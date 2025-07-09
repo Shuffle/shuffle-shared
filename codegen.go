@@ -20,13 +20,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"crypto/sha1"
 
-	"cloud.google.com/go/storage"
-	docker "github.com/docker/docker/client"
-	"github.com/frikky/kin-openapi/openapi3"
-
-	//"github.com/satori/go.uuid"
 	"gopkg.in/yaml.v2"
+	"cloud.google.com/go/storage"
+	uuid "github.com/satori/go.uuid"
+	"github.com/frikky/kin-openapi/openapi3"
+	docker "github.com/docker/docker/client"
 )
 
 var downloadedImages = []string{}
@@ -4370,33 +4370,92 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		return err
 	}
 
-	if parsedName == "run_workflow" {
+	if parsedName == "correlate_categories" {
+		if debug { 
+		}
+
+		// Ensure the standard correlation-workflow exists 
+		seedString := fmt.Sprintf("%s_correlate_categories", cacheData.OrgId)
+		hash := sha1.New()
+		hash.Write([]byte(seedString))
+		hashBytes := hash.Sum(nil)
+
+		uuidBytes := make([]byte, 16)
+		copy(uuidBytes, hashBytes)
+		workflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
+		workflow, err := GetWorkflow(ctx, workflowId)
+		if err != nil || workflow.ID == "" || workflow.Name == "" {
+			log.Printf("[ERROR] Failed to get correlation workflow by ID %s: %s", workflowId, err)
+
+			categoryAction := CategoryAction{
+				Label: "correlate_categories",
+			}
+
+			workflow.ID = workflowId
+			newWorkflow, err := GetDefaultWorkflowByType(*workflow, cacheData.OrgId, categoryAction)
+			if err != nil || newWorkflow.ID == "" || newWorkflow.Name == "" {
+				log.Printf("[ERROR] Failed to get default workflow by type %s: %s", categoryAction.Label, err)
+				return errors.New(fmt.Sprintf("Failed to get default workflow by type %s: %s", categoryAction, err))
+			}
+
+			workflow = &newWorkflow
+			workflow.ID = workflowId
+
+			SetWorkflow(ctx, *workflow, workflowId)
+		}
+
+		for _, option := range automation.Options {
+			if option.Key != "datastore_categories" {
+				continue
+			}
+
+			if len(option.Value) == 0 {
+				continue
+			}
+
+			log.Printf("[DEBUG] Found datastore categories to correlate: %s. Workflow to run: %s", option.Value, workflow.ID)
+
+			//func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType  string) error {
+			go handleDatastoreAutomationWebhook(
+				ctx, 
+				marshalledBody, 
+				cacheData, 
+				automation, 
+				fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), 
+				"run_workflow",
+			)
+		}
+
+	} else if parsedName == "run_workflow" {
 		if debug { 
 			log.Printf("[DEBUG] Running workflow %s for org %s", automation.Options[0].Value, cacheData.OrgId) 
 		}
 
 		for _, option := range automation.Options {
-			if option.Key == "workflow_id" {
-				if len(option.Value) == 0 {
+			if option.Key != "workflow_id" {
+				continue
+			}
+
+			if len(option.Value) == 0 {
+				continue
+			}
+
+			cacheData.WorkflowId = option.Value
+			workflowIds := strings.Split(option.Value, ",")
+
+			handled := []string{}
+			for _, workflowId := range workflowIds {
+				workflowId = strings.TrimSpace(workflowId)
+				if ArrayContains(handled, workflowId) {
 					continue
 				}
 
-				cacheData.WorkflowId = option.Value
-				workflowIds := strings.Split(option.Value, ",")
-
-				handled := []string{}
-				for _, workflowId := range workflowIds {
-					workflowId = strings.TrimSpace(workflowId)
-					if ArrayContains(handled, workflowId) {
-						continue
-					}
-
-					handled = append(handled, workflowId)
-					go handleDatastoreAutomationWebhook(ctx, marshalledBody, cacheData, automation, fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), "run_workflow")
-				}
-
-				break
+				handled = append(handled, workflowId)
+				go handleDatastoreAutomationWebhook(ctx, marshalledBody, cacheData, automation, fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), "run_workflow")
 			}
+
+			break
 		}
 
 	} else if parsedName == "send_webhook" {

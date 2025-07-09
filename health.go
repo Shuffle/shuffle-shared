@@ -2050,7 +2050,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 			for _, field := range action.Parameters {
 				if (field.Name == "app_name" || field.Name == "appname") && (field.Value == "" || field.Value == "noapp") {
-					parsedError := fmt.Sprintf("Agent action %s is missing an AI app", action.Name)
+					parsedError := fmt.Sprintf("Singul AI action %s is an app to use", action.Label)
 					if !ArrayContains(workflow.Errors, parsedError) {
 						workflow.Errors = append(workflow.Errors, parsedError)
 					}
