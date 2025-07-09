@@ -3567,7 +3567,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 
 	if len(outputBody) > 0 && bodyIndex >= 0 {
 		if debug { 
-			log.Printf("\n\n\n[INFO] Found matching body FROM MatchBodyWithInputdata(): %s\n\n", outputBody)
+			log.Printf("\n\n\n[DEBUG] Found matching body FROM MatchBodyWithInputdata(): %s\n\n", outputBody)
 		}
 		selectedAction.Parameters[bodyIndex].Value = outputBody
 	}
@@ -6311,13 +6311,13 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) (Action, error) {
 	//openai "github.com/sashabaranov/go-openai"
 	// Create the OpenAI body struct
-	systemMessage := `You are a general AI agent. You can make decisions based on the user input. You should output a list of decisions based on the input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it makes sense.
+	systemMessage := `You are a general AI agent. You can make decisions based on the user input. You should output a list of decisions based on the input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it makes sense. 
 
-built-in: 
+category standalone: 
 analyze 
 ask 
 
-singul: `
+category singul: `
 	userMessage := ""
 
 	// Don't think this matters much
@@ -6372,7 +6372,27 @@ singul: `
 	// Will just have to make a translation system.
 	//typeOptions := []string{"ask", "singul", "workflow", "agent"}
 	typeOptions := []string{"ask", "singul"}
-	systemMessage += fmt.Sprintf(`. Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "appname", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. Indexes should be the same if they should run in parallell. The confidence is between 0 and 1. Runs are how many times it should run requests (default: 1, * for all looped items). Fields can be set manually, or use previous action output by adding them in the format {{action_name}}, such as {"key": "body": "value": "{{tickets[0].fieldname}}} to get the first ticket output from a previous decision. The {{action_name}} has to match EXACTLY the action name of a previous decision.`, strings.Join(typeOptions, ", "))
+	extraString := "Have a MINIMUM of two decisions. "
+	if len(typeOptions) == 0 {
+		extraString = ""
+	}
+
+	systemMessage += fmt.Sprintf(`. Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "<tool name>", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. 
+
+Formatting Rules:
+- If a tool or app is mentioned, add it to the tool field. Otherwise make the field empty.
+- Indexes should be the same if they should run in parallell. 
+- The confidence is between 0 and 1. 
+- Runs are how many times it should run requests (default: 1, * for all looped items). 
+- The {{action_name}} has to match EXACTLY the action name of a previous decision.
+- NEVER add unnecessary fields to the fields array, only add the ones that are absolutely needed for the action to run!
+- If you ask for user input, use the "ask" action and add a "question" field. 
+
+Decision Field Rules: 
+- Do NOT add random fields and do NOT guess formatting e.g. body formatting
+- Fields can be set manually, or use previous action output by adding them in the format {{action_name}}, such as {"key": "body": "value": "{{tickets[0].fieldname}}} to get the first ticket output from a previous decision.
+
+%s`, strings.Join(typeOptions, ", "), extraString)
 
 	systemMessage += `If you are missing information (such as emails) to make a list of decisions, just add a single decision which asks them to clarify the input better.`
 
@@ -6400,7 +6420,7 @@ singul: `
 		ResponseFormat: &openai.ChatCompletionResponseFormat{
 			Type: "json_object",
 		},
-		ReasoningEffort: "low",
+		ReasoningEffort: "medium",
 		Store: true,
 	}
 
