@@ -1441,7 +1441,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	var fileId string
 	activate := true
 	shouldDistributeToLocation := false
-	shouldDistributeToSuborgs := false
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			resp.WriteHeader(401)
@@ -1457,37 +1456,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		if strings.ToLower(location[5]) == "distribute" {
 			shouldDistributeToLocation = true
 		}
-
-		if strings.ToLower(location[5]) == "suborg_distribute" {
-			shouldDistributeToSuborgs = true
-		}
-	}
-
-	suborgsToDistribute := []string{}
-	if shouldDistributeToSuborgs {
-		// unmarshal body for suborgs ids
-		body, err := ioutil.ReadAll(request.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed reading request body for suborgs: %s", err)
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "Failed reading request body"}`))
-			return
-		}
-
-		type SuborgsRequest struct {
-			Suborgs []string `json:"sub_orgs"`
-		}
-
-		suborgsRequest := SuborgsRequest{}
-		err = json.Unmarshal(body, &suborgsRequest)
-		if err != nil {
-			log.Printf("[ERROR] Failed unmarshaling request body for suborgs: %s", err)
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "Failed unmarshaling request body"}`))
-			return
-		}
-
-		suborgsToDistribute = suborgsRequest.Suborgs
 	}
 
 	app, err := GetApp(ctx, fileId, user, false)
@@ -1589,16 +1557,30 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-
-	if shouldDistributeToSuborgs && (app.ReferenceOrg != user.ActiveOrg.Id || app.Public) {
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Can't distribute app to suborgs as it is a public app."}`))
-		return
+	distributingApp := false
+	if !app.Public && app.ReferenceOrg != user.ActiveOrg.Id && user.ActiveOrg.Role == "admin" {
+		if app.Owner == user.Id {
+			log.Printf("[INFO] App %s (%s) is owned by the user %s (%s). Distributing it to the org %s (%s)", app.Name, app.ID, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+			distributingApp = true
+		} else {
+			// check if the app belongs to parent org
+			org, err := GetOrg(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting org %s (%s): %s", user.ActiveOrg.Name, user.ActiveOrg.Id, err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
+				return
+			}
+			if org.CreatorOrg == app.ReferenceOrg {
+				log.Printf("[INFO] App %s (%s) is owned by the parent org %s (%s). Distributing it to the suborg %s (%s)", app.Name, app.ID, org.Name, org.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+				distributingApp = true
+			}
+		}
 	}
 
 	org := &Org{}
 	added := false
-	if app.Sharing || app.Public || !activate {
+	if app.Sharing || app.Public || !activate || distributingApp {
 		org, err = GetOrg(ctx, user.ActiveOrg.Id)
 		if err == nil {
 			if len(org.ActiveApps) > 150 {
@@ -1623,7 +1605,14 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				if !ArrayContains(org.ActiveApps, app.ID) {
 					org.ActiveApps = append(org.ActiveApps, app.ID)
 					added = true
+				} else if ArrayContains(org.ActiveApps, app.ID) && !app.Public {
+					// If the app is already in the org, we don't need to add it again
+					log.Printf("[DEBUG] App %s (%s) already exists in org %s (%s). Not adding again.", app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+					resp.WriteHeader(200)
+					resp.Write([]byte(`{"success": true, "reason": "App already exists in org"}`))
+					return
 				}
+
 			} else {
 				// Remove from the array
 				newActiveApps := []string{}
@@ -1670,98 +1659,10 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	} else {
-
-		if shouldDistributeToSuborgs {
-
-			// Build a combined list of suborgs to check (union of old and new)
-			allSuborgs := []string{}
-
-			// First add all from suborgsToDistribute
-			for _, suborgId := range suborgsToDistribute {
-				if suborgId != "" && !ArrayContains(allSuborgs, suborgId) {
-					allSuborgs = append(allSuborgs, suborgId)
-				}
-			}
-
-			// Then add remaining from app.SubOrgDistribution (if not already included)
-			for _, suborgId := range app.SubOrgDistribution {
-				if suborgId != "" && !ArrayContains(allSuborgs, suborgId) {
-					allSuborgs = append(allSuborgs, suborgId)
-				}
-			}
-
-			for _, suborgId := range allSuborgs {
-
-				subOrg, err := GetOrg(ctx, suborgId)
-				if err != nil {
-					log.Printf("[ERROR] Failed getting suborg %s: %s", suborgId, err)
-					resp.WriteHeader(500)
-					resp.Write([]byte(`{"success": false, "reason": "Failed getting suborg"}`))
-					return
-				}
-
-				inOld := ArrayContains(app.SubOrgDistribution, suborgId)
-				inNew := ArrayContains(suborgsToDistribute, suborgId)
-
-				if inOld && !inNew {
-					// Deactivate app
-					log.Printf("[INFO] App %s (%s) deactivated in suborg %s (%s)", app.Name, app.ID, subOrg.Name, subOrg.Id)
-					newActiveApps := []string{}
-					for _, activeApp := range subOrg.ActiveApps {
-						if activeApp != app.ID {
-							newActiveApps = append(newActiveApps, activeApp)
-						}
-					}
-					subOrg.ActiveApps = newActiveApps
-
-				} else if !inOld && inNew {
-					// Activate app
-					log.Printf("[INFO] App %s (%s) distributed to suborg %s (%s)", app.Name, app.ID, subOrg.Name, subOrg.Id)
-					if !ArrayContains(subOrg.ActiveApps, app.ID) {
-						subOrg.ActiveApps = append(subOrg.ActiveApps, app.ID)
-					}
-
-				} else {
-					log.Printf("[INFO] App %s (%s) already distributed to suborg %s (%s)", app.Name, app.ID, subOrg.Name, subOrg.Id)
-					if !ArrayContains(subOrg.ActiveApps, app.ID) {
-						log.Printf("[FIX] App was missing in suborg %s's ActiveApps list. Adding it now.", subOrg.Name)
-						subOrg.ActiveApps = append(subOrg.ActiveApps, app.ID)
-					}
-				}
-
-				err = SetOrg(ctx, *subOrg, subOrg.Id)
-				if err != nil {
-					log.Printf("[ERROR] Failed setting suborg %s (%s) after distributing app %s: %s", subOrg.Name, subOrg.Id, app.Name, err)
-					resp.WriteHeader(500)
-					resp.Write([]byte(`{"success": false, "reason": "Failed setting suborg"}`))
-					return
-				}
-
-				DeleteCache(ctx, fmt.Sprintf("apps_%s", subOrg.Id))
-				for _, user := range subOrg.Users {
-					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-				}
-			}
-
-			app.SubOrgDistribution = suborgsToDistribute
-			err = SetWorkflowAppDatastore(ctx, *app, app.ID)
-			if err != nil {
-				log.Printf("[ERROR] Failed setting app %s (%s) after distributing to suborgs: %s", app.Name, app.ID, err)
-				resp.WriteHeader(500)
-				resp.Write([]byte(`{"success": false, "reason": "Failed setting app"}`))
-				return
-			}
-
-			resp.WriteHeader(200)
-			resp.Write([]byte(`{"success": true, "reason": "App distributed to suborgs"}`))
-			return
-		} else {
-			log.Printf("[WARNING] User is trying to activate %s which is NOT a public app", app.Name)
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
+		log.Printf("[WARNING] User is trying to activate %s which is NOT a public app", app.Name)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	if shouldDistributeToLocation {
@@ -1843,8 +1744,14 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		RedirectUserRequest(resp, request)
 	}
 
+	reason := "App Activated"
+
+	if !activate {
+		reason = "App Deactivated"
+	}
+
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
+	resp.Write([]byte(`{"success": true,"reason": "` + reason + `"}`))
 }
 
 // For replicating HTTP request from schedule user
