@@ -872,38 +872,57 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		return org, errors.New(fmt.Sprintf("Failed getting the organization %s: %s", orgId, err))
 	}
 
-	// Allows parent & childorgs to run as much as they want. No limitations
-	if len(org.ChildOrgs) > 0 || len(org.ManagerOrgs) > 0 {
-		// log.Printf("[DEBUG] Execution for org '%s' (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
-		return org, nil
+	orgStats, err := GetOrgStatistics(ctx, orgId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org statistics for %s (%s): %s", org.Name, org.Id, err)
+		return org, errors.New(fmt.Sprintf("Failed getting the organization statistics %s: %s", orgId, err))
 	}
 
-	info, err := GetOrgStatistics(ctx, orgId)
-	if err == nil {
-		// log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
-		org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
-		if org.SyncFeatures.AppExecutions.Limit <= 10000 {
-			org.SyncFeatures.AppExecutions.Limit = 10000
-		} else {
-			// FIXME: Not strictly enforcing other limits yet
-			// Should just warn our team about them going over
-			org.SyncFeatures.AppExecutions.Limit = 15000000000
-		}
+	if org.Billing.AppRunsHardLimit > 0 && orgStats.MonthlyAppExecutions > org.Billing.AppRunsHardLimit {
+		log.Printf("[WARNING] Org %s (%s) has exceeded the app runs hard limit (%d/%d)", org.Name, org.Id, orgStats.MonthlyAppExecutions, org.Billing.AppRunsHardLimit)
 
-		//log.Printf("[DEBUG] Org %s (%s) has values: org.LeadInfo.POV: %v, org.LeadInfo.Internal: %v", org.Name, org.Id, org.LeadInfo.POV, org.LeadInfo.Internal)
-
-		// FIXME: When inside this, check if usage should be sent to the user
-		// if (org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit) && !(org.LeadInfo.POV || org.LeadInfo.Internal) {
-		if (org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit) && !(org.LeadInfo.POV) {
-			return org, errors.New(fmt.Sprintf("You are above your limited usage of app executions this month (%d / %d) when running with triggers. Contact support@shuffler.io or the live chat to extend this for org %s (%s)", org.SyncFeatures.AppExecutions.Usage, org.SyncFeatures.AppExecutions.Limit, org.Name, org.Id))
-		}
-
-		return org, nil
-	} else {
-		//log.Printf("[WARNING] Failed finding executions for org %s (%s)", org.Name, org.Id)
+		return org, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the app runs hard limit (%d/%d)", org.Name, org.Id, orgStats.MonthlyAppExecutions, org.Billing.AppRunsHardLimit))
 	}
 
-	return org, nil
+	validationOrg := org
+	validationOrgStats := orgStats
+
+	if len(org.CreatorOrg) > 0 {
+		validationOrg, err = GetOrg(ctx, org.CreatorOrg)
+		if err != nil {
+			return org, errors.New(fmt.Sprintf("Failed getting the creator organization %s: %s", org.CreatorOrg, err))
+		}
+		validationOrgStats, err = GetOrgStatistics(ctx, org.CreatorOrg)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting creator org statistics for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
+			return org, errors.New(fmt.Sprintf("Failed getting the creator organization statistics %s: %s", validationOrg.CreatorOrg, err))
+		}
+
+		log.Printf("[INFO] Using creator org %s (%s) for org %s (%s)", validationOrg.Name, validationOrg.Id, org.CreatorOrg, org.Id)
+	}
+
+	// Allows partners and POV users to run workflows without limits
+	if validationOrg.LeadInfo.POV || validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.ServicePartner {
+		return validationOrg, nil
+	}
+
+	// If enterprise customer then don't block them
+	if validationOrg.LeadInfo.Customer && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+		return validationOrg, nil
+	}
+
+	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
+
+	if totalAppExecutions >= validationOrg.SyncFeatures.AppExecutions.Limit {
+		log.Printf("[WARNING] Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit)
+		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit))
+	}
+
+	if debug {
+		log.Printf("[INFO] Org %s (%s) has %d/%d app executions this month", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit)
+	}
+
+	return validationOrg, nil
 }
 
 func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {

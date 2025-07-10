@@ -12029,6 +12029,9 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
+	if tmpData.Editing == "app_runs_hard_limit" && tmpData.Billing.AppRunsHardLimit != org.Billing.AppRunsHardLimit {
+		org.Billing.AppRunsHardLimit = tmpData.Billing.AppRunsHardLimit
+	}
 
 	//Update mfa required value
 	if tmpData.MFARequired != org.MFARequired {
@@ -12291,7 +12294,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// check if user is editing sync features of suborg from parent org
-	if project.Environment == "cloud" && !user.SupportAccess && tmpData.SyncFeatures.Editing {
+	if project.Environment == "cloud" && !user.SupportAccess && tmpData.SyncFeatures.Editing && tmpData.Editing != "app_runs_hard_limit" {
 		log.Printf("[WARNING] User %s (%s) is trying to edit sync features of suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
 
 		// check whether user org id is suborg of parent org
