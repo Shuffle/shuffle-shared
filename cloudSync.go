@@ -903,13 +903,11 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 	// Allows partners and POV users to run workflows without limits
 	if validationOrg.LeadInfo.POV || validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.ServicePartner {
-		log.Printf("[INFO] Skipping execution usage validation for org %s (%s) as it is a POV or partner org", validationOrg.Name, validationOrg.Id)
 		return validationOrg, nil
 	}
 
 	// If enterprise customer then don't block them
 	if validationOrg.LeadInfo.Customer && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
-		log.Printf("[INFO] Skipping execution usage validation for org %s (%s) as it is a Enterprise customer org with high limit", org.Name, org.Id)
 		return validationOrg, nil
 	}
 
