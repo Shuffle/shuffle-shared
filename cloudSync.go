@@ -918,7 +918,9 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit))
 	}
 
-	log.Printf("[INFO] Org %s (%s) has %d/%d app executions this month", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit)
+	if debug {
+		log.Printf("[INFO] Org %s (%s) has %d/%d app executions this month", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit)
+	}
 
 	return validationOrg, nil
 }
