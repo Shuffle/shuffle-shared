@@ -16383,6 +16383,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					newresp, err := client.Do(req)
 					if err != nil {
 						log.Printf("[ERROR] Error running SKIPPED request (%s): %s", foundAction.Label, err)
+
+						cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, foundAction.ID)
+						go SetCache(context.Background(), cacheId, resultData, 35)
+
 						continue
 					}
 
@@ -16390,15 +16394,23 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					body, err := ioutil.ReadAll(newresp.Body)
 					if err != nil {
 						log.Printf("[ERROR] Failed reading body when running SKIPPED request (%s): %s", foundAction.Label, err)
+
+						cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, foundAction.ID)
+						go SetCache(context.Background(), cacheId, resultData, 35)
+
 						continue
 					}
 
 					//log.Printf("[DEBUG] Skipped body return from %s (%d): %s", streamUrl, newresp.StatusCode, string(body))
 					if strings.Contains(string(body), "already finished") {
 						log.Printf("[WARNING] Data couldn't be re-inputted for %s.", foundAction.Label)
+
 						// DONT CHANGE THE ERROR OUTPUT HERE
 						return &workflowExecution, true, errors.New(fmt.Sprintf("Workflow has already been ran with label %s. Raw: %s", foundAction.Label, string(body)))
 					}
+
+					cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, foundAction.ID)
+					go SetCache(context.Background(), cacheId, resultData, 35)
 				}
 			}
 		}
