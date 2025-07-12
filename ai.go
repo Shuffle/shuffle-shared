@@ -7234,3 +7234,704 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 
 	return contentOutput, nil
 }
+
+func generateWorkflowAiResponse(ctx context.Context, input QueryInput, user User) ([]MatchedApps, error) {
+	systemMessage := `You are a technical assistant that helps determine the most relevant App-action categories required to solve a task described by a user.
+You are given a fixed list of App-action categories. Each category contains multiple actions, and many different apps may fall under the same category.
+Your job is to analyze the user task and return the **minimal, most accurate list of categories** that might contain the needed apps and actions. If a category is even partially required to fulfill the task, include it.
+Be very deliberate in your decisions. Never guess randomly. Choose only categories that are truly likely to contain the kind of apps needed.
+Your response must be a **JSON array of strings**, where each string is one of the exact category names provided.
+Do not include any explanations or additional text — only the JSON array.
+
+
+List of available App-action categories:
+communication category:
+communication:list_messages
+communication:send_message
+communication:get_message
+communication:search_messages
+communication:list_attachments
+communication:get_attachment
+communication:get_contact
+
+siem category:
+siem:search
+siem:list_alerts
+siem:close_alert
+siem:get_alert
+siem:create_detection
+siem:add_to_lookup_list
+siem:isolate_endpoint
+
+eradication category:
+eradication:list_alerts
+eradication:close_alert
+eradication:get_alert
+eradication:create_detection
+eradication:block_hash
+eradication:search_hosts
+eradication:isolate_host
+eradication:unisolate_host
+eradication:trigger_host_scan
+
+cases category:
+cases:list_tickets
+cases:get_ticket
+cases:create_ticket
+cases:close_ticket
+cases:add_comment
+cases:update_ticket
+cases:search_tickets
+
+assets category:
+assets:list_assets
+assets:get_asset
+assets:search_assets
+assets:search_users
+assets:search_endpoints
+assets:search_vulnerabilities
+
+intel category:
+intel:get_ioc
+intel:search_ioc
+intel:create_ioc
+intel:update_ioc
+intel:delete_ioc
+
+iam category:
+iam:reset_password
+iam:enable_user
+iam:disable_user
+iam:get_identity
+iam:get_asset
+iam:search_identity
+
+network category:
+network:get_rules
+network:allow_ip
+network:block_ip
+
+other category:
+other:update_info
+other:get_info
+other:get_status
+other:get_version
+other:get_health
+other:get_config
+other:get_configs
+other:get_configs_by_type
+other:get_configs_by_name
+other:run_script
+
+Remember that you are selecting categories only not apps or actions labels so include only categories dont include apps or actions labels in the result for example if user task requires communication and eradication category then you can just return ["communication", "eradication"] and not ["communication:list_messages", "eradication:close_alert"] or ["communication", "eradication:close_alert"] 
+.`
+
+	var result []MatchedApps
+	var filteredWorflowApps []WorkflowApp
+
+	if len(input.Query) > 10000 {
+		log.Printf("[ERROR] Input query too long for AI response generation: %d characters", len(input.Query))
+		return result, errors.New("Input query too long for AI response generation")
+	}
+	systemMessage += ` If you are missing information (such as emails) to make a list of decisions, just add a single decision which asks them to clarify the input better.`
+	contentOutput, err := RunAiQuery(systemMessage, input.Query)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in generateWorkflowAiResponse: %s", err)
+		return result, err
+	}
+   log.Printf("[DEBUG] AI response: %s", contentOutput)
+	// Check if the contentOutput is a valid JSON array
+	if !strings.HasPrefix(contentOutput, "[") || !strings.HasSuffix(contentOutput, "]") {
+		log.Printf("[ERROR] AI response is not a valid JSON array: %s", contentOutput)
+		return result, errors.New("AI response is not a valid JSON array")
+	}
+	// Check if the contentOutput is a valid JSON array
+	var categories []string
+	err = json.Unmarshal([]byte(contentOutput), &categories)
+	if err != nil {
+		log.Printf("[ERROR] AI response is not a valid JSON array: %s", err)
+		return result, errors.New("AI response is not a valid JSON array")
+	}
+	// Check if the categories are valid
+	if len(categories) == 0 {
+		log.Printf("[ERROR] AI response is an empty JSON array")
+		return result, errors.New("AI response is an empty JSON array")
+	}
+
+	// get all the apps that matches the categories
+
+	apps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get apps in Generate worflow: %s", err)
+       return result, err
+	}
+
+normalizedFilters := make([]string, len(categories))
+
+	for i, f := range categories {
+		normalizedFilters[i] = strings.ToLower(f)
+	}
+
+	for _, app := range apps {
+		var matchedCategory string
+
+		for _, appCat := range app.Categories {
+			appCatLower := strings.ToLower(appCat)
+
+			for _, filter := range normalizedFilters {
+				if strings.Contains(appCatLower, filter) || strings.Contains(filter, appCatLower) {
+					matchedCategory = filter
+					break
+				}
+			}
+
+			if matchedCategory != "" {
+				break
+			}
+		}
+
+		if matchedCategory != "" {
+
+
+			result = append(result, MatchedApps{
+				AppName:         app.Name,
+				MatchedCategory: matchedCategory,
+			})
+			filteredWorflowApps = append(filteredWorflowApps, app)
+		}
+	}
+	jsonResult, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+	log.Printf("[ERROR] Failed to marshal result to JSON: %s", err)
+	return result, err
+}
+jsonStr := string(jsonResult)
+
+	systemMessage = fmt.Sprintf(`
+	You are a workflow automation assistant.
+
+You are given:
+- A user task description
+- A list of relevant apps, where each app has a matched category
+
+Your job is to analyze the user’s intent and **select the single best app for each unique category** from the provided list.
+
+Guidelines:
+- If the user explicitly mentions an app by name (e.g., “notify team on Slack”), that app **must be selected** for its category.
+- If no app is mentioned, select the most appropriate one **based on the user’s intent**, usage pattern, and common practice.
+- Pick apps that are commonly used or best suited for their category unless the user clearly favors another.
+- Only select **one app per category** unless the task explicitly needs multiple (e.g., two different apps doing distinct things in the same category).
+- If multiple apps match a category, prioritize based on how well they align with the task context.
+
+For each selected app:
+   - Write an "intent_description" — a realistic sentence describing **what this app would actually do**, in its own domain, to help complete the user’s task. This must be specific to the app’s real-world capabilities.
+   - List "possible_action_labels" — your best guesses of what the actual API action name *might* look like. These should be short, realistic, snake_case names such as "send_message", "forward_info", etc.
+
+
+Your response must follow this **strict JSON format**:
+
+[
+  {
+    "category": "siem",
+    "app_name": "Wazuh",
+    "intent_description": "Detect and fetch high-priority security alerts from the SIEM system",
+    "possible_action_labels": ["get_alerts", "query_events", "fetch_incidents"]
+  },
+  {
+    "category": "communication",
+    "app_name": "Slack",
+    "intent_description": "Send a message to a channel or user to notify about a workflow event",
+    "possible_action_labels": ["send_message", "post_to_channel", "send_dm"]
+  },
+  {
+    "category": "cases",
+    "app_name": "Jira",
+    "intent_description": "Create a new issue or ticket to log and track the incident",
+    "possible_action_labels": ["create_issue", "open_ticket", "log_case"]
+  }
+]
+
+Rules:
+
+The keys must be the category names (lowercase, exactly as provided).
+
+The values must be the selected app names (case-sensitive, exactly as provided).
+
+Keep intent_description grounded in what that app can actually do.
+
+Do not include duplicates, explanations, or any extra text.
+
+Do not guess or hallucinate app names — only choose from the apps provided.
+
+Do not include categories that aren’t relevant to the user task.
+
+If the input does not require any apps in a category, omit that category entirely from the response.
+
+Be deliberate. Be precise. Pick only what is truly required to fulfill the task successfully.
+
+Here is the list of apps and their matched categories:
+%s
+
+Here is the user input %s`, jsonStr, input.Query)
+
+	
+	contentOutput, err = RunAiQuery(systemMessage, input.Query)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in generateWorkflowAiResponse: %s", err)
+		return result, err
+	}
+
+var selectedApps []AIAppIntent
+
+err = json.Unmarshal([]byte(contentOutput), &selectedApps)
+if err != nil {
+	log.Printf("[ERROR] Failed to parse AI output JSON: %s", err)
+	return result, err
+}
+
+log.Printf("[DEBUG] AI selected apps: %v", selectedApps)
+
+
+shortListedActions := ShortlistActions(filteredWorflowApps, selectedApps, 5)
+
+	jsonResult, err = json.MarshalIndent(shortListedActions, "", "  ")
+	if err != nil {
+	log.Printf("[ERROR] Failed to marshal result to JSON: %s", err)
+	return result, err
+}
+jsonStr = string(jsonResult)
+
+log.Printf("[DEBUG] Final shortlisted actions: %v and the length is %d", jsonStr, len(shortListedActions))
+
+systemMessage = fmt.Sprintf(`
+You are helping match a user's intent with the most relevant app actions.
+
+The user has described a task they want automated. Based on this, we already selected the most relevant apps and a shortlist of top-scoring actions per app.
+
+Your job is to now pick the single most appropriate action for each app.
+
+Each app includes a list of potential actions with short descriptions. These descriptions are only provided to help you understand what the action likely does — you do not need to include them in your output.
+
+Sometimes there may be no perfect action match — in that case, pick the closest possible action that makes the most sense for achieving the goal. Do not leave any app blank unless absolutely nothing fits at all.
+
+Return your response in this strict JSON format:
+
+[
+  {
+    "app_name": "app name",
+    "action_name": "the best possible action name that matches the user's intent"
+  },
+  {
+    "app_name": "app name",
+    "action_name": "the best possible action name that matches the user's intent"
+  }
+]
+
+Here is the list of apps and their matched actions:
+%s
+
+Here is the user input %s`, jsonStr, input.Query)
+
+	contentOutput, err = RunAiQuery(systemMessage, input.Query)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in generateWorkflowAiResponse: %s", err)
+		return result, err
+	}
+
+	var finalActions []FinalAppAction
+	err = json.Unmarshal([]byte(contentOutput), &finalActions)
+	if err != nil {
+		log.Printf("[ERROR] Failed to parse AI output JSON: %s", err)
+		return result, err
+	}
+	log.Printf("[DEBUG] AI final actions: %v", finalActions)
+
+	details := BuildFinalDetails(filteredWorflowApps, finalActions)
+	if details == nil {
+		log.Printf("[ERROR] Failed to build final details for the actions")
+		return result, errors.New("Failed to build final details for the actions")
+	}
+
+	jsonResult, err = json.MarshalIndent(details, "", "  ")
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal final details to JSON: %s", err)
+		return result, err
+	}
+	jsonStr = string(jsonResult)
+	log.Printf("[DEBUG] Final details JSON: %s", jsonStr)
+
+	systemMessage = fmt.Sprintf(`
+You are an assistant that only writes Python wrapper functions for preselected app actions.
+
+You will be given a list of app actions. Each action includes:
+- "app_name": the app the action belongs to
+- "action_name": the name of the action (this will also be the function name)
+- "parameters": a list of parameter objects with name, type, whether it's required, and example
+- "description": a short explanation of what the action does
+
+Your job:
+- For **each action**, write a Python function
+- Use "action_name" as the function name
+- Use parameters as the function arguments
+  - Required parameters must be positional
+  - Optional ones should have default values
+- Inside the function:
+  - Assume the base URL is given as "url"
+  - Construct the full URL using what makes sense from "description" (if it's not there, just use "url" directly)
+  - Build a "POST" request using "requests.post(...)"
+  - Use "headers", "params", and "data" if available
+  - If "ssl_verify" exists, convert it to "verify=ssl_verify == "True"
+- No imports, no comments, no explanation, no markdown
+- Output must be plain Python code with function definitions only
+
+
+Here is the list of actions and their parameters:
+%s
+`, jsonStr)
+
+	contentOutput, err = RunAiQuery(systemMessage, input.Query)
+	if err != nil {		log.Printf("[ERROR] Failed to run AI query in generateWorkflowAiResponse: %s", err)
+		return result, err
+	}
+	log.Printf("[DEBUG] AI generated Python code: %s", contentOutput)
+
+return result, nil
+}
+
+// ————————
+// 1) Jaccard similarity of keyword sets (description vs intent)
+// ————————
+func jaccard(a, b string) float64 {
+    set := func(s string) map[string]struct{} {
+        out := make(map[string]struct{})
+        for _, w := range strings.Fields(strings.ToLower(s)) {
+            w = strings.Trim(w, ".,;!()")
+            if len(w) > 2 {
+                out[w] = struct{}{}
+            }
+        }
+        return out
+    }
+
+    A, B := set(a), set(b)
+    var inter, union int
+    for w := range A {
+        if _, ok := B[w]; ok {
+            inter++
+        }
+        union++
+    }
+    for w := range B {
+        if _, ok := A[w]; !ok {
+            union++
+        }
+    }
+    if union == 0 {
+        return 0
+    }
+    return float64(inter) / float64(union)
+}
+
+// ————————
+// 2) Best fuzzy‑Levenshtein match against any guessed label (normalized rank → [0,1])
+// ————————
+func bestLabelScore(name string, labels []string) float64 {
+    nameLower := strings.ToLower(name)
+    best := 0.0
+    for _, lbl := range labels {
+        // fuzzy.RankNormalized returns index of best substring match; lower is better
+        rank := float64(fuzzy.RankMatchNormalizedFold(lbl, nameLower))
+        // normalize: assume maxRank ~ len(name)+len(lbl)
+        maxRank := float64(len(nameLower) + len(lbl))
+        score := 1.0 - (rank / maxRank)
+        // also try Levenshtein ratio
+        dist := float64(levenshtein.DistanceForStrings([]rune(nameLower), []rune(strings.ToLower(lbl)), levenshtein.DefaultOptions))
+        // distRatio = 1 - (dist / maxLen)
+        maxLen := float64(len(nameLower))
+        if maxLen < float64(len(lbl)) {
+            maxLen = float64(len(lbl))
+        }
+        levScore := 1.0 - (dist / maxLen)
+        if levScore > score {
+            score = levScore
+        }
+        if score > best {
+            best = score
+        }
+    }
+    return best // in [0,1]
+}
+
+ func ShortlistActions(apps []WorkflowApp, intents []AIAppIntent, topN int) []ScoredAppActions {
+	// Map intents by app name (lowercased)
+	intentMap := make(map[string]AIAppIntent)
+	for _, intent := range intents {
+		intentMap[strings.ToLower(intent.AppName)] = intent
+	}
+
+	var results []ScoredAppActions
+
+	for _, app := range apps {
+		lowerApp := strings.ToLower(app.Name)
+		intent, ok := intentMap[lowerApp]
+		if !ok {
+			continue // no intent for this app
+		}
+
+		// Score actions
+		scored := []struct {
+			action WorkflowAppAction
+			score  float64
+		}{}
+
+		for _, action := range app.Actions {
+			descScore := jaccard(action.Description, intent.IntentDescription)
+			labelScore := bestLabelScore(action.Name, intent.PossibleActionLabels)
+			total := descScore*0.6 + labelScore*0.4
+			if total > 0.1 {
+				scored = append(scored, struct {
+					action WorkflowAppAction
+					score  float64
+				}{action, total})
+			}
+		}
+
+		// Sort by descending score
+		sort.Slice(scored, func(i, j int) bool {
+			return scored[i].score > scored[j].score
+		})
+
+		// Take top N and build summary
+		var summary []ActionSummary
+		for i := 0; i < len(scored) && i < topN; i++ {
+			a := scored[i].action
+			d := a.Description
+			if len(d) > 100 {
+				d = d[:100] + "..."
+			}
+			summary = append(summary, ActionSummary{Name: a.Name, Description: d})
+		}
+
+		if len(summary) > 0 {
+			results = append(results, ScoredAppActions{AppName: app.Name, Actions: summary})
+		}
+	}
+
+	return results
+}
+func BuildFinalDetails(filteredApps []WorkflowApp, finalActions []FinalAppAction) []FinalAppActionDetail {
+	details := []FinalAppActionDetail{}
+
+	// Index apps by name for fast lookup
+	appMap := map[string]WorkflowApp{}
+	for _, app := range filteredApps {
+		appMap[strings.ToLower(app.Name)] = app
+	}
+
+	for _, fa := range finalActions {
+		app, ok := appMap[strings.ToLower(fa.AppName)]
+		if !ok {
+			continue // app not found
+		}
+
+		for _, act := range app.Actions {
+			if act.Name != fa.ActionName {
+				continue
+			}
+
+			// Build params
+			params := []ActionParamForAI{}
+			for _, p := range act.Parameters {
+				params = append(params, ActionParamForAI{
+					Name:        p.Name,
+					Description: p.Description,
+					Required:    p.Required,
+					Type:        p.Schema.Type,
+					Example:     p.Example,
+				})
+			}
+
+			// Optional return info
+			var returns *ActionReturnForAI
+			if act.Returns.Description != "" || act.Returns.Schema.Type != "" {
+				returns = &ActionReturnForAI{
+					Description: act.Returns.Description,
+					Type:        act.Returns.Schema.Type,
+					Example:     act.Returns.Example,
+				}
+			}
+
+			// Add to result
+			details = append(details, FinalAppActionDetail{
+				AppName:     fa.AppName,
+				ActionName:  fa.ActionName,
+				Description: act.Description,
+				Parameters:  params,
+				Returns:     returns,
+			})
+			break // once matched
+		}
+	}
+
+	return details
+}
+
+
+func generateWorkflowJson(ctx context.Context, input QueryInput, user User) (string, error) {
+
+	systemMessage := fmt.Sprintf(`You are a senior security automation assistant helping build workflows for an automation platform called shuffle that connects security tools through triggers and actions (similar to SOAR platforms). 
+
+You’ll receive vague or messy user inputs describing a security automation task they want to perform.
+
+Your job is to:
+
+1. Understand what the user is trying to automate.
+2. Break the task into **clear, chronological steps** that describe exactly what needs to happen.
+3. Explicitly **separate steps that happen inside the automation system** from those that must be **manually configured or exist externally**, like SIEM, 3rd-party APIs, user authentication, or system setup.
+4. Determine whether the automation is event-driven — meaning something external (like a SIEM or alerting tool) must notify the system when to begin.
+If so, this means a trigger must be configured inside the automation tool (e.g. Shuffle) to receive that signal.
+
+Use a Webhook trigger (HTTP trigger) when some external system needs to send data to start the automation.
+→ Mention that this will generate a webhook URL, which the user must configure in the external system.
+
+Use a Scheduler trigger when the automation should run periodically (e.g. every 5 minutes). No external setup is needed here.
+
+If the task doesn't rely on external events (e.g. "fetch all tickets from Jira"), and can start on its own or via schedule, then skip trigger setup.
+
+The goal is to make sure we don't forget any setup required to make the automation actually run.
+5. Make sure **no step is skipped** — even if it's obvious to an expert.
+6. Ensure the steps are **atomic**, meaning no two actions are bundled into one.
+7. For any action that depends on another step’s output (e.g. extracting a value, passing it to another app), **call it out** clearly.
+8. Dont duplicate steps that were already handled externally (e.g. don’t re-check that login failures > 5 if the alert already filtered for that) and avoid unnecessary steps or validations or things that were not asked by the user.
+
+The goal is to produce a smart, complete breakdown so a later stage can turn it into a machine-readable workflow.
+You will receive a user input describing the task they want to automate.
+
+Here is the user input:
+	%s`, input.Query)
+
+	contentOutput, err := RunAiQuery(systemMessage, input.Query)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
+		return "", err
+	}
+		if len(contentOutput) == 0 {
+		log.Printf("[ERROR] AI response is empty")
+		return "", errors.New("AI response is empty")
+	}
+	log.Printf("[DEBUG] AI response: %s", contentOutput)
+
+	// lets try to convert this into json format 
+
+	systemMessage = fmt.Sprintf(`You are a senior security automation assistant helping build workflows for an automation platform called shuffle that connects security tools through triggers and actions (similar to SOAR platforms).
+	
+
+ Your job is to convert a sequence of natural-language automation steps into a structured actionable JSON format. 
+
+This format represents a generic security workflow that includes:
+
+- Triggers (like HTTP/Webhook)
+- Actions (calling known apps and their actions with parameters)
+- Data passing between steps (e.g., extract values, save them, reference them in a later step)
+
+You must assume that:
+
+- All apps mentioned are available
+- All needed actions exist in those apps
+- Parameters required for those actions are known
+- All external filtering, validation, and setup have already been completed (e.g. authentication, permission, alert thresholds)
+
+You should:
+
+- Ignore **manual or external setup steps** (e.g. creating API keys, registering Azure apps, configuring SIEM filters)
+- Do NOT repeat validations that were already handled externally (e.g. don’t re-check that login failures > 5 if the alert already filtered for that)
+- Start from **the moment the trigger is received**, and build **only the in-platform automation steps**
+- Invent clean, logical app and action names based on step description
+- Chain steps using variables, each action can use output from previous steps, each action returns a structured information about the result and the result contain some the variables that can be used in the next steps and so on
+- Use **snake_case** for action names and parameters
+- Overall the JSON structure should represent a sequence of chronological steps that can be executed in order with no missing pieces.
+- Use this JSON structure:
+
+
+{
+  "triggers": [ ... ],
+  "actions": [ ... ]
+}
+
+Where each action might look like this 
+{
+  "app_name": "string",
+  "app_version": "string",
+  "description": "string",
+  "app_id": "string",
+  "errors": ["string"],
+  "id": "string",
+  "name": "string",
+  "parameters": [
+    {
+      "description": "string",
+      "id": "string",
+      "name": "string",
+      "example": "string",
+      "value": "string",
+      "multiline": false,
+      "multiselect": false,
+      "options": ["string"],
+      "action_field": "string",
+      "variant": "string",
+      "required": true,
+      "configuration": false,
+      "tags": ["string"],
+      "schema": {},
+      "skip_multicheck": false,
+      "value_replace": [],
+      "unique_toggled": false,
+      "error": "string",
+      "hidden": false
+    },
+	...
+  ]
+}
+
+The fields above must exist for every action.
+
+You can assume the app, app_id, and parameters as fake data — just make them feel real.
+
+Actions can refer to results from previous steps using $label.field.path, for example:
+"value": "$http_1.body.result"
+where http_1 is the label of an earlier action.
+
+Ensure later steps chain properly from earlier ones — like parsing a response, then using a field from that in another action.
+
+Assign your own fake labels (like http_1, parse_json_1, etc.) to help with referencing.
+
+Value Referencing (Chaining):
+If an action needs a value from a previous step, use this format:
+
+$step_label.output.key
+
+Example: if step1 has label http_1, and it returned body and you want a field named result, use:
+
+$http_1.body.result
+
+
+dont include "json" word in the output, just return the JSON structure as is, without any markdown or back ticks
+
+Here are the high level atomic breakdown of steps of the  for the AI:
+%s
+`, contentOutput)
+
+	contentOutput, err = RunAiQuery(systemMessage, input.Query)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
+		return "", err
+	}
+		if len(contentOutput) == 0 {
+		log.Printf("[ERROR] AI response is empty")
+		return "", errors.New("AI response is empty")
+	}
+	log.Printf("[DEBUG] AI response: %s", contentOutput)
+
+	// var workflowJson []Workflow
+	return contentOutput, nil
+}
