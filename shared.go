@@ -26282,7 +26282,6 @@ func SortOrgList(orgs []OrgMini) []OrgMini {
 
 func findMissingChildren(ctx context.Context, workflowExecution *WorkflowExecution, children map[string][]string, inputNode string, checkedNodes []string) []string {
 	nextActions := []string{}
-
 	if ArrayContains(checkedNodes, inputNode) {
 		return nextActions
 	}
@@ -26295,8 +26294,10 @@ func findMissingChildren(ctx context.Context, workflowExecution *WorkflowExecuti
 		}
 	}
 
+
 	if !parentRan {
-		//log.Printf("Should run parent first.")
+		//log.Printf("[ERROR] Parent node %s hasn't run yet, skipping children search", inputNode)
+
 		return []string{inputNode}
 	} else {
 		// Starting from the startnode, go through the workflow one level at a time
@@ -26314,47 +26315,46 @@ func findMissingChildren(ctx context.Context, workflowExecution *WorkflowExecuti
 
 			if !found {
 				// Due to being too fast cleared
-				//cacheId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, child)
-				//_, err := GetCache(ctx, cacheId)
-				//if err != nil {
-				//	//log.Printf("[INFO] Missing execution (2): %s", child)
-				//	nextActions = append(nextActions, child)
-				//	continue
-				//}
-
 				cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, child)
 				_, err := GetCache(ctx, cacheId)
 				if err != nil {
-					//log.Printf("[INFO] Missing execution (2): %s", child)
 					nextActions = append(nextActions, child)
 				}
 			}
 		}
 
 		if foundCnt == len(children[inputNode]) {
-			//log.Printf("All nodes done. Check their child results. Child nodes: %d, found: %d", len(children[inputNode]), foundCnt)
-			// Run child nodes of this!
-			nextActions = []string{}
+			//log.Printf("[DEBUG] All nodes done (%s). Check their child results. Child nodes: %d, found: %d", inputNode, len(children[inputNode]), foundCnt)
 
 			// Randomize order as to keep digging
-			//for _, child := range rand.Perm(children[inputNode]) {
+			nextActions = []string{}
 			for _, child := range children[inputNode] {
 				next := findMissingChildren(ctx, workflowExecution, children, child, checkedNodes)
 
-				// Only doing one are at a time as to SLOWLY dig down into it
 				if len(next) > 0 {
+					// WARNING: Do NOT break here. 
+					// This has caused bugs before in complicated decision trees.
 					nextActions = append(nextActions, next...)
-					break
 				}
 			}
-
-			return nextActions
 		} else {
-			//log.Printf("Missing nodes. Found: %d, Expected: %d", foundCnt, len(children[inputNode]))
+			if debug { 
+				//log.Printf("[DEBUG] Missing nodes (%s). Found: %d, Expected: %d. NEXT: %#v", inputNode, foundCnt, len(children[inputNode]), nextActions)
+			}
 		}
 	}
 
-	return nextActions
+	// Dedup here
+	newList := []string{}
+	for _, next := range nextActions {
+		if ArrayContains(newList, next) {
+			continue
+		}
+
+		newList = append(newList, next)
+	}
+
+	return newList 
 }
 
 // Finds next actions that aren't already executed and don't have results
@@ -26419,31 +26419,18 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 		}
 
 		if foundCnt != 2 {
-			//log.Printf("[INFO] Missing branch fullfillment for src + dst!")
+			if debug { 
+				log.Printf("[ERROR] Missing branch fullfillment for src + dst! Source: %s, Destination: %s, Branch: %#v", branch.SourceID, branch.DestinationID, branch)
+			}
 		}
 	}
 
 	nextActions = findMissingChildren(ctx, workflowExecution, children, inputNode, []string{})
 
 	// SHOULD WE: Write code here which returns IF an action should be SKIPPED. If ALL parents are SKIPPED/FAILED, return something like []string{id:SKIPPED} -> parent function that calls this should make it SKIPPED
-	// Question: Should we just run SKIPPED requests directly from here, then NOT return the ID?
-
-	// Skipped request info:
-	// Look into sendSelfRequest AND areas where we send requests for ActionResult to self:
-	/*
-		ActionResult{
-			Action:        curaction,
-			ExecutionId:   workflowExecution.ExecutionId,
-			Authorization: workflowExecution.Authorization,
-			Result:        `{"success": false, "reason": "Skipped because it's not under the startnode (1)"}`,
-			StartedAt:     0,
-			CompletedAt:   0,
-			Status:        "SKIPPED",
-		}
-	*/
+	// Question: Should we just run SKIPPED requests directly from here, then NOT return the ID? Maybe set it in cache?
 
 	var updatedActions []string
-
 	for _, actionId := range nextActions {
 		skippedParents := 0
 
