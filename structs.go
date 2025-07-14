@@ -4047,8 +4047,9 @@ type SingleResult struct {
 }
 
 type DockerRequestCheck struct {
-	Name  string `datastore:"name" json:"name" yaml:"name"`
-	Image string `datastore:"image" json:"image" yaml:"image"`
+	Name			string	`datastore:"name" json:"name" yaml:"name"`
+	Image			string	`datastore:"image" json:"image" yaml:"image"`
+	ImageVersion	string	`datastore:"image_version" json:"image_version" yaml:"image_version"`
 }
 
 type Recommendations struct {

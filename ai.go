@@ -33,8 +33,9 @@ import (
 
 //var model = "gpt-4-turbo-preview"
 //var model = "gpt-4o-mini"
+//var model = "o4-mini"
 var standalone bool
-var model = "o4-mini"
+var model = "gpt-4.1-mini"
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID") 
 var assistantModel = model
@@ -355,7 +356,7 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 	httpOutput := &HTTPOutput{} 
 	err := json.Unmarshal(fullBody, &kmsResponse)
 	if err != nil {
-		log.Printf("[ERROR] %s - Failed to unmarshal Schemaless response to match SubflowData struct (1): %s", string(fullBody), err)
+		log.Printf("[ERROR] Failed to unmarshal schemaless response '%s': %s - Match SubflowData struct (1)", err, string(fullBody))
 		return *httpOutput, []byte{}, err
 	}
 
@@ -719,6 +720,7 @@ Strict output rules to follow:
 3. Output Format:
    - Provide corrected JSON
    - No comments. Must be valid JSON.
+   - Headers should be separated by newline between each key:value pair
    - Do NOT make the same output mistake twice. 
 
 4. Error Handling:
@@ -1325,7 +1327,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 		if len(foundCategory.Name) == 0 {
 			log.Printf("[DEBUG] No category found for app %s (%s). Checking based on input label, then using that category in app setup", app.Name, app.ID)
-			systemMessage := `Your goal is to find the correct CATEGORY for the app to be in. Synonyms are accepted, and you should be very critical to not make mistakes. If none match, don't add any. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate. If it exists, return {"success": true, "category": "<category>"} where <category> is replaced with the category found. If it does not exist, return {"success": false, "category": "Other"}. Output as only JSON."`
+			systemMessage := `Your goal is to find the correct CATEGORY for the app to be in. Synonyms are accepted, and you should be very critical to not make mistakes. If none match, don't add any. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate. If it exists, return {"success": true, "category": "<category>"} where <category> is replaced with the category found. If it does not exist, return {"success": false, "category": "Other"}. Output as JSON."`
 
 			categories := ""
 			for _, category := range availableCategories {
@@ -1423,13 +1425,34 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	//userMessage := "The available actions are as follows:\n"
 
 	if cacheGeterr != nil {
-		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate = contacts. Be extra careful of not confusing LIST and GET operations, based on the user query, respond with the most likely action. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as only JSON."`
+		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: case = alert = ticket = issue = task, or message = chat = communication. Be extra careful of not confusing LIST and GET operations, based on the user query, respond with the most likely action. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as JSON."`
 		userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
 
+		//changedNames := map[string]string{}
 		for _, action := range app.Actions {
 			if action.Name == "custom_action" {
 				continue
 			}
+
+			//userMessage += fmt.Sprintf("%s\n", action.Name)	
+			/*
+			newName := action.Name
+			if strings.HasPrefix(newName, "get_list") {
+				newName = strings.Replace(newName, "get_list", "list", 1)
+			} 
+
+			if strings.HasPrefix(newName, "post_") {
+				newName = strings.Replace(newName, "post_", "", 1)
+			} else if strings.HasPrefix(newName, "patch_") {
+				newName = strings.Replace(newName, "patch_", "", 1)
+			} else if strings.HasPrefix(newName, "put_") {
+				newName = strings.Replace(newName, "put_", "", 1)
+			} 
+
+			if newName != action.Name {
+				changedNames[action.Name] = newName
+			}
+			*/
 
 			userMessage += fmt.Sprintf("%s\n", action.Name)	
 		}
@@ -1438,8 +1461,14 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 			userMessage += fmt.Sprintf("\nUse the keys provided by the user. Your goal is to guess the action name with it's name as well. Keys: %s\n", strings.Join(keys, ", "))
 		}
 
-		log.Printf("[INFO] System message (find action): %s", systemMessage)
-		log.Printf("[INFO] User message (find action): %s", userMessage)
+		if debug { 
+			log.Printf("[DEBUG] System message (find action): %s", systemMessage)
+			log.Printf("[DEBUG] User message (find action): %s", userMessage)
+		}
+
+		if project.Environment == "cloud" {
+
+		}
 
 		output, err := RunAiQuery(systemMessage, userMessage) 
 		if err != nil {
@@ -1447,10 +1476,11 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 			return app, WorkflowAppAction{}
 		} 
 
+		if debug {
+			log.Printf("[DEBUG] Autocomplete output for label '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
+		}
+
 		output = FixContentOutput(output)
-
-		log.Printf("[DEBUG] Autocomplete output for label '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
-
 		err = json.Unmarshal([]byte(output), &actionStruct)
 		if err != nil {
 			log.Printf("[ERROR] FAILED action mapping parsed output: %s", output)
@@ -3537,7 +3567,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 
 	if len(outputBody) > 0 && bodyIndex >= 0 {
 		if debug { 
-			log.Printf("\n\n\n[INFO] Found matching body FROM MatchBodyWithInputdata(): %s\n\n", outputBody)
+			log.Printf("\n\n\n[DEBUG] Found matching body FROM MatchBodyWithInputdata(): %s\n\n", outputBody)
 		}
 		selectedAction.Parameters[bodyIndex].Value = outputBody
 	}
@@ -4673,7 +4703,7 @@ func DeleteFileSingul(ctx context.Context, filepath string) error {
 	*/
 
 	//return DeleteFile(ctx, fileId)
-	log.Printf("[ERROR] DeleteFileSingul() is not implemented for shuffle backend, meaning self-correcting measure may not work.")
+	//log.Printf("[ERROR] DeleteFileSingul() is not implemented for shuffle backend, meaning self-correcting measure may not work.")
 	return nil 
 }
 
@@ -6279,16 +6309,20 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 }
 
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) (Action, error) {
-	if debug { 
-		log.Printf("\n\nAI AGENT REWRITE (first request?). PARAMS: %d\n\n", len(startNode.Parameters))
-	}
-
 	//openai "github.com/sashabaranov/go-openai"
 	// Create the OpenAI body struct
-	systemMessage := `You are a general AI agent. You can make decisions based on the user input. You should output a list of decisions based on the input. Available actions  within categories you can choose from: ask: ask for human help. singul: `
+	systemMessage := `You are a general AI agent. You can make decisions based on the user input. You should output a list of decisions based on the input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it makes sense. 
+
+category standalone: 
+analyze 
+ask 
+
+category singul: `
 	userMessage := ""
 
-	openaiAllowedApps := []string{"openai", "grok"}
+	// Don't think this matters much
+	// See: https://github.com/Shuffle/singul?tab=readme-ov-file#llm-controls
+	openaiAllowedApps := []string{"openai"}
 	runOpenaiRequest := false
 	appname := ""
 
@@ -6312,9 +6346,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 					continue
 				}
 
-				systemMessage += fmt.Sprintf(", %s", strings.ReplaceAll(actionStr, " " , "_"))
+				systemMessage += fmt.Sprintf("%s\n", strings.ReplaceAll(actionStr, " " , "_"))
 
 			}
+
+			systemMessage += "\n\n"
 		}
 
 		if param.Name == "memory" {
@@ -6336,7 +6372,27 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 	// Will just have to make a translation system.
 	//typeOptions := []string{"ask", "singul", "workflow", "agent"}
 	typeOptions := []string{"ask", "singul"}
-	systemMessage += fmt.Sprintf(`. Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "appname", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. Indexes should be the same if they should run in parallell. The confidence is between 0 and 1. Runs are how many times it should run requests (default: 1, * for all looped items). Fields can be set manually, or use previous action output by adding them in the format {{action_name}}, such as {"key": "body": "value": "{{tickets[0].fieldname}}} to get the first ticket output from a previous decision. The {{action_name}} has to match EXACTLY the action name of a previous decision.`, strings.Join(typeOptions, ", "))
+	extraString := "Have a MINIMUM of two decisions. "
+	if len(typeOptions) == 0 {
+		extraString = ""
+	}
+
+	systemMessage += fmt.Sprintf(`. Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "<tool name>", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. 
+
+Formatting Rules:
+- If a tool or app is mentioned, add it to the tool field. Otherwise make the field empty.
+- Indexes should be the same if they should run in parallell. 
+- The confidence is between 0 and 1. 
+- Runs are how many times it should run requests (default: 1, * for all looped items). 
+- The {{action_name}} has to match EXACTLY the action name of a previous decision.
+- NEVER add unnecessary fields to the fields array, only add the ones that are absolutely needed for the action to run!
+- If you ask for user input, use the "ask" action and add a "question" field. 
+
+Decision Field Rules: 
+- Do NOT add random fields and do NOT guess formatting e.g. body formatting
+- Fields can be set manually, or use previous action output by adding them in the format {{action_name}}, such as {"key": "body": "value": "{{tickets[0].fieldname}}} to get the first ticket output from a previous decision.
+
+%s`, strings.Join(typeOptions, ", "), extraString)
 
 	systemMessage += `If you are missing information (such as emails) to make a list of decisions, just add a single decision which asks them to clarify the input better.`
 
@@ -6344,8 +6400,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 
 	completionRequest := openai.ChatCompletionRequest{
 		//Model: "gpt-4o-mini",
-		//Model: "gpt-4o",
-		Model: "o4-mini",
+		//Model: "gpt-4.1-mini",
+		Model: "o4-mini", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
@@ -6364,7 +6420,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		ResponseFormat: &openai.ChatCompletionResponseFormat{
 			Type: "json_object",
 		},
-		ReasoningEffort: "low",
+		ReasoningEffort: "medium",
 		Store: true,
 	}
 
@@ -6376,7 +6432,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (4): %s"}`, err),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (4): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6392,7 +6448,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (5): %s"}`, err),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (5): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6444,7 +6500,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (6): %s"}`, err),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (6): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6481,7 +6537,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (7): %s"}`, err),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (7): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6496,7 +6552,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (8): %s"}`, err),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (8): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6520,7 +6576,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (9): %s"}`, err),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (9): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6590,7 +6646,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 			execution.Status = "ABORTED"
 			execution.Results = append(execution.Results, ActionResult{
 				Status: "ABORTED",
-				Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (1): %s"}`, err),
+				Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (1): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 				Action: startNode,
 			})
 			go SetWorkflowExecution(ctx, execution, true)
@@ -6619,7 +6675,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 				execution.Status = "ABORTED"
 				execution.Results = append(execution.Results, ActionResult{
 					Status: "ABORTED",
-					Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (3): %s"}`, err),
+					Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (3): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 					Action: startNode,
 				})
 				go SetWorkflowExecution(ctx, execution, true)
@@ -6685,6 +6741,16 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		// Set the raw response
 		if !strings.HasPrefix(decisionString, `[`) || !strings.HasSuffix(decisionString, `]`) {
 			decisionString = choicesString
+		}
+
+		// Find the first one and remove anything until that point
+		if !strings.HasPrefix(decisionString, `[`) {
+			firstIndex := strings.Index(decisionString, "[")
+			if firstIndex != -1 {
+				decisionString = decisionString[firstIndex:]
+			} else {
+				log.Printf("[WARNING][%s] No '[' found in AI Agent response. Using full response: %s", execution.ExecutionId, decisionString)
+			}
 		}
 
 		errorMessage := ""
@@ -6860,6 +6926,135 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 
 	return startNode, nil
 
+}
+
+// Generates Workflows based on Singul
+// Main question: 
+// - Should we pre-define these? Or should it just "figure it out"?
+
+// Specific requirement for threatlist(s):
+// - URLs
+// - Where to put it (?)
+
+func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Input data:
+	// Data type (e.g. list_tickets, list_assets, threatlist_monitor etc)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Failed to authenticate user in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusUnauthorized)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorized"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to generate singul workflows: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading request body in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
+		return
+	}
+
+	categoryAction := CategoryAction{}
+	err = json.Unmarshal(body, &categoryAction)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling request body in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to parse request body"}`))
+		return
+	}
+
+	if len(categoryAction.Label) == 0 {
+		log.Printf("[ERROR] No label found in request body in GenerateSingulWorkflows")
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "No label found in request body"}`))
+		return
+	}
+
+	log.Printf("[AUDIT] Allowing user %s (%s) to generate singul workflows for category '%s'", user.Username, user.Id, categoryAction.Label)
+
+	// Removing unecessary fields just in case
+	categoryAction = CategoryAction{
+		AppName: categoryAction.AppName,
+		Label: categoryAction.Label,
+
+		Fields: categoryAction.Fields,
+		Category: categoryAction.Category,
+	}
+
+	// Deterministic IDs for the specific type. This is to ensure
+	// we just modify the existing one.
+	seedString := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, categoryAction.Label)
+	//if len(categoryAction.AppName) > 0 && categoryAction.AppName != categoryAction.Label {
+	//	seedString = fmt.Sprintf("%s_%s_%s", user.ActiveOrg.Id, categoryAction.Label, categoryAction.AppName)
+	//}
+
+	hash := sha1.New()
+	hash.Write([]byte(seedString))
+	hashBytes := hash.Sum(nil)
+
+	uuidBytes := make([]byte, 16)
+	copy(uuidBytes, hashBytes)
+	workflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
+	if debug {
+		log.Printf("[DEBUG] Getting workflow with ID %s for category '%s'", workflowId, categoryAction.Label)
+	}
+
+	ctx := GetContext(request)
+	workflow, err := GetWorkflow(ctx, workflowId)
+	if err != nil || workflow.ID == "" {
+		log.Printf("[WARNING] Failed to get workflow by ID in GenerateSingulWorkflows: %s", err)
+	}
+
+	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get default workflow in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get default workflow for this category. Please contact support@shuffler.io"}`))
+		return
+	}
+
+	workflow = &newWorkflow
+	workflow.ID = workflowId
+
+	if workflow.OrgId != user.ActiveOrg.Id && len(workflow.OrgId) > 0 {
+		log.Printf("[ERROR] Workflow with ID %s is not owned by the current organization (%s). It belongs to %s", workflowId, user.ActiveOrg.Id, workflow.OrgId)
+		resp.WriteHeader(http.StatusForbidden)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow does not belong to your organization. Please contact support@shuffler.io if this persists"}`))
+		return
+	}
+
+	if len(workflow.ID) == 0 || len(workflow.Name) == 0 || len(workflow.Actions) == 0 {
+		log.Printf("[ERROR] No workflow found for ID %s in GenerateSingulWorkflows", workflowId)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "No workflow found for this ID"}`))
+		return
+	}
+
+	workflow.OrgId = user.ActiveOrg.Id
+	err = SetWorkflow(ctx, *workflow, workflow.ID)
+	if err != nil {
+		log.Printf("[ERROR] Failed to set workflow in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to set workflow"}`))
+		return
+	}
+
+	resp.WriteHeader(http.StatusOK)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Workflow generated", "id": "%s"}`, workflow.ID)))
 }
 
 // Runs ANY AI query based on the system message and user message.
@@ -7038,380 +7233,4 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	}
 
 	return contentOutput, nil
-}
-
-// These are just specific examples for specific cases
-// FIXME: Should these be loaded from public workflows?
-// I kind of think so ~
-// That means each algorithm needs to be written as if-statements to
-// replace a specific part of a workflow :thinking:
-
-// Should workflows be written as YAML and be text-editable? 
-func GetDefaultWorkflowByType(workflow Workflow, orgId, actionType string) (Workflow, error) {
-	if len(orgId) == 0 {
-		return workflow, errors.New("Organization ID is empty")
-	}
-
-	parsedActiontype := strings.ReplaceAll(strings.ToLower(actionType), " ", "_")
-	if strings.Contains(strings.ToLower(actionType), "threat feed") {
-		parsedActiontype = "threatlist_monitor"
-	}
-
-	// If-else with specific rules per workflow
-	// Make sure it uses workflow -> copies data, as 
-	startActionId := uuid.NewV4().String()
-	startTriggerId := uuid.NewV4().String()
-
-	actionEnv := "cloud"
-	triggerEnv := "cloud"
-	ctx := context.Background()
-	if project.Environment != "cloud" {
-		triggerEnv = "onprem"
-
-		envs, err := GetEnvironments(ctx, orgId)
-		if err == nil { 
-			for _, env := range envs {
-				if env.Default {
-					actionEnv = env.Name
-					break
-				}
-			}
-		} else { 
-			actionEnv = "shuffle"
-		}
-	}
-
-	if parsedActiontype == "ingest_tickets" {
-		log.Printf("INGESTING TICKETS YAY")
-
-		defaultWorkflow := Workflow{
-			Name: actionType,
-			Description: "Monitor threatlists and ingest regularly",
-			OrgId: orgId,
-			Start: startActionId,
-			Actions: []Action{
-				Action{
-					Name: "Cases",
-					AppID: "integration",
-					AppName: "Singul",
-					ID: startActionId,
-					AppVersion: "1.0.0",
-					Environment: actionEnv,
-					Label: "List tickets",
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "action",
-							Value: "list_tickets",
-						},
-					},
-				},
-			},
-			Triggers: []Trigger{
-				Trigger{
-					ID: startTriggerId,
-					TriggerType: "SCHEDULE",
-					Label: "Pull threatlist URLs",
-					Environment: triggerEnv,
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "cron",
-							Value: "0 0 * * *", 
-						},
-						WorkflowAppActionParameter{
-							Name:  "execution_argument",
-							Value: "Automatically configured by Shuffle", 
-						},
-					},
-				},
-			},
-		}
-
-		workflow = defaultWorkflow
-		workflow.OrgId = orgId
-	} else if parsedActiontype == "threatlist_monitor" {
-		defaultWorkflow := Workflow{
-			Name: actionType,
-			Description: "Monitor threatlists and ingest regularly",
-			OrgId: orgId,
-			Start: startActionId,
-			Actions: []Action{
-				Action{
-					Name: "GET",
-					AppID: "HTTP",
-					AppName: "HTTP",
-					ID: startActionId,
-					AppVersion: "1.4.0",
-					Environment: actionEnv,
-					Label: "Get threatlist URLs",
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "url",
-							Value: "$shuffle_cache.threatlist_urls.value.#",
-						},
-					},
-				},
-				Action{
-					Name: "parse_ioc",
-					AppID: "Shuffle Tools",
-					AppName: "Shuffle Tools",
-					ID: uuid.NewV4().String(),
-					AppVersion: "1.2.0",
-					Environment: actionEnv,
-					Label: "Parse IOC",
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "input_string",
-							Value: "$get_threatlist_urls.#.body",
-						},
-						WorkflowAppActionParameter{
-							Name:  "input_type",
-							Value: "domain,ipv4,sha256",
-						},
-					},
-				},
-			},
-			Triggers: []Trigger{
-				Trigger{
-					ID: startTriggerId,
-					TriggerType: "SCHEDULE",
-					Label: "Pull threatlist URLs",
-					Environment: triggerEnv,
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "cron",
-							Value: "0 0 * * *", 
-						},
-						WorkflowAppActionParameter{
-							Name:  "execution_argument",
-							Value: "Automatically configured by Shuffle", 
-						},
-					},
-				},
-			},
-		}
-
-		// For now while testing
-		workflow = defaultWorkflow
-		workflow.OrgId = orgId
-
-		/*
-		if len(workflow.WorkflowVariables) == 0 {
-			workflow.WorkflowVariables = defaultWorkflow.WorkflowVariables
-		}
-
-		if len(workflow.Actions) == 0 {
-			workflow.Actions = defaultWorkflow.Actions
-		}
-
-		// Rules specific to this one
-		if len(workflow.Triggers) == 0 {
-			workflow.Triggers = defaultWorkflow.Triggers
-		}
-		*/
-
-		// Get the item with key "threatlist_urls" from datastore
-		ctx := GetContext(nil)
-		_, err := GetDatastoreKey(ctx, "threatlist_urls", "")
-		if err != nil {
-			//log.Printf("[INFO] Failed to get threatlist URLs from datastore. Making it.: %s", err)
-			urls := []string{
-				"https://sslbl.abuse.ch/blacklist/sslblacklist.csv",
-			}
-
-			jsonMarshalled, err := json.Marshal(urls)
-			if err != nil {
-				log.Printf("[ERROR] Failed to marshal threatlist URLs: %s", err)
-			} else {
-				key := CacheKeyData{
-					Key: "threatlist_urls",
-					Value: fmt.Sprintf(`%s`, string(jsonMarshalled)),
-					OrgId: orgId,
-				}
-
-				err = SetDatastoreKey(ctx, key)
-				if err != nil {
-					log.Printf("[ERROR] Failed to set threatlist URLs in datastore: %s", err)
-				} else {
-					log.Printf("[INFO] Successfully set threatlist URLs in datastore")
-				}
-			}
-		}
-	}
-
-	if len(workflow.Name) == 0 || len(workflow.Actions) == 0 {
-		return workflow, errors.New("Workflow name or ID is empty")
-	}
-
-	if workflow.Actions[0].Position.X == 0 && workflow.Actions[0].Position.Y == 0 {
-		addition := float64(200)
-		startXPosition := float64(0)
-		startYPosition := float64(0)
-		for triggerIndex, _ := range workflow.Triggers {
-			workflow.Triggers[triggerIndex].Position = Position{
-				X: startXPosition,
-				Y: startYPosition,
-			}
-
-			startXPosition += addition 
-		}
-
-		for actionIndex, _ := range workflow.Actions {
-			workflow.Actions[actionIndex].Position = Position{
-				X: startXPosition,
-				Y: startYPosition, 
-			}
-
-			startXPosition += addition 
-		}
-	}
-
-	if len(workflow.Actions)+len(workflow.Triggers) > 1 {
-		if len(workflow.Branches) == 0 {
-			// Connect from trigger -> action
-
-			sourceId := ""
-			destId := ""
-			if len(workflow.Triggers) == 1 {
-				sourceId = workflow.Triggers[0].ID
-				destId = workflow.Start
-			}
-
-			newBranch := Branch{
-				SourceID: sourceId,
-				DestinationID: destId,
-				ID: uuid.NewV4().String(),
-			}
-
-			workflow.Branches = append(workflow.Branches, newBranch)
-		}
-	}
-
-	return workflow, nil
-}
-
-// Generates Workflows based on Singul
-// Main question: 
-// - Should we pre-define these? Or should it just "figure it out"?
-
-// Specific requirement for threatlist(s):
-// - URLs
-// - Where to put it (?)
-
-func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	// Input data:
-	// Data type (e.g. list_tickets, list_assets, threatlist_monitor etc)
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[INFO] Failed to authenticate user in GenerateSingulWorkflows: %s", err)
-		resp.WriteHeader(http.StatusUnauthorized)
-		resp.Write([]byte(`{"success": false, "reason": "Unauthorized"}`))
-		return
-	}
-
-	if user.Role == "org-reader" {
-		log.Printf("[WARNING] Org-reader doesn't have access to generate singul workflows: %s (%s)", user.Username, user.Id)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
-		return
-	}
-
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		log.Printf("[ERROR] Failed reading request body in GenerateSingulWorkflows: %s", err)
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
-		return
-	}
-
-	categoryAction := CategoryAction{}
-	err = json.Unmarshal(body, &categoryAction)
-	if err != nil {
-		log.Printf("[ERROR] Failed unmarshalling request body in GenerateSingulWorkflows: %s", err)
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to parse request body"}`))
-		return
-	}
-
-	if len(categoryAction.Label) == 0 {
-		log.Printf("[ERROR] No label found in request body in GenerateSingulWorkflows")
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "No label found in request body"}`))
-		return
-	}
-
-	log.Printf("[AUDIT] Allowing user %s (%s) to generate singul workflows for category '%s'", user.Username, user.Id, categoryAction.Label)
-
-	// Removing unecessary fields just in case
-	categoryAction = CategoryAction{
-		AppName: categoryAction.AppName,
-		Label: categoryAction.Label,
-		Fields: categoryAction.Fields,
-	}
-
-	// Deterministic IDs for the specific type. This is to ensure
-	// we just modify the required.
-	seedString := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, categoryAction.Label)
-	if len(categoryAction.AppName) > 0 && categoryAction.AppName != categoryAction.Label {
-		seedString = fmt.Sprintf("%s_%s_%s", user.ActiveOrg.Id, categoryAction.Label, categoryAction.AppName)
-	}
-
-	hash := sha1.New()
-	hash.Write([]byte(seedString))
-	hashBytes := hash.Sum(nil)
-
-	uuidBytes := make([]byte, 16)
-	copy(uuidBytes, hashBytes)
-	workflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
-
-	if debug {
-		log.Printf("[DEBUG] Getting workflow with ID %s for category '%s'", workflowId, categoryAction.Label)
-	}
-
-	ctx := GetContext(request)
-	workflow, err := GetWorkflow(ctx, workflowId)
-	if err != nil || workflow.ID == "" {
-		log.Printf("[WARNING] Failed to get workflow by ID in GenerateSingulWorkflows: %s", err)
-	}
-
-	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction.Label)
-	if err != nil {
-		log.Printf("[ERROR] Failed to get default workflow in GenerateSingulWorkflows: %s", err)
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to get default workflow for this category. Please contact support@shuffler.io"}`))
-		return
-	}
-
-	workflow = &newWorkflow
-	workflow.ID = workflowId
-
-	if workflow.OrgId != user.ActiveOrg.Id && len(workflow.OrgId) > 0 {
-		log.Printf("[ERROR] Workflow with ID %s is not owned by the current organization (%s). It belongs to %s", workflowId, user.ActiveOrg.Id, workflow.OrgId)
-		resp.WriteHeader(http.StatusForbidden)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow does not belong to your organization. Please contact support@shuffler.io if this persists"}`))
-		return
-	}
-
-	if len(workflow.ID) == 0 || len(workflow.Name) == 0 || len(workflow.Actions) == 0 {
-		log.Printf("[ERROR] No workflow found for ID %s in GenerateSingulWorkflows", workflowId)
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(`{"success": false, "reason": "No workflow found for this ID"}`))
-		return
-	}
-
-	workflow.OrgId = user.ActiveOrg.Id
-	err = SetWorkflow(ctx, *workflow, workflow.ID)
-	if err != nil {
-		log.Printf("[ERROR] Failed to set workflow in GenerateSingulWorkflows: %s", err)
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to set workflow"}`))
-		return
-	}
-
-	resp.WriteHeader(http.StatusOK)
-	resp.Write([]byte(`{"success": true, "reason": "Not implemented yet"}`)) 
 }

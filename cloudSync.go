@@ -1576,9 +1576,30 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	distributingApp := false
+	if !app.Public && app.ReferenceOrg != user.ActiveOrg.Id && user.ActiveOrg.Role == "admin" {
+		if app.Owner == user.Id {
+			log.Printf("[INFO] App %s (%s) is owned by the user %s (%s). Distributing it to the org %s (%s)", app.Name, app.ID, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+			distributingApp = true
+		} else {
+			// check if the app belongs to parent org
+			org, err := GetOrg(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting org %s (%s): %s", user.ActiveOrg.Name, user.ActiveOrg.Id, err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
+				return
+			}
+			if org.CreatorOrg == app.ReferenceOrg {
+				log.Printf("[INFO] App %s (%s) is owned by the parent org %s (%s). Distributing it to the suborg %s (%s)", app.Name, app.ID, org.Name, org.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+				distributingApp = true
+			}
+		}
+	}
+
 	org := &Org{}
 	added := false
-	if app.Sharing || app.Public || !activate {
+	if app.Sharing || app.Public || !activate || distributingApp {
 		org, err = GetOrg(ctx, user.ActiveOrg.Id)
 		if err == nil {
 			if len(org.ActiveApps) > 150 {
@@ -1603,7 +1624,14 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				if !ArrayContains(org.ActiveApps, app.ID) {
 					org.ActiveApps = append(org.ActiveApps, app.ID)
 					added = true
+				} else if ArrayContains(org.ActiveApps, app.ID) && !app.Public {
+					// If the app is already in the org, we don't need to add it again
+					log.Printf("[DEBUG] App %s (%s) already exists in org %s (%s). Not adding again.", app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+					resp.WriteHeader(200)
+					resp.Write([]byte(`{"success": true, "reason": "App already exists in org"}`))
+					return
 				}
+
 			} else {
 				// Remove from the array
 				newActiveApps := []string{}
@@ -1735,8 +1763,14 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		RedirectUserRequest(resp, request)
 	}
 
+	reason := "App Activated"
+
+	if !activate {
+		reason = "App Deactivated"
+	}
+
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
+	resp.Write([]byte(`{"success": true,"reason": "` + reason + `"}`))
 }
 
 // For replicating HTTP request from schedule user
@@ -2259,16 +2293,14 @@ func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
 
 func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http.ResponseWriter, env *Environment) error {
 	if len(env.Id) == 0 || len(env.Name) == 0 {
+		// Avoiding this onprem as it doesn't make sense
+		if project.Environment != "cloud" {
+			return nil
+		}
 
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Environment ID or Name is not set"}`)))
 		return errors.New("Environment ID or Name is not set")
-
-		// Avoiding this onprem as it doesn't make sense
-		//if project.Environment == "cloud" {
-		//}  else {
-		//	return nil
-		//}
 	}
 
 	orborusLabel := request.Header.Get("x-orborus-label")

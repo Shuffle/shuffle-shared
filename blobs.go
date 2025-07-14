@@ -1,8 +1,422 @@
 package shuffle
 
+/*
+This file is for blobs that we use throughout Shuffle in many locations. If we want to optimise Shuffle, we need to use structured data stored somewhere, but just creating blobs is a quick way to get a lot of things up and running until it needs proper fixing
+*/
+
 import (
 	"os"
+	"errors"
+	"strings"
+	"context"
+	"fmt"
+	"log"
+	"encoding/json"
+
+	uuid "github.com/satori/go.uuid"
 )
+
+
+// These are just specific examples for specific cases
+// FIXME: Should these be loaded from public workflows?
+// I kind of think so ~
+// That means each algorithm needs to be written as if-statements to
+// replace a specific part of a workflow :thinking:
+
+// Should workflows be written as YAML and be text-editable? 
+func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction CategoryAction) (Workflow, error) {
+	actionType := categoryAction.Label  
+	appNames := categoryAction.AppName
+
+	if len(orgId) == 0 {
+		return workflow, errors.New("Organization ID is empty. Can't generate workflow.")
+	}
+
+	parsedActiontype := strings.ReplaceAll(strings.ToLower(actionType), " ", "_")
+	if strings.Contains(strings.ToLower(actionType), "threat feed") {
+		parsedActiontype = "threatlist_monitor"
+	}
+
+	// If-else with specific rules per workflow
+	// Make sure it uses workflow -> copies data, as 
+	startActionId := uuid.NewV4().String()
+	startTriggerId := workflow.ID
+	if len(startTriggerId) == 0 {
+		startTriggerId = uuid.NewV4().String()
+	}
+
+	actionEnv := "Cloud"
+	triggerEnv := "Cloud"
+	ctx := context.Background()
+	if project.Environment != "cloud" {
+		triggerEnv = "onprem"
+
+		envs, err := GetEnvironments(ctx, orgId)
+		if err == nil { 
+			for _, env := range envs {
+				if env.Default {
+					actionEnv = env.Name
+					break
+				}
+			}
+		} else { 
+			actionEnv = "Shuffle"
+		}
+	}
+
+	if parsedActiontype == "correlate_categories" {
+		defaultWorkflow := Workflow{
+			Name: actionType,
+			Description: "Correlates Datastore categories in Shuffle. The point is to graph data",
+			OrgId: orgId,
+			Start: startActionId,
+			Actions: []Action{
+				Action{
+					ID: startActionId,
+					Name: "repeat_back_to_me",
+					AppName: "Shuffle Tools",
+					AppVersion: "1.2.0",
+					Environment: actionEnv,
+					Label: "Start",
+					IsStartNode: true, 
+					Position: Position{
+						X: 250,
+						Y: 0,
+					},
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "call",
+							Value: "Some code here hello",
+							Multiline: true,
+						},
+					},
+				},
+			},
+		}
+
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+
+	} else if parsedActiontype == "ingest_tickets" {
+		defaultWorkflow := Workflow{
+			Name: actionType,
+			Description: "List tickets from different systems and ingest them",
+			OrgId: orgId,
+			Start: startActionId,
+			Actions: []Action{
+				Action{
+					Name: "Cases",
+					AppID: "integration",
+					AppName: "Singul",
+					ID: startActionId,
+					AppVersion: "1.0.0",
+					Environment: actionEnv,
+					Label: "List tickets",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "app_name",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "action",
+							Value: "List tickets",
+							Options: []string{
+								"List tickets",
+								"Create ticket",
+								"Close ticket",
+								"Add comment",
+							},
+						},
+						WorkflowAppActionParameter{
+							Name:  "fields",
+							Value: "",
+							Multiline: true,
+						},
+					},
+				},
+			},
+			Triggers: []Trigger{
+				Trigger{
+					ID: startTriggerId,
+					Name: "Schedule",
+					TriggerType: "SCHEDULE",
+					Label: "Ingest tickets",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "cron",
+							Value: "0 0 * * *", 
+						},
+						WorkflowAppActionParameter{
+							Name:  "execution_argument",
+							Value: "Automatically configured by Shuffle", 
+						},
+					},
+				},
+			},
+		}
+
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+	} else if parsedActiontype == "threatlist_monitor" {
+		defaultWorkflow := Workflow{
+			Name: actionType,
+			Description: "Monitor threatlists and ingest regularly",
+			OrgId: orgId,
+			Start: startActionId,
+			Actions: []Action{
+				Action{
+					Name: "GET",
+					AppID: "HTTP",
+					AppName: "HTTP",
+					ID: startActionId,
+					AppVersion: "1.4.0",
+					Environment: actionEnv,
+					Label: "Get threatlist URLs",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "url",
+							Value: "$shuffle_cache.threatlist_urls.value.#",
+						},
+					},
+				},
+				Action{
+					Name: "parse_ioc",
+					AppID: "Shuffle Tools",
+					AppName: "Shuffle Tools",
+					ID: uuid.NewV4().String(),
+					AppVersion: "1.2.0",
+					Environment: actionEnv,
+					Label: "Parse IOC",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "input_string",
+							Value: "$get_threatlist_urls.#.body",
+						},
+						WorkflowAppActionParameter{
+							Name:  "input_type",
+							Value: "domain,ipv4,sha256",
+						},
+					},
+				},
+			},
+			Triggers: []Trigger{
+				Trigger{
+					ID: startTriggerId,
+					Name: "Schedule",
+					TriggerType: "SCHEDULE",
+					Label: "Pull threatlist URLs",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "cron",
+							Value: "0 0 * * *", 
+						},
+						WorkflowAppActionParameter{
+							Name:  "execution_argument",
+							Value: "Automatically configured by Shuffle", 
+						},
+					},
+				},
+			},
+		}
+
+		// For now while testing
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+
+		/*
+		if len(workflow.WorkflowVariables) == 0 {
+			workflow.WorkflowVariables = defaultWorkflow.WorkflowVariables
+		}
+
+		if len(workflow.Actions) == 0 {
+			workflow.Actions = defaultWorkflow.Actions
+		}
+
+		// Rules specific to this one
+		if len(workflow.Triggers) == 0 {
+			workflow.Triggers = defaultWorkflow.Triggers
+		}
+		*/
+
+		// Get the item with key "threatlist_urls" from datastore
+		ctx := GetContext(nil)
+		_, err := GetDatastoreKey(ctx, "threatlist_urls", "")
+		if err != nil {
+			//log.Printf("[INFO] Failed to get threatlist URLs from datastore. Making it.: %s", err)
+			urls := []string{
+				"https://sslbl.abuse.ch/blacklist/sslblacklist.csv",
+			}
+
+			jsonMarshalled, err := json.Marshal(urls)
+			if err != nil {
+				log.Printf("[ERROR] Failed to marshal threatlist URLs: %s", err)
+			} else {
+				key := CacheKeyData{
+					Key: "threatlist_urls",
+					Value: fmt.Sprintf(`%s`, string(jsonMarshalled)),
+					OrgId: orgId,
+				}
+
+				err = SetDatastoreKey(ctx, key)
+				if err != nil {
+					log.Printf("[ERROR] Failed to set threatlist URLs in datastore: %s", err)
+				} else {
+					log.Printf("[INFO] Successfully set threatlist URLs in datastore")
+				}
+			}
+		}
+	}
+
+	if len(workflow.Name) == 0 || len(workflow.Actions) == 0 {
+		return workflow, errors.New("Workflow name or ID is empty")
+	}
+
+	// Appends actions in the workflow 
+	positionAddition := float64(250)
+	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && len(appNames) > 0 {
+		actionTemplate := workflow.Actions[0]
+
+		// Pre-defining it with a startnode that does nothing
+		workflow.Actions = []Action{
+			Action{
+				ID: startActionId,
+				Name: "repeat_back_to_me",
+				AppName: "Shuffle Tools",
+				AppVersion: "1.2.0",
+				Environment: actionEnv,
+				Label: "Start",
+				IsStartNode: true, 
+				Position: Position{
+					X: 250,
+					Y: 0,
+				},
+				Parameters: []WorkflowAppActionParameter{
+					WorkflowAppActionParameter{
+						Name:  "call",
+						Value: "",
+						Multiline: true,
+					},
+				},
+			},
+		}
+
+		// Point from trigger(s) to startnode (repeater)
+		for _, trigger := range workflow.Triggers { 
+			newBranch := Branch{
+				SourceID: trigger.ID,
+				DestinationID: workflow.Start,
+				ID: uuid.NewV4().String(),
+			}
+
+			workflow.Branches = append(workflow.Branches, newBranch)
+		}
+
+		for appIndex, appName := range strings.Split(appNames, ",") {
+			newAction := actionTemplate
+			newAction.ID = uuid.NewV4().String()
+			newAction.Parameters = append([]WorkflowAppActionParameter(nil), actionTemplate.Parameters...)
+
+			// Positioning
+			newAction.Position.X = positionAddition*float64(appIndex)
+			newAction.Position.Y = positionAddition
+
+
+			// Point from startnode to current one
+			newBranch := Branch{
+				SourceID: workflow.Start,
+				DestinationID: newAction.ID,
+				ID: uuid.NewV4().String(),
+			}
+
+			workflow.Branches = append(workflow.Branches, newBranch)
+
+			appNameIndex := -1
+			for paramIndex, param := range actionTemplate.Parameters {
+				if param.Name == "app_name" || param.Name == "appName" {
+					appNameIndex = paramIndex
+					break
+				}
+			}
+
+			newAction.Label += " " + appName
+			if appNameIndex >= 0 {
+				newAction.Parameters[appNameIndex].Value = appName
+			} else {
+				newAction.Parameters = append(newAction.Parameters, WorkflowAppActionParameter{
+					Name:  "app_name",
+					Value: appName,
+				})
+
+				appNameIndex = len(newAction.Parameters) - 1
+			}
+
+			workflow.Actions = append(workflow.Actions, newAction)
+		}
+	}
+
+	if workflow.Actions[0].Position.X == 0 && workflow.Actions[0].Position.Y == 0 {
+		startXPosition := float64(0)
+		startYPosition := float64(0)
+		for triggerIndex, _ := range workflow.Triggers {
+			workflow.Triggers[triggerIndex].Position = Position{
+				X: startXPosition,
+				Y: startYPosition,
+			}
+
+			startXPosition += positionAddition 
+		}
+
+		for actionIndex, _ := range workflow.Actions {
+			workflow.Actions[actionIndex].Position = Position{
+				X: startXPosition,
+				Y: startYPosition, 
+			}
+
+			startXPosition += positionAddition 
+		}
+	}
+
+	if len(workflow.Actions) > 0 {
+		for _, action := range workflow.Actions {
+			if action.AppID == "integration" || action.AppName == "Singul" {
+
+				for _, param := range action.Parameters {
+					if (param.Name == "app_name" || param.Name == "appName") && len(param.Value) == 0 {
+						log.Printf("[DEBUG] Should verify if an app of type '%s' exists", action.Name)
+					}
+				}
+			}
+		}
+	}
+
+	if len(workflow.Actions)+len(workflow.Triggers) > 1 {
+		if len(workflow.Branches) == 0 {
+			// Connect from trigger -> action
+
+			sourceId := ""
+			destId := ""
+			if len(workflow.Triggers) == 1 {
+				sourceId = workflow.Triggers[0].ID
+				destId = workflow.Start
+			}
+
+			newBranch := Branch{
+				SourceID: sourceId,
+				DestinationID: destId,
+				ID: uuid.NewV4().String(),
+			}
+
+			workflow.Branches = append(workflow.Branches, newBranch)
+		}
+	}
+
+	// API-available, but not UI visible by default
+	//workflow.Hidden = true
+
+	return workflow, nil
+}
 
 func GetPublicDetections() []DetectionResponse {
 	return []DetectionResponse{
