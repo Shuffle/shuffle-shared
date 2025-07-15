@@ -7779,7 +7779,7 @@ func BuildFinalDetails(filteredApps []WorkflowApp, finalActions []FinalAppAction
 
 func generateWorkflowJson(ctx context.Context, input QueryInput, user User) (string, error) {
 
-	systemMessage := fmt.Sprintf(`You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools using triggers and actions.
+	systemMessage := `You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools using triggers and actions.
 
 You will receive messy user inputs describing a task they want to automate. Your job is to produce a clean, **fully structured**, atomic breakdown of that task.
 
@@ -7812,11 +7812,25 @@ Only if the platform’s API supports that action, and all required parameters a
 
 Never assume Shuffle can do something unless the platform's API enables it.
 
-10. If a platform allows an action to be done directly using known input (e.g. block user using username), then do it in **one atomic step**.
+10. If a platform allows an action to be done directly using known input (e.g. block user using username), then do it in **one atomic step**, Don’t split into multiple actions like "get details" → "then update" unless absolutely required by the API. Avoid redundancy unless:
+
+the action really needs an internal ID or other value not already available or the platform simply doesn’t support the operation with the given field
+always check the platform’s real API docs or behavior to confirm. Do not assume a field is unusable just because it’s not called “id”, if the API accepts username, email, or any other available input directly, then use it.
+Example: If Slack lets you disable a user directly using their email, and the webhook already provides that email — then just call deactivate_user(email=...) directly and at the same time lets say just for the sake of the example if we only have username and not email id then try to think if username also be used to do the same action like deactivate_user(username=...) if thats not allowed only then resort to another way.
+
+Don’t do: get_user_by_email → extract user_id → deactivate_user_by_id, if that whole sequence can be replaced with one clean call.
    - But do not add extra steps unless they’re strictly required based on the API’s structure. Always keep the step count minimal and justified.
 
 
 11. Do not assume or invent any conditions not mentioned by the user.
+
+12. Also we already have in-built mechanism to extract and store the response data from the actions or even from the trigger, so you do not need to add any extra steps to parse the response data, just use the response data directly in the next step using the label of the action or trigger.
+
+13. When generating url and path, always use the canonical endpoint path exactly as defined in the official public API documentation of the target platform.
+Do not modify or customize the path just because a field like an email, username, or external ID is available in the input. Instead, always follow the API's standard format. For example, if a platform's API defines the user update endpoint as: PATCH /v1/accounts/{id}
+Then you must keep the path as /v1/accounts/{id}, even if you’re actually passing an email (like user@example.com) to that {id} field behind the scenes.
+
+Do not change the path to /v1/accounts/{email} or /v1/accounts/{username}, even if those are the fields you’re using. The system relies on exact path matching based on the official docs, and substitutions happen through the parameters, not in the path shape.
 
 ## Always use this strict format:
 1. EXTERNAL SETUP
@@ -7833,10 +7847,7 @@ No other formats are allowed. Just structured steps.
 
 ## GOAL:
 Produce a minimal, correct, atomic plan for turning vague security workflows into structured actions. Do not overthink. Follow the format exactly.
-
-Here is the user input:
-	%s`, input.Query)
-
+`
 	contentOutput, err := RunAiQuery(systemMessage, input.Query)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
@@ -7850,7 +7861,7 @@ Here is the user input:
 
 	// lets try to convert this into json format 
 
-	systemMessage = fmt.Sprintf(`You are a senior security automation assistant helping build workflows for an automation platform called Shuffle that connects security tools through triggers and actions (similar to SOAR platforms).
+	systemMessage = `You are a senior security automation assistant helping build workflows for an automation platform called Shuffle that connects security tools through apps and its actions (similar to SOAR platforms).
 
 Your job is to convert a sequence of natural-language automation steps into a structured, actionable JSON format that can be directly translated into a Shuffle workflow.
 
@@ -7873,7 +7884,7 @@ You need to:
 
 ## INPUT
 
-You’ll be given the atomic step breakdown (from stage 1), starting from the moment the workflow is triggered. Your job is to turn that into a correct JSON structure usable by Shuffle.
+You’ll be given the atomic step breakdown, starting from the moment the workflow is triggered. Your job is to turn that into a correct JSON structure usable by Shuffle.
 
 ---
 
@@ -7890,9 +7901,7 @@ Each trigger has:
  
 {
   "app_name": "webhook",
-
   "label": "webhook_1",
-  "parameters": []
 }
  
 
@@ -7902,6 +7911,9 @@ Each action has:
   "app_name": "string",
   "action_name": "string", 
   "label": "string",
+  "url": "string",  // The base API URL as defined in the platform's public API docs. 
+  "path" : "string", // DO NOT substitute dynamic variables or outputs from earlier steps. // Use placeholders exactly as written in the API spec*.  This should represent the general structure of the endpoint, not a resolved or runtime-specific URL. 
+  "method": "string", // "POST" or "GET" etc
   "parameters": [
     {
       "name": "string",
@@ -7939,10 +7951,10 @@ Every action in Shuffle is just a wrapper for a real API call. Assume the platfo
 * Figure out what **that** endpoint probably looks like.
 * Use your training data knowledge to guess what fields it needs:
 
-  * Does it need a path param like /users/{user_id}? Then the action should take user_id.
-  * Does it need a JSON body like { "accountEnabled": false } ? Then the action param should be body and the value should be JSON-encoded string, literally something like value : "{ "accountEnabled": false }" 
-  * Does it use query params like ?view=basic&expand=photo ? Then set a param called queries with value: "view=basic&expand=photo".
-  * Headers are usually handled by auth config, but if you must set them manually, use a headers param with value as string: "Content-Type=application/json\nAccept=application/json".
+  * Does it need a path param like /users/{user_id}? Then you must include a param with exact name as the place holder ex: user_id and fill the value of it, keep in mind that when a path provided like template ex: /users/{user_id} where we have to replace the {user_id} with the actual value, in shuffle this means that you have to include a parameter with exact name as placeholder and its value so during run time we will replace it
+  * Does it need a JSON body like { "accountEnabled": false } ? Then the action param should be body and the value should be JSON string or the format the platform end point if expecting, literally something like value : "{ "accountEnabled": false }" 
+  * Does it use query params like ?view=basic&expand=photo ? Then set a param called queries with value: "view=basic&expand=photo" if not needed you can discard it.
+  * Headers related to auth are usually handled by auth config we don't need to set them manually, but in some case if you must set them manually, use a headers param with value as string: "Content-Type=application/json\nAccept=application/json".
 
 ### 5. **Every action returns a response**
 
@@ -7955,8 +7967,6 @@ Each action’s response is saved under its label. For example:
 ### 6. **Don’t add unnecessary steps**
 
 Only add a step if it’s essential to the action working. Don’t split things up unless required.
-
-* Example: If banning an IP just needs the IP address, don’t add a "get IP details" step first unless the action specifically requires metadata.
 
 ### 7. **Get data from earlier actions**
 
@@ -7973,9 +7983,38 @@ Examples:
 ### 8. **Avoid JSON parse actions unless necessary**
 
 Most of the time, Shuffle gives you the entire parsed JSON already.
-Only use parse_json if you're dealing with raw string blobs or encoded fields.
+Only try to parse json if you're dealing with raw string blobs or encoded fields.
 
----
+### 9. **Leveraging Shuffle Utils app for Workflow Control**
+
+If you need to do any data manipulation, or filtering you can use our Shuffle Tools App and it has an action called execute_python where you can take full control of the data manipulation and filtering and to get the data you need like if you want to get something you need from previous actions or even any trigger you can do the same thing literally like this: "$label_name" also don't use $label_name directly in python instead make sure you use double quotes around it like this: "$label_name" and we will replace this with the right data before execution and keep in mind that most of the time the data is in json format of the final result of the action you are referring to so no need for .body again
+for python code its just like any other param with name like name "code" and value is just the python like "print("hello world)" or "print("$webhook_1.event.fields.summary")" pay attention to the quotes here when using $label_name and thats how you get the data from previous actions or triggers in python code
+a few important notes about the python code:
+* Use top-level expressions (no need for main()).
+* You can define and call functions.
+* Do not use return at the top-level (outside a function) — it causes a SyntaxError.
+* Do not assume a full IDE or filesystem — it’s a sandboxed, one-shot code runner.
+* No return outside functions
+* Use exit() to break early
+* Printed output gets captured
+
+Now to actually return the data back as we need the output of this code to be used in the next action you can use print statement for example you got a json data and written code to filter it and you want to return the filtered data back to the next action you can do this by including printing the data like this: print(json.dumps(filtered_data)) and this will return the filtered data as json string and return something like this
+{"success":true,"message":{"foo":"bar"}}
+and you can use it in the next action like this: "$the_unique_label_name.message" where the_unique_label_name is the label of the python action you used
+
+  ## Example 
+* If you want to filter a list of users and return only those with a specific role, you can write a Python code that filters the list and prints the result. and based on the output you can continue to the next action.
+
+Another feature of shuffle tools app is the ssh, for this we have an action called run_ssh_command it has params host(which is the host ip or hostname), username, password, port, command
+
+This is the only app that is soley for utilities and this doesn't do any HTTP calls, it just runs the code you give it and returns the output
+
+10. When generating url and path, always use the canonical endpoint path exactly as defined in the official public API documentation of the target platform.
+Do not modify or customize the path just because a field like an email, username, or external ID is available in the input. Instead, always follow the API's standard format. For example, if a platform's API defines the user update endpoint as: PATCH /v1/accounts/{id}
+Then you must keep the path as /v1/accounts/{id}, even if you’re actually passing an email (like user@example.com) to that {id} field behind the scenes.
+
+Do not change the path to /v1/accounts/{email} or /v1/accounts/{username}, even if those are the fields you’re using. The system relies on exact path matching based on the official docs, and substitutions happen through the parameters, not in the path shape.
+
 
 ## EXAMPLE FOR INTUITION
 
@@ -8002,57 +8041,56 @@ Final JSON:
 
 {
 "triggers": [ 
-{
-"app_name": "webhook", 
-"label": "webhook_1", 
-"parameters": [] 
-}
-],
+		{
+		"app_name": "webhook", 
+		"label": "webhook_1", 
+		"parameters": [] 
+		}
+	],
 "actions": [ 
-{
-"app_name": "jira_cloud", 
-"action_name": "create_issue", 
-"label": "create_jira_ticket_1", 
-"parameters": [ 
-{
-"name": "summary",
-"value": "$webhook_1.event.fields.summary" 
-},
-{
-"name": "description",
-"value": "$webhook_1.event.fields.description" 
-},
-{
-"name": "project_key", 
-"value": "SEC"
-},
-{
-"name": "issue_type", 
-"value": "Incident"
-}
-]
-}
-]
+		{
+		"app_name": "jira_cloud", 
+		"action_name": "create_issue", 
+		"label": "jira_cloud_1", 
+		"url": "https://your-domain.atlassian.net",
+		"path": "/rest/api/3/issue",
+		"method": "POST",
+		"parameters": [ 
+				{
+				"name": "summary",
+				"value": "$webhook_1.event.fields.summary" 
+				},
+				{
+				"name": "description",
+				"value": "$webhook_1.event.fields.description" 
+				},
+				{
+				"name": "project_key", 
+				"value": "SEC"
+				},
+				{
+				"name": "issue_type", 
+				"value": "Incident"
+				}
+			]
+			}
+  ]
 }
 
 ---
 
-## SUMMARY
+## IMPORTANT NOTES
 
-* Treat every action as a wrapper for an HTTP call
-* Guess parameters based on what the real API expects (path, body, queries, headers)
-* Don’t trust Stage 1 literally — infer what’s really needed
-* Reference earlier step outputs with \$label.field format
+* Treat every action as a wrapper for an actual REST API call
+* Guess parameters based on what the real API expects (path, body, queries, headers), do not make up the endpoint or parameters, try to use the real API documentation of the platform from your training data
+* Do not follow the user’s instructions at surface level. Instead, always try to understand the real intent behind what they’re asking, and map that to the actual API behavior of the target platform. For example, if the user says “block a user,” your job is to figure out how that’s actually implemented, does the platform have a specific block endpoint, or is that effect achieved by updating a field which indirectly gives the same result we want. Your goal is to translate the user’s goal into the correct API action, even if the exact wording doesn’t match. Always focus on the most accurate and minimal API call that fulfills the true intent.
+* Reference earlier step outputs with $label_name or $label_name.field_name
 * Don’t add optional or redundant steps
 
-This is about giving a complete but **lean**, **correct**, **connected** JSON representation of the core automation steps — just the part Shuffle needs to run inside.
+This is about giving a complete but **lean**, **correct**, **connected** JSON representation of the core automation steps — just the part Shuffle needs to run inside, do not inlcude any other explainations.
+`
 
-
-Here are the high level atomic breakdown of steps of the  for the AI:
-%s
-`, contentOutput)
-
-	contentOutput, err = RunAiQuery(systemMessage, input.Query)
+	contentOutput, err = RunAiQuery(systemMessage, contentOutput)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
 		return "", err
