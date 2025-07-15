@@ -875,7 +875,8 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	orgStats, err := GetOrgStatistics(ctx, orgId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting org statistics for %s (%s): %s", org.Name, org.Id, err)
-		return org, errors.New(fmt.Sprintf("Failed getting the organization statistics %s: %s", orgId, err))
+		//return org, errors.New(fmt.Sprintf("Failed getting the organization statistics %s: %s", orgId, err))
+		return org, nil
 	}
 
 	if org.Billing.AppRunsHardLimit > 0 && orgStats.MonthlyAppExecutions > org.Billing.AppRunsHardLimit {
@@ -895,7 +896,8 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		validationOrgStats, err = GetOrgStatistics(ctx, org.CreatorOrg)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting creator org statistics for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
-			return org, errors.New(fmt.Sprintf("Failed getting the creator organization statistics %s: %s", validationOrg.CreatorOrg, err))
+			//return org, errors.New(fmt.Sprintf("Failed getting the creator organization statistics %s: %s", validationOrg.CreatorOrg, err))
+			return org, nil
 		}
 
 		log.Printf("[INFO] Using creator org %s (%s) for org %s (%s)", validationOrg.Name, validationOrg.Id, org.CreatorOrg, org.Id)
