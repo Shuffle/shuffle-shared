@@ -1513,43 +1513,55 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 
 		if int64(AlertThreshold.Count) < totalAppExecutions && AlertThreshold.Email_send == false {
 
+			allAdmins := []string{}
+
 			for _, user := range org.Users {
 				if user.Role == "admin" {
-					// var BccAddress []string
-					// if int64(AlertThreshold.Count) >= 5000 || int64(AlertThreshold.Count) >= 10000 && AlertThreshold.Email_send == false {
-					// 	BccAddress = []string{"support@shuffler.io", "jay@shuffler.io"}
-					// }
-					Subject := fmt.Sprintf("[Shuffle]: You've reached the app-runs threshold limit for your account %s", org.Name)
-					// mailbody := Mailcheck{
-					// 	Targets: []string{user.Username},
-					// 	Subject: "You have reached the threshold limit of app executions",
-					// 	Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
-					// }
-
-					AppRunsPercentage := float64(totalAppExecutions) / float64(org.SyncFeatures.AppExecutions.Limit) * 100
-
-					substitutions := map[string]interface{}{
-						"app_runs_usage":            totalAppExecutions,
-						"app_runs_limit":            org.SyncFeatures.AppExecutions.Limit,
-						"app_runs_usage_percentage": int64(AppRunsPercentage),
-						"org_name":                  org.Name,
-						"org_id":                    org.Id,
-					}
-
-					err = sendMailSendgridV2(
-						[]string{user.Username, "support@shuffler.io", "jay@shuffler.io"},
-						Subject,
-						substitutions,
-						false,
-						"d-3678d48b2b7144feb4b0b4cff7045016",
-					)
-					// err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false, BccAddress)
-					if err != nil {
-						log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
-					} else {
-						emailSend = true
-					}
+					allAdmins = append(allAdmins, user.Username)
 				}
+			}
+
+			// var BccAddress []string
+			// if int64(AlertThreshold.Count) >= 5000 || int64(AlertThreshold.Count) >= 10000 && AlertThreshold.Email_send == false {
+			// 	BccAddress = []string{"support@shuffler.io", "jay@shuffler.io"}
+			// }
+			Subject := fmt.Sprintf("[Shuffle]: You've reached the app-runs threshold limit for your account %s", org.Name)
+			// mailbody := Mailcheck{
+			// 	Targets: []string{user.Username},
+			// 	Subject: "You have reached the threshold limit of app executions",
+			// 	Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
+			// }
+
+			AppRunsPercentage := float64(totalAppExecutions) / float64(org.SyncFeatures.AppExecutions.Limit) * 100
+
+			substitutions := map[string]interface{}{
+				"app_runs_usage":            totalAppExecutions,
+				"app_runs_limit":            org.SyncFeatures.AppExecutions.Limit,
+				"app_runs_usage_percentage": int64(AppRunsPercentage),
+				"org_name":                  org.Name,
+				"org_id":                    org.Id,
+			}
+
+			if !ArrayContains(allAdmins, "jay@shuffler.io") {
+				allAdmins = append(allAdmins, "jay@shuffler.io")
+			}
+
+			if !ArrayContains(allAdmins, "support@shuffler.io") {
+				allAdmins = append(allAdmins, "support@shuffler.io")
+			}
+
+			err = sendMailSendgridV2(
+				allAdmins,
+				Subject,
+				substitutions,
+				false,
+				"d-3678d48b2b7144feb4b0b4cff7045016",
+			)
+			// err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false, BccAddress)
+			if err != nil {
+				log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
+			} else {
+				emailSend = true
 			}
 
 			if emailSend {
