@@ -875,7 +875,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	orgStats, err := GetOrgStatistics(ctx, orgId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting org statistics for %s (%s): %s", org.Name, org.Id, err)
-		return org, errors.New(fmt.Sprintf("Failed getting the organization statistics %s: %s", orgId, err))
+		return org, nil
 	}
 
 	if org.Billing.AppRunsHardLimit > 0 && orgStats.MonthlyAppExecutions > org.Billing.AppRunsHardLimit {
