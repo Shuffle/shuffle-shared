@@ -1114,6 +1114,7 @@ func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
 	return workflowExecution
 }
 
+// Sanitizes Liquid formatting to ensure it can't run retroactively
 func sanitizeString(input string) string {
 	// Sanitize instances of {{...}}
 	for strings.Contains(input, "{{") && strings.Contains(input, "}}") {
@@ -4141,6 +4142,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	for _, user := range data.Users {
 		user.Password = ""
 		user.Session = ""
+		user.ApiKey = ""
 		user.PrivateApps = []WorkflowApp{}
 		user.MFA = MFAInfo{}
 		user.Authentication = []UserAuth{}
@@ -4148,6 +4150,8 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		user.PublicProfile = PublicProfile{}
 		user.LoginInfo = []LoginInfo{}
 		user.PersonalInfo = PersonalInfo{}
+
+		//user.Orgs = []string{}
 
 		newUsers = append(newUsers, user)
 	}
@@ -12693,13 +12697,12 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	}
 
 	// NOT returning without this, as we want to cache even when
-	// there isn't data in the key. This just makes general loading of individual
-	// keys faster
-	if len(cacheData.Key) > 0 {
-		if debug {
-			log.Printf("[DEBUG] Found key '%s' in datastore with org '%s' and category '%s'", cacheData.Key, cacheData.OrgId, cacheData.Category)
-		}
-	}
+	// there isn't data in the key. This just makes general loading of individual keys faster
+	//if len(cacheData.Key) > 0 {
+	//	if debug {
+	//		log.Printf("[DEBUG] Found key '%s' in datastore with org '%s' and category '%s'", cacheData.Key, cacheData.OrgId, cacheData.Category)
+	//	}
+	//}
 
 	if project.CacheDb {
 		data, err := json.Marshal(cacheData)
@@ -13871,7 +13874,9 @@ func GetAppStats(ctx context.Context, id string) (*Conversionevents, error) {
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, stats); err != nil {
-			log.Printf("[WARNING] Error in appstats loading of %s: %s", id, err)
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[ERROR] Error in appstats loading of %s: %s", id, err)
+			}
 		}
 	}
 

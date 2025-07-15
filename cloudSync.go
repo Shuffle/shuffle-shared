@@ -876,38 +876,57 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		return org, errors.New(fmt.Sprintf("Failed getting the organization %s: %s", orgId, err))
 	}
 
-	// Allows parent & childorgs to run as much as they want. No limitations
-	if len(org.ChildOrgs) > 0 || len(org.ManagerOrgs) > 0 {
-		// log.Printf("[DEBUG] Execution for org '%s' (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
-		return org, nil
+	orgStats, err := GetOrgStatistics(ctx, orgId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org statistics for %s (%s): %s", org.Name, org.Id, err)
+		return org, errors.New(fmt.Sprintf("Failed getting the organization statistics %s: %s", orgId, err))
 	}
 
-	info, err := GetOrgStatistics(ctx, orgId)
-	if err == nil {
-		// log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
-		org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
-		if org.SyncFeatures.AppExecutions.Limit <= 10000 {
-			org.SyncFeatures.AppExecutions.Limit = 10000
-		} else {
-			// FIXME: Not strictly enforcing other limits yet
-			// Should just warn our team about them going over
-			org.SyncFeatures.AppExecutions.Limit = 15000000000
-		}
+	if org.Billing.AppRunsHardLimit > 0 && orgStats.MonthlyAppExecutions > org.Billing.AppRunsHardLimit {
+		log.Printf("[WARNING] Org %s (%s) has exceeded the app runs hard limit (%d/%d)", org.Name, org.Id, orgStats.MonthlyAppExecutions, org.Billing.AppRunsHardLimit)
 
-		//log.Printf("[DEBUG] Org %s (%s) has values: org.LeadInfo.POV: %v, org.LeadInfo.Internal: %v", org.Name, org.Id, org.LeadInfo.POV, org.LeadInfo.Internal)
-
-		// FIXME: When inside this, check if usage should be sent to the user
-		// if (org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit) && !(org.LeadInfo.POV || org.LeadInfo.Internal) {
-		if (org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit) && !(org.LeadInfo.POV) {
-			return org, errors.New(fmt.Sprintf("You are above your limited usage of app executions this month (%d / %d) when running with triggers. Contact support@shuffler.io or the live chat to extend this for org %s (%s)", org.SyncFeatures.AppExecutions.Usage, org.SyncFeatures.AppExecutions.Limit, org.Name, org.Id))
-		}
-
-		return org, nil
-	} else {
-		//log.Printf("[WARNING] Failed finding executions for org %s (%s)", org.Name, org.Id)
+		return org, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the app runs hard limit (%d/%d)", org.Name, org.Id, orgStats.MonthlyAppExecutions, org.Billing.AppRunsHardLimit))
 	}
 
-	return org, nil
+	validationOrg := org
+	validationOrgStats := orgStats
+
+	if len(org.CreatorOrg) > 0 {
+		validationOrg, err = GetOrg(ctx, org.CreatorOrg)
+		if err != nil {
+			return org, errors.New(fmt.Sprintf("Failed getting the creator organization %s: %s", org.CreatorOrg, err))
+		}
+		validationOrgStats, err = GetOrgStatistics(ctx, org.CreatorOrg)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting creator org statistics for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
+			return org, errors.New(fmt.Sprintf("Failed getting the creator organization statistics %s: %s", validationOrg.CreatorOrg, err))
+		}
+
+		log.Printf("[INFO] Using creator org %s (%s) for org %s (%s)", validationOrg.Name, validationOrg.Id, org.CreatorOrg, org.Id)
+	}
+
+	// Allows partners and POV users to run workflows without limits
+	if validationOrg.LeadInfo.POV || validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.ServicePartner {
+		return validationOrg, nil
+	}
+
+	// If enterprise customer then don't block them
+	if validationOrg.LeadInfo.Customer && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+		return validationOrg, nil
+	}
+
+	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
+
+	if totalAppExecutions >= validationOrg.SyncFeatures.AppExecutions.Limit {
+		log.Printf("[WARNING] Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit)
+		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit))
+	}
+
+	if debug {
+		log.Printf("[INFO] Org %s (%s) has %d/%d app executions this month", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit)
+	}
+
+	return validationOrg, nil
 }
 
 func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
@@ -1561,9 +1580,30 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	distributingApp := false
+	if !app.Public && app.ReferenceOrg != user.ActiveOrg.Id && user.ActiveOrg.Role == "admin" {
+		if app.Owner == user.Id {
+			log.Printf("[INFO] App %s (%s) is owned by the user %s (%s). Distributing it to the org %s (%s)", app.Name, app.ID, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+			distributingApp = true
+		} else {
+			// check if the app belongs to parent org
+			org, err := GetOrg(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting org %s (%s): %s", user.ActiveOrg.Name, user.ActiveOrg.Id, err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
+				return
+			}
+			if org.CreatorOrg == app.ReferenceOrg {
+				log.Printf("[INFO] App %s (%s) is owned by the parent org %s (%s). Distributing it to the suborg %s (%s)", app.Name, app.ID, org.Name, org.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+				distributingApp = true
+			}
+		}
+	}
+
 	org := &Org{}
 	added := false
-	if app.Sharing || app.Public || !activate {
+	if app.Sharing || app.Public || !activate || distributingApp {
 		org, err = GetOrg(ctx, user.ActiveOrg.Id)
 		if err == nil {
 			if len(org.ActiveApps) > 150 {
@@ -1588,7 +1628,14 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				if !ArrayContains(org.ActiveApps, app.ID) {
 					org.ActiveApps = append(org.ActiveApps, app.ID)
 					added = true
+				} else if ArrayContains(org.ActiveApps, app.ID) && !app.Public {
+					// If the app is already in the org, we don't need to add it again
+					log.Printf("[DEBUG] App %s (%s) already exists in org %s (%s). Not adding again.", app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+					resp.WriteHeader(200)
+					resp.Write([]byte(`{"success": true, "reason": "App already exists in org"}`))
+					return
 				}
+
 			} else {
 				// Remove from the array
 				newActiveApps := []string{}
@@ -1720,8 +1767,14 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		RedirectUserRequest(resp, request)
 	}
 
+	reason := "App Activated"
+
+	if !activate {
+		reason = "App Deactivated"
+	}
+
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
+	resp.Write([]byte(`{"success": true,"reason": "` + reason + `"}`))
 }
 
 // For replicating HTTP request from schedule user
@@ -2244,16 +2297,14 @@ func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
 
 func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http.ResponseWriter, env *Environment) error {
 	if len(env.Id) == 0 || len(env.Name) == 0 {
+		// Avoiding this onprem as it doesn't make sense
+		if project.Environment != "cloud" {
+			return nil
+		}
 
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Environment ID or Name is not set"}`)))
 		return errors.New("Environment ID or Name is not set")
-
-		// Avoiding this onprem as it doesn't make sense
-		//if project.Environment == "cloud" {
-		//}  else {
-		//	return nil
-		//}
 	}
 
 	orborusLabel := request.Header.Get("x-orborus-label")

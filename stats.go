@@ -1340,7 +1340,9 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.WeeklyCloudExecutions = 0
 	executionInfo.WeeklyOnpremExecutions = 0
 
+	// Cleans up "random" stats as well
 	for additionIndex, _ := range executionInfo.Additions {
+		executionInfo.Additions[additionIndex].Value = 0
 		executionInfo.Additions[additionIndex].DailyValue = 0
 	}
 
@@ -1362,6 +1364,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyApiUsage = 0
 		executionInfo.MonthlyAIUsage = 0
 		executionInfo.LastMonthlyResetMonth = currentMonth
+		executionInfo.LastUsageAlertThreshold = 0
 	}
 
 	return executionInfo
@@ -1459,6 +1462,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 
 	if appendCustom {
 		//log.Printf("[DEBUG] Appending custom data type %s for org %s", dataType, orgStatistics.OrgId)
+		dataType = strings.ToLower(strings.Replace(dataType, " ", "_", -1))
 
 		found := false
 		for additionIndex, addition := range orgStatistics.Additions {
@@ -1505,7 +1509,9 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 
 	for index, AlertThreshold := range org.Billing.AlertThreshold {
 
-		if int64(AlertThreshold.Count) < orgStatistics.MonthlyAppExecutions && AlertThreshold.Email_send == false {
+		totalAppExecutions := orgStatistics.MonthlyAppExecutions + orgStatistics.MonthlyChildAppExecutions
+
+		if int64(AlertThreshold.Count) < totalAppExecutions && AlertThreshold.Email_send == false {
 
 			for _, user := range org.Users {
 				if user.Role == "admin" {
@@ -1520,9 +1526,16 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 					// 	Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
 					// }
 
+					AppRunsPercentage := float64(totalAppExecutions) / float64(org.SyncFeatures.AppExecutions.Limit) * 100
+
 					substitutions := map[string]interface{}{
-						"AlertThreshold": AlertThreshold.Count,
+						"app_runs_usage":            totalAppExecutions,
+						"app_runs_limit":            org.SyncFeatures.AppExecutions.Limit,
+						"app_runs_usage_percentage": int64(AppRunsPercentage),
+						"org_name":                  org.Name,
+						"org_id":                    org.Id,
 					}
+
 					err = sendMailSendgridV2(
 						[]string{user.Username, "support@shuffler.io", "jay@shuffler.io"},
 						Subject,
@@ -1548,6 +1561,104 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				}
 				log.Printf("[DEBUG] Successfully sent alert mail for org %s", orgId)
 			}
+		}
+	}
+
+	// hard limit aleart
+	if org.Billing.AppRunsHardLimit > 0 && orgStatistics.MonthlyAppExecutions > org.Billing.AppRunsHardLimit {
+		// send alert to all admin in the orgs
+		subject := fmt.Sprintf("App Runs Hard Limit Exceeded for Org %s (%s)", org.Name, org.Id)
+		message := fmt.Sprintf(
+			`Dear Team,
+
+			Your organization <strong>%s</strong> (ID: %s) has exceeded the monthly app runs hard limit of <strong>%d</strong> runs.
+
+			<strong>Current usage:</strong> %d app runs.
+			
+			As a result, all workflows have been temporarily blocked until the start of the next billing cycle.
+			To increase your organization's hard limit, please visit the admin panel of the parent organization.
+			If you have any questions, feel free to reach out to us at <a href="mailto:support@shuffler.io">support@shuffler.io</a>.
+			
+			Note: This is an automated message sent by Shuffle to notify you about the exceeded app runs hard limit.
+
+			Best regards, 
+			The Shuffler Team`,
+			org.Name, org.Id, org.Billing.AppRunsHardLimit, orgStatistics.MonthlyAppExecutions,
+		)
+
+		admins := []string{}
+
+		for _, user := range org.Users {
+			if user.Role == "admin" {
+				admins = append(admins, user.Username)
+			}
+		}
+
+		err = sendMailSendgrid(admins, subject, message, false, []string{})
+		if err != nil {
+			log.Printf("[ERROR] Failed sending alert email to admins of org %s (%s): %s", org.Name, org.Id, err)
+		}
+	}
+
+	if dataType == "app_executions" || dataType == "childorg_app_executions" {
+		log.Printf("[INFO] Checking alert thresholds for org %s with data type %s", orgStatistics.OrgId, dataType)
+
+		validationOrg := org
+		validationOrgStatistics := orgStatistics
+
+		if len(org.CreatorOrg) > 0 {
+			validationOrg, err = GetOrg(ctx, org.CreatorOrg)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting parent org in increment: %s", err)
+				return validationOrgStatistics
+			}
+
+			validationOrgStatistics, err = GetOrgStatistics(ctx, org.CreatorOrg)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting parent org statistics in increment: %s", err)
+				return validationOrgStatistics
+			}
+		}
+
+		totalExecutions := float64(validationOrgStatistics.MonthlyAppExecutions) + float64(validationOrgStatistics.MonthlyChildAppExecutions)
+		limit := float64(validationOrg.SyncFeatures.AppExecutions.Limit)
+		percentage := (totalExecutions / limit) * 100
+
+		var currentThreshold int64
+		if percentage >= 100 {
+			currentThreshold = int64(100 + ((int(percentage)-100)/50)*50)
+		}
+
+		if currentThreshold >= 100 && currentThreshold > validationOrgStatistics.LastUsageAlertThreshold {
+			// send mail use different subject line as it will sent only to the team
+			Subject := fmt.Sprintf("[Support] Exceeded app executions for org %s (%s)", validationOrg.Name, validationOrg.Id)
+
+			totalAppExecutions := validationOrgStatistics.MonthlyAppExecutions + validationOrgStatistics.MonthlyChildAppExecutions
+			AppRunsPercentage := float64(totalAppExecutions) / float64(validationOrg.SyncFeatures.AppExecutions.Limit) * 100
+
+			substitutions := map[string]interface{}{
+				"app_runs_usage":            totalAppExecutions,
+				"app_runs_limit":            validationOrg.SyncFeatures.AppExecutions.Limit,
+				"app_runs_usage_percentage": int64(AppRunsPercentage),
+				"org_name":                  validationOrg.Name,
+				"org_id":                    validationOrg.Id,
+			}
+
+			err = sendMailSendgridV2(
+				[]string{"support@shuffler.io", "jay@shuffler.io"},
+				Subject,
+				substitutions,
+				false,
+				"d-3678d48b2b7144feb4b0b4cff7045016",
+			)
+
+			if err != nil {
+				log.Printf("[ERROR] Failed sending alert mail for child org in increment: %s", err)
+			} else {
+				log.Printf("[DEBUG] Successfully sent alert mail for child org %s to parent org %s", validationOrg.Name, validationOrg.Name)
+			}
+
+			orgStatistics.LastUsageAlertThreshold = currentThreshold
 		}
 	}
 
