@@ -7915,20 +7915,21 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					isPartner = true
 				}
 
+				// Check if the partner org owns the workflow and user is an admin
 				if isPartner && (len(workflow.Owner) > 0 && workflow.Owner == user.ActiveOrg.Id && user.Role == "admin") {
-					// First case : Check if the partner org owns the workflow and user is an admin
 					log.Printf("[INFO] User %s (%s) is saving a public workflow %s as a partner org", user.Username, user.Id, workflow.ID)
 					correctUser = true
 					tmpworkflow.Public = true
 					workflow.Public = true
+
+				// Check if the user is the owns the workflow
 				}else if (len(workflow.Owner) > 0 && workflow.Owner == user.Id) {
-					// Second case : Check if the user is the owner of the workflow
 					log.Printf("[INFO] User %s (%s) is saving a public workflow %s", user.Username, user.Id, workflow.ID)
 					correctUser = true
 					tmpworkflow.Public = true
 					workflow.Public = true
 				}else {
-					// Third case : Check if the user is allowed to edit the public workflow (Algolia Creator search)
+					// Check if the user is allowed to edit the public workflow (Algolia Creator search)
 					algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, user.PublicProfile.GithubUsername)
 					if err != nil {
 						// Using the Allowlist to check if the user is allowed to edit the public workflow
@@ -10222,25 +10223,18 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.BackupConfig = BackupConfig{}
 		workflow.ExecutingOrg = OrgMini{}
 		workflow.Org = []OrgMini{}
-
 		isPartner := false
 		if len(workflow.Owner) > 0 {
+			// From now on, we will have the owner ID (Org || User)
 			org, err := GetOrg(ctx, workflow.Owner)
-			if err != nil {
-				// If the owner is user not org
-				log.Printf("[WARNING] Failed getting org for public workflow'%s': %s", workflow.ID, err)
-				
-				if workflow.Owner != user.Id {
-					// If the user doesn't own the workflow, then don't show the owner
-					workflow.Owner = ""
-				}
-			}else{
-				// If the owner is org not user now check if the org is a partner
+
+			if err == nil {
+				// So the owner is org not user now check if the org is a partner
 				if org.LeadInfo.TechPartner || org.LeadInfo.IntegrationPartner || org.LeadInfo.DistributionPartner || org.LeadInfo.ServicePartner || org.LeadInfo.ChannelPartner{
 					isPartner = true
 				}
 				
-				// If the org is a partner, Check if that org owns the workflow (if not then don't show the owner)
+				// If the org is a partner, Check if that org owns the workflow (if not then don't show the owner id)
 				if isPartner && workflow.Owner != user.ActiveOrg.Id && user.Role != "admin" {
 					workflow.Owner = ""
 				}
@@ -10248,6 +10242,20 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 				if !isPartner {
 					workflow.Owner = ""
 				}
+			}else{
+				// So the owner is user not org
+				log.Printf("[WARNING] Failed getting org for public workflow'%s': %s", workflow.ID, err)
+				
+				// Check if the active user is the actual owner of that public workflow
+				if workflow.Owner != user.Id {
+					// If the user doesn't own the workflow, then don't show the owner
+					workflow.Owner = ""
+				}
+			}
+		}else{
+			// Backward compatibility: Previously we did not store owner or orgId when publishing workflows, only the "updated by" field is there which can be used to determine the owner.
+			if user.Username == workflow.UpdatedBy{
+				workflow.Owner = user.Id
 			}
 		}
 		
