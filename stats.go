@@ -1519,7 +1519,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 					// if int64(AlertThreshold.Count) >= 5000 || int64(AlertThreshold.Count) >= 10000 && AlertThreshold.Email_send == false {
 					// 	BccAddress = []string{"support@shuffler.io", "jay@shuffler.io"}
 					// }
-					Subject := fmt.Sprintf("[Support] You have reached the threshold limit of app executions")
+					Subject := fmt.Sprintf("[Shuffle]: You've reached the app-runs threshold limit for your account %s", org.Name)
 					// mailbody := Mailcheck{
 					// 	Targets: []string{user.Username},
 					// 	Subject: "You have reached the threshold limit of app executions",
