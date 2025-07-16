@@ -890,7 +890,9 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	if len(org.CreatorOrg) > 0 {
 		validationOrg, err = GetOrg(ctx, org.CreatorOrg)
 		if err != nil {
-			return org, errors.New(fmt.Sprintf("Failed getting the creator organization %s: %s", org.CreatorOrg, err))
+			log.Printf("[WARNING] Failed getting creator org %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
+			//return org, errors.New(fmt.Sprintf("Failed getting the creator organization %s: %s", org.CreatorOrg, err))
+			return org, nil
 		}
 		validationOrgStats, err = GetOrgStatistics(ctx, org.CreatorOrg)
 		if err != nil {
