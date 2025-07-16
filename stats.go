@@ -747,7 +747,8 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 	// FIXME: Can look for childorg_app_executions here as well which
 	// would make tracking app runs at scale recursively work
 	// The problem is... recursion (:
-	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "app_executions" || dataType == "app_runs") {
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "app_executions") {
 		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
 			if len(managerOrg.Id) == 36 {
 				IncrementCache(ctx, managerOrg.Id, "childorg_app_executions", int(dbDumpInterval))
@@ -829,51 +830,67 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 
 		//log.Printf("[DEBUG] Incremented org stats for %s", orgId)
 	} else {
-		tx, err := project.Dbclient.NewTransaction(ctx)
-		if err != nil {
-			log.Printf("[WARNING] Error in cache dump: %s", err)
-			return err
-		}
+		maxRetries := 3
+		for i := 0; i < maxRetries; i++ {
+			concurrentTxn = false
 
-		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
-		if err := tx.Get(key, orgStatistics); err != nil {
+			tx, err := project.Dbclient.NewTransaction(ctx)
+			if err != nil {
+				log.Printf("[WARNING] Error in cache dump: %s", err)
+				return err
+			}
 
-			if strings.Contains(fmt.Sprintf("%s", err), "no such entity") {
-				log.Printf("[DEBUG] Continuing by creating entity for org %s", orgId)
-			} else {
-				if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-					log.Printf("[ERROR] Failed getting stats in increment: %s", err)
-					tx.Rollback()
-					return err
+			key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
+			if err := tx.Get(key, orgStatistics); err != nil {
+				if strings.Contains(fmt.Sprintf("%s", err), "no such entity") {
+					log.Printf("[DEBUG] Continuing by creating entity for org %s", orgId)
+				} else {
+					if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+						log.Printf("[ERROR] Failed getting stats in increment: %s", err)
+						tx.Rollback()
+						return err
+					}
 				}
 			}
-		}
 
-		if orgStatistics.OrgName == "" || orgStatistics.OrgName == orgStatistics.OrgId {
-			org, err := GetOrg(ctx, orgId)
-			if err == nil {
-				orgStatistics.OrgName = org.Name
+			if orgStatistics.OrgName == "" || orgStatistics.OrgName == orgStatistics.OrgId {
+				org, err := GetOrg(ctx, orgId)
+				if err == nil {
+					orgStatistics.OrgName = org.Name
+				}
+
+				orgStatistics.OrgId = orgId
 			}
 
-			orgStatistics.OrgId = orgId
-		}
+			orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
+			orgStatistics = handleDailyCacheUpdate(orgStatistics)
 
-		orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
-		orgStatistics = handleDailyCacheUpdate(orgStatistics)
-		// Transaction control
-		if _, err := tx.Put(key, orgStatistics); err != nil {
-			log.Printf("[WARNING] Failed setting stats: %s", err)
-			tx.Rollback()
-			return err
-		}
-
-		if _, err = tx.Commit(); err != nil {
-			log.Printf("[ERROR] Failed commiting stats: %s", err)
-			if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
-				concurrentTxn = true
-				errMsg = fmt.Sprintf("%s", err)
+			// Transaction control
+			if _, err := tx.Put(key, orgStatistics); err != nil {
+				log.Printf("[WARNING] Failed setting stats: %s", err)
+				tx.Rollback()
+				return err
 			}
+
+			if _, err = tx.Commit(); err != nil {
+				log.Printf("[ERROR] Failed commiting stats: %s", err)
+				if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
+					concurrentTxn = true
+					errMsg = fmt.Sprintf("%s", err)
+					time.Sleep(time.Duration(200*(i+1)) * time.Millisecond)
+					continue
+				}
+				return err
+			}
+
+			break
 		}
+
+		if concurrentTxn {
+			log.Printf("[ERROR] Failed to update stats for org %s after %d retries: concurrent transaction error: %s", orgId, maxRetries, errMsg)
+			return errors.New(errMsg)
+		}
+
 	}
 
 	// Could use cache for everything, really
@@ -1381,16 +1398,12 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.DailyChildAppExecutions += int64(increment)
 		orgStatistics.HourlyChildAppExecutions += int64(increment)
 
-	} else if dataType == "app_executions" || strings.HasPrefix(dataType, "app_executions") {
+	} else if dataType == "app_executions" {
 		orgStatistics.TotalAppExecutions += int64(increment)
 		orgStatistics.MonthlyAppExecutions += int64(increment)
 		orgStatistics.WeeklyAppExecutions += int64(increment)
 		orgStatistics.DailyAppExecutions += int64(increment)
 		orgStatistics.HourlyAppExecutions += int64(increment)
-
-		if dataType != "app_executions" {
-			appendCustom = true
-		}
 
 	} else if dataType == "workflow_executions" {
 		orgStatistics.TotalWorkflowExecutions += int64(increment)
@@ -1460,6 +1473,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		appendCustom = true
 	}
 
+	if strings.HasPrefix(dataType, "app_executions") && dataType != "app_executions" {
+		appendCustom = true
+	}
+
 	if appendCustom {
 		//log.Printf("[DEBUG] Appending custom data type %s for org %s", dataType, orgStatistics.OrgId)
 		dataType = strings.ToLower(strings.Replace(dataType, " ", "_", -1))
@@ -1513,43 +1530,71 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 
 		if int64(AlertThreshold.Count) < totalAppExecutions && AlertThreshold.Email_send == false {
 
+			allAdmins := []string{}
+			firstAdmin := ""
+			allShufflerEmails := true
+
 			for _, user := range org.Users {
 				if user.Role == "admin" {
-					// var BccAddress []string
-					// if int64(AlertThreshold.Count) >= 5000 || int64(AlertThreshold.Count) >= 10000 && AlertThreshold.Email_send == false {
-					// 	BccAddress = []string{"support@shuffler.io", "jay@shuffler.io"}
-					// }
-					Subject := fmt.Sprintf("[Support] You have reached the threshold limit of app executions")
-					// mailbody := Mailcheck{
-					// 	Targets: []string{user.Username},
-					// 	Subject: "You have reached the threshold limit of app executions",
-					// 	Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
-					// }
+					allAdmins = append(allAdmins, user.Username)
 
-					AppRunsPercentage := float64(totalAppExecutions) / float64(org.SyncFeatures.AppExecutions.Limit) * 100
-
-					substitutions := map[string]interface{}{
-						"app_runs_usage":            totalAppExecutions,
-						"app_runs_limit":            org.SyncFeatures.AppExecutions.Limit,
-						"app_runs_usage_percentage": int64(AppRunsPercentage),
-						"org_name":                  org.Name,
-						"org_id":                    org.Id,
+					if firstAdmin == "" && !strings.Contains(user.Username, "shuffler.io") {
+						firstAdmin = user.Username
 					}
 
-					err = sendMailSendgridV2(
-						[]string{user.Username, "support@shuffler.io", "jay@shuffler.io"},
-						Subject,
-						substitutions,
-						false,
-						"d-3678d48b2b7144feb4b0b4cff7045016",
-					)
-					// err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false, BccAddress)
-					if err != nil {
-						log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
-					} else {
-						emailSend = true
+					if !strings.Contains(user.Username, "shuffler.io") {
+						allShufflerEmails = false
 					}
 				}
+			}
+
+			if allShufflerEmails && firstAdmin == "" && len(allAdmins) > 0 {
+				firstAdmin = allAdmins[0]
+			}
+
+			// var BccAddress []string
+			// if int64(AlertThreshold.Count) >= 5000 || int64(AlertThreshold.Count) >= 10000 && AlertThreshold.Email_send == false {
+			// 	BccAddress = []string{"support@shuffler.io", "jay@shuffler.io"}
+			// }
+
+			Subject := fmt.Sprintf("[Shuffle]: You've reached the app-runs threshold limit for your account %s", firstAdmin)
+			// mailbody := Mailcheck{
+			// 	Targets: []string{user.Username},
+			// 	Subject: "You have reached the threshold limit of app executions",
+			// 	Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
+			// }
+
+			AppRunsPercentage := float64(totalAppExecutions) / float64(org.SyncFeatures.AppExecutions.Limit) * 100
+
+			substitutions := map[string]interface{}{
+				"app_runs_usage":            totalAppExecutions,
+				"app_runs_limit":            org.SyncFeatures.AppExecutions.Limit,
+				"app_runs_usage_percentage": int64(AppRunsPercentage),
+				"org_name":                  org.Name,
+				"org_id":                    org.Id,
+				"admin_email":               firstAdmin,
+			}
+
+			if !ArrayContains(allAdmins, "jay@shuffler.io") {
+				allAdmins = append(allAdmins, "jay@shuffler.io")
+			}
+
+			if !ArrayContains(allAdmins, "support@shuffler.io") {
+				allAdmins = append(allAdmins, "support@shuffler.io")
+			}
+
+			err = sendMailSendgridV2(
+				allAdmins,
+				Subject,
+				substitutions,
+				false,
+				"d-3678d48b2b7144feb4b0b4cff7045016",
+			)
+			// err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false, BccAddress)
+			if err != nil {
+				log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
+			} else {
+				emailSend = true
 			}
 
 			if emailSend {

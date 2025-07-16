@@ -1187,6 +1187,37 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	org.SyncConfig.Apikey = ""
 	org.SyncConfig.Source = ""
 
+	if user.SupportAccess {
+		// send all suborgs for support users
+		org.ChildOrgs = []OrgMini{}
+		allChildOrgs, err := GetAllChildOrgs(ctx, org.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting child orgs for %s: %s", org.Id, err)
+		} else {
+			for _, childorg := range allChildOrgs {
+				// add only those that are not added to org.ChildOrgs
+				found := false
+				for _, suborg := range org.ChildOrgs {
+					if suborg.Id == childorg.Id {
+						found = true
+						break
+					}
+
+				}
+
+				if !found {
+					org.ChildOrgs = append(org.ChildOrgs, OrgMini{
+						Id:         childorg.Id,
+						Name:       childorg.Name,
+						CreatorOrg: childorg.CreatorOrg,
+						Image:      childorg.Image,
+						RegionUrl:  childorg.RegionUrl,
+					})
+				}
+			}
+		}
+	}
+
 	// This is for sending branding information
 	// to those who need it
 	if sanitizeOrg {
