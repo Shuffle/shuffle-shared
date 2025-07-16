@@ -7888,6 +7888,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.InputQuestions[qIndex].Required = true
 	}
 
+	isPartner := false
 	correctUser := false
 	if user.Id != tmpworkflow.Owner || tmpworkflow.Public == true {
 		log.Printf("[AUDIT] User %s is accessing workflow %s (save workflow)", user.Username, tmpworkflow.ID)
@@ -7901,6 +7902,31 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			if project.Environment == "cloud" {
 				//algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, username)
 
+				org, err := GetOrg(ctx, user.ActiveOrg.Id)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting org for public workflow edit: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "message": Failed getting org}`))
+					return
+
+				}else{
+					// Check if the org is marked as Partner
+					if org.LeadInfo.TechPartner || org.LeadInfo.IntegrationPartner || org.LeadInfo.DistributionPartner || org.LeadInfo.ServicePartner || org.LeadInfo.ChannelPartner {
+						isPartner = true
+					}	
+					
+					if isPartner && user.ActiveOrg.Id == tmpworkflow.OrgId && user.Role == "admin" {
+						correctUser = true
+						tmpworkflow.Public = true
+						workflow.Public = true
+					}
+
+					if workflow.Owner == user.Id {
+						correctUser = true
+					    tmpworkflow.Public = true
+						workflow.Public = true
+					}
+				}
 				algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, user.PublicProfile.GithubUsername)
 				if err != nil {
 					allowList := os.Getenv("GITHUB_USER_ALLOWLIST")
@@ -8485,9 +8511,17 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Only happens if the workflow is public and being edited
 	if correctUser {
 		workflow.Public = true
+		// This is the Id used to store the public workflow ownership in algolia which we use to get the public workflows for user or org
+		creatorId := ""	
 
+		if isPartner && user.ActiveOrg.Id == tmpworkflow.OrgId && (user.Role == "admin") {
+			creatorId = workflow.OrgId
+		}else if user.Id == workflow.Owner {
+			creatorId = user.Id
+		}
+	
 		// Should save it in Algolia too?
-		_, err = handleAlgoliaWorkflowUpdate(ctx, workflow)
+		_, err = handleAlgoliaWorkflowUpdate(ctx, workflow, creatorId)
 		if err != nil {
 			log.Printf("[ERROR] Failed finding publicly changed workflow %s for user %s (%s): %s", workflow.ID, user.Username, user.Id, err)
 		} else {
@@ -10186,7 +10220,19 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.BackupConfig = BackupConfig{}
 		workflow.ExecutingOrg = OrgMini{}
 		workflow.Org = []OrgMini{}
-		workflow.OrgId = ""
+		
+		if user.ActiveOrg.Id != workflow.OrgId {
+			workflow.OrgId = ""
+		}
+
+		if user.Id != workflow.Owner {
+			workflow.Owner = ""
+		}
+
+		// Backward compatibility
+		if len(workflow.Owner) == 0 && user.Username == workflow.UpdatedBy {
+			workflow.Owner = user.Id
+		}
 
 		if !isOwner {
 			workflow.PreviouslySaved = false
@@ -12884,9 +12930,8 @@ func SanitizeWorkflow(workflow Workflow) Workflow {
 		_ = variable
 	}
 
-	workflow.Owner = ""
+	// Removed the OrgId and OwnerId from the Sanitization (To store with Ids in DB)
 	workflow.Org = []OrgMini{}
-	workflow.OrgId = ""
 	workflow.ExecutingOrg = OrgMini{}
 	workflow.PreviouslySaved = false
 

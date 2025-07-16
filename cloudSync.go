@@ -748,7 +748,7 @@ func GetWorkflowPriority(workflow Workflow) int {
 	return prio
 }
 
-func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string, error) {
+func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow, creatorId string) (string, error) {
 	log.Printf("[INFO] Should try to UPLOAD the Workflow to Algolia")
 
 	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
@@ -841,6 +841,10 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 	record.Categories = categories
 	record.ActionReferences = actionRefs
 
+	if len(creatorId) > 0 {
+		record.Creator = creatorId
+	}
+	
 	record.Priority = GetWorkflowPriority(workflow)
 	record.Validated = workflow.Validated
 
