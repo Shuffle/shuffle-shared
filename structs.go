@@ -4553,8 +4553,90 @@ type SyncKey struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
-type partnerReturnStruct struct {
-	Success bool     `json:"success"`
-	Partner *Partner `json:"partner"`
+type MatchedApps struct {
+	AppName         string          `json:"app_name"`
+	MatchedCategory string          `json:"matched_category"`
 }
 
+type SelectedApp struct {
+	Category string `json:"category"`
+	App      string `json:"app"`
+}
+
+// What AI gives you per app:
+type AIAppIntent struct {
+    Category            string   `json:"category"`
+    AppName             string   `json:"app_name"`
+    IntentDescription   string   `json:"intent_description"`
+    PossibleActionLabels []string `json:"possible_action_labels"` // Labels that the AI thinks are relevant to this app
+}
+
+// Our final pick
+type ScoredAction struct {
+    Action WorkflowAppAction
+    Score  float64
+}
+
+// ActionSummary is a truncated, user-facing summary
+ type ActionSummary struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+ }
+
+// ScoredAppActions pairs an app with its shortlisted actions
+ type ScoredAppActions struct {
+	AppName string          `json:"app_name"`
+	Actions []ActionSummary `json:"actions"`
+ }
+
+ type FinalAppAction struct {
+	AppName    string `json:"app_name"`
+	ActionName string `json:"action_name"`
+}
+
+type FinalAppActionDetail struct {
+	AppName     string                   `json:"app_name"`
+	ActionName  string                   `json:"action_name"`
+	Description string                   `json:"description"`
+	Parameters  []ActionParamForAI       `json:"parameters"` 
+	Returns     *ActionReturnForAI       `json:"returns"`    
+}
+
+type ActionParamForAI struct {
+	Name        string `json:"name"`       
+	Description string  `json:"description"`
+	Required    bool    `json:"required"`    
+	Type        string  `json:"type"`       
+	Example     string  `json:"example"`    
+}
+
+type ActionReturnForAI struct {
+	Description string  `json:"description"`
+	Type        string  `json:"type"`        
+	Example     string  `json:"example"`    
+}
+
+type AIWorkflowResponse struct {
+	AITriggers []AITriggerItem `json:"triggers" datastore:"triggers"`
+	AIActions  []AIActionItem  `json:"actions" datastore:"actions"`
+}
+
+type AITriggerItem struct {
+	Index   int    `json:"index" datastore:"index"`
+	AppName string `json:"app_name" datastore:"app_name"`
+	Label   string `json:"label" datastore:"label"`
+}
+
+type AIActionItem struct {
+	Index      int           `json:"index" datastore:"index"`
+	AppName    string        `json:"app_name" datastore:"app_name"`
+	ActionName string        `json:"action_name" datastore:"action_name"`
+	Label      string        `json:"label" datastore:"label"`
+	URL        string        `json:"url" datastore:"url"`
+	Params     []AIParamItem `json:"parameters" datastore:"parameters"`
+}
+
+type AIParamItem struct {
+	Name  string `json:"name" datastore:"name"`
+	Value string `json:"value" datastore:"value"`
+}
