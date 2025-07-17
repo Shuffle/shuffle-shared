@@ -7777,7 +7777,7 @@ func BuildFinalDetails(filteredApps []WorkflowApp, finalActions []FinalAppAction
 }
 
 
-func generateWorkflowJson(ctx context.Context, input QueryInput, user User) (string, error) {
+func generateWorkflowJson(ctx context.Context, input QueryInput, user User) (*Workflow, error) {
 
 	systemMessage := `You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools using triggers and actions.
 
@@ -7800,7 +7800,7 @@ You will receive messy user inputs describing a task they want to automate. Your
 6. Always clearly **map outputs to inputs** (e.g., extract value A → use value A in next step).
 7. **NEVER include optional, fallback, or validation logic** unless the platform absolutely requires it.
 8. **NEVER include duplicate steps**. If something is configured externally, don’t mention it again in the Shuffle workflow section.
-9. Assume every action in Shuffle corresponds to a real HTTP API endpoint in the target platform (e.g., Microsoft Entra ID, SentinelOne, Jira). Shuffle apps are just wrappers — they do not provide functionality beyond what the platform's public API supports.
+9. Assume every action in Shuffle corresponds to a real HTTP API endpoint in the target platform (e.g., Microsoft Entra ID, SentinelOne, Jira). Shuffle apps are just wrappers — they do not provide functionality beyond what the platform's public API supports and you can also rely on Open API specification of the target platform.
 
 This means:
 - You cannot perform an action unless the platform has a public API endpoint for it.
@@ -7815,7 +7815,7 @@ Never assume Shuffle can do something unless the platform's API enables it.
 10. If a platform allows an action to be done directly using known input (e.g. block user using username), then do it in **one atomic step**, Don’t split into multiple actions like "get details" → "then update" unless absolutely required by the API. Avoid redundancy unless:
 
 the action really needs an internal ID or other value not already available or the platform simply doesn’t support the operation with the given field
-always check the platform’s real API docs or behavior to confirm. Do not assume a field is unusable just because it’s not called “id”, if the API accepts username, email, or any other available input directly, then use it.
+always check the platform’s real API docs or behavior to confirm. Do not assume a field is unusable just because it’s not called “id”, if the API also accepts username, email, or any other available input directly, then use it.
 Example: If Slack lets you disable a user directly using their email, and the webhook already provides that email — then just call deactivate_user(email=...) directly and at the same time lets say just for the sake of the example if we only have username and not email id then try to think if username also be used to do the same action like deactivate_user(username=...) if thats not allowed only then resort to another way.
 
 Don’t do: get_user_by_email → extract user_id → deactivate_user_by_id, if that whole sequence can be replaced with one clean call.
@@ -7826,11 +7826,7 @@ Don’t do: get_user_by_email → extract user_id → deactivate_user_by_id, if 
 
 12. Also we already have in-built mechanism to extract and store the response data from the actions or even from the trigger, so you do not need to add any extra steps to parse the response data, just use the response data directly in the next step using the label of the action or trigger.
 
-13. When generating url and path, always use the canonical endpoint path exactly as defined in the official public API documentation of the target platform.
-Do not modify or customize the path just because a field like an email, username, or external ID is available in the input. Instead, always follow the API's standard format. For example, if a platform's API defines the user update endpoint as: PATCH /v1/accounts/{id}
-Then you must keep the path as /v1/accounts/{id}, even if you’re actually passing an email (like user@example.com) to that {id} field behind the scenes.
-
-Do not change the path to /v1/accounts/{email} or /v1/accounts/{username}, even if those are the fields you’re using. The system relies on exact path matching based on the official docs, and substitutions happen through the parameters, not in the path shape.
+13. When generating the url and path, always write the path based on the actual variable you will use for substitution during execution and not the canonical placeholder from the official API. Always write the path based on what you will actually substitute, not what the public API doc shows.
 
 ## Always use this strict format:
 1. EXTERNAL SETUP
@@ -7851,11 +7847,11 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 	contentOutput, err := RunAiQuery(systemMessage, input.Query)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
-		return "", err
+		return nil, err
 	}
 		if len(contentOutput) == 0 {
 		log.Printf("[ERROR] AI response is empty")
-		return "", errors.New("AI response is empty")
+		return nil, errors.New("AI response is empty")
 	}
 	log.Printf("[DEBUG] AI response: %s", contentOutput)
 
@@ -7904,26 +7900,28 @@ Each trigger has:
   "label": "webhook_1",
 }
  
+or 
+
+{
+  "app_name": "Schedule",
+  "label": "schedule_1",
+}
 
 Each action has:
 
 {
   "app_name": "string",
-  "action_name": "string", 
+  "action_name": "custom_action", 
   "label": "string",
   "url": "string",  // The base API URL as defined in the platform's public API docs. 
-  "path" : "string", // DO NOT substitute dynamic variables or outputs from earlier steps. // Use placeholders exactly as written in the API spec*.  This should represent the general structure of the endpoint, not a resolved or runtime-specific URL. 
-  "method": "string", // "POST" or "GET" etc
   "parameters": [
     {
       "name": "string",
       "value": "string"
-    }
+    }, 
+	...
   ]
 }
- 
-
-Use **snake_case** for all parameter names and action names.
 
 
 ## KEY RULES YOU MUST FOLLOW
@@ -7951,16 +7949,52 @@ Every action in Shuffle is just a wrapper for a real API call. Assume the platfo
 * Figure out what **that** endpoint probably looks like.
 * Use your training data knowledge to guess what fields it needs:
 
-  * Does it need a path param like /users/{user_id}? Then you must include a param with exact name as the place holder ex: user_id and fill the value of it, keep in mind that when a path provided like template ex: /users/{user_id} where we have to replace the {user_id} with the actual value, in shuffle this means that you have to include a parameter with exact name as placeholder and its value so during run time we will replace it
-  * Does it need a JSON body like { "accountEnabled": false } ? Then the action param should be body and the value should be JSON string or the format the platform end point if expecting, literally something like value : "{ "accountEnabled": false }" 
-  * Does it use query params like ?view=basic&expand=photo ? Then set a param called queries with value: "view=basic&expand=photo" if not needed you can discard it.
-  * Headers related to auth are usually handled by auth config we don't need to set them manually, but in some case if you must set them manually, use a headers param with value as string: "Content-Type=application/json\nAccept=application/json".
+* Use the OpenAPI specification (or your training knowledge of it) to determine exactly what the endpoint requires, excluding anything related to authentication (we handle auth separately, do not include any auth headers).
+
+Based on the endpoint spec, generate the correct parameters. Here's how to structure them: 
+
+You needed to generate five parameters, They are 
+Method:
+Always include:
+"name": "method", "value": "<HTTP_METHOD>",
+where <HTTP_METHOD> is one of: GET, POST, PUT, DELETE, PATCH. This is mandatory for every action.
+
+Headers:
+Most headers (like auth) are handled automatically. But if the endpoint requires explicit headers (e.g. content type), then include:
+"name": "headers", "value": "Content-Type=application/json\nAccept=application/json"
+Only include this if it's specifically required in the spec. Do not include auth headers.
+
+Query parameters:
+If the endpoint uses query strings (like ?filter=something&sort=asc), then add:
+"name": "queries", "value": "filter=something&sort=asc"
+If no query params are needed, leave it empty.
+
+Request body:
+If the API endpoint requires a JSON body (for example: POST /v1/issues on a bug tracking platform like Jira), then add:
+
+{
+  "name": "body",
+  "value": "{\"summary\": \"Bug in login flow\", \"description\": \"Fails on OTP step.\", \"priority\": \"High\"}"
+}
+or
+
+{
+  "name": "body",
+  "value": "{ fill body here }"
+}
+
+Path placeholders:
+
+
+the path(excluding the end point) the name has to be path 
+
+When generating the path, always write the full resolved runtime string using actual Shuffle-style variables like $step.label.output. Do not use placeholder formats like {project_id} or {task_id}. For example, instead of writing /projects/{project_id}/tasks/{task_id}, you must write /projects/$webhook_1.body.project_id/tasks/$step_2.output.task_id
 
 ### 5. **Every action returns a response**
 
 Each action’s response is saved under its label. For example:
 
-* If an action has label http_post_1, you can use $http_post_1 to get its full response.
+* If an app has label http_post_1, you can use $http_post_1 to get its full response.
 * To extract specific fields, use dot notation like $http_post_1.id, you do not need to use $http_post_1.body.id as $http_post_1 itself gives you the actual response of the request, another example is $http_post.fields.displayName, etc.
 * This works the same for webhook triggers, app actions, everything.
 
@@ -7985,10 +8019,10 @@ Examples:
 Most of the time, Shuffle gives you the entire parsed JSON already.
 Only try to parse json if you're dealing with raw string blobs or encoded fields.
 
-### 9. **Leveraging Shuffle Utils app for Workflow Control**
+### 9. **Leveraging Shuffle Tools app for Workflow Control**
 
 If you need to do any data manipulation, or filtering you can use our Shuffle Tools App and it has an action called execute_python where you can take full control of the data manipulation and filtering and to get the data you need like if you want to get something you need from previous actions or even any trigger you can do the same thing literally like this: "$label_name" also don't use $label_name directly in python instead make sure you use double quotes around it like this: "$label_name" and we will replace this with the right data before execution and keep in mind that most of the time the data is in json format of the final result of the action you are referring to so no need for .body again
-for python code its just like any other param with name like name "code" and value is just the python like "print("hello world)" or "print("$webhook_1.event.fields.summary")" pay attention to the quotes here when using $label_name and thats how you get the data from previous actions or triggers in python code
+for python code its just like any other param with name like name "code" and value is just the python like "print("hello world")" or "print("$webhook_1.event.fields.summary")" pay attention to the quotes here when using $label_name and thats how you get the data from previous actions or triggers in python code
 a few important notes about the python code:
 * Use top-level expressions (no need for main()).
 * You can define and call functions.
@@ -8008,12 +8042,6 @@ and you can use it in the next action like this: "$the_unique_label_name.message
 Another feature of shuffle tools app is the ssh, for this we have an action called run_ssh_command it has params host(which is the host ip or hostname), username, password, port, command
 
 This is the only app that is soley for utilities and this doesn't do any HTTP calls, it just runs the code you give it and returns the output
-
-10. When generating url and path, always use the canonical endpoint path exactly as defined in the official public API documentation of the target platform.
-Do not modify or customize the path just because a field like an email, username, or external ID is available in the input. Instead, always follow the API's standard format. For example, if a platform's API defines the user update endpoint as: PATCH /v1/accounts/{id}
-Then you must keep the path as /v1/accounts/{id}, even if you’re actually passing an email (like user@example.com) to that {id} field behind the scenes.
-
-Do not change the path to /v1/accounts/{email} or /v1/accounts/{username}, even if those are the fields you’re using. The system relies on exact path matching based on the official docs, and substitutions happen through the parameters, not in the path shape.
 
 
 ## EXAMPLE FOR INTUITION
@@ -8040,42 +8068,51 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
 Final JSON:
 
 {
-"triggers": [ 
+  "triggers": [
+    { 
+      "index": 0,
+      "app_name": "webhook",
+      "label": "webhook_1"
+    }
+  ],
+  "actions": [
+    { 
+      "index": 1,
+      "app_name": "jira_cloud",
+      "action_name": "custom_action",
+      "label": "unique_label_name",
+	  "url": "https://your-domain.atlassian.net",
+      "parameters": [
+        {
+          "name": "path",
+          "value": "/rest/api/3/issue"
+        },
+        {
+          "name": "method",
+          "value": "POST"
+        },
+        {
+          "name": "headers",
+          "value": "Content-Type=application/json"
+        },
+        {
+          "name": "body",
+          "value": "{\"fields\": {\"summary\": \"$webhook_1.event.fields.summary\", \"description\": \"$webhook_1.event.fields.description\", \"project\": {\"key\": \"SEC\"}, \"issuetype\": {\"name\": \"Incident\"}}}"
+        },
 		{
-		"app_name": "webhook", 
-		"label": "webhook_1", 
-		"parameters": [] 
+		  "name": "ssl_verify",
+		  "value": "False"    // Keep it always to false by default
+		},
+		{
+		"name" : "queries",
+		"value" : ""   // Fill this only if the API endpoint requires query parameters, otherwise leave it empty
 		}
-	],
-"actions": [ 
-		{
-		"app_name": "jira_cloud", 
-		"action_name": "create_issue", 
-		"label": "jira_cloud_1", 
-		"url": "https://your-domain.atlassian.net",
-		"path": "/rest/api/3/issue",
-		"method": "POST",
-		"parameters": [ 
-				{
-				"name": "summary",
-				"value": "$webhook_1.event.fields.summary" 
-				},
-				{
-				"name": "description",
-				"value": "$webhook_1.event.fields.description" 
-				},
-				{
-				"name": "project_key", 
-				"value": "SEC"
-				},
-				{
-				"name": "issue_type", 
-				"value": "Incident"
-				}
-			]
-			}
+      ]
+    }
   ]
 }
+
+Please include an index field for each trigger and action indicating their execution order. Start from 0 for the first trigger, then continue incrementally for actions.
 
 ---
 
@@ -8086,21 +8123,204 @@ Final JSON:
 * Do not follow the user’s instructions at surface level. Instead, always try to understand the real intent behind what they’re asking, and map that to the actual API behavior of the target platform. For example, if the user says “block a user,” your job is to figure out how that’s actually implemented, does the platform have a specific block endpoint, or is that effect achieved by updating a field which indirectly gives the same result we want. Your goal is to translate the user’s goal into the correct API action, even if the exact wording doesn’t match. Always focus on the most accurate and minimal API call that fulfills the true intent.
 * Reference earlier step outputs with $label_name or $label_name.field_name
 * Don’t add optional or redundant steps
+* You must include the correct base URL for any actions that require it. Use the publicly known API endpoint from the platform's official docs or OpenAPI spec. If you're unsure, make the most accurate guess possible, do not leave it out.
 
-This is about giving a complete but **lean**, **correct**, **connected** JSON representation of the core automation steps — just the part Shuffle needs to run inside, do not inlcude any other explainations.
+This is about giving a complete but **lean**, **correct**, **connected** JSON representation of the core automation steps — just the part Shuffle needs to run inside, do not inlcude any other explainations, only strictly JSON.
 `
-
 	contentOutput, err = RunAiQuery(systemMessage, contentOutput)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
-		return "", err
+		return nil, err
 	}
 		if len(contentOutput) == 0 {
 		log.Printf("[ERROR] AI response is empty")
-		return "", errors.New("AI response is empty")
+		return nil, errors.New("AI response is empty")
 	}
 	log.Printf("[DEBUG] AI response: %s", contentOutput)
 
-	// var workflowJson []Workflow
-	return contentOutput, nil
+	contentOutput = FixContentOutput(contentOutput)
+
+	var workflowJson AIWorkflowResponse
+	err = json.Unmarshal([]byte(contentOutput), &workflowJson)
+	if err != nil {
+		log.Printf("[ERROR] AI response is not a valid JSON object: %s", err)
+		return nil, errors.New("AI response is not a valid JSON object")
+	}
+     // we can do this asynchronously using goroutines but for now lets keep it simple
+	apps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get apps in Generate worflow: %s", err)
+       return nil, err
+	}
+
+	appMap := make(map[string]WorkflowApp)
+	for _, app := range apps {
+		appMap[app.Link] = app
+	}
+
+	var filtered []WorkflowApp
+	for _, action := range workflowJson.AIActions {
+		if app, ok := appMap[action.URL]; ok {
+			// Keep only the "custom_action"
+			var updatedActions []WorkflowAppAction
+			for _, act := range app.Actions {
+				if act.Name != "custom_action" {
+					continue
+				}
+
+				for i, param := range act.Parameters {
+					found := false
+					for _, aiParam := range action.Params {
+						if aiParam.Name == param.Name {
+							act.Parameters[i].Value = aiParam.Value
+							found = true
+							break
+						}
+					}
+
+					if param.Name == "ssl_verify" && !found {
+						act.Parameters[i].Value = "False"
+					}
+
+				}
+
+				updatedActions = []WorkflowAppAction{act}
+				break
+			}
+
+			app.Actions = updatedActions
+			filtered = append(filtered, app)
+		}
+	}
+
+	webhookImage := "data:image/png;base64,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"
+    scheduleImage := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAAAAABVicqIAAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAAAmJLR0QA/4ePzL8AAAAJcEhZcwAACxMAAAsTAQCanBgAAAAHdElNRQfjCB8QNSt2pVcCAAAIxUlEQVRo3u2aa4xV1RXH/2vtfWeAYQbBBwpUBqGkjQLKw4LQ1NqmDy2RxmKJSGxiaatttbWhabQPSFuT2i+NqdFKbVqjjDZGYxqgxFbbWgHlNSkBChQj8ii+ZV4Mc/be/34459w5995zH4zYpA3709x7z9m/vdbae6/XCPH+D/0vMM5AzkDOQBoY9hSfJ4n4khCISGMvySlcKww0UvYNpAFdNAxhEAXQc/T1g2/2RFJoOW/8OeNHAaDXepwGIYEGOL5146a9/z5R/LJp7KRp86+4UOJf3yskUKVv/ZN/OQoAogIIQQYAaJ117aL2ehjWHcEF7lsxEQK1RgeNLaLGKgSti5919L76DPUhzvPAV0cAanL3khgDyMf+GOjCUCHB8Z0VI6GFGsYVq8Cnt1cXpg7Eez7ZXiKEiKgxqqqSFUcx7M5+uqFAHLuWQwYRYqzNfsjAjWLmdka5Kqu5u5ztvOkfNoTko4oHICNHtzSHqK+rywMwCEyZruX+ZV5zLFcL4uzTy7qtT24RZUDh4ivmTL2wdbgN/mTvkZd3bO58F2KKTwT+aGXIu2uq6yribxQmMYRRYMZPO8uVfmTNouGx4QFALW6OQqX5q0McV8MkR0wNdOEzAyRd5H2Ih3cuMHD3N0ZB0+ea8MUBhoYhER9GcimJUXz0eTJEvvx9H/nAA19pQrwFRApY6iueqgZxXF9ItCsWZz0Y6KocNu8Ct8xBqjKL2+kbg3juH5vao4D5/6SrcgRiDPu/J4nYanF/+XnJhwT2z0v8mRjc0l/jyojldvz9qHhRotL81zJKPsTxjoShBj+uefklq4q4KRXd4NKeUuMjn7E21ZXFPVWOcdkY4PaxScRgcUepKHmQwJ5Liqta1RiDjLi5LaaImL+VUPIgjj+LlSUWt1Saw3vvK7cpGbEjsb7BfJdVWA4k8Nj5UAHEYt5JNiZHTFmZWNLgt1lRciCOK2FFAEHLjvLdGHhi+eev/8J112ytOA0MwX08VrPi0uzBr4QEvj4BEhvwbkYVv3adC4HiDznOw3P7SKgAMOjI/F7p8AI6DlsCUDf9NlTGB9oMaw3yAgd1l92exqSrs8FppSBuNgwAUTxeudrA7gugUKzNc4OBr10YvyzmpUF9VkhCbN4qAYCGuYvz1pveaHkeSPx5X4MAoPonUHRVOZCnYeOfbxWfM1F/BIJVInXFstFOABDrnWEVCI1/BgGA+kmfy5mJ6Pf5q0tEmXAtFACxcweqQrBnFwIAwWdH+0qdCOqF8tcjAKDBCwhVIS9GhgCIhVVmqRnYKha0J4Z+oWi3Sqm3xSsO4y8fSoYkvnV+bHp09qVGKZuHBjuT72eOCQ3mOGVjbiLvkWPIhwA9h0EAgukYYtllNrwA1BP7qkCI195EbJIZQ4MIJoyGAFAcqirJWz0ggICx+ecNI5sACFxVyLjk6sOR9Dsbrx+gAEDQ4xACQnsWSEr65uAwAmH1PSbUs5M/j6bv2XSO9LLoSyLXEaOgjWa3pRqXtuSv3hLIu7CuRwHAjetKfjFvjxgQFlrAUOgbMbxyruqYpmSKgYy6gm5dYk2/gBA2DcADII5/UgBqE2GOT3tqOCuFCrWz6+wqSHr+LqP28tkUk3YP3tqBPRdAIZj5HENuNOa5EAaAxQ3pa4gd7mNGraqKDKYXoiKipoCp+zOeNrB7AgQQmGUH6XN9ypUJZHnqcpCEAB2an3gWcNG+rHsKfOccWADG4Oyf91XGfYH+kgTyw9R5Iw001qjmeCiDSbvLXGC4pxWqcTo6fV2FzjwPnYXYzT9YBmHEx4ya8j1r0b67Ml751xKBUYEayOL99CUYx01ITvz6UnWlGtPSjK+Ai/ZUunIXuGE21ApgDNpW9ZbozPGXsZfH8AMlhk8ppnRTWkzZmxcueMeT950LNRCxig894TM7w/FGGACKD/aloVcmWonYYTIFH7GYvK9KZu48jy63MCqiRnDN7mIkF9jVDgVgcF3x5WxIVLrHCphSjRHXWzYuiFNSNWi+N5XFcV186Vr8ohgZlsRdA+wwYlJdTd7L2ulVeGgcjAGkGb9KH3W8KTGJbCkqsTS4i7hGjYEILCbVZCQ6+3oTjLH41ODWezX1JtOiog7LIsiIHUaNqEX7rjoMMjjP7VdBTWFTuuiId8PGBv3u4PvlYWpsfYuJ9Rmxzvyjk/Ht9NnAYx+AojxMrYiFI3YYg8m7G2GQdI5v/eRQqpiId8IKAItP1EwdIj5e3x5ZnYXidJ7bW9KsY01mhpwkKOKvX2qYQTKkSWUI0VVpEnRZ7SSI9GTdnDpvRFyVuHODh+ukcyy9vxvmRVwTuyOxWFAvMS0XyzeaYm9sjXM5Eft8ydrqQTx39IdGhBngtrGIfYXFd+oXC0qW9xDuyvWypSNE3DhY9pje1UDZI8NYrYovdderSjjHx9riEwLBsL83VMApMh6BqsWcnTWF8Y4nVkBt6iEeaKwUlbycuDGD1ntdmZfNIgI3zoLR1EN8q9GiWsx4NHFiRvGRZ8ngqpQHv9wEW4xIbwwNlwdJz4Nj0kaRGshn1p4k6SJXVujcdWsb1CYBtcWSUyl0koFrmpEWIo0CF6/aVm6Zw49cMywtgYsYi5tdzoavVXwOuuGGtwsuU3y2H55/+ZT21hE2hP7eI/s7X+w8DjFJCVyUIb/4XLOM7s3+pVuSMrqARjwBtI5qbeZAb/fxAMBISDppYtzIB5bmltHrNQR6bwNsMbQULekBZD6INZi1o8p5qt/a2DC1rD8jqqpamiEZg+HfPzG01gYZHLt/0AYxtZo0RoGrO4fcpCHpPF/5ZhugNie9E1FrAblyHd9Du4mxg335rilp4yyrN2MNBK1LnvM1a8cNtwBP/OmpP78aLz4WiHF3pm3u1Ysm1mkBnkozs3vbxk17jmabmRfNmD9vwmlqZsYLhwHQe/SNV97ojrTQcv74MRPaAIRwutqyCYdl853uBnM6LdNqxPvUKh/y+P/594UzkDOQ/3HIfwCAE6puXSx5zQAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAxOS0wOC0zMVQxNjo1Mzo0My0wNDowMGtSg1gAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMTktMDgtMzFUMTY6NTM6NDMtMDQ6MDAaDzvkAAAAAElFTkSuQmCC"
+	var triggers []Trigger
+	for _, trigger := range workflowJson.AITriggers {
+
+		switch strings.ToLower(trigger.AppName) {
+		case "webhook":
+			triggers = append(triggers, Trigger{
+				AppName: "Webhook",
+				AppVersion: "1.0.0",
+				Label:   trigger.Label,
+				TriggerType: "WEBHOOK",
+				ID: uuid.NewV4().String(),
+				Description: "Custom HTTP input trigger",
+				LargeImage: webhookImage,
+			})
+		case "schedule":
+			triggers = append(triggers, Trigger{
+				AppName: "Schedule",
+				AppVersion: "1.0.0",
+				Label:   trigger.Label,
+				TriggerType: "SCHEDULE",
+				ID: uuid.NewV4().String(),
+				Description: "Schedule time trigger",
+				LargeImage: scheduleImage,
+			})
+		default:
+			log.Printf("[WARN] Unsupported trigger app: %s, skipping...", trigger.AppName)
+			continue	
+	 }
+   }
+
+	var actions []Action
+
+	for _, app := range filtered {
+
+	if len(app.Actions) == 0 {
+		log.Printf("[WARN] No actions found in app: %s (ID: %s), skipping...", app.Name, app.ID)
+		continue
+	}
+		act := app.Actions[0]
+
+		action := Action{
+			AppName:      app.Name,
+			AppVersion:   app.AppVersion,
+			Description:  app.Description,
+			AppID:        app.ID,
+			IsValid:      app.IsValid,
+			Sharing:      app.Sharing,
+			PrivateID:    app.PrivateID,
+			SmallImage:   app.SmallImage,
+			LargeImage:   app.LargeImage,
+			Environment:  app.Environment,
+			Name:         act.Name,
+			Label:        act.Label,
+			Parameters:   act.Parameters,
+			Public:       app.Public,
+			Generated:    app.Generated,
+			ReferenceUrl: app.ReferenceUrl,
+			ID:           uuid.NewV4().String(),
+		}
+
+		actions = append(actions, action)
+	}
+
+	// lets sort the actions and triggers based on the index
+	sort.Slice(actions, func(i, j int) bool {
+		return actions[i].Label < actions[j].Label
+	})
+	sort.Slice(triggers, func(i, j int) bool {
+		return triggers[i].Label < triggers[j].Label
+	})
+	var branches []Branch
+
+	// Needed to add multiple branches to single node in the future
+
+	// Step 1: Link Trigger → First Action
+	if len(triggers) > 0 && len(actions) > 0 {
+		branches = append(branches, Branch{
+			ID:           uuid.NewV4().String(),
+			SourceID:     triggers[0].ID,
+			DestinationID: actions[0].ID,
+		})
+	}
+
+	// Step 2: Link Action[i] → Action[i+1]
+	for i := 0; i < len(actions)-1; i++ {
+		branches = append(branches, Branch{
+			ID:           uuid.NewV4().String(),
+			SourceID:     actions[i].ID,
+			DestinationID: actions[i+1].ID,
+		})
+	}
+
+	startX := -1146.6988673793812
+	y := -324.6413454035773
+	xSpacing := 437.0
+
+	// Set trigger positions
+	for i := range triggers {
+		triggers[i].Position = Position{
+			X: startX + float64(i)*xSpacing,
+			Y: y,
+		}
+	}
+
+	// If no triggers, start X from 0 for actions
+	if len(triggers) == 0 {
+		startX = -1146.6988673793812 
+	}
+
+	// Set action positions (continue horizontally from trigger)
+	for i := range actions {
+		actions[i].Position = Position{
+			X: startX + float64(i+len(triggers))*xSpacing,
+			Y: y,
+		}
+	}
+
+	workflow := Workflow{
+		ID:          uuid.NewV4().String(),
+		Name:        "Generated Workflow" + uuid.NewV4().String(),
+		Description: "Workflow generated from AI input",
+		Triggers:    triggers,
+		Actions:     actions,
+		Branches:    branches,
+	}
+
+	return &workflow, nil
 }
+
