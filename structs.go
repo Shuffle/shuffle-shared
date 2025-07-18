@@ -4558,3 +4558,28 @@ type partnerReturnStruct struct {
 	Partner *Partner `json:"partner"`
 }
 
+type AIWorkflowResponse struct {
+	AITriggers []AITriggerItem `json:"triggers" datastore:"triggers"`
+	AIActions  []AIActionItem  `json:"actions" datastore:"actions"`
+}
+
+type AITriggerItem struct {
+	Index   int           `json:"index" datastore:"index"`
+	AppName string        `json:"app_name" datastore:"app_name"`
+	Label   string        `json:"label" datastore:"label"`
+	Params  []AIParamItem `json:"parameters" datastore:"parameters"`
+}
+
+type AIActionItem struct {
+	Index      int           `json:"index" datastore:"index"`
+	AppName    string        `json:"app_name" datastore:"app_name"`
+	ActionName string        `json:"action_name" datastore:"action_name"`
+	Label      string        `json:"label" datastore:"label"`
+	URL        string        `json:"url" datastore:"url"`
+	Params     []AIParamItem `json:"parameters" datastore:"parameters"`
+}
+
+type AIParamItem struct {
+	Name  string `json:"name" datastore:"name"`
+	Value string `json:"value" datastore:"value"`
+}
