@@ -4622,9 +4622,10 @@ type AIWorkflowResponse struct {
 }
 
 type AITriggerItem struct {
-	Index   int    `json:"index" datastore:"index"`
-	AppName string `json:"app_name" datastore:"app_name"`
-	Label   string `json:"label" datastore:"label"`
+	Index   int					`json:"index" datastore:"index"`
+	AppName string 				`json:"app_name" datastore:"app_name"`
+	Label   string 				`json:"label" datastore:"label"`
+	Params     []AIParamItem 	`json:"parameters" datastore:"parameters"`
 }
 
 type AIActionItem struct {
