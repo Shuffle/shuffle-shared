@@ -31117,3 +31117,60 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 	resp.WriteHeader(http.StatusOK)
 	resp.Write([]byte(`{"success": true}`))
 }
+
+
+func GetWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+	ctx := GetContext(request)
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s in workflow generation", GetRequestIp(request))
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed to read body in runActionAI: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input body is not valid JSON"}`))
+		return
+	}
+	var input QueryInput
+	err = json.Unmarshal(body, &input)
+	if err != nil {
+		log.Printf("[WARNING] Failed to unmarshal input in runActionAI: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input data invalid"}`))
+		return
+	}
+
+	output , err := generateWorkflowJson(ctx, input, user)
+	if err != nil {
+		log.Printf("[ERROR] Failed to generate workflow AI response: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	appsJson, err := json.Marshal(output)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal apps in Generate workflow: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+	resp.WriteHeader(http.StatusOK)
+	resp.Write(appsJson)
+}
