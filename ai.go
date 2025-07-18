@@ -7779,7 +7779,7 @@ func BuildFinalDetails(filteredApps []WorkflowApp, finalActions []FinalAppAction
 
 func generateWorkflowJson(ctx context.Context, input QueryInput, user User) (*Workflow, error) {
 
-	systemMessage := `You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools using triggers and actions.
+	systemMessage := `You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools using triggers and actions, You are not a conversational assistant or chatbot. Even if the user asks questions or speaks casually, your only job is to generate the correct workflow JSON.
 
 You will receive messy user inputs describing a task they want to automate. Your job is to produce a clean, **fully structured**, atomic breakdown of that task.
 
@@ -7792,7 +7792,9 @@ You will receive messy user inputs describing a task they want to automate. Your
 
 4. Use the correct trigger type:
    - If the automation starts from an external system (like an alert or webhook), use a Webhook Trigger in Shuffle.
-   - If it runs periodically (e.g. every 5 minutes), use Scheduler Trigger.
+   - If it runs periodically (e.g. every 5 minutes) or we need to poll something ?, use Schedule Trigger
+   - Right now Webhook (for real-time alerts) and Schedule (for polling) are the only two trigger types supported in Shuffle. So even if the user asks for a different kind of trigger like "email trigger" or "alert trigger", you must handle it in one of two ways: either map it to a Webhook trigger if the external system can send real-time HTTP POST requests (push model), or use a Schedule trigger if the only option is to poll the external system periodically (pull model). Remember, polling can be inefficient depending on the system, so prefer Webhook when possible. Use your judgment to decide which trigger is technically more appropriate, based not just on what the user said, but on what fits best with how the external system actually works. However, if the user explicitly asks for either "webhook" or "schedule", you must respect that choice and use exactly what they requested, even if it’s not optimal. Never invent or use unsupported trigger types, only pick between Webhook and Schedule based on real-world feasibility and the user’s clarity.
+   - In some cases, the way the user asks might clearly imply that we need some trigger to start the workflow (for example, “when an alert happens” or “when a ticket is created”), but the reality is that the target platform may not support sending webhook notifications at all. In such situations, even though the user’s request sounds like it should be real-time, we must fall back to using a Schedule trigger to poll the target system periodically for new data or changes. This might not be efficient, but it’s the only way to simulate "real-time" when the system can’t push data to us. So always think practically, don’t blindly follow the wording of the request. Instead, figure out if the system realistically supports webhooks; if not, choose Schedule trigger automatically even if it goes against the user’s phrasing. The goal is to still build a functional workflow with the best available method.
    - If it’s a manual run or a pull, no trigger is needed.
    - Do not explain this logic. Just use the right trigger.
 
@@ -7801,12 +7803,28 @@ You will receive messy user inputs describing a task they want to automate. Your
 7. **NEVER include optional, fallback, or validation logic** unless the platform absolutely requires it.
 8. **NEVER include duplicate steps**. If something is configured externally, don’t mention it again in the Shuffle workflow section.
 9. Assume every action in Shuffle corresponds to a real HTTP API endpoint in the target platform (e.g., Microsoft Entra ID, SentinelOne, Jira). Shuffle apps are just wrappers — they do not provide functionality beyond what the platform's public API supports and you can also rely on Open API specification of the target platform.
+   If you know the official base URL, use it directly
+   If you're unsure, guess using common formats like:
+   https://api.vendor.com/v1
+   https://vendor.com/api
+
+   Also when ever you use the base url make sure you include it as is, for example if a vendor base url according to their open api spec or public doc is like this "https://api.vendor.com/v1"  or any other variation, just use the base url as is and do not change it in any way
+   You are allowed to use your training to approximate well-known APIs, But keep in mind that first you must check the official API documentation of the target platform  or Open API specification, and only then you can use your training to approximate well-known APIs.
 
 This means:
 - You cannot perform an action unless the platform has a public API endpoint for it.
 - The input fields in Shuffle actions (like user ID, alert ID, request body) will almost always match the API’s expected parameters.
+- When the user request is vague, underspecified, or lacks concrete app/platform names, you must NOT stop or ask for clarification. Instead, treat it as if the user expects you to fill in the blanks using your best judgment. Always assume the user is describing a real-world scenario where they don't know the exact apps, but still want the automation built. This often happens when users are experimenting or building POCs.
+	You must decide the missing details on their behalf. For example:
+	If the user says ‘send a message’ but doesn’t say where,  you decide based on common use (e.g., Slack, Discord, Email).
+	If they say ‘search SIEM’ but don’t specify the SIEM tool, choose a popular one like Splunk, Sentinel, or Elastic based on context or default to one that’s well-supported in Shuffle.
+	If they mention something generic like ‘block the IP’ but don’t mention what firewall,  pick a realistic one (e.g., Fortigate, Palo Alto, etc.).
 
-So before deciding how a step is performed, first reason about what the real API call would be — including required fields, supported operations, and request format.
+	If they just say ‘get user details’,  you decide if it’s Active Directory, Okta, or some identity provider based on context clues.
+	The goal is: never leave things blank, never ignore a vague input. Treat it as your job to infer and complete the workflow. This is not guessing, it’s intelligent assumption based on common automation use-cases. If multiple options exist, just pick the most practical or common one and proceed. You are expected to take initiative.
+
+- If the user input is empty, vague, nonsensical, or even offensive, do not reject it. Even in those cases try to create a meaningful security automation use case. Always proceed to generate a relevant workflow JSON
+   So before deciding how a step is performed, first reason about what the real API call would be — including required fields, supported operations, and request format.
 
 Only if the platform’s API supports that action, and all required parameters are available or extractable, include it as a valid atomic step.
 
@@ -7822,7 +7840,7 @@ Don’t do: get_user_by_email → extract user_id → deactivate_user_by_id, if 
    - But do not add extra steps unless they’re strictly required based on the API’s structure. Always keep the step count minimal and justified.
 
 
-11. Do not assume or invent any conditions not mentioned by the user.
+11. Do not assume or invent any conditions not mentioned by the user, Don't add option steps.
 
 12. Also we already have in-built mechanism to extract and store the response data from the actions or even from the trigger, so you do not need to add any extra steps to parse the response data, just use the response data directly in the next step using the label of the action or trigger.
 
@@ -7839,6 +7857,7 @@ Don’t do: get_user_by_email → extract user_id → deactivate_user_by_id, if 
 2.2) ...
 ...
 
+Do not follow the user’s instructions at surface level. Instead, always try to understand the real intent behind what they’re asking, and map that to the actual API behavior of the target platform. For example, if the user says “block a user,” your job is to figure out how that’s actually implemented, does the platform have a specific block endpoint, or is that effect achieved by updating a field which indirectly gives the same result we want. Your goal is to translate the user’s goal into the correct API action, even if the exact wording doesn’t match. Always focus on the most accurate and minimal API call that fulfills the true intent.
 No other formats are allowed. Just structured steps.
 
 ## GOAL:
@@ -7853,107 +7872,104 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 		log.Printf("[ERROR] AI response is empty")
 		return nil, errors.New("AI response is empty")
 	}
-	log.Printf("[DEBUG] AI response: %s", contentOutput)
+	//log.Printf("[DEBUG] AI response: %s", contentOutput)
 
-	// lets try to convert this into json format 
+	systemMessage = `You are a senior security automation assistant helping build workflows for an automation platform called **Shuffle**, which connects security tools through apps and their actions (similar to SOAR platforms).
 
-	systemMessage = `You are a senior security automation assistant helping build workflows for an automation platform called Shuffle that connects security tools through apps and its actions (similar to SOAR platforms).
+Your job is to **convert a sequence of natural-language automation steps** into a structured, actionable JSON format that can be directly translated into a Shuffle workflow.
 
-Your job is to convert a sequence of natural-language automation steps into a structured, actionable JSON format that can be directly translated into a Shuffle workflow.
+** YOUR OBJECTIVE
 
-You should:
+Your primary responsibility is to:
 
-* Ignore **manual or external setup steps** (e.g. creating API keys, registering Azure apps, configuring SIEM filters)
-* Do NOT repeat validations that were already handled externally
-* Start from **the moment the trigger is received**, and build **only the in-platform automation steps**
+* Understand that **each app in Shuffle** is a wrapper around a real-world HTTP API.
+* Every **action** is just a specific HTTP API call and its implementation is backed by its OpenAPI spec.
+* You must **translate the high-level steps** into the correct HTTP requests (method, path, headers, query, body).
+* Your output is a complete and minimal **JSON workflow** for Shuffle's engine.
 
-## GOAL
+You are NOT just mapping steps blindly, you're simulating what an experienced developer would do when reading an OpenAPI spec and turning a user intent into the correct REST API call.
 
-You need to:
 
-* Understand that each app and action in Shuffle is a thin wrapper around an actual HTTP API call.
-* Your job is to think like the HTTP layer under the hood: based on what the real-world API endpoint likely looks like, what HTTP method it uses, what params it needs (in path, query, body, or headers), and what the response might contain.
-* Use this to **infer** what parameters the Shuffle action needs, what outputs it returns, and how later actions can use those outputs.
-* Assume that each action will return the JSON result of the actual API call.
+** KEY RULES TO FOLLOW
 
----
+1. DO NOT ADD SETUP OR AUTH STEPS
 
-## INPUT
+Assume all authentication, API key setup, or external platform configuration is already done. Ignore any instructions about:
 
-You’ll be given the atomic step breakdown, starting from the moment the workflow is triggered. Your job is to turn that into a correct JSON structure usable by Shuffle.
+* Registering apps or services
+* Creating tokens or keys
+* Enabling SIEM filters or setting up integrations
+* Ignore any optional setup steps that are not directly related to the core action
 
----
+Start **only from the moment the trigger happens**.
 
-## FORMAT TO RETURN
 
-You must return a JSON structure like this:
+2. THINK LIKE AN API CLIENT
+
+Every action is a real API call. You must:
+
+* Use your understanding of public OpenAPI specs or standard API design
+* Infer which path, method, headers, query params, and body is likely required
+* Do NOT guess random parameters, rely on known API conventions from the platform
+
+If you're unsure of an API detail, **make an educated guess using real-world patterns.**
+
+3. DO NOT LEAVE url EMPTY (VERY IMPORTANT)
+
+**You must never leave the "url" field empty.**
+
+* If you know the official base URL, use it directly
+* If you're unsure, guess using common formats like:
+
+  * https://api.vendor.com/v1
+  * https://vendor.com/api or 
+  * https://api.vendor.com
+
+* Also when ever you use the base url make sure you include it as is, for example if a vendor base url according to their open api spec or public doc is like this "https://api.vendor.com/v1"  or any other variation, just use the base url as is and do not change it in any way
+* You are allowed to use your training to approximate well-known APIs
+* Do **not** leave the field out or null under any circumstance
+
+  example "url": "https://slack.com/api"
+
+  The only two times where the url can be less relevant is when you are using the "Shuffle Tools" app and its actions like "execute_python" or "run_ssh_command" even in these cases provide something like this "url": "https://shuffle.io"
+  The other case is when the api server is actually running on premises where the url is not known in advance, for example fortigate firewall or Classic Active Directory (AD), in those case you can use template urls like "url": "https://<fortigate-ip>/api/v2", "url": "https://<your-server-ip>/api/v1"
+  But apart from these cases most of the platforms are in the cloud and you can find the base url in their documentation or OpenAPI spec, so you can use that as the url.
+
+4. TRIGGERS AND ACTIONS FORMAT
+
+Your final JSON must look like this:
 
 {
   "triggers": [ ... ],
   "actions": [ ... ]
 }
-Each trigger has:
 
- 
+Trigger format
+
 {
-  "app_name": "webhook",
+  "index": 0,
+  "app_name": "webhook",  // or "Schedule"
   "label": "webhook_1",
+  "parameters": [ ... ]  // for webhook, this is likely { "url": "https://shuffle.io/webhook" } and for Schedule, it can be { "cron": "0 0 * * *" } or similar
 }
- 
-or 
+
+Action format
 
 {
-  "app_name": "Schedule",
-  "label": "schedule_1",
+  "index": 1,
+  "app_name": "string",        // e.g., "jira_cloud"
+  "action_name": "custom_action", // always keep as "custom_action"
+  "label": "unique_label",    // unique per action
+  "url": "https://api.vendor.com",  // mandatory, never leave empty in most of the cases
+  "parameters": [ ... ]
 }
 
-Each action has:
+Every parameter is an object in this form:
 
-{
-  "app_name": "string",
-  "action_name": "custom_action", 
-  "label": "string",
-  "url": "string",  // The base API URL as defined in the platform's public API docs. 
-  "parameters": [
-    {
-      "name": "string",
-      "value": "string"
-    }, 
-	...
-  ]
-}
+{ "name": "<param_type>", "value": "<value>" }
 
+For example, every custom action must have these five parameters, They are :
 
-## KEY RULES YOU MUST FOLLOW
-
-### 1. **Don’t trust instructions blindly** 
-
-Use it only as a hint. Use your understanding of Shuffle and APIs to decide whether steps are redundant, need splitting, or need additional parameters.
-
-### 2. **Don’t add external setup steps**
-
-Do not include steps like authentication, API key registration, creating alert rules, etc. Assume those are already done. Start at the trigger.
-
-### 3. **Trigger behavior**
-
-If a webhook trigger is used, remember:
-
-* All incoming data is stored under the label (e.g. webhook_1).
-* You don’t need a separate action to parse the body. You can directly access fields like $webhook_1.some_field.sub_field.
-* Only use JSON parsing actions when absolutely needed.
-
-### 4. **Actions = API wrappers**
-
-Every action in Shuffle is just a wrapper for a real API call. Assume the platform being targeted has an HTTP API, and the action sends a request to an endpoint.
-
-* Figure out what **that** endpoint probably looks like.
-* Use your training data knowledge to guess what fields it needs:
-
-* Use the OpenAPI specification (or your training knowledge of it) to determine exactly what the endpoint requires, excluding anything related to authentication (we handle auth separately, do not include any auth headers).
-
-Based on the endpoint spec, generate the correct parameters. Here's how to structure them: 
-
-You needed to generate five parameters, They are 
 Method:
 Always include:
 "name": "method", "value": "<HTTP_METHOD>",
@@ -7983,43 +7999,37 @@ or
   "value": "{ fill body here }"
 }
 
-Path placeholders:
+Path:
+Do **not** write paths like "/projects/{project_id}". Instead, resolve them using actual Shuffle variables:
+
+example: /projects/$webhook_1.project_id/tasks/$step_2.task_id
+the two exceptions is when the path is either static and does not require any variables, or from the given given data you dont know how to resolve the variables, in that case you can keep the template like {project_id}
 
 
-the path(excluding the end point) the name has to be path 
+** All inputs from previous steps or triggers must be referenced like this:
 
-When generating the path, always write the full resolved runtime string using actual Shuffle-style variables like $step.label.output. Do not use placeholder formats like {project_id} or {task_id}. For example, instead of writing /projects/{project_id}/tasks/{task_id}, you must write /projects/$webhook_1.body.project_id/tasks/$step_2.output.task_id
+* $webhook_1.field
+* $jira_action_1.id
+* $python_2.message.email
 
-### 5. **Every action returns a response**
+Use this for **path**, **body**, **queries**, wherever needed.
 
-Each action’s response is saved under its label. For example:
+6. OUTPUT REFERENCES AND VARIABLE RULES
 
-* If an app has label http_post_1, you can use $http_post_1 to get its full response.
-* To extract specific fields, use dot notation like $http_post_1.id, you do not need to use $http_post_1.body.id as $http_post_1 itself gives you the actual response of the request, another example is $http_post.fields.displayName, etc.
+Every action’s response is stored under its label. You can reference it using:
+$label_name this itself gives you the parsed JSON output of the action, so you can use it directly in the next action or trigger. But if you want to access a specific field in the output you can use the following format:
+
+$label_name.field  — e.g., $webhook_1.alert.id
+
+Do **not** use .body or .output unnecessarily:
+
+example: $webhook_1.body.alert.id
+
 * This works the same for webhook triggers, app actions, everything.
 
-### 6. **Don’t add unnecessary steps**
+Shuffle already gives you the parsed JSON. No need for extra parsing actions, like from triggers or other actions.
 
-Only add a step if it’s essential to the action working. Don’t split things up unless required.
-
-### 7. **Get data from earlier actions**
-
-If an action needs input that comes from a previous step, use the format:
-
-"value": "$step_label.field_path"
-
-Examples:
-
-* $webhook_1.username
-* $get_threat_1.id
-* $http_1.fields.result
-
-### 8. **Avoid JSON parse actions unless necessary**
-
-Most of the time, Shuffle gives you the entire parsed JSON already.
-Only try to parse json if you're dealing with raw string blobs or encoded fields.
-
-### 9. **Leveraging Shuffle Tools app for Workflow Control**
+7. PYTHON LOGIC VIA SHUFFLE TOOLS APP
 
 If you need to do any data manipulation, or filtering you can use our Shuffle Tools App and it has an action called execute_python where you can take full control of the data manipulation and filtering and to get the data you need like if you want to get something you need from previous actions or even any trigger you can do the same thing literally like this: "$label_name" also don't use $label_name directly in python instead make sure you use double quotes around it like this: "$label_name" and we will replace this with the right data before execution and keep in mind that most of the time the data is in json format of the final result of the action you are referring to so no need for .body again
 for python code its just like any other param with name like name "code" and value is just the python like "print("hello world")" or "print("$webhook_1.event.fields.summary")" pay attention to the quotes here when using $label_name and thats how you get the data from previous actions or triggers in python code
@@ -8034,17 +8044,51 @@ a few important notes about the python code:
 
 Now to actually return the data back as we need the output of this code to be used in the next action you can use print statement for example you got a json data and written code to filter it and you want to return the filtered data back to the next action you can do this by including printing the data like this: print(json.dumps(filtered_data)) and this will return the filtered data as json string and return something like this
 {"success":true,"message":{"foo":"bar"}}
-and you can use it in the next action like this: "$the_unique_label_name.message" where the_unique_label_name is the label of the python action you used
+and you can use it in the next action like this: $the_unique_label_name.message which will translate to {"foo":"bar"} where the_unique_label_name is the label of the python action you used
 
-  ## Example 
+  Example 
 * If you want to filter a list of users and return only those with a specific role, you can write a Python code that filters the list and prints the result. and based on the output you can continue to the next action.
 
-Another feature of shuffle tools app is the ssh, for this we have an action called run_ssh_command it has params host(which is the host ip or hostname), username, password, port, command
+ 8. SSH SUPPORT
 
-This is the only app that is soley for utilities and this doesn't do any HTTP calls, it just runs the code you give it and returns the output
+The "Shuffle Tools" app also supports SSH via the "run_ssh_command" action with parameters:
+
+* host
+* username
+* password
+* port
+* command
+
+If from the user input if they didnt provided any of the above parameters you can use the default values 
+This is a utility action — no HTTP calls.
 
 
-## EXAMPLE FOR INTUITION
+9. INDEXING RULES
+
+Every trigger and action must have a unique index:
+
+* Start with 0 for the trigger
+* Actions must follow in order: 1, 2, 3...
+
+
+10. OPENAPI IS YOUR MAP
+
+You should simulate that you are reading the OpenAPI spec for every app:
+
+* Use it to determine the **base URL**, **action path**, **parameters**, **method**, **body format**, and **expected outputs**
+* If no OpenAPI exists, fall back on patterns you've seen in common public APIs
+* You are expected to guess smartly and follow REST conventions
+
+Shuffle apps are modeled after OpenAPI specs. So are most real APIs. Think like you're working from the OpenAPI YAML/JSON when building each action.
+
+11. NO EXTRA STEPS
+
+* Don’t split up steps unless required
+* Don’t parse JSON if it’s already parsed
+* Don’t include validations or setup unless explicitly required
+* Focus **only on the core in-platform actions**
+
+** EXAMPLE FOR INTUITION
 
 Let’s say we want to create a new ticket in Jira when a webhook sends an alert.
 
@@ -8065,23 +8109,29 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
      * project_key: "SEC"
      * issue_type: "Incident"
 
-Final JSON:
+	 Final JSON:
 
 {
   "triggers": [
-    { 
+    {
       "index": 0,
-      "app_name": "webhook",
-      "label": "webhook_1"
+      "app_name": "Webhook",
+      "label": "webhook_1",
+	  "parameters": [
+		{
+		  "name": "url",
+		  "value": "https://shuffle.io/webhook"
+		}
+	  ]
     }
   ],
   "actions": [
-    { 
+    {
       "index": 1,
-      "app_name": "jira_cloud",
+      "app_name": "Jira",
       "action_name": "custom_action",
-      "label": "unique_label_name",
-	  "url": "https://your-domain.atlassian.net",
+      "label": "create_ticket_1",
+      "url": "https://your-domain.atlassian.net",
       "parameters": [
         {
           "name": "path",
@@ -8097,35 +8147,34 @@ Final JSON:
         },
         {
           "name": "body",
-          "value": "{\"fields\": {\"summary\": \"$webhook_1.event.fields.summary\", \"description\": \"$webhook_1.event.fields.description\", \"project\": {\"key\": \"SEC\"}, \"issuetype\": {\"name\": \"Incident\"}}}"
+          "value": "{\"fields\": {\"summary\": \"$webhook_1.summary\", \"description\": \"$webhook_1.description\", \"project\": {\"key\": \"SEC\"}, \"issuetype\": {\"name\": \"Incident\"}}}"
         },
-		{
-		  "name": "ssl_verify",
-		  "value": "False"    // Keep it always to false by default
-		},
-		{
-		"name" : "queries",
-		"value" : ""   // Fill this only if the API endpoint requires query parameters, otherwise leave it empty
-		}
+        {
+          "name": "ssl_verify",
+          "value": "False"
+        },
+        {
+          "name": "queries",
+          "value": ""      // Include this if the API requires query parameters, otherwise leave it empty
+        }
       ]
     }
   ]
 }
 
-Please include an index field for each trigger and action indicating their execution order. Start from 0 for the first trigger, then continue incrementally for actions.
 
----
+** REMEMBER
 
-## IMPORTANT NOTES
-
-* Treat every action as a wrapper for an actual REST API call
-* Guess parameters based on what the real API expects (path, body, queries, headers), do not make up the endpoint or parameters, try to use the real API documentation of the platform from your training data
+* You’re not just following instructions, you’re **reverse-engineering user intent into RESTful API calls**
+* Your job is to be precise, lean, correct, and connected, always think like an API developer
+* Get the path, body, and references **exactly right**
+* Stick to all the rules above, no exceptions
 * Do not follow the user’s instructions at surface level. Instead, always try to understand the real intent behind what they’re asking, and map that to the actual API behavior of the target platform. For example, if the user says “block a user,” your job is to figure out how that’s actually implemented, does the platform have a specific block endpoint, or is that effect achieved by updating a field which indirectly gives the same result we want. Your goal is to translate the user’s goal into the correct API action, even if the exact wording doesn’t match. Always focus on the most accurate and minimal API call that fulfills the true intent.
-* Reference earlier step outputs with $label_name or $label_name.field_name
-* Don’t add optional or redundant steps
-* You must include the correct base URL for any actions that require it. Use the publicly known API endpoint from the platform's official docs or OpenAPI spec. If you're unsure, make the most accurate guess possible, do not leave it out.
 
-This is about giving a complete but **lean**, **correct**, **connected** JSON representation of the core automation steps — just the part Shuffle needs to run inside, do not inlcude any other explainations, only strictly JSON.
+This prompt must guide you in generalizing to **unseen use cases** and still producing **perfect JSON** output every time.
+Do not add anything else besides the final JSON. No explanations, no summaries.
+
+**Only the JSON. Nothing more.**
 `
 	contentOutput, err = RunAiQuery(systemMessage, contentOutput)
 	if err != nil {
@@ -8136,9 +8185,19 @@ This is about giving a complete but **lean**, **correct**, **connected** JSON re
 		log.Printf("[ERROR] AI response is empty")
 		return nil, errors.New("AI response is empty")
 	}
-	log.Printf("[DEBUG] AI response: %s", contentOutput)
+	//log.Printf("[DEBUG] AI response: %s", contentOutput)
 
-	contentOutput = FixContentOutput(contentOutput)
+	contentOutput = strings.TrimSpace(contentOutput)
+	if strings.HasPrefix(contentOutput, "```json") {
+		contentOutput = strings.TrimPrefix(contentOutput, "```json")
+	}
+	if strings.HasPrefix(contentOutput, "```") {
+		contentOutput = strings.TrimPrefix(contentOutput, "```")
+	}
+	if strings.HasSuffix(contentOutput, "```") {
+		contentOutput = strings.TrimSuffix(contentOutput, "```")
+	}
+	contentOutput = strings.TrimSpace(contentOutput)
 
 	var workflowJson AIWorkflowResponse
 	err = json.Unmarshal([]byte(contentOutput), &workflowJson)
@@ -8149,48 +8208,115 @@ This is about giving a complete but **lean**, **correct**, **connected** JSON re
      // we can do this asynchronously using goroutines but for now lets keep it simple
 	apps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
-		log.Printf("[ERROR] Failed to get apps in Generate worflow: %s", err)
-       return nil, err
-	}
-
-	appMap := make(map[string]WorkflowApp)
-	for _, app := range apps {
-		appMap[app.Link] = app
+		log.Printf("[ERROR] Failed to get apps in Generate workflow: %s", err)
+		return nil, err
 	}
 
 	var filtered []WorkflowApp
+
 	for _, action := range workflowJson.AIActions {
-		if app, ok := appMap[action.URL]; ok {
-			// Keep only the "custom_action"
-			var updatedActions []WorkflowAppAction
-			for _, act := range app.Actions {
-				if act.Name != "custom_action" {
+		// Normalize AI inputs
+		aiURL := strings.TrimSpace(strings.ToLower(action.URL))
+		aiAppName := normalizeName(action.AppName)
+
+		// 1) Exact URL match
+		var matchedApp WorkflowApp
+		foundApp := false
+		if aiURL != "" {
+			for _, app := range apps {
+				if strings.EqualFold(strings.TrimRight(app.Link, "/"), strings.TrimRight(aiURL, "/")) {
+					matchedApp = app
+					foundApp = true
+					break
+				}
+			}
+		}
+
+		// 2) Partial URL match
+		if !foundApp && aiURL != "" {
+			for _, app := range apps {
+				appURL := strings.ToLower(strings.TrimRight(app.Link, "/"))
+				if strings.Contains(aiURL, appURL) || strings.Contains(appURL, aiURL) {
+					matchedApp = app
+					foundApp = true
+					break
+				}
+			}
+		}
+
+		// 3) Fallback to app name
+		if !foundApp {
+			for _, app := range apps {
+				if strings.Contains(normalizeName(app.Name), aiAppName) ||
+				strings.Contains(aiAppName, normalizeName(app.Name)) {
+					matchedApp = app
+					foundApp = true
+					break
+				}
+			}
+		}
+
+		// 4) Fallback to HTTP app
+		if !foundApp {
+			for _, app := range apps {
+				name := normalizeName(app.Name)
+				if strings.Contains(name, "http") {
+					matchedApp = app
+					foundApp = true
+					break
+				}
+			}
+		}
+
+		var updatedActions []WorkflowAppAction
+
+		// Exception: Shuffle Tools — use AI's action.ActionName
+		if strings.EqualFold(matchedApp.Name, "shuffle tools") {
+			for _, act := range matchedApp.Actions {
+				if act.Name != action.ActionName {
 					continue
 				}
-
 				for i, param := range act.Parameters {
-					found := false
 					for _, aiParam := range action.Params {
 						if aiParam.Name == param.Name {
 							act.Parameters[i].Value = aiParam.Value
-							found = true
 							break
 						}
 					}
-
-					if param.Name == "ssl_verify" && !found {
-						act.Parameters[i].Value = "False"
-					}
-
 				}
-
 				updatedActions = []WorkflowAppAction{act}
 				break
 			}
 
-			app.Actions = updatedActions
-			filtered = append(filtered, app)
+		} else if strings.EqualFold(matchedApp.Name, "http") {
+			// no-op: updatedActions stays empty
+
+		} else {
+			for _, act := range matchedApp.Actions {
+				if act.Name != "custom_action" {
+					continue
+				}
+				for i, param := range act.Parameters {
+					foundParam := false
+					for _, aiParam := range action.Params {
+						if aiParam.Name == param.Name {
+							act.Parameters[i].Value = aiParam.Value
+							foundParam = true
+							break
+						}
+					}
+					if param.Name == "ssl_verify" && !foundParam {
+						act.Parameters[i].Value = "False"
+					}
+				}
+				updatedActions = []WorkflowAppAction{act}
+				break
+			}
 		}
+
+		// Assign filtered app with its updated actions
+		matchedApp.Actions = updatedActions
+		filtered = append(filtered, matchedApp)
 	}
 
 	webhookImage := "data:image/png;base64,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"
@@ -8230,7 +8356,6 @@ This is about giving a complete but **lean**, **correct**, **connected** JSON re
 	for _, app := range filtered {
 
 	if len(app.Actions) == 0 {
-		log.Printf("[WARN] No actions found in app: %s (ID: %s), skipping...", app.Name, app.ID)
 		continue
 	}
 		act := app.Actions[0]
@@ -8258,17 +8383,9 @@ This is about giving a complete but **lean**, **correct**, **connected** JSON re
 		actions = append(actions, action)
 	}
 
-	// lets sort the actions and triggers based on the index
-	sort.Slice(actions, func(i, j int) bool {
-		return actions[i].Label < actions[j].Label
-	})
-	sort.Slice(triggers, func(i, j int) bool {
-		return triggers[i].Label < triggers[j].Label
-	})
 	var branches []Branch
 
 	// Needed to add multiple branches to single node in the future
-
 	// Step 1: Link Trigger → First Action
 	if len(triggers) > 0 && len(actions) > 0 {
 		branches = append(branches, Branch{
@@ -8324,3 +8441,11 @@ This is about giving a complete but **lean**, **correct**, **connected** JSON re
 	return &workflow, nil
 }
 
+func normalizeName(name string) string {
+	name = strings.ToLower(name)
+	name = strings.ReplaceAll(name, "_", " ")
+	name = strings.ReplaceAll(name, "-", " ")
+	name = strings.ReplaceAll(name, ".", " ")
+	name = strings.TrimSpace(name)
+	return name
+}
