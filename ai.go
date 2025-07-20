@@ -7237,15 +7237,31 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 
 func generateWorkflowJson(ctx context.Context, input QueryInput, user User) (*Workflow, error) {
 
-	systemMessage := `You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools using triggers and actions, You are not a conversational assistant or chatbot. Even if the user asks questions or speaks casually, your only job is to generate the correct workflow JSON.
+	apps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get apps in Generate workflow: %s", err)
+		return nil, err
+	}
+    var httpApp WorkflowApp // We use http app as the final fallback if in case we cannot find any app that matches the AI suggested app name
+	var builder strings.Builder
 
-You will receive messy user inputs describing a task they want to automate. Your job is to produce a clean, **fully structured**, atomic breakdown of that task.
+	for _, app := range apps {
+		builder.WriteString(fmt.Sprintf("%s: %v\n", app.Name, app.Categories))
 
-## Your job:
+		if normalizeName(app.Name) == "http" {
+			httpApp = app
+		}
+	}
+	categoryString := builder.String()
+
+	systemMessage := fmt.Sprintf(`You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools and automates security workflows, You are not a conversational assistant or chatbot. Even if the user asks questions or speaks casually, your only job is to generate the correct workflow JSON.
+
+You will receive messy user inputs describing a task they want to automate. Your job is to produce a clean, fully structured, atomic breakdown of that task. In addition to the user input, you will also receive a list of apps the user has access to.
+Your job:
 1. Understand what the user is trying to automate.
 2. Break the task into **chronological steps**, with **no steps skipped**, even if obvious.
 3. Separate steps into two sections:
-   - “EXTERNAL SETUP” = steps done outside Shuffle (e.g., SIEM config, 3rd-party auth, app registration, webhook setup)
+   - “EXTERNAL SETUP” = steps done outside Shuffle (e.g., SIEM config, 3rd-party auth, app registration, webhook setup), make sure your steps are detailed enough that a user can follow them to set up the external systems correctly, but at the same time, do not make it too verbose or complicated.
    - “SHUFFLE WORKFLOW” = only the automation logic that happens *inside* Shuffle
 
 4. Use the correct trigger type:
@@ -7254,7 +7270,6 @@ You will receive messy user inputs describing a task they want to automate. Your
    - Right now Webhook (for real-time alerts) and Schedule (for polling) are the only two trigger types supported in Shuffle. So even if the user asks for a different kind of trigger like "email trigger" or "alert trigger", you must handle it in one of two ways: either map it to a Webhook trigger if the external system can send real-time HTTP POST requests (push model), or use a Schedule trigger if the only option is to poll the external system periodically (pull model). Remember, polling can be inefficient depending on the system, so prefer Webhook when possible. Use your judgment to decide which trigger is technically more appropriate, based not just on what the user said, but on what fits best with how the external system actually works. However, if the user explicitly asks for either "webhook" or "schedule", you must respect that choice and use exactly what they requested, even if it’s not optimal. Never invent or use unsupported trigger types, only pick between Webhook and Schedule based on real-world feasibility and the user’s clarity.
    - In some cases, the way the user asks might clearly imply that we need some trigger to start the workflow (for example, “when an alert happens” or “when a ticket is created”), but the reality is that the target platform may not support sending webhook notifications at all. In such situations, even though the user’s request sounds like it should be real-time, we must fall back to using a Schedule trigger to poll the target system periodically for new data or changes. This might not be efficient, but it’s the only way to simulate "real-time" when the system can’t push data to us. So always think practically, don’t blindly follow the wording of the request. Instead, figure out if the system realistically supports webhooks; if not, choose Schedule trigger automatically even if it goes against the user’s phrasing. The goal is to still build a functional workflow with the best available method.
    - If it’s a manual run or a pull, no trigger is needed.
-   - Do not explain this logic. Just use the right trigger.
 
 5. Ensure **all steps are atomic** — one action per step only.
 6. Always clearly **map outputs to inputs** (e.g., extract value A → use value A in next step).
@@ -7272,17 +7287,14 @@ You will receive messy user inputs describing a task they want to automate. Your
 This means:
 - You cannot perform an action unless the platform has a public API endpoint for it.
 - The input fields in Shuffle actions (like user ID, alert ID, request body) will almost always match the API’s expected parameters.
-- When the user request is vague, underspecified, or lacks concrete app/platform names, you must NOT stop or ask for clarification. Instead, treat it as if the user expects you to fill in the blanks using your best judgment. Always assume the user is describing a real-world scenario where they don't know the exact apps, but still want the automation built. This often happens when users are experimenting or building POCs.
-	You must decide the missing details on their behalf. For example:
-	If the user says ‘send a message’ but doesn’t say where,  you decide based on common use (e.g., Slack, Discord, Email).
-	If they say ‘search SIEM’ but don’t specify the SIEM tool, choose a popular one like Splunk, Sentinel, or Elastic based on context or default to one that’s well-supported in Shuffle.
-	If they mention something generic like ‘block the IP’ but don’t mention what firewall,  pick a realistic one (e.g., Fortigate, Palo Alto, etc.).
+- When the user request is non-sensical, empty or even offensive then you must STOP and respond with a meaningful message like "Be more specific about your request".
+- You have the context of available apps, so you can intelligently choose the right app based on the user’s request. The list will consist of app names and their categories, which you can use to determine the most appropriate apps for the task.
 
-	If they just say ‘get user details’,  you decide if it’s Active Directory, Okta, or some identity provider based on context clues.
-	The goal is: never leave things blank, never ignore a vague input. Treat it as your job to infer and complete the workflow. This is not guessing, it’s intelligent assumption based on common automation use-cases. If multiple options exist, just pick the most practical or common one and proceed. You are expected to take initiative.
+Available Apps:
+%s
 
-- If the user input is empty, vague, nonsensical, or even offensive, do not reject it. Even in those cases try to create a meaningful security automation use case. Always proceed to generate a relevant workflow JSON
-   So before deciding how a step is performed, first reason about what the real API call would be — including required fields, supported operations, and request format.
+    Based on this list of apps, you can infer which app to use for a specific action even if the user's input is vague or doesn’t clearly specify an app name. For example: if the user says "take alerts from SIEM and send it to my case management system", you should intelligently choose the most relevant SIEM and case management app from the available apps list. If there are multiple apps in the same category, pick the one that seems most appropriate based on context.
+	Sometimes, the app the user specifically mentions might not exist in the available apps list, either because they named a tool that isn’t present, or because their query isn’t tied to any app explicitly. In such cases: If the user explicitly mentioned an app name that is not in the available list, include that app anyway, and If the user didn’t mention an app name but the context suggests a type of app is needed, and no suitable app is found in the list, then pick a well-known app from that category instead.
 
 Only if the platform’s API supports that action, and all required parameters are available or extractable, include it as a valid atomic step.
 
@@ -7297,14 +7309,13 @@ Example: If Slack lets you disable a user directly using their email, and the we
 Don’t do: get_user_by_email → extract user_id → deactivate_user_by_id, if that whole sequence can be replaced with one clean call.
    - But do not add extra steps unless they’re strictly required based on the API’s structure. Always keep the step count minimal and justified.
 
-
 11. Do not assume or invent any conditions not mentioned by the user, Don't add option steps.
 
 12. Also we already have in-built mechanism to extract and store the response data from the actions or even from the trigger, so you do not need to add any extra steps to parse the response data, just use the response data directly in the next step using the label of the action or trigger.
 
 13. When generating the url and path, always write the path based on the actual variable you will use for substitution during execution and not the canonical placeholder from the official API. Always write the path based on what you will actually substitute, not what the public API doc shows.
 
-## Always use this strict format:
+** Always use this strict format for approved requests:
 1. EXTERNAL SETUP
 1.1) ...
 1.2) ...
@@ -7315,12 +7326,18 @@ Don’t do: get_user_by_email → extract user_id → deactivate_user_by_id, if 
 2.2) ...
 ...
 
+** Always use this strict format for rejected requests:
+REJECTED
+Reason: <short but clear reason explaining why the task couldn't be processed>
+
+
 Do not follow the user’s instructions at surface level. Instead, always try to understand the real intent behind what they’re asking, and map that to the actual API behavior of the target platform. For example, if the user says “block a user,” your job is to figure out how that’s actually implemented, does the platform have a specific block endpoint, or is that effect achieved by updating a field which indirectly gives the same result we want. Your goal is to translate the user’s goal into the correct API action, even if the exact wording doesn’t match. Always focus on the most accurate and minimal API call that fulfills the true intent.
 No other formats are allowed. Just structured steps.
 
 ## GOAL:
-Produce a minimal, correct, atomic plan for turning vague security workflows into structured actions. Do not overthink. Follow the format exactly.
-`
+Produce a minimal, correct, atomic plan for turning vague security workflows into structured actions. Do not overthink. Follow the format exactly, Including the headings.
+`, categoryString)
+
 	contentOutput, err := RunAiQuery(systemMessage, input.Query)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
@@ -7330,7 +7347,13 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 		log.Printf("[ERROR] AI response is empty")
 		return nil, errors.New("AI response is empty")
 	}
-	//log.Printf("[DEBUG] AI response: %s", contentOutput)
+    err = checkIfRejected(contentOutput)
+	if err != nil {
+		return nil, err
+	}
+
+	externalSetupInstructions := extractExternalSetup(contentOutput)
+	log.Printf("[DEBUG] AI response: %s", contentOutput)
 
 	systemMessage = `You are a senior security automation assistant helping build workflows for an automation platform called **Shuffle**, which connects security tools through apps and their actions (similar to SOAR platforms).
 
@@ -7399,7 +7422,8 @@ Your final JSON must look like this:
 
 {
   "triggers": [ ... ],
-  "actions": [ ... ]
+  "actions": [ ... ],
+  "comments": "This must be a single string that contains a clear, line-by-line description of what each step in the workflow does. Use \n to separate each line. Avoid markdown, emojis, or formatting — just plain readable text."
 }
 
 Trigger format
@@ -7408,7 +7432,7 @@ Trigger format
   "index": 0,
   "app_name": "webhook",  // or "Schedule"
   "label": "webhook_1",
-  "parameters": [ ... ]  // for webhook, this is likely { "url": "https://shuffle.io/webhook" } and for Schedule, it can be { "cron": "0 0 * * *" } or similar
+  "parameters": [ ... ]  // for webhook, this is likely { "url": "https://shuffle.io/webhook" } and for Schedule, it can be { "cron": "0 0 * * *" }
 }
 
 Action format
@@ -7426,7 +7450,7 @@ Every parameter is an object in this form:
 
 { "name": "<param_type>", "value": "<value>" }
 
-For example, every custom action must have these five parameters, They are :
+For example, every custom action must have these five parameters, They are:
 
 Method:
 Always include:
@@ -7567,7 +7591,7 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
      * project_key: "SEC"
      * issue_type: "Incident"
 
-	 Final JSON:
+ Final JSON:
 
 {
   "triggers": [
@@ -7617,7 +7641,8 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
         }
       ]
     }
-  ]
+  ],
+  "comments": "Trigger when data is received via webhook.\nExtract summary and description from webhook payload.\nUse that data to create a Jira incident in project SEC."
 }
 
 
@@ -7643,7 +7668,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		log.Printf("[ERROR] AI response is empty")
 		return nil, errors.New("AI response is empty")
 	}
-	//log.Printf("[DEBUG] AI response: %s", contentOutput)
+	log.Printf("[DEBUG] AI response: %s", contentOutput)
 
 	contentOutput = strings.TrimSpace(contentOutput)
 	if strings.HasPrefix(contentOutput, "```json") {
@@ -7663,12 +7688,6 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		log.Printf("[ERROR] AI response is not a valid JSON object: %s", err)
 		return nil, errors.New("AI response is not a valid JSON object")
 	}
-     // we can do this asynchronously using goroutines but for now lets keep it simple
-	apps, err := GetPrioritizedApps(ctx, user)
-	if err != nil {
-		log.Printf("[ERROR] Failed to get apps in Generate workflow: %s", err)
-		return nil, err
-	}
 
 	var filtered []WorkflowApp
 
@@ -7677,11 +7696,25 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		aiURL := strings.TrimSpace(strings.ToLower(action.URL))
 		aiAppName := normalizeName(action.AppName)
 
-		// 1) Exact URL match
+		// 1) Lets try mactching with app names
 		var matchedApp WorkflowApp
 		foundApp := false
-		if aiURL != "" {
+		if aiAppName != "" {
 			for _, app := range apps {
+				normA := normalizeName(app.Name)
+				log.Printf("[DEBUG] Matching AI app name '%s' with app '%s'", aiAppName, normA)
+				if strings.EqualFold(normA, aiAppName) || (strings.Contains(normA, aiAppName) || strings.Contains(aiAppName, normA)) {
+					matchedApp = app
+					foundApp = true
+					break
+				}
+			}
+		}
+
+		// 2) Exact URL match
+		if !foundApp && aiURL != "" {
+			for _, app := range apps {
+				log.Printf("[DEBUG] Matching AI URL '%s' with app '%s'", aiURL, app.Link)
 				if strings.EqualFold(strings.TrimRight(app.Link, "/"), strings.TrimRight(aiURL, "/")) {
 					matchedApp = app
 					foundApp = true
@@ -7690,7 +7723,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 			}
 		}
 
-		// 2) Partial URL match
+		// 3) Partial URL match
 		if !foundApp && aiURL != "" {
 			for _, app := range apps {
 				appURL := strings.ToLower(strings.TrimRight(app.Link, "/"))
@@ -7702,28 +7735,26 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 			}
 		}
 
-		// 3) Fallback to app name
-		if !foundApp {
-			for _, app := range apps {
-				if strings.Contains(normalizeName(app.Name), aiAppName) ||
-				strings.Contains(aiAppName, normalizeName(app.Name)) {
-					matchedApp = app
-					foundApp = true
-					break
-				}
-			}
-		}
-
 		// 4) Fallback to HTTP app
-		if !foundApp {
-			for _, app := range apps {
-				name := normalizeName(app.Name)
-				if strings.Contains(name, "http") {
-					matchedApp = app
-					foundApp = true
-					break
-				}
+		if !foundApp && httpApp.Name != "" {
+			matchedApp = httpApp
+			foundApp = true
+		} else {
+			log.Printf("[WARN] No matching app found for AI action: %s", action.AppName)
+			httpApp = WorkflowApp{
+				Name: "http",
+				Actions: []WorkflowAppAction{
+					{
+						Name: "custom_action",
+						Parameters: []WorkflowAppActionParameter{
+							{Name: "url", Value: aiURL},
+							{Name: "method", Value: "GET"},
+						},
+					},
+				},
 			}
+			matchedApp = httpApp
+			foundApp = true
 		}
 
 		var updatedActions []WorkflowAppAction
@@ -7736,7 +7767,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 				}
 				for i, param := range act.Parameters {
 					for _, aiParam := range action.Params {
-						if aiParam.Name == param.Name {
+						if strings.EqualFold(aiParam.Name, param.Name) {
 							act.Parameters[i].Value = aiParam.Value
 							break
 						}
@@ -7747,7 +7778,40 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 			}
 
 		} else if strings.EqualFold(matchedApp.Name, "http") {
-			// FIXME
+				var method string
+				for _, aiParam := range action.Params {
+					if strings.EqualFold(aiParam.Name, "method") {
+						method = strings.ToUpper(aiParam.Value)
+						break
+					}
+				}
+
+				// find action by method name
+				var matchedHttpAction WorkflowAppAction
+				for _, act := range matchedApp.Actions {
+					if strings.EqualFold(act.Name, method) {
+						matchedHttpAction = act
+						break
+					}
+				}
+
+				// fill rest of the params
+				for i, param := range matchedHttpAction.Parameters {
+					if strings.EqualFold(param.Name, "method") {
+						continue 
+					}
+					for _, aiParam := range action.Params {
+						if strings.EqualFold(aiParam.Name, "url") && strings.EqualFold(param.Name, "url") {
+							matchedHttpAction.Parameters[i].Value = aiParam.Value
+							continue
+						}
+						if strings.EqualFold(aiParam.Name, param.Name) {
+							matchedHttpAction.Parameters[i].Value = aiParam.Value
+							break 
+						}
+					}
+				}
+				updatedActions = []WorkflowAppAction{matchedHttpAction}
 
 		} else {
 			for _, act := range matchedApp.Actions {
@@ -7756,8 +7820,13 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 				}
 				for i, param := range act.Parameters {
 					foundParam := false
+					if strings.EqualFold(param.Name, "url") {
+						act.Parameters[i].Value = matchedApp.Link
+						foundParam = true
+						continue
+					}
 					for _, aiParam := range action.Params {
-						if aiParam.Name == param.Name {
+						if strings.EqualFold(aiParam.Name, param.Name) {
 							act.Parameters[i].Value = aiParam.Value
 							foundParam = true
 							break
@@ -7810,36 +7879,43 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
    }
 
 	var actions []Action
+	var actionLabel string
+	actionLen := len(workflowJson.AIActions)
 
-	for _, app := range filtered {
+	for i, app := range filtered {
 
 	if len(app.Actions) == 0 {
 		continue
 	}
-		act := app.Actions[0]
-
-		action := Action{
-			AppName:      app.Name,
-			AppVersion:   app.AppVersion,
-			Description:  app.Description,
-			AppID:        app.ID,
-			IsValid:      app.IsValid,
-			Sharing:      app.Sharing,
-			PrivateID:    app.PrivateID,
-			SmallImage:   app.SmallImage,
-			LargeImage:   app.LargeImage,
-			Environment:  app.Environment,
-			Name:         act.Name,
-			Label:        act.Label,
-			Parameters:   act.Parameters,
-			Public:       app.Public,
-			Generated:    app.Generated,
-			ReferenceUrl: app.ReferenceUrl,
-			ID:           uuid.NewV4().String(),
-		}
-
-		actions = append(actions, action)
+	if i < actionLen {
+		actionLabel = workflowJson.AIActions[i].Label
+	} else {
+		actionLabel = app.Name + "_" + strconv.Itoa(i+1)
 	}
+	act := app.Actions[0]
+
+	action := Action{
+		AppName:      app.Name,
+		AppVersion:   app.AppVersion,
+		Description:  app.Description,
+		AppID:        app.ID,
+		IsValid:      app.IsValid,
+		Sharing:      app.Sharing,
+		PrivateID:    app.PrivateID,
+		SmallImage:   app.SmallImage,
+		LargeImage:   app.LargeImage,
+		Environment:  app.Environment,
+		Name:         act.Name,
+		Label:        actionLabel,
+		Parameters:   act.Parameters,
+		Public:       app.Public,
+		Generated:    app.Generated,
+		ReferenceUrl: app.ReferenceUrl,
+		ID:           uuid.NewV4().String(),
+	}
+
+	actions = append(actions, action)
+}
 
 	var branches []Branch
 
@@ -7862,8 +7938,8 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		})
 	}
 
-	startX := -1146.6988673793812
-	y := -324.6413454035773
+	startX := -312.6988673793812
+	y := 190.6413454035773
 	xSpacing := 437.0
 
 	// Set trigger positions
@@ -7876,7 +7952,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 
 	// If no triggers, start X from 0 for actions
 	if len(triggers) == 0 {
-		startX = -1146.6988673793812 
+		startX = -312.6988673793812 
 	}
 
 	// Set action positions (continue horizontally from trigger)
@@ -7887,6 +7963,34 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		}
 	}
 
+	var comments []Comment
+
+	comments = append(comments, Comment{
+		ID:         uuid.NewV4().String(),
+		Type:      "COMMENT",
+		Position:  Position{X: -854.999, Y: 131.001},
+		IsValid: true,
+		Label: externalSetupInstructions,
+		BackgroundColor: "#1f2023",
+		Color: "#ffffff",
+		Decorator: true,
+		Height: 400,
+		Width: 500,
+	})
+
+	comments = append(comments, Comment{
+		ID:        uuid.NewV4().String(),
+		Type:      "COMMENT",
+		Position:  Position{X: 394.001, Y: -324.999},
+		IsValid: true,
+		Label: workflowJson.Comments,
+		BackgroundColor: "#1f2023",
+		Color: "#ffffff",
+		Decorator: true,
+		Height: 500,
+		Width: 600,
+	})
+
 	workflow := Workflow{
 		ID:          uuid.NewV4().String(),
 		Name:        "Generated Workflow" + uuid.NewV4().String(),
@@ -7894,6 +7998,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		Triggers:    triggers,
 		Actions:     actions,
 		Branches:    branches,
+		Comments:    comments,
 	}
 
 	return &workflow, nil
@@ -7905,5 +8010,66 @@ func normalizeName(name string) string {
 	name = strings.ReplaceAll(name, "-", " ")
 	name = strings.ReplaceAll(name, ".", " ")
 	name = strings.TrimSpace(name)
+
+	log.Printf("[DEBUG] Normalized name: %s", name)
 	return name
+}
+
+func checkIfRejected(response string) error {
+
+	lower := strings.ToLower(response)
+
+	// quick rejection check
+	if !strings.Contains(lower, "rejected") {
+		return nil
+	}
+
+	lines := strings.Split(response, "\n")
+
+	for _, line := range lines {
+		lineClean := strings.ToLower(strings.TrimSpace(line))
+		lineClean = strings.TrimPrefix(lineClean, "**")
+		lineClean = strings.TrimSuffix(lineClean, "**")
+
+		if strings.HasPrefix(lineClean, "reason:") {
+			// extract actual reason
+			reason := strings.TrimSpace(line[len("Reason:"):])
+			return errors.New("AI rejected the task: " + reason)
+		}
+	}
+
+	// fallback if no proper reason found
+	return errors.New("AI rejected the task: reason unknown")
+}
+
+func extractExternalSetup(response string) (string) {
+	lines := strings.Split(response, "\n")
+	var result []string
+	foundExternal := false
+
+	for _, rawLine := range lines {
+		line := strings.ToLower(strings.TrimSpace(rawLine))
+
+		clean := strings.Trim(line, "*# ")
+		if !foundExternal && strings.HasPrefix(clean, "1. external setup") {
+			foundExternal = true
+			result = append(result, rawLine)
+			continue
+		}
+
+		// Stop when SHUFFLE WORKFLOW starts
+		if foundExternal && strings.Contains(clean, "shuffle workflow") {
+			break
+		}
+
+		if foundExternal {
+			result = append(result, rawLine)
+		}
+	}
+
+	if !foundExternal {
+		return "AI did not include any external setup instructions"
+	}
+
+	return strings.Join(result, "\n")
 }
