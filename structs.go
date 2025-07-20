@@ -4561,6 +4561,7 @@ type partnerReturnStruct struct {
 type AIWorkflowResponse struct {
 	AITriggers []AITriggerItem `json:"triggers" datastore:"triggers"`
 	AIActions  []AIActionItem  `json:"actions" datastore:"actions"`
+	Comments    string          `json:"comments" datastore:"comments"`
 }
 
 type AITriggerItem struct {
@@ -4582,4 +4583,9 @@ type AIActionItem struct {
 type AIParamItem struct {
 	Name  string `json:"name" datastore:"name"`
 	Value string `json:"value" datastore:"value"`
+}
+
+type AppCategoryItem struct {
+	AppName    string   `json:"app_name" datastore:"app_name"`
+	Categories []string `json:"categories" datastore:"categories"`
 }
