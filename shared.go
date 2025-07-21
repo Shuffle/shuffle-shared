@@ -31168,6 +31168,13 @@ func GetWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Reque
 
 	output , err := generateWorkflowJson(ctx, input, user, workflow)
 	if err != nil {
+		reason := err.Error()
+		if strings.HasPrefix(reason, "AI rejected the task: ") {
+			reason = strings.TrimPrefix(reason, "AI rejected the task: ")
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
+			return
+		}
 		log.Printf("[ERROR] Failed to generate workflow AI response: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
