@@ -31140,6 +31140,12 @@ func GetWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Reque
 		return
 	}
 
+	if !user.SupportAccess {
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+			return
+		}
+
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Failed to read body in runActionAI: %s", err)
@@ -31155,11 +31161,15 @@ func GetWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Reque
 		resp.Write([]byte(`{"success": false, "reason": "Input data invalid"}`))
 		return
 	}
+	workflow, err := GetWorkflow(ctx, input.WorkflowId, true)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get workflow %s: %s", input.WorkflowId, err)
+	}
 
-	output , err := generateWorkflowJson(ctx, input, user)
+	output , err := generateWorkflowJson(ctx, input, user, workflow)
 	if err != nil {
 		log.Printf("[ERROR] Failed to generate workflow AI response: %s", err)
-		resp.WriteHeader(http.StatusInternalServerError)
+		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
