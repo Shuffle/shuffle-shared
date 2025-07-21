@@ -1,43 +1,43 @@
 package shuffle
 
 import (
-	"os"
-	"fmt"
-	"log"
-	"time"
-	"sync"
 	"bytes"
-	"regexp"
-	"reflect"
-	"errors"
 	"context"
-	"strings"
-	"strconv"
-	"net/http"
-	"math/rand"
-	"io/ioutil"
 	"crypto/md5"
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/base64"
+	"errors"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"math/rand"
+	"net/http"
+	"os"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
-	uuid "github.com/satori/go.uuid"
 	openai "github.com/sashabaranov/go-openai"
-	option "google.golang.org/api/option"
+	uuid "github.com/satori/go.uuid"
 	"google.golang.org/api/customsearch/v1"
+	option "google.golang.org/api/option"
 
-	"github.com/frikky/schemaless"
 	"github.com/frikky/kin-openapi/openapi3"
+	"github.com/frikky/schemaless"
 )
 
-//var model = "gpt-4-turbo-preview"
-//var model = "gpt-4o-mini"
-//var model = "o4-mini"
+// var model = "gpt-4-turbo-preview"
+// var model = "gpt-4o-mini"
+// var model = "o4-mini"
 var standalone bool
 var model = "gpt-4.1-mini"
 var fallbackModel = ""
-var assistantId = os.Getenv("OPENAI_ASSISTANT_ID") 
+var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
 var assistantModel = model
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
@@ -75,7 +75,7 @@ func SetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key, value 
 	md5String := hex.EncodeToString(hashInBytes)
 	encryptionKey := fmt.Sprintf("%s_%d_%s", auth.OrgId, auth.Created, md5String)
 
-	encrypted, err := HandleKeyEncryption([]byte(value), encryptionKey) 
+	encrypted, err := HandleKeyEncryption([]byte(value), encryptionKey)
 	if err != nil {
 		log.Printf("[ERROR] Failed to encrypt KMS cache for key %s: %s", key, err)
 		return err
@@ -94,7 +94,7 @@ func SetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key, value 
 // Should talk to the KMS and find the key we are looking for
 // Uses normal OR execution auth (authorization: Bearer..)
 func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authorization, optionalExecutionId string) (string, error) {
-	cachedOutput, err := GetKmsCache(ctx, auth, key) 
+	cachedOutput, err := GetKmsCache(ctx, auth, key)
 	if err == nil && len(cachedOutput) > 0 {
 		log.Printf("[INFO] Found cached KMS key for key '%s'", key)
 		return cachedOutput, nil
@@ -114,14 +114,13 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 	// seeing as it has to start with kms(./:), we can remove the first element
 	keys = keys[1:]
 
-
 	// Associated key is a structure to help with e.g. Hashicorp Vault where keys are used as values (multiple key:values in one)
 	// This is silly instead of just indexing & modifying keys ROFL
 	// Doesn't matter with small for-loop
 	newKeys := []string{}
 	associatedKey := ""
 	for keyIndex, keyPart := range keys {
-		if keyIndex != len(keys) - 1 {
+		if keyIndex != len(keys)-1 {
 			newKeys = append(newKeys, keyPart)
 			continue
 		}
@@ -131,11 +130,10 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 				break
 			}
 
-			associatedKey = keyPart[2:len(keyPart)-1]
+			associatedKey = keyPart[2 : len(keyPart)-1]
 			break
 		}
 	}
-
 
 	keys = newKeys
 	log.Printf("[INFO] Looking to decrypt KMS key '%s' with %d parts. Additional Key: %#v", key, len(keys), associatedKey)
@@ -169,7 +167,7 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		for _, label := range curaction.CategoryLabel {
 			label = strings.ToLower(strings.ReplaceAll(label, " ", "_"))
 			if label == "get_kms_key" {
-				found = true 
+				found = true
 				break
 			}
 		}
@@ -209,7 +207,7 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 	// Now we need to map the required params to the keys. Order?
 	// If we have a key like "kms/org/project/app/key", we can map the required params to the keys
 
-	// If the keys are a path or something, we just throw them all in there without caring about keys <=> requiredParams 
+	// If the keys are a path or something, we just throw them all in there without caring about keys <=> requiredParams
 	if len(keys) != len(requiredParams) {
 		log.Printf("[ERROR] KMS: %#v and %#v are not the same length (%d vs %d)\n\n", keys, requiredParams, len(keys), len(requiredParams))
 
@@ -221,7 +219,7 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 
 		newkeys := []string{}
 		for kIndex, key := range keys {
-			if kIndex == len(requiredParams) - 1 {
+			if kIndex == len(requiredParams)-1 {
 				newkeys = append(newkeys, strings.Join(keys[kIndex:], "/"))
 				break
 			}
@@ -239,15 +237,15 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 	// #1 = faster, but #2 is general. Maybe #2 for first time, then fallback to #1? Problem with #1 again is that it can't also use workflows at that point
 	categoryAction := CategoryAction{
 		AppName: app.Name,
-		Label: "get_kms_key",
+		Label:   "get_kms_key",
 
-		ActionName: action.Name,
+		ActionName:       action.Name,
 		AuthenticationId: auth.Id,
-		Fields: []Valuereplace{},
+		Fields:           []Valuereplace{},
 
-		SkipWorkflow: true,
+		SkipWorkflow:          true,
 		SkipOutputTranslation: true, // Manually done in the KMS case
-		Environment: auth.Environment,
+		Environment:           auth.Environment,
 	}
 
 	if len(app.Categories) > 0 {
@@ -261,7 +259,7 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		}
 
 		categoryAction.Fields = append(categoryAction.Fields, Valuereplace{
-			Key: param,
+			Key:   param,
 			Value: keys[i],
 		})
 	}
@@ -299,7 +297,7 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 	}
 
 	req, err := http.NewRequest(
-		"POST", 
+		"POST",
 		parsedUrl,
 		bytes.NewBuffer(marshalledAction),
 	)
@@ -353,7 +351,7 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 
 func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 	kmsResponse := SubflowData{}
-	httpOutput := &HTTPOutput{} 
+	httpOutput := &HTTPOutput{}
 	err := json.Unmarshal(fullBody, &kmsResponse)
 	if err != nil {
 		log.Printf("[ERROR] Failed to unmarshal schemaless response '%s': %s - Match SubflowData struct (1)", err, string(fullBody))
@@ -373,7 +371,7 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 	}
 
 	if httpOutput.Status >= 300 && httpOutput.Status != 404 {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Translated action failed with status: %d. Rerun Autocorrecting feature!", httpOutput.Status)
 		}
 
@@ -389,7 +387,7 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 	return *httpOutput, marshalledBody, nil
 }
 
-// Translates the output of the KMS action to a usable format in the 
+// Translates the output of the KMS action to a usable format in the
 // { "kms_key": "key", "kms_value": "value" } format
 func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig, paramName string) (string, error) {
 	// We need to parse the response from the KMS action
@@ -414,14 +412,13 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig, paramNa
 		return string(fullBody), err
 	}
 
-
 	// We need to check if the response is in the format we expect
 	/*
-	// Without key IS ok.
-	if _, ok := labeledResponse["kms_key"]; !ok {
-		log.Printf("[ERROR] KMS response does not contain the key 'kms_key'")
-		return "", errors.New("KMS response does not contain the key 'kms_key'")
-	}
+		// Without key IS ok.
+		if _, ok := labeledResponse["kms_key"]; !ok {
+			log.Printf("[ERROR] KMS response does not contain the key 'kms_key'")
+			return "", errors.New("KMS response does not contain the key 'kms_key'")
+		}
 	*/
 	if _, ok := labeledResponse["kms_value"]; !ok {
 		log.Printf("[ERROR] KMS response does not contain the key 'kms_value'")
@@ -596,7 +593,7 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 			// Body = previous requests' body
 			action, additionalInfo, err := RunSelfCorrectingRequest(action, status, additionalInfo, string(body), useApp, inputdata, curAttempt)
 			if err != nil {
-				if !strings.Contains(err.Error(), "missing_fields") { 
+				if !strings.Contains(err.Error(), "missing_fields") {
 					log.Printf("[ERROR] Error running self-correcting request: %s", err)
 				}
 
@@ -616,11 +613,11 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 	return "", action, errors.New(getBadOutputString(action, action.AppName, inputdata, string(body), status)), additionalInfo
 }
 
-// Params: 
-// Action = the Action with the fields to fill in 
+// Params:
+// Action = the Action with the fields to fill in
 // Status = status from PREVIOUS execution
-// additionalInfo = additional info from attempt to fix the request 
-// outputBody = typically the Error response from the previous REQUESTS 
+// additionalInfo = additional info from attempt to fix the request
+// outputBody = typically the Error response from the previous REQUESTS
 // appname = name of the app
 // inputdata = input data from the request
 
@@ -644,7 +641,7 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		//}
 
 		checkValue := strings.TrimSpace(strings.Replace(param.Value, "\n", "", -1))
-		if  (strings.HasPrefix(checkValue, "{") && strings.HasSuffix(checkValue, "}")) || (strings.HasPrefix(param.Value, "[") && strings.HasSuffix(param.Value, "]")) {
+		if (strings.HasPrefix(checkValue, "{") && strings.HasSuffix(checkValue, "}")) || (strings.HasPrefix(param.Value, "[") && strings.HasSuffix(param.Value, "]")) {
 			inputBody += fmt.Sprintf("\"%s\": %s,\n", param.Name, param.Value)
 			continue
 		}
@@ -732,7 +729,7 @@ Strict output rules to follow:
 	if len(attempt) > 0 {
 		currentAttempt := attempt[0]
 		if currentAttempt > 4 {
-   			inputData += fmt.Sprintf(`IF we are missing a value from the user, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. Do NOT do this unless it is absolutely necessary, make SURE the fields are missing. Before doing this, ensure the body and query fields are in the right format.\n\n`)
+			inputData += fmt.Sprintf(`IF we are missing a value from the user, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. Do NOT do this unless it is absolutely necessary, make SURE the fields are missing. Before doing this, ensure the body and query fields are in the right format.\n\n`)
 		}
 	}
 
@@ -750,14 +747,14 @@ Input JSON Payload (ensure VALID JSON):
 		log.Printf("[DEBUG] SYSTEM MESSAGE: %#v\n\nINPUTDATA:\n\n\n%s\n\n\n\n", systemMessage, inputData)
 	}
 
-	contentOutput, err := RunAiQuery(systemMessage, inputData) 
+	contentOutput, err := RunAiQuery(systemMessage, inputData)
 	if err != nil {
 		return action, additionalInfo, err
 	}
 
 	//log.Printf("\n\nTOKENS (AUTOFIX API~): In: %d, Out: %d\n\n", (len(systemMessage)+len(inputData))/4, len(contentOutput)/4)
 	contentOutput = FixContentOutput(contentOutput)
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] Autocorrected output: %s", contentOutput)
 	}
 
@@ -772,7 +769,7 @@ Input JSON Payload (ensure VALID JSON):
 	}
 
 	if strings.Contains(contentOutput, "missing_fields") {
-		successField, ok := outputJSON["success"] 
+		successField, ok := outputJSON["success"]
 		if ok {
 			if successField, ok := successField.(bool); ok {
 				if successField == false {
@@ -818,14 +815,14 @@ Input JSON Payload (ensure VALID JSON):
 
 					formattedVal = string(valByte)
 				} else {
-					// Check if val is a map[string]interface{}, and not interface{} 
+					// Check if val is a map[string]interface{}, and not interface{}
 					log.Printf("[ERROR] Failed to convert val of %#v to map[string]interface{} in action fix for app %s with action %s. Field: %s. Type: %#v. Value: %#v", param.Name, appname, action.Name, param.Name, reflect.TypeOf(val), val)
 				}
 			}
 
 			inputFields := []Valuereplace{
 				Valuereplace{
-					Key: param.Name,
+					Key:   param.Name,
 					Value: formattedVal,
 				},
 			}
@@ -833,14 +830,13 @@ Input JSON Payload (ensure VALID JSON):
 			responseFields := TranslateBadFieldFormats(inputFields)
 			if len(responseFields) > 0 {
 				if responseFields[0].Value != formattedVal {
-					if debug { 
+					if debug {
 						log.Printf("[DEBUG] Changed output formatting: %s from %s to %s", param.Name, formattedVal, responseFields[0].Value)
 					}
 
 					formattedVal = responseFields[0].Value
 				}
 			}
-
 
 			// Check if value is base64 and decode if no mention of base64 previously
 			if param.Name == "body" && strings.HasSuffix(param.Value, "=") {
@@ -903,12 +899,12 @@ func getBadOutputString(action Action, appname, inputdata, outputBody string, st
 
 	outputData := fmt.Sprintf("Fields: %s\n\nHTTP Status: %d\nHTTP error: %s", outputParams, status, outputBody)
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] Skipping output formatting (bad output string)")
 	}
 	//errorString := HandleOutputFormatting(string(outputData), inputdata, appname)
 
-	return outputData 
+	return outputData
 }
 
 // Ask itself for information about the API in case it has it
@@ -921,7 +917,7 @@ func getOpenApiInformation(appname, action string) string {
 	systemMessage := fmt.Sprintf("Output a valid JSON body format for a HTTP request %s in the %s API?", action, appname)
 
 	//log.Printf("[INFO] System message (find API documentation): %s", systemMessage)
-	contentOutput, err = RunAiQuery(systemMessage, "") 
+	contentOutput, err = RunAiQuery(systemMessage, "")
 	if err != nil {
 		log.Printf("[ERROR] Failed to run API query: %s", err)
 	}
@@ -964,7 +960,7 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 		log.Printf("[ERROR] Failed to unmarshal JSON in get action body for find http endpoint (8): %s", err)
 		return "", errors.New("Failed to find JSON in output 2")
 	} else {
-		// Should save as new backup for the field? 
+		// Should save as new backup for the field?
 		// 1. Find the app
 		// 2. Find the action
 		// 3. Save the body as a backup for the action
@@ -1040,7 +1036,7 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 						// If DOESNT exist at all, write it from scratch
 						// If content exists but example doesn't, overwrite it
 
-						// propertypath: 
+						// propertypath:
 						// paths["/rest/api/3/issue"].post.requestBody.content.example.example
 						if operation.RequestBody == nil {
 							log.Printf("IN NEW BODY")
@@ -1048,7 +1044,7 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 								Value: &openapi3.RequestBody{
 									Description: "",
 									Required:    true,
-									Content:     map[string]*openapi3.MediaType{
+									Content: map[string]*openapi3.MediaType{
 										"example": {
 											Example: contentOutput,
 										},
@@ -1100,7 +1096,7 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 
 					if updated {
 						break
-					} 
+					}
 				}
 
 				if updated {
@@ -1113,7 +1109,7 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 					} else {
 						openapiWrapper.Body = string(newBody)
 
-						err = SetOpenApiDatastore(ctx, openapiWrapper.ID, openapiWrapper) 
+						err = SetOpenApiDatastore(ctx, openapiWrapper.ID, openapiWrapper)
 						if err != nil {
 							log.Printf("[ERROR] Failed to set openapi datastore in get action body for find http endpoint (12): %s", err)
 						}
@@ -1127,7 +1123,6 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 
 	return contentOutput, nil
 }
-
 
 // Uploads modifyable parameter data to file storage, as to be used in the future executions of the app
 func UploadParameterBase(ctx context.Context, orgId, appId, actionName, paramName, paramValue string) error {
@@ -1143,7 +1138,7 @@ func UploadParameterBase(ctx context.Context, orgId, appId, actionName, paramNam
 
 	file, err := GetFileSingul(ctx, fileId)
 	if err == nil && file.Status == "active" {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Parameter file '{root}/singul/%s' already exists. NOT re-uploading", fileId)
 		}
 
@@ -1196,13 +1191,12 @@ func FixContentOutput(contentOutput string) string {
 			end = strings.Index(contentOutput[start+7:], "```")
 
 			// Shift it so the index is at the correct place
-			end = end + start+7
+			end = end + start + 7
 		}
 
-
 		if start != -1 && end != -1 {
-			newend := end+7	
-			newstart := start+7
+			newend := end + 7
+			newstart := start + 7
 
 			log.Printf("[INFO] Found ``` in content. Start: %d, end: %d", start, end)
 
@@ -1231,9 +1225,9 @@ func FixContentOutput(contentOutput string) string {
 		end := strings.Index(contentOutput[start+3:], "```")
 		if start != -1 {
 			end = strings.Index(contentOutput[start+3:], "```")
-			end = end + start+3
+			end = end + start + 3
 		}
-			
+
 		if start != -1 && end != -1 {
 			contentOutput = contentOutput[start+3 : end+3]
 		}
@@ -1259,7 +1253,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		return app, WorkflowAppAction{}
 	}
 
-	// FIXME: This should NOT be necessary. 
+	// FIXME: This should NOT be necessary.
 	// If there is no label, we should automatically try to catch it
 	// Maybe if category is not defined as well
 	if len(label) == 0 {
@@ -1331,7 +1325,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 			categories := ""
 			for _, category := range availableCategories {
-				categories += fmt.Sprintf("%s,", category.Name)	
+				categories += fmt.Sprintf("%s,", category.Name)
 			}
 
 			userMessage := fmt.Sprintf("The app name is '%s'. Available categories are: %s. Here are SOME actions it can do:\n", app.Name, strings.Trim(categories, ","))
@@ -1342,18 +1336,18 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 				}
 			}
 
-			output, err := RunAiQuery(systemMessage, userMessage) 
+			output, err := RunAiQuery(systemMessage, userMessage)
 			log.Printf("[DEBUG] Autocomplete output for category '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
 			if err != nil {
 				log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for category with app %s (%s): %s", app.Name, app.ID, err)
 				return app, WorkflowAppAction{}
-			} 
+			}
 
 			type ActionStruct struct {
 				Category string `json:"category"`
 			}
 
-			output = FixContentOutput(output) 
+			output = FixContentOutput(output)
 			actionStruct := ActionStruct{}
 			err = json.Unmarshal([]byte(output), &actionStruct)
 			if err != nil {
@@ -1368,7 +1362,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 			app.Categories = append(app.Categories, actionStruct.Category)
 
 			// Forces app to update
-			if len(app.Actions) > 0 { 
+			if len(app.Actions) > 0 {
 				updatedIndex = 0
 			}
 
@@ -1383,7 +1377,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		}
 	}
 
-	if len(foundCategory.ActionLabels) == 0 { 
+	if len(foundCategory.ActionLabels) == 0 {
 
 		log.Printf("[ERROR] No category found for app %s (%s) based on label %s", app.Name, app.ID, label)
 		return app, WorkflowAppAction{}
@@ -1419,8 +1413,8 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	}
 
 	// FIXME: Run AI here to check based on the label which action may be matching
-	
-	// Old attempts 
+
+	// Old attempts
 	//systemMessage := fmt.Sprintf(`Find which action is most likely to be used based on the label '%s'. If any match, return their exact name and if none match, write "none" as the name. Return in the JSON format {"action": "action name"}`, label)
 	//userMessage := "The available actions are as follows:\n"
 
@@ -1434,34 +1428,34 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 				continue
 			}
 
-			//userMessage += fmt.Sprintf("%s\n", action.Name)	
+			//userMessage += fmt.Sprintf("%s\n", action.Name)
 			/*
-			newName := action.Name
-			if strings.HasPrefix(newName, "get_list") {
-				newName = strings.Replace(newName, "get_list", "list", 1)
-			} 
+				newName := action.Name
+				if strings.HasPrefix(newName, "get_list") {
+					newName = strings.Replace(newName, "get_list", "list", 1)
+				}
 
-			if strings.HasPrefix(newName, "post_") {
-				newName = strings.Replace(newName, "post_", "", 1)
-			} else if strings.HasPrefix(newName, "patch_") {
-				newName = strings.Replace(newName, "patch_", "", 1)
-			} else if strings.HasPrefix(newName, "put_") {
-				newName = strings.Replace(newName, "put_", "", 1)
-			} 
+				if strings.HasPrefix(newName, "post_") {
+					newName = strings.Replace(newName, "post_", "", 1)
+				} else if strings.HasPrefix(newName, "patch_") {
+					newName = strings.Replace(newName, "patch_", "", 1)
+				} else if strings.HasPrefix(newName, "put_") {
+					newName = strings.Replace(newName, "put_", "", 1)
+				}
 
-			if newName != action.Name {
-				changedNames[action.Name] = newName
-			}
+				if newName != action.Name {
+					changedNames[action.Name] = newName
+				}
 			*/
 
-			userMessage += fmt.Sprintf("%s\n", action.Name)	
+			userMessage += fmt.Sprintf("%s\n", action.Name)
 		}
 
 		if len(keys) > 0 {
 			userMessage += fmt.Sprintf("\nUse the keys provided by the user. Your goal is to guess the action name with it's name as well. Keys: %s\n", strings.Join(keys, ", "))
 		}
 
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] System message (find action): %s", systemMessage)
 			log.Printf("[DEBUG] User message (find action): %s", userMessage)
 		}
@@ -1470,11 +1464,11 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 		}
 
-		output, err := RunAiQuery(systemMessage, userMessage) 
+		output, err := RunAiQuery(systemMessage, userMessage)
 		if err != nil {
 			log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
 			return app, WorkflowAppAction{}
-		} 
+		}
 
 		if debug {
 			log.Printf("[DEBUG] Autocomplete output for label '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
@@ -1551,7 +1545,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		if err != nil {
 			log.Printf("[WARNING] Failed to get openapi datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
 			return app, WorkflowAppAction{}
-		} 
+		}
 
 		swaggerLoader := openapi3.NewSwaggerLoader()
 		swaggerLoader.IsExternalRefsAllowed = true
@@ -1560,7 +1554,6 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 			log.Printf("[ERROR] Failed to unmarshal openapi in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
 			return app, WorkflowAppAction{}
 		}
-
 
 		// Overwrite categories no matter what?
 		openapi.Info.Extensions["x-categories"] = app.Categories
@@ -1596,7 +1589,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 					}
 				}
 
-				changed = true 
+				changed = true
 				openapi.Paths[pathIndex].SetOperation(method, operation)
 			}
 
@@ -1647,7 +1640,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 	if project.Environment == "cloud" && !user.SupportAccess {
 		//if org.SyncFeatures.ShuffleGPT.Active && org.SyncFeatures.ShuffleGPT.Usage < org.SyncFeatures.ShuffleGPT.Limit {
 		if org.SyncFeatures.ShuffleGPT.Usage < 100 {
-			log.Printf("[AUDIT] Org %#v (%s) has access to the auto feature. Allowing user %s to use it", org.Name, org.Id,  user.Username)
+			log.Printf("[AUDIT] Org %#v (%s) has access to the auto feature. Allowing user %s to use it", org.Name, org.Id, user.Username)
 			org.SyncFeatures.ShuffleGPT.Usage += 1
 
 			// Managing usage (this happens elsewhere as well apparently
@@ -1744,7 +1737,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 	if len(input.AppId) > 0 {
 		// Get app directly
 		if standalone {
-			newApp, err := GetSingulApp("", input.AppId) 
+			newApp, err := GetSingulApp("", input.AppId)
 			if err == nil {
 				foundApp = *newApp
 			}
@@ -1798,7 +1791,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 			respBody = []byte(`{"success": false, "reason": "Failed to run AI query"}`)
 			resp.WriteHeader(500)
 			resp.Write(respBody)
-			return respBody, err	
+			return respBody, err
 		}
 
 		if len(openaiResp.Choices) > 0 {
@@ -1908,7 +1901,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 
 					// Get the app
 					discoveredApp := &WorkflowApp{}
-					if standalone { 
+					if standalone {
 						discoveredApp, err = GetSingulApp("", algoliaApp.ObjectID)
 					} else {
 						discoveredApp, err = GetApp(ctx, algoliaApp.ObjectID, user, false)
@@ -2661,7 +2654,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 				resp.WriteHeader(400)
 				resp.Write([]byte(returnValue))
 				return returnValue, err
-	 		}
+			}
 
 			log.Printf("[ERROR] Failed to send run request to self: %s", err)
 			if strings.Contains(fmt.Sprintf("%s", err), "Failed to run") {
@@ -2713,7 +2706,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 				if err == nil {
 					resp.Write(returnJSON)
 					resp.WriteHeader(400)
-					return returnJSON, nil 
+					return returnJSON, nil
 				} else {
 					log.Printf("[ERROR] Failed to marshal return struct: %s", err)
 				}
@@ -2861,7 +2854,7 @@ func findHTTPrequestInformation(textInput string, appname string) (HTTPWrapper, 
 
 	// Parses the input and returns the category and action label
 	var httpWrapper HTTPWrapper
-	contentOutput, err := RunAiQuery(systemMessage, userMessage) 
+	contentOutput, err := RunAiQuery(systemMessage, userMessage)
 	if err != nil {
 		log.Printf("[DEBUG] Failed to run AI query in findHTTPrequestInformation: %s", err)
 		return httpWrapper, err
@@ -2884,7 +2877,7 @@ func findRelevantOpenAIAppsForCategory(category string) []WorkflowApp {
 	userMessage := fmt.Sprintf("Create a list of the top three apps in the category '%s'", category)
 	log.Printf("[INFO] System message (find relevant apps for category): %s. Usermsg: %s", systemMessage, userMessage)
 
-	contentOutput, err := RunAiQuery(systemMessage, userMessage) 
+	contentOutput, err := RunAiQuery(systemMessage, userMessage)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in findRelevantOpenAIAppsForCategory: %s", err)
 		return newApps
@@ -3155,7 +3148,7 @@ func findActionByInput(inputQuery, actionLabel string, foundApp WorkflowApp) (st
 	//log.Printf("[INFO] System message: %s", systemMessage)
 
 	// Parses the input and returns the category and action label
-	contentOutput, err := RunAiQuery(systemMessage, parsedNames) 
+	contentOutput, err := RunAiQuery(systemMessage, parsedNames)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in findActionByInput: %s", err)
 		return "", err
@@ -3421,7 +3414,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 	apps := []WorkflowApp{}
 	newAppContext := []AppContext{}
 	if len(sampleBody) == 0 {
-		if !strings.HasPrefix(selectedAction.Name, "get") { 
+		if !strings.HasPrefix(selectedAction.Name, "get") {
 			log.Printf("[WARNING] App %s doesn't have a valid body for action %s", appname, selectedAction.Name)
 		}
 
@@ -3566,7 +3559,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 	}
 
 	if len(outputBody) > 0 && bodyIndex >= 0 {
-		if debug { 
+		if debug {
 			log.Printf("\n\n\n[DEBUG] Found matching body FROM MatchBodyWithInputdata(): %s\n\n", outputBody)
 		}
 		selectedAction.Parameters[bodyIndex].Value = outputBody
@@ -3577,7 +3570,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 
 	// Forces focus into the Query instead of Body for get_ requests
 	if queryIndex >= 0 && bodyIndex < 0 {
-		if debug && len(outputQueries) > 0 { 
+		if debug && len(outputQueries) > 0 {
 			log.Printf("[INFO] Found matching query: %s", outputQueries)
 		}
 
@@ -3585,8 +3578,6 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 		// FIXME: This should NOT run if not necessary
 		inputQuery = fixInputQuery(inputQuery, selectedAction)
 		outputQueries = MatchBodyWithInputdata(inputQuery, appname, selectedAction.Name, "shuffleFieldName=queries", newAppContext)
-
-
 
 		// Marshal, then rebuild the query string
 		var parsedBody map[string]interface{}
@@ -3896,7 +3887,7 @@ func findNextAction(action Action, stepOutput []byte, additionalInfo, inputdata,
 			body = []byte(val)
 		}
 
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] ERROR in body handler. Status: %#v: %s", string(body), status)
 		}
 
@@ -3948,7 +3939,7 @@ func MatchRequiredFieldsWithInputdata(inputdata, appname, inputAction, body stri
 	systemMessage := fmt.Sprintf("For the %s API%s, fill in the following fields in JSON format based on our input. If a specific input is not supplied, make a guess. Don't add fields that haven't been supplied.", appname, actionInfo)
 	log.Printf("[INFO] Required fields message: %s", systemMessage)
 
-	contentOutput, err := RunAiQuery(systemMessage, inputdata) 
+	contentOutput, err := RunAiQuery(systemMessage, inputdata)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in MatchRequiredFieldsWithInputdata: %s", err)
 		return ""
@@ -4162,7 +4153,7 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 		body = ""
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] Translating fieldname %s", fieldName)
 	}
 
@@ -4187,18 +4178,17 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 		}
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] Userdata: %s", userInfo)
 	}
 
-	// FIXME: This MAY not work as we used to do this with 
+	// FIXME: This MAY not work as we used to do this with
 	// Assistant instead of User for some reason
-	contentOutput, err := RunAiQuery(systemMessage, userInfo) 
+	contentOutput, err := RunAiQuery(systemMessage, userInfo)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in MatchBodyWithInputdata: %s", err)
 		return ""
 	}
-
 
 	// Diff and find strings from body vs contentOutput
 	// If there are any strings that are not in contentOutput, add them to the contentOutput
@@ -4234,18 +4224,18 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 	}
 
 	sampleFields := []Valuereplace{
-		Valuereplace{ 
-			Key: "body",
+		Valuereplace{
+			Key:   "body",
 			Value: contentOutput,
 		},
 	}
 
-	sampleFields = TranslateBadFieldFormats(sampleFields) 
+	sampleFields = TranslateBadFieldFormats(sampleFields)
 	if len(sampleFields) > 0 {
 		contentOutput = sampleFields[0].Value
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("\n\n[DEBUG] TOKENS (Inputdata~): In: %d~, Out: %d~\n\nRAW OUTPUT: %s\n\n", (len(systemMessage)+len(userInfo)+len(body))/4, len(contentOutput)/4, string(contentOutput))
 	}
 
@@ -4362,7 +4352,7 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		log.Printf("[DEBUG] Input body sent: %s", inputBody)
 	}
 
-	contentOutput, err := RunAiQuery(systemMessage, inputData) 
+	contentOutput, err := RunAiQuery(systemMessage, inputData)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in runActionAI: %s", err)
 		return action, additionalInfo, err
@@ -4462,7 +4452,7 @@ func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
 	var err error
 	responseBody := []byte{}
 
-	_, statErr := os.Stat(appPath) 
+	_, statErr := os.Stat(appPath)
 	if statErr == nil {
 		// File exists, read it
 		file, err := os.Open(appPath)
@@ -4479,7 +4469,7 @@ func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
 	} else {
 
 		appId := ""
-		foundApp, err := HandleAlgoliaAppSearch(context.Background(), appname) 
+		foundApp, err := HandleAlgoliaAppSearch(context.Background(), appname)
 		if err != nil {
 			log.Printf("[ERROR] Error handling Algolia app search: %s", err)
 		} else {
@@ -4497,8 +4487,8 @@ func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
 		baseUrl := "https://shuffler.io/api/v1"
 		url := fmt.Sprintf("%s/apps/%s/config", baseUrl, appId)
 		req, err := http.NewRequest(
-			"GET", 
-			url, 
+			"GET",
+			url,
 			nil,
 		)
 
@@ -4576,7 +4566,7 @@ func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
 }
 
 func GetSingulStandaloneFilepath() string {
-	singulFolder := os.Getenv("FILE_LOCATION") 
+	singulFolder := os.Getenv("FILE_LOCATION")
 	if len(singulFolder) > 0 {
 		singulFolder += "/"
 	}
@@ -4609,7 +4599,7 @@ func GetFileContentSingul(ctx context.Context, file *File, resp http.ResponseWri
 			return []byte{}, err
 		}
 
-		return data, nil 
+		return data, nil
 
 		//log.Printf("\n\n\n[ERROR] GET FILE CONTENT FAILING\n\n\n")
 		//return []byte{}, errors.New(fmt.Sprintf("GetContent: Standalone mode not supported/implemented YET for file CONTENT ID '%s'", file.Id))
@@ -4687,24 +4677,24 @@ func DeleteFileSingul(ctx context.Context, filepath string) error {
 	}
 
 	/*
-	file, err := GetFile(ctx, fileId)
-	if err != nil {
-		log.Printf("[ERROR] Error getting file: %s", err)
-		return err
-	}
+		file, err := GetFile(ctx, fileId)
+		if err != nil {
+			log.Printf("[ERROR] Error getting file: %s", err)
+			return err
+		}
 
-	err = DeleteKey(ctx, "files", fileId)
-	if err != nil {
-		log.Printf("Failed deleting file with ID %s: %s", fileId, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
+		err = DeleteKey(ctx, "files", fileId)
+		if err != nil {
+			log.Printf("Failed deleting file with ID %s: %s", fileId, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	*/
 
 	//return DeleteFile(ctx, fileId)
 	//log.Printf("[ERROR] DeleteFileSingul() is not implemented for shuffle backend, meaning self-correcting measure may not work.")
-	return nil 
+	return nil
 }
 
 func GetFileSingul(ctx context.Context, fileId string) (*File, error) {
@@ -4715,18 +4705,18 @@ func GetFileSingul(ctx context.Context, fileId string) (*File, error) {
 		//	log.Printf("[DEBUG] Looking for file ID %s locally.\n\nFull search path: %s", fileId, filepath)
 		//}
 
-		_, statErr := os.Stat(filepath) 
-		if statErr == nil { 
+		_, statErr := os.Stat(filepath)
+		if statErr == nil {
 			return &File{
-				Status: "active",
-				Id:    fileId,
+				Status:   "active",
+				Id:       fileId,
 				Filename: fileId,
 			}, nil
-		} 
+		}
 
 		return &File{
 			Status: "not found",
-			Id:    fileId,
+			Id:     fileId,
 		}, errors.New(fmt.Sprintf("File not found locally for ID '%s'", fileId))
 	}
 
@@ -5887,7 +5877,7 @@ func RunActionAI(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			// Check if a sync key has the same one
 			authReturn := SyncKey{}
-			if project.Environment == "cloud" { 
+			if project.Environment == "cloud" {
 				authReturn, err := HandleCloudSyncAuthentication(resp, request)
 				if err != nil || authReturn.OrgId == "" {
 					log.Printf("[AUDIT] Error in AI inference - missing api key (2): %s", err)
@@ -6258,7 +6248,7 @@ other:run_script
 
 Make sure that the output is short and crisp, in bullet points, specifies the type (API-request or App-action based), and gives small description of the task. Ignore Formatting.`
 
-	contentOutput, err := RunAiQuery(systemMessage, input.Query) 
+	contentOutput, err := RunAiQuery(systemMessage, input.Query)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in getWorkflowSuggestionAiResponse: %s", err)
 		return ""
@@ -6295,7 +6285,6 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 	if len(chatModel) == 0 {
 		chatModel = "ft:gpt-3.5-turbo-0613:shuffle::80d8lt3J"
 	}
-
 
 	sysMessage := "Introduce yourself as a support bot. Answer in less than 300 characters. Technical answers are best, with links. Make it clear that you are a bot, and that your answers are based on our documentation. If you don't have a good answer, say that you will find a human. If urls are in markdown format, make it easy to read. Focus most on the LAST question!! NEVER show a domain other than shuffler."
 
@@ -6346,7 +6335,7 @@ category singul: `
 					continue
 				}
 
-				systemMessage += fmt.Sprintf("%s\n", strings.ReplaceAll(actionStr, " " , "_"))
+				systemMessage += fmt.Sprintf("%s\n", strings.ReplaceAll(actionStr, " ", "_"))
 
 			}
 
@@ -6362,9 +6351,9 @@ category singul: `
 		}
 	}
 
-	// If the fields are edited, don't forget to edit the AgentDecision struct 
+	// If the fields are edited, don't forget to edit the AgentDecision struct
 	// FIXME: Using a different reference format as these are common to reasoning models
-	// such as: 
+	// such as:
 	// Prompt engineering (LangChain, LlamaIndex)
 	// Web templating (Jinja2 in Flask/Django)
 	// Frontend frameworks (Handlebars)
@@ -6416,12 +6405,12 @@ Decision Field Rules:
 		Temperature: 1,
 
 		// Reasoning control
-		MaxCompletionTokens: 5000, 
+		MaxCompletionTokens: 5000,
 		ResponseFormat: &openai.ChatCompletionResponseFormat{
 			Type: "json_object",
 		},
 		ReasoningEffort: "medium",
-		Store: true,
+		Store:           true,
 	}
 
 	ctx := context.Background()
@@ -6456,7 +6445,7 @@ Decision Field Rules:
 		return startNode, errors.New("Unhandled Singul BODY for OpenAI agent (first request)")
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("\n\n\n[DEBUG] BODY for AI Agent (first request): %s\n\n\n", string(initialAgentRequestBody))
 	}
 
@@ -6533,7 +6522,6 @@ Decision Field Rules:
 	if err != nil {
 		log.Printf("[ERROR] Failed creating request during LLM setup: %s", err)
 
-
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
@@ -6596,16 +6584,15 @@ Decision Field Rules:
 	resultMapping.Action = startNode
 	resultMapping.Action.Name = "agent"
 
-
-	// This exists for the single reason of tracking errors + parameters 
+	// This exists for the single reason of tracking errors + parameters
 	// ActionResult{} is the type we are using to build the request, while
-	// the LLM request ACTUALLY returns SingleResult{} 
+	// the LLM request ACTUALLY returns SingleResult{}
 	additionalResultMapping := SingleResult{}
 	err = json.Unmarshal(body, &additionalResultMapping)
 
 	parsedAgentInput := ""
 	if err == nil {
-		// Checking for errors in the Single Action run. 
+		// Checking for errors in the Single Action run.
 		// They usually cause notifications to occur as well.
 		if len(additionalResultMapping.Errors) > 0 {
 			// Handle this.
@@ -6625,7 +6612,7 @@ Decision Field Rules:
 				log.Printf("[DEBUG][%s] AI Agent: Found body parameter which MAY contain the right user input. LEN: %d", execution.ExecutionId, len(param.Value))
 
 				if len(param.Value) > 0 {
-					parsedAgentInput  = param.Value
+					parsedAgentInput = param.Value
 					break
 				}
 			}
@@ -6691,7 +6678,7 @@ Decision Field Rules:
 		}
 
 		// Edgecase handling for LLM not being available etc
-		if len(choicesString) > 0 { 
+		if len(choicesString) > 0 {
 		} else if len(openaiOutput.Choices) == 0 {
 
 			// FIXME: This is specific to OpenAI, but may work for others :thinking:
@@ -6699,11 +6686,11 @@ Decision Field Rules:
 			err = json.Unmarshal(bodyString, &newOutput)
 			if err == nil && len(newOutput.Error.Message) > 0 {
 				choicesString = fmt.Sprintf("LLM Error: %s", newOutput.Error.Message)
-		
-				resultMapping.Status = "FAILURE" 
+
+				resultMapping.Status = "FAILURE"
 			} else {
 				log.Printf("[ERROR][%s] No choices, nor error found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
-				resultMapping.Status = "FAILURE" 
+				resultMapping.Status = "FAILURE"
 			}
 		} else {
 			choicesString = openaiOutput.Choices[0].Message.Content
@@ -6721,7 +6708,7 @@ Decision Field Rules:
 					choicesString = strings.Replace(choicesString, "json", "", 1)
 				}
 			}
-				
+
 			choicesString = strings.TrimSpace(choicesString)
 			//log.Printf("\n\n\nCONTENT: %#v\n\n\n", choicesString)
 		}
@@ -6758,7 +6745,7 @@ Decision Field Rules:
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
 
-			if len(mappedDecisions) == 0 { 
+			if len(mappedDecisions) == 0 {
 				decisionString = strings.Replace(decisionString, `\"`, `"`, -1)
 
 				err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
@@ -6773,29 +6760,29 @@ Decision Field Rules:
 		}
 
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-			Role: "assistant",
+			Role:    "assistant",
 			Content: string(bodyString),
 		})
 
 		// Lool, this will be fun won't it
 		/*
-		for mapIndex, _ := range mappedDecisions {
-			randomType := typeOptions[rand.Intn(len(typeOptions))]
+			for mapIndex, _ := range mappedDecisions {
+				randomType := typeOptions[rand.Intn(len(typeOptions))]
 
-			mappedDecisions[mapIndex].RunDetails.Type = randomType
-			mappedDecisions[mapIndex].RunDetails.Status = ""
-		}
+				mappedDecisions[mapIndex].RunDetails.Type = randomType
+				mappedDecisions[mapIndex].RunDetails.Status = ""
+			}
 		*/
 
 		agentOutput := AgentOutput{
 			Status:    "RUNNING",
 			Input:     userMessage,
-			Error: 	   errorMessage,
+			Error:     errorMessage,
 			Decisions: mappedDecisions,
 
 			ExecutionId: execution.ExecutionId,
-			NodeId: startNode.ID,
-			StartedAt: time.Now().Unix(),
+			NodeId:      startNode.ID,
+			StartedAt:   time.Now().Unix(),
 
 			Memory: memorizationEngine,
 		}
@@ -6810,7 +6797,7 @@ Decision Field Rules:
 		}
 
 		// Ensures we track them along the way
-		if len(parsedAgentInput) > 0 { 
+		if len(parsedAgentInput) > 0 {
 			agentOutput.Input = parsedAgentInput
 		}
 
@@ -6827,7 +6814,7 @@ Decision Field Rules:
 
 			}
 
-			// Send a Singul job. 
+			// Send a Singul job.
 			// Which do we use:
 			// 1. Local Singul
 			if decision.Action == "" {
@@ -6873,17 +6860,17 @@ Decision Field Rules:
 			log.Printf("[ERROR][%s] Failed marshalling openai completion request: %s", execution.ExecutionId, err)
 		} else {
 			cacheData := CacheKeyData{
-				Key: requestKey,
-				Value: string(marshalledCompletionRequest),
+				Key:      requestKey,
+				Value:    string(marshalledCompletionRequest),
 				Category: "agent_requests",
 
-				WorkflowId: execution.Workflow.ID,
-				ExecutionId: execution.ExecutionId,
+				WorkflowId:    execution.Workflow.ID,
+				ExecutionId:   execution.ExecutionId,
 				Authorization: execution.Authorization,
-				OrgId: execution.ExecutionOrg,
+				OrgId:         execution.ExecutionOrg,
 			}
 
-			err := SetDatastoreKey(ctx, cacheData) 
+			err := SetDatastoreKey(ctx, cacheData)
 			if err != nil {
 				log.Printf("[ERROR][%s] Failed updating AI requests: %s", execution.ExecutionId, err)
 			}
@@ -6929,7 +6916,7 @@ Decision Field Rules:
 }
 
 // Generates Workflows based on Singul
-// Main question: 
+// Main question:
 // - Should we pre-define these? Or should it just "figure it out"?
 
 // Specific requirement for threatlist(s):
@@ -6988,9 +6975,9 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	// Removing unecessary fields just in case
 	categoryAction = CategoryAction{
 		AppName: categoryAction.AppName,
-		Label: categoryAction.Label,
+		Label:   categoryAction.Label,
 
-		Fields: categoryAction.Fields,
+		Fields:   categoryAction.Fields,
 		Category: categoryAction.Category,
 	}
 
@@ -7103,9 +7090,9 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	//}
 
 	chatCompletion := openai.ChatCompletionRequest{
-		Model: model,
-		Messages: []openai.ChatCompletionMessage{},
-		MaxTokens:   maxTokens,
+		Model:     model,
+		Messages:  []openai.ChatCompletionMessage{},
+		MaxTokens: maxTokens,
 	}
 
 	// Too specific, but.. :)
@@ -7190,7 +7177,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 				}
 
 				model = fallbackModel
-				chatCompletion.Model = fallbackModel 
+				chatCompletion.Model = fallbackModel
 				log.Printf("[DEBUG] Changed default model to %s", model)
 				continue
 			}
@@ -7202,7 +7189,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 
 		if len(openaiResp.Choices) == 0 {
 			return "", errors.New("No choices found in OpenAI response. This should be AT LEAST 1.")
-		} 
+		}
 
 		contentOutput = openaiResp.Choices[0].Message.Content
 		if len(contentOutput) == 0 && len(openaiResp.Choices[0].Message.Refusal) > 0 {
@@ -7235,14 +7222,14 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	return contentOutput, nil
 }
 
-func generateWorkflowJson(ctx context.Context, input QueryInput, user User) (*Workflow, error) {
+func generateWorkflowJson(ctx context.Context, input QueryInput, user User, workflow *Workflow) (*Workflow, error) {
 
 	apps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get apps in Generate workflow: %s", err)
 		return nil, err
 	}
-    var httpApp WorkflowApp // We use http app as the final fallback if in case we cannot find any app that matches the AI suggested app name
+	var httpApp WorkflowApp // We use http app as the final fallback if in case we cannot find any app that matches the AI suggested app name
 	var builder strings.Builder
 
 	for _, app := range apps {
@@ -7343,11 +7330,10 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
 		return nil, err
 	}
-		if len(contentOutput) == 0 {
-		log.Printf("[ERROR] AI response is empty")
+	if len(contentOutput) == 0 {
 		return nil, errors.New("AI response is empty")
 	}
-    err = checkIfRejected(contentOutput)
+	err = checkIfRejected(contentOutput)
 	if err != nil {
 		return nil, err
 	}
@@ -7664,8 +7650,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
 		return nil, err
 	}
-		if len(contentOutput) == 0 {
-		log.Printf("[ERROR] AI response is empty")
+	if len(contentOutput) == 0 {
 		return nil, errors.New("AI response is empty")
 	}
 	log.Printf("[DEBUG] AI response: %s", contentOutput)
@@ -7702,7 +7687,6 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		if aiAppName != "" {
 			for _, app := range apps {
 				normA := normalizeName(app.Name)
-				log.Printf("[DEBUG] Matching AI app name '%s' with app '%s'", aiAppName, normA)
 				if strings.EqualFold(normA, aiAppName) || (strings.Contains(normA, aiAppName) || strings.Contains(aiAppName, normA)) {
 					matchedApp = app
 					foundApp = true
@@ -7714,7 +7698,6 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		// 2) Exact URL match
 		if !foundApp && aiURL != "" {
 			for _, app := range apps {
-				log.Printf("[DEBUG] Matching AI URL '%s' with app '%s'", aiURL, app.Link)
 				if strings.EqualFold(strings.TrimRight(app.Link, "/"), strings.TrimRight(aiURL, "/")) {
 					matchedApp = app
 					foundApp = true
@@ -7735,26 +7718,28 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 			}
 		}
 
-		// 4) Fallback to HTTP app
-		if !foundApp && httpApp.Name != "" {
-			matchedApp = httpApp
-			foundApp = true
-		} else {
-			log.Printf("[WARN] No matching app found for AI action: %s", action.AppName)
-			httpApp = WorkflowApp{
-				Name: "http",
-				Actions: []WorkflowAppAction{
-					{
-						Name: "custom_action",
-						Parameters: []WorkflowAppActionParameter{
-							{Name: "url", Value: aiURL},
-							{Name: "method", Value: "GET"},
+		// 4) Only fallback if we truly didn’t find anything
+
+		if !foundApp {
+			if httpApp.Name != "" {
+				matchedApp = httpApp
+				foundApp = true
+			} else {
+				log.Printf("[WARN] No matching app found for AI action: %s", action.AppName)
+				httpApp = WorkflowApp{
+					Name: "http",
+					Actions: []WorkflowAppAction{
+						{
+							Name: "GET",
+							Parameters: []WorkflowAppActionParameter{
+								{Name: "url", Value: aiURL},
+							},
 						},
 					},
-				},
+				}
+				matchedApp = httpApp
+				foundApp = true
 			}
-			matchedApp = httpApp
-			foundApp = true
 		}
 
 		var updatedActions []WorkflowAppAction
@@ -7778,40 +7763,40 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 			}
 
 		} else if strings.EqualFold(matchedApp.Name, "http") {
-				var method string
+			var method string
+			for _, aiParam := range action.Params {
+				if strings.EqualFold(aiParam.Name, "method") {
+					method = strings.ToUpper(aiParam.Value)
+					break
+				}
+			}
+
+			// find action by method name
+			var matchedHttpAction WorkflowAppAction
+			for _, act := range matchedApp.Actions {
+				if strings.EqualFold(act.Name, method) {
+					matchedHttpAction = act
+					break
+				}
+			}
+
+			// fill rest of the params
+			for i, param := range matchedHttpAction.Parameters {
+				if strings.EqualFold(param.Name, "method") {
+					continue
+				}
 				for _, aiParam := range action.Params {
-					if strings.EqualFold(aiParam.Name, "method") {
-						method = strings.ToUpper(aiParam.Value)
+					if strings.EqualFold(aiParam.Name, "url") && strings.EqualFold(param.Name, "url") {
+						matchedHttpAction.Parameters[i].Value = aiParam.Value
+						continue
+					}
+					if strings.EqualFold(aiParam.Name, param.Name) {
+						matchedHttpAction.Parameters[i].Value = aiParam.Value
 						break
 					}
 				}
-
-				// find action by method name
-				var matchedHttpAction WorkflowAppAction
-				for _, act := range matchedApp.Actions {
-					if strings.EqualFold(act.Name, method) {
-						matchedHttpAction = act
-						break
-					}
-				}
-
-				// fill rest of the params
-				for i, param := range matchedHttpAction.Parameters {
-					if strings.EqualFold(param.Name, "method") {
-						continue 
-					}
-					for _, aiParam := range action.Params {
-						if strings.EqualFold(aiParam.Name, "url") && strings.EqualFold(param.Name, "url") {
-							matchedHttpAction.Parameters[i].Value = aiParam.Value
-							continue
-						}
-						if strings.EqualFold(aiParam.Name, param.Name) {
-							matchedHttpAction.Parameters[i].Value = aiParam.Value
-							break 
-						}
-					}
-				}
-				updatedActions = []WorkflowAppAction{matchedHttpAction}
+			}
+			updatedActions = []WorkflowAppAction{matchedHttpAction}
 
 		} else {
 			for _, act := range matchedApp.Actions {
@@ -7847,36 +7832,36 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 	}
 
 	webhookImage := "data:image/png;base64,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"
-    scheduleImage := "data:image/png;base64,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"
+	scheduleImage := "data:image/png;base64,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"
 	var triggers []Trigger
 	for _, trigger := range workflowJson.AITriggers {
 
 		switch strings.ToLower(trigger.AppName) {
 		case "webhook":
 			triggers = append(triggers, Trigger{
-				AppName: "Webhook",
-				AppVersion: "1.0.0",
-				Label:   trigger.Label,
+				AppName:     "Webhook",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
 				TriggerType: "WEBHOOK",
-				ID: uuid.NewV4().String(),
+				ID:          uuid.NewV4().String(),
 				Description: "Custom HTTP input trigger",
-				LargeImage: webhookImage,
+				LargeImage:  webhookImage,
 			})
 		case "schedule":
 			triggers = append(triggers, Trigger{
-				AppName: "Schedule",
-				AppVersion: "1.0.0",
-				Label:   trigger.Label,
+				AppName:     "Schedule",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
 				TriggerType: "SCHEDULE",
-				ID: uuid.NewV4().String(),
+				ID:          uuid.NewV4().String(),
 				Description: "Schedule time trigger",
-				LargeImage: scheduleImage,
+				LargeImage:  scheduleImage,
 			})
 		default:
 			log.Printf("[WARN] Unsupported trigger app: %s, skipping...", trigger.AppName)
-			continue	
-	 }
-   }
+			continue
+		}
+	}
 
 	var actions []Action
 	var actionLabel string
@@ -7884,38 +7869,38 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 
 	for i, app := range filtered {
 
-	if len(app.Actions) == 0 {
-		continue
-	}
-	if i < actionLen {
-		actionLabel = workflowJson.AIActions[i].Label
-	} else {
-		actionLabel = app.Name + "_" + strconv.Itoa(i+1)
-	}
-	act := app.Actions[0]
+		if len(app.Actions) == 0 {
+			continue
+		}
+		if i < actionLen {
+			actionLabel = workflowJson.AIActions[i].Label
+		} else {
+			actionLabel = app.Name + "_" + strconv.Itoa(i+1)
+		}
+		act := app.Actions[0]
 
-	action := Action{
-		AppName:      app.Name,
-		AppVersion:   app.AppVersion,
-		Description:  app.Description,
-		AppID:        app.ID,
-		IsValid:      app.IsValid,
-		Sharing:      app.Sharing,
-		PrivateID:    app.PrivateID,
-		SmallImage:   app.SmallImage,
-		LargeImage:   app.LargeImage,
-		Environment:  app.Environment,
-		Name:         act.Name,
-		Label:        actionLabel,
-		Parameters:   act.Parameters,
-		Public:       app.Public,
-		Generated:    app.Generated,
-		ReferenceUrl: app.ReferenceUrl,
-		ID:           uuid.NewV4().String(),
-	}
+		action := Action{
+			AppName:      app.Name,
+			AppVersion:   app.AppVersion,
+			Description:  app.Description,
+			AppID:        app.ID,
+			IsValid:      app.IsValid,
+			Sharing:      app.Sharing,
+			PrivateID:    app.PrivateID,
+			SmallImage:   app.SmallImage,
+			LargeImage:   app.LargeImage,
+			Environment:  app.Environment,
+			Name:         act.Name,
+			Label:        actionLabel,
+			Parameters:   act.Parameters,
+			Public:       app.Public,
+			Generated:    app.Generated,
+			ReferenceUrl: app.ReferenceUrl,
+			ID:           uuid.NewV4().String(),
+		}
 
-	actions = append(actions, action)
-}
+		actions = append(actions, action)
+	}
 
 	var branches []Branch
 
@@ -7923,8 +7908,8 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 	// Step 1: Link Trigger → First Action
 	if len(triggers) > 0 && len(actions) > 0 {
 		branches = append(branches, Branch{
-			ID:           uuid.NewV4().String(),
-			SourceID:     triggers[0].ID,
+			ID:            uuid.NewV4().String(),
+			SourceID:      triggers[0].ID,
 			DestinationID: actions[0].ID,
 		})
 	}
@@ -7932,8 +7917,8 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 	// Step 2: Link Action[i] → Action[i+1]
 	for i := 0; i < len(actions)-1; i++ {
 		branches = append(branches, Branch{
-			ID:           uuid.NewV4().String(),
-			SourceID:     actions[i].ID,
+			ID:            uuid.NewV4().String(),
+			SourceID:      actions[i].ID,
 			DestinationID: actions[i+1].ID,
 		})
 	}
@@ -7952,7 +7937,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 
 	// If no triggers, start X from 0 for actions
 	if len(triggers) == 0 {
-		startX = -312.6988673793812 
+		startX = -312.6988673793812
 	}
 
 	// Set action positions (continue horizontally from trigger)
@@ -7966,42 +7951,49 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 	var comments []Comment
 
 	comments = append(comments, Comment{
-		ID:         uuid.NewV4().String(),
-		Type:      "COMMENT",
-		Position:  Position{X: -854.999, Y: 131.001},
-		IsValid: true,
-		Label: externalSetupInstructions,
+		ID:              uuid.NewV4().String(),
+		Type:            "COMMENT",
+		Position:        Position{X: -854.999, Y: 131.001},
+		IsValid:         true,
+		Label:           externalSetupInstructions,
 		BackgroundColor: "#1f2023",
-		Color: "#ffffff",
-		Decorator: true,
-		Height: 400,
-		Width: 500,
+		Color:           "#ffffff",
+		Decorator:       true,
+		Height:          400,
+		Width:           500,
 	})
 
 	comments = append(comments, Comment{
-		ID:        uuid.NewV4().String(),
-		Type:      "COMMENT",
-		Position:  Position{X: 394.001, Y: -324.999},
-		IsValid: true,
-		Label: workflowJson.Comments,
+		ID:              uuid.NewV4().String(),
+		Type:            "COMMENT",
+		Position:        Position{X: 394.001, Y: -324.999},
+		IsValid:         true,
+		Label:           workflowJson.Comments,
 		BackgroundColor: "#1f2023",
-		Color: "#ffffff",
-		Decorator: true,
-		Height: 500,
-		Width: 600,
+		Color:           "#ffffff",
+		Decorator:       true,
+		Height:          500,
+		Width:           600,
 	})
 
-	workflow := Workflow{
-		ID:          uuid.NewV4().String(),
-		Name:        "Generated Workflow" + uuid.NewV4().String(),
-		Description: "Workflow generated from AI input",
-		Triggers:    triggers,
-		Actions:     actions,
-		Branches:    branches,
-		Comments:    comments,
+	if workflow != nil && workflow.ID != "" {
+		workflow.Actions = actions
+		workflow.Triggers = triggers
+		workflow.Branches = branches
+		workflow.Comments = comments
+	} else {
+		workflow = &Workflow{
+			ID:          uuid.NewV4().String(),
+			Name:        "Generated Workflow" + uuid.NewV4().String(),
+			Description: "Workflow generated from AI input",
+			Triggers:    triggers,
+			Actions:     actions,
+			Branches:    branches,
+			Comments:    comments,
+		}
 	}
 
-	return &workflow, nil
+	return workflow, nil
 }
 
 func normalizeName(name string) string {
@@ -8011,7 +8003,6 @@ func normalizeName(name string) string {
 	name = strings.ReplaceAll(name, ".", " ")
 	name = strings.TrimSpace(name)
 
-	log.Printf("[DEBUG] Normalized name: %s", name)
 	return name
 }
 
@@ -8042,7 +8033,7 @@ func checkIfRejected(response string) error {
 	return errors.New("AI rejected the task: reason unknown")
 }
 
-func extractExternalSetup(response string) (string) {
+func extractExternalSetup(response string) string {
 	lines := strings.Split(response, "\n")
 	var result []string
 	foundExternal := false
