@@ -31118,8 +31118,7 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 	resp.Write([]byte(`{"success": true}`))
 }
 
-
-func GetWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Request) {
+func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -31141,10 +31140,17 @@ func GetWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Reque
 	}
 
 	if !user.SupportAccess {
-			resp.WriteHeader(403)
-			resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
-			return
-		}
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to generate LLM workflows: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
@@ -31161,12 +31167,19 @@ func GetWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Reque
 		resp.Write([]byte(`{"success": false, "reason": "Input data invalid"}`))
 		return
 	}
-	workflow, err := GetWorkflow(ctx, input.WorkflowId, true)
+	
+	workflow, err := GetWorkflow(ctx, input.WorkflowId)
+
 	if err != nil {
 		log.Printf("[ERROR] Failed to get workflow %s: %s", input.WorkflowId, err)
+	} else if workflow.OrgId != user.ActiveOrg.Id && len(workflow.OrgId) > 0 {
+		log.Printf("[ERROR] Workflow with ID %s is not owned by the current organization (%s). It belongs to %s", input.WorkflowId, user.ActiveOrg.Id, workflow.OrgId)
+		resp.WriteHeader(http.StatusForbidden)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow does not belong to your organization. Please contact support@shuffler.io if this persists"}`))
+		return
 	}
 
-	output , err := generateWorkflowJson(ctx, input, user, workflow)
+	output, err := generateWorkflowJson(ctx, input, user, workflow)
 	if err != nil {
 		reason := err.Error()
 		if strings.HasPrefix(reason, "AI rejected the task: ") {
@@ -31190,4 +31203,85 @@ func GetWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Reque
 	}
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(appsJson)
+}
+
+func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+	ctx := GetContext(request)
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s in workflow generation", GetRequestIp(request))
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+	if !user.SupportAccess {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+		return
+	}
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to generate LLM workflows: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed to read body in runActionAI: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input body is not valid JSON"}`))
+		return
+	}
+
+	var editRequest WorkflowEditAIRequest
+	err = json.Unmarshal(body, &editRequest)
+	if err != nil {
+		log.Printf("[WARNING] Failed to unmarshal edit request in runActionAI: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input data invalid"}`))
+		return
+	}
+	workflow, err := GetWorkflow(ctx, editRequest.WorkflowID)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get workflow %s: %s", editRequest.WorkflowID, err)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+		return
+	}
+
+	if workflow.OrgId != user.ActiveOrg.Id && len(workflow.OrgId) > 0 {
+		log.Printf("[ERROR] Workflow with ID %s is not owned by the current organization (%s). It belongs to %s", editRequest.WorkflowID, user.ActiveOrg.Id, workflow.OrgId)
+		resp.WriteHeader(http.StatusForbidden)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow does not belong to your organization. Please contact support@shuffler.io if this persists"}`))
+		return
+	}
+
+	output, err := editWorkflowWithLLM(ctx, workflow, editRequest)
+	if err != nil {
+		log.Printf("[ERROR] Failed to edit workflow %s: %s", editRequest.WorkflowID, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to edit workflow"}`))
+		return
+	}
+
+	workflowJson, err := json.Marshal(output)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal workflow %s: %s", editRequest.WorkflowID, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal workflow"}`))
+		return
+	}
+	resp.WriteHeader(http.StatusOK)
+	resp.Write(workflowJson)
 }
