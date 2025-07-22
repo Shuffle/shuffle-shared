@@ -677,6 +677,8 @@ type Contact struct {
 	DealCountry   string   `json:"dealcountry"`
 	Category      string   `json:"Category"`
 	Interests     []string `json:"interests"`
+	LegalAgreementsAccepted   bool     `json:"legal_agreements_accepted"`
+	PocTermsAccepted   bool      `json:"poc_terms_accepted"`
 }
 
 type Translator struct {
