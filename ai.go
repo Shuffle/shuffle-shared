@@ -7339,7 +7339,7 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 	}
 
 	externalSetupInstructions := extractExternalSetup(contentOutput)
-	log.Printf("[DEBUG] AI response: %s", contentOutput)
+	// log.Printf("[DEBUG] AI response: %s", contentOutput)
 
 	systemMessage = `You are a senior security automation assistant helping build workflows for an automation platform called **Shuffle**, which connects security tools through apps and their actions (similar to SOAR platforms).
 
@@ -7653,7 +7653,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 	if len(contentOutput) == 0 {
 		return nil, errors.New("AI response is empty")
 	}
-	log.Printf("[DEBUG] AI response: %s", contentOutput)
+	// log.Printf("[DEBUG] AI response: %s", contentOutput)
 
 	contentOutput = strings.TrimSpace(contentOutput)
 	if strings.HasPrefix(contentOutput, "```json") {
@@ -7719,7 +7719,6 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		}
 
 		// 4) Only fallback if we truly didn’t find anything
-
 		if !foundApp {
 			if httpApp.Name != "" {
 				matchedApp = httpApp
@@ -7863,6 +7862,30 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		}
 	}
 
+	var foundEnv bool
+	envs, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+
+	if err == nil {
+		if input.Environment != "" {
+			// check if the provided environment is valid
+			for _, env := range envs {
+				if env.Name == input.Environment && !env.Archived {
+					foundEnv = true
+					break
+				}
+			}
+		}
+		if !foundEnv || input.Environment == "" {
+			for _, env := range envs {
+				if env.Default {
+					input.Environment = env.Name
+					foundEnv = true
+					break
+				}
+			}
+		}
+	} 
+
 	var actions []Action
 	var actionLabel string
 	actionLen := len(workflowJson.AIActions)
@@ -7889,7 +7912,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 			PrivateID:    app.PrivateID,
 			SmallImage:   app.SmallImage,
 			LargeImage:   app.LargeImage,
-			Environment:  app.Environment,
+			Environment:  input.Environment,
 			Name:         act.Name,
 			Label:        actionLabel,
 			Parameters:   act.Parameters,
@@ -7904,8 +7927,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 
 	var branches []Branch
 
-	// Needed to add multiple branches to single node in the future
-	// Step 1: Link Trigger → First Action
+	//  Link Trigger --> First Action
 	if len(triggers) > 0 && len(actions) > 0 {
 		branches = append(branches, Branch{
 			ID:            uuid.NewV4().String(),
@@ -7914,7 +7936,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		})
 	}
 
-	// Step 2: Link Action[i] → Action[i+1]
+	// Link Action[i] --> Action[i+1]
 	for i := 0; i < len(actions)-1; i++ {
 		branches = append(branches, Branch{
 			ID:            uuid.NewV4().String(),
@@ -7976,6 +7998,12 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		Width:           600,
 	})
 
+    start := ""
+	if len(actions) > 0 {
+		actions[0].IsStartNode = true
+		start = actions[0].ID
+	}
+
 	if workflow != nil && workflow.ID != "" {
 		workflow.Actions = actions
 		workflow.Triggers = triggers
@@ -7990,6 +8018,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 			Actions:     actions,
 			Branches:    branches,
 			Comments:    comments,
+			Start:       start,
 		}
 	}
 
@@ -8064,3 +8093,12 @@ func extractExternalSetup(response string) string {
 
 	return strings.Join(result, "\n")
 }
+
+// func EditWorkflowWithLLM(workflow *Workflow, userInput string) (*Workflow, error) {
+// 	// Use LLM to process user input and suggest edits to the workflow
+// 	// This is a placeholder for the actual LLM integration
+
+// 	systemPrompt := ``
+// 	editedWorkflow := workflow
+// 	return editedWorkflow, nil
+// }
