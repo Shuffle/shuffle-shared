@@ -8094,11 +8094,10 @@ func extractExternalSetup(response string) string {
 	return strings.Join(result, "\n")
 }
 
-// func EditWorkflowWithLLM(workflow *Workflow, userInput string) (*Workflow, error) {
-// 	// Use LLM to process user input and suggest edits to the workflow
-// 	// This is a placeholder for the actual LLM integration
+func editWorkflowWithLLM(ctx context.Context, workflow *Workflow, input WorkflowEditAIRequest) (*Workflow, error) {
+	// Use LLM to process user input and suggest edits to the workflow
+	// This is a placeholder for the actual LLM integration
 
-// 	systemPrompt := ``
-// 	editedWorkflow := workflow
-// 	return editedWorkflow, nil
-// }
+	return workflow, nil
+
+}
