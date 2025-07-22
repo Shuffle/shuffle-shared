@@ -4590,3 +4590,13 @@ type AppCategoryItem struct {
 	AppName    string   `json:"app_name" datastore:"app_name"`
 	Categories []string `json:"categories" datastore:"categories"`
 }
+
+type WorkflowEditAIRequest struct {
+	Query 			string `json:"query"`
+
+    WorkflowID      string `json:"workflow_id"`      
+    OrgID           string `json:"org_id"`           
+    WorkflowYaml    string `json:"workflow_yaml"`    
+	Environment     string `json:"environment"`
+
+}
