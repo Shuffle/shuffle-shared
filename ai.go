@@ -7331,6 +7331,7 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 
 	contentOutput, err := RunAiQuery(systemMessage, input.Query)
 	if err != nil {
+		// No need to retry, as RunAiQuery already has retry logic
 		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
 		return nil, err
 	}
@@ -7900,6 +7901,12 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 					break
 				}
 			}
+		}
+	} else {
+		if project.Environment == "cloud" {
+			input.Environment = "cloud"
+		} else {
+			input.Environment = "Shuffle"
 		}
 	}
 
