@@ -7233,6 +7233,9 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 	var builder strings.Builder
 
 	for _, app := range apps {
+		if len(strings.TrimSpace(app.Name)) == 0 {
+			continue
+		}
 		builder.WriteString(fmt.Sprintf("%s: %v\n", app.Name, app.Categories))
 
 		if normalizeName(app.Name) == "http" {
@@ -7256,7 +7259,7 @@ Your job:
    - If it runs periodically (e.g. every 5 minutes) or we need to poll something ?, use Schedule Trigger
    - Right now Webhook (for real-time alerts) and Schedule (for polling) are the only two trigger types supported in Shuffle. So even if the user asks for a different kind of trigger like "email trigger" or "alert trigger", you must handle it in one of two ways: either map it to a Webhook trigger if the external system can send real-time HTTP POST requests (push model), or use a Schedule trigger if the only option is to poll the external system periodically (pull model). Remember, polling can be inefficient depending on the system, so prefer Webhook when possible. Use your judgment to decide which trigger is technically more appropriate, based not just on what the user said, but on what fits best with how the external system actually works. However, if the user explicitly asks for either "webhook" or "schedule", you must respect that choice and use exactly what they requested, even if it’s not optimal. Never invent or use unsupported trigger types, only pick between Webhook and Schedule based on real-world feasibility and the user’s clarity.
    - In some cases, the way the user asks might clearly imply that we need some trigger to start the workflow (for example, “when an alert happens” or “when a ticket is created”), but the reality is that the target platform may not support sending webhook notifications at all. In such situations, even though the user’s request sounds like it should be real-time, we must fall back to using a Schedule trigger to poll the target system periodically for new data or changes. This might not be efficient, but it’s the only way to simulate "real-time" when the system can’t push data to us. So always think practically, don’t blindly follow the wording of the request. Instead, figure out if the system realistically supports webhooks; if not, choose Schedule trigger automatically even if it goes against the user’s phrasing. The goal is to still build a functional workflow with the best available method.
-   - If it’s a manual run or a pull, no trigger is needed.
+   - A trigger is only needed if the workflow is clearly meant to start automatically (event-driven or scheduled), and the source system either pushes data to us (Webhook) or allows us to pull it (Schedule). If it’s just a data-fetching step inside the flow or a manual run, no trigger is needed.
 
 5. Ensure **all steps are atomic** — one action per step only.
 6. Always clearly **map outputs to inputs** (e.g., extract value A → use value A in next step).
@@ -7280,8 +7283,9 @@ This means:
 Available Apps:
 %s
 
-    Based on this list of apps, you can infer which app to use for a specific action even if the user's input is vague or doesn’t clearly specify an app name. For example: if the user says "take alerts from SIEM and send it to my case management system", you should intelligently choose the most relevant SIEM and case management app from the available apps list. If there are multiple apps in the same category, pick the one that seems most appropriate based on context.
-	Sometimes, the app the user specifically mentions might not exist in the available apps list, either because they named a tool that isn’t present, or because their query isn’t tied to any app explicitly. In such cases: If the user explicitly mentioned an app name that is not in the available list, include that app anyway, and If the user didn’t mention an app name but the context suggests a type of app is needed, and no suitable app is found in the list, then pick a well-known app from that category instead.
+Based on this list of apps, you can infer which app to use for a specific action even if the user's input is vague or doesn’t clearly specify an app name. For example: if the user says "take alerts from SIEM and send it to my case management system", you should intelligently choose the most relevant SIEM and case management app from the available apps list. When multiple apps exist in the same category, never choose based on list order or appearance position. Always prioritize well-known, purpose-built apps over vague or ambiguously named ones, unless the user specifically mentions otherwise. However, do not guess or make up app names. Only use app names exactly as they appear in the available apps list. Matching should always be based on actual app names in the list, even if inferred by category, never invent similar-sounding or unrelated app names.
+Sometimes, the app the user specifically mentions might not exist in the available apps list, either because they named a tool that isn’t present, or because their query isn’t tied to any app explicitly. In such cases: If the user explicitly mentioned an app name that is not in the available list, include that app anyway, and If the user didn’t mention an app name but the context suggests a type of app is needed, and no suitable app is found in the list, then pick a well-known app from that category instead.
+Always use the exact app names in the breakdown steps as it appears in the available list. Don’t confuse it with the name of an action or function inside the app.
 
 Only if the platform’s API supports that action, and all required parameters are available or extractable, include it as a valid atomic step.
 
@@ -7416,17 +7420,19 @@ Trigger format
 
 {
   "index": 0,
-  "app_name": "webhook",  // or "Schedule"
+  "app_name": "Webhook",  // or "Schedule" and never invent a new trigger name
   "label": "webhook_1",
   "parameters": [ ... ]  // for webhook, this is likely { "url": "https://shuffle.io/webhook" } and for Schedule, it can be { "cron": "0 0 * * *" }
 }
+
+If the breakdown does not mention any trigger, do not add one when generating the JSON, instead include an empty array like this "triggers": []. Only include a trigger if it's clearly stated in the breakdown.
 
 Action format
 
 {
   "index": 1,
-  "app_name": "string",        // e.g., "jira_cloud"
-  "action_name": "custom_action", // always keep as "custom_action"
+  "app_name": "string",        // e.g., "Jira"
+  "action_name": "custom_action", // always keep as "custom_action" except for the Shuffle Tools app where it can be "execute_python" or "run_ssh_command"
   "label": "unique_label",    // unique per action
   "url": "https://api.vendor.com",  // mandatory, never leave empty in most of the cases
   "parameters": [ ... ]
@@ -7687,6 +7693,9 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		if aiAppName != "" {
 			for _, app := range apps {
 				normA := normalizeName(app.Name)
+				if normA == "" {
+					continue // Skip ghost apps with no name
+				}
 				if strings.EqualFold(normA, aiAppName) || (strings.Contains(normA, aiAppName) || strings.Contains(aiAppName, normA)) {
 					matchedApp = app
 					foundApp = true
@@ -7857,8 +7866,16 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 				LargeImage:  scheduleImage,
 			})
 		default:
-			log.Printf("[WARN] Unsupported trigger app: %s, skipping...", trigger.AppName)
-			continue
+			log.Printf("[WARN] Unsupported trigger app: %s, falling back to webhook", trigger.AppName)
+			triggers = append(triggers, Trigger{
+				AppName:     "Webhook",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "WEBHOOK",
+				ID:          uuid.NewV4().String(),
+				Description: "Fallback to webhook for unsupported trigger",
+				LargeImage:  webhookImage,
+			})
 		}
 	}
 
@@ -7884,7 +7901,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 				}
 			}
 		}
-	} 
+	}
 
 	var actions []Action
 	var actionLabel string
@@ -7998,7 +8015,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		Width:           600,
 	})
 
-    start := ""
+	start := ""
 	if len(actions) > 0 {
 		actions[0].IsStartNode = true
 		start = actions[0].ID
@@ -8013,7 +8030,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		workflow = &Workflow{
 			ID:          uuid.NewV4().String(),
 			Name:        "Generated Workflow" + uuid.NewV4().String(),
-			Description: "Workflow generated from AI input",
+			Description: workflowJson.Comments,
 			Triggers:    triggers,
 			Actions:     actions,
 			Branches:    branches,
@@ -8100,4 +8117,53 @@ func editWorkflowWithLLM(ctx context.Context, workflow *Workflow, input Workflow
 
 	return workflow, nil
 
+}
+
+func buildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
+	if w == nil {
+		return nil
+	}
+
+	var minActs []MinimalAction
+	for _, a := range w.Actions {
+		var params []MinimalParameter
+		for _, p := range a.Parameters {
+			params = append(params, MinimalParameter{Name: p.Name, Value: p.Value})
+		}
+		minActs = append(minActs, MinimalAction{
+			AppName:    a.AppName,
+			ID:         a.ID,
+			Label:      a.Label,
+			Name:       a.Name,
+			Parameters: params,
+		})
+	}
+
+	var minBrs []MinimalBranch
+	for _, b := range w.Branches {
+		minBrs = append(minBrs, MinimalBranch{
+			ID:            b.ID,
+			SourceID:      b.SourceID,
+			DestinationID: b.DestinationID,
+		})
+	}
+
+	var minTrigs []MinimalTrigger
+	for _, t := range w.Triggers {
+		var params []MinimalParameter
+		for _, p := range t.Parameters {
+			params = append(params, MinimalParameter{Name: p.Name, Value: p.Value})
+		}
+		minTrigs = append(minTrigs, MinimalTrigger{
+			AppName:    t.AppName,
+			Label:      t.Label,
+			Parameters: params,
+		})
+	}
+
+	return &MinimalWorkflow{
+		Actions:  minActs,
+		Branches: minBrs,
+		Triggers: minTrigs,
+	}
 }
