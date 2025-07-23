@@ -4560,35 +4560,35 @@ type partnerReturnStruct struct {
 }
 
 type AIWorkflowResponse struct {
-	AITriggers []AITriggerItem `json:"triggers" datastore:"triggers"`
-	AIActions  []AIActionItem  `json:"actions" datastore:"actions"`
-	Comments    string          `json:"comments" datastore:"comments"`
+	AITriggers []AITriggerItem `json:"triggers"`
+	AIActions  []AIActionItem  `json:"actions"`
+	Comments    string          `json:"comments"`
 }
 
 type AITriggerItem struct {
-	Index   int           `json:"index" datastore:"index"`
-	AppName string        `json:"app_name" datastore:"app_name"`
-	Label   string        `json:"label" datastore:"label"`
-	Params  []AIParamItem `json:"parameters" datastore:"parameters"`
+	Index   int           `json:"index"`
+	AppName string        `json:"app_name"`
+	Label   string        `json:"label"`
+	Params  []AIParamItem `json:"parameters"`
 }
 
 type AIActionItem struct {
-	Index      int           `json:"index" datastore:"index"`
-	AppName    string        `json:"app_name" datastore:"app_name"`
-	ActionName string        `json:"action_name" datastore:"action_name"`
-	Label      string        `json:"label" datastore:"label"`
-	URL        string        `json:"url" datastore:"url"`
-	Params     []AIParamItem `json:"parameters" datastore:"parameters"`
+	Index      int           `json:"index"`
+	AppName    string        `json:"app_name"`
+	ActionName string        `json:"action_name"`
+	Label      string        `json:"label"`
+	URL        string        `json:"url"`
+	Params     []AIParamItem `json:"parameters"`
 }
 
 type AIParamItem struct {
-	Name  string `json:"name" datastore:"name"`
-	Value string `json:"value" datastore:"value"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 type AppCategoryItem struct {
-	AppName    string   `json:"app_name" datastore:"app_name"`
-	Categories []string `json:"categories" datastore:"categories"`
+	AppName    string   `json:"app_name"`
+	Categories []string `json:"categories"`
 }
 
 type WorkflowEditAIRequest struct {
@@ -4598,5 +4598,36 @@ type WorkflowEditAIRequest struct {
     OrgID           string `json:"org_id"`           
     WorkflowYaml    string `json:"workflow_yaml"`    
 	Environment     string `json:"environment"`
+}
 
+type MinimalParameter struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type MinimalAction struct {
+	AppName    string             `json:"app_name"`
+	ID         string             `json:"id"`
+	Label      string             `json:"label"`
+	Name       string             `json:"name"`
+	Parameters []MinimalParameter `json:"parameters"`
+}
+
+type MinimalTrigger struct {
+	AppName    string             `json:"app_name"`
+	Label      string             `json:"label"`
+	Parameters []MinimalParameter `json:"parameters"`
+}
+
+type MinimalBranch struct {
+	ID            string `json:"id"`
+	SourceID      string `json:"source_id"`
+	DestinationID string `json:"destination_id"`
+}
+
+// MinimalWorkflow gathers only the minimal slices.
+type MinimalWorkflow struct {
+	Actions  []MinimalAction  `json:"actions"`
+	Branches []MinimalBranch  `json:"branches"`
+	Triggers []MinimalTrigger `json:"triggers"`
 }
