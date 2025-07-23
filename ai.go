@@ -7232,12 +7232,17 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 	var httpApp WorkflowApp // We use http app as the final fallback if in case we cannot find any app that matches the AI suggested app name
 	var builder strings.Builder
 
+	maxApps := 150
+	count := 0
+
 	for _, app := range apps {
 		if len(strings.TrimSpace(app.Name)) == 0 {
 			continue
 		}
-		builder.WriteString(fmt.Sprintf("%s: %v\n", app.Name, app.Categories))
-
+		if count < maxApps {
+			builder.WriteString(fmt.Sprintf("%s: %v\n", app.Name, app.Categories))
+			count++
+		}
 		if normalizeName(app.Name) == "http" {
 			httpApp = app
 		}
