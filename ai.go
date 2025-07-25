@@ -7845,8 +7845,9 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 		filtered = append(filtered, matchedApp)
 	}
 
-	webhookImage := "data:image/png;base64,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"
-	scheduleImage := "data:image/png;base64,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"
+	webhookImage := GetTriggerData("Webhook")
+	scheduleImage := GetTriggerData("Schedule")
+
 	var triggers []Trigger
 	for _, trigger := range workflowJson.AITriggers {
 
@@ -8123,9 +8124,669 @@ func extractExternalSetup(response string) string {
 	return strings.Join(result, "\n")
 }
 
-func editWorkflowWithLLM(ctx context.Context, workflow *Workflow, input WorkflowEditAIRequest) (*Workflow, error) {
-	// Use LLM to process user input and suggest edits to the workflow
-	// This is a placeholder for the actual LLM integration
+func editWorkflowWithLLM(ctx context.Context, workflow *Workflow, user User, input WorkflowEditAIRequest) (*Workflow, error) {
+
+	apps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get apps in Generate workflow: %s", err)
+		return nil, err
+	}
+	var httpApp WorkflowApp // We use http app as the final fallback if in case we cannot find any app that matches the AI suggested app name
+	var builder strings.Builder
+
+	maxApps := 150
+	count := 0
+
+	for _, app := range apps {
+		if len(strings.TrimSpace(app.Name)) == 0 {
+			continue
+		}
+		if count < maxApps {
+			builder.WriteString(fmt.Sprintf("%s: %v\n", app.Name, app.Categories))
+			count++
+		}
+		if normalizeName(app.Name) == "http" {
+			httpApp = app
+		}
+	}
+	categoryString := builder.String()
+
+	systemMessage := fmt.Sprintf(`You are a senior security automation assistant helping improve workflows for an automation platform called Shuffle, which connects security tools through apps and their actions (similar to SOAR platforms).
+Your job is to interpret the user's natural-language editing request and apply the necessary changes to an existing Shuffle workflow JSON, keeping it minimal, valid, and consistent with real-world API logic.
+The end result should be an updated JSON workflow reflecting the user's requested changes.
+
+You will receive a JSON object representing a workflow, which includes triggers, actions, and comments. For example the general format looks like this:
+
+{
+  "actions": [
+    {
+      "app_name": "Example App", 
+      "id": "action-1",
+      "label": "unique_identifying_name", 
+      "name": "example_action",
+      "parameters": [
+        {
+          "name": "param1",
+          "value": "value1"
+        }
+      ]
+    }
+  ],
+  "branches": [
+    {
+      "id": "branch-1",
+      "source_id": "trigger-1",
+      "destination_id": "action-1"
+    }
+  ],
+  "triggers": [
+    {
+      "app_name": "Webhook", //  or Schedule 
+      "label": "webhook_1",  // or schedule_1
+      "parameters": [
+        {
+          "name": "some name", 
+          "value": "some_value" 
+        }
+      ]
+    }
+  ]
+}
+
+YOUR OBJECTIVE
+
+Your primary responsibility is to:
+
+* Understand that **each app in Shuffle** is a wrapper around a real-world HTTP API.
+* Every **action** is just a specific HTTP API call and its implementation is backed by its OpenAPI spec.
+* You must carefully modify the provided JSON workflow to reflect the user’s intent using accurate HTTP request structures (method, path, headers, query, body).
+*Your output should preserve existing logic wherever possible and make only the necessary edits to match the user’s instructions.
+
+You are not blindly replacing the workflow. You're thinking like an experienced developer editing production logic, making clean, minimal, and technically correct changes.
+
+Expected output format:
+
+Your final JSON must look like this:
+
+{
+  "triggers": [ ... ],
+  "actions": [ ... ],
+  "comments": "This must be a single string that contains a clear, line-by-line description of what each step in the workflow does. Use \n to separate each line. Avoid markdown, emojis, or formatting — just plain readable text."
+}
+
+Trigger format
+
+{
+  "index": 0,
+  "app_name": "Webhook",  // or "Schedule" and never invent a new trigger name
+  "label": "webhook_1",
+  "parameters": [ ... ]  // for webhook, this is likely { "url": "https://shuffle.io/webhook" } and for Schedule, it can be { "cron": "0 0 * * *" }
+}
+
+If the breakdown does not mention any trigger, do not add one when generating the JSON, instead include an empty array like this "triggers": []. Only include a trigger if it's clearly stated in the breakdown.
+
+Action format
+
+{
+  "index": 1,
+  "app_name": "string",        // e.g., "Jira"
+  "action_name": "action_name",
+  "label": "unique_label",    // unique per action
+  "url": "https://api.vendor.com",  // mandatory, never leave empty in most of the cases
+  "parameters": [ ... ]
+}
+
+Every parameter is an object in this form:
+
+{ "name": "<param_type>", "value": "<value>" }
+
+Every trigger and action must have a unique index:
+
+* Start with 0 for the first trigger or action
+* Increment by 1 for each subsequent trigger or action
+
+References
+
+Use the exact format below for referencing prior outputs:
+
+$label.field — Example: $webhook_1.alert_id
+
+Never use .body or .output — those are not real fields. Avoid $step.output or $step.body entirely.
+
+ Wrong: $webhook_1.body.alert_id
+
+Correct: $webhook_1.alert_id
+
+All outputs are already parsed JSON; no extra parsing required
+
+$label.field — Example: $webhook_1.alert_id
+
+Do not use .body or .output unnecessarily
+
+All outputs are already parsed JSON; no extra parsing required
+
+7. PYTHON LOGIC VIA SHUFFLE TOOLS APP
+
+If you need to do any data manipulation, or filtering you can use our Shuffle Tools App and it has an action called execute_python where you can take full control of the data manipulation and filtering and to get the data you need like if you want to get something you need from previous actions or even any trigger you can do the same thing literally like this: "$label_name" also don't use $label_name directly in python instead make sure you use double quotes around it like this: "$label_name" and we will replace this with the right data before execution and keep in mind that most of the time the data is in json format of the final result of the action you are referring to so no need for .body again
+for python code its just like any other param with name like name "code" and value is just the python like "print("hello world")" or "print("$webhook_1.event.fields.summary")" pay attention to the quotes here when using $label_name and thats how you get the data from previous actions or triggers in python code
+a few important notes about the python code:
+* Use top-level expressions (no need for main()).
+* You can define and call functions.
+* Do not use return at the top-level (outside a function) — it causes a SyntaxError.
+* Do not assume a full IDE or filesystem — it’s a sandboxed, one-shot code runner.
+* No return outside functions
+* Use exit() to break early
+* Printed output gets captured
+
+Now to actually return the data back as we need the output of this code to be used in the next action you can use print statement for example you got a json data and written code to filter it and you want to return the filtered data back to the next action you can do this by including printing the data like this: print(json.dumps(filtered_data)) and this will return the filtered data as json string and return something like this
+{"success":true,"message":{"foo":"bar"}}
+and you can use it in the next action like this: $the_unique_label_name.message which will translate to {"foo":"bar"} where the_unique_label_name is the label of the python action you used
+
+  Example 
+* If you want to filter a list of users and return only those with a specific role, you can write a Python code that filters the list and prints the result. and based on the output you can continue to the next action.
+
+ 8. SSH SUPPORT
+
+The "Shuffle Tools" app also supports SSH via the "run_ssh_command" action with parameters:
+
+* host
+* username
+* password
+* port
+* command
+
+If from the user input if they didnt provided any of the above parameters you can use the default values 
+This is a utility action — no HTTP calls.
+
+** HANDLING EDIT INSTRUCTIONS
+
+1. EDITING ACTION PARAMETERS OR LABELS
+    If the user asks to:
+		- Update a label
+		- Modify a value of a  field in the parameters of any action or trigger
+	Just update that specific action or trigger. Do not touch anything else. Keep the action ID the same, keep unrelated steps as they are. But never touch the changing of app name itself, only the label or parameters.
+
+2. ADDING A NEW APP ACTION or TRIGGER
+     If the user says:
+      - Add a step to send an email after this
+	  - Insert a new action before X
+	  - Add an enrichment step between trigger and Slack
+
+	  Some important notes:
+	    when adding a new app action, keep in mind that:
+		Each app and action in the workflow represents a real API call. When modifying actions or adding new ones:
+		- Use public OpenAPI specs or common API conventions
+		- Accurately infer the correct method, endpoint, headers, and parameters
+		- Avoid guessing random fields, stick to what’s real or well-known
+		- If you're unsure of an API detail, **make an educated guess using real-world patterns.**
+		- You must never leave the "url" field empty.
+
+			If you know the official base URL, use it directly
+			If you're unsure, guess using common formats like:
+
+			https://api.vendor.com/v1
+			https://vendor.com/api or 
+			https://api.vendor.com
+
+			Also when ever you use the base url make sure you include it as is, for example if a vendor base url according to their open api spec or public doc is like this "https://api.vendor.com/v1"  or any other variation, just use the base url as is and do not change it in any way
+			You are allowed to use your training to approximate well-known APIs
+			Do **not** leave the field out or null under any circumstance
+
+			example "url": "https://slack.com/api"
+
+			The only two times where the url can be less relevant is when you are using the "Shuffle Tools" app and its actions like "execute_python" or "run_ssh_command" even in these cases provide something like this "url": "https://shuffle.io"
+			The other case is when the api server is actually running on premises where the url is not known in advance, for example fortigate firewall or Classic Active Directory (AD), in those case you can use template urls like "url": "https://<fortigate-ip>/api/v2", "url": "https://<your-server-ip>/api/v1"
+			But apart from these cases most of the platforms are in the cloud and you can find the base url in their documentation or OpenAPI spec, so you can use that as the url.
+		
+			Here is the format for adding a new action:
+			Action format
+
+				{
+				"index": n,
+				"app_name": "string",        // e.g., "Jira"
+				"action_name": "custom_action", // always keep as "custom_action" except for the Shuffle Tools app where it can be "execute_python" or "run_ssh_command"
+				"label": "unique_label",    // unique per action
+				"url": "https://api.vendor.com",  // mandatory, never leave empty in most of the cases
+				"parameters": [ ... ]
+				}
+
+				Each custom_action must have these 5 parameters:
+
+				{ "name": "method", "value": "GET" | "POST" | "PUT" | "DELETE" | "PATCH" }
+
+				{ "name": "path", "value": "/projects/$webhook_1.project_id/tasks/$step_2.task_id" } // the two exceptions is when the path is either static and does not require any variables, or from the given given data you dont know how to resolve the variables, in that case you can keep the template like {project_id} 
+
+				{ "name": "body", "value": "{\"summary\": \"Bug in login flow\", \"description\": \"Fails on OTP step.\", \"priority\": \"High\"}" } (if required)
+
+				{ "name": "queries", "value": "key1=value1&key2=value2" } (optional)
+
+				{ "name": "headers", "value": "Content-Type=application/json\nAccept=application/json" } (only if needed)
+
+				Keep in mind that custom_action for the action_name is the default for the new app you are going to add in the existing workflow and not for the already existing actions user picked
+
+		Add the new action of the specific app to the actions array. Also update the branches(indexes) to reflect how it's connected in the flow.
+		If the new action breaks an existing connection (like A → B), remove that branch and instead add:
+		A → NewAction
+		NewAction → B, Only change the branches involved in the new step. Don’t modify anything else. You can use the index field to convey the order of actions, starting from 0 for the trigger, then 1 for the first action, and so on.
+
+3. REMOVING AN APP ACTION or TRIGGER
+        If the user says:
+			“Remove the PagerDuty step”
+			“Delete the VirusTotal scan”
+			Remove the action from the actions or trigger array.
+			Also delete any branch where that action ID is either source_id or destination_id.
+			Make sure to update the branches(indexes) accordingly so that the workflow remains valid.
+			Don’t remove other connected actions unless the user says so. Be surgical.
+
+4.  REPLACING AN APP ACTION or TRIGGER
+
+       the user says:
+		“Replace Slack with Teams”
+		“Change this to use a different app but same function”
+		"Change from Webhook to a Scheduled trigger"
+
+		Keep in mind that replacing an app is the same as adding a new app in those cases. You have to pick the app the user asked to replace, and follow the same rules defined earlier (under the “add new app” instructions). Treat this like you’re inserting a new custom action from that app.
+		Infer the existing field values (parameters) from the old action, and intelligently map them into the correct predefined parameters for the custom_action.
+		Make sure to remove the old action, add the new one, and reconnect the branches so the workflow remains valid.
+
+5. REORDERING OR MOVING STEPS
+        If the user says:
+         "Make this the last step"
+         "Move this after that step or action"
+
+		 You need to reorder items in the actions array and also make sure to update the indexes to reflect the new logical flow.
+
+6. NEVER TOUCH WHAT'S NOT MENTIONED
+		Do not touch:
+		Actions that were not mentioned
+		Triggers that weren’t referenced
+		Existing URL fields
+		Any branch not related to the edit
+
+		Only act on what the user clearly asked. Everything else stays the same.
+
+When a user asks to pick an alternative app or replace an existing one, use the following list of available apps to guide your decision:
+
+%s
+
+FINAL OUTPUT RULE
+
+	Return ONLY the final, updated JSON.
+
+	No markdown
+	No explanation
+	No commentary
+	No extra code blocks
+	Just the valid updated JSON and nothing else.
+
+	If the request cannot be processed, return exactly this format:
+	REJECTED
+    Reason: <short but clear reason explaining why the task couldn't be processed>
+	This should only be used when the user request is not a valid edit, is impossible given the context, or violates the rules above.
+	`, categoryString)
+
+	contentOutput, err := RunAiQuery(systemMessage, input.Query)
+	if err != nil {
+		// No need to retry, as RunAiQuery already has retry logic
+		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
+		return nil, err
+	}
+	if len(contentOutput) == 0 {
+		return nil, errors.New("AI response is empty")
+	}
+	err = checkIfRejected(contentOutput)
+	if err != nil {
+		return nil, err
+	}
+
+	// log.Printf("[DEBUG] AI response: %s", contentOutput)
+
+	contentOutput = strings.TrimSpace(contentOutput)
+	if strings.HasPrefix(contentOutput, "```json") {
+		contentOutput = strings.TrimPrefix(contentOutput, "```json")
+	}
+	if strings.HasPrefix(contentOutput, "```") {
+		contentOutput = strings.TrimPrefix(contentOutput, "```")
+	}
+	if strings.HasSuffix(contentOutput, "```") {
+		contentOutput = strings.TrimSuffix(contentOutput, "```")
+	}
+	contentOutput = strings.TrimSpace(contentOutput)
+
+	var workflowJson AIWorkflowResponse
+	err = json.Unmarshal([]byte(contentOutput), &workflowJson)
+	if err != nil {
+		log.Printf("[ERROR] AI response is not a valid JSON object: %s", err)
+		return nil, errors.New("AI response is not a valid JSON object")
+	}
+
+		var filtered []WorkflowApp
+
+	for _, action := range workflowJson.AIActions {
+		// Normalize AI inputs
+		aiURL := strings.TrimSpace(strings.ToLower(action.URL))
+		aiAppName := normalizeName(action.AppName)
+
+		// 1) Lets try mactching with app names
+		var matchedApp WorkflowApp
+		foundApp := false
+		if aiAppName != "" {
+			for _, app := range apps {
+				normA := normalizeName(app.Name)
+				if normA == "" {
+					continue // Skip ghost apps with no name
+				}
+				if strings.EqualFold(normA, aiAppName) || (strings.Contains(normA, aiAppName) || strings.Contains(aiAppName, normA)) {
+					matchedApp = app
+					foundApp = true
+					break
+				}
+			}
+		}
+
+		// 2) Exact URL match
+		if !foundApp && aiURL != "" {
+			for _, app := range apps {
+				if strings.EqualFold(strings.TrimRight(app.Link, "/"), strings.TrimRight(aiURL, "/")) {
+					matchedApp = app
+					foundApp = true
+					break
+				}
+			}
+		}
+
+		// 3) Partial URL match
+		if !foundApp && aiURL != "" {
+			for _, app := range apps {
+				appURL := strings.ToLower(strings.TrimRight(app.Link, "/"))
+				if strings.Contains(aiURL, appURL) || strings.Contains(appURL, aiURL) {
+					matchedApp = app
+					foundApp = true
+					break
+				}
+			}
+		}
+
+		// 4) Only fallback if we truly didn’t find anything
+		if !foundApp {
+			if httpApp.Name != "" {
+				matchedApp = httpApp
+				foundApp = true
+			} else {
+				log.Printf("[WARN] No matching app found for AI action: %s", action.AppName)
+				httpApp = WorkflowApp{
+					Name: "http",
+					Actions: []WorkflowAppAction{
+						{
+							Name: "GET",
+							Parameters: []WorkflowAppActionParameter{
+								{Name: "url", Value: aiURL},
+							},
+						},
+					},
+				}
+				matchedApp = httpApp
+				foundApp = true
+			}
+		}
+
+		var updatedActions []WorkflowAppAction
+
+		// Exception: Shuffle Tools — use AI's action.ActionName
+		if strings.EqualFold(matchedApp.Name, "shuffle tools") {
+			for _, act := range matchedApp.Actions {
+				if act.Name != action.ActionName {
+					continue
+				}
+				for i, param := range act.Parameters {
+					for _, aiParam := range action.Params {
+						if strings.EqualFold(aiParam.Name, param.Name) {
+							act.Parameters[i].Value = aiParam.Value
+							break
+						}
+					}
+				}
+				updatedActions = []WorkflowAppAction{act}
+				break
+			}
+
+		} else if strings.EqualFold(matchedApp.Name, "http") {
+			var method string
+			for _, aiParam := range action.Params {
+				if strings.EqualFold(aiParam.Name, "method") {
+					method = strings.ToUpper(aiParam.Value)
+					break
+				}
+			}
+
+			// find action by method name
+			var matchedHttpAction WorkflowAppAction
+			for _, act := range matchedApp.Actions {
+				if strings.EqualFold(act.Name, method) {
+					matchedHttpAction = act
+					break
+				}
+			}
+
+			// fill rest of the params
+			for i, param := range matchedHttpAction.Parameters {
+				if strings.EqualFold(param.Name, "method") {
+					continue
+				}
+				for _, aiParam := range action.Params {
+					if strings.EqualFold(aiParam.Name, "url") && strings.EqualFold(param.Name, "url") {
+						matchedHttpAction.Parameters[i].Value = aiParam.Value
+						continue
+					}
+					if strings.EqualFold(aiParam.Name, param.Name) {
+						matchedHttpAction.Parameters[i].Value = aiParam.Value
+						break
+					}
+				}
+			}
+			updatedActions = []WorkflowAppAction{matchedHttpAction}
+
+		} else {
+			for _, act := range matchedApp.Actions {
+				if !strings.EqualFold(act.Name, action.ActionName) {
+					continue
+				}
+				for i, param := range act.Parameters {
+					foundParam := false
+					if strings.EqualFold(param.Name, "url") {
+						act.Parameters[i].Value = matchedApp.Link
+						foundParam = true
+						continue
+					}
+					for _, aiParam := range action.Params {
+						if strings.EqualFold(aiParam.Name, param.Name) {
+							act.Parameters[i].Value = aiParam.Value
+							foundParam = true
+							break
+						}
+					}
+					if param.Name == "ssl_verify" && !foundParam {
+						act.Parameters[i].Value = "False"
+					}
+				}
+				updatedActions = []WorkflowAppAction{act}
+				break
+			}
+		}
+
+		// Assign filtered app with its updated actions
+		matchedApp.Actions = updatedActions
+		filtered = append(filtered, matchedApp)
+	}
+
+	webhookImage := GetTriggerData("Webhook")
+	scheduleImage := GetTriggerData("Schedule")
+
+	var triggers []Trigger
+	for _, trigger := range workflowJson.AITriggers {
+
+		switch strings.ToLower(trigger.AppName) {
+		case "webhook":
+			triggers = append(triggers, Trigger{
+				AppName:     "Webhook",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "WEBHOOK",
+				ID:          uuid.NewV4().String(),
+				Description: "Custom HTTP input trigger",
+				LargeImage:  webhookImage,
+			})
+		case "schedule":
+			triggers = append(triggers, Trigger{
+				AppName:     "Schedule",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "SCHEDULE",
+				ID:          uuid.NewV4().String(),
+				Description: "Schedule time trigger",
+				LargeImage:  scheduleImage,
+			})
+		default:
+			log.Printf("[WARN] Unsupported trigger app: %s, falling back to webhook", trigger.AppName)
+			triggers = append(triggers, Trigger{
+				AppName:     "Webhook",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "WEBHOOK",
+				ID:          uuid.NewV4().String(),
+				Description: "Fallback to webhook for unsupported trigger",
+				LargeImage:  webhookImage,
+			})
+		}
+	}
+
+	var foundEnv bool
+	envs, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+
+	if err == nil {
+		if input.Environment != "" {
+			// check if the provided environment is valid
+			for _, env := range envs {
+				if env.Name == input.Environment && !env.Archived {
+					foundEnv = true
+					break
+				}
+			}
+		}
+		if !foundEnv || input.Environment == "" {
+			for _, env := range envs {
+				if env.Default {
+					input.Environment = env.Name
+					foundEnv = true
+					break
+				}
+			}
+		}
+	} else {
+		if project.Environment == "cloud" {
+			input.Environment = "cloud"
+		} else {
+			input.Environment = "Shuffle"
+		}
+	}
+
+	var actions []Action
+	var actionLabel string
+	actionLen := len(workflowJson.AIActions)
+
+	for i, app := range filtered {
+
+		if len(app.Actions) == 0 {
+			continue
+		}
+		if i < actionLen {
+			actionLabel = workflowJson.AIActions[i].Label
+		} else {
+			actionLabel = app.Name + "_" + strconv.Itoa(i+1)
+		}
+		act := app.Actions[0]
+
+		action := Action{
+			AppName:      app.Name,
+			AppVersion:   app.AppVersion,
+			Description:  app.Description,
+			AppID:        app.ID,
+			IsValid:      app.IsValid,
+			Sharing:      app.Sharing,
+			PrivateID:    app.PrivateID,
+			SmallImage:   app.SmallImage,
+			LargeImage:   app.LargeImage,
+			Environment:  input.Environment,
+			Name:         act.Name,
+			Label:        actionLabel,
+			Parameters:   act.Parameters,
+			Public:       app.Public,
+			Generated:    app.Generated,
+			ReferenceUrl: app.ReferenceUrl,
+			ID:           uuid.NewV4().String(),
+		}
+
+		actions = append(actions, action)
+	}
+
+	var branches []Branch
+
+	//  Link Trigger --> First Action
+	if len(triggers) > 0 && len(actions) > 0 {
+		branches = append(branches, Branch{
+			ID:            uuid.NewV4().String(),
+			SourceID:      triggers[0].ID,
+			DestinationID: actions[0].ID,
+		})
+	}
+
+	// Link Action[i] --> Action[i+1]
+	for i := 0; i < len(actions)-1; i++ {
+		branches = append(branches, Branch{
+			ID:            uuid.NewV4().String(),
+			SourceID:      actions[i].ID,
+			DestinationID: actions[i+1].ID,
+		})
+	}
+
+	startX := -312.6988673793812
+	y := 190.6413454035773
+	xSpacing := 437.0
+
+	// Set trigger positions
+	for i := range triggers {
+		triggers[i].Position = Position{
+			X: startX + float64(i)*xSpacing,
+			Y: y,
+		}
+	}
+
+	// If no triggers, start X from 0 for actions
+	if len(triggers) == 0 {
+		startX = -312.6988673793812
+	}
+
+	// Set action positions (continue horizontally from trigger)
+	for i := range actions {
+		actions[i].Position = Position{
+			X: startX + float64(i+len(triggers))*xSpacing,
+			Y: y,
+		}
+	}
+	start := ""
+	if len(actions) > 0 {
+		actions[0].IsStartNode = true
+		start = actions[0].ID
+	}
+
+	if workflow != nil && workflow.ID != "" {
+		workflow.Actions = actions
+		workflow.Triggers = triggers
+		workflow.Branches = branches
+		workflow.Start = start
+	} else {
+		return nil, fmt.Errorf("workflow is nil")
+	}
 
 	return workflow, nil
 
