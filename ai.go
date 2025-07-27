@@ -17,6 +17,7 @@ import (
 	"os"
 	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -8183,6 +8184,7 @@ You will receive a JSON object representing a workflow, which includes triggers,
     {
       "app_name": "Webhook", //  or Schedule 
       "label": "webhook_1",  // or schedule_1
+	  "id": "a-unique-trigger-id",
       "parameters": [
         {
           "name": "some name", 
@@ -8218,6 +8220,8 @@ Trigger format
 
 {
   "index": 0,
+  "edited": true_or_false, // true if this trigger was modified or newly added, false if it was not
+  "id": "the-exact-id-of-the-trigger", // make sure you keep the same ID as is for the unchanged trigger
   "app_name": "Webhook",  // or "Schedule" and never invent a new trigger name
   "label": "webhook_1",
   "parameters": [ ... ]  // for webhook, this is likely { "url": "https://shuffle.io/webhook" } and for Schedule, it can be { "cron": "0 0 * * *" }
@@ -8229,6 +8233,8 @@ Action format
 
 {
   "index": 1,
+  "edited": true_or_false, // true if this action was modified or newly added, false if it was not
+  "id": "the-exact-id-of-the-action", // make sure you keep the same ID as is for the unchanged action
   "app_name": "string",        // e.g., "Jira"
   "action_name": "action_name",
   "label": "unique_label",    // unique per action
@@ -8343,7 +8349,9 @@ This is a utility action — no HTTP calls.
 
 				{
 				"index": n,
-				"app_name": "string",        // e.g., "Jira"
+				"edited": true, // false if this action was NOT modified or newly added
+				"id": "sample-id", // do not stress about this, the system will generate a unique ID for you
+				"app_name": "string",  // e.g., "Jira"
 				"action_name": "custom_action", // always keep as "custom_action" except for the Shuffle Tools app where it can be "execute_python" or "run_ssh_command"
 				"label": "unique_label",    // unique per action
 				"url": "https://api.vendor.com",  // mandatory, never leave empty in most of the cases
@@ -8460,163 +8468,202 @@ FINAL OUTPUT RULE
 		return nil, errors.New("AI response is not a valid JSON object")
 	}
 
-		var filtered []WorkflowApp
+	// var filtered []WorkflowApp
 
+	// lets sort the AI actions by their index to ensure the order is preserved
+	sort.Slice(workflowJson.AIActions, func(i, j int) bool {
+		return workflowJson.AIActions[i].Index < workflowJson.AIActions[j].Index
+	})
+	var actions []Action
 	for _, action := range workflowJson.AIActions {
-		// Normalize AI inputs
-		aiURL := strings.TrimSpace(strings.ToLower(action.URL))
-		aiAppName := normalizeName(action.AppName)
-
-		// 1) Lets try mactching with app names
-		var matchedApp WorkflowApp
-		foundApp := false
-		if aiAppName != "" {
-			for _, app := range apps {
-				normA := normalizeName(app.Name)
-				if normA == "" {
-					continue // Skip ghost apps with no name
-				}
-				if strings.EqualFold(normA, aiAppName) || (strings.Contains(normA, aiAppName) || strings.Contains(aiAppName, normA)) {
-					matchedApp = app
-					foundApp = true
+		found := false
+		if !action.Edited && workflow != nil {
+			// If not edited, we can try to reuse it
+			for _, existing := range workflow.Actions {
+				if (action.ID != "" && strings.EqualFold(existing.ID, action.ID)) || strings.EqualFold(existing.AppName, action.AppName) {
+					actions = append(actions, existing)
+					found = true
 					break
 				}
 			}
 		}
+		if action.Edited || !found {
+			// Normalize AI inputs
+			aiURL := strings.TrimSpace(strings.ToLower(action.URL))
+			aiAppName := normalizeName(action.AppName)
 
-		// 2) Exact URL match
-		if !foundApp && aiURL != "" {
-			for _, app := range apps {
-				if strings.EqualFold(strings.TrimRight(app.Link, "/"), strings.TrimRight(aiURL, "/")) {
-					matchedApp = app
-					foundApp = true
-					break
-				}
-			}
-		}
-
-		// 3) Partial URL match
-		if !foundApp && aiURL != "" {
-			for _, app := range apps {
-				appURL := strings.ToLower(strings.TrimRight(app.Link, "/"))
-				if strings.Contains(aiURL, appURL) || strings.Contains(appURL, aiURL) {
-					matchedApp = app
-					foundApp = true
-					break
-				}
-			}
-		}
-
-		// 4) Only fallback if we truly didn’t find anything
-		if !foundApp {
-			if httpApp.Name != "" {
-				matchedApp = httpApp
-				foundApp = true
-			} else {
-				log.Printf("[WARN] No matching app found for AI action: %s", action.AppName)
-				httpApp = WorkflowApp{
-					Name: "http",
-					Actions: []WorkflowAppAction{
-						{
-							Name: "GET",
-							Parameters: []WorkflowAppActionParameter{
-								{Name: "url", Value: aiURL},
-							},
-						},
-					},
-				}
-				matchedApp = httpApp
-				foundApp = true
-			}
-		}
-
-		var updatedActions []WorkflowAppAction
-
-		// Exception: Shuffle Tools — use AI's action.ActionName
-		if strings.EqualFold(matchedApp.Name, "shuffle tools") {
-			for _, act := range matchedApp.Actions {
-				if act.Name != action.ActionName {
-					continue
-				}
-				for i, param := range act.Parameters {
-					for _, aiParam := range action.Params {
-						if strings.EqualFold(aiParam.Name, param.Name) {
-							act.Parameters[i].Value = aiParam.Value
-							break
-						}
+			// 1) Lets try mactching with app names
+			var matchedApp WorkflowApp
+			foundApp := false
+			if aiAppName != "" {
+				for _, app := range apps {
+					normA := normalizeName(app.Name)
+					if normA == "" {
+						continue // Skip ghost apps with no name
 					}
-				}
-				updatedActions = []WorkflowAppAction{act}
-				break
-			}
-
-		} else if strings.EqualFold(matchedApp.Name, "http") {
-			var method string
-			for _, aiParam := range action.Params {
-				if strings.EqualFold(aiParam.Name, "method") {
-					method = strings.ToUpper(aiParam.Value)
-					break
-				}
-			}
-
-			// find action by method name
-			var matchedHttpAction WorkflowAppAction
-			for _, act := range matchedApp.Actions {
-				if strings.EqualFold(act.Name, method) {
-					matchedHttpAction = act
-					break
-				}
-			}
-
-			// fill rest of the params
-			for i, param := range matchedHttpAction.Parameters {
-				if strings.EqualFold(param.Name, "method") {
-					continue
-				}
-				for _, aiParam := range action.Params {
-					if strings.EqualFold(aiParam.Name, "url") && strings.EqualFold(param.Name, "url") {
-						matchedHttpAction.Parameters[i].Value = aiParam.Value
-						continue
-					}
-					if strings.EqualFold(aiParam.Name, param.Name) {
-						matchedHttpAction.Parameters[i].Value = aiParam.Value
+					if strings.EqualFold(normA, aiAppName) || (strings.Contains(normA, aiAppName) || strings.Contains(aiAppName, normA)) {
+						matchedApp = app
+						foundApp = true
 						break
 					}
 				}
 			}
-			updatedActions = []WorkflowAppAction{matchedHttpAction}
 
-		} else {
-			for _, act := range matchedApp.Actions {
-				if !strings.EqualFold(act.Name, action.ActionName) {
-					continue
+			// 2) Exact URL match
+			if !foundApp && aiURL != "" {
+				for _, app := range apps {
+					if strings.EqualFold(strings.TrimRight(app.Link, "/"), strings.TrimRight(aiURL, "/")) {
+						matchedApp = app
+						foundApp = true
+						break
+					}
 				}
-				for i, param := range act.Parameters {
-					foundParam := false
-					if strings.EqualFold(param.Name, "url") {
-						act.Parameters[i].Value = matchedApp.Link
-						foundParam = true
+			}
+
+			// 3) Partial URL match
+			if !foundApp && aiURL != "" {
+				for _, app := range apps {
+					appURL := strings.ToLower(strings.TrimRight(app.Link, "/"))
+					if strings.Contains(aiURL, appURL) || strings.Contains(appURL, aiURL) {
+						matchedApp = app
+						foundApp = true
+						break
+					}
+				}
+			}
+
+			// 4) Only fallback if we truly didn’t find anything
+			if !foundApp {
+				if httpApp.Name != "" {
+					matchedApp = httpApp
+					foundApp = true
+				} else {
+					log.Printf("[WARN] No matching app found for AI action: %s", action.AppName)
+					httpApp = WorkflowApp{
+						Name: "http",
+						Actions: []WorkflowAppAction{
+							{
+								Name: "GET",
+								Parameters: []WorkflowAppActionParameter{
+									{Name: "url", Value: aiURL},
+								},
+							},
+						},
+					}
+					matchedApp = httpApp
+					foundApp = true
+				}
+			}
+
+			var updatedActions []WorkflowAppAction
+
+			// Exception: Shuffle Tools — use AI's action.ActionName
+			if strings.EqualFold(matchedApp.Name, "shuffle tools") {
+				for _, act := range matchedApp.Actions {
+					if act.Name != action.ActionName {
+						continue
+					}
+					for i, param := range act.Parameters {
+						for _, aiParam := range action.Params {
+							if strings.EqualFold(aiParam.Name, param.Name) {
+								act.Parameters[i].Value = aiParam.Value
+								break
+							}
+						}
+					}
+					updatedActions = []WorkflowAppAction{act}
+					break
+				}
+
+			} else if strings.EqualFold(matchedApp.Name, "http") {
+				var method string
+				for _, aiParam := range action.Params {
+					if strings.EqualFold(aiParam.Name, "method") {
+						method = strings.ToUpper(aiParam.Value)
+						break
+					}
+				}
+
+				// find action by method name
+				var matchedHttpAction WorkflowAppAction
+				for _, act := range matchedApp.Actions {
+					if strings.EqualFold(act.Name, method) {
+						matchedHttpAction = act
+						break
+					}
+				}
+
+				// fill rest of the params
+				for i, param := range matchedHttpAction.Parameters {
+					if strings.EqualFold(param.Name, "method") {
 						continue
 					}
 					for _, aiParam := range action.Params {
+						if strings.EqualFold(aiParam.Name, "url") && strings.EqualFold(param.Name, "url") {
+							matchedHttpAction.Parameters[i].Value = aiParam.Value
+							continue
+						}
 						if strings.EqualFold(aiParam.Name, param.Name) {
-							act.Parameters[i].Value = aiParam.Value
-							foundParam = true
+							matchedHttpAction.Parameters[i].Value = aiParam.Value
 							break
 						}
 					}
-					if param.Name == "ssl_verify" && !foundParam {
-						act.Parameters[i].Value = "False"
-					}
 				}
-				updatedActions = []WorkflowAppAction{act}
-				break
-			}
-		}
+				updatedActions = []WorkflowAppAction{matchedHttpAction}
 
-		// Assign filtered app with its updated actions
-		matchedApp.Actions = updatedActions
-		filtered = append(filtered, matchedApp)
+			} else {
+				for _, act := range matchedApp.Actions {
+					if !strings.EqualFold(act.Name, action.ActionName) {
+						continue
+					}
+					for i, param := range act.Parameters {
+						foundParam := false
+						if strings.EqualFold(param.Name, "url") {
+							act.Parameters[i].Value = matchedApp.Link
+							foundParam = true
+							continue
+						}
+						for _, aiParam := range action.Params {
+							if strings.EqualFold(aiParam.Name, param.Name) {
+								act.Parameters[i].Value = aiParam.Value
+								foundParam = true
+								break
+							}
+						}
+						if param.Name == "ssl_verify" && !foundParam {
+							act.Parameters[i].Value = "False"
+						}
+					}
+					updatedActions = []WorkflowAppAction{act}
+					break
+				}
+			}
+
+			// Assign filtered app with its updated actions
+			matchedApp.Actions = updatedActions
+
+			editedAction := Action{
+				AppName:      matchedApp.Name,
+				AppVersion:   matchedApp.AppVersion,
+				Description:  matchedApp.Description,
+				AppID:        matchedApp.ID,
+				IsValid:      matchedApp.IsValid,
+				Sharing:      matchedApp.Sharing,
+				PrivateID:    matchedApp.PrivateID,
+				SmallImage:   matchedApp.SmallImage,
+				LargeImage:   matchedApp.LargeImage,
+				Environment:  input.Environment,
+				Name:         action.ActionName,
+				Label:        action.Label,
+				Parameters:   matchedApp.Actions[0].Parameters,
+				Public:       matchedApp.Public,
+				Generated:    matchedApp.Generated,
+				ReferenceUrl: matchedApp.ReferenceUrl,
+				ID:           uuid.NewV4().String(),
+			}
+
+			actions = append(actions, editedAction)
+		}
 	}
 
 	webhookImage := GetTriggerData("Webhook")
@@ -8690,44 +8737,44 @@ FINAL OUTPUT RULE
 		}
 	}
 
-	var actions []Action
-	var actionLabel string
-	actionLen := len(workflowJson.AIActions)
+	// var actions []Action
+	// var actionLabel string
+	// actionLen := len(workflowJson.AIActions)
 
-	for i, app := range filtered {
+	// for i, app := range filtered {
 
-		if len(app.Actions) == 0 {
-			continue
-		}
-		if i < actionLen {
-			actionLabel = workflowJson.AIActions[i].Label
-		} else {
-			actionLabel = app.Name + "_" + strconv.Itoa(i+1)
-		}
-		act := app.Actions[0]
+	// 	if len(app.Actions) == 0 {
+	// 		continue
+	// 	}
+	// 	if i < actionLen {
+	// 		actionLabel = workflowJson.AIActions[i].Label
+	// 	} else {
+	// 		actionLabel = app.Name + "_" + strconv.Itoa(i+1)
+	// 	}
+	// 	act := app.Actions[0]
 
-		action := Action{
-			AppName:      app.Name,
-			AppVersion:   app.AppVersion,
-			Description:  app.Description,
-			AppID:        app.ID,
-			IsValid:      app.IsValid,
-			Sharing:      app.Sharing,
-			PrivateID:    app.PrivateID,
-			SmallImage:   app.SmallImage,
-			LargeImage:   app.LargeImage,
-			Environment:  input.Environment,
-			Name:         act.Name,
-			Label:        actionLabel,
-			Parameters:   act.Parameters,
-			Public:       app.Public,
-			Generated:    app.Generated,
-			ReferenceUrl: app.ReferenceUrl,
-			ID:           uuid.NewV4().String(),
-		}
+	// 	action := Action{
+	// 		AppName:      app.Name,
+	// 		AppVersion:   app.AppVersion,
+	// 		Description:  app.Description,
+	// 		AppID:        app.ID,
+	// 		IsValid:      app.IsValid,
+	// 		Sharing:      app.Sharing,
+	// 		PrivateID:    app.PrivateID,
+	// 		SmallImage:   app.SmallImage,
+	// 		LargeImage:   app.LargeImage,
+	// 		Environment:  input.Environment,
+	// 		Name:         act.Name,
+	// 		Label:        actionLabel,
+	// 		Parameters:   act.Parameters,
+	// 		Public:       app.Public,
+	// 		Generated:    app.Generated,
+	// 		ReferenceUrl: app.ReferenceUrl,
+	// 		ID:           uuid.NewV4().String(),
+	// 	}
 
-		actions = append(actions, action)
-	}
+	// 	actions = append(actions, action)
+	// }
 
 	var branches []Branch
 
@@ -8789,7 +8836,6 @@ FINAL OUTPUT RULE
 	}
 
 	return workflow, nil
-
 }
 
 func buildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
