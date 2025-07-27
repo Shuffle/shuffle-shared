@@ -4570,6 +4570,8 @@ type AITriggerItem struct {
 	AppName string        `json:"app_name"`
 	Label   string        `json:"label"`
 	Params  []AIParamItem `json:"parameters"`
+	Edited  bool          `json:"edited"` // If the trigger was edited by the user
+	ID      string        `json:"id"`     // Unique identifier for the trigger
 }
 
 type AIActionItem struct {
@@ -4579,6 +4581,8 @@ type AIActionItem struct {
 	Label      string        `json:"label"`
 	URL        string        `json:"url"`
 	Params     []AIParamItem `json:"parameters"`
+	Edited     bool          `json:"edited"` // If the action was edited by the user
+	ID         string        `json:"id"`     // Unique identifier for the action
 }
 
 type AIParamItem struct {
