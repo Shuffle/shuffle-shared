@@ -4597,11 +4597,11 @@ type AppCategoryItem struct {
 
 type WorkflowEditAIRequest struct {
 	Query 			string `json:"query"`
-
     WorkflowID      string `json:"workflow_id"`      
-    OrgID           string `json:"org_id"`           
-    WorkflowYaml    string `json:"workflow_yaml"`    
+    OrgID           string `json:"org_id"`             
 	Environment     string `json:"environment"`
+	
+	Workflow        Workflow `json:"workflow"`  
 }
 
 type MinimalParameter struct {
