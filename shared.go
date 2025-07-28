@@ -31259,6 +31259,12 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
 		return
 	}
+	if workflow == nil {
+		log.Printf("[ERROR] Workflow with ID %s not found", editRequest.WorkflowID)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+		return
+	}
 
 	if workflow.OrgId != user.ActiveOrg.Id && len(workflow.OrgId) > 0 {
 		log.Printf("[ERROR] Workflow with ID %s is not owned by the current organization (%s). It belongs to %s", editRequest.WorkflowID, user.ActiveOrg.Id, workflow.OrgId)
