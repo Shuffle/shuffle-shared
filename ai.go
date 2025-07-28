@@ -8132,6 +8132,15 @@ func editWorkflowWithLLM(ctx context.Context, workflow *Workflow, user User, inp
 		log.Printf("[ERROR] Failed to get apps in Generate workflow: %s", err)
 		return nil, err
 	}
+	minimalWorkflow := buildMinimalWorkflow(workflow)
+	if minimalWorkflow == nil {
+		return nil, errors.New("failed to build minimal workflow")
+	}
+	workflowBytes, err := json.MarshalIndent(minimalWorkflow, "", "  ")
+	if err != nil {
+		return nil, errors.New("failed to convert minimal workflow to JSON")
+	}
+
 	var httpApp WorkflowApp // We use http app as the final fallback if in case we cannot find any app that matches the AI suggested app name
 	var builder strings.Builder
 
@@ -8433,7 +8442,19 @@ FINAL OUTPUT RULE
 	This should only be used when the user request is not a valid edit, is impossible given the context, or violates the rules above.
 	`, categoryString)
 
-	contentOutput, err := RunAiQuery(systemMessage, input.Query)
+	userPrompt := fmt.Sprintf(`Below is the current workflow in JSON format: 
+
+	--- WORKFLOW START ---
+	%s
+	--- WORKFLOW END ---
+
+	The user wants to edit the workflow with this request:
+	"%s"
+
+	Please return a valid updated JSON workflow response.
+	`, string(workflowBytes), input.Query)
+
+	contentOutput, err := RunAiQuery(systemMessage, userPrompt)
 	if err != nil {
 		// No need to retry, as RunAiQuery already has retry logic
 		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
@@ -8468,12 +8489,40 @@ FINAL OUTPUT RULE
 		return nil, errors.New("AI response is not a valid JSON object")
 	}
 
-	// var filtered []WorkflowApp
-
-	// lets sort the AI actions by their index to ensure the order is preserved
 	sort.Slice(workflowJson.AIActions, func(i, j int) bool {
 		return workflowJson.AIActions[i].Index < workflowJson.AIActions[j].Index
 	})
+
+	var foundEnv bool
+	envs, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+
+	if err == nil {
+		if input.Environment != "" {
+			// check if the provided environment is valid
+			for _, env := range envs {
+				if env.Name == input.Environment && !env.Archived {
+					foundEnv = true
+					break
+				}
+			}
+		}
+		if !foundEnv || input.Environment == "" {
+			for _, env := range envs {
+				if env.Default {
+					input.Environment = env.Name
+					foundEnv = true
+					break
+				}
+			}
+		}
+	} else {
+		if project.Environment == "cloud" {
+			input.Environment = "cloud"
+		} else {
+			input.Environment = "Shuffle"
+		}
+	}
+
 	var actions []Action
 	for _, action := range workflowJson.AIActions {
 		found := false
@@ -8655,7 +8704,7 @@ FINAL OUTPUT RULE
 				Environment:  input.Environment,
 				Name:         action.ActionName,
 				Label:        action.Label,
-				Parameters:   matchedApp.Actions[0].Parameters,
+				Parameters:   updatedActions[0].Parameters,
 				Public:       matchedApp.Public,
 				Generated:    matchedApp.Generated,
 				ReferenceUrl: matchedApp.ReferenceUrl,
@@ -8671,110 +8720,54 @@ FINAL OUTPUT RULE
 
 	var triggers []Trigger
 	for _, trigger := range workflowJson.AITriggers {
+		foundTrigger := false
 
-		switch strings.ToLower(trigger.AppName) {
-		case "webhook":
-			triggers = append(triggers, Trigger{
-				AppName:     "Webhook",
-				AppVersion:  "1.0.0",
-				Label:       trigger.Label,
-				TriggerType: "WEBHOOK",
-				ID:          uuid.NewV4().String(),
-				Description: "Custom HTTP input trigger",
-				LargeImage:  webhookImage,
-			})
-		case "schedule":
-			triggers = append(triggers, Trigger{
-				AppName:     "Schedule",
-				AppVersion:  "1.0.0",
-				Label:       trigger.Label,
-				TriggerType: "SCHEDULE",
-				ID:          uuid.NewV4().String(),
-				Description: "Schedule time trigger",
-				LargeImage:  scheduleImage,
-			})
-		default:
-			log.Printf("[WARN] Unsupported trigger app: %s, falling back to webhook", trigger.AppName)
-			triggers = append(triggers, Trigger{
-				AppName:     "Webhook",
-				AppVersion:  "1.0.0",
-				Label:       trigger.Label,
-				TriggerType: "WEBHOOK",
-				ID:          uuid.NewV4().String(),
-				Description: "Fallback to webhook for unsupported trigger",
-				LargeImage:  webhookImage,
-			})
-		}
-	}
-
-	var foundEnv bool
-	envs, err := GetEnvironments(ctx, user.ActiveOrg.Id)
-
-	if err == nil {
-		if input.Environment != "" {
-			// check if the provided environment is valid
-			for _, env := range envs {
-				if env.Name == input.Environment && !env.Archived {
-					foundEnv = true
+		if !trigger.Edited && workflow != nil {
+			// If not edited, we can try to reuse it
+			for _, existing := range workflow.Triggers {
+				if (trigger.ID != "" && strings.EqualFold(existing.ID, trigger.ID)) || strings.EqualFold(existing.AppName, trigger.AppName) {
+					triggers = append(triggers, existing)
+					foundTrigger = true
 					break
 				}
 			}
-		}
-		if !foundEnv || input.Environment == "" {
-			for _, env := range envs {
-				if env.Default {
-					input.Environment = env.Name
-					foundEnv = true
-					break
-				}
+		} else if trigger.Edited || !foundTrigger {
+
+			switch strings.ToLower(trigger.AppName) {
+			case "webhook":
+				triggers = append(triggers, Trigger{
+					AppName:     "Webhook",
+					AppVersion:  "1.0.0",
+					Label:       trigger.Label,
+					TriggerType: "WEBHOOK",
+					ID:          uuid.NewV4().String(),
+					Description: "Custom HTTP input trigger",
+					LargeImage:  webhookImage,
+				})
+			case "schedule":
+				triggers = append(triggers, Trigger{
+					AppName:     "Schedule",
+					AppVersion:  "1.0.0",
+					Label:       trigger.Label,
+					TriggerType: "SCHEDULE",
+					ID:          uuid.NewV4().String(),
+					Description: "Schedule time trigger",
+					LargeImage:  scheduleImage,
+				})
+			default:
+				log.Printf("[WARN] Unsupported trigger app: %s, falling back to webhook", trigger.AppName)
+				triggers = append(triggers, Trigger{
+					AppName:     "Webhook",
+					AppVersion:  "1.0.0",
+					Label:       trigger.Label,
+					TriggerType: "WEBHOOK",
+					ID:          uuid.NewV4().String(),
+					Description: "Fallback to webhook for unsupported trigger",
+					LargeImage:  webhookImage,
+				})
 			}
 		}
-	} else {
-		if project.Environment == "cloud" {
-			input.Environment = "cloud"
-		} else {
-			input.Environment = "Shuffle"
-		}
 	}
-
-	// var actions []Action
-	// var actionLabel string
-	// actionLen := len(workflowJson.AIActions)
-
-	// for i, app := range filtered {
-
-	// 	if len(app.Actions) == 0 {
-	// 		continue
-	// 	}
-	// 	if i < actionLen {
-	// 		actionLabel = workflowJson.AIActions[i].Label
-	// 	} else {
-	// 		actionLabel = app.Name + "_" + strconv.Itoa(i+1)
-	// 	}
-	// 	act := app.Actions[0]
-
-	// 	action := Action{
-	// 		AppName:      app.Name,
-	// 		AppVersion:   app.AppVersion,
-	// 		Description:  app.Description,
-	// 		AppID:        app.ID,
-	// 		IsValid:      app.IsValid,
-	// 		Sharing:      app.Sharing,
-	// 		PrivateID:    app.PrivateID,
-	// 		SmallImage:   app.SmallImage,
-	// 		LargeImage:   app.LargeImage,
-	// 		Environment:  input.Environment,
-	// 		Name:         act.Name,
-	// 		Label:        actionLabel,
-	// 		Parameters:   act.Parameters,
-	// 		Public:       app.Public,
-	// 		Generated:    app.Generated,
-	// 		ReferenceUrl: app.ReferenceUrl,
-	// 		ID:           uuid.NewV4().String(),
-	// 	}
-
-	// 	actions = append(actions, action)
-	// }
 
 	var branches []Branch
 
