@@ -8358,7 +8358,7 @@ This is a utility action — no HTTP calls.
 
 				{
 				"index": n,
-				"edited": true, // false if this action was NOT modified or newly added
+				"edited": true, // false if this action was NOT modified
 				"id": "sample-id", // do not stress about this, the system will generate a unique ID for you
 				"app_name": "string",  // e.g., "Jira"
 				"action_name": "custom_action", // always keep as "custom_action" except for the Shuffle Tools app where it can be "execute_python" or "run_ssh_command"
