@@ -4600,7 +4600,7 @@ type WorkflowEditAIRequest struct {
     WorkflowID      string `json:"workflow_id"`      
     OrgID           string `json:"org_id"`             
 	Environment     string `json:"environment"`
-	
+
 	Workflow        Workflow `json:"workflow"`  
 }
 
@@ -4613,7 +4613,7 @@ type MinimalAction struct {
 	AppName    string             `json:"app_name"`
 	ID         string             `json:"id"`
 	Label      string             `json:"label"`
-	Name       string             `json:"name"`
+	Name       string             `json:"action_name"`
 	Parameters []MinimalParameter `json:"parameters"`
 }
 

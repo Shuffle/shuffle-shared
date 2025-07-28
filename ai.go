@@ -8228,7 +8228,7 @@ Your final JSON must look like this:
 Trigger format
 
 {
-  "index": 0,
+  "index": 0, // start indexing from 0
   "edited": true_or_false, // true if this trigger was modified or newly added, false if it was not
   "id": "the-exact-id-of-the-trigger", // make sure you keep the same ID as is for the unchanged trigger
   "app_name": "Webhook",  // or "Schedule" and never invent a new trigger name
@@ -8241,7 +8241,7 @@ If the breakdown does not mention any trigger, do not add one when generating th
 Action format
 
 {
-  "index": 1,
+  "index": 1, // Start indexing from 0 only if this is the first action and there are no triggers present.  Otherwise, continue indexing from 1, 2, 3, and so on.
   "edited": true_or_false, // true if this action was modified or newly added, false if it was not
   "id": "the-exact-id-of-the-action", // make sure you keep the same ID as is for the unchanged action
   "app_name": "string",        // e.g., "Jira"
@@ -8259,6 +8259,8 @@ Every trigger and action must have a unique index:
 
 * Start with 0 for the first trigger or action
 * Increment by 1 for each subsequent trigger or action
+
+Keep in mind that the branch array is not part of the output, but you can use it to understand how the actions are connected, so that you can provide the correct order of these connected triggers and actions in the final JSON output via indexes.
 
 References
 
@@ -8357,7 +8359,7 @@ This is a utility action — no HTTP calls.
 			Action format
 
 				{
-				"index": n,
+				"index": n, // n denotes the order of the action in the workflow, so the n has to be unique
 				"edited": true, // false if this action was NOT modified
 				"id": "sample-id", // do not stress about this, the system will generate a unique ID for you
 				"app_name": "string",  // e.g., "Jira"
@@ -8433,7 +8435,7 @@ FINAL OUTPUT RULE
 	No markdown
 	No explanation
 	No commentary
-	No extra code blocks
+	Make sure you include the field names in the final JSON exactly as described in the instructions.
 	Just the valid updated JSON and nothing else.
 
 	If the request cannot be processed, return exactly this format:
@@ -8687,9 +8689,12 @@ FINAL OUTPUT RULE
 					break
 				}
 			}
-
-			// Assign filtered app with its updated actions
-			matchedApp.Actions = updatedActions
+			var parameters []WorkflowAppActionParameter
+			if len(updatedActions) > 0 {
+				parameters = updatedActions[0].Parameters
+			} else {
+				parameters = []WorkflowAppActionParameter{}
+			}
 
 			editedAction := Action{
 				AppName:      matchedApp.Name,
@@ -8704,7 +8709,7 @@ FINAL OUTPUT RULE
 				Environment:  input.Environment,
 				Name:         action.ActionName,
 				Label:        action.Label,
-				Parameters:   updatedActions[0].Parameters,
+				Parameters:   parameters,
 				Public:       matchedApp.Public,
 				Generated:    matchedApp.Generated,
 				ReferenceUrl: matchedApp.ReferenceUrl,
@@ -8723,7 +8728,6 @@ FINAL OUTPUT RULE
 		foundTrigger := false
 
 		if !trigger.Edited && workflow != nil {
-			// If not edited, we can try to reuse it
 			for _, existing := range workflow.Triggers {
 				if (trigger.ID != "" && strings.EqualFold(existing.ID, trigger.ID)) || strings.EqualFold(existing.AppName, trigger.AppName) {
 					triggers = append(triggers, existing)
