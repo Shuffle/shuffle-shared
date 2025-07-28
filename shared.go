@@ -31194,6 +31194,15 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		return
 	}
 
+	// Try to save the generated workflow to database
+	if output != nil && output.ID != "" {
+		err = SetWorkflow(ctx, *output, output.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed to save generated workflow to database: %s", err)
+			// Continue anyway - user still gets the workflow and can manually save later
+		}
+	}
+
 	appsJson, err := json.Marshal(output)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal apps in Generate workflow: %s", err)
