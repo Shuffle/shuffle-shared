@@ -7661,7 +7661,7 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 	var finalContentOutput string
 	var workflowJson AIWorkflowResponse
 	maxJsonRetries := 2
-	
+
 	for jsonAttempt := 0; jsonAttempt <= maxJsonRetries; jsonAttempt++ {
 		var currentInput string
 		if jsonAttempt == 0 {
@@ -7701,7 +7701,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 			// Success! Break out of retry loop
 			break
 		}
-		
+
 		// JSON parsing failed
 		if jsonAttempt < maxJsonRetries {
 			log.Printf("[WARN] AI response is not valid JSON on attempt %d, retrying... Error: %s", jsonAttempt+1, err)
@@ -8483,7 +8483,7 @@ FINAL OUTPUT RULE
 	var contentOutput string
 	var workflowJson AIWorkflowResponse
 	maxJsonRetries := 2
-	
+
 	for jsonAttempt := 0; jsonAttempt <= maxJsonRetries; jsonAttempt++ {
 		var currentUserPrompt string
 		if jsonAttempt == 0 {
@@ -8529,7 +8529,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 			// Success! Break out of retry loop
 			break
 		}
-		
+
 		// JSON parsing failed
 		if jsonAttempt < maxJsonRetries {
 			log.Printf("[WARN] AI response is not valid JSON on attempt %d, retrying... Error: %s", jsonAttempt+1, err)
