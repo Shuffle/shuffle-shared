@@ -7658,33 +7658,57 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 
 **Only the JSON. Nothing more.**
 `
-	contentOutput, err = RunAiQuery(systemMessage, contentOutput)
-	if err != nil {
-		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
-		return nil, err
-	}
-	if len(contentOutput) == 0 {
-		return nil, errors.New("AI response is empty")
-	}
-	// log.Printf("[DEBUG] AI response: %s", contentOutput)
-
-	contentOutput = strings.TrimSpace(contentOutput)
-	if strings.HasPrefix(contentOutput, "```json") {
-		contentOutput = strings.TrimPrefix(contentOutput, "```json")
-	}
-	if strings.HasPrefix(contentOutput, "```") {
-		contentOutput = strings.TrimPrefix(contentOutput, "```")
-	}
-	if strings.HasSuffix(contentOutput, "```") {
-		contentOutput = strings.TrimSuffix(contentOutput, "```")
-	}
-	contentOutput = strings.TrimSpace(contentOutput)
-
+	var finalContentOutput string
 	var workflowJson AIWorkflowResponse
-	err = json.Unmarshal([]byte(contentOutput), &workflowJson)
-	if err != nil {
-		log.Printf("[ERROR] AI response is not a valid JSON object: %s", err)
-		return nil, errors.New("AI response is not a valid JSON object")
+	maxJsonRetries := 2
+	
+	for jsonAttempt := 0; jsonAttempt <= maxJsonRetries; jsonAttempt++ {
+		var currentInput string
+		if jsonAttempt == 0 {
+			// First attempt - use original breakdown
+			currentInput = contentOutput
+		} else {
+			// Retry attempts - add JSON format reminder to the breakdown
+			currentInput = fmt.Sprintf(`%s
+
+IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you return ONLY valid JSON in the exact format specified in the system instructions. Do not include any explanations, markdown formatting, or extra text - just the pure JSON object.`, contentOutput)
+		}
+
+		finalContentOutput, err = RunAiQuery(systemMessage, currentInput)
+		if err != nil {
+			log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
+			return nil, err
+		}
+		if len(finalContentOutput) == 0 {
+			return nil, errors.New("AI response is empty")
+		}
+		// log.Printf("[DEBUG] AI response: %s", finalContentOutput)
+
+		finalContentOutput = strings.TrimSpace(finalContentOutput)
+		if strings.HasPrefix(finalContentOutput, "```json") {
+			finalContentOutput = strings.TrimPrefix(finalContentOutput, "```json")
+		}
+		if strings.HasPrefix(finalContentOutput, "```") {
+			finalContentOutput = strings.TrimPrefix(finalContentOutput, "```")
+		}
+		if strings.HasSuffix(finalContentOutput, "```") {
+			finalContentOutput = strings.TrimSuffix(finalContentOutput, "```")
+		}
+		finalContentOutput = strings.TrimSpace(finalContentOutput)
+
+		err = json.Unmarshal([]byte(finalContentOutput), &workflowJson)
+		if err == nil {
+			// Success! Break out of retry loop
+			break
+		}
+		
+		// JSON parsing failed
+		if jsonAttempt < maxJsonRetries {
+			log.Printf("[WARN] AI response is not valid JSON on attempt %d, retrying... Error: %s", jsonAttempt+1, err)
+		} else {
+			log.Printf("[ERROR] AI response is not a valid JSON object after %d attempts: %s", maxJsonRetries+1, err)
+			return nil, errors.New("AI response is not a valid JSON object after retries")
+		}
 	}
 
 	var filtered []WorkflowApp
@@ -8456,39 +8480,63 @@ FINAL OUTPUT RULE
 	Please return a valid updated JSON workflow response.
 	`, string(workflowBytes), input.Query)
 
-	contentOutput, err := RunAiQuery(systemMessage, userPrompt)
-	if err != nil {
-		// No need to retry, as RunAiQuery already has retry logic
-		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
-		return nil, err
-	}
-	if len(contentOutput) == 0 {
-		return nil, errors.New("AI response is empty")
-	}
-	err = checkIfRejected(contentOutput)
-	if err != nil {
-		return nil, err
-	}
-
-	// log.Printf("[DEBUG] AI response: %s", contentOutput)
-
-	contentOutput = strings.TrimSpace(contentOutput)
-	if strings.HasPrefix(contentOutput, "```json") {
-		contentOutput = strings.TrimPrefix(contentOutput, "```json")
-	}
-	if strings.HasPrefix(contentOutput, "```") {
-		contentOutput = strings.TrimPrefix(contentOutput, "```")
-	}
-	if strings.HasSuffix(contentOutput, "```") {
-		contentOutput = strings.TrimSuffix(contentOutput, "```")
-	}
-	contentOutput = strings.TrimSpace(contentOutput)
-
+	var contentOutput string
 	var workflowJson AIWorkflowResponse
-	err = json.Unmarshal([]byte(contentOutput), &workflowJson)
-	if err != nil {
-		log.Printf("[ERROR] AI response is not a valid JSON object: %s", err)
-		return nil, errors.New("AI response is not a valid JSON object")
+	maxJsonRetries := 2
+	
+	for jsonAttempt := 0; jsonAttempt <= maxJsonRetries; jsonAttempt++ {
+		var currentUserPrompt string
+		if jsonAttempt == 0 {
+			// First attempt - use original prompt
+			currentUserPrompt = userPrompt
+		} else {
+			// Retry attempts - add JSON format reminder
+			currentUserPrompt = fmt.Sprintf(`%s
+
+IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you return ONLY valid JSON in the exact format specified in the system instructions. Do not include any explanations, markdown formatting, or extra text - just the pure JSON object.`, userPrompt)
+		}
+
+		contentOutput, err = RunAiQuery(systemMessage, currentUserPrompt)
+		if err != nil {
+			// No need to retry, as RunAiQuery already has retry logic
+			log.Printf("[ERROR] Failed to run AI query in editWorkflowWithLLM: %s", err)
+			return nil, err
+		}
+		if len(contentOutput) == 0 {
+			return nil, errors.New("AI response is empty")
+		}
+		err = checkIfRejected(contentOutput)
+		if err != nil {
+			return nil, err
+		}
+
+		// log.Printf("[DEBUG] AI response: %s", contentOutput)
+
+		contentOutput = strings.TrimSpace(contentOutput)
+		if strings.HasPrefix(contentOutput, "```json") {
+			contentOutput = strings.TrimPrefix(contentOutput, "```json")
+		}
+		if strings.HasPrefix(contentOutput, "```") {
+			contentOutput = strings.TrimPrefix(contentOutput, "```")
+		}
+		if strings.HasSuffix(contentOutput, "```") {
+			contentOutput = strings.TrimSuffix(contentOutput, "```")
+		}
+		contentOutput = strings.TrimSpace(contentOutput)
+
+		err = json.Unmarshal([]byte(contentOutput), &workflowJson)
+		if err == nil {
+			// Success! Break out of retry loop
+			break
+		}
+		
+		// JSON parsing failed
+		if jsonAttempt < maxJsonRetries {
+			log.Printf("[WARN] AI response is not valid JSON on attempt %d, retrying... Error: %s", jsonAttempt+1, err)
+		} else {
+			log.Printf("[ERROR] AI response is not a valid JSON object after %d attempts: %s", maxJsonRetries+1, err)
+			return nil, errors.New("AI response is not a valid JSON object after retries")
+		}
 	}
 
 	sort.Slice(workflowJson.AIActions, func(i, j int) bool {
