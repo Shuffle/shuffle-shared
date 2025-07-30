@@ -1539,6 +1539,10 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	ip := GetRequestIp(request)
+
+	log.Printf("[AUDIT] Successful logout for user %s (%s) from IP address %s", userInfo.Username, userInfo.Id, ip)
+
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": false, "reason": "Successfully logged out"}`))
 }
@@ -5482,6 +5486,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
 		return
 	}
+
+	ip := GetRequestIp(request)
+
+	log.Printf("[AUDIT] Successfully updated user %s (%s) with IP: %s", foundUser.Username, foundUser.Id, ip)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
@@ -9467,8 +9475,8 @@ func CheckPasswordStrength(username, password string) error {
 
 	} else {
 		// Onprem~
-		if len(password) < 4 {
-			return errors.New("Minimum password length is 4.")
+		if len(password) < 11 {
+			return errors.New("Minimum password length is 10.")
 		}
 	}
 
@@ -12452,7 +12460,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	GetTutorials(ctx, *org, true)
 
-	log.Printf("[INFO] Successfully updated org %s (%s) with %d priorities", org.Name, org.Id, len(org.Priorities))
+	ip := GetRequestIp(request)
+
+	log.Printf("[AUDIT] Org %s (%s) updated by user %s (%s) from IP %s - priorities: %d", org.Name, org.Id, user.Username, user.Id, ip, len(org.Priorities))
+
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
 
@@ -13838,7 +13849,9 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[AUDIT] Handling login of username %s", data.Username)
+	ip := GetRequestIp(request)
+
+	log.Printf("[AUDIT] Handling login of username %s with IP: %s", data.Username, ip)
 	data.Username = strings.ToLower(strings.TrimSpace(data.Username))
 	err = CheckUsername(data.Username)
 	if err != nil {
@@ -14439,7 +14452,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[INFO] %s SUCCESSFULLY LOGGED IN with session %s", data.Username, userdata.Session)
+	log.Printf("[AUDIT] Login successful for user %s (%s) with IP: %s, session: %s", userdata.Username, userdata.Id, ip, userdata.Session)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(loginData))
