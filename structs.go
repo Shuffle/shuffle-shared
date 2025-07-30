@@ -946,13 +946,13 @@ type PartnerType struct {
 type Partner struct {
 	Id                string      `json:"id" datastore:"id"`
 	Name              string      `json:"name" datastore:"name"`
-	Description       string      `json:"description" datastore:"description"`
+	Description       string      `json:"description" datastore:"description,noindex"`
 	OrgId             string      `json:"org_id" datastore:"org_id"`
 	ImageUrl          string      `json:"image_url" datastore:"image_url,noindex"`
 	LandscapeImageUrl string      `json:"landscape_image_url" datastore:"landscape_image_url,noindex"`
 	ArticleUrl        string      `json:"article_url" datastore:"article_url,noindex"`
-	WebsiteUrl        string      `json:"website_url" datastore:"website_url,noindex"`
-	ContactEmail	 string      `json:"contact_email" datastore:"contact_email,noindex"`
+	WebsiteUrl        string      `json:"website_url" datastore:"website_url"`
+	ContactEmail	 string      `json:"contact_email" datastore:"contact_email"`
 	Expertise         []string    `json:"expertise" datastore:"expertise"`
 	Services          []string    `json:"services" datastore:"services"`
 	Solutions         []string    `json:"solutions" datastore:"solutions"`
@@ -972,7 +972,7 @@ type UsecaseInfo struct {
 	} `datastore:"companyInfo" json:"companyInfo"`
 	MainContent struct {
 		Title              string   `datastore:"title" json:"title"`
-		Description        string   `datastore:"description" json:"description"`
+		Description        string   `datastore:"description,noindex" json:"description"`
 		Categories         []string `datastore:"categories" json:"categories"`
 		PublicWorkflowID   string   `datastore:"PublicWorkflowId" json:"publicWorkflowId"`
 		SourceAppType      string   `datastore:"sourceAppType" json:"sourceAppType"`
@@ -981,9 +981,9 @@ type UsecaseInfo struct {
 	Navigation struct {
 		Items []struct {
 			Name    string   `datastore:"name" json:"name"`
-			Content []string `datastore:"content" json:"content"`
-		} `datastore:"items" json:"items"`
-	} `datastore:"navigation" json:"navigation"`
+			Content []string `datastore:"content,noindex" json:"content"`
+		} `datastore:"items,noindex" json:"items"`
+	} `datastore:"navigation,noindex" json:"navigation"`
 	Public  bool  `datastore:"public" json:"public"`
 	Edited  int64 `datastore:"edited" json:"edited"`
 	Created int64 `datastore:"created" json:"created"`
