@@ -7718,19 +7718,31 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		aiURL := strings.TrimSpace(strings.ToLower(action.URL))
 		aiAppName := normalizeName(action.AppName)
 
-		// 1) Lets try mactching with app names
+		// 1) Enhanced app discovery, so first try local and then Algolia 
 		var matchedApp WorkflowApp
 		foundApp := false
 		if aiAppName != "" {
-			for _, app := range apps {
-				normA := normalizeName(app.Name)
-				if normA == "" {
-					continue // Skip ghost apps with no name
-				}
-				if strings.EqualFold(normA, aiAppName) || (strings.Contains(normA, aiAppName) || strings.Contains(aiAppName, normA)) {
-					matchedApp = app
-					foundApp = true
-					break
+			// First try fuzzy search in database
+			foundApps, err := FindWorkflowAppByName(ctx, action.AppName)
+			if err == nil && len(foundApps) > 0 {
+				matchedApp = foundApps[0]
+				foundApp = true
+			} else {
+				// Fallback to Algolia search for public apps
+				algoliaApp, err := HandleAlgoliaAppSearch(ctx, action.AppName)
+				if err == nil && len(algoliaApp.ObjectID) > 0 {
+					// Get the actual app from Algolia result
+					discoveredApp := &WorkflowApp{}
+					standalone := os.Getenv("STANDALONE") == "true"
+					if standalone {
+						discoveredApp, err = GetSingulApp("", algoliaApp.ObjectID)
+					} else {
+						discoveredApp, err = GetApp(ctx, algoliaApp.ObjectID, user, false)
+					}
+					if err == nil {
+						matchedApp = *discoveredApp
+						foundApp = true
+					}
 				}
 			}
 		}
@@ -8461,6 +8473,7 @@ FINAL OUTPUT RULE
 	No commentary
 	Make sure you include the field names in the final JSON exactly as described in the instructions.
 	Just the valid updated JSON and nothing else.
+	Make sure you understand the cascading effects of your changes on the workflow structure, especially with respect to branches and indexes. Whenever you add, remove an action or trigger, ensure that the branches are updated accordingly to maintain a valid workflow. No duplicates, no missing connections.
 
 	If the request cannot be processed, return exactly this format:
 	REJECTED
@@ -8591,19 +8604,31 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 			aiURL := strings.TrimSpace(strings.ToLower(action.URL))
 			aiAppName := normalizeName(action.AppName)
 
-			// 1) Lets try mactching with app names
+			// 1) Enhanced app discovery, so first try local and then Algolia 
 			var matchedApp WorkflowApp
 			foundApp := false
 			if aiAppName != "" {
-				for _, app := range apps {
-					normA := normalizeName(app.Name)
-					if normA == "" {
-						continue // Skip ghost apps with no name
-					}
-					if strings.EqualFold(normA, aiAppName) || (strings.Contains(normA, aiAppName) || strings.Contains(aiAppName, normA)) {
-						matchedApp = app
-						foundApp = true
-						break
+				// First try fuzzy search in database
+				foundApps, err := FindWorkflowAppByName(ctx, action.AppName)
+				if err == nil && len(foundApps) > 0 {
+					matchedApp = foundApps[0]
+					foundApp = true
+				} else {
+					// Fallback to Algolia search for public apps
+					algoliaApp, err := HandleAlgoliaAppSearch(ctx, action.AppName)
+					if err == nil && len(algoliaApp.ObjectID) > 0 {
+						// Get the actual app from Algolia result
+						discoveredApp := &WorkflowApp{}
+						standalone := os.Getenv("STANDALONE") == "true"
+						if standalone {
+							discoveredApp, err = GetSingulApp("", algoliaApp.ObjectID)
+						} else {
+							discoveredApp, err = GetApp(ctx, algoliaApp.ObjectID, user, false)
+						}
+						if err == nil {
+							matchedApp = *discoveredApp
+							foundApp = true
+						}
 					}
 				}
 			}
