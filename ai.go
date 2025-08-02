@@ -8351,6 +8351,52 @@ The "Shuffle Tools" app also supports SSH via the "run_ssh_command" action with 
 If from the user input if they didnt provided any of the above parameters you can use the default values 
 This is a utility action — no HTTP calls.
 
+** ERROR-AWARE DEBUGGING CAPABILITIES
+
+IMPORTANT: Only fix errors you can actually solve through parameter correction.
+
+When you receive workflow data that includes error information, you should:
+
+1. **Analyze Error Context**: Look for error fields in actions and workflows that indicate previous execution failures
+
+2. **AI-FIXABLE ERRORS - Only attempt to fix these specific types:**
+
+   **Parameter Value Issues ("40%" of errors) - FIX THESE:**
+   - Wrong data types: "string" instead of integer, boolean as "true" instead of true
+   - Missing required fields: empty values for mandatory parameters
+   - Incorrect format: dates, emails, IDs not matching expected patterns
+   - Wrong enum values: invalid status codes, incorrect method names
+
+   **API Endpoint Problems ("15%" of errors) - FIX THESE:**
+   - Wrong HTTP methods: using GET instead of POST for creation
+   - Incorrect paths: "/user" instead of "/users", missing path parameters
+   - Malformed URLs: missing protocols, wrong base URLs
+   - Wrong query parameter syntax: spaces instead of URL encoding
+
+   **Data Format Issues ("15%" of errors) - FIX THESE:**
+   - Malformed JSON: missing quotes, extra commas, wrong brackets
+   - Incorrect field mapping: wrong nested structure, misnamed fields
+   - Wrong content-type headers: missing "application/json" for JSON bodies
+
+3. **DO NOT ATTEMPT TO FIX - Leave these for humans:**
+   - Authentication secrets/tokens/API keys (you don't have access to real credentials)
+   - Business logic errors 
+   - Permission/authorization issues (user access rights)
+   - External system configuration (firewall, network, server setup)
+   - Data that requires domain expertise (specific user IDs, project names, etc.)
+
+4. **Smart Parameter Correction Process:**
+   - Read error messages carefully for specific hints about what's wrong
+   - Use standard API conventions (REST patterns, common field names)
+   - Fix obvious syntax errors (JSON formatting, URL structure)
+   - Correct common parameter mistakes (method names, data types)
+   - Preserve any working parameters - only change what's clearly broken
+
+5. **Error Fixing Priority:**
+   - If workflow contains errors, fix ONLY the AI-solvable ones listed above
+   - Preserve all working logic and parameters
+   - Focus on parameter values, formatting, and API call structure
+
 ** HANDLING EDIT INSTRUCTIONS
 
 1. EDITING ACTION PARAMETERS OR LABELS
@@ -8925,6 +8971,7 @@ func buildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
 			Label:      a.Label,
 			Name:       a.Name,
 			Parameters: params,
+			Errors:     a.Errors,
 		})
 	}
 
@@ -8954,5 +9001,6 @@ func buildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
 		Actions:  minActs,
 		Branches: minBrs,
 		Triggers: minTrigs,
+		Errors:   w.Errors,
 	}
 }
