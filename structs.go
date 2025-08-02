@@ -4615,6 +4615,7 @@ type MinimalAction struct {
 	Label      string             `json:"label"`
 	Name       string             `json:"action_name"`
 	Parameters []MinimalParameter `json:"parameters"`
+	Errors     []string           `json:"errors,omitempty"`
 }
 
 type MinimalTrigger struct {
@@ -4634,4 +4635,5 @@ type MinimalWorkflow struct {
 	Actions  []MinimalAction  `json:"actions"`
 	Branches []MinimalBranch  `json:"branches"`
 	Triggers []MinimalTrigger `json:"triggers"`
+	Errors   []string         `json:"errors,omitempty"`
 }
