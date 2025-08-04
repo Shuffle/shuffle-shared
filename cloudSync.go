@@ -905,12 +905,12 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	}
 
 	// Allows partners and POV users to run workflows without limits
-	if validationOrg.LeadInfo.POV || validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.ServicePartner {
+	if validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.ChannelPartner || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.ServicePartner {
 		return validationOrg, nil
 	}
 
-	// If enterprise customer then don't block them
-	if validationOrg.LeadInfo.Customer && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+	// If enterprise customer or pov then don't block them
+	if (validationOrg.LeadInfo.Customer || validationOrg.LeadInfo.POV) && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
 		return validationOrg, nil
 	}
 
