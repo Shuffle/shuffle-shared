@@ -6362,6 +6362,11 @@ category singul: `
 		}
 	}
 
+	if len(appname) == 0 || appname == "Shuffle AI" {
+		appname = "openai"
+		runOpenaiRequest = true
+	}
+
 	// If the fields are edited, don't forget to edit the AgentDecision struct 
 	// FIXME: Using a different reference format as these are common to reasoning models
 	// such as: 
@@ -6448,7 +6453,7 @@ Decision Field Rules:
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (5): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (5): Failed initial AI request. Contact support@shuffler.io if this persists."}`),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6465,6 +6470,8 @@ Decision Field Rules:
 	aiNode.AppID = "5d19dd82517870c68d40cacad9b5ca91"
 	aiNode.AppName = "openai"
 	aiNode.Name = "post_generate_a_chat_response"
+
+	//aiNode.Environment = "cloud"
 
 	// FIXME: Resetting auth as it should auto-pick (if possible)
 	aiNode.AuthenticationId = ""
@@ -7042,6 +7049,60 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(http.StatusInternalServerError)
 		resp.Write([]byte(`{"success": false, "reason": "No workflow found for this ID"}`))
 		return
+	}
+
+	// Ensure triggers are started
+	for triggerIndex, trigger := range workflow.Triggers {
+		if trigger.ID == "" {
+			continue
+		}
+
+		if trigger.TriggerType == "SCHEDULE" {
+			err = startSchedule(workflow.Triggers[triggerIndex], user.ApiKey, *workflow)
+			if err == nil {
+				workflow.Triggers[triggerIndex].Status = "Running"
+			}
+
+		} else if trigger.TriggerType == "WEBHOOK" {
+
+			hook := Hook{
+				Status: "running",
+				Running: true,
+
+				Id:        trigger.ID,
+				Start:     workflow.Start,
+				Workflows: []string{workflow.ID},
+				Info: Info{
+					Name:        "",
+					Description: "",
+					Url:         fmt.Sprintf("/api/v1/hooks/webhook_%s", trigger.ID),
+				},
+				Type:   "webhook",
+				Owner:  workflow.OrgId,
+				Actions: []HookAction{
+					HookAction{
+						Type:  "workflow",
+						Name:  "",
+						Id:    workflow.ID,
+						Field: "",
+					},
+				},
+				OrgId:          workflow.OrgId,
+				Environment:    trigger.Environment,
+				Auth:           "",
+				CustomResponse: "",
+				Version:        "",
+				VersionTimeout: 0,
+			}
+
+			err := SetHook(ctx, hook)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting auto-hook for trigger %s in workflow %s: %s", trigger.ID, workflow.ID, err)
+				continue
+			}
+
+			workflow.Triggers[triggerIndex].Status = "Running"
+		}
 	}
 
 	workflow.OrgId = user.ActiveOrg.Id

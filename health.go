@@ -2781,7 +2781,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 								continue
 							}
 
-							errorMsg := fmt.Sprintf("Parameter %s in Action %s is empty", param.Name, action.Label)
+							errorMsg := fmt.Sprintf("Required parameter '%s' in Action %s is empty", param.Name, action.Label)
 							if !ArrayContains(workflow.Errors, errorMsg) {
 								workflow.Errors = append(workflow.Errors, errorMsg)
 							}
