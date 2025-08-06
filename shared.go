@@ -31139,11 +31139,11 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		return
 	}
 
-	if !user.SupportAccess {
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
-		return
-	}
+	// if !user.SupportAccess {
+	// 	resp.WriteHeader(403)
+	// 	resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+	// 	return
+	// }
 
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to generate LLM workflows: %s (%s)", user.Username, user.Id)
