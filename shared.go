@@ -31153,11 +31153,14 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 	}
 
 	// Check AI usage limits for workflow generation
-	aiUsageCount, err := GetCacheKeyCount(ctx, user.ActiveOrg.Id, "ai_executions")
-	if err != nil {
-		log.Printf("[WARNING] Failed to get AI usage count for org %s: %s", user.ActiveOrg.Id, err)
-		// Shall we continue anyway if we can't check the count ?
-	} else if aiUsageCount >= 100 {
+	cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
+	aiUsageData, err := GetCache(ctx, cacheKey)
+	aiUsageCount := 0
+	if err == nil && aiUsageData != nil {
+		aiUsageCount, _ = strconv.Atoi(fmt.Sprintf("%v", aiUsageData)) // Is converting interface{} to int like this fine? :)
+	}
+	
+	if aiUsageCount >= 100 {
 		log.Printf("[AUDIT] Org %s (%s) has exceeded AI workflow generation limit (%d/100)", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount)
 		resp.WriteHeader(429)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have exceeded your AI workflow generation limit (%d/100). This limit resets monthly. Contact support@shuffler.io if you need more credits."}`, aiUsageCount)))
@@ -31260,11 +31263,14 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	// Check AI usage limits for workflow generation
-	aiUsageCount, err := GetCacheKeyCount(ctx, user.ActiveOrg.Id, "ai_executions")
-	if err != nil {
-		log.Printf("[WARNING] Failed to get AI usage count for org %s: %s", user.ActiveOrg.Id, err)
-		// Shall we continue anyway if we can't check the count ?
-	} else if aiUsageCount >= 100 {
+	cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
+	aiUsageData, err := GetCache(ctx, cacheKey)
+	aiUsageCount := 0
+	if err == nil && aiUsageData != nil {
+		aiUsageCount, _ = strconv.Atoi(fmt.Sprintf("%v", aiUsageData)) 
+	}
+	
+	if aiUsageCount >= 100 {
 		log.Printf("[AUDIT] Org %s (%s) has exceeded AI workflow generation limit (%d/100)", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount)
 		resp.WriteHeader(429)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have exceeded your AI workflow generation limit (%d/100). This limit resets monthly. Contact support@shuffler.io if you need more credits."}`, aiUsageCount)))
