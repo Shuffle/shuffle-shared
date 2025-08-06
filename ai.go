@@ -8615,6 +8615,10 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		}
 	}
 
+	// Increment AI usage count after successful generation
+	IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
+	log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
+
 	sort.Slice(workflowJson.AIActions, func(i, j int) bool {
 		return workflowJson.AIActions[i].Index < workflowJson.AIActions[j].Index
 	})
