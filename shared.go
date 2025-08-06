@@ -31258,6 +31258,21 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
+
+	// Check AI usage limits for workflow generation
+	aiUsageCount, err := GetCacheKeyCount(ctx, user.ActiveOrg.Id, "ai_executions")
+	if err != nil {
+		log.Printf("[WARNING] Failed to get AI usage count for org %s: %s", user.ActiveOrg.Id, err)
+		// Shall we continue anyway if we can't check the count ?
+	} else if aiUsageCount >= 100 {
+		log.Printf("[AUDIT] Org %s (%s) has exceeded AI workflow generation limit (%d/100)", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount)
+		resp.WriteHeader(429)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have exceeded your AI workflow generation limit (%d/100). This limit resets monthly. Contact support@shuffler.io if you need more credits."}`, aiUsageCount)))
+		return
+	} else {
+		log.Printf("[AUDIT] Org %s (%s) AI usage: %d/100 - allowing workflow generation", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount)
+	}
+
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Failed to read body in runActionAI: %s", err)
