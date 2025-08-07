@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"sort"
 	"sync"
+	"unicode"
 
 	scheduler "cloud.google.com/go/scheduler/apiv1"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
@@ -12540,6 +12541,211 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
 
+}
+
+func HandleUserMails(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting User Mails request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in user mails: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if !user.SupportAccess {
+		log.Printf("[WARNING] User %s (%s) is not support user, can't call this API", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Not support user"}`))
+		return
+	}
+
+	// get the org id from the api request
+	location := strings.Split(request.URL.String(), "/")
+	if len(location) < 5 {
+		log.Printf("[WARNING] Path too short: %d", len(location))
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	orgId := location[4]
+	if len(orgId) == 0 {
+		log.Printf("[WARNING] Org ID is empty in request: %s", request.URL.String())
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	org, err := GetOrg(ctx, orgId)
+	log.Printf("err is: %v", err)
+	if err != nil {
+		log.Printf("[WARNING] Organization doesn't exist: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	yourApps := "- Connecting "
+
+	email := org.Name
+	orgName := ""
+
+	if strings.Contains(email, "@") {
+		parts := strings.Split(email, "@")
+		localPart := parts[0]
+		domainPart := parts[1]
+
+		domainLower := strings.ToLower(domainPart)
+
+		if strings.Contains(domainLower, "gmail.com") ||
+			strings.Contains(domainLower, "yahoo.com") ||
+			strings.Contains(domainLower, "aol.com") ||
+			strings.Contains(domainLower, "outlook.com") ||
+			strings.Contains(domainLower, "infopercept.com") ||
+			strings.Contains(domainLower, "163.com") ||
+			strings.Contains(domainLower, "qq.com") ||
+			strings.Contains(domainLower, "pm.me") ||
+			strings.Contains(domainLower, "hotmail.") ||
+			strings.Contains(domainLower, "icloud") ||
+			strings.Contains(domainLower, "yopmail.com") ||
+			strings.Contains(domainLower, "mvpalace.com") {
+			orgName = localPart
+		} else {
+			company := strings.Split(domainLower, ".")[0]
+			if len(company) > 0 {
+				runes := []rune(company)
+				runes[0] = unicode.ToUpper(runes[0])
+				orgName = string(runes)
+			}
+		}
+	} else {
+		orgName = org.Name
+	}
+
+	subject := fmt.Sprintf("Shuffle and %s", orgName)
+
+	frameworkItems := []string{
+		org.SecurityFramework.Cases.Name,
+		org.SecurityFramework.SIEM.Name,
+		org.SecurityFramework.Communication.Name,
+		org.SecurityFramework.EDR.Name,
+		org.SecurityFramework.Intel.Name,
+	}
+
+	for _, item := range frameworkItems {
+		if item != "" {
+			appName := strings.ReplaceAll(strings.ReplaceAll(item, "_", " "), " API", "")
+			yourApps += appName + ", "
+		}
+	}
+
+	if len(yourApps) > 2 {
+		yourApps = strings.TrimSuffix(yourApps, ", ")
+	}
+
+	// Build usecases
+	usecases := "- "
+	for _, item := range org.Priorities {
+		if item.Type == "usecase" && item.Active {
+			name := strings.Replace(item.Name, "Suggested Usecase: ", "", 1)
+			usecases += name + ", "
+		}
+	}
+
+	if strings.HasSuffix(usecases, ", ") {
+		usecases = strings.TrimSuffix(usecases, ", ")
+	}
+
+	if len(yourApps) <= 15 {
+		yourApps = ""
+	}
+	if len(usecases) <= 30 {
+		usecases = ""
+	}
+
+	// workflowAmount := "a few"
+	admins := []string{}
+	lastLogin := int64(0)
+
+	users := org.Users
+
+	for _, user := range users {
+		if strings.Contains(user.Username, "shuffler") {
+			continue
+		}
+
+		if user.Role == "admin" && !ArrayContains(admins, user.Username) {
+			admins = append(admins, user.Username)
+		}
+
+		for _, login := range user.LoginInfo {
+			if login.Timestamp > lastLogin {
+				lastLogin = login.Timestamp
+			}
+		}
+	}
+
+	if len(yourApps) > 5 && !strings.HasSuffix(yourApps, "\n") {
+		yourApps += "\n"
+	}
+
+	if len(usecases) > 5 && !strings.HasSuffix(usecases, "\n") {
+		usecases += "\n"
+	}
+
+	personalizedMessage := `Hello,
+
+I noticed you've been exploring Shuffle and setting up some workflows - that's awesome! It seems like you might not be getting everything you’re looking for just yet, and I’d love to help. Would you be open to a quick chat?
+
+I can walk you through things like configuring and authenticating your apps, set up multi-tenancy, and create custom use cases.
+
+PS: In case you prefer to talk over a call, can you share some good times that work for you? Or you can always book a call here: https://shuffler.io/ayush`
+
+	if len(yourApps) > 0 {
+		var usecasePart string
+		if len(usecases) > 0 {
+			usecasePart = fmt.Sprintf(" and create custom use cases like %s", usecases)
+		} else {
+			usecasePart = " and creating custom use cases"
+		}
+		personalizedMessage = fmt.Sprintf(`Hello,
+
+I noticed you've been exploring Shuffle and setting up some workflows - that's awesome! It seems like you might not be getting everything you’re looking for just yet, and I’d love to help. Would you be open to a quick chat?
+
+I can walk you through things like configuring %s and authenticating your apps, setting up multi-tenancy%s.
+
+PS: In case you prefer to talk over a call, can you share some good times that work for you? Or you can always book a call here: https://shuffler.io/ayush 
+`, yourApps, usecasePart)
+	}
+
+	body := personalizedMessage
+
+	err = sendMailSendgrid(admins, subject, body, false, []string{"platform@shuffler.io"})
+	if err != nil {
+		log.Printf("[ERROR] Failed to send email: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to send email"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "reason": "Successfully sent email"}`))
 }
 
 func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool, BccAddresses []string) error {
