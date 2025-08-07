@@ -1670,13 +1670,60 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		percentage := (totalExecutions / limit) * 100
 
 		var currentThreshold int64
-		if percentage >= 100 {
-			currentThreshold = int64(100 + ((int(percentage)-100)/50)*50)
+		if percentage >= 50 {
+			currentThreshold = int64((int(percentage) / 50) * 50)
 		}
 
-		if currentThreshold >= 100 && currentThreshold > validationOrgStatistics.LastUsageAlertThreshold {
+		// If 50% and 100% alert are already set by user, and alert is send for that threshold, then skip
+		for _, AlertThreshold := range validationOrg.Billing.AlertThreshold {
+			if AlertThreshold.Percentage == int(currentThreshold) && AlertThreshold.Email_send {
+				log.Printf("[DEBUG] Alert threshold for %d%% already set and email sent for org %s", currentThreshold, validationOrg.Id)
+				return validationOrgStatistics
+			}
+		}
+
+		if currentThreshold >= 50 && currentThreshold > validationOrgStatistics.LastUsageAlertThreshold {
+
+			allAdmins := []string{}
+			firstAdmin := ""
+			allShufflerEmails := true
+
+			for _, user := range org.Users {
+				if user.Role == "admin" {
+					allAdmins = append(allAdmins, user.Username)
+
+					if firstAdmin == "" && !strings.Contains(user.Username, "shuffler.io") {
+						firstAdmin = user.Username
+					}
+
+					if !strings.Contains(user.Username, "shuffler.io") {
+						allShufflerEmails = false
+					}
+				}
+			}
+
+			if allShufflerEmails && firstAdmin == "" && len(allAdmins) > 0 {
+				firstAdmin = allAdmins[0]
+			}
+
+			newEmailList := []string{}
+
+			if currentThreshold == 100 || currentThreshold == 50 {
+				newEmailList = allAdmins
+			} else {
+				newEmailList = []string{"jay@shuffler.io", "support@shuffler.io"}
+			}
+
+			if !ArrayContains(newEmailList, "jay@shuffler.io") {
+				newEmailList = append(newEmailList, "jay@shuffler.io")
+			}
+
+			if !ArrayContains(newEmailList, "support@shuffler.io") {
+				newEmailList = append(newEmailList, "support@shuffler.io")
+			}
+
 			// send mail use different subject line as it will sent only to the team
-			Subject := fmt.Sprintf("[Support] Exceeded app executions for org %s (%s)", validationOrg.Name, validationOrg.Id)
+			Subject := fmt.Sprintf("[Shuffle]: You've reached the app-runs threshold limit for your account %s", firstAdmin)
 
 			totalAppExecutions := validationOrgStatistics.MonthlyAppExecutions + validationOrgStatistics.MonthlyChildAppExecutions
 			AppRunsPercentage := float64(totalAppExecutions) / float64(validationOrg.SyncFeatures.AppExecutions.Limit) * 100
@@ -1687,10 +1734,11 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				"app_runs_usage_percentage": int64(AppRunsPercentage),
 				"org_name":                  validationOrg.Name,
 				"org_id":                    validationOrg.Id,
+				"admin_email":               firstAdmin,
 			}
 
 			err = sendMailSendgridV2(
-				[]string{"support@shuffler.io", "jay@shuffler.io"},
+				newEmailList,
 				Subject,
 				substitutions,
 				false,
