@@ -31239,12 +31239,30 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 	}
 
 	// Check AI usage limits for workflow generation
-	cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
-	aiUsageData, err := GetCache(ctx, cacheKey)
-	aiUsageCount := 0
-	if err == nil && aiUsageData != nil {
-		aiUsageCount, _ = strconv.Atoi(fmt.Sprintf("%v", aiUsageData)) // Is converting interface{} to int like this fine? :)
+	// So i think we need both: MonthlyAIUsage (dumped from cache) + current cache count (pending)
+	orgStats, err := GetOrgStatistics(ctx, user.ActiveOrg.Id)
+	monthlyUsage := int64(0)
+	if err == nil && orgStats != nil {
+		monthlyUsage = orgStats.MonthlyAIUsage
+	} else {
+		log.Printf("[DEBUG] Failed to get org statistics for AI usage: %v", err)
 	}
+
+	// Get current cache count (pending increments that haven't been dumped yet)
+	cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
+	currentCacheCount := 0
+	if cacheData, cacheErr := GetCache(ctx, cacheKey); cacheErr == nil && cacheData != nil {
+		if byteData, ok := cacheData.([]uint8); ok {
+			dataStr := string(byteData)
+			if parsedInt, parseErr := strconv.ParseInt(dataStr, 16, 64); parseErr == nil {
+				currentCacheCount = int(parsedInt)
+			}
+		}
+	}
+
+	// Total usage = dumped monthly usage + pending cache count
+	aiUsageCount := int(monthlyUsage) + currentCacheCount
+	log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/100", monthlyUsage, currentCacheCount, aiUsageCount)
 	
 	if aiUsageCount >= 100 {
 		log.Printf("[AUDIT] Org %s (%s) has exceeded AI workflow generation limit (%d/100)", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount)
@@ -31296,7 +31314,6 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
-	// Try to save the generated workflow to database
 	if output != nil && output.ID != "" {
 		err = SetWorkflow(ctx, *output, output.ID)
 		if err != nil {
@@ -31349,21 +31366,30 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	// Check AI usage limits for workflow generation
-	cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
-	aiUsageData, err := GetCache(ctx, cacheKey)
-	aiUsageCount := 0
-	if err == nil && aiUsageData != nil {
-		aiUsageCount, _ = strconv.Atoi(fmt.Sprintf("%v", aiUsageData)) 
-	}
-	
-	if aiUsageCount >= 100 {
-		log.Printf("[AUDIT] Org %s (%s) has exceeded AI workflow generation limit (%d/100)", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount)
-		resp.WriteHeader(429)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have exceeded your AI workflow generation limit (%d/100). This limit resets monthly. Contact support@shuffler.io if you need more credits."}`, aiUsageCount)))
-		return
+	// So i think we need both: MonthlyAIUsage (dumped from cache) + current cache count (pending)
+	orgStats, err := GetOrgStatistics(ctx, user.ActiveOrg.Id)
+	monthlyUsage := int64(0)
+	if err == nil && orgStats != nil {
+		monthlyUsage = orgStats.MonthlyAIUsage
 	} else {
-		log.Printf("[AUDIT] Org %s (%s) AI usage: %d/100 - allowing workflow generation", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount)
+		log.Printf("[DEBUG] Failed to get org statistics for AI usage: %v", err)
 	}
+
+	// Get current cache count (pending increments that haven't been dumped yet)
+	cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
+	currentCacheCount := 0
+	if cacheData, cacheErr := GetCache(ctx, cacheKey); cacheErr == nil && cacheData != nil {
+		if byteData, ok := cacheData.([]uint8); ok {
+			dataStr := string(byteData)
+			if parsedInt, parseErr := strconv.ParseInt(dataStr, 16, 64); parseErr == nil {
+				currentCacheCount = int(parsedInt)
+			}
+		}
+	}
+
+	// Total usage = dumped monthly usage + pending cache count
+	aiUsageCount := int(monthlyUsage) + currentCacheCount
+	log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/100", monthlyUsage, currentCacheCount, aiUsageCount)
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
