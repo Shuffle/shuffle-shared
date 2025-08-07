@@ -18998,7 +18998,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	var tmpData []CacheKeyData
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling in setvalue: %s", err)
+		log.Printf("[WARNING] Failed unmarshalling in setvalue (1): %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -19102,7 +19102,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			log.Printf("Path too short: %d", len(location))
-			resp.WriteHeader(401)
+			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
@@ -19110,11 +19110,13 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
+	//log.Printf("DATA: %s", string(body))
+	// Check if body contains "key": <number> and replace it, as it should be a string 
 	var tmpData CacheKeyData
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling in setvalue: %s", err)
-		resp.WriteHeader(401)
+		log.Printf("[WARNING] Failed unmarshalling in setvalue (2): %s", err)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
