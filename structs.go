@@ -1118,6 +1118,11 @@ type DatastoreCategoryUpdate struct {
 	Settings DatastoreCategorySettings `json:"settings" datastore:"settings"`
 }
 
+type DatastoreKeyMini struct {
+	Key      string `json:"key" datastore:"key"`
+	Existed  bool   `json:"existed" datastore:"existed"` // If the key existed before the update
+}
+
 type CacheKeyData struct {
 	Success       bool   `json:"success" datastore:"Success"`
 	WorkflowId    string `json:"workflow_id," datastore:"WorkflowId"`

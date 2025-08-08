@@ -18428,6 +18428,7 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, fmt.Sprintf("datastore_category_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, cacheKey))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, orgId))
 
@@ -19041,6 +19042,8 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 	mainCategory := ""
 	for itemIndex, _ := range tmpData {
+		tmpData[itemIndex].OrgId = user.ActiveOrg.Id
+
 		mainCategory = tmpData[itemIndex].Category
 		if len(user.ActiveOrg.Id) == 0 {
 			break
@@ -19054,7 +19057,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[AUDIT] Running bulk upload for org %s to category '%s'", user.ActiveOrg.Id, mainCategory)
 
-	err = SetDatastoreKeyBulk(ctx, tmpData)
+	existingInfo, err := SetDatastoreKeyBulk(ctx, tmpData)
 	if err != nil {
 		log.Printf("[ERROR] Failed to set %d datastore key(s) for org %s", len(tmpData), user.ActiveOrg.Id)
 		resp.WriteHeader(500)
@@ -19065,10 +19068,12 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Successfully set %d datastore keys (or less) for org '%s' (%s)", len(tmpData), user.ActiveOrg.Name, user.ActiveOrg.Id)
 	type returnStruct struct {
 		Success bool `json:"success"`
+		KeysExisted []DatastoreKeyMini `json:"keys_existed"`
 	}
 
 	returnData := returnStruct{
 		Success: true,
+		KeysExisted: existingInfo,
 	}
 
 	b, err := json.Marshal(returnData)
@@ -19110,7 +19115,6 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	//log.Printf("DATA: %s", string(body))
 	// Check if body contains "key": <number> and replace it, as it should be a string 
 	var tmpData CacheKeyData
 	err = json.Unmarshal(body, &tmpData)
