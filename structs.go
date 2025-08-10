@@ -4562,9 +4562,10 @@ type partnerReturnStruct struct {
 }
 
 type AIWorkflowResponse struct {
-	AITriggers []AITriggerItem `json:"triggers"`
-	AIActions  []AIActionItem  `json:"actions"`
-	Comments    string          `json:"comments"`
+	AITriggers  []AITriggerItem  `json:"triggers"`
+	AIActions   []AIActionItem   `json:"actions"`
+	Comments    string           `json:"comments"`
+	AIConditions []AIConditionItem `json:"conditions"`
 }
 
 type AITriggerItem struct {
@@ -4588,6 +4589,19 @@ type AIActionItem struct {
 }
 
 type AIParamItem struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type AIConditionItem struct {
+    SourceIndex      int              `json:"source_index"`
+    DestinationIndex int              `json:"destination_index"`
+    Condition        AIConditionValue `json:"condition"`
+    Source           AIConditionValue `json:"source"`
+    Destination      AIConditionValue `json:"destination"`
+}
+
+type AIConditionValue struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
 }
