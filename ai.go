@@ -7433,6 +7433,7 @@ Your final JSON must look like this:
 {
   "triggers": [ ... ],
   "actions": [ ... ],
+  "conditions": [ ... ],
   "comments": "This must be a single string that contains a clear, line-by-line description of what each step in the workflow does. Use \n to separate each line. Avoid markdown, emojis, or formatting — just plain readable text."
 }
 
@@ -7507,6 +7508,38 @@ the two exceptions is when the path is either static and does not require any va
 * $python_2.message.email
 
 Use this for **path**, **body**, **queries**, wherever needed.
+
+Conditions:
+
+Conditions in Shuffle help control the flow of execution based on the result of previous actions or triggers.
+For example, imagine a webhook receives alerts, and we want to forward only critical or high alerts to Gmail. If the alert doesn't meet that severity, we don’t want to send the email.
+This is where conditions come in. Conditions are often used on branches, the connections between two actions like webhook → Gmail. If the condition evaluates to false, all actions connected after it are skipped.
+Think of it like connecting light bulbs in a series. If one bulb (the condition) is off, all the bulbs (actions) after it stay off too.
+
+Now, what kind of conditions can you use? Shuffle supports a variety of options like: equals, doesnotequal, startswith, endswith, contains, containsanyof, largerthan, lessthan, and isempty.
+
+So in short, conditions let you block parts of your workflow, depending on dynamic input values.
+
+If the breakdown mentions any conditions or intent's as such, include them in the "conditions" array. Each condition must have:
+
+Condition format
+
+{
+	"source_index": m, // the index number of the action or trigger that the condition has to sit between
+	"destination_index": n, // the index number of the action or trigger that the condition has to sit between
+	"condition": {
+	"name": "condition",
+	"value": "equals" // or any other condition type like "contains", "largerthan", etc.
+	},
+	"source": {
+		"name": "source",
+		"value": "The Value can extracted using the label name referencing of the action or trigger" // name referencing of the action or trigger is explained in the later part of the prompt
+	},
+	"destination": {
+		"name": "destination",
+		"value": "The Value can extracted using the label name referencing of the action or trigger" // name referencing of the action or trigger is explained in the later part of the prompt
+	}
+},
 
 6. OUTPUT REFERENCES AND VARIABLE RULES
 
@@ -7603,6 +7636,25 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
      * project_key: "SEC"
      * issue_type: "Incident"
 
+3. Send Email Notification (conditionally)
+
+	App: gmail
+
+	Action: send_email
+
+	Only triggered if $webhook_1.event.fields.severity equals "critical"
+
+	Params:
+
+	to: team@example.com
+
+	subject: Critical Alert: $webhook_1.event.fields.summary
+
+	body: A critical issue has been reported.
+	Summary: $webhook_1.event.fields.summary
+	Description: $webhook_1.event.fields.description
+
+
  Final JSON:
 
 {
@@ -7652,9 +7704,49 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
           "value": ""      // Include this if the API requires query parameters, otherwise leave it empty
         }
       ]
+    },
+
+	{
+      "index": 2,
+      "app_name": "Gmail",
+      "action_name": "send_email",
+      "label": "send_email_1",
+      "parameters": [
+        {
+          "name": "to",
+          "value": "team@example.com"
+        },
+        {
+          "name": "subject",
+          "value": "Critical Alert: $webhook_1.summary"
+        },
+        {
+          "name": "body",
+          "value": "A critical issue has been reported:\n\nSummary: $webhook_1.summary\nDescription: $webhook_1.description"
+        }
+      ]
     }
   ],
-  "comments": "Trigger when data is received via webhook.\nExtract summary and description from webhook payload.\nUse that data to create a Jira incident in project SEC."
+  "comments": "Trigger when data is received via webhook.\nExtract summary and description from webhook payload.\nUse that data to create a Jira incident in project SEC.",
+   "conditions": [
+    {
+      "source_index": 1,
+      "destination_index": 2,
+	  
+      "source": {
+        "name": "source",
+        "value": "$webhook_1.event.fields.severity"
+      },
+	 "condition": {
+        "name": "condition",
+        "value": "equals"
+      },
+      "destination": {
+        "name": "destination",
+        "value": "critical"
+      }
+    }
+  ]  // Incase there are no conditions, this can be an empty array
 }
 
 
@@ -7727,6 +7819,40 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 	// Increment AI usage count after successful generation
 	IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
 	log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+	sort.Slice(workflowJson.AIActions, func(i, j int) bool {
+		return workflowJson.AIActions[i].Index < workflowJson.AIActions[j].Index
+	})
+
+	var foundEnv bool
+	envs, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+
+	if err == nil {
+		if input.Environment != "" {
+			// check if the provided environment is valid
+			for _, env := range envs {
+				if env.Name == input.Environment && !env.Archived {
+					foundEnv = true
+					break
+				}
+			}
+		}
+		if !foundEnv || input.Environment == "" {
+			for _, env := range envs {
+				if env.Default {
+					input.Environment = env.Name
+					foundEnv = true
+					break
+				}
+			}
+		}
+	} else {
+		if project.Environment == "cloud" {
+			input.Environment = "cloud"
+		} else {
+			input.Environment = "Shuffle"
+		}
+	}
 
 	var filtered []WorkflowApp
 
@@ -7907,16 +8033,45 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 
 		switch strings.ToLower(trigger.AppName) {
 		case "webhook":
+			ID := uuid.NewV4().String()
+			webhookURL := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", ID)
+			if project.Environment != "cloud" {
+				if len(os.Getenv("BASE_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("BASE_URL"), ID)
+				} else if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"), ID)
+				} else {
+					port := os.Getenv("PORT")
+					if len(port) == 0 {
+						port = "5001"
+					}
+					webhookURL = fmt.Sprintf("http://localhost:%s/api/v1/hooks/webhook_%s", port, ID)
+				}
+			}
+			
 			triggers = append(triggers, Trigger{
 				AppName:     "Webhook",
 				AppVersion:  "1.0.0",
 				Label:       trigger.Label,
 				TriggerType: "WEBHOOK",
-				ID:          uuid.NewV4().String(),
+				ID:         ID,
 				Description: "Custom HTTP input trigger",
 				LargeImage:  webhookImage,
+				Environment: input.Environment,
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "url", Value: webhookURL},
+					{Name: "tmp", Value: ""},
+					{Name: "auth_headers", Value: ""},
+					{Name: "custom_response_body", Value: ""},
+					{Name: "await_response", Value: "v1"},
+
+				},
 			})
 		case "schedule":
+			ScheduleValue := "*/25 * * * *"
+			if len(trigger.Params) != 0 {
+				ScheduleValue = trigger.Params[0].Value
+			}
 			triggers = append(triggers, Trigger{
 				AppName:     "Schedule",
 				AppVersion:  "1.0.0",
@@ -7925,48 +8080,48 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 				ID:          uuid.NewV4().String(),
 				Description: "Schedule time trigger",
 				LargeImage:  scheduleImage,
+				Environment: input.Environment,
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "cron", Value: ScheduleValue},
+					{Name: "execution_argument", Value: ""},
+				},
 			})
 		default:
 			log.Printf("[WARN] Unsupported trigger app: %s, falling back to webhook", trigger.AppName)
+			ID := uuid.NewV4().String()
+			webhookURL := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", ID)
+			if project.Environment != "cloud" {
+				if len(os.Getenv("BASE_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("BASE_URL"), ID)
+				} else if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"), ID)
+				} else {
+					port := os.Getenv("PORT")
+					if len(port) == 0 {
+						port = "5001"
+					}
+					webhookURL = fmt.Sprintf("http://localhost:%s/api/v1/hooks/webhook_%s", port, ID)
+				}
+			}
+			
 			triggers = append(triggers, Trigger{
 				AppName:     "Webhook",
 				AppVersion:  "1.0.0",
 				Label:       trigger.Label,
 				TriggerType: "WEBHOOK",
-				ID:          uuid.NewV4().String(),
-				Description: "Fallback to webhook for unsupported trigger",
+				ID:         ID,
+				Description: "Custom HTTP input trigger",
 				LargeImage:  webhookImage,
+				Environment: input.Environment,
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "url", Value: webhookURL},
+					{Name: "tmp", Value: ""},
+					{Name: "auth_headers", Value: ""},
+					{Name: "custom_response_body", Value: ""},
+					{Name: "await_response", Value: "v1"},
+
+				},
 			})
-		}
-	}
-
-	var foundEnv bool
-	envs, err := GetEnvironments(ctx, user.ActiveOrg.Id)
-
-	if err == nil {
-		if input.Environment != "" {
-			// check if the provided environment is valid
-			for _, env := range envs {
-				if env.Name == input.Environment && !env.Archived {
-					foundEnv = true
-					break
-				}
-			}
-		}
-		if !foundEnv || input.Environment == "" {
-			for _, env := range envs {
-				if env.Default {
-					input.Environment = env.Name
-					foundEnv = true
-					break
-				}
-			}
-		}
-	} else {
-		if project.Environment == "cloud" {
-			input.Environment = "cloud"
-		} else {
-			input.Environment = "Shuffle"
 		}
 	}
 
@@ -8029,11 +8184,69 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		})
 	}
 
+	// lets add any provided conditions to the branches
+	for _, condition := range workflowJson.AIConditions {
+		var sourceID, destinationID string
+		
+		if len(triggers) > 0 {
+			// When trigger exists: Index 0 = Trigger, Index 1+ = Actions
+			if condition.SourceIndex == 0 {
+				sourceID = triggers[0].ID
+			} else if condition.SourceIndex > 0 && condition.SourceIndex <= len(actions) {
+				sourceID = actions[condition.SourceIndex-1].ID
+			}
+		} else {
+			// When no trigger: Index 0+ = Actions directly
+			if condition.SourceIndex < len(actions) {
+				sourceID = actions[condition.SourceIndex].ID
+			}
+		}
+		
+		if len(triggers) > 0 {
+			// When trigger exists: Index 0 = Trigger, Index 1+ = Actions
+			if condition.DestinationIndex > 0 && condition.DestinationIndex <= len(actions) {
+				destinationID = actions[condition.DestinationIndex-1].ID
+			}
+		} else {
+			if condition.DestinationIndex < len(actions) {
+				destinationID = actions[condition.DestinationIndex].ID
+			}
+		}
+		
+		if sourceID != "" && destinationID != "" && (sourceID != destinationID) {
+			// Find the branch connecting the source to destination
+			for _, branch := range branches {
+				if branch.SourceID == sourceID && branch.DestinationID == destinationID {
+					finalCondition := Condition{
+						Source:         WorkflowAppActionParameter{
+							ID:   uuid.NewV4().String(),
+							Name: "source",
+							Variant: "STATIC_VALUE",
+							Value: condition.Source.Value,
+						},
+						Condition: WorkflowAppActionParameter{
+							ID:   uuid.NewV4().String(),
+							Name: "condition",
+							Value: condition.Condition.Value,
+						},
+						Destination: WorkflowAppActionParameter{
+							ID:   uuid.NewV4().String(),
+							Name: "destination",
+							Variant: "STATIC_VALUE",
+							Value: condition.Destination.Value,
+						},
+					}
+					branch.Conditions = append(branch.Conditions, finalCondition)
+					break
+				}
+			}
+		}
+	}
+
 	startX := -312.6988673793812
 	y := 190.6413454035773
 	xSpacing := 437.0
 
-	// Set trigger positions
 	for i := range triggers {
 		triggers[i].Position = Position{
 			X: startX + float64(i)*xSpacing,
@@ -8879,39 +9092,98 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 
 			switch strings.ToLower(trigger.AppName) {
 			case "webhook":
-				triggers = append(triggers, Trigger{
-					AppName:     "Webhook",
-					AppVersion:  "1.0.0",
-					Label:       trigger.Label,
-					TriggerType: "WEBHOOK",
-					ID:          uuid.NewV4().String(),
-					Description: "Custom HTTP input trigger",
-					LargeImage:  webhookImage,
-				})
-			case "schedule":
-				triggers = append(triggers, Trigger{
-					AppName:     "Schedule",
-					AppVersion:  "1.0.0",
-					Label:       trigger.Label,
-					TriggerType: "SCHEDULE",
-					ID:          uuid.NewV4().String(),
-					Description: "Schedule time trigger",
-					LargeImage:  scheduleImage,
-				})
-			default:
-				log.Printf("[WARN] Unsupported trigger app: %s, falling back to webhook", trigger.AppName)
-				triggers = append(triggers, Trigger{
-					AppName:     "Webhook",
-					AppVersion:  "1.0.0",
-					Label:       trigger.Label,
-					TriggerType: "WEBHOOK",
-					ID:          uuid.NewV4().String(),
-					Description: "Fallback to webhook for unsupported trigger",
-					LargeImage:  webhookImage,
-				})
+			ID := uuid.NewV4().String()
+			webhookURL := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", ID)
+			if project.Environment != "cloud" {
+				if len(os.Getenv("BASE_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("BASE_URL"), ID)
+				} else if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"), ID)
+				} else {
+					port := os.Getenv("PORT")
+					if len(port) == 0 {
+						port = "5001"
+					}
+					webhookURL = fmt.Sprintf("http://localhost:%s/api/v1/hooks/webhook_%s", port, ID)
+				}
 			}
+			
+			triggers = append(triggers, Trigger{
+				AppName:     "Webhook",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "WEBHOOK",
+				ID:         ID,
+				Description: "Custom HTTP input trigger",
+				LargeImage:  webhookImage,
+				Environment: input.Environment,
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "url", Value: webhookURL},
+					{Name: "tmp", Value: ""},
+					{Name: "auth_headers", Value: ""},
+					{Name: "custom_response_body", Value: ""},
+					{Name: "await_response", Value: "v1"},
+
+				},
+			})
+			case "schedule":
+			ScheduleValue := "*/25 * * * *"
+			if len(trigger.Params) != 0 {
+				ScheduleValue = trigger.Params[0].Value
+			}
+			triggers = append(triggers, Trigger{
+				AppName:     "Schedule",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "SCHEDULE",
+				ID:          uuid.NewV4().String(),
+				Description: "Schedule time trigger",
+				LargeImage:  scheduleImage,
+				Environment: input.Environment,
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "cron", Value: ScheduleValue},
+					{Name: "execution_argument", Value: ""},
+				},
+			})
+		default:
+			log.Printf("[WARN] Unsupported trigger app: %s, falling back to webhook", trigger.AppName)
+			ID := uuid.NewV4().String()
+			webhookURL := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", ID)
+			if project.Environment != "cloud" {
+				if len(os.Getenv("BASE_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("BASE_URL"), ID)
+				} else if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"), ID)
+				} else {
+					port := os.Getenv("PORT")
+					if len(port) == 0 {
+						port = "5001"
+					}
+					webhookURL = fmt.Sprintf("http://localhost:%s/api/v1/hooks/webhook_%s", port, ID)
+				}
+			}
+			
+			triggers = append(triggers, Trigger{
+				AppName:     "Webhook",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "WEBHOOK",
+				ID:         ID,
+				Description: "Custom HTTP input trigger",
+				LargeImage:  webhookImage,
+				Environment: input.Environment,
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "url", Value: webhookURL},
+					{Name: "tmp", Value: ""},
+					{Name: "auth_headers", Value: ""},
+					{Name: "custom_response_body", Value: ""},
+					{Name: "await_response", Value: "v1"},
+
+				},
+			})
 		}
 	}
+}
 
 	var branches []Branch
 
