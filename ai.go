@@ -36,7 +36,7 @@ import (
 //var model = "gpt-4o-mini"
 //var model = "o4-mini"
 var standalone bool
-var model = "gpt-5";
+var model = "gpt-5"; 
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID") 
 var assistantModel = model
@@ -7109,8 +7109,8 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		MaxTokens:   maxTokens,
 	}
 
-	// Too specific, but.. :)
-	if model == "o4-mini" {
+	// Newer models (GPT-4o, o1, gpt-5 etc.) require max_completion_tokens instead of max_tokens
+	if strings.HasPrefix(model, "gpt-4o") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "gpt-5") || model == "o4-mini" {
 		chatCompletion.MaxTokens = 0
 		chatCompletion.MaxCompletionTokens = maxTokens
 	}
@@ -7181,7 +7181,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		if err != nil {
 			cnt += 1
 
-			if strings.Contains(err.Error(), "not supported MaxTokens") {
+			if strings.Contains(err.Error(), "not supported MaxTokens") || strings.Contains(err.Error(), "'max_tokens' is not supported") {
 				chatCompletion.MaxTokens = 0
 				chatCompletion.MaxCompletionTokens = maxTokens
 				continue
@@ -7787,7 +7787,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		if len(finalContentOutput) == 0 {
 			return nil, errors.New("AI response is empty")
 		}
-		// log.Printf("[DEBUG] AI response: %s", finalContentOutput)
+		log.Printf("[DEBUG] AI response: %s", finalContentOutput)
 
 		finalContentOutput = strings.TrimSpace(finalContentOutput)
 		if strings.HasPrefix(finalContentOutput, "```json") {
