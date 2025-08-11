@@ -36,7 +36,7 @@ import (
 //var model = "gpt-4o-mini"
 //var model = "o4-mini"
 var standalone bool
-var model = "gpt-5"; 
+var model = "gpt-5-mini"; 
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID") 
 var assistantModel = model
