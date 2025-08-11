@@ -31509,18 +31509,18 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 
 	// Get current cache count (pending increments that haven't been dumped yet)
 	cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
-	currentCacheCount := 0
+	currentCacheCount := int64(0)
 	if cacheData, cacheErr := GetCache(ctx, cacheKey); cacheErr == nil && cacheData != nil {
 		if byteData, ok := cacheData.([]uint8); ok {
 			dataStr := string(byteData)
 			if parsedInt, parseErr := strconv.ParseInt(dataStr, 16, 64); parseErr == nil {
-				currentCacheCount = int(parsedInt)
+				currentCacheCount = parsedInt
 			}
 		}
 	}
 
 	// Total usage = dumped monthly usage + pending cache count
-	aiUsageCount := int(monthlyUsage) + currentCacheCount
+	aiUsageCount := monthlyUsage + currentCacheCount
 	log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/100", monthlyUsage, currentCacheCount, aiUsageCount)
 	
 	if aiUsageCount >= 100 {
@@ -31652,18 +31652,18 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 
 	// Get current cache count (pending increments that haven't been dumped yet)
 	cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
-	currentCacheCount := 0
+	currentCacheCount := int64(0)
 	if cacheData, cacheErr := GetCache(ctx, cacheKey); cacheErr == nil && cacheData != nil {
 		if byteData, ok := cacheData.([]uint8); ok {
 			dataStr := string(byteData)
 			if parsedInt, parseErr := strconv.ParseInt(dataStr, 16, 64); parseErr == nil {
-				currentCacheCount = int(parsedInt)
+				currentCacheCount = parsedInt
 			}
 		}
 	}
 
 	// Total usage = dumped monthly usage + pending cache count
-	aiUsageCount := int(monthlyUsage) + currentCacheCount
+	aiUsageCount := monthlyUsage + currentCacheCount
 	log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/100", monthlyUsage, currentCacheCount, aiUsageCount)
 
 	body, err := ioutil.ReadAll(request.Body)
