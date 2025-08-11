@@ -36,7 +36,7 @@ import (
 //var model = "gpt-4o-mini"
 //var model = "o4-mini"
 var standalone bool
-var model = "gpt-4.1-mini"
+var model = "gpt-5";
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID") 
 var assistantModel = model
@@ -7497,15 +7497,15 @@ or
 Path:
 Do **not** write paths like "/projects/{project_id}". Instead, resolve them using actual Shuffle variables:
 
-example: /projects/$webhook_1.project_id/tasks/$step_2.task_id
+example: /projects/$exec.project_id/tasks/$step_2.task_id
 the two exceptions is when the path is either static and does not require any variables, or from the given given data you dont know how to resolve the variables, in that case you can keep the template like {project_id}
 
 
-** All inputs from previous steps or triggers must be referenced like this:
+** All inputs from previous steps must be referenced like this:
 
-* $webhook_1.field
 * $jira_action_1.id
 * $python_2.message.email
+* For triggers use "$exec" for example $exec.field
 
 Use this for **path**, **body**, **queries**, wherever needed.
 
@@ -7544,13 +7544,13 @@ Condition format
 6. OUTPUT REFERENCES AND VARIABLE RULES
 
 Every action’s response is stored under its label. You can reference it using:
-$label_name this itself gives you the parsed JSON output of the action, so you can use it directly in the next action or trigger. But if you want to access a specific field in the output you can use the following format:
+$label_name this itself gives you the parsed JSON output of the action, so you can use it directly in the next action. But if you want to access a specific field in the output you can use the following format:
 
-$label_name.field  — e.g., $webhook_1.alert.id
+$label_name.field but for triggers use "$exec" like $exec.alert.id
 
 Do **not** use .body or .output unnecessarily:
 
-example: $webhook_1.body.alert.id
+example: $exec.body.alert.id
 
 * This works the same for webhook triggers, app actions, everything.
 
@@ -7559,7 +7559,7 @@ Shuffle already gives you the parsed JSON. No need for extra parsing actions, li
 7. PYTHON LOGIC VIA SHUFFLE TOOLS APP
 
 If you need to do any data manipulation, or filtering you can use our Shuffle Tools App and it has an action called execute_python where you can take full control of the data manipulation and filtering and to get the data you need like if you want to get something you need from previous actions or even any trigger you can do the same thing literally like this: "$label_name" also don't use $label_name directly in python instead make sure you use double quotes around it like this: "$label_name" and we will replace this with the right data before execution and keep in mind that most of the time the data is in json format of the final result of the action you are referring to so no need for .body again
-for python code its just like any other param with name like name "code" and value is just the python like "print("hello world")" or "print("$webhook_1.event.fields.summary")" pay attention to the quotes here when using $label_name and thats how you get the data from previous actions or triggers in python code
+for python code its just like any other param with name like name "code" and value is just the python like "print("hello world")" or "print("$exec.event.fields.summary")" pay attention to the quotes here when using $label_name and thats how you get the data from previous actions or triggers in python code
 a few important notes about the python code:
 * Use top-level expressions (no need for main()).
 * You can define and call functions.
@@ -7621,7 +7621,7 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
 
 1. Webhook Trigger
 
-   * Label: webhook_1
+   * Label: webhook_1 // this is the unique identifier for the webhook trigger but when you are trying to refer then use $exec not $webhook_1
    * Input JSON has a field: event.fields.summary → this is the title
    * And event.fields.description → this is the body
 
@@ -7631,8 +7631,8 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
    * Action: create_issue
    * Params:
 
-     * summary: $webhook_1.event.fields.summary
-     * description: $webhook_1.event.fields.description
+     * summary: $exec.event.fields.summary
+     * description: $exec.event.fields.description
      * project_key: "SEC"
      * issue_type: "Incident"
 
@@ -7642,17 +7642,17 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
 
 	Action: send_email
 
-	Only triggered if $webhook_1.event.fields.severity equals "critical"
+	Only triggered if $exec.event.fields.severity equals "critical"
 
 	Params:
 
 	to: team@example.com
 
-	subject: Critical Alert: $webhook_1.event.fields.summary
+	subject: Critical Alert: $exec.event.fields.summary
 
 	body: A critical issue has been reported.
-	Summary: $webhook_1.event.fields.summary
-	Description: $webhook_1.event.fields.description
+	Summary: $exec.event.fields.summary
+	Description: $exec.event.fields.description
 
 
  Final JSON:
@@ -7693,7 +7693,7 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
         },
         {
           "name": "body",
-          "value": "{\"fields\": {\"summary\": \"$webhook_1.summary\", \"description\": \"$webhook_1.description\", \"project\": {\"key\": \"SEC\"}, \"issuetype\": {\"name\": \"Incident\"}}}"
+          "value": "{\"fields\": {\"summary\": \"$exec.summary\", \"description\": \"$exec.description\", \"project\": {\"key\": \"SEC\"}, \"issuetype\": {\"name\": \"Incident\"}}}"
         },
         {
           "name": "ssl_verify",
@@ -7718,11 +7718,11 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
         },
         {
           "name": "subject",
-          "value": "Critical Alert: $webhook_1.summary"
+          "value": "Critical Alert: $exce.summary"
         },
         {
           "name": "body",
-          "value": "A critical issue has been reported:\n\nSummary: $webhook_1.summary\nDescription: $webhook_1.description"
+          "value": "A critical issue has been reported:\n\nSummary: $exec.summary\nDescription: $exec.description"
         }
       ]
     }
@@ -7735,7 +7735,7 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
 	  
       "source": {
         "name": "source",
-        "value": "$webhook_1.event.fields.severity"
+        "value": "$exec.event.fields.severity"
       },
 	 "condition": {
         "name": "condition",
@@ -8058,6 +8058,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 				Description: "Custom HTTP input trigger",
 				LargeImage:  webhookImage,
 				Environment: input.Environment,
+				Status:   "uninitialized",
 				Parameters: []WorkflowAppActionParameter{
 					{Name: "url", Value: webhookURL},
 					{Name: "tmp", Value: ""},
@@ -8081,6 +8082,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 				Description: "Schedule time trigger",
 				LargeImage:  scheduleImage,
 				Environment: input.Environment,
+				Status:      "uninitialized",
 				Parameters: []WorkflowAppActionParameter{
 					{Name: "cron", Value: ScheduleValue},
 					{Name: "execution_argument", Value: ""},
@@ -8113,6 +8115,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 				Description: "Custom HTTP input trigger",
 				LargeImage:  webhookImage,
 				Environment: input.Environment,
+				Status:      "uninitialized",
 				Parameters: []WorkflowAppActionParameter{
 					{Name: "url", Value: webhookURL},
 					{Name: "tmp", Value: ""},
@@ -8532,26 +8535,28 @@ References
 
 Use the exact format below for referencing prior outputs:
 
-$label.field — Example: $webhook_1.alert_id
+$label.field for actions and for triggers use "$exec" for example: $exec.alert_id
 
 Never use .body or .output — those are not real fields. Avoid $step.output or $step.body entirely.
 
- Wrong: $webhook_1.body.alert_id
+ Wrong: $exec.body.alert_id
 
-Correct: $webhook_1.alert_id
+Correct: $exec.alert_id
 
 All outputs are already parsed JSON; no extra parsing required
 
-$label.field — Example: $webhook_1.alert_id
+$label.field — Example: $exec.alert_id
 
 Do not use .body or .output unnecessarily
+
+Keep in mind that you use "$exec" only for triggers when you want to extract data by referencing $exec, but for actions use the targeted label name like $action_label_name
 
 All outputs are already parsed JSON; no extra parsing required
 
 7. PYTHON LOGIC VIA SHUFFLE TOOLS APP
 
 If you need to do any data manipulation, or filtering you can use our Shuffle Tools App and it has an action called execute_python where you can take full control of the data manipulation and filtering and to get the data you need like if you want to get something you need from previous actions or even any trigger you can do the same thing literally like this: "$label_name" also don't use $label_name directly in python instead make sure you use double quotes around it like this: "$label_name" and we will replace this with the right data before execution and keep in mind that most of the time the data is in json format of the final result of the action you are referring to so no need for .body again
-for python code its just like any other param with name like name "code" and value is just the python like "print("hello world")" or "print("$webhook_1.event.fields.summary")" pay attention to the quotes here when using $label_name and thats how you get the data from previous actions or triggers in python code
+for python code its just like any other param with name like name "code" and value is just the python like "print("hello world")" or "print("$exec.event.fields.summary")" pay attention to the quotes here when using $label_name and thats how you get the data from previous actions or triggers in python code
 a few important notes about the python code:
 * Use top-level expressions (no need for main()).
 * You can define and call functions.
@@ -8685,7 +8690,7 @@ When you receive workflow data that includes error information, you should:
 
 				{ "name": "method", "value": "GET" | "POST" | "PUT" | "DELETE" | "PATCH" }
 
-				{ "name": "path", "value": "/projects/$webhook_1.project_id/tasks/$step_2.task_id" } // the two exceptions is when the path is either static and does not require any variables, or from the given given data you dont know how to resolve the variables, in that case you can keep the template like {project_id} 
+				{ "name": "path", "value": "/projects/$exec.project_id/tasks/$step_2.task_id" } // the two exceptions is when the path is either static and does not require any variables, or from the given given data you dont know how to resolve the variables, in that case you can keep the template like {project_id} 
 
 				{ "name": "body", "value": "{\"summary\": \"Bug in login flow\", \"description\": \"Fails on OTP step.\", \"priority\": \"High\"}" } (if required)
 
