@@ -159,6 +159,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
 	} else if parsedActiontype == "threatlist_monitor" {
+		secondActionId := uuid.NewV4().String()
+
 		defaultWorkflow := Workflow{
 			Name: actionType,
 			Description: "Monitor threatlists and ingest regularly",
@@ -178,24 +180,27 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 							Name:  "url",
 							Value: "$shuffle_cache.threatlist_urls.value.#",
 						},
+						WorkflowAppActionParameter{
+							Name:  "headers",
+							Multiline: true,
+							Value: "",
+						},
 					},
 				},
 				Action{
-					Name: "parse_ioc",
+					Name: "execute_python",
 					AppID: "Shuffle Tools",
 					AppName: "Shuffle Tools",
-					ID: uuid.NewV4().String(),
+					ID: secondActionId,
 					AppVersion: "1.2.0",
 					Environment: actionEnv,
-					Label: "Parse IOC",
+					Label: "Ingest IOCs",
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
-							Name:  "input_string",
-							Value: "$get_threatlist_urls.#.body",
-						},
-						WorkflowAppActionParameter{
-							Name:  "input_type",
-							Value: "domain,ipv4,sha256",
+							Name:  "code",
+							Multiline: true,
+							Required: true,
+							Value: getIocIngestionScript(),
 						},
 					},
 				},
@@ -215,6 +220,34 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 						WorkflowAppActionParameter{
 							Name:  "execution_argument",
 							Value: "Automatically configured by Shuffle", 
+						},
+					},
+				},
+			},
+			Branches: []Branch{
+				Branch{
+					SourceID: startTriggerId,
+					DestinationID: startActionId,
+					ID: uuid.NewV4().String(),
+				},
+				Branch{
+					SourceID: startActionId,
+					DestinationID: secondActionId,
+					ID: uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name: "source",
+								Value: "{{ $get_threatlist_urls | size }}",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name: "condition",
+								Value: "larger than",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name: "destination",
+								Value: "0",
+							},
 						},
 					},
 				},
@@ -409,6 +442,32 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			}
 
 			workflow.Branches = append(workflow.Branches, newBranch)
+		}
+	}
+
+	// Check if the action has branches at all
+	// This is not efficientm but ensures they all at least run
+	for actionIndex, action := range workflow.Actions {
+		if actionIndex == 0 {
+			continue
+		}
+
+		found := false
+		for _, branch := range workflow.Branches {
+			if branch.SourceID == action.ID || branch.DestinationID == action.ID {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			log.Printf("Missing branch: %s", action.ID)
+			// Create a branch from the previous action to this one
+			workflow.Branches = append(workflow.Branches, Branch{
+				SourceID: workflow.Actions[actionIndex-1].ID,
+				DestinationID: action.ID,
+				ID: uuid.NewV4().String(),
+			})
 		}
 	}
 
@@ -1094,4 +1153,190 @@ func GetTriggerData(triggerType string) string {
 	default:
 		return ""
 	}
+}
+							
+func getIocIngestionScript() string {
+	return `import os
+import re
+import json
+import uuid
+import time
+import requests
+
+input_data = json.loads(r'''$get_threatlist_urls''')
+upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
+
+parsed_headers = {}
+if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
+  parsed_headers["Authorization"] = "Bearer %s" % os.environ.get("SHUFFLE_AUTHORIZATION", "")
+else:
+  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+
+# This is shitty, but is used for a basic test. 
+regexsearch = {
+  "md5": r"\b[a-fA-F0-9]{32}\b",
+  "sha1": r'\b[a-fA-F0-9]{40}\b',
+  "sha256": r"\b[a-fA-F0-9]{64}\b",
+  "ip": r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.|$)){4}\b",
+  "domain": r"\b(?:[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,63}\b",
+}
+
+all_items = {
+  "md5": {},
+  "sha1": {},
+  "sha256": {},
+  "ip": {},
+  "domain": {},
+}
+
+if not isinstance(input_data, list):
+  input_data = [input_data]
+
+## Assuming
+max_items = 1000
+threat_timeout = 90 # days
+for content in input_data:
+  iocs = content["body"]
+
+  found_type = ""
+  searchspace = iocs[0:1000]
+  for key, value in regexsearch.items():
+    match = re.search(value, searchspace)
+    if match:
+      found_type = key
+      break
+
+  if len(found_type) == 0:
+    continue
+
+  appended_items = []
+  discovered_split_index = -1
+  datestamp_index = -1
+
+  cnt = 0
+  for line in iocs.split("\n"):
+    if len(line) < 3:
+      continue
+
+    if line.startswith("#"):
+      continue
+
+    if cnt > max_items:
+      continue
+
+    # Remove ANYTHING after # on the line
+    line = line.split("#")[0].strip()
+
+    linesplit = line.split(",")
+    if discovered_split_index >= 0:
+      if datestamp_index >= 0:
+        # Check if the timestamp is more than 90 days ago (threat_timeout)
+        try:
+          timestamp = time.strptime(linesplit[datestamp_index], "%Y-%m-%d %H:%M:%S")
+          current_time = time.time()
+          if (current_time - time.mktime(timestamp)) / (24 * 3600) > threat_timeout:
+            continue
+        except ValueError:
+          continue
+
+      appended_items.append(linesplit[discovered_split_index])
+
+    else:
+      # Discovering pattern
+      cnt += 1
+      linesplit = line.split(",")
+      if len(linesplit) == 1:
+        discovered_split_index = 0
+      else:
+        itemcnt = 0
+
+        for item in linesplit:
+          # Check if item is a timestamp
+          import time
+          try:
+            time.strptime(item, "%Y-%m-%d %H:%M:%S")
+            datestamp_index = itemcnt
+
+            # Check if the timestamp is more than 90 days ago. If so, break and continue
+          except ValueError:
+            pass
+
+          match = re.search(regexsearch[found_type], item)
+          if match:
+            discovered_split_index = itemcnt
+            break
+
+          itemcnt += 1
+
+        if discovered_split_index >= 0:
+          appended_items.append(linesplit[discovered_split_index])
+
+  # Parsing STIX
+  for item in appended_items:
+    key = item.strip()
+
+    if key in all_items:
+      if content["url"] not in all_items[found_type][key]["urls"]:
+              all_items[found_type][key] = all_items[found_type][key]["urls"].append(content["url"])
+    else:
+
+      # Silly workaround to ensure we got a good UUID
+      # But keeping it deterministic for now
+      static_namespace = "c59d2471-df00-48ae-bc18-dd76e84a60df"
+      stix_id = f"indicator--{uuid.uuid5(uuid.UUID(static_namespace), key)}"
+
+      stix_pattern = ""
+      if found_type == "md5":
+        stix_pattern = "[file:hashes.MD5 = '%s']" % (key)
+      elif found_type == "sha1":
+        stix_pattern = "[file:hashes.SHA1 = '%s']" % (key)
+      elif found_type == "sha256":
+        stix_pattern = "[file:hashes.SHA256 = '%s']" % (key)
+      elif found_type == "ip":
+        stix_pattern = "[ipv4-addr:value = '%s']" % (key)
+      elif found_type == "domain":
+        stix_pattern = "[domain-name:value = '%s']" % (key)
+
+      all_items[found_type][key] = {
+        "type": "indicator",
+        "spec_version": "2.1",
+        "id": stix_id,
+        "pattern": stix_pattern,
+        "pattern_type": "stix",
+
+        "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "modified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+
+        "urls": [content["url"]],
+      }
+
+for k, v in all_items.items():
+    new_list = []
+
+    cnt = 0
+    for subkey, subval in v.items():
+        subval["external_references"] = []
+        for url in subval["urls"]:
+            subval["external_references"].append({
+                "source_name": "threatfeed",
+                "url": url,
+            })
+
+        del subval["urls"]
+        new_list.append({
+            "key": subkey,
+            "category": "%s_indicators" % k,
+            "value": json.dumps(subval),
+        })
+
+        cnt += 1
+        #if cnt == 100:
+        #    break
+
+    if len(new_list) > 0:
+        print("Uploading %s items of type %s" % (len(new_list), k))
+        ret = requests.post(upload_url, json=new_list, headers=parsed_headers)
+        print(ret.text)
+        print(ret.status_code)
+	`
 }

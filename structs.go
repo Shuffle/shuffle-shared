@@ -666,20 +666,20 @@ type Session struct {
 }
 
 type Contact struct {
-	Firstname     string   `json:"firstname"`
-	Lastname      string   `json:"lastname"`
-	Title         string   `json:"title"`
-	Companyname   string   `json:"companyname"`
-	Phone         string   `json:"phone"`
-	Email         string   `json:"email"`
-	ValidateEmail string   `json:"validate_email"`
-	Message       string   `json:"message"`
-	DealType      string   `json:"dealtype"`
-	DealCountry   string   `json:"dealcountry"`
-	Category      string   `json:"Category"`
-	Interests     []string `json:"interests"`
-	LegalAgreementsAccepted   bool     `json:"legal_agreements_accepted"`
-	PocTermsAccepted   bool      `json:"poc_terms_accepted"`
+	Firstname               string   `json:"firstname"`
+	Lastname                string   `json:"lastname"`
+	Title                   string   `json:"title"`
+	Companyname             string   `json:"companyname"`
+	Phone                   string   `json:"phone"`
+	Email                   string   `json:"email"`
+	ValidateEmail           string   `json:"validate_email"`
+	Message                 string   `json:"message"`
+	DealType                string   `json:"dealtype"`
+	DealCountry             string   `json:"dealcountry"`
+	Category                string   `json:"Category"`
+	Interests               []string `json:"interests"`
+	LegalAgreementsAccepted bool     `json:"legal_agreements_accepted"`
+	PocTermsAccepted        bool     `json:"poc_terms_accepted"`
 }
 
 type Translator struct {
@@ -930,7 +930,7 @@ type LeadInfo struct {
 	IntegrationPartner  bool `json:"integration_partner,omitempty" datastore:"integration_partner"`
 	DistributionPartner bool `json:"distribution_partner,omitempty" datastore:"distribution_partner"`
 	ServicePartner      bool `json:"service_partner,omitempty" datastore:"service_partner"`
-	ChannelPartner	  bool `json:"channel_partner,omitempty" datastore:"channel_partner"`
+	ChannelPartner      bool `json:"channel_partner,omitempty" datastore:"channel_partner"`
 
 	Creator bool `json:"creator,omitempty" datastore:"creator"`
 }
@@ -941,7 +941,7 @@ type PartnerType struct {
 	IntegrationPartner  bool `json:"integration_partner,omitempty" datastore:"integration_partner"`
 	DistributionPartner bool `json:"distribution_partner,omitempty" datastore:"distribution_partner"`
 	ServicePartner      bool `json:"service_partner,omitempty" datastore:"service_partner"`
-	ChannelPartner	  bool `json:"channel_partner,omitempty" datastore:"channel_partner"`
+	ChannelPartner      bool `json:"channel_partner,omitempty" datastore:"channel_partner"`
 }
 
 type Partner struct {
@@ -953,7 +953,7 @@ type Partner struct {
 	LandscapeImageUrl string      `json:"landscape_image_url" datastore:"landscape_image_url,noindex"`
 	ArticleUrl        string      `json:"article_url" datastore:"article_url,noindex"`
 	WebsiteUrl        string      `json:"website_url" datastore:"website_url"`
-	ContactEmail	 string      `json:"contact_email" datastore:"contact_email"`
+	ContactEmail      string      `json:"contact_email" datastore:"contact_email"`
 	Expertise         []string    `json:"expertise" datastore:"expertise"`
 	Services          []string    `json:"services" datastore:"services"`
 	Solutions         []string    `json:"solutions" datastore:"solutions"`
@@ -1117,6 +1117,11 @@ type DatastoreCategoryUpdate struct {
 	Automations []DatastoreAutomation `json:"automations" datastore:"automations"`
 
 	Settings DatastoreCategorySettings `json:"settings" datastore:"settings"`
+}
+
+type DatastoreKeyMini struct {
+	Key      string `json:"key" datastore:"key"`
+	Existed  bool   `json:"existed" datastore:"existed"` // If the key existed before the update
 }
 
 type CacheKeyData struct {
@@ -4004,10 +4009,10 @@ type CategoryAction struct {
 	DryRun                bool   `json:"dry_run"`                 // If true, it will not actually execute the action, but instead just build the workflow
 	SkipWorkflow          bool   `json:"skip_workflow"`           // If true, it will not put it in a workflow, but instead just execute it
 	SkipOutputTranslation bool   `json:"skip_output_translation"` // If true, it will not translate the output to the default format for the label
-	SkipAuthentication 	  bool 	 `json:"skip_authentication"`
-	Environment           string `json:"environment"`             // The environment to use for the action (Orborus)
-	App                   string `jjson:"app"`                    // The app to use for the action (Orborus)
-	Action                string `json:"action"`                  // The action to use for the action (Orborus)
+	SkipAuthentication    bool   `json:"skip_authentication"`
+	Environment           string `json:"environment"` // The environment to use for the action (Orborus)
+	App                   string `jjson:"app"`        // The app to use for the action (Orborus)
+	Action                string `json:"action"`      // The action to use for the action (Orborus)
 }
 
 type LabelStruct struct {
@@ -4050,9 +4055,9 @@ type SingleResult struct {
 }
 
 type DockerRequestCheck struct {
-	Name			string	`datastore:"name" json:"name" yaml:"name"`
-	Image			string	`datastore:"image" json:"image" yaml:"image"`
-	ImageVersion	string	`datastore:"image_version" json:"image_version" yaml:"image_version"`
+	Name         string `datastore:"name" json:"name" yaml:"name"`
+	Image        string `datastore:"image" json:"image" yaml:"image"`
+	ImageVersion string `datastore:"image_version" json:"image_version" yaml:"image_version"`
 }
 
 type Recommendations struct {
@@ -4516,7 +4521,6 @@ type AgentDecision struct {
 // The overall Agent controller
 type AgentOutput struct {
 	Status    string          `json:"status" datastore:"status"`
-	Input     string          `json:"input" datastore:"input"`
 	Error     string          `json:"error,omitempty" datastore:"error"`
 	Decisions []AgentDecision `json:"decisions" datastore:"decisions"`
 
@@ -4528,6 +4532,7 @@ type AgentOutput struct {
 	ExecutionId string `json:"execution_id,omitempty" datastore:"execution_id"`
 	NodeId      string `json:"node_id,omitempty" datastore:"node_id"`
 	Memory      string `json:"memory,omitempty" datastore:"memory"`
+	Input       string `json:"input" datastore:"input"`
 }
 
 type HTTPWrapper struct {

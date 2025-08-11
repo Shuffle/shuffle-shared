@@ -18682,6 +18682,7 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, fmt.Sprintf("datastore_category_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, cacheKey))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, orgId))
 
@@ -19249,11 +19250,10 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// FIXME: Look for "bulk=true" ?
 	var tmpData []CacheKeyData
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling in setvalue: %s", err)
+		log.Printf("[WARNING] Failed unmarshalling in setvalue (1): %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -19296,6 +19296,8 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 	mainCategory := ""
 	for itemIndex, _ := range tmpData {
+		tmpData[itemIndex].OrgId = user.ActiveOrg.Id
+
 		mainCategory = tmpData[itemIndex].Category
 		if len(user.ActiveOrg.Id) == 0 {
 			break
@@ -19309,7 +19311,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[AUDIT] Running bulk upload for org %s to category '%s'", user.ActiveOrg.Id, mainCategory)
 
-	err = SetDatastoreKeyBulk(ctx, tmpData)
+	existingInfo, err := SetDatastoreKeyBulk(ctx, tmpData)
 	if err != nil {
 		log.Printf("[ERROR] Failed to set %d datastore key(s) for org %s", len(tmpData), user.ActiveOrg.Id)
 		resp.WriteHeader(500)
@@ -19320,10 +19322,12 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Successfully set %d datastore keys (or less) for org '%s' (%s)", len(tmpData), user.ActiveOrg.Name, user.ActiveOrg.Id)
 	type returnStruct struct {
 		Success bool `json:"success"`
+		KeysExisted []DatastoreKeyMini `json:"keys_existed"`
 	}
 
 	returnData := returnStruct{
 		Success: true,
+		KeysExisted: existingInfo,
 	}
 
 	b, err := json.Marshal(returnData)
@@ -19357,7 +19361,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			log.Printf("Path too short: %d", len(location))
-			resp.WriteHeader(401)
+			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
@@ -19365,11 +19369,12 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
+	// Check if body contains "key": <number> and replace it, as it should be a string 
 	var tmpData CacheKeyData
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling in setvalue: %s", err)
-		resp.WriteHeader(401)
+		log.Printf("[WARNING] Failed unmarshalling in setvalue (2): %s", err)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -31722,4 +31727,79 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 	}
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(workflowJson)
+}
+
+func startSchedule(trigger Trigger, authorization string, workflow Workflow) error { 
+	baseUrl := "https://shuffler.io"
+	if os.Getenv("BASE_URL") != "" {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	scheduleUrl := fmt.Sprintf("%s/api/v1/workflows/%s/schedule", baseUrl, workflow.ID)
+	// POST request to it
+
+	// Every 24 hours in cron
+	foundFrequency := "0 0 * * *"
+	for _, param := range trigger.Parameters {
+		if param.Name == "frequency" && len(param.Value) > 2 {
+			foundFrequency = param.Value
+		}
+	}
+
+	scheduleRequest := Schedule{
+		Name: "Schedule",
+		Frequency: foundFrequency,
+		ExecutionArgument: "Automatically configured by Shuffle",
+		Environment: trigger.Environment,
+		Id: trigger.ID,
+		Start: workflow.Start,
+	}
+
+	parsedBody, err := json.Marshal(scheduleRequest)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling schedule request: %s", err)
+		return err 
+	}
+
+	// Send post request
+	client := GetExternalClient(baseUrl)
+	req, err := http.NewRequest(
+		"POST",
+		scheduleUrl,
+		bytes.NewBuffer(parsedBody),
+	)
+
+	if err != nil {
+		return err
+	}
+
+	// Add headers
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", authorization))
+	if len(workflow.OrgId) > 0 {
+		req.Header.Add("Org-Id", workflow.OrgId)
+	}
+
+	// Add content type
+	req.Header.Add("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to start schedule for workflow %s: %s", workflow.ID, err)
+		return err
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		body = []byte{}
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed to start schedule for workflow %s: %s. Body: %s", workflow.ID, resp.Status, string(body))
+		return errors.New(fmt.Sprintf("Failed to start schedule for workflow %s: %s", workflow.ID, resp.Status))
+	}
+
+	return nil
 }

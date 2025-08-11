@@ -262,7 +262,6 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 
 	// read query parameter "remove_metadata"
 	removeMetadata := false
-
 	removeMetadataQuery, ok := request.URL.Query()["remove_metadata"]
 	if ok && len(removeMetadataQuery) > 0 {
 		if removeMetadataQuery[0] == "true" {
@@ -270,7 +269,6 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 			removeMetadata = true
 		}
 	}
-
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
