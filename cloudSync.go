@@ -1336,14 +1336,14 @@ func loadAppConfigFromMain(fileId string) {
 	}
 
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed getting app config for ID %s: %d", fileId, resp.StatusCode)
-		return
-	}
-
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed reading app config: %s", err)
+		return
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed getting app config for ID %s: %d. Body: %s", fileId, resp.StatusCode, string(body))
 		return
 	}
 
@@ -1482,6 +1482,23 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		if strings.ToLower(location[5]) == "distribute" {
 			shouldDistributeToLocation = true
 		}
+	}
+
+
+	// If onprem, it should autobuild the container(s) from here
+	// FIXME: The problem with redirect:
+	// 1. You are in EU
+	// 2. You activate an app for a suborg, which has to be saved to ActivatedApps in the org in EU so that it loads properly
+	// 3. The app itself is in EU - NOT in UK, but the org has to be updated in UK -> EU propagation
+	// 4. In this case, it would overwrite the current change as well
+
+	// Additional: Superfluous response(s)
+	if project.Environment == "cloud" && gceProject != "shuffler" {
+		go loadAppConfigFromMain(fileId)
+		go RedirectUserRequest(resp, request)
+
+		// Just to ensure propagation occurs
+		time.Sleep(2 * time.Second)
 	}
 
 	app, err := GetApp(ctx, fileId, user, false)
@@ -1763,13 +1780,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
 	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
 
-	// If onprem, it should autobuild the container(s) from here
-	if project.Environment == "cloud" && gceProject != "shuffler" {
-		go loadAppConfigFromMain(fileId)
-
-		RedirectUserRequest(resp, request)
-	}
-
 	reason := "App Activated"
 
 	if !activate {
@@ -1777,7 +1787,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true,"reason": "` + reason + `"}`))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true,"reason": "%s"}`, reason)))
 }
 
 // For replicating HTTP request from schedule user
