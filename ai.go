@@ -1,41 +1,42 @@
 package shuffle
 
 import (
-	"os"
-	"fmt"
-	"log"
-	"time"
-	"sync"
 	"bytes"
-	"regexp"
-	"reflect"
-	"errors"
 	"context"
-	"strings"
-	"strconv"
-	"net/http"
-	"math/rand"
-	"io/ioutil"
 	"crypto/md5"
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/base64"
+	"errors"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"math/rand"
+	"net/http"
+	"os"
+	"reflect"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
-	uuid "github.com/satori/go.uuid"
 	openai "github.com/sashabaranov/go-openai"
-	option "google.golang.org/api/option"
+	uuid "github.com/satori/go.uuid"
 	"google.golang.org/api/customsearch/v1"
+	option "google.golang.org/api/option"
 
-	"github.com/frikky/schemaless"
 	"github.com/frikky/kin-openapi/openapi3"
+	"github.com/frikky/schemaless"
 )
 
 //var model = "gpt-4-turbo-preview"
 //var model = "gpt-4o-mini"
 //var model = "o4-mini"
 var standalone bool
-var model = "gpt-4.1-mini"
+var model = "gpt-5-mini"; 
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID") 
 var assistantModel = model
@@ -7169,8 +7170,8 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		MaxTokens:   maxTokens,
 	}
 
-	// Too specific, but.. :)
-	if model == "o4-mini" {
+	// Newer models (GPT-4o, o1, gpt-5 etc.) require max_completion_tokens instead of max_tokens
+	if strings.HasPrefix(model, "gpt-4o") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "gpt-5") || model == "o4-mini" {
 		chatCompletion.MaxTokens = 0
 		chatCompletion.MaxCompletionTokens = maxTokens
 	}
@@ -7241,7 +7242,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		if err != nil {
 			cnt += 1
 
-			if strings.Contains(err.Error(), "not supported MaxTokens") {
+			if strings.Contains(err.Error(), "not supported MaxTokens") || strings.Contains(err.Error(), "'max_tokens' is not supported") {
 				chatCompletion.MaxTokens = 0
 				chatCompletion.MaxCompletionTokens = maxTokens
 				continue
@@ -7294,4 +7295,2071 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	}
 
 	return contentOutput, nil
+}
+
+func generateWorkflowJson(ctx context.Context, input QueryInput, user User, workflow *Workflow) (*Workflow, error) {
+
+	apps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get apps in Generate workflow: %s", err)
+		return nil, err
+	}
+	var httpApp WorkflowApp // We use http app as the final fallback if in case we cannot find any app that matches the AI suggested app name
+	var builder strings.Builder
+
+	maxApps := 150
+	count := 0
+
+	for _, app := range apps {
+		if len(strings.TrimSpace(app.Name)) == 0 {
+			continue
+		}
+		if count < maxApps {
+			builder.WriteString(fmt.Sprintf("%s: %v\n", app.Name, app.Categories))
+			count++
+		}
+		if normalizeName(app.Name) == "http" {
+			httpApp = app
+		}
+	}
+	categoryString := builder.String()
+
+	systemMessage := fmt.Sprintf(`You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools and automates security workflows, You are not a conversational assistant or chatbot. Even if the user asks questions or speaks casually, your only job is to generate the correct workflow JSON.
+
+You will receive messy user inputs describing a task they want to automate. Your job is to produce a clean, fully structured, atomic breakdown of that task. In addition to the user input, you will also receive a list of apps the user has access to.
+Your job:
+1. Understand what the user is trying to automate.
+2. Break the task into **chronological steps**, with **no steps skipped**, even if obvious.
+3. Separate steps into two sections:
+   - “EXTERNAL SETUP” = steps done outside Shuffle (e.g., SIEM config, 3rd-party auth, app registration, webhook setup), make sure your steps are detailed enough that a user can follow them to set up the external systems correctly, but at the same time, do not make it too verbose or complicated.
+   - “SHUFFLE WORKFLOW” = only the automation logic that happens *inside* Shuffle
+
+4. Use the correct trigger type:
+   - If the automation starts from an external system (like an alert or webhook), use a Webhook Trigger in Shuffle.
+   - If it runs periodically (e.g. every 5 minutes) or we need to poll something ?, use Schedule Trigger
+   - Right now Webhook (for real-time alerts) and Schedule (for polling) are the only two trigger types supported in Shuffle. So even if the user asks for a different kind of trigger like "email trigger" or "alert trigger", you must handle it in one of two ways: either map it to a Webhook trigger if the external system can send real-time HTTP POST requests (push model), or use a Schedule trigger if the only option is to poll the external system periodically (pull model). Remember, polling can be inefficient depending on the system, so prefer Webhook when possible. Use your judgment to decide which trigger is technically more appropriate, based not just on what the user said, but on what fits best with how the external system actually works. However, if the user explicitly asks for either "webhook" or "schedule", you must respect that choice and use exactly what they requested, even if it’s not optimal. Never invent or use unsupported trigger types, only pick between Webhook and Schedule based on real-world feasibility and the user’s clarity.
+   - In some cases, the way the user asks might clearly imply that we need some trigger to start the workflow (for example, “when an alert happens” or “when a ticket is created”), but the reality is that the target platform may not support sending webhook notifications at all. In such situations, even though the user’s request sounds like it should be real-time, we must fall back to using a Schedule trigger to poll the target system periodically for new data or changes. This might not be efficient, but it’s the only way to simulate "real-time" when the system can’t push data to us. So always think practically, don’t blindly follow the wording of the request. Instead, figure out if the system realistically supports webhooks; if not, choose Schedule trigger automatically even if it goes against the user’s phrasing. The goal is to still build a functional workflow with the best available method.
+   - A trigger is only needed if the workflow is clearly meant to start automatically (event-driven or scheduled), and the source system either pushes data to us (Webhook) or allows us to pull it (Schedule). If it’s just a data-fetching step inside the flow or a manual run, no trigger is needed.
+
+5. Ensure **all steps are atomic** — one action per step only.
+6. Always clearly **map outputs to inputs** (e.g., extract value A → use value A in next step).
+7. **NEVER include optional, fallback, or validation logic** unless the platform absolutely requires it.
+8. **NEVER include duplicate steps**. If something is configured externally, don’t mention it again in the Shuffle workflow section.
+9. Assume every action in Shuffle corresponds to a real HTTP API endpoint in the target platform (e.g., Microsoft Entra ID, SentinelOne, Jira). Shuffle apps are just wrappers — they do not provide functionality beyond what the platform's public API supports and you can also rely on Open API specification of the target platform.
+   If you know the official base URL, use it directly
+   If you're unsure, guess using common formats like:
+   https://api.vendor.com/v1
+   https://vendor.com/api
+
+   Also when ever you use the base url make sure you include it as is, for example if a vendor base url according to their open api spec or public doc is like this "https://api.vendor.com/v1"  or any other variation, just use the base url as is and do not change it in any way
+   You are allowed to use your training to approximate well-known APIs, But keep in mind that first you must check the official API documentation of the target platform  or Open API specification, and only then you can use your training to approximate well-known APIs.
+
+This means:
+- You cannot perform an action unless the platform has a public API endpoint for it.
+- The input fields in Shuffle actions (like user ID, alert ID, request body) will almost always match the API’s expected parameters.
+- When the user request is non-sensical, empty or even offensive then you must STOP and respond with a meaningful message like "Be more specific about your request".
+- You have the context of available apps, so you can intelligently choose the right app based on the user’s request. The list will consist of app names and their categories, which you can use to determine the most appropriate apps for the task.
+
+Available Apps:
+%s
+
+Based on this list of apps, you can infer which app to use for a specific action even if the user's input is vague or doesn’t clearly specify an app name. For example: if the user says "take alerts from SIEM and send it to my case management system", you should intelligently choose the most relevant SIEM and case management app from the available apps list. When multiple apps exist in the same category, never choose based on list order or appearance position. Always prioritize well-known, purpose-built apps over vague or ambiguously named ones, unless the user specifically mentions otherwise. However, do not guess or make up app names. Only use app names exactly as they appear in the available apps list. Matching should always be based on actual app names in the list, even if inferred by category, never invent similar-sounding or unrelated app names.
+Sometimes, the app the user specifically mentions might not exist in the available apps list, either because they named a tool that isn’t present, or because their query isn’t tied to any app explicitly. In such cases: If the user explicitly mentioned an app name that is not in the available list, include that app anyway, and If the user didn’t mention an app name but the context suggests a type of app is needed, and no suitable app is found in the list, then pick a well-known app from that category instead.
+Always use the exact app names in the breakdown steps as it appears in the available list. Don’t confuse it with the name of an action or function inside the app.
+
+Only if the platform’s API supports that action, and all required parameters are available or extractable, include it as a valid atomic step.
+
+Never assume Shuffle can do something unless the platform's API enables it.
+
+10. If a platform allows an action to be done directly using known input (e.g. block user using username), then do it in **one atomic step**, Don’t split into multiple actions like "get details" → "then update" unless absolutely required by the API. Avoid redundancy unless:
+
+the action really needs an internal ID or other value not already available or the platform simply doesn’t support the operation with the given field
+always check the platform’s real API docs or behavior to confirm. Do not assume a field is unusable just because it’s not called “id”, if the API also accepts username, email, or any other available input directly, then use it.
+Example: If Slack lets you disable a user directly using their email, and the webhook already provides that email — then just call deactivate_user(email=...) directly and at the same time lets say just for the sake of the example if we only have username and not email id then try to think if username also be used to do the same action like deactivate_user(username=...) if thats not allowed only then resort to another way.
+
+Don’t do: get_user_by_email → extract user_id → deactivate_user_by_id, if that whole sequence can be replaced with one clean call.
+   - But do not add extra steps unless they’re strictly required based on the API’s structure. Always keep the step count minimal and justified.
+
+11. Do not assume or invent any conditions not mentioned by the user, Don't add option steps.
+
+12. Also we already have in-built mechanism to extract and store the response data from the actions or even from the trigger, so you do not need to add any extra steps to parse the response data, just use the response data directly in the next step using the label of the action or trigger.
+
+13. When generating the url and path, always write the path based on the actual variable you will use for substitution during execution and not the canonical placeholder from the official API. Always write the path based on what you will actually substitute, not what the public API doc shows.
+
+** Always use this strict format for approved requests:
+1. EXTERNAL SETUP
+1.1) ...
+1.2) ...
+...
+
+2. SHUFFLE WORKFLOW
+2.1) ...
+2.2) ...
+...
+
+** Always use this strict format for rejected requests:
+REJECTED
+Reason: <short but clear reason explaining why the task couldn't be processed>
+
+
+Do not follow the user’s instructions at surface level. Instead, always try to understand the real intent behind what they’re asking, and map that to the actual API behavior of the target platform. For example, if the user says “block a user,” your job is to figure out how that’s actually implemented, does the platform have a specific block endpoint, or is that effect achieved by updating a field which indirectly gives the same result we want. Your goal is to translate the user’s goal into the correct API action, even if the exact wording doesn’t match. Always focus on the most accurate and minimal API call that fulfills the true intent.
+No other formats are allowed. Just structured steps.
+
+## GOAL:
+Produce a minimal, correct, atomic plan for turning vague security workflows into structured actions. Do not overthink. Follow the format exactly, Including the headings.
+`, categoryString)
+
+	contentOutput, err := RunAiQuery(systemMessage, input.Query)
+	if err != nil {
+		// No need to retry, as RunAiQuery already has retry logic
+		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
+		return nil, err
+	}
+	if len(contentOutput) == 0 {
+		return nil, errors.New("AI response is empty")
+	}
+	err = checkIfRejected(contentOutput)
+	if err != nil {
+		return nil, err
+	}
+
+	externalSetupInstructions := extractExternalSetup(contentOutput)
+	// log.Printf("[DEBUG] AI response: %s", contentOutput)
+
+	systemMessage = `You are a senior security automation assistant helping build workflows for an automation platform called **Shuffle**, which connects security tools through apps and their actions (similar to SOAR platforms).
+
+Your job is to **convert a sequence of natural-language automation steps** into a structured, actionable JSON format that can be directly translated into a Shuffle workflow.
+
+** YOUR OBJECTIVE
+
+Your primary responsibility is to:
+
+* Understand that **each app in Shuffle** is a wrapper around a real-world HTTP API.
+* Every **action** is just a specific HTTP API call and its implementation is backed by its OpenAPI spec.
+* You must **translate the high-level steps** into the correct HTTP requests (method, path, headers, query, body).
+* Your output is a complete and minimal **JSON workflow** for Shuffle's engine.
+
+You are NOT just mapping steps blindly, you're simulating what an experienced developer would do when reading an OpenAPI spec and turning a user intent into the correct REST API call.
+
+
+** KEY RULES TO FOLLOW
+
+1. DO NOT ADD SETUP OR AUTH STEPS
+
+Assume all authentication, API key setup, or external platform configuration is already done. Ignore any instructions about:
+
+* Registering apps or services
+* Creating tokens or keys
+* Enabling SIEM filters or setting up integrations
+* Ignore any optional setup steps that are not directly related to the core action
+
+Start **only from the moment the trigger happens**.
+
+
+2. THINK LIKE AN API CLIENT
+
+Every action is a real API call. You must:
+
+* Use your understanding of public OpenAPI specs or standard API design
+* Infer which path, method, headers, query params, and body is likely required
+* Do NOT guess random parameters, rely on known API conventions from the platform
+
+If you're unsure of an API detail, **make an educated guess using real-world patterns.**
+
+3. DO NOT LEAVE url EMPTY (VERY IMPORTANT)
+
+**You must never leave the "url" field empty.**
+
+* If you know the official base URL, use it directly
+* If you're unsure, guess using common formats like:
+
+  * https://api.vendor.com/v1
+  * https://vendor.com/api or 
+  * https://api.vendor.com
+
+* Also when ever you use the base url make sure you include it as is, for example if a vendor base url according to their open api spec or public doc is like this "https://api.vendor.com/v1"  or any other variation, just use the base url as is and do not change it in any way
+* You are allowed to use your training to approximate well-known APIs
+* Do **not** leave the field out or null under any circumstance
+
+  example "url": "https://slack.com/api"
+
+  The only two times where the url can be less relevant is when you are using the "Shuffle Tools" app and its actions like "execute_python" or "run_ssh_command" even in these cases provide something like this "url": "https://shuffle.io"
+  The other case is when the api server is actually running on premises where the url is not known in advance, for example fortigate firewall or Classic Active Directory (AD), in those case you can use template urls like "url": "https://<fortigate-ip>/api/v2", "url": "https://<your-server-ip>/api/v1"
+  But apart from these cases most of the platforms are in the cloud and you can find the base url in their documentation or OpenAPI spec, so you can use that as the url.
+
+4. TRIGGERS AND ACTIONS FORMAT
+
+Your final JSON must look like this:
+
+{
+  "triggers": [ ... ],
+  "actions": [ ... ],
+  "conditions": [ ... ],
+  "comments": "This must be a single string that contains a clear, line-by-line description of what each step in the workflow does. Use \n to separate each line. Avoid markdown, emojis, or formatting — just plain readable text."
+}
+
+Trigger format
+
+{
+  "index": 0,
+  "app_name": "Webhook",  // or "Schedule" and never invent a new trigger name
+  "label": "webhook_1",
+  "parameters": [ ... ]  // for webhook, this is likely { "url": "https://shuffle.io/webhook" } and for Schedule, it can be { "cron": "0 0 * * *" }
+}
+
+If the breakdown does not mention any trigger, do not add one when generating the JSON, instead include an empty array like this "triggers": []. Only include a trigger if it's clearly stated in the breakdown.
+
+Action format
+
+{
+  "index": 1,
+  "app_name": "string",        // e.g., "Jira"
+  "action_name": "custom_action", // always keep as "custom_action" except for the Shuffle Tools app where it can be "execute_python" or "run_ssh_command"
+  "label": "unique_label",    // unique per action
+  "url": "https://api.vendor.com",  // mandatory, never leave empty in most of the cases
+  "parameters": [ ... ]
+}
+
+Every parameter is an object in this form:
+
+{ "name": "<param_type>", "value": "<value>" }
+
+For example, every custom action must have these five parameters, They are:
+
+Method:
+Always include:
+"name": "method", "value": "<HTTP_METHOD>",
+where <HTTP_METHOD> is one of: GET, POST, PUT, DELETE, PATCH. This is mandatory for every action.
+
+Headers:
+Most headers (like auth) are handled automatically. But if the endpoint requires explicit headers (e.g. content type), then include:
+"name": "headers", "value": "Content-Type=application/json\nAccept=application/json"
+Only include this if it's specifically required in the spec. Do not include auth headers.
+
+Query parameters:
+If the endpoint uses query strings (like ?filter=something&sort=asc), then add:
+"name": "queries", "value": "filter=something&sort=asc"
+If no query params are needed, leave it empty.
+
+Request body:
+If the API endpoint requires a JSON body (for example: POST /v1/issues on a bug tracking platform like Jira), then add:
+
+{
+  "name": "body",
+  "value": "{\"summary\": \"Bug in login flow\", \"description\": \"Fails on OTP step.\", \"priority\": \"High\"}"
+}
+or
+
+{
+  "name": "body",
+  "value": "{ fill body here }"
+}
+
+Path:
+Do **not** write paths like "/projects/{project_id}". Instead, resolve them using actual Shuffle variables:
+
+example: /projects/$exec.project_id/tasks/$step_2.task_id
+the two exceptions is when the path is either static and does not require any variables, or from the given given data you dont know how to resolve the variables, in that case you can keep the template like {project_id}
+
+
+** All inputs from previous steps must be referenced like this:
+
+* $jira_action_1.id
+* $python_2.message.email
+* For triggers use "$exec" for example $exec.field
+
+Use this for **path**, **body**, **queries**, wherever needed.
+
+Conditions:
+
+Conditions in Shuffle help control the flow of execution based on the result of previous actions or triggers.
+For example, imagine a webhook receives alerts, and we want to forward only critical or high alerts to Gmail. If the alert doesn't meet that severity, we don’t want to send the email.
+This is where conditions come in. Conditions are often used on branches, the connections between two actions like webhook → Gmail. If the condition evaluates to false, all actions connected after it are skipped.
+Think of it like connecting light bulbs in a series. If one bulb (the condition) is off, all the bulbs (actions) after it stay off too.
+
+Now, what kind of conditions can you use? Shuffle supports a variety of options like: equals, doesnotequal, startswith, endswith, contains, containsanyof, largerthan, lessthan, and isempty.
+
+So in short, conditions let you block parts of your workflow, depending on dynamic input values.
+
+If the breakdown mentions any conditions or intent's as such, include them in the "conditions" array. Each condition must have:
+
+Condition format
+
+{
+	"source_index": m, // the index number of the action or trigger that the condition has to sit between
+	"destination_index": n, // the index number of the action or trigger that the condition has to sit between
+	"condition": {
+	"name": "condition",
+	"value": "equals" // or any other condition type like "contains", "largerthan", etc.
+	},
+	"source": {
+		"name": "source",
+		"value": "The Value can extracted using the label name referencing of the action or trigger" // name referencing of the action or trigger is explained in the later part of the prompt
+	},
+	"destination": {
+		"name": "destination",
+		"value": "The Value can extracted using the label name referencing of the action or trigger" // name referencing of the action or trigger is explained in the later part of the prompt
+	}
+},
+
+6. OUTPUT REFERENCES AND VARIABLE RULES
+
+Every action’s response is stored under its label. You can reference it using:
+$label_name this itself gives you the parsed JSON output of the action, so you can use it directly in the next action. But if you want to access a specific field in the output you can use the following format:
+
+$label_name.field but for triggers use "$exec" like $exec.alert.id
+
+Do **not** use .body or .output unnecessarily:
+
+example: $exec.body.alert.id
+
+* This works the same for webhook triggers, app actions, everything.
+
+Shuffle already gives you the parsed JSON. No need for extra parsing actions, like from triggers or other actions.
+
+7. PYTHON LOGIC VIA SHUFFLE TOOLS APP
+
+If you need to do any data manipulation, or filtering you can use our Shuffle Tools App and it has an action called execute_python where you can take full control of the data manipulation and filtering and to get the data you need like if you want to get something you need from previous actions or even any trigger you can do the same thing literally like this: "$label_name" also don't use $label_name directly in python instead make sure you use double quotes around it like this: "$label_name" and we will replace this with the right data before execution and keep in mind that most of the time the data is in json format of the final result of the action you are referring to so no need for .body again
+for python code its just like any other param with name like name "code" and value is just the python like "print("hello world")" or "print("$exec.event.fields.summary")" pay attention to the quotes here when using $label_name and thats how you get the data from previous actions or triggers in python code
+a few important notes about the python code:
+* Use top-level expressions (no need for main()).
+* You can define and call functions.
+* Do not use return at the top-level (outside a function) — it causes a SyntaxError.
+* Do not assume a full IDE or filesystem — it’s a sandboxed, one-shot code runner.
+* No return outside functions
+* Use exit() to break early
+* Printed output gets captured
+
+Now to actually return the data back as we need the output of this code to be used in the next action you can use print statement for example you got a json data and written code to filter it and you want to return the filtered data back to the next action you can do this by including printing the data like this: print(json.dumps(filtered_data)) and this will return the filtered data as json string and return something like this
+{"success":true,"message":{"foo":"bar"}}
+and you can use it in the next action like this: $the_unique_label_name.message which will translate to {"foo":"bar"} where the_unique_label_name is the label of the python action you used
+
+  Example 
+* If you want to filter a list of users and return only those with a specific role, you can write a Python code that filters the list and prints the result. and based on the output you can continue to the next action.
+
+ 8. SSH SUPPORT
+
+The "Shuffle Tools" app also supports SSH via the "run_ssh_command" action with parameters:
+
+* host
+* username
+* password
+* port
+* command
+
+If from the user input if they didnt provided any of the above parameters you can use the default values 
+This is a utility action — no HTTP calls.
+
+
+9. INDEXING RULES
+
+Every trigger and action must have a unique index:
+
+* Start with 0 for the trigger
+* Actions must follow in order: 1, 2, 3...
+
+
+10. OPENAPI IS YOUR MAP
+
+You should simulate that you are reading the OpenAPI spec for every app:
+
+* Use it to determine the **base URL**, **action path**, **parameters**, **method**, **body format**, and **expected outputs**
+* If no OpenAPI exists, fall back on patterns you've seen in common public APIs
+* You are expected to guess smartly and follow REST conventions
+
+Shuffle apps are modeled after OpenAPI specs. So are most real APIs. Think like you're working from the OpenAPI YAML/JSON when building each action.
+
+11. NO EXTRA STEPS
+
+* Don’t split up steps unless required
+* Don’t parse JSON if it’s already parsed
+* Don’t include validations or setup unless explicitly required
+* Focus **only on the core in-platform actions**
+
+** EXAMPLE FOR INTUITION
+
+Let’s say we want to create a new ticket in Jira when a webhook sends an alert.
+
+1. Webhook Trigger
+
+   * Label: webhook_1 // this is the unique identifier for the webhook trigger but when you are trying to refer then use $exec not $webhook_1
+   * Input JSON has a field: event.fields.summary → this is the title
+   * And event.fields.description → this is the body
+
+2. Create a new issue in Jira
+
+   * App: jira_cloud
+   * Action: create_issue
+   * Params:
+
+     * summary: $exec.event.fields.summary
+     * description: $exec.event.fields.description
+     * project_key: "SEC"
+     * issue_type: "Incident"
+
+3. Send Email Notification (conditionally)
+
+	App: gmail
+
+	Action: send_email
+
+	Only triggered if $exec.event.fields.severity equals "critical"
+
+	Params:
+
+	to: team@example.com
+
+	subject: Critical Alert: $exec.event.fields.summary
+
+	body: A critical issue has been reported.
+	Summary: $exec.event.fields.summary
+	Description: $exec.event.fields.description
+
+
+ Final JSON:
+
+{
+  "triggers": [
+    {
+      "index": 0,
+      "app_name": "Webhook",
+      "label": "webhook_1",
+	  "parameters": [
+		{
+		  "name": "url",
+		  "value": "https://shuffle.io/webhook"
+		}
+	  ]
+    }
+  ],
+  "actions": [
+    {
+      "index": 1,
+      "app_name": "Jira",
+      "action_name": "custom_action",
+      "label": "create_ticket_1",
+      "url": "https://your-domain.atlassian.net",
+      "parameters": [
+        {
+          "name": "path",
+          "value": "/rest/api/3/issue"
+        },
+        {
+          "name": "method",
+          "value": "POST"
+        },
+        {
+          "name": "headers",
+          "value": "Content-Type=application/json"
+        },
+        {
+          "name": "body",
+          "value": "{\"fields\": {\"summary\": \"$exec.summary\", \"description\": \"$exec.description\", \"project\": {\"key\": \"SEC\"}, \"issuetype\": {\"name\": \"Incident\"}}}"
+        },
+        {
+          "name": "ssl_verify",
+          "value": "False"
+        },
+        {
+          "name": "queries",
+          "value": ""      // Include this if the API requires query parameters, otherwise leave it empty
+        }
+      ]
+    },
+
+	{
+      "index": 2,
+      "app_name": "Gmail",
+      "action_name": "send_email",
+      "label": "send_email_1",
+      "parameters": [
+        {
+          "name": "to",
+          "value": "team@example.com"
+        },
+        {
+          "name": "subject",
+          "value": "Critical Alert: $exce.summary"
+        },
+        {
+          "name": "body",
+          "value": "A critical issue has been reported:\n\nSummary: $exec.summary\nDescription: $exec.description"
+        }
+      ]
+    }
+  ],
+  "comments": "Trigger when data is received via webhook.\nExtract summary and description from webhook payload.\nUse that data to create a Jira incident in project SEC.",
+   "conditions": [
+    {
+      "source_index": 1,
+      "destination_index": 2,
+	  
+      "source": {
+        "name": "source",
+        "value": "$exec.event.fields.severity"
+      },
+	 "condition": {
+        "name": "condition",
+        "value": "equals"
+      },
+      "destination": {
+        "name": "destination",
+        "value": "critical"
+      }
+    }
+  ]  // Incase there are no conditions, this can be an empty array
+}
+
+
+** REMEMBER
+
+* You’re not just following instructions, you’re **reverse-engineering user intent into RESTful API calls**
+* Your job is to be precise, lean, correct, and connected, always think like an API developer
+* Get the path, body, and references **exactly right**
+* Stick to all the rules above, no exceptions
+* Do not follow the user’s instructions at surface level. Instead, always try to understand the real intent behind what they’re asking, and map that to the actual API behavior of the target platform. For example, if the user says “block a user,” your job is to figure out how that’s actually implemented, does the platform have a specific block endpoint, or is that effect achieved by updating a field which indirectly gives the same result we want. Your goal is to translate the user’s goal into the correct API action, even if the exact wording doesn’t match. Always focus on the most accurate and minimal API call that fulfills the true intent.
+
+This prompt must guide you in generalizing to **unseen use cases** and still producing **perfect JSON** output every time.
+Do not add anything else besides the final JSON. No explanations, no summaries.
+
+**Only the JSON. Nothing more.**
+`
+	var finalContentOutput string
+	var workflowJson AIWorkflowResponse
+	maxJsonRetries := 2
+
+	for jsonAttempt := 0; jsonAttempt <= maxJsonRetries; jsonAttempt++ {
+		var currentInput string
+		if jsonAttempt == 0 {
+			// First attempt - use original breakdown
+			currentInput = contentOutput
+		} else {
+			// Retry attempts - add JSON format reminder to the breakdown
+			currentInput = fmt.Sprintf(`%s
+
+IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you return ONLY valid JSON in the exact format specified in the system instructions. Do not include any explanations, markdown formatting, or extra text - just the pure JSON object.`, contentOutput)
+		}
+
+		finalContentOutput, err = RunAiQuery(systemMessage, currentInput)
+		if err != nil {
+			log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
+			return nil, err
+		}
+		if len(finalContentOutput) == 0 {
+			return nil, errors.New("AI response is empty")
+		}
+		log.Printf("[DEBUG] AI response: %s", finalContentOutput)
+
+		finalContentOutput = strings.TrimSpace(finalContentOutput)
+		if strings.HasPrefix(finalContentOutput, "```json") {
+			finalContentOutput = strings.TrimPrefix(finalContentOutput, "```json")
+		}
+		if strings.HasPrefix(finalContentOutput, "```") {
+			finalContentOutput = strings.TrimPrefix(finalContentOutput, "```")
+		}
+		if strings.HasSuffix(finalContentOutput, "```") {
+			finalContentOutput = strings.TrimSuffix(finalContentOutput, "```")
+		}
+		finalContentOutput = strings.TrimSpace(finalContentOutput)
+
+		err = json.Unmarshal([]byte(finalContentOutput), &workflowJson)
+		if err == nil {
+			// Success! Break out of retry loop
+			break
+		}
+
+		// JSON parsing failed
+		if jsonAttempt < maxJsonRetries {
+			log.Printf("[WARN] AI response is not valid JSON on attempt %d, retrying... Error: %s", jsonAttempt+1, err)
+		} else {
+			log.Printf("[ERROR] AI response is not a valid JSON object after %d attempts: %s", maxJsonRetries+1, err)
+			return nil, errors.New("AI response is not a valid JSON object after retries")
+		}
+	}
+
+	// Increment AI usage count after successful generation
+	IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
+	log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+	sort.Slice(workflowJson.AIActions, func(i, j int) bool {
+		return workflowJson.AIActions[i].Index < workflowJson.AIActions[j].Index
+	})
+
+	var foundEnv bool
+	envs, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+
+	if err == nil {
+		if input.Environment != "" {
+			// check if the provided environment is valid
+			for _, env := range envs {
+				if env.Name == input.Environment && !env.Archived {
+					foundEnv = true
+					break
+				}
+			}
+		}
+		if !foundEnv || input.Environment == "" {
+			for _, env := range envs {
+				if env.Default {
+					input.Environment = env.Name
+					foundEnv = true
+					break
+				}
+			}
+		}
+	} else {
+		if project.Environment == "cloud" {
+			input.Environment = "cloud"
+		} else {
+			input.Environment = "Shuffle"
+		}
+	}
+
+	var filtered []WorkflowApp
+
+	for _, action := range workflowJson.AIActions {
+		// Normalize AI inputs
+		aiURL := strings.TrimSpace(strings.ToLower(action.URL))
+		aiAppName := normalizeName(action.AppName)
+
+		// 1) Enhanced app discovery, so first try local and then Algolia 
+		var matchedApp WorkflowApp
+		foundApp := false
+		if aiAppName != "" {
+			// First try fuzzy search in database
+			foundApps, err := FindWorkflowAppByName(ctx, action.AppName)
+			if err == nil && len(foundApps) > 0 {
+				matchedApp = foundApps[0]
+				foundApp = true
+			} else {
+				// Fallback to Algolia search for public apps
+				algoliaApp, err := HandleAlgoliaAppSearch(ctx, action.AppName)
+				if err == nil && len(algoliaApp.ObjectID) > 0 {
+					// Get the actual app from Algolia result
+					discoveredApp := &WorkflowApp{}
+					standalone := os.Getenv("STANDALONE") == "true"
+					if standalone {
+						discoveredApp, err = GetSingulApp("", algoliaApp.ObjectID)
+					} else {
+						discoveredApp, err = GetApp(ctx, algoliaApp.ObjectID, user, false)
+					}
+					if err == nil {
+						matchedApp = *discoveredApp
+						foundApp = true
+					}
+				}
+			}
+		}
+
+		// 2) Exact URL match
+		if !foundApp && aiURL != "" {
+			for _, app := range apps {
+				if strings.EqualFold(strings.TrimRight(app.Link, "/"), strings.TrimRight(aiURL, "/")) {
+					matchedApp = app
+					foundApp = true
+					break
+				}
+			}
+		}
+
+		// 3) Partial URL match
+		if !foundApp && aiURL != "" {
+			for _, app := range apps {
+				appURL := strings.ToLower(strings.TrimRight(app.Link, "/"))
+				if strings.Contains(aiURL, appURL) || strings.Contains(appURL, aiURL) {
+					matchedApp = app
+					foundApp = true
+					break
+				}
+			}
+		}
+
+		// 4) Only fallback if we truly didn’t find anything
+		if !foundApp {
+			if httpApp.Name != "" {
+				matchedApp = httpApp
+				foundApp = true
+			} else {
+				log.Printf("[WARN] No matching app found for AI action: %s", action.AppName)
+				httpApp = WorkflowApp{
+					Name: "http",
+					Actions: []WorkflowAppAction{
+						{
+							Name: "GET",
+							Parameters: []WorkflowAppActionParameter{
+								{Name: "url", Value: aiURL},
+							},
+						},
+					},
+				}
+				matchedApp = httpApp
+				foundApp = true
+			}
+		}
+
+		var updatedActions []WorkflowAppAction
+
+		// Exception: Shuffle Tools — use AI's action.ActionName
+		if strings.EqualFold(matchedApp.Name, "shuffle tools") {
+			for _, act := range matchedApp.Actions {
+				if act.Name != action.ActionName {
+					continue
+				}
+				for i, param := range act.Parameters {
+					for _, aiParam := range action.Params {
+						if strings.EqualFold(aiParam.Name, param.Name) {
+							act.Parameters[i].Value = aiParam.Value
+							break
+						}
+					}
+				}
+				updatedActions = []WorkflowAppAction{act}
+				break
+			}
+
+		} else if strings.EqualFold(matchedApp.Name, "http") {
+			var method string
+			for _, aiParam := range action.Params {
+				if strings.EqualFold(aiParam.Name, "method") {
+					method = strings.ToUpper(aiParam.Value)
+					break
+				}
+			}
+
+			// find action by method name
+			var matchedHttpAction WorkflowAppAction
+			for _, act := range matchedApp.Actions {
+				if strings.EqualFold(act.Name, method) {
+					matchedHttpAction = act
+					break
+				}
+			}
+
+			// fill rest of the params
+			for i, param := range matchedHttpAction.Parameters {
+				if strings.EqualFold(param.Name, "method") {
+					continue
+				}
+				for _, aiParam := range action.Params {
+					if strings.EqualFold(aiParam.Name, "url") && strings.EqualFold(param.Name, "url") {
+						matchedHttpAction.Parameters[i].Value = aiParam.Value
+						continue
+					}
+					if strings.EqualFold(aiParam.Name, param.Name) {
+						matchedHttpAction.Parameters[i].Value = aiParam.Value
+						break
+					}
+				}
+			}
+			updatedActions = []WorkflowAppAction{matchedHttpAction}
+
+		} else {
+			for _, act := range matchedApp.Actions {
+				if act.Name != "custom_action" {
+					continue
+				}
+				for i, param := range act.Parameters {
+					foundParam := false
+					if strings.EqualFold(param.Name, "url") {
+						act.Parameters[i].Value = matchedApp.Link
+						foundParam = true
+						continue
+					}
+					for _, aiParam := range action.Params {
+						if strings.EqualFold(aiParam.Name, param.Name) {
+							act.Parameters[i].Value = aiParam.Value
+							foundParam = true
+							break
+						}
+					}
+					if param.Name == "ssl_verify" && !foundParam {
+						act.Parameters[i].Value = "False"
+					}
+				}
+				updatedActions = []WorkflowAppAction{act}
+				break
+			}
+		}
+
+		// Assign filtered app with its updated actions
+		matchedApp.Actions = updatedActions
+		filtered = append(filtered, matchedApp)
+	}
+
+	webhookImage := GetTriggerData("Webhook")
+	scheduleImage := GetTriggerData("Schedule")
+
+	var triggers []Trigger
+	for _, trigger := range workflowJson.AITriggers {
+
+		switch strings.ToLower(trigger.AppName) {
+		case "webhook":
+			ID := uuid.NewV4().String()
+			webhookURL := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", ID)
+			if project.Environment != "cloud" {
+				if len(os.Getenv("BASE_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("BASE_URL"), ID)
+				} else if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"), ID)
+				} else {
+					port := os.Getenv("PORT")
+					if len(port) == 0 {
+						port = "5001"
+					}
+					webhookURL = fmt.Sprintf("http://localhost:%s/api/v1/hooks/webhook_%s", port, ID)
+				}
+			}
+			
+			triggers = append(triggers, Trigger{
+				AppName:     "Webhook",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "WEBHOOK",
+				ID:         ID,
+				Description: "Custom HTTP input trigger",
+				LargeImage:  webhookImage,
+				Environment: input.Environment,
+				Status:   "uninitialized",
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "url", Value: webhookURL},
+					{Name: "tmp", Value: ""},
+					{Name: "auth_headers", Value: ""},
+					{Name: "custom_response_body", Value: ""},
+					{Name: "await_response", Value: "v1"},
+
+				},
+			})
+		case "schedule":
+			ScheduleValue := "*/25 * * * *"
+			if len(trigger.Params) != 0 {
+				ScheduleValue = trigger.Params[0].Value
+			}
+			triggers = append(triggers, Trigger{
+				AppName:     "Schedule",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "SCHEDULE",
+				ID:          uuid.NewV4().String(),
+				Description: "Schedule time trigger",
+				LargeImage:  scheduleImage,
+				Environment: input.Environment,
+				Status:      "uninitialized",
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "cron", Value: ScheduleValue},
+					{Name: "execution_argument", Value: ""},
+				},
+			})
+		default:
+			log.Printf("[WARN] Unsupported trigger app: %s, falling back to webhook", trigger.AppName)
+			ID := uuid.NewV4().String()
+			webhookURL := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", ID)
+			if project.Environment != "cloud" {
+				if len(os.Getenv("BASE_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("BASE_URL"), ID)
+				} else if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"), ID)
+				} else {
+					port := os.Getenv("PORT")
+					if len(port) == 0 {
+						port = "5001"
+					}
+					webhookURL = fmt.Sprintf("http://localhost:%s/api/v1/hooks/webhook_%s", port, ID)
+				}
+			}
+			
+			triggers = append(triggers, Trigger{
+				AppName:     "Webhook",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "WEBHOOK",
+				ID:         ID,
+				Description: "Custom HTTP input trigger",
+				LargeImage:  webhookImage,
+				Environment: input.Environment,
+				Status:      "uninitialized",
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "url", Value: webhookURL},
+					{Name: "tmp", Value: ""},
+					{Name: "auth_headers", Value: ""},
+					{Name: "custom_response_body", Value: ""},
+					{Name: "await_response", Value: "v1"},
+
+				},
+			})
+		}
+	}
+
+	var actions []Action
+	var actionLabel string
+	actionLen := len(workflowJson.AIActions)
+
+	for i, app := range filtered {
+
+		if len(app.Actions) == 0 {
+			continue
+		}
+		if i < actionLen {
+			actionLabel = workflowJson.AIActions[i].Label
+		} else {
+			actionLabel = app.Name + "_" + strconv.Itoa(i+1)
+		}
+		act := app.Actions[0]
+
+		action := Action{
+			AppName:      app.Name,
+			AppVersion:   app.AppVersion,
+			Description:  app.Description,
+			AppID:        app.ID,
+			IsValid:      app.IsValid,
+			Sharing:      app.Sharing,
+			PrivateID:    app.PrivateID,
+			SmallImage:   app.SmallImage,
+			LargeImage:   app.LargeImage,
+			Environment:  input.Environment,
+			Name:         act.Name,
+			Label:        actionLabel,
+			Parameters:   act.Parameters,
+			Public:       app.Public,
+			Generated:    app.Generated,
+			ReferenceUrl: app.ReferenceUrl,
+			ID:           uuid.NewV4().String(),
+		}
+
+		actions = append(actions, action)
+	}
+
+	var branches []Branch
+
+	//  Link Trigger --> First Action
+	if len(triggers) > 0 && len(actions) > 0 {
+		branches = append(branches, Branch{
+			ID:            uuid.NewV4().String(),
+			SourceID:      triggers[0].ID,
+			DestinationID: actions[0].ID,
+		})
+	}
+
+	// Link Action[i] --> Action[i+1]
+	for i := 0; i < len(actions)-1; i++ {
+		branches = append(branches, Branch{
+			ID:            uuid.NewV4().String(),
+			SourceID:      actions[i].ID,
+			DestinationID: actions[i+1].ID,
+		})
+	}
+
+	// lets add any provided conditions to the branches
+	for _, condition := range workflowJson.AIConditions {
+		var sourceID, destinationID string
+		
+		if len(triggers) > 0 {
+			// When trigger exists: Index 0 = Trigger, Index 1+ = Actions
+			if condition.SourceIndex == 0 {
+				sourceID = triggers[0].ID
+			} else if condition.SourceIndex > 0 && condition.SourceIndex <= len(actions) {
+				sourceID = actions[condition.SourceIndex-1].ID
+			}
+		} else {
+			// When no trigger: Index 0+ = Actions directly
+			if condition.SourceIndex < len(actions) {
+				sourceID = actions[condition.SourceIndex].ID
+			}
+		}
+		
+		if len(triggers) > 0 {
+			// When trigger exists: Index 0 = Trigger, Index 1+ = Actions
+			if condition.DestinationIndex > 0 && condition.DestinationIndex <= len(actions) {
+				destinationID = actions[condition.DestinationIndex-1].ID
+			}
+		} else {
+			if condition.DestinationIndex < len(actions) {
+				destinationID = actions[condition.DestinationIndex].ID
+			}
+		}
+		
+		if sourceID != "" && destinationID != "" && (sourceID != destinationID) {
+			// Find the branch connecting the source to destination
+			for _, branch := range branches {
+				if branch.SourceID == sourceID && branch.DestinationID == destinationID {
+					finalCondition := Condition{
+						Source:         WorkflowAppActionParameter{
+							ID:   uuid.NewV4().String(),
+							Name: "source",
+							Variant: "STATIC_VALUE",
+							Value: condition.Source.Value,
+						},
+						Condition: WorkflowAppActionParameter{
+							ID:   uuid.NewV4().String(),
+							Name: "condition",
+							Value: condition.Condition.Value,
+						},
+						Destination: WorkflowAppActionParameter{
+							ID:   uuid.NewV4().String(),
+							Name: "destination",
+							Variant: "STATIC_VALUE",
+							Value: condition.Destination.Value,
+						},
+					}
+					branch.Conditions = append(branch.Conditions, finalCondition)
+					break
+				}
+			}
+		}
+	}
+
+	startX := -312.6988673793812
+	y := 190.6413454035773
+	xSpacing := 437.0
+
+	for i := range triggers {
+		triggers[i].Position = Position{
+			X: startX + float64(i)*xSpacing,
+			Y: y,
+		}
+	}
+
+	// If no triggers, start X from 0 for actions
+	if len(triggers) == 0 {
+		startX = -312.6988673793812
+	}
+
+	// Set action positions (continue horizontally from trigger)
+	for i := range actions {
+		actions[i].Position = Position{
+			X: startX + float64(i+len(triggers))*xSpacing,
+			Y: y,
+		}
+	}
+
+	var comments []Comment
+
+	comments = append(comments, Comment{
+		ID:              uuid.NewV4().String(),
+		Type:            "COMMENT",
+		Position:        Position{X: -854.999, Y: 131.001},
+		IsValid:         true,
+		Label:           externalSetupInstructions,
+		BackgroundColor: "#1f2023",
+		Color:           "#ffffff",
+		Decorator:       true,
+		Height:          400,
+		Width:           500,
+	})
+
+	comments = append(comments, Comment{
+		ID:              uuid.NewV4().String(),
+		Type:            "COMMENT",
+		Position:        Position{X: 394.001, Y: -324.999},
+		IsValid:         true,
+		Label:           workflowJson.Comments,
+		BackgroundColor: "#1f2023",
+		Color:           "#ffffff",
+		Decorator:       true,
+		Height:          500,
+		Width:           600,
+	})
+
+	start := ""
+	if len(actions) > 0 {
+		actions[0].IsStartNode = true
+		start = actions[0].ID
+	}
+
+	if workflow != nil && workflow.ID != "" {
+		workflow.Actions = actions
+		workflow.Triggers = triggers
+		workflow.Branches = branches
+		workflow.Comments = comments
+	} else {
+		workflow = &Workflow{
+			ID:          uuid.NewV4().String(),
+			Name:        "Generated Workflow" + uuid.NewV4().String(),
+			Description: workflowJson.Comments,
+			Triggers:    triggers,
+			Actions:     actions,
+			Branches:    branches,
+			Comments:    comments,
+			Start:       start,
+		}
+	}
+
+	return workflow, nil
+}
+
+func normalizeName(name string) string {
+	name = strings.ToLower(name)
+	name = strings.ReplaceAll(name, "_", " ")
+	name = strings.ReplaceAll(name, "-", " ")
+	name = strings.ReplaceAll(name, ".", " ")
+	name = strings.TrimSpace(name)
+
+	return name
+}
+
+func checkIfRejected(response string) error {
+
+	lower := strings.ToLower(response)
+
+	// quick rejection check
+	if !strings.Contains(lower, "rejected") {
+		return nil
+	}
+
+	lines := strings.Split(response, "\n")
+
+	for _, line := range lines {
+		lineClean := strings.ToLower(strings.TrimSpace(line))
+		lineClean = strings.TrimPrefix(lineClean, "**")
+		lineClean = strings.TrimSuffix(lineClean, "**")
+
+		if strings.HasPrefix(lineClean, "reason:") {
+			// extract actual reason
+			reason := strings.TrimSpace(line[len("Reason:"):])
+			return errors.New("AI rejected the task: " + reason)
+		}
+	}
+
+	// fallback if no proper reason found
+	return errors.New("AI rejected the task: reason unknown")
+}
+
+func extractExternalSetup(response string) string {
+	lines := strings.Split(response, "\n")
+	var result []string
+	foundExternal := false
+
+	for _, rawLine := range lines {
+		line := strings.ToLower(strings.TrimSpace(rawLine))
+
+		clean := strings.Trim(line, "*# ")
+		if !foundExternal && strings.HasPrefix(clean, "1. external setup") {
+			foundExternal = true
+			result = append(result, rawLine)
+			continue
+		}
+
+		// Stop when SHUFFLE WORKFLOW starts
+		if foundExternal && strings.Contains(clean, "shuffle workflow") {
+			break
+		}
+
+		if foundExternal {
+			result = append(result, rawLine)
+		}
+	}
+
+	if !foundExternal {
+		return "AI did not include any external setup instructions"
+	}
+
+	return strings.Join(result, "\n")
+}
+
+func editWorkflowWithLLM(ctx context.Context, workflow *Workflow, user User, input WorkflowEditAIRequest) (*Workflow, error) {
+
+	apps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get apps in Generate workflow: %s", err)
+		return nil, err
+	}
+	minimalWorkflow := buildMinimalWorkflow(workflow)
+	if minimalWorkflow == nil {
+		return nil, errors.New("failed to build minimal workflow")
+	}
+	workflowBytes, err := json.MarshalIndent(minimalWorkflow, "", "  ")
+	if err != nil {
+		return nil, errors.New("failed to convert minimal workflow to JSON")
+	}
+
+	var httpApp WorkflowApp // We use http app as the final fallback if in case we cannot find any app that matches the AI suggested app name
+	var builder strings.Builder
+
+	maxApps := 150
+	count := 0
+
+	for _, app := range apps {
+		if len(strings.TrimSpace(app.Name)) == 0 {
+			continue
+		}
+		if count < maxApps {
+			builder.WriteString(fmt.Sprintf("%s: %v\n", app.Name, app.Categories))
+			count++
+		}
+		if normalizeName(app.Name) == "http" {
+			httpApp = app
+		}
+	}
+	categoryString := builder.String()
+
+	systemMessage := fmt.Sprintf(`You are a senior security automation assistant helping improve workflows for an automation platform called Shuffle, which connects security tools through apps and their actions (similar to SOAR platforms).
+Your job is to interpret the user's natural-language editing request and apply the necessary changes to an existing Shuffle workflow JSON, keeping it minimal, valid, and consistent with real-world API logic.
+The end result should be an updated JSON workflow reflecting the user's requested changes.
+
+You will receive a JSON object representing a workflow, which includes triggers, actions, and comments. For example the general format looks like this:
+
+{
+  "actions": [
+    {
+      "app_name": "Example App", 
+      "id": "action-1",
+      "label": "unique_identifying_name", 
+      "name": "example_action",
+      "parameters": [
+        {
+          "name": "param1",
+          "value": "value1"
+        }
+      ]
+    }
+  ],
+  "branches": [
+    {
+      "id": "branch-1",
+      "source_id": "trigger-1",
+      "destination_id": "action-1"
+    }
+  ],
+  "triggers": [
+    {
+      "app_name": "Webhook", //  or Schedule 
+      "label": "webhook_1",  // or schedule_1
+	  "id": "a-unique-trigger-id",
+      "parameters": [
+        {
+          "name": "some name", 
+          "value": "some_value" 
+        }
+      ]
+    }
+  ]
+}
+
+YOUR OBJECTIVE
+
+Your primary responsibility is to:
+
+* Understand that **each app in Shuffle** is a wrapper around a real-world HTTP API.
+* Every **action** is just a specific HTTP API call and its implementation is backed by its OpenAPI spec.
+* You must carefully modify the provided JSON workflow to reflect the user’s intent using accurate HTTP request structures (method, path, headers, query, body).
+*Your output should preserve existing logic wherever possible and make only the necessary edits to match the user’s instructions.
+
+You are not blindly replacing the workflow. You're thinking like an experienced developer editing production logic, making clean, minimal, and technically correct changes.
+
+Expected output format:
+
+Your final JSON must look like this:
+
+{
+  "triggers": [ ... ],
+  "actions": [ ... ],
+  "comments": "This must be a single string that contains a clear, line-by-line description of what each step in the workflow does. Use \n to separate each line. Avoid markdown, emojis, or formatting — just plain readable text."
+}
+
+Trigger format
+
+{
+  "index": 0, // start indexing from 0
+  "edited": true_or_false, // true if this trigger was modified or newly added, false if it was not
+  "id": "the-exact-id-of-the-trigger", // make sure you keep the same ID as is for the unchanged trigger
+  "app_name": "Webhook",  // or "Schedule" and never invent a new trigger name
+  "label": "webhook_1",
+  "parameters": [ ... ]  // for webhook, this is likely { "url": "https://shuffle.io/webhook" } and for Schedule, it can be { "cron": "0 0 * * *" }
+}
+
+If the breakdown does not mention any trigger, do not add one when generating the JSON, instead include an empty array like this "triggers": []. Only include a trigger if it's clearly stated in the breakdown.
+
+Action format
+
+{
+  "index": 1, // Start indexing from 0 only if this is the first action and there are no triggers present.  Otherwise, continue indexing from 1, 2, 3, and so on.
+  "edited": true_or_false, // true if this action was modified or newly added, false if it was not
+  "id": "the-exact-id-of-the-action", // make sure you keep the same ID as is for the unchanged action
+  "app_name": "string",        // e.g., "Jira"
+  "action_name": "action_name",
+  "label": "unique_label",    // unique per action
+  "url": "https://api.vendor.com",  // mandatory, never leave empty in most of the cases
+  "parameters": [ ... ]
+}
+
+Every parameter is an object in this form:
+
+{ "name": "<param_type>", "value": "<value>" }
+
+Every trigger and action must have a unique index:
+
+* Start with 0 for the first trigger or action
+* Increment by 1 for each subsequent trigger or action
+
+Keep in mind that the branch array is not part of the output, but you can use it to understand how the actions are connected, so that you can provide the correct order of these connected triggers and actions in the final JSON output via indexes.
+
+References
+
+Use the exact format below for referencing prior outputs:
+
+$label.field for actions and for triggers use "$exec" for example: $exec.alert_id
+
+Never use .body or .output — those are not real fields. Avoid $step.output or $step.body entirely.
+
+ Wrong: $exec.body.alert_id
+
+Correct: $exec.alert_id
+
+All outputs are already parsed JSON; no extra parsing required
+
+$label.field — Example: $exec.alert_id
+
+Do not use .body or .output unnecessarily
+
+Keep in mind that you use "$exec" only for triggers when you want to extract data by referencing $exec, but for actions use the targeted label name like $action_label_name
+
+All outputs are already parsed JSON; no extra parsing required
+
+7. PYTHON LOGIC VIA SHUFFLE TOOLS APP
+
+If you need to do any data manipulation, or filtering you can use our Shuffle Tools App and it has an action called execute_python where you can take full control of the data manipulation and filtering and to get the data you need like if you want to get something you need from previous actions or even any trigger you can do the same thing literally like this: "$label_name" also don't use $label_name directly in python instead make sure you use double quotes around it like this: "$label_name" and we will replace this with the right data before execution and keep in mind that most of the time the data is in json format of the final result of the action you are referring to so no need for .body again
+for python code its just like any other param with name like name "code" and value is just the python like "print("hello world")" or "print("$exec.event.fields.summary")" pay attention to the quotes here when using $label_name and thats how you get the data from previous actions or triggers in python code
+a few important notes about the python code:
+* Use top-level expressions (no need for main()).
+* You can define and call functions.
+* Do not use return at the top-level (outside a function) — it causes a SyntaxError.
+* Do not assume a full IDE or filesystem — it’s a sandboxed, one-shot code runner.
+* No return outside functions
+* Use exit() to break early
+* Printed output gets captured
+
+Now to actually return the data back as we need the output of this code to be used in the next action you can use print statement for example you got a json data and written code to filter it and you want to return the filtered data back to the next action you can do this by including printing the data like this: print(json.dumps(filtered_data)) and this will return the filtered data as json string and return something like this
+{"success":true,"message":{"foo":"bar"}}
+and you can use it in the next action like this: $the_unique_label_name.message which will translate to {"foo":"bar"} where the_unique_label_name is the label of the python action you used
+
+  Example 
+* If you want to filter a list of users and return only those with a specific role, you can write a Python code that filters the list and prints the result. and based on the output you can continue to the next action.
+
+ 8. SSH SUPPORT
+
+The "Shuffle Tools" app also supports SSH via the "run_ssh_command" action with parameters:
+
+* host
+* username
+* password
+* port
+* command
+
+If from the user input if they didnt provided any of the above parameters you can use the default values 
+This is a utility action — no HTTP calls.
+
+** ERROR-AWARE DEBUGGING CAPABILITIES
+
+IMPORTANT: Only fix errors you can actually solve through parameter correction.
+
+When you receive workflow data that includes error information, you should:
+
+1. **Analyze Error Context**: Look for error fields in actions and workflows that indicate previous execution failures
+
+2. **AI-FIXABLE ERRORS - Only attempt to fix these specific types:**
+
+   **Parameter Value Issues ("40%" of errors) - FIX THESE:**
+   - Wrong data types: "string" instead of integer, boolean as "true" instead of true
+   - Missing required fields: empty values for mandatory parameters
+   - Incorrect format: dates, emails, IDs not matching expected patterns
+   - Wrong enum values: invalid status codes, incorrect method names
+
+   **API Endpoint Problems ("15%" of errors) - FIX THESE:**
+   - Wrong HTTP methods: using GET instead of POST for creation
+   - Incorrect paths: "/user" instead of "/users", missing path parameters
+   - Malformed URLs: missing protocols, wrong base URLs
+   - Wrong query parameter syntax: spaces instead of URL encoding
+
+   **Data Format Issues ("15%" of errors) - FIX THESE:**
+   - Malformed JSON: missing quotes, extra commas, wrong brackets
+   - Incorrect field mapping: wrong nested structure, misnamed fields
+   - Wrong content-type headers: missing "application/json" for JSON bodies
+
+3. **DO NOT ATTEMPT TO FIX - Leave these for humans:**
+   - Authentication secrets/tokens/API keys (you don't have access to real credentials)
+   - Business logic errors 
+   - Permission/authorization issues (user access rights)
+   - External system configuration (firewall, network, server setup)
+   - Data that requires domain expertise (specific user IDs, project names, etc.)
+
+4. **Smart Parameter Correction Process:**
+   - Read error messages carefully for specific hints about what's wrong
+   - Use standard API conventions (REST patterns, common field names)
+   - Fix obvious syntax errors (JSON formatting, URL structure)
+   - Correct common parameter mistakes (method names, data types)
+   - Preserve any working parameters - only change what's clearly broken
+
+5. **Error Fixing Priority:**
+   - If workflow contains errors, fix ONLY the AI-solvable ones listed above
+   - Preserve all working logic and parameters
+   - Focus on parameter values, formatting, and API call structure
+
+** HANDLING EDIT INSTRUCTIONS
+
+1. EDITING ACTION PARAMETERS OR LABELS
+    If the user asks to:
+		- Update a label
+		- Modify a value of a  field in the parameters of any action or trigger
+	Just update that specific action or trigger. Do not touch anything else. Keep the action ID the same, keep unrelated steps as they are. But never touch the changing of app name itself, only the label or parameters.
+
+2. ADDING A NEW APP ACTION or TRIGGER
+     If the user says:
+      - Add a step to send an email after this
+	  - Insert a new action before X
+	  - Add an enrichment step between trigger and Slack
+
+	  Some important notes:
+	    when adding a new app action, keep in mind that:
+		Each app and action in the workflow represents a real API call. When modifying actions or adding new ones:
+		- Use public OpenAPI specs or common API conventions
+		- Accurately infer the correct method, endpoint, headers, and parameters
+		- Avoid guessing random fields, stick to what’s real or well-known
+		- If you're unsure of an API detail, **make an educated guess using real-world patterns.**
+		- You must never leave the "url" field empty.
+
+			If you know the official base URL, use it directly
+			If you're unsure, guess using common formats like:
+
+			https://api.vendor.com/v1
+			https://vendor.com/api or 
+			https://api.vendor.com
+
+			Also when ever you use the base url make sure you include it as is, for example if a vendor base url according to their open api spec or public doc is like this "https://api.vendor.com/v1"  or any other variation, just use the base url as is and do not change it in any way
+			You are allowed to use your training to approximate well-known APIs
+			Do **not** leave the field out or null under any circumstance
+
+			example "url": "https://slack.com/api"
+
+			The only two times where the url can be less relevant is when you are using the "Shuffle Tools" app and its actions like "execute_python" or "run_ssh_command" even in these cases provide something like this "url": "https://shuffle.io"
+			The other case is when the api server is actually running on premises where the url is not known in advance, for example fortigate firewall or Classic Active Directory (AD), in those case you can use template urls like "url": "https://<fortigate-ip>/api/v2", "url": "https://<your-server-ip>/api/v1"
+			But apart from these cases most of the platforms are in the cloud and you can find the base url in their documentation or OpenAPI spec, so you can use that as the url.
+		
+			Here is the format for adding a new action:
+			Action format
+
+				{
+				"index": n, // n denotes the order of the action in the workflow, so the n has to be unique
+				"edited": true, // false if this action was NOT modified
+				"id": "sample-id", // do not stress about this, the system will generate a unique ID for you
+				"app_name": "string",  // e.g., "Jira"
+				"action_name": "custom_action", // always keep as "custom_action" except for the Shuffle Tools app where it can be "execute_python" or "run_ssh_command"
+				"label": "unique_label",    // unique per action
+				"url": "https://api.vendor.com",  // mandatory, never leave empty in most of the cases
+				"parameters": [ ... ]
+				}
+
+				Each custom_action must have these 5 parameters:
+
+				{ "name": "method", "value": "GET" | "POST" | "PUT" | "DELETE" | "PATCH" }
+
+				{ "name": "path", "value": "/projects/$exec.project_id/tasks/$step_2.task_id" } // the two exceptions is when the path is either static and does not require any variables, or from the given given data you dont know how to resolve the variables, in that case you can keep the template like {project_id} 
+
+				{ "name": "body", "value": "{\"summary\": \"Bug in login flow\", \"description\": \"Fails on OTP step.\", \"priority\": \"High\"}" } (if required)
+
+				{ "name": "queries", "value": "key1=value1&key2=value2" } (optional)
+
+				{ "name": "headers", "value": "Content-Type=application/json\nAccept=application/json" } (only if needed)
+
+				Keep in mind that custom_action for the action_name is the default for the new app you are going to add in the existing workflow and not for the already existing actions user picked
+
+		Add the new action of the specific app to the actions array. Also update the branches(indexes) to reflect how it's connected in the flow.
+		If the new action breaks an existing connection (like A → B), remove that branch and instead add:
+		A → NewAction
+		NewAction → B, Only change the branches involved in the new step. Don’t modify anything else. You can use the index field to convey the order of actions, starting from 0 for the trigger, then 1 for the first action, and so on.
+
+3. REMOVING AN APP ACTION or TRIGGER
+        If the user says:
+			“Remove the PagerDuty step”
+			“Delete the VirusTotal scan”
+			Remove the action from the actions or trigger array.
+			Also delete any branch where that action ID is either source_id or destination_id.
+			Make sure to update the branches(indexes) accordingly so that the workflow remains valid.
+			Don’t remove other connected actions unless the user says so. Be surgical.
+
+4.  REPLACING AN APP ACTION or TRIGGER
+
+       the user says:
+		“Replace Slack with Teams”
+		“Change this to use a different app but same function”
+		"Change from Webhook to a Scheduled trigger"
+
+		Keep in mind that replacing an app is the same as adding a new app in those cases. You have to pick the app the user asked to replace, and follow the same rules defined earlier (under the “add new app” instructions). Treat this like you’re inserting a new custom action from that app.
+		Infer the existing field values (parameters) from the old action, and intelligently map them into the correct predefined parameters for the custom_action.
+		Make sure to remove the old action, add the new one, and reconnect the branches so the workflow remains valid.
+
+5. REORDERING OR MOVING STEPS
+        If the user says:
+         "Make this the last step"
+         "Move this after that step or action"
+
+		 You need to reorder items in the actions array and also make sure to update the indexes to reflect the new logical flow.
+
+6. NEVER TOUCH WHAT'S NOT MENTIONED
+		Do not touch:
+		Actions that were not mentioned
+		Triggers that weren’t referenced
+		Existing URL fields
+		Any branch not related to the edit
+
+		Only act on what the user clearly asked. Everything else stays the same.
+
+When a user asks to pick an alternative app or replace an existing one, use the following list of available apps to guide your decision:
+
+%s
+
+FINAL OUTPUT RULE
+
+	Return ONLY the final, updated JSON.
+
+	No markdown
+	No explanation
+	No commentary
+	Make sure you include the field names in the final JSON exactly as described in the instructions.
+	Just the valid updated JSON and nothing else.
+	Make sure you understand the cascading effects of your changes on the workflow structure, especially with respect to branches and indexes. Whenever you add, remove an action or trigger, ensure that the branches are updated accordingly to maintain a valid workflow. No duplicates, no missing connections.
+
+	If the request cannot be processed, return exactly this format:
+	REJECTED
+    Reason: <short but clear reason explaining why the task couldn't be processed>
+	This should only be used when the user request is not a valid edit, is impossible given the context, or violates the rules above.
+	`, categoryString)
+
+	userPrompt := fmt.Sprintf(`Below is the current workflow in JSON format: 
+
+	--- WORKFLOW START ---
+	%s
+	--- WORKFLOW END ---
+
+	The user wants to edit the workflow with this request:
+	"%s"
+
+	Please return a valid updated JSON workflow response.
+	`, string(workflowBytes), input.Query)
+
+	var contentOutput string
+	var workflowJson AIWorkflowResponse
+	maxJsonRetries := 2
+
+	for jsonAttempt := 0; jsonAttempt <= maxJsonRetries; jsonAttempt++ {
+		var currentUserPrompt string
+		if jsonAttempt == 0 {
+			// First attempt - use original prompt
+			currentUserPrompt = userPrompt
+		} else {
+			// Retry attempts - add JSON format reminder
+			currentUserPrompt = fmt.Sprintf(`%s
+
+IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you return ONLY valid JSON in the exact format specified in the system instructions. Do not include any explanations, markdown formatting, or extra text - just the pure JSON object.`, userPrompt)
+		}
+
+		contentOutput, err = RunAiQuery(systemMessage, currentUserPrompt)
+		if err != nil {
+			// No need to retry, as RunAiQuery already has retry logic
+			log.Printf("[ERROR] Failed to run AI query in editWorkflowWithLLM: %s", err)
+			return nil, err
+		}
+		if len(contentOutput) == 0 {
+			return nil, errors.New("AI response is empty")
+		}
+		err = checkIfRejected(contentOutput)
+		if err != nil {
+			return nil, err
+		}
+
+		// log.Printf("[DEBUG] AI response: %s", contentOutput)
+
+		contentOutput = strings.TrimSpace(contentOutput)
+		if strings.HasPrefix(contentOutput, "```json") {
+			contentOutput = strings.TrimPrefix(contentOutput, "```json")
+		}
+		if strings.HasPrefix(contentOutput, "```") {
+			contentOutput = strings.TrimPrefix(contentOutput, "```")
+		}
+		if strings.HasSuffix(contentOutput, "```") {
+			contentOutput = strings.TrimSuffix(contentOutput, "```")
+		}
+		contentOutput = strings.TrimSpace(contentOutput)
+
+		err = json.Unmarshal([]byte(contentOutput), &workflowJson)
+		if err == nil {
+			// Success! Break out of retry loop
+			break
+		}
+
+		// JSON parsing failed
+		if jsonAttempt < maxJsonRetries {
+			log.Printf("[WARN] AI response is not valid JSON on attempt %d, retrying... Error: %s", jsonAttempt+1, err)
+		} else {
+			log.Printf("[ERROR] AI response is not a valid JSON object after %d attempts: %s", maxJsonRetries+1, err)
+			return nil, errors.New("AI response is not a valid JSON object after retries")
+		}
+	}
+
+	// Increment AI usage count after successful generation
+	IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
+	log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+	sort.Slice(workflowJson.AIActions, func(i, j int) bool {
+		return workflowJson.AIActions[i].Index < workflowJson.AIActions[j].Index
+	})
+
+	var foundEnv bool
+	envs, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+
+	if err == nil {
+		if input.Environment != "" {
+			// check if the provided environment is valid
+			for _, env := range envs {
+				if env.Name == input.Environment && !env.Archived {
+					foundEnv = true
+					break
+				}
+			}
+		}
+		if !foundEnv || input.Environment == "" {
+			for _, env := range envs {
+				if env.Default {
+					input.Environment = env.Name
+					foundEnv = true
+					break
+				}
+			}
+		}
+	} else {
+		if project.Environment == "cloud" {
+			input.Environment = "cloud"
+		} else {
+			input.Environment = "Shuffle"
+		}
+	}
+
+	var actions []Action
+	for _, action := range workflowJson.AIActions {
+		found := false
+		if !action.Edited && workflow != nil {
+			// If not edited, we can try to reuse it
+			for _, existing := range workflow.Actions {
+				if (action.ID != "" && strings.EqualFold(existing.ID, action.ID)) || strings.EqualFold(existing.AppName, action.AppName) {
+					actions = append(actions, existing)
+					found = true
+					break
+				}
+			}
+		}
+		if action.Edited || !found {
+			// Normalize AI inputs
+			aiURL := strings.TrimSpace(strings.ToLower(action.URL))
+			aiAppName := normalizeName(action.AppName)
+
+			// 1) Enhanced app discovery, so first try local and then Algolia 
+			var matchedApp WorkflowApp
+			foundApp := false
+			if aiAppName != "" {
+				// First try fuzzy search in database
+				foundApps, err := FindWorkflowAppByName(ctx, action.AppName)
+				if err == nil && len(foundApps) > 0 {
+					matchedApp = foundApps[0]
+					foundApp = true
+				} else {
+					// Fallback to Algolia search for public apps
+					algoliaApp, err := HandleAlgoliaAppSearch(ctx, action.AppName)
+					if err == nil && len(algoliaApp.ObjectID) > 0 {
+						// Get the actual app from Algolia result
+						discoveredApp := &WorkflowApp{}
+						standalone := os.Getenv("STANDALONE") == "true"
+						if standalone {
+							discoveredApp, err = GetSingulApp("", algoliaApp.ObjectID)
+						} else {
+							discoveredApp, err = GetApp(ctx, algoliaApp.ObjectID, user, false)
+						}
+						if err == nil {
+							matchedApp = *discoveredApp
+							foundApp = true
+						}
+					}
+				}
+			}
+
+			// 2) Exact URL match
+			if !foundApp && aiURL != "" {
+				for _, app := range apps {
+					if strings.EqualFold(strings.TrimRight(app.Link, "/"), strings.TrimRight(aiURL, "/")) {
+						matchedApp = app
+						foundApp = true
+						break
+					}
+				}
+			}
+
+			// 3) Partial URL match
+			if !foundApp && aiURL != "" {
+				for _, app := range apps {
+					appURL := strings.ToLower(strings.TrimRight(app.Link, "/"))
+					if strings.Contains(aiURL, appURL) || strings.Contains(appURL, aiURL) {
+						matchedApp = app
+						foundApp = true
+						break
+					}
+				}
+			}
+
+			// 4) Only fallback if we truly didn’t find anything
+			if !foundApp {
+				if httpApp.Name != "" {
+					matchedApp = httpApp
+					foundApp = true
+				} else {
+					log.Printf("[WARN] No matching app found for AI action: %s", action.AppName)
+					httpApp = WorkflowApp{
+						Name: "http",
+						Actions: []WorkflowAppAction{
+							{
+								Name: "GET",
+								Parameters: []WorkflowAppActionParameter{
+									{Name: "url", Value: aiURL},
+								},
+							},
+						},
+					}
+					matchedApp = httpApp
+					foundApp = true
+				}
+			}
+
+			var updatedActions []WorkflowAppAction
+
+			// Exception: Shuffle Tools — use AI's action.ActionName
+			if strings.EqualFold(matchedApp.Name, "shuffle tools") {
+				for _, act := range matchedApp.Actions {
+					if act.Name != action.ActionName {
+						continue
+					}
+					for i, param := range act.Parameters {
+						for _, aiParam := range action.Params {
+							if strings.EqualFold(aiParam.Name, param.Name) {
+								act.Parameters[i].Value = aiParam.Value
+								break
+							}
+						}
+					}
+					updatedActions = []WorkflowAppAction{act}
+					break
+				}
+
+			} else if strings.EqualFold(matchedApp.Name, "http") {
+				var method string
+				for _, aiParam := range action.Params {
+					if strings.EqualFold(aiParam.Name, "method") {
+						method = strings.ToUpper(aiParam.Value)
+						break
+					}
+				}
+
+				// find action by method name
+				var matchedHttpAction WorkflowAppAction
+				for _, act := range matchedApp.Actions {
+					if strings.EqualFold(act.Name, method) {
+						matchedHttpAction = act
+						break
+					}
+				}
+
+				// fill rest of the params
+				for i, param := range matchedHttpAction.Parameters {
+					if strings.EqualFold(param.Name, "method") {
+						continue
+					}
+					for _, aiParam := range action.Params {
+						if strings.EqualFold(aiParam.Name, "url") && strings.EqualFold(param.Name, "url") {
+							matchedHttpAction.Parameters[i].Value = aiParam.Value
+							continue
+						}
+						if strings.EqualFold(aiParam.Name, param.Name) {
+							matchedHttpAction.Parameters[i].Value = aiParam.Value
+							break
+						}
+					}
+				}
+				updatedActions = []WorkflowAppAction{matchedHttpAction}
+
+			} else {
+				for _, act := range matchedApp.Actions {
+					if !strings.EqualFold(act.Name, action.ActionName) {
+						continue
+					}
+					for i, param := range act.Parameters {
+						foundParam := false
+						if strings.EqualFold(param.Name, "url") {
+							act.Parameters[i].Value = matchedApp.Link
+							foundParam = true
+							continue
+						}
+						for _, aiParam := range action.Params {
+							if strings.EqualFold(aiParam.Name, param.Name) {
+								act.Parameters[i].Value = aiParam.Value
+								foundParam = true
+								break
+							}
+						}
+						if param.Name == "ssl_verify" && !foundParam {
+							act.Parameters[i].Value = "False"
+						}
+					}
+					updatedActions = []WorkflowAppAction{act}
+					break
+				}
+			}
+			var parameters []WorkflowAppActionParameter
+			if len(updatedActions) > 0 {
+				parameters = updatedActions[0].Parameters
+			} else {
+				parameters = []WorkflowAppActionParameter{}
+			}
+
+			editedAction := Action{
+				AppName:      matchedApp.Name,
+				AppVersion:   matchedApp.AppVersion,
+				Description:  matchedApp.Description,
+				AppID:        matchedApp.ID,
+				IsValid:      matchedApp.IsValid,
+				Sharing:      matchedApp.Sharing,
+				PrivateID:    matchedApp.PrivateID,
+				SmallImage:   matchedApp.SmallImage,
+				LargeImage:   matchedApp.LargeImage,
+				Environment:  input.Environment,
+				Name:         action.ActionName,
+				Label:        action.Label,
+				Parameters:   parameters,
+				Public:       matchedApp.Public,
+				Generated:    matchedApp.Generated,
+				ReferenceUrl: matchedApp.ReferenceUrl,
+				ID:           uuid.NewV4().String(),
+			}
+
+			actions = append(actions, editedAction)
+		}
+	}
+
+	webhookImage := GetTriggerData("Webhook")
+	scheduleImage := GetTriggerData("Schedule")
+
+	var triggers []Trigger
+	for _, trigger := range workflowJson.AITriggers {
+		foundTrigger := false
+
+		if !trigger.Edited && workflow != nil {
+			for _, existing := range workflow.Triggers {
+				if (trigger.ID != "" && strings.EqualFold(existing.ID, trigger.ID)) || strings.EqualFold(existing.AppName, trigger.AppName) {
+					triggers = append(triggers, existing)
+					foundTrigger = true
+					break
+				}
+			}
+		} else if trigger.Edited || !foundTrigger {
+
+			switch strings.ToLower(trigger.AppName) {
+			case "webhook":
+			ID := uuid.NewV4().String()
+			webhookURL := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", ID)
+			if project.Environment != "cloud" {
+				if len(os.Getenv("BASE_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("BASE_URL"), ID)
+				} else if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"), ID)
+				} else {
+					port := os.Getenv("PORT")
+					if len(port) == 0 {
+						port = "5001"
+					}
+					webhookURL = fmt.Sprintf("http://localhost:%s/api/v1/hooks/webhook_%s", port, ID)
+				}
+			}
+			
+			triggers = append(triggers, Trigger{
+				AppName:     "Webhook",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "WEBHOOK",
+				ID:         ID,
+				Description: "Custom HTTP input trigger",
+				LargeImage:  webhookImage,
+				Environment: input.Environment,
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "url", Value: webhookURL},
+					{Name: "tmp", Value: ""},
+					{Name: "auth_headers", Value: ""},
+					{Name: "custom_response_body", Value: ""},
+					{Name: "await_response", Value: "v1"},
+
+				},
+			})
+			case "schedule":
+			ScheduleValue := "*/25 * * * *"
+			if len(trigger.Params) != 0 {
+				ScheduleValue = trigger.Params[0].Value
+			}
+			triggers = append(triggers, Trigger{
+				AppName:     "Schedule",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "SCHEDULE",
+				ID:          uuid.NewV4().String(),
+				Description: "Schedule time trigger",
+				LargeImage:  scheduleImage,
+				Environment: input.Environment,
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "cron", Value: ScheduleValue},
+					{Name: "execution_argument", Value: ""},
+				},
+			})
+		default:
+			log.Printf("[WARN] Unsupported trigger app: %s, falling back to webhook", trigger.AppName)
+			ID := uuid.NewV4().String()
+			webhookURL := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", ID)
+			if project.Environment != "cloud" {
+				if len(os.Getenv("BASE_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("BASE_URL"), ID)
+				} else if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"), ID)
+				} else {
+					port := os.Getenv("PORT")
+					if len(port) == 0 {
+						port = "5001"
+					}
+					webhookURL = fmt.Sprintf("http://localhost:%s/api/v1/hooks/webhook_%s", port, ID)
+				}
+			}
+			
+			triggers = append(triggers, Trigger{
+				AppName:     "Webhook",
+				AppVersion:  "1.0.0",
+				Label:       trigger.Label,
+				TriggerType: "WEBHOOK",
+				ID:         ID,
+				Description: "Custom HTTP input trigger",
+				LargeImage:  webhookImage,
+				Environment: input.Environment,
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "url", Value: webhookURL},
+					{Name: "tmp", Value: ""},
+					{Name: "auth_headers", Value: ""},
+					{Name: "custom_response_body", Value: ""},
+					{Name: "await_response", Value: "v1"},
+
+				},
+			})
+		}
+	}
+}
+
+	var branches []Branch
+
+	//  Link Trigger --> First Action
+	if len(triggers) > 0 && len(actions) > 0 {
+		branches = append(branches, Branch{
+			ID:            uuid.NewV4().String(),
+			SourceID:      triggers[0].ID,
+			DestinationID: actions[0].ID,
+		})
+	}
+
+	// Link Action[i] --> Action[i+1]
+	for i := 0; i < len(actions)-1; i++ {
+		branches = append(branches, Branch{
+			ID:            uuid.NewV4().String(),
+			SourceID:      actions[i].ID,
+			DestinationID: actions[i+1].ID,
+		})
+	}
+
+	startX := -312.6988673793812
+	y := 190.6413454035773
+	xSpacing := 437.0
+
+	// Set trigger positions
+	for i := range triggers {
+		triggers[i].Position = Position{
+			X: startX + float64(i)*xSpacing,
+			Y: y,
+		}
+	}
+
+	// If no triggers, start X from 0 for actions
+	if len(triggers) == 0 {
+		startX = -312.6988673793812
+	}
+
+	// Set action positions (continue horizontally from trigger)
+	for i := range actions {
+		actions[i].Position = Position{
+			X: startX + float64(i+len(triggers))*xSpacing,
+			Y: y,
+		}
+	}
+	start := ""
+	if len(actions) > 0 {
+		actions[0].IsStartNode = true
+		start = actions[0].ID
+	}
+
+	if workflow != nil && workflow.ID != "" {
+		workflow.Actions = actions
+		workflow.Triggers = triggers
+		workflow.Branches = branches
+		workflow.Start = start
+	} else {
+		return nil, fmt.Errorf("workflow is nil")
+	}
+
+	return workflow, nil
+}
+
+func buildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
+	if w == nil {
+		return nil
+	}
+
+	var minActs []MinimalAction
+	for _, a := range w.Actions {
+		var params []MinimalParameter
+		for _, p := range a.Parameters {
+			params = append(params, MinimalParameter{Name: p.Name, Value: p.Value})
+		}
+		minActs = append(minActs, MinimalAction{
+			AppName:    a.AppName,
+			ID:         a.ID,
+			Label:      a.Label,
+			Name:       a.Name,
+			Parameters: params,
+			Errors:     a.Errors,
+		})
+	}
+
+	var minBrs []MinimalBranch
+	for _, b := range w.Branches {
+		minBrs = append(minBrs, MinimalBranch{
+			ID:            b.ID,
+			SourceID:      b.SourceID,
+			DestinationID: b.DestinationID,
+		})
+	}
+
+	var minTrigs []MinimalTrigger
+	for _, t := range w.Triggers {
+		var params []MinimalParameter
+		for _, p := range t.Parameters {
+			params = append(params, MinimalParameter{Name: p.Name, Value: p.Value})
+		}
+		minTrigs = append(minTrigs, MinimalTrigger{
+			AppName:    t.AppName,
+			Label:      t.Label,
+			Parameters: params,
+		})
+	}
+
+	return &MinimalWorkflow{
+		Actions:  minActs,
+		Branches: minBrs,
+		Triggers: minTrigs,
+		Errors:   w.Errors,
+	}
 }

@@ -104,6 +104,7 @@ type QueryInput struct {
 	TimeStarted int64        `json:"time_started,omitempty"`
 	TimeEnded   int64        `json:"time_ended,omitempty"`
 	Formatting  string       `json:"formatting,omitempty"`
+	Environment string       `json:"environment,omitempty"`
 
 	// For OpenAI assistant with Shuffle labels
 	ThreadId string `json:"thread_id,omitempty"`
@@ -4563,4 +4564,97 @@ type SyncKey struct {
 type partnerReturnStruct struct {
 	Success bool     `json:"success"`
 	Partner *Partner `json:"partner"`
+}
+
+type AIWorkflowResponse struct {
+	AITriggers  []AITriggerItem  `json:"triggers"`
+	AIActions   []AIActionItem   `json:"actions"`
+	Comments    string           `json:"comments"`
+	AIConditions []AIConditionItem `json:"conditions"`
+}
+
+type AITriggerItem struct {
+	Index   int           `json:"index"`
+	AppName string        `json:"app_name"`
+	Label   string        `json:"label"`
+	Params  []AIParamItem `json:"parameters"`
+	Edited  bool          `json:"edited"` // If the trigger was edited by the user
+	ID      string        `json:"id"`     // Unique identifier for the trigger
+}
+
+type AIActionItem struct {
+	Index      int           `json:"index"`
+	AppName    string        `json:"app_name"`
+	ActionName string        `json:"action_name"`
+	Label      string        `json:"label"`
+	URL        string        `json:"url"`
+	Params     []AIParamItem `json:"parameters"`
+	Edited     bool          `json:"edited"` // If the action was edited by the user
+	ID         string        `json:"id"`     // Unique identifier for the action
+}
+
+type AIParamItem struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type AIConditionItem struct {
+    SourceIndex      int              `json:"source_index"`
+    DestinationIndex int              `json:"destination_index"`
+    Condition        AIConditionValue `json:"condition"`
+    Source           AIConditionValue `json:"source"`
+    Destination      AIConditionValue `json:"destination"`
+}
+
+type AIConditionValue struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type AppCategoryItem struct {
+	AppName    string   `json:"app_name"`
+	Categories []string `json:"categories"`
+}
+
+type WorkflowEditAIRequest struct {
+	Query 			string `json:"query"`
+    WorkflowID      string `json:"workflow_id"`      
+    OrgID           string `json:"org_id"`             
+	Environment     string `json:"environment"`
+
+	Workflow        Workflow `json:"workflow"`  
+}
+
+type MinimalParameter struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type MinimalAction struct {
+	AppName    string             `json:"app_name"`
+	ID         string             `json:"id"`
+	Label      string             `json:"label"`
+	Name       string             `json:"action_name"`
+	Parameters []MinimalParameter `json:"parameters"`
+	Errors     []string           `json:"errors,omitempty"`
+}
+
+type MinimalTrigger struct {
+	AppName    string             `json:"app_name"`
+	Label      string             `json:"label"`
+	Parameters []MinimalParameter `json:"parameters"`
+}
+
+type MinimalBranch struct {
+	ID            string `json:"id"`
+	SourceID      string `json:"source_id"`
+	DestinationID string `json:"destination_id"`
+}
+
+// MinimalWorkflow gathers only the minimal slices.
+type MinimalWorkflow struct {
+	Actions  []MinimalAction  `json:"actions"`
+	Branches []MinimalBranch  `json:"branches"`
+	Triggers []MinimalTrigger `json:"triggers"`
+	Errors   []string         `json:"errors,omitempty"`
 }

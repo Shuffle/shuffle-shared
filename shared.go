@@ -13386,6 +13386,260 @@ func HandleDeleteHook(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true, "reason": "Stopped webhook"}`))
 }
 
+// startWebhookTrigger - Core function to start a webhook trigger without HTTP handlers
+func startWebhookTrigger(ctx context.Context, workflowId, triggerId, triggerName, startNode, environment, auth, customResponse, version string, versionTimeout int, user User, orgId string) error {
+	// Validate webhook ID length (exactly like HandleNewHook)
+	if len(triggerId) != 36 {
+		return fmt.Errorf("invalid Webhook ID: bad formatting - must be 36 characters, got %d", len(triggerId))
+	}
+
+	// Get the workflow first
+	workflow, err := GetWorkflow(ctx, workflowId)
+	if err != nil {
+		return fmt.Errorf("failed getting workflow %s: %s", workflowId, err)
+	}
+
+	// Check if hook already exists
+	originalHook, err := GetHook(ctx, triggerId)
+	if err == nil {
+		log.Printf("[WARNING] Hook with ID %s already exists", triggerId)
+	}
+
+	// Validate workflow access (exactly like HandleNewHook)
+	if workflow.OrgId != user.ActiveOrg.Id {
+		return fmt.Errorf("user %s doesn't have access to workflow %s", user.Username, workflowId)
+	}
+
+	// Validate hook access if it exists (exactly like HandleNewHook)
+	if (!(user.SupportAccess || user.Id == originalHook.Owner) || len(user.Id) == 0) && originalHook.Id != "" {
+		if originalHook.OrgId != user.ActiveOrg.Id && originalHook.OrgId != "" {
+			return fmt.Errorf("user %s doesn't have access to hook %s", user.Username, originalHook.Id)
+		}
+	}
+
+	// Generate webhook URL (exactly like HandleNewHook)
+	baseUrl := "https://shuffler.io"
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+	}
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	webhookUrl := fmt.Sprintf("%s/api/v1/hooks/webhook_%s", baseUrl, triggerId)
+
+	// Handle cloud webhook setup if needed (exactly like HandleNewHook)
+	if environment == "cloud" && project.Environment != "cloud" {
+		log.Printf("[INFO] Should START a cloud webhook for url %s for startnode %s", webhookUrl, startNode)
+		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			return fmt.Errorf("failed finding org %s: %s", user.ActiveOrg.Id, err)
+		}
+
+		action := CloudSyncJob{
+			Type:          "webhook",
+			Action:        "start",
+			OrgId:         org.Id,
+			PrimaryItemId: triggerId,
+			SecondaryItem: startNode,
+			ThirdItem:     workflowId,
+			FourthItem:    auth,
+		}
+
+		err = executeCloudAction(action, org.SyncConfig.Apikey)
+		if err != nil {
+			return fmt.Errorf("failed cloud action START webhook execution: %s", err)
+		} else {
+			log.Printf("[INFO] Successfully set up cloud action schedule")
+		}
+	}
+
+	// Create the hook object (EXACTLY like HandleNewHook)
+	hook := Hook{
+		Id:        triggerId,
+		Start:     startNode,
+		Workflows: []string{workflowId},
+		Info: Info{
+			Name:        triggerName,
+			Description: triggerName, // Use triggerName for description like original
+			Url:         webhookUrl,
+		},
+		Type:   "webhook",
+		Owner:  user.Username,
+		Status: "uninitialized", // IMPORTANT: Start as uninitialized like original
+		Actions: []HookAction{
+			{
+				Type:  "workflow",
+				Name:  triggerName,
+				Id:    workflowId,
+				Field: "",
+			},
+		},
+		Running:        false, // IMPORTANT: Start as false like original
+		OrgId:          user.ActiveOrg.Id,
+		Environment:    environment,
+		Auth:           auth,
+		CustomResponse: customResponse,
+		Version:        version,        // MISSING FIELD ADDED
+		VersionTimeout: versionTimeout, // MISSING FIELD ADDED
+	}
+
+	// EXACTLY like HandleNewHook - set to running AFTER creation
+	hook.Status = "running"
+	hook.Running = true
+	err = SetHook(ctx, hook)
+	if err != nil {
+		return fmt.Errorf("failed setting hook: %s", err)
+	}
+
+	// set the same for the workflow (exactly like HandleNewHook)
+	workflow, err = GetWorkflow(ctx, workflowId)
+	if err != nil {
+		return fmt.Errorf("failed getting workflow %s: %s", workflowId, err)
+	}
+
+	// get the webhook trigger with the same id (exactly like HandleNewHook)
+	for triggerIndex, trigger := range workflow.Triggers {
+		if trigger.ID == triggerId {
+			workflow.Triggers[triggerIndex].Status = "running"
+			log.Printf("[INFO] Changed status of trigger %s to running", triggerId)
+			break
+		}
+	}
+
+	// update the workflow (exactly like HandleNewHook)
+	err = SetWorkflow(ctx, *workflow, workflow.ID)
+	if err != nil {
+		return fmt.Errorf("failed setting workflow %s: %s", workflow.ID, err)
+	}
+
+	log.Printf("[INFO] Set up a new hook with ID %s and environment %s", triggerId, hook.Environment)
+	return nil
+}
+
+// startScheduleTrigger - Core function to start a schedule trigger without HTTP handlers
+func startScheduleTrigger(ctx context.Context, workflowId, triggerId, cronExpression, executionArgument, environment string, user User, orgId string) error {
+	// Get the workflow first
+	workflow, err := GetWorkflow(ctx, workflowId)
+	if err != nil {
+		return fmt.Errorf("failed getting workflow %s: %s", workflowId, err)
+	}
+
+	// Validate access
+	if workflow.OrgId != orgId {
+		return fmt.Errorf("user doesn't have access to workflow %s", workflowId)
+	}
+
+	// For cloud environments, we need to set up GCP schedules
+	if project.Environment == "cloud" {
+		// This would typically involve creating a GCP Cloud Scheduler job
+		// The actual implementation depends on your GCP setup
+		log.Printf("[INFO] Setting up cloud schedule for trigger %s with cron %s", triggerId, cronExpression)
+	}
+
+	// Update the workflow trigger status
+	for triggerIndex, trigger := range workflow.Triggers {
+		if trigger.ID == triggerId {
+			workflow.Triggers[triggerIndex].Status = "running"
+			
+			// Update the cron parameter if needed
+			for paramIndex, param := range trigger.Parameters {
+				if param.Name == "cron" {
+					workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = cronExpression
+				} else if param.Name == "execution_argument" {
+					workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = executionArgument
+				}
+			}
+			
+			log.Printf("[INFO] Changed status of schedule trigger %s to running with cron %s", triggerId, cronExpression)
+			break
+		}
+	}
+
+	// Save the updated workflow
+	err = SetWorkflow(ctx, *workflow, workflow.ID)
+	if err != nil {
+		return fmt.Errorf("failed setting workflow %s: %s", workflow.ID, err)
+	}
+
+	log.Printf("[INFO] Set up schedule trigger %s with cron expression %s", triggerId, cronExpression)
+	return nil
+}
+
+// startAllWorkflowTriggers - Start all triggers for a workflow (most useful function)
+func startAllWorkflowTriggers(ctx context.Context, workflowId string, user User, orgId string) error {
+	workflow, err := GetWorkflow(ctx, workflowId)
+	if err != nil {
+		return fmt.Errorf("failed getting workflow %s: %s", workflowId, err)
+	}
+
+	if workflow.OrgId != orgId {
+		return fmt.Errorf("user doesn't have access to workflow %s", workflowId)
+	}
+
+	for _, trigger := range workflow.Triggers {
+		switch trigger.TriggerType {
+		case "WEBHOOK":
+			// Extract parameters
+			auth := ""
+			customResponse := ""
+			version := ""
+			versionTimeout := 0
+			for _, param := range trigger.Parameters {
+				if param.Name == "auth_headers" {
+					auth = param.Value
+				} else if param.Name == "custom_response_body" {
+					customResponse = param.Value
+				} else if param.Name == "await_response" {
+					version = param.Value
+				} else if param.Name == "version_timeout" {
+					if timeoutInt, err := strconv.Atoi(param.Value); err == nil {
+						versionTimeout = timeoutInt
+					}
+				}
+			}
+
+			// Find start node
+			startNode := workflow.Start
+			for _, branch := range workflow.Branches {
+				if branch.SourceID == trigger.ID {
+					startNode = branch.DestinationID
+					break
+				}
+			}
+
+			err := startWebhookTrigger(ctx, workflowId, trigger.ID, trigger.Label, startNode, trigger.Environment, auth, customResponse, version, versionTimeout, user, orgId)
+			if err != nil {
+				log.Printf("[ERROR] Failed starting webhook trigger %s: %s", trigger.ID, err)
+				return err
+			}
+
+		case "SCHEDULE":
+			// Extract parameters
+			cronExpression := ""
+			executionArgument := ""
+			for _, param := range trigger.Parameters {
+				if param.Name == "cron" {
+					cronExpression = param.Value
+				} else if param.Name == "execution_argument" {
+					executionArgument = param.Value
+				}
+			}
+
+			err := startScheduleTrigger(ctx, workflowId, trigger.ID, cronExpression, executionArgument, trigger.Environment, user, orgId)
+			if err != nil {
+				log.Printf("[ERROR] Failed starting schedule trigger %s: %s", trigger.ID, err)
+				return err
+			}
+
+		default:
+			log.Printf("[INFO] Trigger type %s not supported for auto-start", trigger.TriggerType)
+		}
+	}
+
+	return nil
+}
+
 func ParseVersions(versions []string) []string {
 	log.Printf("Versions: %s", versions)
 
@@ -31207,6 +31461,272 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 
 	resp.WriteHeader(http.StatusOK)
 	resp.Write([]byte(`{"success": true}`))
+}
+
+func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+	ctx := GetContext(request)
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s in workflow generation", GetRequestIp(request))
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// if !user.SupportAccess {
+	// 	resp.WriteHeader(403)
+	// 	resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+	// 	return
+	// }
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to generate LLM workflows: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	// Check AI usage limits for workflow generation
+	// So i think we need both: MonthlyAIUsage (dumped from cache) + current cache count (pending)
+	orgStats, err := GetOrgStatistics(ctx, user.ActiveOrg.Id)
+	monthlyUsage := int64(0)
+	if err == nil && orgStats != nil {
+		monthlyUsage = orgStats.MonthlyAIUsage
+	} else {
+		log.Printf("[DEBUG] Failed to get org statistics for AI usage: %v", err)
+	}
+
+	// Get current cache count (pending increments that haven't been dumped yet)
+	cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
+	currentCacheCount := int64(0)
+	if cacheData, cacheErr := GetCache(ctx, cacheKey); cacheErr == nil && cacheData != nil {
+		if byteData, ok := cacheData.([]uint8); ok {
+			dataStr := string(byteData)
+			if parsedInt, parseErr := strconv.ParseInt(dataStr, 16, 64); parseErr == nil {
+				currentCacheCount = parsedInt
+			}
+		}
+	}
+
+	// Total usage = dumped monthly usage + pending cache count
+	aiUsageCount := monthlyUsage + currentCacheCount
+	log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/100", monthlyUsage, currentCacheCount, aiUsageCount)
+	
+	if aiUsageCount >= 100 {
+		log.Printf("[AUDIT] Org %s (%s) has exceeded AI workflow generation limit (%d/100)", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount)
+		resp.WriteHeader(429)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have exceeded your AI workflow generation limit (%d/100). This limit resets monthly. Contact support@shuffler.io if you need more credits."}`, aiUsageCount)))
+		return
+	} else {
+		log.Printf("[AUDIT] Org %s (%s) AI usage: %d/100 - allowing workflow generation", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount)
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed to read body in runActionAI: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input body is not valid JSON"}`))
+		return
+	}
+	var input QueryInput
+	err = json.Unmarshal(body, &input)
+	if err != nil {
+		log.Printf("[WARNING] Failed to unmarshal input in runActionAI: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input data invalid"}`))
+		return
+	}
+	
+	workflow, err := GetWorkflow(ctx, input.WorkflowId)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to get workflow %s: %s", input.WorkflowId, err)
+	} else if workflow.OrgId != user.ActiveOrg.Id && len(workflow.OrgId) > 0 {
+		log.Printf("[ERROR] Workflow with ID %s is not owned by the current organization (%s). It belongs to %s", input.WorkflowId, user.ActiveOrg.Id, workflow.OrgId)
+		resp.WriteHeader(http.StatusForbidden)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow does not belong to your organization. Please contact support@shuffler.io if this persists"}`))
+		return
+	}
+
+	output, err := generateWorkflowJson(ctx, input, user, workflow)
+	if err != nil {
+		reason := err.Error()
+		if strings.HasPrefix(reason, "AI rejected the task: ") {
+			reason = strings.TrimPrefix(reason, "AI rejected the task: ")
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
+			return
+		}
+		log.Printf("[ERROR] Failed to generate workflow AI response: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	output.Owner = user.Id
+	output.Sharing = "private"
+	output.ExecutingOrg = user.ActiveOrg
+	output.OrgId = user.ActiveOrg.Id
+
+	if output != nil && output.ID != "" {
+		err = SetWorkflow(ctx, *output, output.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed to save generated workflow to database: %s", err)
+			// Continue anyway - user still gets the workflow and can manually save later
+		}
+	}
+
+	if len(output.Triggers) > 0 {
+		err = startAllWorkflowTriggers(ctx, output.ID, user, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed to auto-start triggers for workflow %s: %s", output.ID, err)
+			// Don't fail the workflow save if trigger startup fails
+		} else {
+			log.Printf("[INFO] Successfully auto-started triggers for workflow %s", output.ID)
+		}
+	}
+
+	appsJson, err := json.Marshal(output)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal apps in Generate workflow: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+	resp.WriteHeader(http.StatusOK)
+	resp.Write(appsJson)
+}
+
+func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+	ctx := GetContext(request)
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s in workflow generation", GetRequestIp(request))
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+	if !user.SupportAccess {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+		return
+	}
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to generate LLM workflows: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	// Check AI usage limits for workflow generation
+	// So i think we need both: MonthlyAIUsage (dumped from cache) + current cache count (pending)
+	orgStats, err := GetOrgStatistics(ctx, user.ActiveOrg.Id)
+	monthlyUsage := int64(0)
+	if err == nil && orgStats != nil {
+		monthlyUsage = orgStats.MonthlyAIUsage
+	} else {
+		log.Printf("[DEBUG] Failed to get org statistics for AI usage: %v", err)
+	}
+
+	// Get current cache count (pending increments that haven't been dumped yet)
+	cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
+	currentCacheCount := int64(0)
+	if cacheData, cacheErr := GetCache(ctx, cacheKey); cacheErr == nil && cacheData != nil {
+		if byteData, ok := cacheData.([]uint8); ok {
+			dataStr := string(byteData)
+			if parsedInt, parseErr := strconv.ParseInt(dataStr, 16, 64); parseErr == nil {
+				currentCacheCount = parsedInt
+			}
+		}
+	}
+
+	// Total usage = dumped monthly usage + pending cache count
+	aiUsageCount := monthlyUsage + currentCacheCount
+	log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/100", monthlyUsage, currentCacheCount, aiUsageCount)
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed to read body in runActionAI: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input body is not valid JSON"}`))
+		return
+	}
+
+	var editRequest WorkflowEditAIRequest
+	err = json.Unmarshal(body, &editRequest)
+	if err != nil {
+		log.Printf("[WARNING] Failed to unmarshal edit request in runActionAI: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input data invalid"}`))
+		return
+	}
+	workflow, err := GetWorkflow(ctx, editRequest.WorkflowID)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get workflow %s: %s", editRequest.WorkflowID, err)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+		return
+	}
+	if workflow == nil {
+		log.Printf("[ERROR] Workflow with ID %s not found", editRequest.WorkflowID)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+		return
+	}
+
+	if workflow.OrgId != user.ActiveOrg.Id && len(workflow.OrgId) > 0 {
+		log.Printf("[ERROR] Workflow with ID %s is not owned by the current organization (%s). It belongs to %s", editRequest.WorkflowID, user.ActiveOrg.Id, workflow.OrgId)
+		resp.WriteHeader(http.StatusForbidden)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow does not belong to your organization. Please contact support@shuffler.io if this persists"}`))
+		return
+	}
+
+	output, err := editWorkflowWithLLM(ctx, workflow, user, editRequest)
+	if err != nil {
+		reason := err.Error()
+		if strings.HasPrefix(reason, "AI rejected the task: ") {
+			reason = strings.TrimPrefix(reason, "AI rejected the task: ")
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
+			return
+		}
+		log.Printf("[ERROR] Failed to generate workflow AI response: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	workflowJson, err := json.Marshal(output)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal workflow %s: %s", editRequest.WorkflowID, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal workflow"}`))
+		return
+	}
+	resp.WriteHeader(http.StatusOK)
+	resp.Write(workflowJson)
 }
 
 func startSchedule(trigger Trigger, authorization string, workflow Workflow) error { 
