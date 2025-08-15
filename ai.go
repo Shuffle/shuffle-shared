@@ -7106,6 +7106,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	workflow.BackgroundProcessing = true
 	workflow.OrgId = user.ActiveOrg.Id
 	err = SetWorkflow(ctx, *workflow, workflow.ID)
 	if err != nil {

@@ -12212,7 +12212,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	newArray := []CacheKeyData{}
 	dbKeys := []*datastore.Key{}
 
-	existingInfo := [] DatastoreKeyMini{}
+	existingInfo := []DatastoreKeyMini{}
 
 	mainCategory := ""
 	wg := sync.WaitGroup{}
@@ -12233,7 +12233,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	}
 
 	if debug {
-		log.Printf("[DEBUG] Uploading and validating %d keys to datastore", cnt)
+		log.Printf("[DEBUG] Uploading and validating %d key(s) to datastore", cnt)
 	}
 
 	cacheKeys := make(chan CacheKeyData, cnt)
@@ -12281,7 +12281,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 			// Sets new keys in cache so they can be queried fast next time
 			if getCacheError != nil || config.Key == "" {
-				log.Printf("[DEBUG] Setting new cache key for org %s with key %s", cacheData.OrgId, datastoreId)
+				if debug { 
+					log.Printf("[DEBUG] Setting new cache key for org %s with key %s", cacheData.OrgId, datastoreId)
+				}
 
 				marshalledEntry, err := json.Marshal(cacheData)
 				if err == nil {
@@ -12410,7 +12412,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 	}
 
-	log.Printf("[DEBUG] SetDatastoreKeyBulk: Successfully set %d keys", len(newArray))
+	log.Printf("[DEBUG] SetDatastoreKeyBulk: Successfully set %d keys in category %s for org %s", len(newArray), mainCategory, orgId)
 
 	/*
 		if project.CacheDb {
@@ -12432,8 +12434,37 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 	*/
 
+	for cnt, cacheData := range newArray {
+		// Maxing out at 100 for now just in case
+		if cnt > 100 { 
+			break
+		}
+
+		if len(cacheData.Category) == 0 || len(cacheData.OrgId) == 0 {
+			continue
+		}
+
+		found := false
+		for _, existing := range existingInfo {
+			if existing.Key == cacheData.Key {
+				if existing.Existed { 
+					found = true
+				}
+
+				break
+			}
+		}
+
+		if found {
+			continue
+		}
+
+		go crossCorrelateNGrams(context.Background(), cacheData.OrgId, cacheData.Category, cacheData.Key, cacheData.Value)
+	}
+
 	// Look for category triggers
 	if len(mainCategory) > 0 && mainCategory != "default" && len(newArray) > 0 && len(newArray[0].OrgId) > 0 {
+
 		orgId := newArray[0].OrgId
 
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, orgId, mainCategory)
@@ -12490,7 +12521,6 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			}
 		}
 	}
-
 
 	DeleteCache(ctx, fmt.Sprintf("datastore_category_%s", orgId))
 	return existingInfo, nil
@@ -15304,4 +15334,252 @@ func SetSyncApikey(ctx context.Context, synckey *SyncKey) error {
 	}
 
 	return nil
+}
+
+// Used to cross-correlate data 
+// Not YET doing proper ngram by breaking everything down, but it's easy to 
+// Modify this into doing that as well
+
+// Issues:
+// Only does strings
+// Only does top-level in JSON (no recursion)
+func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, value string) error {
+	if len(orgId) == 0 || len(category) == 0 || len(datastoreKey) == 0 || len(value) == 0 {
+		return errors.New("Invalid parameters for cross-correlate ngrams. All parameters must be set. orgId, category, key, value")
+	}
+
+	// Random sleeptime between 0-1000ms because we're inside a goroutine 
+	// and want to ensure there aren't a ton of concurrent writes to the datastore
+	time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
+
+	unmarshalled := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(value), &unmarshalled); err != nil {
+		log.Printf("[WARNING] Failed unmarshalling value for cross-correlate ngrams: %s", err)
+	}
+
+	// Simple workaround for dates
+	// hardcoded for now just to remove certain things
+	skippableKeys := []string{"spec_version", "version", "pattern_type", "created", "edited", "creation"} 
+	skippableValues := []string{"indicator", "stix"}
+	invalidStarts := []string{"[", "{", "2025", "2026", "2027", "2028", "2029", "2030"}
+
+	//for jsonKey, val := range unmarshalled {
+	amountAdded := 0
+	maxAmountToAdd := 3
+	for jsonKey, val := range unmarshalled {
+		if ArrayContains(skippableKeys, jsonKey) {
+			continue
+		}
+
+		// Only handle strings for now
+		if val == nil {
+			continue
+		}
+
+		if _, ok := val.(string); !ok {
+			// FIXME: Check here if it's a map, then recurse down 
+			// to find more string 
+			continue
+		}
+
+		parsedValue := val.(string)
+
+		// Arbitrary limit
+		// About ngram: We may want to do additional splitting,
+		// but to start with, we just do the whole thing
+		if len(parsedValue) > 128 {
+			continue
+		}
+
+		skip := false
+		for _, invalidStart := range invalidStarts {
+			if strings.HasPrefix(parsedValue, invalidStart) {
+				skip = true
+				break
+			}
+		}
+
+
+		if skip || ArrayContains(skippableValues, parsedValue) {
+			continue
+		}
+
+		// Make sure we don't add more than 5 items (for now)
+		amountAdded += 1
+		if amountAdded > maxAmountToAdd {
+			break
+		}
+
+		parsedValue = strings.ToLower(strings.TrimSpace(
+			strings.ReplaceAll(
+				strings.ReplaceAll(
+					parsedValue, "\n", "",
+				), " ", "",
+			),
+		))
+
+		//parsedKey := strings.ToLower(strings.ReplaceAll(jsonKey, " ", "_"))
+		parsedCategory := strings.ToLower(strings.ReplaceAll(category, " ", "_"))
+		//referenceKey := fmt.Sprintf("%s_%s_%s_%s", orgId, parsedCategory, datastoreKey, parsedKey)
+		// Doing it WITHOUT the JSON key & Org, as we only want to partially cross-correlate to find items among each other
+		referenceKey := fmt.Sprintf("%s|%s", parsedCategory, datastoreKey)
+
+		// FIXME: May need to hash the parsedValue to make search work well
+		// as we are doing the full string right now
+		ngramSearchKey := fmt.Sprintf("%s_%s", orgId, parsedValue)
+		ngramItem, err := GetDatastoreNGramItem(ctx, ngramSearchKey)
+
+		// FIXME: Key may disappear/be overwritten if connectivity to backend fails briefly?
+		if err != nil || ngramItem == nil || ngramItem.Key == "" {
+			ngramItem = &NGramItem{
+				Key: parsedValue,
+				OrgId: orgId,
+				
+				Amount: 1, 
+				Ref: []string{
+					referenceKey,
+				},
+			}
+
+			err = SetDatastoreNGramItem(ctx, ngramSearchKey, ngramItem)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
+			}
+
+			log.Printf("[DEBUG] Created new ngram item for %s with key %s", ngramSearchKey, parsedValue)
+			continue
+		}
+
+		if ArrayContains(ngramItem.Ref, referenceKey) {
+			continue
+		}
+
+		// Add the reference to the ngram item
+		ngramItem.Ref = append(ngramItem.Ref, referenceKey)
+		ngramItem.Amount = len(ngramItem.Ref)
+
+		err = SetDatastoreNGramItem(ctx, ngramSearchKey, ngramItem)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
+		} else {
+			log.Printf("[DEBUG] Updated ngram item for %s with key %s", ngramSearchKey, parsedValue)
+		}
+	}
+
+	return nil
+
+}
+
+func SetDatastoreNGramItem(ctx context.Context, key string, ngramItem *NGramItem) error {
+	// OrgId (uuid) + key
+	if len(key) < 38 {
+		return errors.New("Invalid key for ngram item. Must be at least 38 characters long")
+	}
+
+	nameKey := "datastore_ngram"
+	data, err := json.Marshal(ngramItem)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set ngram %s: %s", key, err)
+		return nil
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, key, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, key, nil)
+		if _, err := project.Dbclient.Put(ctx, key, ngramItem); err != nil {
+			log.Printf("[ERROR] Failed adding ngramkey with ID %s: %s", key, err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, key)
+
+		err = SetCache(ctx, cacheKey, data, 60)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for ngramitem '%s': %s", cacheKey, err)
+		}
+	}
+
+	return nil
+}
+
+// Key itself contains the orgId so this should "just work"
+func GetDatastoreNGramItem(ctx context.Context, key string) (*NGramItem, error) {
+
+	nameKey := "datastore_ngram"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, key)
+	ngramItem := &NGramItem{}
+
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &ngramItem)
+			if err == nil {
+				//log.Printf("[DEBUG] Successfully got cache for ngramitem with key %s", key)
+				return ngramItem, nil
+			} 
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), key)
+		if err != nil {
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			return ngramItem, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return ngramItem, errors.New("Item doesn't exist")
+		}
+
+		defer res.Body.Close()
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return ngramItem, err
+		}
+
+		wrapped := NgramItemWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return ngramItem, err
+		}
+
+		ngramItem = &wrapped.Source
+	} else {
+		// Get the ngram item from the datastore
+		getNgramKey := datastore.NameKey(nameKey, key, nil)
+		if err := project.Dbclient.Get(ctx, getNgramKey, ngramItem); err != nil {
+			if strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[ERROR] Error in ngramitem loading. Migrating ngramitems to new handler (1): %s", err)
+				err = nil
+			} else {
+				return ngramItem, err
+			}
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(ngramItem)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in GetNGramItem: %s", err)
+			return ngramItem, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 60)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for GetNGramItem '%s': %s", cacheKey, err)
+			return ngramItem, nil
+		}
+
+		log.Printf("[DEBUG] Successfully set cache for ngramitem with key %s", key)
+	}
+
+	return ngramItem, nil
 }
