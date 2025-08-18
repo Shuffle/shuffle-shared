@@ -3286,9 +3286,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			go IncrementCache(ctx, userdata.ActiveOrg.Id, "api_usage")
 		}
 
-		// Check and update AI availability for on-prem deployments
-		go checkAndUpdateAIAvailability(ctx, userdata.ActiveOrg.Id)
-
 		return userdata, nil
 	}
 
@@ -3430,9 +3427,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		user.SessionLogin = true
 
-		// Check and update AI availability for on-prem deployments
-		go checkAndUpdateAIAvailability(ctx, user.ActiveOrg.Id)
-
 		// Means session exists, but
 		return user, nil
 	}
@@ -3441,17 +3435,13 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	return User{}, errors.New("Missing authentication")
 }
 
-// checkAndUpdateAIAvailability checks AI availability for on-prem and updates org accordingly
-func checkAndUpdateAIAvailability(ctx context.Context, orgId string) {
-	// Skip for cloud environment - use business logic instead
+func CheckAndUpdateAIAvailability(ctx context.Context, orgId string) {
 	if project.Environment == "cloud" {
 		return
 	}
 
-	// Check if AI is available
 	aiAvailable := detectLocalAIAvailability(ctx)
 	
-	// Update the org's AI status
 	err := updateOrgAIAvailability(ctx, orgId, aiAvailable)
 	if err != nil {
 		log.Printf("[WARNING] Failed to update AI availability for org %s: %s", orgId, err)
@@ -3465,7 +3455,6 @@ func detectLocalAIAvailability(ctx context.Context) bool {
 		return false
 	}
 
-	// Check if required environment variables are set
 	aiRequestUrl := os.Getenv("OPENAI_API_URL")
 	if len(aiRequestUrl) == 0 {
 		log.Printf("[DEBUG] OPENAI_API_URL not set, AI not available for on-prem")
@@ -3478,14 +3467,13 @@ func detectLocalAIAvailability(ctx context.Context) bool {
 		return false
 	}
 
-	// AI_MODEL is required for on-prem - no fallback assumptions
 	selectedModel := os.Getenv("AI_MODEL")
 	if len(selectedModel) == 0 {
 		log.Printf("[DEBUG] AI_MODEL not set, AI not available for on-prem. Please specify which model to use.")
 		return false
 	}
 
-	// Make a simple HTTP HEAD request to check if AI server is reachable
+	// Lets make a simple HTTP HEAD request to check if AI server is reachable
 	client := http.Client{
 		Timeout: 3 * time.Second,
 	}
@@ -3514,7 +3502,7 @@ func updateOrgAIAvailability(ctx context.Context, orgId string, aiEnabled bool) 
 	}
 
 	// Only update if there's a change
-	if org.LocalAIEnabled != aiEnabled {
+	if org != nil && org.LocalAIEnabled != aiEnabled {
 		org.LocalAIEnabled = aiEnabled
 		err = SetOrg(ctx, *org, orgId)
 		if err != nil {
@@ -14871,6 +14859,11 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[AUDIT] Login successful for user %s (%s) with IP: %s, session: %s", userdata.Username, userdata.Id, ip, userdata.Session)
+
+	// Check and update AI availability for on-prem deployments after successful login
+	// if project.Environment != "cloud" {
+	// 	go CheckAndUpdateAIAvailability(ctx, userdata.ActiveOrg.Id)
+	// }
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(loginData))
