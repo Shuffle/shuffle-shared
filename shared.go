@@ -9581,7 +9581,7 @@ func CheckPasswordStrength(username, password string) error {
 	// Check password strength here
 
 	if project.Environment == "cloud" {
-		if len(password) < 11 {
+		if len(password) < 10 {
 			return errors.New("Minimum password length is 10.")
 		}
 
@@ -9595,7 +9595,7 @@ func CheckPasswordStrength(username, password string) error {
 
 	} else {
 		// Onprem~
-		if len(password) < 11 {
+		if len(password) < 10 {
 			return errors.New("Minimum password length is 10.")
 		}
 	}
@@ -19180,7 +19180,9 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 				//log.Printf("%s vs %s", tmpkey, searchkey)
 				if tmpkey == searchkey {
-					log.Printf("\n\n[INFO] Found key %s for org %s\n\n", key.Key, org.Id)
+					if debug {
+						log.Printf("\n\n[DEBUG] Found key %s for org %s\n\n", key.Key, org.Id)
+					}
 					cacheData = &key
 					break
 				}
@@ -19552,7 +19554,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		tmpData.SuborgDistribution = cacheData.SuborgDistribution
 	}
 
-	err = SetDatastoreKey(ctx, tmpData)
+	existed, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{tmpData})
 	if err != nil {
 		log.Printf("[ERROR] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
 		resp.WriteHeader(500)
@@ -19560,7 +19562,12 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Successfully set key '%s' for org '%s' (%s)", tmpData.Key, org.Name, tmpData.OrgId)
+	if len(existed) == 0 {
+		log.Printf("[INFO] Successfully set key '%s' for org '%s' (%s)", tmpData.Key, org.Name, tmpData.OrgId)
+	} else {
+		log.Printf("[INFO] Successfully set key '%s' for org '%s' (%s). New key: %#v", tmpData.Key, org.Name, tmpData.OrgId, !existed[0].Existed)
+	}
+
 	type returnStruct struct {
 		Success bool `json:"success"`
 	}
@@ -27799,15 +27806,16 @@ func GetExternalClient(baseUrl string) *http.Client {
 			}
 		}
 
-		// Manage noproxy manually
-		if len(noProxy) > 0 {
-			isNoProxy := isNoProxyHost(noProxy, parsedUrl.Host)
-			if isNoProxy {
-				log.Printf("[INFO] Skipping proxy for %s", parsedUrl)
+	}
 
-				httpProxy = ""
-				httpsProxy = ""
-			}
+	// Manage noproxy manually
+	if len(noProxy) > 0 {
+		isNoProxy := isNoProxyHost(noProxy, parsedUrl.Host)
+		if isNoProxy {
+			log.Printf("[INFO] Skipping proxy for %s", parsedUrl)
+
+			httpProxy = ""
+			httpsProxy = ""
 		}
 	}
 

@@ -97,7 +97,39 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
 
-	} else if parsedActiontype == "ingest_tickets" {
+	} else if parsedActiontype == "ingest_tickets" || parsedActiontype == "ingest_assets" || parsedActiontype == "ingest_users" {
+		actionName := "Cases"
+		currentAction := WorkflowAppActionParameter{
+			Name:  "action",
+			Value: "List tickets",
+			Options: []string{
+				"List tickets",
+				"Create ticket",
+				"Close ticket",
+				"Add comment",
+			},
+		}
+
+		if parsedActiontype == "ingest_assets" {
+			actionName = "Assets"
+			currentAction.Value = "List assets"
+			currentAction.Options = []string{
+				"List assets",
+				"Get asset",
+				"Search assets",
+				"Create asset",
+			}
+		} else if parsedActiontype == "ingest_users" {
+			actionName = "IAM"
+			currentAction.Value = "List users"
+			currentAction.Options = []string{
+				"List users",
+				"Get users",
+				"Search users",
+				"Create user",
+			}
+		}
+
 		defaultWorkflow := Workflow{
 			Name: actionType,
 			Description: "List tickets from different systems and ingest them",
@@ -105,28 +137,19 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			Start: startActionId,
 			Actions: []Action{
 				Action{
-					Name: "Cases",
+					Name: actionName,
 					AppID: "integration",
 					AppName: "Singul",
 					ID: startActionId,
 					AppVersion: "1.0.0",
 					Environment: actionEnv,
-					Label: "List tickets",
+					Label: currentAction.Value,
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:  "app_name",
 							Value: "",
 						},
-						WorkflowAppActionParameter{
-							Name:  "action",
-							Value: "List tickets",
-							Options: []string{
-								"List tickets",
-								"Create ticket",
-								"Close ticket",
-								"Add comment",
-							},
-						},
+						currentAction,
 						WorkflowAppActionParameter{
 							Name:  "fields",
 							Value: "",
@@ -1307,6 +1330,7 @@ for content in input_data:
         "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "modified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
 
+		"x_raw_pattern": key,
         "urls": [content["url"]],
       }
 

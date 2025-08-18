@@ -1121,8 +1121,8 @@ type DatastoreCategoryUpdate struct {
 }
 
 type DatastoreKeyMini struct {
-	Key      string `json:"key" datastore:"key"`
-	Existed  bool   `json:"existed" datastore:"existed"` // If the key existed before the update
+	Key     string `json:"key" datastore:"key"`
+	Existed bool   `json:"existed" datastore:"existed"` // If the key existed before the update
 }
 
 type CacheKeyData struct {
@@ -1511,6 +1511,7 @@ type Workflow struct {
 	WorkflowType string `json:"workflow_type" datastore:"workflow_type"`
 	Generated    bool   `json:"generated" datastore:"generated"`
 	Hidden       bool   `json:"hidden" datastore:"hidden"`
+	BackgroundProcessing bool `json:"background_processing" datastore:"background_processing"` // If the workflow should be processed in the background
 	UpdatedBy    string `json:"updated_by" datastore:"updated_by"`
 
 	// Whether it's manually validated or not
@@ -2591,6 +2592,17 @@ type AuthGroupWrapper struct {
 	PrimaryTerm int                    `json:"_primary_term"`
 	Found       bool                   `json:"found"`
 	Source      AppAuthenticationGroup `json:"_source"`
+}
+
+type NgramItemWrapper struct {
+	Index       string    `json:"_index"`
+	Type        string    `json:"_type"`
+	ID          string    `json:"_id"`
+	Version     int       `json:"_version"`
+	SeqNo       int       `json:"_seq_no"`
+	PrimaryTerm int       `json:"_primary_term"`
+	Found       bool      `json:"found"`
+	Source      NGramItem `json:"_source"`
 }
 
 type WorkflowWrapper struct {
@@ -4570,9 +4582,9 @@ type partnerReturnStruct struct {
 }
 
 type AIWorkflowResponse struct {
-	AITriggers  []AITriggerItem  `json:"triggers"`
-	AIActions   []AIActionItem   `json:"actions"`
-	Comments    string           `json:"comments"`
+	AITriggers   []AITriggerItem   `json:"triggers"`
+	AIActions    []AIActionItem    `json:"actions"`
+	Comments     string            `json:"comments"`
 	AIConditions []AIConditionItem `json:"conditions"`
 }
 
@@ -4602,11 +4614,11 @@ type AIParamItem struct {
 }
 
 type AIConditionItem struct {
-    SourceIndex      int              `json:"source_index"`
-    DestinationIndex int              `json:"destination_index"`
-    Condition        AIConditionValue `json:"condition"`
-    Source           AIConditionValue `json:"source"`
-    Destination      AIConditionValue `json:"destination"`
+	SourceIndex      int              `json:"source_index"`
+	DestinationIndex int              `json:"destination_index"`
+	Condition        AIConditionValue `json:"condition"`
+	Source           AIConditionValue `json:"source"`
+	Destination      AIConditionValue `json:"destination"`
 }
 
 type AIConditionValue struct {
@@ -4620,12 +4632,12 @@ type AppCategoryItem struct {
 }
 
 type WorkflowEditAIRequest struct {
-	Query 			string `json:"query"`
-    WorkflowID      string `json:"workflow_id"`      
-    OrgID           string `json:"org_id"`             
-	Environment     string `json:"environment"`
+	Query       string `json:"query"`
+	WorkflowID  string `json:"workflow_id"`
+	OrgID       string `json:"org_id"`
+	Environment string `json:"environment"`
 
-	Workflow        Workflow `json:"workflow"`  
+	Workflow Workflow `json:"workflow"`
 }
 
 type MinimalParameter struct {
@@ -4660,6 +4672,14 @@ type MinimalWorkflow struct {
 	Branches []MinimalBranch  `json:"branches"`
 	Triggers []MinimalTrigger `json:"triggers"`
 	Errors   []string         `json:"errors,omitempty"`
+}
+
+type NGramItem struct {
+	Key   string `json:"key"`
+	OrgId string `json:"org_id"`
+
+	Amount int      `json:"amount"`
+	Ref    []string `json:"ref"` // Reference to other items
 }
 
 type AIConfig struct {
