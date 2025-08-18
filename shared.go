@@ -9498,7 +9498,7 @@ func CheckPasswordStrength(username, password string) error {
 	// Check password strength here
 
 	if project.Environment == "cloud" {
-		if len(password) < 11 {
+		if len(password) < 10 {
 			return errors.New("Minimum password length is 10.")
 		}
 
@@ -9512,7 +9512,7 @@ func CheckPasswordStrength(username, password string) error {
 
 	} else {
 		// Onprem~
-		if len(password) < 11 {
+		if len(password) < 10 {
 			return errors.New("Minimum password length is 10.")
 		}
 	}

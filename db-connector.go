@@ -15583,3 +15583,128 @@ func GetDatastoreNGramItem(ctx context.Context, key string) (*NGramItem, error) 
 
 	return ngramItem, nil
 }
+
+func InitOpensearchIndexes() {
+	if project.DbType != "opensearch" {
+		return
+	}
+
+	// Check if the "workflowexecution" index exists and configuring rollovers if possible
+	log.Printf("[INFO] Configuring Opensearch indexes for scaling")
+
+	ctx := context.Background()
+	relevantScaleIndexes := []string{
+		"workflowexecution",
+		"datastore_ngram",
+		"org_cache",
+	}
+
+	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")
+	if len(customConfig) > 0 {
+		checkValidJson := map[string]interface{}{}
+		if err := json.Unmarshal([]byte(customConfig), &checkValidJson); err != nil {
+			log.Printf("[ERROR] Invalid JSON in OPENSEARCH_INDEX_CONFIG: %s", err)
+			customConfig = ""
+		}
+
+		log.Printf("[DEBUG] Using custom index config for relevant scale indexes: %s", customConfig)
+	}
+
+	customRollover := os.Getenv("OPENSEARCH_INDEX_ROLLOVER")
+	if len(customRollover) > 0 {
+		checkValidJson := map[string]interface{}{}
+		if err := json.Unmarshal([]byte(customRollover), &checkValidJson); err != nil {
+			log.Printf("[ERROR] Invalid JSON in OPENSEARCH_INDEX_ROLLOVER: %s", err)
+			customRollover = ""
+		}
+
+		log.Printf("[DEBUG] Using custom rollover config for relevant scale indexes: %s", customRollover)
+	}
+
+	for _, index := range relevantScaleIndexes {
+		indexConfig := []byte(fmt.Sprintf(`{
+			"aliases": {
+				"%s": {
+					"is_write_index": true
+				}
+			},
+			"settings": {
+				"number_of_shards": 3,
+				"number_of_replicas": 1,
+				"refresh_interval": "30s"
+			},
+			"mappings": {
+				"dynamic_templates": [
+					{
+						"strings_as_keywords": {
+							"match_mapping_type": "string",
+							"mapping": {
+								"type": "keyword"
+							}
+						}
+					}
+				]
+			}
+		}`, index))
+
+		if len(customConfig) > 0 {
+			indexConfig = []byte(customConfig)
+		}
+
+		index = strings.ToLower(GetESIndexPrefix(index))
+		// Directly try to force create it. Opensearch throws a 400 if it fails.
+
+		initialIndexName := fmt.Sprintf("%s-000001", index)
+		res, err := project.Es.Indices.Create(
+			initialIndexName,
+			project.Es.Indices.Create.WithContext(ctx),
+			project.Es.Indices.Create.WithBody(bytes.NewReader(indexConfig)),
+		)
+
+		defer res.Body.Close()
+		if err != nil {
+			log.Printf("[WARNING] Error creating index %s: %s", index, err)
+		} else {
+			if res.IsError() {
+				if !strings.Contains(res.String(), "resource_already_exists_exception") {
+					log.Printf("[DEBUG] Error creating index %s with custom config: %s", index, res.String())
+				}
+
+			} else {
+				log.Printf("[DEBUG] Successfully created index %s with custom config", index)
+			}
+		}
+
+		// Define rollover mechanism
+		rolloverConfig := []byte(fmt.Sprintf(`{
+			"conditions": {
+				"max_age": "90d",
+				"max_size": "40gb"
+				"max_docs": 1000000,
+			}
+		}`))
+
+		if len(customRollover) > 0 {
+			rolloverConfig = []byte(customRollover)
+		}
+
+		rolloverRes, err := project.Es.Indices.Rollover(
+			index,
+			project.Es.Indices.Rollover.WithBody(bytes.NewReader(rolloverConfig)),
+			project.Es.Indices.Rollover.WithContext(context.Background()),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Problem during rollover config for %s: %s", index, err)
+		}
+		defer rolloverRes.Body.Close()
+
+		if rolloverRes.IsError() {
+			log.Printf("[ERROR] Rollover config failed for %s: %s", index, rolloverRes.String())
+		} else {
+			fmt.Printf("[INFO] Rollover executed successfully for %s ✅", index)
+		}
+
+
+	}
+
+}
