@@ -3463,8 +3463,7 @@ func detectLocalAIAvailability(ctx context.Context) bool {
 
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if len(apiKey) == 0 {
-		log.Printf("[DEBUG] OPENAI_API_KEY not set, AI not available for on-prem")
-		return false
+		log.Printf("[DEBUG] OPENAI_API_KEY not set, Trying to connect without API key")
 	}
 
 	selectedModel := os.Getenv("AI_MODEL")
@@ -3478,15 +3477,20 @@ func detectLocalAIAvailability(ctx context.Context) bool {
 		Timeout: 3 * time.Second,
 	}
 	
-	resp, err := client.Head(aiRequestUrl)
+	headUrl := aiRequestUrl
+	if strings.HasSuffix(headUrl, "/v1") {
+		headUrl = strings.TrimSuffix(headUrl, "/v1")
+	}
+	
+	resp, err := client.Head(headUrl)
 	if err != nil {
-		log.Printf("[DEBUG] Local AI server not reachable at %s: %s", aiRequestUrl, err)
+		log.Printf("[DEBUG] Local AI server not reachable at %s: %s", headUrl, err)
 		return false
 	}
 	defer resp.Body.Close()
 	
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		log.Printf("[DEBUG] Local AI server returned status %d for %s", resp.StatusCode, aiRequestUrl)
+		log.Printf("[DEBUG] Local AI server returned status %d for %s", resp.StatusCode, headUrl)
 		return false
 	}
 
