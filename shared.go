@@ -27718,15 +27718,16 @@ func GetExternalClient(baseUrl string) *http.Client {
 			}
 		}
 
-		// Manage noproxy manually
-		if len(noProxy) > 0 {
-			isNoProxy := isNoProxyHost(noProxy, parsedUrl.Host)
-			if isNoProxy {
-				log.Printf("[INFO] Skipping proxy for %s", parsedUrl)
+	}
 
-				httpProxy = ""
-				httpsProxy = ""
-			}
+	// Manage noproxy manually
+	if len(noProxy) > 0 {
+		isNoProxy := isNoProxyHost(noProxy, parsedUrl.Host)
+		if isNoProxy {
+			log.Printf("[INFO] Skipping proxy for %s", parsedUrl)
+
+			httpProxy = ""
+			httpsProxy = ""
 		}
 	}
 
