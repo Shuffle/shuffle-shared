@@ -7768,7 +7768,14 @@ Do not add anything else besides the final JSON. No explanations, no summaries, 
 IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you return ONLY valid JSON in the exact format specified in the system instructions. Do not include any explanations, markdown formatting, or extra text - just the pure JSON object.`, contentOutput)
 		}
 
-		finalContentOutput, err = RunAiQueryWithModel(systemMessage, currentInput, "gpt-5")
+		// Use gpt-5 for better JSON generation in cloud, but respect AI_MODEL for local deployments
+		workflowGenerationModel := "gpt-5"
+		if len(os.Getenv("AI_MODEL")) > 0 {
+			// Local deployment with custom model
+			workflowGenerationModel = ""
+		}
+
+		finalContentOutput, err = RunAiQueryWithModel(systemMessage, currentInput, workflowGenerationModel)
 		if err != nil {
 			log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
 			return nil, err
