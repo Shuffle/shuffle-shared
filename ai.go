@@ -7783,7 +7783,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		if len(finalContentOutput) == 0 {
 			return nil, errors.New("AI response is empty")
 		}
-		log.Printf("[DEBUG] AI response: %s", finalContentOutput)
+		//log.Printf("[DEBUG] AI response: %s", finalContentOutput)
 
 		finalContentOutput = strings.TrimSpace(finalContentOutput)
 		if strings.HasPrefix(finalContentOutput, "```json") {
