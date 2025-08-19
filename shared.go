@@ -13698,18 +13698,8 @@ func startAllWorkflowTriggers(ctx context.Context, workflowId string, user User,
 			}
 
 		case "SCHEDULE":
-			// Extract parameters
-			cronExpression := ""
-			executionArgument := ""
-			for _, param := range trigger.Parameters {
-				if param.Name == "cron" {
-					cronExpression = param.Value
-				} else if param.Name == "execution_argument" {
-					executionArgument = param.Value
-				}
-			}
+			err := startSchedule(trigger, user.ApiKey, *workflow)
 
-			err := startScheduleTrigger(ctx, workflowId, trigger.ID, cronExpression, executionArgument, trigger.Environment, user, orgId)
 			if err != nil {
 				log.Printf("[ERROR] Failed starting schedule trigger %s: %s", trigger.ID, err)
 				return err
