@@ -7345,6 +7345,7 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("[DEBUG] AI response: %s", contentOutput)
 
 	err = checkIfRejected(contentOutput)
 	if err != nil {
@@ -7352,7 +7353,6 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 	}
 
 	externalSetupInstructions := extractExternalSetup(contentOutput)
-	log.Printf("[DEBUG] AI response: %s", contentOutput)
 
 	systemMessage := `You are a senior security automation assistant helping build workflows for an automation platform called **Shuffle**, which connects security tools through apps and their actions (similar to SOAR platforms).
 
@@ -7769,13 +7769,13 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		}
 
 		// Use gpt-5 for better JSON generation in cloud, but respect AI_MODEL for local deployments
-		workflowGenerationModel := "gpt-5"
-		if len(os.Getenv("AI_MODEL")) > 0 {
-			// Local deployment with custom model
-			workflowGenerationModel = ""
-		}
+		// workflowGenerationModel := "gpt-5"
+		// if len(os.Getenv("AI_MODEL")) > 0 {
+		// 	// Local deployment with custom model
+		// 	workflowGenerationModel = ""
+		// }
 
-		finalContentOutput, err = RunAiQueryWithModel(systemMessage, currentInput, workflowGenerationModel)
+		finalContentOutput, err = RunAiQueryWithModel(systemMessage, currentInput, "")
 		if err != nil {
 			log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
 			return nil, err
@@ -8357,6 +8357,12 @@ func checkIfRejected(response string) error {
 		if strings.HasPrefix(lineClean, "reason:") {
 			// extract actual reason
 			reason := strings.TrimSpace(line[len("Reason:"):])
+			
+			// Clean reason for valid JSON
+			reason = strings.ReplaceAll(reason, `"`, `'`)   
+			reason = strings.ReplaceAll(reason, "\\", "")
+			reason = strings.TrimSpace(reason)
+			
 			return errors.New("AI rejected the task: " + reason)
 		}
 	}
