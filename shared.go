@@ -3435,6 +3435,89 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	return User{}, errors.New("Missing authentication")
 }
 
+func CheckAndUpdateAIAvailability(ctx context.Context, orgId string) {
+	if project.Environment == "cloud" {
+		return
+	}
+
+	aiAvailable := detectLocalAIAvailability(ctx)
+	
+	err := updateOrgAIAvailability(ctx, orgId, aiAvailable)
+	if err != nil {
+		log.Printf("[WARNING] Failed to update AI availability for org %s: %s", orgId, err)
+	}
+}
+
+// detectLocalAIAvailability checks if local AI server is reachable and working
+func detectLocalAIAvailability(ctx context.Context) bool {
+	// Skip detection for cloud environment
+	if project.Environment == "cloud" {
+		return false
+	}
+
+	aiRequestUrl := os.Getenv("OPENAI_API_URL")
+	if len(aiRequestUrl) == 0 {
+		log.Printf("[DEBUG] OPENAI_API_URL not set, AI not available for on-prem")
+		return false
+	}
+
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if len(apiKey) == 0 {
+		log.Printf("[DEBUG] OPENAI_API_KEY not set, Trying to connect without API key")
+	}
+
+	selectedModel := os.Getenv("AI_MODEL")
+	if len(selectedModel) == 0 {
+		log.Printf("[DEBUG] AI_MODEL not set, AI not available for on-prem. Please specify which model to use.")
+		return false
+	}
+
+	// Lets make a simple HTTP HEAD request to check if AI server is reachable
+	client := http.Client{
+		Timeout: 3 * time.Second,
+	}
+	
+	headUrl := aiRequestUrl
+	if strings.HasSuffix(headUrl, "/v1") {
+		headUrl = strings.TrimSuffix(headUrl, "/v1")
+	}
+	
+	resp, err := client.Head(headUrl)
+	if err != nil {
+		log.Printf("[DEBUG] Local AI server not reachable at %s: %s", headUrl, err)
+		return false
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		log.Printf("[DEBUG] Local AI server returned status %d for %s", resp.StatusCode, headUrl)
+		return false
+	}
+
+	log.Printf("[INFO] Local AI server is available at %s with model %s", aiRequestUrl, selectedModel)
+	return true
+}
+
+// updateOrgAIAvailability updates the LocalAIEnabled field for an organization
+func updateOrgAIAvailability(ctx context.Context, orgId string, aiEnabled bool) error {
+	org, err := GetOrg(ctx, orgId)
+	if err != nil {
+		return fmt.Errorf("failed to get org %s: %s", orgId, err)
+	}
+
+	// Only update if there's a change
+	if org != nil && org.LocalAIEnabled != aiEnabled {
+		org.LocalAIEnabled = aiEnabled
+		err = SetOrg(ctx, *org, orgId)
+		if err != nil {
+			return fmt.Errorf("failed to update org %s AI status: %s", orgId, err)
+		}
+		log.Printf("[INFO] Updated org %s LocalAIEnabled to %t", orgId, aiEnabled)
+	}
+
+	return nil
+}
+
 func HandleGetUserApps(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -13615,18 +13698,8 @@ func startAllWorkflowTriggers(ctx context.Context, workflowId string, user User,
 			}
 
 		case "SCHEDULE":
-			// Extract parameters
-			cronExpression := ""
-			executionArgument := ""
-			for _, param := range trigger.Parameters {
-				if param.Name == "cron" {
-					cronExpression = param.Value
-				} else if param.Name == "execution_argument" {
-					executionArgument = param.Value
-				}
-			}
+			err := startSchedule(trigger, user.ApiKey, *workflow)
 
-			err := startScheduleTrigger(ctx, workflowId, trigger.ID, cronExpression, executionArgument, trigger.Environment, user, orgId)
 			if err != nil {
 				log.Printf("[ERROR] Failed starting schedule trigger %s: %s", trigger.ID, err)
 				return err
@@ -14780,6 +14853,11 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[AUDIT] Login successful for user %s (%s) with IP: %s, session: %s", userdata.Username, userdata.Id, ip, userdata.Session)
+
+	// Check and update AI availability for on-prem deployments after successful login
+	// if project.Environment != "cloud" {
+	// 	go CheckAndUpdateAIAvailability(ctx, userdata.ActiveOrg.Id)
+	// }
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(loginData))
@@ -31505,39 +31583,51 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		return
 	}
 
-	// Check AI usage limits for workflow generation
-	// So i think we need both: MonthlyAIUsage (dumped from cache) + current cache count (pending)
-	orgStats, err := GetOrgStatistics(ctx, user.ActiveOrg.Id)
-	monthlyUsage := int64(0)
-	if err == nil && orgStats != nil {
-		monthlyUsage = orgStats.MonthlyAIUsage
-	} else {
-		log.Printf("[DEBUG] Failed to get org statistics for AI usage: %v", err)
-	}
+	if project.Environment == "cloud" {
 
-	// Get current cache count (pending increments that haven't been dumped yet)
-	cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
-	currentCacheCount := int64(0)
-	if cacheData, cacheErr := GetCache(ctx, cacheKey); cacheErr == nil && cacheData != nil {
-		if byteData, ok := cacheData.([]uint8); ok {
-			dataStr := string(byteData)
-			if parsedInt, parseErr := strconv.ParseInt(dataStr, 16, 64); parseErr == nil {
-				currentCacheCount = parsedInt
+		// Check AI usage limits for workflow generation
+		// So i think we need both: MonthlyAIUsage (dumped from cache) + current cache count (pending)
+		orgStats, err := GetOrgStatistics(ctx, user.ActiveOrg.Id)
+		monthlyUsage := int64(0)
+		if err == nil && orgStats != nil {
+			monthlyUsage = orgStats.MonthlyAIUsage
+		} else {
+			log.Printf("[DEBUG] Failed to get org statistics for AI usage: %v", err)
+		}
+
+		// Get current cache count (pending increments that haven't been dumped yet)
+		cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
+		currentCacheCount := int64(0)
+		if cacheData, cacheErr := GetCache(ctx, cacheKey); cacheErr == nil && cacheData != nil {
+			if byteData, ok := cacheData.([]uint8); ok {
+				dataStr := string(byteData)
+				if parsedInt, parseErr := strconv.ParseInt(dataStr, 16, 64); parseErr == nil {
+					currentCacheCount = parsedInt
+				}
 			}
 		}
-	}
 
-	// Total usage = dumped monthly usage + pending cache count
-	aiUsageCount := monthlyUsage + currentCacheCount
-	log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/100", monthlyUsage, currentCacheCount, aiUsageCount)
-	
-	if aiUsageCount >= 100 {
-		log.Printf("[AUDIT] Org %s (%s) has exceeded AI workflow generation limit (%d/100)", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount)
-		resp.WriteHeader(429)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have exceeded your AI workflow generation limit (%d/100). This limit resets monthly. Contact support@shuffler.io if you need more credits."}`, aiUsageCount)))
-		return
-	} else {
-		log.Printf("[AUDIT] Org %s (%s) AI usage: %d/100 - allowing workflow generation", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount)
+		// Total usage = dumped monthly usage + pending cache count
+		aiUsageCount := monthlyUsage + currentCacheCount
+		
+		aiLimit := int64(100) // Default limit
+		fullOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err == nil && fullOrg != nil {
+			if fullOrg.SyncFeatures.ShuffleGPT.Limit > 0 {
+				aiLimit = fullOrg.SyncFeatures.ShuffleGPT.Limit
+			}
+		}
+		
+		log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/%d", monthlyUsage, currentCacheCount, aiUsageCount, aiLimit)
+		
+		if aiUsageCount >= aiLimit {
+			log.Printf("[AUDIT] Org %s (%s) has exceeded AI workflow generation limit (%d/%d)", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount, aiLimit)
+			resp.WriteHeader(429)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have exceeded your AI workflow generation limit (%d/%d). This limit resets monthly. Contact support@shuffler.io if you need more credits."}`, aiUsageCount, aiLimit)))
+			return
+		} else {
+			log.Printf("[AUDIT] Org %s (%s) AI usage: %d/%d - allowing workflow generation", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount, aiLimit)
+		}
 	}
 
 	body, err := ioutil.ReadAll(request.Body)
@@ -31572,7 +31662,7 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		reason := err.Error()
 		if strings.HasPrefix(reason, "AI rejected the task: ") {
 			reason = strings.TrimPrefix(reason, "AI rejected the task: ")
-			resp.WriteHeader(401)
+			resp.WriteHeader(422)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
 			return
 		}
@@ -31581,13 +31671,13 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
-
-	output.Owner = user.Id
-	output.Sharing = "private"
-	output.ExecutingOrg = user.ActiveOrg
-	output.OrgId = user.ActiveOrg.Id
+    if project.Environment == "cloud" {
+		IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
+		log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
+	}
 
 	if output != nil && output.ID != "" {
+	log.Printf("[INFO] Generated workflow with ID %s for user %s in org %s",  output.ID, user.Id, user.ActiveOrg.Id)
 		err = SetWorkflow(ctx, *output, output.ID)
 		if err != nil {
 			log.Printf("[ERROR] Failed to save generated workflow to database: %s", err)
@@ -31648,31 +31738,53 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	// Check AI usage limits for workflow generation
-	// So i think we need both: MonthlyAIUsage (dumped from cache) + current cache count (pending)
-	orgStats, err := GetOrgStatistics(ctx, user.ActiveOrg.Id)
-	monthlyUsage := int64(0)
-	if err == nil && orgStats != nil {
-		monthlyUsage = orgStats.MonthlyAIUsage
-	} else {
-		log.Printf("[DEBUG] Failed to get org statistics for AI usage: %v", err)
-	}
+	if project.Environment == "cloud" {
 
-	// Get current cache count (pending increments that haven't been dumped yet)
-	cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
-	currentCacheCount := int64(0)
-	if cacheData, cacheErr := GetCache(ctx, cacheKey); cacheErr == nil && cacheData != nil {
-		if byteData, ok := cacheData.([]uint8); ok {
-			dataStr := string(byteData)
-			if parsedInt, parseErr := strconv.ParseInt(dataStr, 16, 64); parseErr == nil {
-				currentCacheCount = parsedInt
+		// Check AI usage limits for workflow generation
+		// So i think we need both: MonthlyAIUsage (dumped from cache) + current cache count (pending)
+		orgStats, err := GetOrgStatistics(ctx, user.ActiveOrg.Id)
+		monthlyUsage := int64(0)
+		if err == nil && orgStats != nil {
+			monthlyUsage = orgStats.MonthlyAIUsage
+		} else {
+			log.Printf("[DEBUG] Failed to get org statistics for AI usage: %v", err)
+		}
+
+		// Get current cache count (pending increments that haven't been dumped yet)
+		cacheKey := fmt.Sprintf("cache_%s_ai_executions", user.ActiveOrg.Id)
+		currentCacheCount := int64(0)
+		if cacheData, cacheErr := GetCache(ctx, cacheKey); cacheErr == nil && cacheData != nil {
+			if byteData, ok := cacheData.([]uint8); ok {
+				dataStr := string(byteData)
+				if parsedInt, parseErr := strconv.ParseInt(dataStr, 16, 64); parseErr == nil {
+					currentCacheCount = parsedInt
+				}
 			}
 		}
-	}
 
-	// Total usage = dumped monthly usage + pending cache count
-	aiUsageCount := monthlyUsage + currentCacheCount
-	log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/100", monthlyUsage, currentCacheCount, aiUsageCount)
+		// Total usage = dumped monthly usage + pending cache count
+		aiUsageCount := monthlyUsage + currentCacheCount
+		
+		// Get org-specific AI limit from full org data
+		aiLimit := int64(100) // Default limit
+		fullOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err == nil && fullOrg != nil {
+			if fullOrg.SyncFeatures.ShuffleGPT.Limit > 0 {
+				aiLimit = fullOrg.SyncFeatures.ShuffleGPT.Limit
+			}
+		}
+		
+		log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/%d", monthlyUsage, currentCacheCount, aiUsageCount, aiLimit)
+		
+		if aiUsageCount >= aiLimit {
+			log.Printf("[AUDIT] Org %s (%s) has exceeded AI workflow editing limit (%d/%d)", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount, aiLimit)
+			resp.WriteHeader(429)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have exceeded your AI workflow generation limit (%d/%d). This limit resets monthly. Contact support@shuffler.io if you need more credits."}`, aiUsageCount, aiLimit)))
+			return
+		} else {
+			log.Printf("[AUDIT] Org %s (%s) AI usage: %d/%d - allowing workflow editing", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount, aiLimit)
+		}
+	}
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
@@ -31716,7 +31828,7 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		reason := err.Error()
 		if strings.HasPrefix(reason, "AI rejected the task: ") {
 			reason = strings.TrimPrefix(reason, "AI rejected the task: ")
-			resp.WriteHeader(401)
+			resp.WriteHeader(422)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
 			return
 		}
@@ -31725,7 +31837,10 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
-
+	if project.Environment == "cloud" {
+		IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
+		log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
+	}
 	workflowJson, err := json.Marshal(output)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal workflow %s: %s", editRequest.WorkflowID, err)

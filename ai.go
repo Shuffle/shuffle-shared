@@ -36,7 +36,7 @@ import (
 //var model = "gpt-4o-mini"
 //var model = "o4-mini"
 var standalone bool
-var model = "gpt-5-mini"; 
+var model = "gpt-5-mini"
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID") 
 var assistantModel = model
@@ -7123,9 +7123,19 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 // Runs ANY AI query based on the system message and user message.
 // This can also be overridden by passing in a custom OpenAI ChatCompletion request
 func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
+	return RunAiQueryWithModel(systemMessage, userMessage, "", incomingRequest...)
+}
+
+func RunAiQueryWithModel(systemMessage, userMessage, modelOverride string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
 	cnt := 0
 	maxTokens := 5000
 	maxCharacters := 100000
+
+	// Use override model if provided, otherwise use the global model
+	selectedModel := model
+	if modelOverride != "" {
+		selectedModel = modelOverride
+	}
 
 	config := openai.DefaultConfig(os.Getenv("OPENAI_API_KEY"))
 
@@ -7166,13 +7176,13 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	//}
 
 	chatCompletion := openai.ChatCompletionRequest{
-		Model: model,
+		Model: selectedModel,
 		Messages: []openai.ChatCompletionMessage{},
 		MaxTokens:   maxTokens,
 	}
 
 	// Newer models (GPT-4o, o1, gpt-5 etc.) require max_completion_tokens instead of max_tokens
-	if strings.HasPrefix(model, "gpt-4o") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "gpt-5") || model == "o4-mini" {
+	if strings.HasPrefix(selectedModel, "gpt-4o") || strings.HasPrefix(selectedModel, "o1") || strings.HasPrefix(selectedModel, "gpt-5") || selectedModel == "o4-mini" {
 		chatCompletion.MaxTokens = 0
 		chatCompletion.MaxCompletionTokens = maxTokens
 	}
@@ -7248,14 +7258,20 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 				chatCompletion.MaxCompletionTokens = maxTokens
 				continue
 			} else if strings.Contains(err.Error(), "does not exist") {
-				if len(fallbackModel) == 0 {
-					return "", errors.New(fmt.Sprintf("Model '%s' does not exist and no FALLBACK_AI_MODEL set: %s", model, err))
-				}
+				// Handle model fallback differently for cloud vs on-prem
+				if project.Environment == "cloud" {
+					// Cloud: Use fallback model if available
+					if len(fallbackModel) == 0 {
+						return "", errors.New(fmt.Sprintf("Model '%s' does not exist and no FALLBACK_AI_MODEL set: %s", selectedModel, err))
+					}
 
-				model = fallbackModel
-				chatCompletion.Model = fallbackModel 
-				log.Printf("[DEBUG] Changed default model to %s", model)
-				continue
+					selectedModel = fallbackModel
+					chatCompletion.Model = fallbackModel 
+					log.Printf("[DEBUG] Changed model to %s for this request", selectedModel)
+					continue
+				} else {
+					return "", errors.New(fmt.Sprintf("Model '%s' does not exist on your local AI server. Please check your AI_MODEL environment variable and ensure the model is available on your server: %s", selectedModel, err))
+				}
 			}
 
 			log.Printf("[ERROR] Failed to create AI chat completion. Retrying in 3 seconds (4): %s", err)
@@ -7325,109 +7341,20 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 	}
 	categoryString := builder.String()
 
-	systemMessage := fmt.Sprintf(`You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools and automates security workflows, You are not a conversational assistant or chatbot. Even if the user asks questions or speaks casually, your only job is to generate the correct workflow JSON.
-
-You will receive messy user inputs describing a task they want to automate. Your job is to produce a clean, fully structured, atomic breakdown of that task. In addition to the user input, you will also receive a list of apps the user has access to.
-Your job:
-1. Understand what the user is trying to automate.
-2. Break the task into **chronological steps**, with **no steps skipped**, even if obvious.
-3. Separate steps into two sections:
-   - “EXTERNAL SETUP” = steps done outside Shuffle (e.g., SIEM config, 3rd-party auth, app registration, webhook setup), make sure your steps are detailed enough that a user can follow them to set up the external systems correctly, but at the same time, do not make it too verbose or complicated.
-   - “SHUFFLE WORKFLOW” = only the automation logic that happens *inside* Shuffle
-
-4. Use the correct trigger type:
-   - If the automation starts from an external system (like an alert or webhook), use a Webhook Trigger in Shuffle.
-   - If it runs periodically (e.g. every 5 minutes) or we need to poll something ?, use Schedule Trigger
-   - Right now Webhook (for real-time alerts) and Schedule (for polling) are the only two trigger types supported in Shuffle. So even if the user asks for a different kind of trigger like "email trigger" or "alert trigger", you must handle it in one of two ways: either map it to a Webhook trigger if the external system can send real-time HTTP POST requests (push model), or use a Schedule trigger if the only option is to poll the external system periodically (pull model). Remember, polling can be inefficient depending on the system, so prefer Webhook when possible. Use your judgment to decide which trigger is technically more appropriate, based not just on what the user said, but on what fits best with how the external system actually works. However, if the user explicitly asks for either "webhook" or "schedule", you must respect that choice and use exactly what they requested, even if it’s not optimal. Never invent or use unsupported trigger types, only pick between Webhook and Schedule based on real-world feasibility and the user’s clarity.
-   - In some cases, the way the user asks might clearly imply that we need some trigger to start the workflow (for example, “when an alert happens” or “when a ticket is created”), but the reality is that the target platform may not support sending webhook notifications at all. In such situations, even though the user’s request sounds like it should be real-time, we must fall back to using a Schedule trigger to poll the target system periodically for new data or changes. This might not be efficient, but it’s the only way to simulate "real-time" when the system can’t push data to us. So always think practically, don’t blindly follow the wording of the request. Instead, figure out if the system realistically supports webhooks; if not, choose Schedule trigger automatically even if it goes against the user’s phrasing. The goal is to still build a functional workflow with the best available method.
-   - A trigger is only needed if the workflow is clearly meant to start automatically (event-driven or scheduled), and the source system either pushes data to us (Webhook) or allows us to pull it (Schedule). If it’s just a data-fetching step inside the flow or a manual run, no trigger is needed.
-
-5. Ensure **all steps are atomic** — one action per step only.
-6. Always clearly **map outputs to inputs** (e.g., extract value A → use value A in next step).
-7. **NEVER include optional, fallback, or validation logic** unless the platform absolutely requires it.
-8. **NEVER include duplicate steps**. If something is configured externally, don’t mention it again in the Shuffle workflow section.
-9. Assume every action in Shuffle corresponds to a real HTTP API endpoint in the target platform (e.g., Microsoft Entra ID, SentinelOne, Jira). Shuffle apps are just wrappers — they do not provide functionality beyond what the platform's public API supports and you can also rely on Open API specification of the target platform.
-   If you know the official base URL, use it directly
-   If you're unsure, guess using common formats like:
-   https://api.vendor.com/v1
-   https://vendor.com/api
-
-   Also when ever you use the base url make sure you include it as is, for example if a vendor base url according to their open api spec or public doc is like this "https://api.vendor.com/v1"  or any other variation, just use the base url as is and do not change it in any way
-   You are allowed to use your training to approximate well-known APIs, But keep in mind that first you must check the official API documentation of the target platform  or Open API specification, and only then you can use your training to approximate well-known APIs.
-
-This means:
-- You cannot perform an action unless the platform has a public API endpoint for it.
-- The input fields in Shuffle actions (like user ID, alert ID, request body) will almost always match the API’s expected parameters.
-- When the user request is non-sensical, empty or even offensive then you must STOP and respond with a meaningful message like "Be more specific about your request".
-- You have the context of available apps, so you can intelligently choose the right app based on the user’s request. The list will consist of app names and their categories, which you can use to determine the most appropriate apps for the task.
-
-Available Apps:
-%s
-
-Based on this list of apps, you can infer which app to use for a specific action even if the user's input is vague or doesn’t clearly specify an app name. For example: if the user says "take alerts from SIEM and send it to my case management system", you should intelligently choose the most relevant SIEM and case management app from the available apps list. When multiple apps exist in the same category, never choose based on list order or appearance position. Always prioritize well-known, purpose-built apps over vague or ambiguously named ones, unless the user specifically mentions otherwise. However, do not guess or make up app names. Only use app names exactly as they appear in the available apps list. Matching should always be based on actual app names in the list, even if inferred by category, never invent similar-sounding or unrelated app names.
-Sometimes, the app the user specifically mentions might not exist in the available apps list, either because they named a tool that isn’t present, or because their query isn’t tied to any app explicitly. In such cases: If the user explicitly mentioned an app name that is not in the available list, include that app anyway, and If the user didn’t mention an app name but the context suggests a type of app is needed, and no suitable app is found in the list, then pick a well-known app from that category instead.
-Always use the exact app names in the breakdown steps as it appears in the available list. Don’t confuse it with the name of an action or function inside the app.
-
-Only if the platform’s API supports that action, and all required parameters are available or extractable, include it as a valid atomic step.
-
-Never assume Shuffle can do something unless the platform's API enables it.
-
-10. If a platform allows an action to be done directly using known input (e.g. block user using username), then do it in **one atomic step**, Don’t split into multiple actions like "get details" → "then update" unless absolutely required by the API. Avoid redundancy unless:
-
-the action really needs an internal ID or other value not already available or the platform simply doesn’t support the operation with the given field
-always check the platform’s real API docs or behavior to confirm. Do not assume a field is unusable just because it’s not called “id”, if the API also accepts username, email, or any other available input directly, then use it.
-Example: If Slack lets you disable a user directly using their email, and the webhook already provides that email — then just call deactivate_user(email=...) directly and at the same time lets say just for the sake of the example if we only have username and not email id then try to think if username also be used to do the same action like deactivate_user(username=...) if thats not allowed only then resort to another way.
-
-Don’t do: get_user_by_email → extract user_id → deactivate_user_by_id, if that whole sequence can be replaced with one clean call.
-   - But do not add extra steps unless they’re strictly required based on the API’s structure. Always keep the step count minimal and justified.
-
-11. Do not assume or invent any conditions not mentioned by the user, Don't add option steps.
-
-12. Also we already have in-built mechanism to extract and store the response data from the actions or even from the trigger, so you do not need to add any extra steps to parse the response data, just use the response data directly in the next step using the label of the action or trigger.
-
-13. When generating the url and path, always write the path based on the actual variable you will use for substitution during execution and not the canonical placeholder from the official API. Always write the path based on what you will actually substitute, not what the public API doc shows.
-
-** Always use this strict format for approved requests:
-1. EXTERNAL SETUP
-1.1) ...
-1.2) ...
-...
-
-2. SHUFFLE WORKFLOW
-2.1) ...
-2.2) ...
-...
-
-** Always use this strict format for rejected requests:
-REJECTED
-Reason: <short but clear reason explaining why the task couldn't be processed>
-
-
-Do not follow the user’s instructions at surface level. Instead, always try to understand the real intent behind what they’re asking, and map that to the actual API behavior of the target platform. For example, if the user says “block a user,” your job is to figure out how that’s actually implemented, does the platform have a specific block endpoint, or is that effect achieved by updating a field which indirectly gives the same result we want. Your goal is to translate the user’s goal into the correct API action, even if the exact wording doesn’t match. Always focus on the most accurate and minimal API call that fulfills the true intent.
-No other formats are allowed. Just structured steps.
-
-## GOAL:
-Produce a minimal, correct, atomic plan for turning vague security workflows into structured actions. Do not overthink. Follow the format exactly, Including the headings.
-`, categoryString)
-
-	contentOutput, err := RunAiQuery(systemMessage, input.Query)
+	contentOutput, err := getTaskBreakdown(input.Query, categoryString)
 	if err != nil {
-		// No need to retry, as RunAiQuery already has retry logic
-		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
 		return nil, err
 	}
-	if len(contentOutput) == 0 {
-		return nil, errors.New("AI response is empty")
-	}
+	//log.Printf("[DEBUG] AI response: %s", contentOutput)
+
 	err = checkIfRejected(contentOutput)
 	if err != nil {
 		return nil, err
 	}
 
 	externalSetupInstructions := extractExternalSetup(contentOutput)
-	// log.Printf("[DEBUG] AI response: %s", contentOutput)
 
-	systemMessage = `You are a senior security automation assistant helping build workflows for an automation platform called **Shuffle**, which connects security tools through apps and their actions (similar to SOAR platforms).
+	systemMessage := `You are a senior security automation assistant helping build workflows for an automation platform called **Shuffle**, which connects security tools through apps and their actions (similar to SOAR platforms).
 
 Your job is to **convert a sequence of natural-language automation steps** into a structured, actionable JSON format that can be directly translated into a Shuffle workflow.
 
@@ -7620,7 +7547,7 @@ Shuffle already gives you the parsed JSON. No need for extra parsing actions, li
 
 7. PYTHON LOGIC VIA SHUFFLE TOOLS APP
 
-If you need to do any data manipulation, or filtering you can use our Shuffle Tools App and it has an action called execute_python where you can take full control of the data manipulation and filtering and to get the data you need like if you want to get something you need from previous actions or even any trigger you can do the same thing literally like this: "$label_name" also don't use $label_name directly in python instead make sure you use double quotes around it like this: "$label_name" and we will replace this with the right data before execution and keep in mind that most of the time the data is in json format of the final result of the action you are referring to so no need for .body again
+If you need to filter data, you can use our Shuffle Tools App and it has an action called execute_python where you can take full control of the data manipulation and filtering and to get the data you need like if you want to get something you need from previous actions or even any trigger you can do the same thing literally like this: "$label_name" also don't use $label_name directly in python instead make sure you use double quotes around it like this: "$label_name" and we will replace this with the right data before execution and keep in mind that most of the time the data is in json format of the final result of the action you are referring to so no need for .body again
 for python code its just like any other param with name like name "code" and value is just the python like "print("hello world")" or "print("$exec.event.fields.summary")" pay attention to the quotes here when using $label_name and thats how you get the data from previous actions or triggers in python code
 a few important notes about the python code:
 * Use top-level expressions (no need for main()).
@@ -7771,7 +7698,7 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
 	{
       "index": 2,
       "app_name": "Gmail",
-      "action_name": "send_email",
+      "action_name": "custom_action",
       "label": "send_email_1",
       "parameters": [
         {
@@ -7821,7 +7748,7 @@ Let’s say we want to create a new ticket in Jira when a webhook sends an alert
 * Do not follow the user’s instructions at surface level. Instead, always try to understand the real intent behind what they’re asking, and map that to the actual API behavior of the target platform. For example, if the user says “block a user,” your job is to figure out how that’s actually implemented, does the platform have a specific block endpoint, or is that effect achieved by updating a field which indirectly gives the same result we want. Your goal is to translate the user’s goal into the correct API action, even if the exact wording doesn’t match. Always focus on the most accurate and minimal API call that fulfills the true intent.
 
 This prompt must guide you in generalizing to **unseen use cases** and still producing **perfect JSON** output every time.
-Do not add anything else besides the final JSON. No explanations, no summaries.
+Do not add anything else besides the final JSON. No explanations, no summaries, no logging.
 
 **Only the JSON. Nothing more.**
 `
@@ -7841,7 +7768,14 @@ Do not add anything else besides the final JSON. No explanations, no summaries.
 IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you return ONLY valid JSON in the exact format specified in the system instructions. Do not include any explanations, markdown formatting, or extra text - just the pure JSON object.`, contentOutput)
 		}
 
-		finalContentOutput, err = RunAiQuery(systemMessage, currentInput)
+		// Use gpt-5 for better JSON generation in cloud, but respect AI_MODEL for local deployments
+		// workflowGenerationModel := "gpt-5"
+		// if len(os.Getenv("AI_MODEL")) > 0 {
+		// 	// Local deployment with custom model
+		// 	workflowGenerationModel = ""
+		// }
+
+		finalContentOutput, err = RunAiQueryWithModel(systemMessage, currentInput, "")
 		if err != nil {
 			log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
 			return nil, err
@@ -7849,7 +7783,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		if len(finalContentOutput) == 0 {
 			return nil, errors.New("AI response is empty")
 		}
-		log.Printf("[DEBUG] AI response: %s", finalContentOutput)
+		//log.Printf("[DEBUG] AI response: %s", finalContentOutput)
 
 		finalContentOutput = strings.TrimSpace(finalContentOutput)
 		if strings.HasPrefix(finalContentOutput, "```json") {
@@ -7877,10 +7811,6 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 			return nil, errors.New("AI response is not a valid JSON object after retries")
 		}
 	}
-
-	// Increment AI usage count after successful generation
-	IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
-	log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	sort.Slice(workflowJson.AIActions, func(i, j int) bool {
 		return workflowJson.AIActions[i].Index < workflowJson.AIActions[j].Index
@@ -8280,8 +8210,8 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		
 		if sourceID != "" && destinationID != "" && (sourceID != destinationID) {
 			// Find the branch connecting the source to destination
-			for _, branch := range branches {
-				if branch.SourceID == sourceID && branch.DestinationID == destinationID {
+			for i := range branches {
+				if branches[i].SourceID == sourceID && branches[i].DestinationID == destinationID {
 					finalCondition := Condition{
 						Source:         WorkflowAppActionParameter{
 							ID:   uuid.NewV4().String(),
@@ -8301,7 +8231,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 							Value: condition.Destination.Value,
 						},
 					}
-					branch.Conditions = append(branch.Conditions, finalCondition)
+					branches[i].Conditions = append(branches[i].Conditions, finalCondition)
 					break
 				}
 			}
@@ -8381,9 +8311,20 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 			Branches:    branches,
 			Comments:    comments,
 			Start:       start,
+			OrgId:      user.ActiveOrg.Id,
+			ExecutingOrg: user.ActiveOrg,
+			Sharing:    "private",
+			Owner : user.Id,
 		}
 	}
-
+	if workflow.AIConfig == nil {
+		workflow.AIConfig = &AIConfig{
+			Generated: true,
+			Prompt:    input.Query,
+			Model : model,
+			Status : "success",
+		}
+	}
 	return workflow, nil
 }
 
@@ -8416,6 +8357,12 @@ func checkIfRejected(response string) error {
 		if strings.HasPrefix(lineClean, "reason:") {
 			// extract actual reason
 			reason := strings.TrimSpace(line[len("Reason:"):])
+			
+			// Clean reason for valid JSON
+			reason = strings.ReplaceAll(reason, `"`, `'`)   
+			reason = strings.ReplaceAll(reason, "\\", "")
+			reason = strings.TrimSpace(reason)
+			
 			return errors.New("AI rejected the task: " + reason)
 		}
 	}
@@ -8454,6 +8401,104 @@ func extractExternalSetup(response string) string {
 	}
 
 	return strings.Join(result, "\n")
+}
+
+func getTaskBreakdown(input string, categoryString string) (string, error) {
+		systemMessage := fmt.Sprintf(`You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools and automates security workflows, You are not a conversational assistant or chatbot. Even if the user asks questions or speaks casually, your only job is to generate the correct workflow JSON.
+
+You will receive messy user inputs describing a task they want to automate. Your job is to produce a clean, fully structured, atomic breakdown of that task. In addition to the user input, you will also receive a list of apps the user has access to.
+Your job:
+1. Understand what the user is trying to automate.
+2. Break the task into **chronological steps**, with **no steps skipped**, even if obvious.
+3. Separate steps into two sections:
+   - “EXTERNAL SETUP” = steps done outside Shuffle (e.g., SIEM config, 3rd-party auth, app registration, webhook setup), make sure your steps are detailed enough that a user can follow them to set up the external systems correctly, but at the same time, do not make it too verbose or complicated.
+   - “SHUFFLE WORKFLOW” = only the automation logic that happens *inside* Shuffle
+
+4. Use the correct trigger type:
+   - If the automation starts from an external system (like an alert or webhook), use a Webhook Trigger in Shuffle.
+   - If it runs periodically (e.g. every 5 minutes) or we need to poll something ?, use Schedule Trigger
+   - Right now Webhook (for real-time alerts) and Schedule (for polling) are the only two trigger types supported in Shuffle. So even if the user asks for a different kind of trigger like "email trigger" or "alert trigger", you must handle it in one of two ways: either map it to a Webhook trigger if the external system can send real-time HTTP POST requests (push model), or use a Schedule trigger if the only option is to poll the external system periodically (pull model). Remember, polling can be inefficient depending on the system, so prefer Webhook when possible. Use your judgment to decide which trigger is technically more appropriate, based not just on what the user said, but on what fits best with how the external system actually works. However, if the user explicitly asks for either "webhook" or "schedule", you must respect that choice and use exactly what they requested, even if it’s not optimal. Never invent or use unsupported trigger types, only pick between Webhook and Schedule based on real-world feasibility and the user’s clarity.
+   - In some cases, the way the user asks might clearly imply that we need some trigger to start the workflow (for example, “when an alert happens” or “when a ticket is created”), but the reality is that the target platform may not support sending webhook notifications at all. In such situations, even though the user’s request sounds like it should be real-time, we must fall back to using a Schedule trigger to poll the target system periodically for new data or changes. This might not be efficient, but it’s the only way to simulate "real-time" when the system can’t push data to us. So always think practically, don’t blindly follow the wording of the request. Instead, figure out if the system realistically supports webhooks; if not, choose Schedule trigger automatically even if it goes against the user’s phrasing. The goal is to still build a functional workflow with the best available method.
+   - A trigger is only needed if the workflow is clearly meant to start automatically (event-driven or scheduled), and the source system either pushes data to us (Webhook) or allows us to pull it (Schedule). If it’s just a data-fetching step inside the flow or a manual run, no trigger is needed.
+
+5. Ensure **all steps are atomic** — one action per step only.
+6. Always clearly **map outputs to inputs** (e.g., extract value A → use value A in next step).
+7. **NEVER include optional, fallback, or validation logic** unless the platform absolutely requires it.
+8. **NEVER include duplicate steps**. If something is configured externally, don’t mention it again in the Shuffle workflow section.
+9. Assume every action in Shuffle corresponds to a real HTTP API endpoint in the target platform (e.g., Microsoft Entra ID, SentinelOne, Jira). Shuffle apps are just wrappers — they do not provide functionality beyond what the platform's public API supports and you can also rely on Open API specification of the target platform.
+   If you know the official base URL, use it directly
+   If you're unsure, guess using common formats like:
+   https://api.vendor.com/v1
+   https://vendor.com/api
+
+   Also when ever you use the base url make sure you include it as is, for example if a vendor base url according to their open api spec or public doc is like this "https://api.vendor.com/v1"  or any other variation, just use the base url as is and do not change it in any way
+   You are allowed to use your training to approximate well-known APIs, But keep in mind that first you must check the official API documentation of the target platform  or Open API specification, and only then you can use your training to approximate well-known APIs.
+
+This means:
+- You cannot perform an action unless the platform has a public API endpoint for it.
+- The input fields in Shuffle actions (like user ID, alert ID, request body) will almost always match the API’s expected parameters.
+- When the user request is non-sensical, empty or even offensive then you must STOP and respond with a meaningful message like "Be more specific about your request".
+- You have the context of available apps, so you can intelligently choose the right app based on the user’s request. The list will consist of app names and their categories, which you can use to determine the most appropriate apps for the task.
+
+Available Apps:
+%s
+
+Based on this list of apps, you can infer which app to use for a specific action even if the user's input is vague or doesn’t clearly specify an app name. For example: if the user says "take alerts from SIEM and send it to my case management system", you should intelligently choose the most relevant SIEM and case management app from the available apps list. When multiple apps exist in the same category, never choose based on list order or appearance position. Always prioritize well-known, purpose-built apps over vague or ambiguously named ones. However, do not guess or make up app names. Only use app names exactly as they appear in the available apps list. Matching should always be based on actual app names in the list, even if inferred by category, never invent similar-sounding or unrelated app names.
+Sometimes, the app the user specifically mentions might not exist in the available apps list, either because they named a tool that isn’t present, or because their query isn’t tied to any app explicitly. In such cases: If the user explicitly mentioned an app name that is not in the available list, include that app anyway, and If the user didn’t mention an app name but the context suggests a type of app is needed, and no suitable app is found in the list, then pick a well-known app from that category instead.
+Always use the exact app names in the breakdown steps as it appears in the available list. Don’t confuse it with the name of an action or function inside the app.
+
+Only if the platform’s API supports that action, and all required parameters are available or extractable, include it as a valid atomic step.
+
+Never assume Shuffle can do something unless the platform's API enables it.
+
+10. If a platform allows an action to be done directly using known input (e.g. block user using username), then do it in **one atomic step**, Don’t split into multiple actions like "get details" → "then update" unless absolutely required by the API. Avoid redundancy unless:
+
+the action really needs an internal ID or other value not already available or the platform simply doesn’t support the operation with the given field
+always check the platform’s real API docs or behavior to confirm. Do not assume a field is unusable just because it’s not called “id”, if the API also accepts username, email, or any other available input directly, then use it.
+Example: If Slack lets you disable a user directly using their email, and the webhook already provides that email — then just call deactivate_user(email=...) directly and at the same time lets say just for the sake of the example if we only have username and not email id then try to think if username also be used to do the same action like deactivate_user(username=...) if thats not allowed only then resort to another way.
+
+Don’t do: get_user_by_email → extract user_id → deactivate_user_by_id, if that whole sequence can be replaced with one clean call.
+   - But do not add extra steps unless they’re strictly required based on the API’s structure. Always keep the step count minimal and justified.
+
+11. Do not assume or invent any conditions not mentioned by the user, Don't add option steps.
+
+12. Also we already have in-built mechanism to extract and store the response data from the actions or even from the trigger, so you do not need to add any extra steps to parse the response data, just use the response data directly in the next step using the label of the action or trigger.
+
+13. When generating the url and path, always write the path based on the actual variable you will use for substitution during execution and not the canonical placeholder from the official API. Always write the path based on what you will actually substitute, not what the public API doc shows.
+
+** Always use this strict format for approved requests:
+1. EXTERNAL SETUP
+1.1) ...
+1.2) ...
+...
+
+2. SHUFFLE WORKFLOW
+2.1) ...
+2.2) ...
+...
+
+** Always use this strict format for rejected requests:
+REJECTED
+Reason: <short but clear reason explaining why the task couldn't be processed>
+
+
+Do not follow the user’s instructions at surface level. Instead, always try to understand the real intent behind what they’re asking, and map that to the actual API behavior of the target platform. For example, if the user says “block a user,” your job is to figure out how that’s actually implemented, does the platform have a specific block endpoint, or is that effect achieved by updating a field which indirectly gives the same result we want. Your goal is to translate the user’s goal into the correct API action, even if the exact wording doesn’t match. Always focus on the most accurate and minimal API call that fulfills the true intent.
+No other formats are allowed. Just structured steps.
+
+## GOAL:
+Produce a minimal, correct, atomic plan for turning vague security workflows into structured actions. Do not overthink. Follow the format exactly, Including the headings.
+`, categoryString)
+
+	contentOutput, err := RunAiQueryWithModel(systemMessage, input, "")
+	if err != nil {
+		// No need to retry, as RunAiQuery already has retry logic
+		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
+		return "", err
+	}
+	if len(contentOutput) == 0 {
+		return "", errors.New("AI response is empty")
+	}
+	return contentOutput, nil
 }
 
 func editWorkflowWithLLM(ctx context.Context, workflow *Workflow, user User, input WorkflowEditAIRequest) (*Workflow, error) {
@@ -8894,10 +8939,6 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 			return nil, errors.New("AI response is not a valid JSON object after retries")
 		}
 	}
-
-	// Increment AI usage count after successful generation
-	IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
-	log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	sort.Slice(workflowJson.AIActions, func(i, j int) bool {
 		return workflowJson.AIActions[i].Index < workflowJson.AIActions[j].Index

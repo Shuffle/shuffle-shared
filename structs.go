@@ -1039,6 +1039,7 @@ type Org struct {
 	Billing      Billing     `json:"Billing" datastore:"Billing"`
 	CreatorOrg   string      `json:"creator_org" datastore:"creator_org"`
 	Branding     OrgBranding `json:"branding" datastore:"branding"`
+	LocalAIEnabled   bool    `json:"local_ai_enabled" datastore:"local_ai_enabled"` 	// AI availability for on-prem
 }
 
 type Billing struct {
@@ -1526,6 +1527,7 @@ type Workflow struct {
 	// This overrides org settings for the workflow
 	BackupConfig BackupConfig `json:"backup_config" datastore:"backup_config"`
 	AuthGroups   []string     `json:"auth_groups" datastore:"auth_groups"`
+	AIConfig     *AIConfig    `json:"ai_config,omitempty" datastore:"ai_config,omitempty"`
 }
 
 type BackupConfig struct {
@@ -2891,6 +2893,7 @@ type HandleInfo struct {
 	Licensed            bool        `json:"licensed"`
 	UserGeoInfo         UserGeoInfo `json:"user_geo_info,omitempty"`
 	Theme               string      `json:"theme"`
+	AIEnabled           bool        `json:"ai_enabled"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`
@@ -4677,4 +4680,11 @@ type NGramItem struct {
 
 	Amount int      `json:"amount"`
 	Ref    []string `json:"ref"` // Reference to other items
+}
+
+type AIConfig struct {
+    Generated bool   `json:"generated" datastore:"generated"`
+    Prompt    string `json:"prompt" datastore:"prompt"`
+    Model     string `json:"model" datastore:"model"`
+    Status    string `json:"status" datastore:"status"`
 }
