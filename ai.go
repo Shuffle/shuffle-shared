@@ -7345,7 +7345,7 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("[DEBUG] AI response: %s", contentOutput)
+	//log.Printf("[DEBUG] AI response: %s", contentOutput)
 
 	err = checkIfRejected(contentOutput)
 	if err != nil {
