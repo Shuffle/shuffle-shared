@@ -105,6 +105,7 @@ type QueryInput struct {
 	TimeEnded   int64        `json:"time_ended,omitempty"`
 	Formatting  string       `json:"formatting,omitempty"`
 	Environment string       `json:"environment,omitempty"`
+	ImageURL    string       `json:"image_url,omitempty"`
 
 	// For OpenAI assistant with Shuffle labels
 	ThreadId string `json:"thread_id,omitempty"`
