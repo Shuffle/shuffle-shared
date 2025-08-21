@@ -3974,6 +3974,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	} else {
 		//log.Printf("[DEBUG] Downloading image as POST request WITHOUT redirects due to not being cloud")
 	}
+	streamImage := false
 
 	// Set request timeout to 5 min (max)
 	topClient.Timeout = time.Minute * 10
@@ -4056,7 +4057,57 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	tar, err := os.Create(newFileName)
 	if err != nil {
 		log.Printf("[WARNING] Failed creating file: %s", err)
-		return err
+		streamImage = true
+	}
+
+	// @yashsinghcodes: This is for kubernetes where we cannot write into filesystem
+	// we can make this default at somepoint but for now it is not
+	// well tested.
+	if streamImage {
+		dockercli, err := docker.NewEnvClient()
+		if err != nil {
+			log.Printf("[ERROR] Unable to create docker client (3): %s", err)
+			return err
+		}
+
+		defer dockercli.Close()
+		imageLoadResponse, err := dockercli.ImageLoad(context.Background(), newresp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed loading docker images: %s", err)
+			return err
+		}
+
+		defer imageLoadResponse.Body.Close()
+		body, err := ioutil.ReadAll(imageLoadResponse.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading docker image: %s", err)
+			return err
+		}
+
+		if strings.Contains(string(body), "no such file") {
+			return errors.New(string(body))
+		}
+
+		if strings.Contains(strings.ToLower(string(body)), "error") {
+			log.Printf("[ERROR] Error loading image %s: %s", imageName, string(body))
+			return errors.New(string(body))
+		}
+
+		baseTag := strings.Split(imageName, ":")
+		if len(baseTag) > 1 {
+			tag := baseTag[1]
+			//log.Printf("[DEBUG] Creating tag copies of downloaded containers from tag %s", tag)
+
+			// Remapping
+			ctx := context.Background()
+			dockercli.ImageTag(ctx, imageName, fmt.Sprintf("frikky/shuffle:%s", tag))
+			dockercli.ImageTag(ctx, imageName, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
+
+			downloadedImages = append(downloadedImages, fmt.Sprintf("frikky/shuffle:%s", tag))
+			downloadedImages = append(downloadedImages, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
+		}
+
+		return nil
 	}
 
 	defer tar.Close()
