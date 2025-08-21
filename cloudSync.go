@@ -1506,7 +1506,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// This is a special case where auth was handled in another region, and activation is done anyway
-	if project.Environment == "cloud" && gceProject == "shuffler" && request.URL.Query().Get("propagation") == os.Getenv("SHUFFLE_PROPAGATE_TOKEN") {
+	if project.Environment == "cloud" && gceProject == "shuffler" && request.URL.Query().Get("propagation") == os.Getenv("SHUFFLE_PROPAGATE_TOKEN") && len(os.Getenv("SHUFFLE_PROPAGATE_TOKEN")) > 0 {
 
 		log.Printf("[AUDIT] User %s (%s) is activating app %s for org %s (%s) with their org auth token (distributed)", user.Username, user.Id, appId, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
@@ -1549,8 +1549,12 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		if added {
 			err = SetOrg(ctx, *org, org.Id)
 			if err != nil {
-				log.Printf("[ERROR] Failed setting org %s (%s) after activating app %s: %s", user.ActiveOrg.Name, user.ActiveOrg.Id, appId, err)
-			}
+				log.Printf("[ERROR] Failed setting org %s (%s) after activating app %s: %s (propagate!)", user.ActiveOrg.Name, user.ActiveOrg.Id, appId, err)
+
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": true, "reason": "Failed setting org after activating app"}`))
+				return
+			} 
 
 			resp.WriteHeader(200)
 			resp.Write([]byte(`{"success": true, "reason": "App activated"}`))
@@ -1898,7 +1902,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 			parsedUrl, err := url.Parse(requestUrl)
 			if err != nil {
-				log.Printf("[ERROR] Failed parsing request URL: %s", err)
+				log.Printf("[ERROR] Failed parsing request URL for redirect: %s", err)
 			} else {
 				request.URL = parsedUrl
 			}
