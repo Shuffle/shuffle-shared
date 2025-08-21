@@ -4064,6 +4064,8 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	// we can make this default at somepoint but for now it is not
 	// well tested.
 	if streamImage {
+		log.Printf("[INFO] Streaming image directly to dockercli")
+
 		dockercli, err := docker.NewEnvClient()
 		if err != nil {
 			log.Printf("[ERROR] Unable to create docker client (3): %s", err)
