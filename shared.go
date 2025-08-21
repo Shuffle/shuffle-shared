@@ -4018,6 +4018,66 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+func GetExecTimeline(fileId string) []WidgetPointData {
+
+	backgroundCtx := context.Background()
+
+	// Set cache for it
+	if len(fileId) == 0 {
+		return []WidgetPointData{}
+	}
+
+	foundDates := []WidgetPointData{}
+	cacheId := fmt.Sprintf("exec_timeline_%s", fileId)
+	cache, err := GetCache(backgroundCtx, cacheId)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		err = json.Unmarshal(cacheData, &foundDates)
+		if err == nil {
+			return foundDates
+		}
+	}
+
+	for i := -30; i < 0; i++ {
+
+		startTimeInt := time.Now().AddDate(0, 0, i)
+		endTimeInt := time.Now().AddDate(0, 0, i+1)
+
+		// Normalize startTimeInt & endTimeInt to be at 00:00:00
+		startTimeInt = time.Date(startTimeInt.Year(), startTimeInt.Month(), startTimeInt.Day(), 0, 0, 0, 0, startTimeInt.Location())
+		endTimeInt = time.Date(endTimeInt.Year(), endTimeInt.Month(), endTimeInt.Day(), 0, 0, 0, 0, endTimeInt.Location())
+
+		startTimeNew := startTimeInt.Unix()
+		endTimeNew := endTimeInt.Unix()
+
+		execCount, err := GetWorkflowRunCount(backgroundCtx, fileId, startTimeNew, endTimeNew)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting workflow count for %s: %s", fileId, err)
+		}
+
+		foundDates = append(foundDates, WidgetPointData{
+			Key: startTimeInt.Format("Jan 2"),
+			Data: int64(execCount),
+
+			MetaData: WidgetMeta{
+				Color: "grey",
+			},
+		})
+	}
+
+	// Set cache for it
+	if project.CacheDb {
+		cacheData, err := json.Marshal(foundDates)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling exec timeline data: %s", err)
+		} else {
+			err = SetCache(backgroundCtx, cacheId, cacheData, 400) // 1 week
+		}
+	}
+
+	return foundDates
+}
+
 func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -4204,8 +4264,11 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 
 	newReturn := ExecutionReturn{
 		Success:    true,
+		Id:	   		fileId,
 		Cursor:     newCursor,
 		Executions: workflowExecutions,
+
+		Timeline: GetExecTimeline(fileId),
 	}
 
 	newjson, err := json.Marshal(newReturn)
