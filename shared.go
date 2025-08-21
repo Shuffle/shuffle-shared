@@ -13663,54 +13663,6 @@ func startWebhookTrigger(ctx context.Context, workflowId, triggerId, triggerName
 	return nil
 }
 
-// startScheduleTrigger - Core function to start a schedule trigger without HTTP handlers
-func startScheduleTrigger(ctx context.Context, workflowId, triggerId, cronExpression, executionArgument, environment string, user User, orgId string) error {
-	// Get the workflow first
-	workflow, err := GetWorkflow(ctx, workflowId)
-	if err != nil {
-		return fmt.Errorf("failed getting workflow %s: %s", workflowId, err)
-	}
-
-	// Validate access
-	if workflow.OrgId != orgId {
-		return fmt.Errorf("user doesn't have access to workflow %s", workflowId)
-	}
-
-	// For cloud environments, we need to set up GCP schedules
-	if project.Environment == "cloud" {
-		// This would typically involve creating a GCP Cloud Scheduler job
-		// The actual implementation depends on your GCP setup
-		log.Printf("[INFO] Setting up cloud schedule for trigger %s with cron %s", triggerId, cronExpression)
-	}
-
-	// Update the workflow trigger status
-	for triggerIndex, trigger := range workflow.Triggers {
-		if trigger.ID == triggerId {
-			workflow.Triggers[triggerIndex].Status = "running"
-			
-			// Update the cron parameter if needed
-			for paramIndex, param := range trigger.Parameters {
-				if param.Name == "cron" {
-					workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = cronExpression
-				} else if param.Name == "execution_argument" {
-					workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = executionArgument
-				}
-			}
-			
-			log.Printf("[INFO] Changed status of schedule trigger %s to running with cron %s", triggerId, cronExpression)
-			break
-		}
-	}
-
-	// Save the updated workflow
-	err = SetWorkflow(ctx, *workflow, workflow.ID)
-	if err != nil {
-		return fmt.Errorf("failed setting workflow %s: %s", workflow.ID, err)
-	}
-
-	log.Printf("[INFO] Set up schedule trigger %s with cron expression %s", triggerId, cronExpression)
-	return nil
-}
 
 // startAllWorkflowTriggers - Start all triggers for a workflow (most useful function)
 func startAllWorkflowTriggers(ctx context.Context, workflowId string, user User, orgId string) error {
@@ -31733,12 +31685,13 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 	if err != nil {
 		reason := err.Error()
 		if strings.HasPrefix(reason, "AI rejected the task: ") {
+			log.Printf("[ERROR] AI rejected the task for org=%s user=%s", user.ActiveOrg.Id, user.Id)
 			reason = strings.TrimPrefix(reason, "AI rejected the task: ")
 			resp.WriteHeader(422)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
 			return
 		}
-		log.Printf("[ERROR] Failed to generate workflow AI response: %s", err)
+		log.Printf("[ERROR] Failed to generate workflow AI response for org %s, user %s: %s", user.ActiveOrg.Id, user.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
@@ -31956,7 +31909,7 @@ func startSchedule(trigger Trigger, authorization string, workflow Workflow) err
 	// Every 24 hours in cron
 	foundFrequency := "0 0 * * *"
 	for _, param := range trigger.Parameters {
-		if param.Name == "frequency" && len(param.Value) > 2 {
+		if param.Name == "cron" && len(param.Value) > 2 {
 			foundFrequency = param.Value
 		}
 	}
