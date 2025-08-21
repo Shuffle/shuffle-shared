@@ -1310,7 +1310,15 @@ func loadAppConfigFromMain(fileId string) {
 
 	app, err := GetApp(ctx, fileId, User{}, false)
 	if err == nil && len(app.Name) > 0 && len(app.ID) > 0 {
-		log.Printf("[INFO] Found app %s (%s) for config loading. Running cross-region DOWNLOAD shuffler.io->local", app.Name, app.ID)
+		log.Printf("[INFO] Found app %s (%s) for config loading. Running cross-region DOWNLOAD shuffler.io->local if it's generated==false (python). Actions: %d. Generated: %t", app.Name, app.ID, len(app.Actions), app.Generated)
+		//if len(app.Actions) > 0 { 
+		//	return
+		//}
+
+		// Python apps can't be distributed this easily (sadly)
+		if !app.Generated {
+			return
+		}
 	}
 
 	app.ID = fileId
@@ -1464,7 +1472,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	location := strings.Split(request.URL.String(), "/")
-	var fileId string
+	var appId string
 	activate := true
 	shouldDistributeToLocation := false
 	if location[1] == "api" {
@@ -1474,7 +1482,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		fileId = location[4]
+		appId = location[4]
 		if strings.ToLower(location[5]) == "deactivate" {
 			activate = false
 		}
@@ -1494,14 +1502,68 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	// Additional: Superfluous response(s)
 	if project.Environment == "cloud" && gceProject != "shuffler" {
-		go loadAppConfigFromMain(fileId)
-		go RedirectUserRequest(resp, request)
-
-		// Just to ensure propagation occurs
-		time.Sleep(2 * time.Second)
+		go loadAppConfigFromMain(appId)
 	}
 
-	app, err := GetApp(ctx, fileId, user, false)
+	// This is a special case where auth was handled in another region, and activation is done anyway
+	if project.Environment == "cloud" && gceProject == "shuffler" && request.URL.Query().Get("propagation") == os.Getenv("SHUFFLE_PROPAGATE_TOKEN") {
+
+		log.Printf("[AUDIT] User %s (%s) is activating app %s for org %s (%s) with their org auth token (distributed)", user.Username, user.Id, appId, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting org %s (%s) for app activation: %s (prop)", user.ActiveOrg.Name, user.ActiveOrg.Id, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
+			return
+		}
+
+		added := false
+		if activate {
+			if !ArrayContains(org.ActiveApps, appId) {
+				org.ActiveApps = append(org.ActiveApps, appId)
+				added = true
+			} else if ArrayContains(org.ActiveApps, appId) {
+				// If the app is already in the org, we don't need to add it again
+				log.Printf("[DEBUG] App %s already exists in org %s (%s). Not adding again (prop)", appId, user.ActiveOrg.Name, user.ActiveOrg.Id)
+				resp.WriteHeader(200)
+				resp.Write([]byte(`{"success": true, "reason": "App already exists in org"}`))
+				return
+			}
+
+		} else {
+			// Remove from the array
+			newActiveApps := []string{}
+			for _, activeApp := range org.ActiveApps {
+				if activeApp == appId {
+					continue
+				}
+
+				newActiveApps = append(newActiveApps, activeApp)
+			}
+
+			org.ActiveApps = newActiveApps
+			added = true
+		}
+
+		if added {
+			err = SetOrg(ctx, *org, org.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting org %s (%s) after activating app %s: %s", user.ActiveOrg.Name, user.ActiveOrg.Id, appId, err)
+			}
+
+			resp.WriteHeader(200)
+			resp.Write([]byte(`{"success": true, "reason": "App activated"}`))
+			return
+		} else {
+			resp.WriteHeader(201)
+			resp.Write([]byte(`{"success": true, "reason": "App already handled"}`))
+			return
+		}
+
+	}
+
+	app, err := GetApp(ctx, appId, user, false)
 	if err != nil {
 		appName := request.URL.Query().Get("app_name")
 		appVersion := request.URL.Query().Get("app_version")
@@ -1533,18 +1595,18 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 			app = &selectedApp
 		} else {
-			log.Printf("[WARNING] Error getting app with ID %s (app config): %s", fileId, err)
+			log.Printf("[WARNING] Error getting app with ID %s (app config): %s", appId, err)
 
 			// Automatic propagation to cloud regions
 			if project.Environment == "cloud" && gceProject != "shuffler" {
-				app, err := HandleAlgoliaAppSearch(ctx, fileId)
+				app, err := HandleAlgoliaAppSearch(ctx, appId)
 				if err == nil {
 					// this means that the app exists. so, let's
 					// ask our propagator to proagate it further.
 					log.Printf("[INFO] Found apps %s - %s in algolia", app.Name, app.ObjectID)
 
-					if app.ObjectID != fileId {
-						log.Printf("[WARNING] App %s doesn't exist in algolia", fileId)
+					if app.ObjectID != appId {
+						log.Printf("[WARNING] App %s doesn't exist in algolia", appId)
 						resp.WriteHeader(401)
 						resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
 						return
@@ -1553,7 +1615,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 					// and then recursively call the same function. but that
 					// would make this request way too long.
 					go func() {
-						err = propagateApp(fileId, false)
+						err = propagateApp(appId, false)
 						if err != nil {
 							log.Printf("[WARNING] Error propagating app %s - %s: %s", app.Name, app.ObjectID, err)
 						} else {
@@ -1570,7 +1632,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 			} else if project.Environment == "cloud" && gceProject == "shuffler" {
 				// Automatic deletion in the main region if the app doesn't exist
 				if len(app.ID) == 0 {
-					log.Printf("[INFO] Auto-Removing app %s from Algolia as it doesn't exist with the same ID anymore. Request source: %s (%s) in org %s (%s)", fileId, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+					log.Printf("[INFO] Auto-Removing app %s from Algolia as it doesn't exist with the same ID anymore. Request source: %s (%s) in org %s (%s)", appId, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 					algoliaClient := os.Getenv("ALGOLIA_CLIENT")
 					algoliaSecret := os.Getenv("ALGOLIA_SECRET")
@@ -1578,7 +1640,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 						algClient := search.NewClient(algoliaClient, algoliaSecret)
 						algoliaIndex := algClient.InitIndex("appsearch")
-						_, err = algoliaIndex.DeleteObject(fileId)
+						_, err = algoliaIndex.DeleteObject(appId)
 						if err != nil {
 							resp.WriteHeader(500)
 							resp.Write([]byte(`{"success": false, "reason": "Failed removing the app from Algolia"}`))
@@ -1614,6 +1676,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
 				return
 			}
+
 			if org.CreatorOrg == app.ReferenceOrg {
 				log.Printf("[INFO] App %s (%s) is owned by the parent org %s (%s). Distributing it to the suborg %s (%s)", app.Name, app.ID, org.Name, org.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 				distributingApp = true
@@ -1702,10 +1765,46 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	} else {
-		log.Printf("[WARNING] User is trying to activate %s which is NOT a public app", app.Name)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		// Check if the user in the current context should have access to it or not
+		if user.Id == app.Owner || user.ActiveOrg.Id == app.ReferenceOrg || ArrayContains(app.Contributors, user.Id) {
+			log.Printf("[AUDIT] User %s (%s) is activating app %s (%s) for org %s (%s)", user.Username, user.Id, app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+			log.Printf("[AUDIT] User %s (%s) is activating app %s (%s) for org %s (%s) as a support user", user.Username, user.Id, app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+
+		} else {
+			foundOrg := &Org{}
+			for _, org := range user.Orgs {
+				if org != app.ReferenceOrg {
+					continue
+				}
+
+				foundOrg, err = GetOrg(ctx, org)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting org %s: %s", org, err) 
+				}
+
+				break
+			}
+
+			allowed := false
+			if foundOrg.Id == app.ReferenceOrg {
+				for _, foundUser := range foundOrg.Users {
+					if foundUser.Id == user.Id && foundUser.Role != "org-reader" {
+						allowed = true
+						break
+					}
+				}
+			} 
+
+			if !allowed {
+				log.Printf("[WARNING] User is trying to activate %s which is NOT a public app", app.Name)
+				resp.WriteHeader(400)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+		}
 	}
 
 	if shouldDistributeToLocation {
@@ -1784,6 +1883,31 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	if !activate {
 		reason = "App Deactivated"
+	}
+
+	// Happens down here as we want to make sure the auth is done
+	if project.Environment == "cloud" && gceProject != "shuffler" {
+		if len(os.Getenv("SHUFFLE_PROPAGATE_TOKEN")) > 0 {
+			newQuery := fmt.Sprintf("propagation=%s", os.Getenv("SHUFFLE_PROPAGATE_TOKEN"))
+			requestUrl := request.URL.String()
+			if !strings.Contains(requestUrl, "?") {
+				requestUrl = fmt.Sprintf("%s?%s", requestUrl, newQuery)
+			} else {
+				requestUrl = fmt.Sprintf("%s&%s", requestUrl, newQuery)
+			}
+
+			parsedUrl, err := url.Parse(requestUrl)
+			if err != nil {
+				log.Printf("[ERROR] Failed parsing request URL: %s", err)
+			} else {
+				request.URL = parsedUrl
+			}
+		}
+
+		go RedirectUserRequest(resp, request)
+		return
+
+		// Just to ensure org propagation across regions occurs in time
 	}
 
 	resp.WriteHeader(200)

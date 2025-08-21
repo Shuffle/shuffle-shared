@@ -13937,6 +13937,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Support & Admin user %s (%s) got access to app %s (cloud only)", user.Username, user.Id, app.ID)
+
 		} else if user.Role == "admin" && app.Owner == "" {
 			log.Printf("[AUDIT] Any admin can GET %s (%s), since it doesn't have an owner (GET).", app.Name, app.ID)
 		} else {
@@ -31562,6 +31563,7 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
 		return
 	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
@@ -31637,6 +31639,7 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		resp.Write([]byte(`{"success": false, "reason": "Input body is not valid JSON"}`))
 		return
 	}
+
 	var input QueryInput
 	err = json.Unmarshal(body, &input)
 	if err != nil {
@@ -31645,9 +31648,15 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		resp.Write([]byte(`{"success": false, "reason": "Input data invalid"}`))
 		return
 	}
+
+	if len(input.Query) < 5 {
+		log.Printf("[WARNING] Input query too short in runActionAI: %s", input.Query)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input query too short. Please provide a more detailed description of the workflow you want to generate"}`))
+		return
+	}
 	
 	workflow, err := GetWorkflow(ctx, input.WorkflowId)
-
 	if err != nil {
 		log.Printf("[ERROR] Failed to get workflow %s: %s", input.WorkflowId, err)
 	} else if workflow.OrgId != user.ActiveOrg.Id && len(workflow.OrgId) > 0 {
@@ -31671,6 +31680,7 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
+
     if project.Environment == "cloud" {
 		IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
 		log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
@@ -31702,6 +31712,7 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
+
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(appsJson)
 }
@@ -31711,6 +31722,7 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 	if cors {
 		return
 	}
+
 	ctx := GetContext(request)
 	err := ValidateRequestOverload(resp, request)
 	if err != nil {
@@ -31719,6 +31731,7 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
 		return
 	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
@@ -31726,11 +31739,13 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
 	if !user.SupportAccess {
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
 		return
 	}
+
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to generate LLM workflows: %s (%s)", user.Username, user.Id)
 		resp.WriteHeader(403)
@@ -31774,7 +31789,9 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 			}
 		}
 		
-		log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/%d", monthlyUsage, currentCacheCount, aiUsageCount, aiLimit)
+		if debug { 
+			log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/%d", monthlyUsage, currentCacheCount, aiUsageCount, aiLimit)
+		}
 		
 		if aiUsageCount >= aiLimit {
 			log.Printf("[AUDIT] Org %s (%s) has exceeded AI workflow editing limit (%d/%d)", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount, aiLimit)
@@ -31802,6 +31819,14 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false, "reason": "Input data invalid"}`))
 		return
 	}
+
+	if len(editRequest.Query) < 5 {
+		log.Printf("[WARNING] Input query too short in runActionAI: %s", editRequest.Query)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input query too short. Please provide a more detailed description of the changes you want to make to the workflow"}`))
+		return
+	}
+
 	workflow, err := GetWorkflow(ctx, editRequest.WorkflowID)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get workflow %s: %s", editRequest.WorkflowID, err)

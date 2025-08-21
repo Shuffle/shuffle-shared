@@ -6943,7 +6943,6 @@ Decision Field Rules:
 // Specific requirement for threatlist(s):
 // - URLs
 // - Where to put it (?)
-
 func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -7321,12 +7320,12 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 		log.Printf("[ERROR] Failed to get apps in Generate workflow: %s", err)
 		return nil, err
 	}
+
 	var httpApp WorkflowApp // We use http app as the final fallback if in case we cannot find any app that matches the AI suggested app name
 	var builder strings.Builder
 
 	maxApps := 150
 	count := 0
-
 	for _, app := range apps {
 		if len(strings.TrimSpace(app.Name)) == 0 {
 			continue
@@ -7339,13 +7338,12 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 			httpApp = app
 		}
 	}
-	categoryString := builder.String()
 
+	categoryString := builder.String()
 	contentOutput, err := getTaskBreakdown(input.Query, categoryString)
 	if err != nil {
 		return nil, err
 	}
-	//log.Printf("[DEBUG] AI response: %s", contentOutput)
 
 	err = checkIfRejected(contentOutput)
 	if err != nil {
@@ -7780,10 +7778,10 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 			log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
 			return nil, err
 		}
+
 		if len(finalContentOutput) == 0 {
 			return nil, errors.New("AI response is empty")
 		}
-		//log.Printf("[DEBUG] AI response: %s", finalContentOutput)
 
 		finalContentOutput = strings.TrimSpace(finalContentOutput)
 		if strings.HasPrefix(finalContentOutput, "```json") {
