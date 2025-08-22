@@ -31790,10 +31790,12 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
+
 	if project.Environment == "cloud" {
 		IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
 		log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
 	}
+
 	workflowJson, err := json.Marshal(output)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal workflow %s: %s", editRequest.WorkflowID, err)
@@ -31801,6 +31803,7 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal workflow"}`))
 		return
 	}
+	
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(workflowJson)
 }
