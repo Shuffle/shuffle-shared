@@ -1040,7 +1040,6 @@ type Org struct {
 	Billing        Billing     `json:"Billing" datastore:"Billing"`
 	CreatorOrg     string      `json:"creator_org" datastore:"creator_org"`
 	Branding       OrgBranding `json:"branding" datastore:"branding"`
-	LocalAIEnabled bool        `json:"local_ai_enabled" datastore:"local_ai_enabled"` // AI availability for on-prem
 }
 
 type Billing struct {
