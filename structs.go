@@ -105,6 +105,7 @@ type QueryInput struct {
 	TimeEnded   int64        `json:"time_ended,omitempty"`
 	Formatting  string       `json:"formatting,omitempty"`
 	Environment string       `json:"environment,omitempty"`
+	ImageURL    string       `json:"image_url,omitempty"`
 
 	// For OpenAI assistant with Shuffle labels
 	ThreadId string `json:"thread_id,omitempty"`
@@ -1039,7 +1040,6 @@ type Org struct {
 	Billing        Billing     `json:"Billing" datastore:"Billing"`
 	CreatorOrg     string      `json:"creator_org" datastore:"creator_org"`
 	Branding       OrgBranding `json:"branding" datastore:"branding"`
-	LocalAIEnabled bool        `json:"local_ai_enabled" datastore:"local_ai_enabled"` // AI availability for on-prem
 }
 
 type Billing struct {
