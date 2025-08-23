@@ -31576,8 +31576,8 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		return
 	}
 
-	if len(input.Query) < 5 {
-		log.Printf("[WARNING] Input query too short in runActionAI: %s", input.Query)
+	if len(strings.TrimSpace(input.Query)) < 5 && len(strings.TrimSpace(input.ImageURL)) == 0 {
+		log.Printf("[WARNING] Input query too short in generateWorkflow: %s", input.Query)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Input query too short. Please provide a more detailed description of the workflow you want to generate"}`))
 		return
@@ -31748,7 +31748,7 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	if len(editRequest.Query) < 5 {
+	if len(strings.TrimSpace(editRequest.Query)) < 5 {
 		log.Printf("[WARNING] Input query too short in runActionAI: %s", editRequest.Query)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Input query too short. Please provide a more detailed description of the changes you want to make to the workflow"}`))
