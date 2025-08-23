@@ -7327,6 +7327,7 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 	if err != nil {
 		return nil, err
 	}
+
 	log.Printf("[DEBUG] AI response: %s", contentOutput)
 
 	err = checkIfRejected(contentOutput)
@@ -7334,7 +7335,7 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 		return nil, err
 	}
 
-	externalSetupInstructions := extractExternalSetup(contentOutput)
+	externalSetupInstructions, contentOutput := ExtractExternalAndWorkflow(contentOutput)
 
 	systemMessage := `You are a senior security automation assistant helping build workflows for an automation platform called **Shuffle**, which connects security tools through apps and their actions (similar to SOAR platforms).
 
@@ -8353,36 +8354,72 @@ func checkIfRejected(response string) error {
 	return errors.New("AI rejected the task: reason unknown")
 }
 
-func extractExternalSetup(response string) string {
+// func extractExternalSetup(response string) string {
+// 	lines := strings.Split(response, "\n")
+// 	var result []string
+// 	foundExternal := false
+
+// 	for _, rawLine := range lines {
+// 		line := strings.ToLower(strings.TrimSpace(rawLine))
+
+// 		clean := strings.Trim(line, "*# ")
+// 		if !foundExternal && strings.HasPrefix(clean, "1. external setup") {
+// 			foundExternal = true
+// 			result = append(result, rawLine)
+// 			continue
+// 		}
+
+// 		// Stop when SHUFFLE WORKFLOW starts
+// 		if foundExternal && strings.Contains(clean, "shuffle workflow") {
+// 			break
+// 		}
+
+// 		if foundExternal {
+// 			result = append(result, rawLine)
+// 		}
+// 	}
+
+// 	if !foundExternal {
+// 		return "AI did not include any external setup instructions"
+// 	}
+
+// 	return strings.Join(result, "\n")
+// }
+
+// ExtractExternalAndWorkflow pulls out the two top-level sections.
+// It returns externalSetup, shuffleWorkflow (both may be empty if not present).
+func ExtractExternalAndWorkflow(response string) (string, string) {
 	lines := strings.Split(response, "\n")
-	var result []string
-	foundExternal := false
 
-	for _, rawLine := range lines {
-		line := strings.ToLower(strings.TrimSpace(rawLine))
+	// Accept headings like:
+	// "1. EXTERNAL SETUP", "## 1) External Setup", "**1. external setup**", etc.
+	reExternal := regexp.MustCompile(`(?i)^\s*(?:[*#>\-+` + "`" + `]+\s*)*1[.)]?\s*external\s+setup\b`)
+	reWorkflow := regexp.MustCompile(`(?i)^\s*(?:[*#>\-+` + "`" + `]+\s*)*2[.)]?\s*shuffle\s+workflow\b`)
 
-		clean := strings.Trim(line, "*# ")
-		if !foundExternal && strings.HasPrefix(clean, "1. external setup") {
-			foundExternal = true
-			result = append(result, rawLine)
+	var ext []string
+	var wf []string
+	section := 0 // 0 none, 1 external, 2 workflow
+
+	for _, raw := range lines {
+		switch {
+		case reExternal.MatchString(raw):
+			section = 1
+			ext = append(ext, raw)
+			continue
+		case reWorkflow.MatchString(raw):
+			section = 2
+			wf = append(wf, raw)
 			continue
 		}
 
-		// Stop when SHUFFLE WORKFLOW starts
-		if foundExternal && strings.Contains(clean, "shuffle workflow") {
-			break
-		}
-
-		if foundExternal {
-			result = append(result, rawLine)
+		if section == 1 {
+			ext = append(ext, raw)
+		} else if section == 2 {
+			wf = append(wf, raw)
 		}
 	}
 
-	if !foundExternal {
-		return "AI did not include any external setup instructions"
-	}
-
-	return strings.Join(result, "\n")
+	return strings.TrimSpace(strings.Join(ext, "\n")), strings.TrimSpace(strings.Join(wf, "\n"))
 }
 
 func getTaskBreakdown(input QueryInput, categoryString string) (string, error) {
