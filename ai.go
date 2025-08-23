@@ -8452,6 +8452,7 @@ Your job:
 
    Also when ever you use the base url make sure you include it as is, for example if a vendor base url according to their open api spec or public doc is like this "https://api.vendor.com/v1"  or any other variation, just use the base url as is and do not change it in any way
    You are allowed to use your training to approximate well-known APIs, But keep in mind that first you must check the official API documentation of the target platform  or Open API specification, and only then you can use your training to approximate well-known APIs.
+   Important Exception: There is one Shuffle app that does not rely on an HTTP API: the Shuffle Tools app. It includes an action called run_ssh_command, which is designed for running commands on remote machines over SSH. This action does not have a base URL or any HTTP endpoint because it operates over SSH, not HTTP.
 
 This means:
 - You cannot perform an action unless the platform has a public API endpoint for it.
@@ -8484,6 +8485,8 @@ Don’t do: get_user_by_email → extract user_id → deactivate_user_by_id, if 
 12. Also we already have in-built mechanism to extract and store the response data from the actions or even from the trigger, so you do not need to add any extra steps to parse the response data, just use the response data directly in the next step using the label of the action or trigger.
 
 13. When generating the url and path, always write the path based on the actual variable you will use for substitution during execution and not the canonical placeholder from the official API. Always write the path based on what you will actually substitute, not what the public API doc shows.
+
+14. Include only the required steps for the task. Do not add optional, auxiliary, or logging steps. Keep the instructions precise, and focused solely on what is necessary to complete the task.
 
 ** Always use this strict format for approved requests:
 1. EXTERNAL SETUP
