@@ -533,7 +533,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	// FIXME: This right here has caused more problems during dev than anything
 	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && !strings.Contains(strings.ToLower(hostname), "backend") {
 		if debug {
-			log.Printf("[DEBUG] Not saving execution to DB (just cache), since we are running in swarm mode.")
+			log.Printf("[DEBUG] Not saving execution to DB (just cache), since we are running in swarm mode (SHUFFLE_SWARM_CONFIG=run).")
 		}
 
 		return nil
@@ -552,6 +552,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflowExecution.WorkflowId))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflowExecution.WorkflowId))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflowExecution.WorkflowId))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s", nameKey, workflowExecution.WorkflowId))
 	if !dbSave && workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) > 1 {
 		//log.Printf("[WARNING][%s] SHOULD skip DB saving for execution. Status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
 
@@ -1167,6 +1168,10 @@ func GetExecutionValidation(ctx context.Context, executionId string) (TypeValida
 func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (WorkflowExecution, bool) {
 	dbsave := false
 	workflowExecution.Workflow.Image = ""
+
+	//newExec := cleanupProtectedKeys(*exec)
+	//exec = &newExec
+	workflowExecution = cleanupProtectedKeys(workflowExecution)
 
 	// FIXME: May be a problem here with setting it at all times~
 	//if workflowExecution.Status != "EXECUTING" {
@@ -12309,10 +12314,23 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			//cacheData.Category = strings.ReplaceAll(strings.ToLower(cacheData.Category), " ", "_")
 
 			allKeys[index] = cacheData
-
 			if len(datastoreId) > 127 {
 				datastoreId = datastoreId[:127]
 			}
+
+			if cacheData.Category == "protected" { 
+				cacheData.Encrypted = true
+
+				encryptionKey := fmt.Sprintf("%s_%d_%s_%s", cacheData.OrgId, cacheData.Created, cacheData.Category, cacheData.Key)
+				//newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+				newValue, err := HandleKeyEncryption([]byte(cacheData.Value), encryptionKey)
+				if err != nil {
+					cacheData.Encrypted = false
+				} else {
+					cacheData.Value = string(newValue)
+				}
+			}
+
 
 			datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
 			cacheKeys <- cacheData
@@ -12563,6 +12581,20 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 
 	cacheData.Category = strings.ReplaceAll(strings.ToLower(cacheData.Category), " ", "_")
 
+	// Test just for protected category (for now)
+	if cacheData.Category == "protected" { 
+		cacheData.Encrypted = true
+
+		encryptionKey := fmt.Sprintf("%s_%d_%s_%s", cacheData.OrgId, cacheData.Created, cacheData.Category, cacheData.Key)
+		//newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+		newValue, err := HandleKeyEncryption([]byte(cacheData.Value), encryptionKey)
+		if err != nil {
+			cacheData.Encrypted = false
+		} else {
+			cacheData.Value = string(newValue)
+		}
+	}
+
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(cacheData)
 	if err != nil {
@@ -12788,13 +12820,14 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 		}
 	}
 
-	// NOT returning without this, as we want to cache even when
-	// there isn't data in the key. This just makes general loading of individual keys faster
-	//if len(cacheData.Key) > 0 {
-	//	if debug {
-	//		log.Printf("[DEBUG] Found key '%s' in datastore with org '%s' and category '%s'", cacheData.Key, cacheData.OrgId, cacheData.Category)
-	//	}
-	//}
+	if cacheData.Encrypted { 
+		encryptionKey := fmt.Sprintf("%s_%d_%s_%s", cacheData.OrgId, cacheData.Created, cacheData.Category, cacheData.Key)
+		newValue, err := HandleKeyDecryption([]byte(cacheData.Value), encryptionKey)
+		if err == nil {
+			cacheData.Value = string(newValue)
+			cacheData.Encrypted = false
+		}
+	}
 
 	if project.CacheDb {
 		data, err := json.Marshal(cacheData)
@@ -13533,6 +13566,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		category = ""
 	}
 
+	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
 	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, inputcursor, orgId, category)
 	// Look for
 
@@ -13785,6 +13819,22 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		return cacheKeys[i].Edited > cacheKeys[j].Edited
 	})
 
+	for index, newKey := range cacheKeys {
+
+		// Only runs on specific loads of a category
+		if newKey.Encrypted && newKey.Category == category { 
+			encryptionKey := fmt.Sprintf("%s_%d_%s_%s", newKey.OrgId, newKey.Created, newKey.Category, newKey.Key)
+			newValue, err := HandleKeyDecryption([]byte(newKey.Value), encryptionKey)
+			if err == nil {
+				cacheKeys[index].Value = string(newValue)
+				cacheKeys[index].Encrypted = false
+			} else {
+				log.Printf("[ERROR] Failed decrypting datastore key %s: %s. Category: %s", newKey.Key, err, newKey.Category)
+			}
+		}
+
+	}
+
 	// Only cache if NO cursor at all.
 	// Otherwise we need to track and clean up all cursors
 	//if project.CacheDb && len(inputcursor) == 0 {
@@ -13812,7 +13862,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 				log.Printf("[ERROR] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
 			} else {
 				if debug {
-					log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
+					//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
 				}
 
 				for _, parentCache := range parentOrgCache {
@@ -15356,13 +15406,21 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 		return errors.New("Invalid parameters for cross-correlate ngrams. All parameters must be set. orgId, category, key, value")
 	}
 
+	// Skipping searchability for protected keys
+	if strings.ToLower(category) == "protected" { 
+		return nil
+	}
+
 	// Random sleeptime between 0-1000ms because we're inside a goroutine 
 	// and want to ensure there aren't a ton of concurrent writes to the datastore
 	time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
 
 	unmarshalled := map[string]interface{}{}
 	if err := json.Unmarshal([]byte(value), &unmarshalled); err != nil {
-		log.Printf("[WARNING] Failed unmarshalling value for cross-correlate ngrams: %s", err)
+		log.Printf("[WARNING] Failed unmarshalling value for cross-correlate ngrams: %s. Storing the key directly.", err)
+		unmarshalled = map[string]interface{}{
+			"key": value,
+		}
 	}
 
 	// Simple workaround for dates

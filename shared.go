@@ -12823,7 +12823,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	workflowExecution, err := GetWorkflowExecution(ctx, executionId)
 	if err != nil {
-		log.Printf("[ERROR] Failed getting execution (abort) %s: %s", executionId, err)
+		log.Printf("[ERROR][%s] Failed getting execution (abort): %s", executionId, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting execution ID %s because it doesn't exist (abort)."}`, executionId)))
 		return
@@ -18258,9 +18258,9 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	// Overwriting, as we don't want it to work that way
 	// Should use Org-Id header instead
 	orgId = user.ActiveOrg.Id
-
 	categoryList, categoryOk := request.URL.Query()["category"]
 	if categoryOk && len(categoryList) > 0 {
+		//category = categoryList[0]
 		category = categoryList[0]
 	}
 
@@ -18282,6 +18282,15 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[WARNING] No org ID provided in request. Returning 400.")
 			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false, "reason": "No org ID provided"}`))
+			return
+		}
+	}
+
+	// Requires being admin 
+	if strings.ToLower(category) == "protected" {
+		if user.Role != "admin" {
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Admin required to access protected category"}`))
 			return
 		}
 	}
@@ -18315,7 +18324,6 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	isSuccess := true
 	if keyList, keyOk := request.URL.Query()["key"]; keyOk && len(keyList) > 0 {
 		key := keyList[0]
-		log.Printf("[DEBUG] Loooking for key %s", key)
 
 		cacheId := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, key)
 		if len(category) > 0 {
@@ -20188,8 +20196,12 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 		newExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting single execution data: %s", err)
-			break
+
+			// In case we are too fast
+			if cnt > 2 {
+				log.Printf("[WARNING][%s] Failed getting single execution data: %s", workflowExecution.ExecutionId, err)
+				break
+			}
 		}
 
 		returnBody.Validation = newExecution.Workflow.Validation
@@ -23016,7 +23028,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			// Get the reference execution
 			oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
 			if err != nil {
-				log.Printf("[INFO] Failed getting execution (execution) %s: %s", referenceId[0], err)
+				log.Printf("[INFO][%s] Failed getting execution (execution) %s", referenceId[0], err)
 				return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
 			}
 
@@ -23360,7 +23372,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			// Will use the old name, but still continue with NEW ID
 			oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
 			if err != nil {
-				log.Printf("[ERROR] Failed getting execution (execution) %s: %s", referenceId[0], err)
+				log.Printf("[ERROR][%s] Failed getting execution (execution): %s", referenceId[0], err)
 				return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
 			}
 
@@ -24625,6 +24637,41 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		} else {
 			//log.Printf("[ERROR] Default KMS ID not found in organization. Will not be able to decrypt secrets.")
 		}
+	}
+
+	// Special Action cleanup in case authentication etc has gone wrong
+	// FIXME: Focused on URL field for now
+	for actionIndex, _ := range workflowExecution.Workflow.Actions {
+		found := []string{}
+
+		newparams := []WorkflowAppActionParameter{}
+		for paramIndex, _ := range workflowExecution.Workflow.Actions[actionIndex].Parameters { 
+
+			param := workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex]
+			if ArrayContains(found, param.Name) {
+
+				// Replaces the field
+				for existingParamIndex, _ := range newparams {
+					if param.Name != newparams[existingParamIndex].Name {
+
+						// Special for urls
+						if param.Name == "url" && strings.Contains(param.Value, "http") && !strings.Contains(newparams[existingParamIndex].Value, "http") {
+							newparams[existingParamIndex] = param
+						}
+
+						break
+					}
+				}
+
+				log.Printf("[ERROR][%s] Duplicate Field in Action: %#v", workflowExecution.ExecutionId, param.Name)
+				continue
+			}
+
+			newparams = append(newparams, param)
+			found = append(found, param.Name)
+		}
+
+		workflowExecution.Workflow.Actions[actionIndex].Parameters = newparams
 	}
 
 	// Handles org setting for subflows
@@ -30876,6 +30923,109 @@ func (tw *TimeWindow) cleanOldEvents(now time.Time) {
 	}
 }
 
+// Compute simple edit distance between two strings
+func editDistance(a, b string) int {
+	n := len(a)
+	m := len(b)
+	dp := make([][]int, n+1)
+	for i := range dp {
+		dp[i] = make([]int, m+1)
+		dp[i][0] = i
+	}
+	for j := 0; j <= m; j++ {
+		dp[0][j] = j
+	}
+	for i := 1; i <= n; i++ {
+		for j := 1; j <= m; j++ {
+			if a[i-1] == b[j-1] {
+				dp[i][j] = dp[i-1][j-1]
+			} else {
+				dp[i][j] = min(dp[i-1][j-1], min(dp[i-1][j], dp[i][j-1])) + 1
+			}
+		}
+	}
+	return dp[n][m]
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// SanitizeFuzzySubstring replaces any contiguous substring of haystack
+// that is close to secret with "***"
+func SanitizeFuzzySubstring(haystack, secret string, maxDistance int) string {
+	hayRunes := []rune(haystack)
+	hayLower := strings.ToLower(haystack)
+	secLower := strings.ToLower(secret)
+	secLen := len(secLower)
+	
+	i := 0
+	for i < len(hayRunes) {
+		bestMatchStart := -1
+		bestMatchEnd := -1
+		bestDistance := maxDistance + 1
+
+		// Iterate through possible window sizes
+		for windowLen := secLen - maxDistance; windowLen <= secLen + maxDistance && i+windowLen <= len(hayLower); windowLen++ {
+			if windowLen <= 0 {
+				continue
+			}
+
+			window := hayLower[i : i+windowLen]
+			distance := editDistance(window, secLower)
+
+			// Found a closer match within the tolerance
+			if distance <= maxDistance && distance < bestDistance {
+				bestDistance = distance
+				bestMatchStart = i
+				bestMatchEnd = i + windowLen
+			}
+		}
+
+		// If a match was found, sanitize and jump the index past the sanitized section
+		if bestMatchStart != -1 {
+			for j := bestMatchStart; j < bestMatchEnd; j++ {
+				hayRunes[j] = '*'
+			}
+			i = bestMatchEnd
+		} else {
+			// No match, move to the next character
+			i++
+		}
+	}
+	return string(hayRunes)
+}
+
+
+
+// Basic cleanup.
+func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
+	isDisabled := os.Getenv("SHUFFLE_PROTECTED_CLEANUP_DISABLED")
+	if isDisabled == "true" {
+		return exec
+	}
+
+	protectedKeys, _, err := GetAllCacheKeys(context.Background(), exec.ExecutionOrg, "protected", 100, "")
+	if err != nil {
+		log.Printf("[ERROR] Failed getting protected keys for org %s: %s", exec.ExecutionOrg, err)
+		return exec
+	}
+
+	for _, protectedKey := range protectedKeys {
+
+		for resultKey, _ := range exec.Results { 
+
+			exec.Results[resultKey].Result = SanitizeFuzzySubstring(exec.Results[resultKey].Result, protectedKey.Value, 2) 
+		}
+
+	}
+
+	return exec
+}
+
 // Updates statuses in relevant areas according to what happened in the workflow run
 func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *WorkflowExecution {
 
@@ -30930,7 +31080,6 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		return exec
 	}
 
-	// FIXME: Is this necessary?
 	workflow, err := GetWorkflow(ctx, exec.Workflow.ID, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflow '%s': %s (exec status)", exec.Workflow.ID, err)
