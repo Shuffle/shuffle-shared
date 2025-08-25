@@ -3435,89 +3435,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	return User{}, errors.New("Missing authentication")
 }
 
-func CheckAndUpdateAIAvailability(ctx context.Context, orgId string) {
-	if project.Environment == "cloud" {
-		return
-	}
-
-	aiAvailable := detectLocalAIAvailability(ctx)
-	
-	err := updateOrgAIAvailability(ctx, orgId, aiAvailable)
-	if err != nil {
-		log.Printf("[WARNING] Failed to update AI availability for org %s: %s", orgId, err)
-	}
-}
-
-// detectLocalAIAvailability checks if local AI server is reachable and working
-func detectLocalAIAvailability(ctx context.Context) bool {
-	// Skip detection for cloud environment
-	if project.Environment == "cloud" {
-		return false
-	}
-
-	aiRequestUrl := os.Getenv("OPENAI_API_URL")
-	if len(aiRequestUrl) == 0 {
-		log.Printf("[DEBUG] OPENAI_API_URL not set, AI not available for on-prem")
-		return false
-	}
-
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if len(apiKey) == 0 {
-		log.Printf("[DEBUG] OPENAI_API_KEY not set, Trying to connect without API key")
-	}
-
-	selectedModel := os.Getenv("AI_MODEL")
-	if len(selectedModel) == 0 {
-		log.Printf("[DEBUG] AI_MODEL not set, AI not available for on-prem. Please specify which model to use.")
-		return false
-	}
-
-	// Lets make a simple HTTP HEAD request to check if AI server is reachable
-	client := http.Client{
-		Timeout: 3 * time.Second,
-	}
-	
-	headUrl := aiRequestUrl
-	if strings.HasSuffix(headUrl, "/v1") {
-		headUrl = strings.TrimSuffix(headUrl, "/v1")
-	}
-	
-	resp, err := client.Head(headUrl)
-	if err != nil {
-		log.Printf("[DEBUG] Local AI server not reachable at %s: %s", headUrl, err)
-		return false
-	}
-	defer resp.Body.Close()
-	
-	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		log.Printf("[DEBUG] Local AI server returned status %d for %s", resp.StatusCode, headUrl)
-		return false
-	}
-
-	log.Printf("[INFO] Local AI server is available at %s with model %s", aiRequestUrl, selectedModel)
-	return true
-}
-
-// updateOrgAIAvailability updates the LocalAIEnabled field for an organization
-func updateOrgAIAvailability(ctx context.Context, orgId string, aiEnabled bool) error {
-	org, err := GetOrg(ctx, orgId)
-	if err != nil {
-		return fmt.Errorf("failed to get org %s: %s", orgId, err)
-	}
-
-	// Only update if there's a change
-	if org != nil && org.LocalAIEnabled != aiEnabled {
-		org.LocalAIEnabled = aiEnabled
-		err = SetOrg(ctx, *org, orgId)
-		if err != nil {
-			return fmt.Errorf("failed to update org %s AI status: %s", orgId, err)
-		}
-		log.Printf("[INFO] Updated org %s LocalAIEnabled to %t", orgId, aiEnabled)
-	}
-
-	return nil
-}
-
 func HandleGetUserApps(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -13663,54 +13580,6 @@ func startWebhookTrigger(ctx context.Context, workflowId, triggerId, triggerName
 	return nil
 }
 
-// startScheduleTrigger - Core function to start a schedule trigger without HTTP handlers
-func startScheduleTrigger(ctx context.Context, workflowId, triggerId, cronExpression, executionArgument, environment string, user User, orgId string) error {
-	// Get the workflow first
-	workflow, err := GetWorkflow(ctx, workflowId)
-	if err != nil {
-		return fmt.Errorf("failed getting workflow %s: %s", workflowId, err)
-	}
-
-	// Validate access
-	if workflow.OrgId != orgId {
-		return fmt.Errorf("user doesn't have access to workflow %s", workflowId)
-	}
-
-	// For cloud environments, we need to set up GCP schedules
-	if project.Environment == "cloud" {
-		// This would typically involve creating a GCP Cloud Scheduler job
-		// The actual implementation depends on your GCP setup
-		log.Printf("[INFO] Setting up cloud schedule for trigger %s with cron %s", triggerId, cronExpression)
-	}
-
-	// Update the workflow trigger status
-	for triggerIndex, trigger := range workflow.Triggers {
-		if trigger.ID == triggerId {
-			workflow.Triggers[triggerIndex].Status = "running"
-			
-			// Update the cron parameter if needed
-			for paramIndex, param := range trigger.Parameters {
-				if param.Name == "cron" {
-					workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = cronExpression
-				} else if param.Name == "execution_argument" {
-					workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = executionArgument
-				}
-			}
-			
-			log.Printf("[INFO] Changed status of schedule trigger %s to running with cron %s", triggerId, cronExpression)
-			break
-		}
-	}
-
-	// Save the updated workflow
-	err = SetWorkflow(ctx, *workflow, workflow.ID)
-	if err != nil {
-		return fmt.Errorf("failed setting workflow %s: %s", workflow.ID, err)
-	}
-
-	log.Printf("[INFO] Set up schedule trigger %s with cron expression %s", triggerId, cronExpression)
-	return nil
-}
 
 // startAllWorkflowTriggers - Start all triggers for a workflow (most useful function)
 func startAllWorkflowTriggers(ctx context.Context, workflowId string, user User, orgId string) error {
@@ -14917,11 +14786,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[AUDIT] Login successful for user %s (%s) with IP: %s, session: %s", userdata.Username, userdata.Id, ip, userdata.Session)
-
-	// Check and update AI availability for on-prem deployments after successful login
-	// if project.Environment != "cloud" {
-	// 	go CheckAndUpdateAIAvailability(ctx, userdata.ActiveOrg.Id)
-	// }
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(loginData))
@@ -31733,12 +31597,13 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 	if err != nil {
 		reason := err.Error()
 		if strings.HasPrefix(reason, "AI rejected the task: ") {
+			log.Printf("[ERROR] AI rejected the task for org=%s user=%s", user.ActiveOrg.Id, user.Id)
 			reason = strings.TrimPrefix(reason, "AI rejected the task: ")
 			resp.WriteHeader(422)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
 			return
 		}
-		log.Printf("[ERROR] Failed to generate workflow AI response: %s", err)
+		log.Printf("[ERROR] Failed to generate workflow AI response for org %s, user %s: %s", user.ActiveOrg.Id, user.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
@@ -31925,10 +31790,12 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
+
 	if project.Environment == "cloud" {
 		IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
 		log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
 	}
+
 	workflowJson, err := json.Marshal(output)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal workflow %s: %s", editRequest.WorkflowID, err)
@@ -31936,6 +31803,7 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal workflow"}`))
 		return
 	}
+	
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(workflowJson)
 }
@@ -31956,7 +31824,7 @@ func startSchedule(trigger Trigger, authorization string, workflow Workflow) err
 	// Every 24 hours in cron
 	foundFrequency := "0 0 * * *"
 	for _, param := range trigger.Parameters {
-		if param.Name == "frequency" && len(param.Value) > 2 {
+		if param.Name == "cron" && len(param.Value) > 2 {
 			foundFrequency = param.Value
 		}
 	}

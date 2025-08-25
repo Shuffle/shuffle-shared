@@ -7119,22 +7119,11 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Workflow generated", "id": "%s"}`, workflow.ID)))
 }
 
-// Runs ANY AI query based on the system message and user message.
 // This can also be overridden by passing in a custom OpenAI ChatCompletion request
 func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
-	return RunAiQueryWithModel(systemMessage, userMessage, "", incomingRequest...)
-}
-
-func RunAiQueryWithModel(systemMessage, userMessage, modelOverride string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
 	cnt := 0
 	maxTokens := 5000
 	maxCharacters := 100000
-
-	// Use override model if provided, otherwise use the global model
-	selectedModel := model
-	if modelOverride != "" {
-		selectedModel = modelOverride
-	}
 
 	config := openai.DefaultConfig(os.Getenv("OPENAI_API_KEY"))
 
@@ -7175,13 +7164,13 @@ func RunAiQueryWithModel(systemMessage, userMessage, modelOverride string, incom
 	//}
 
 	chatCompletion := openai.ChatCompletionRequest{
-		Model: selectedModel,
+		Model: model,
 		Messages: []openai.ChatCompletionMessage{},
 		MaxTokens:   maxTokens,
 	}
 
-	// Newer models (GPT-4o, o1, gpt-5 etc.) require max_completion_tokens instead of max_tokens
-	if strings.HasPrefix(selectedModel, "gpt-4o") || strings.HasPrefix(selectedModel, "o1") || strings.HasPrefix(selectedModel, "gpt-5") || selectedModel == "o4-mini" {
+	// Too specific, but.. :)
+	if model == "o4-mini" || model == "gpt-5-mini" {
 		chatCompletion.MaxTokens = 0
 		chatCompletion.MaxCompletionTokens = maxTokens
 	}
@@ -7252,25 +7241,19 @@ func RunAiQueryWithModel(systemMessage, userMessage, modelOverride string, incom
 		if err != nil {
 			cnt += 1
 
-			if strings.Contains(err.Error(), "not supported MaxTokens") || strings.Contains(err.Error(), "'max_tokens' is not supported") {
+			if strings.Contains(err.Error(), "not supported MaxTokens") {
 				chatCompletion.MaxTokens = 0
 				chatCompletion.MaxCompletionTokens = maxTokens
 				continue
 			} else if strings.Contains(err.Error(), "does not exist") {
-				// Handle model fallback differently for cloud vs on-prem
-				if project.Environment == "cloud" {
-					// Cloud: Use fallback model if available
-					if len(fallbackModel) == 0 {
-						return "", errors.New(fmt.Sprintf("Model '%s' does not exist and no FALLBACK_AI_MODEL set: %s", selectedModel, err))
-					}
-
-					selectedModel = fallbackModel
-					chatCompletion.Model = fallbackModel 
-					log.Printf("[DEBUG] Changed model to %s for this request", selectedModel)
-					continue
-				} else {
-					return "", errors.New(fmt.Sprintf("Model '%s' does not exist on your local AI server. Please check your AI_MODEL environment variable and ensure the model is available on your server: %s", selectedModel, err))
+				if len(fallbackModel) == 0 {
+					return "", errors.New(fmt.Sprintf("Model '%s' does not exist and no FALLBACK_AI_MODEL set: %s", model, err))
 				}
+
+				model = fallbackModel
+				chatCompletion.Model = fallbackModel 
+				log.Printf("[DEBUG] Changed default model to %s", model)
+				continue
 			}
 
 			log.Printf("[ERROR] Failed to create AI chat completion. Retrying in 3 seconds (4): %s", err)
@@ -7340,10 +7323,11 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 	}
 
 	categoryString := builder.String()
-	contentOutput, err := getTaskBreakdown(input.Query, categoryString)
+	contentOutput, err := getTaskBreakdown(input, categoryString)
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("[DEBUG] AI response: %s", contentOutput)
 
 	err = checkIfRejected(contentOutput)
 	if err != nil {
@@ -7773,7 +7757,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		// 	workflowGenerationModel = ""
 		// }
 
-		finalContentOutput, err = RunAiQueryWithModel(systemMessage, currentInput, "")
+		finalContentOutput, err = RunAiQuery(systemMessage, currentInput)
 		if err != nil {
 			log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
 			return nil, err
@@ -8401,8 +8385,8 @@ func extractExternalSetup(response string) string {
 	return strings.Join(result, "\n")
 }
 
-func getTaskBreakdown(input string, categoryString string) (string, error) {
-		systemMessage := fmt.Sprintf(`You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools and automates security workflows, You are not a conversational assistant or chatbot. Even if the user asks questions or speaks casually, your only job is to generate the correct workflow JSON.
+func getTaskBreakdown(input QueryInput, categoryString string) (string, error) {
+	systemMessage := fmt.Sprintf(`You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools and automates security workflows, You are not a conversational assistant or chatbot. Even if the user asks questions or speaks casually, your only job is to generate the correct workflow JSON.
 
 You will receive messy user inputs describing a task they want to automate. Your job is to produce a clean, fully structured, atomic breakdown of that task. In addition to the user input, you will also receive a list of apps the user has access to.
 Your job:
@@ -8487,7 +8471,46 @@ No other formats are allowed. Just structured steps.
 Produce a minimal, correct, atomic plan for turning vague security workflows into structured actions. Do not overthink. Follow the format exactly, Including the headings.
 `, categoryString)
 
-	contentOutput, err := RunAiQueryWithModel(systemMessage, input, "")
+	maxTokens := 5000
+	var contentOutput string
+	var err error
+
+	if input.ImageURL != "" {
+		chatCompletion := openai.ChatCompletionRequest{
+			Model: model,
+			Messages: []openai.ChatCompletionMessage{
+				{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: systemMessage,
+				},
+				{
+					Role: openai.ChatMessageRoleUser,
+					MultiContent: []openai.ChatMessagePart{
+						{
+							Type: openai.ChatMessagePartTypeText,
+							Text: input.Query,
+						},
+						{
+							Type: openai.ChatMessagePartTypeImageURL,
+							ImageURL: &openai.ChatMessageImageURL{
+								URL: input.ImageURL,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if model == "o4-mini" || model == "gpt-5-mini" {
+			chatCompletion.MaxTokens = 0
+			chatCompletion.MaxCompletionTokens = maxTokens
+		}
+		contentOutput, err = RunAiQuery("", "", chatCompletion)
+
+	} else {
+		contentOutput, err = RunAiQuery(systemMessage, input.Query)
+
+	}
 	if err != nil {
 		// No need to retry, as RunAiQuery already has retry logic
 		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
@@ -9403,3 +9426,5 @@ func buildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
 		Errors:   w.Errors,
 	}
 }
+
+
