@@ -10858,8 +10858,19 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount int, inputcursor string) ([]WorkflowExecution, string, error) {
 	index := "workflowexecution"
 
-	//cacheKey := fmt.Sprintf("%s_%s_%s", index, inputcursor, workflowId)
 	var executions []WorkflowExecution
+	cacheKey := fmt.Sprintf("%s_%s_%s", index, inputcursor, workflowId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &executions)
+			if err == nil && len(executions) > 0 {
+				return executions, "", nil
+			}
+		}
+	}
+
 	var err error
 	totalMaxSize := 11184810
 
@@ -11104,8 +11115,6 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 		}
 	}
 
-	//log.Printf("[DEBUG] FOund %d executions for search %s", len(executions), workflowId)
-
 	// Find difference between what's in the list and what is in cache
 	//log.Printf("\n\n[DEBUG] Checking local cache for executions. Got %d executions\n\n", len(executions))
 	for execIndex, execution := range executions {
@@ -11192,21 +11201,20 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 		}
 	}
 
-	/*
-		if project.CacheDb {
-			data, err := json.Marshal(executions)
-			if err != nil {
-				log.Printf("[WARNING] Failed marshalling update execution cache: %s", err)
-				return executions, cursor, nil
-			}
-
-			err = SetCache(ctx, cacheKey, data, 10)
-			if err != nil {
-				log.Printf("[WARNING] Failed setting cache executions (%s): %s", workflowId, err)
-				return executions, cursor, nil
-			}
+	// Short-term caching 
+	if project.CacheDb {
+		data, err := json.Marshal(executions)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling update execution cache: %s", err)
+			return executions, cursor, nil
 		}
-	*/
+
+		err = SetCache(ctx, cacheKey, data, 1)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache executions (%s): %s", workflowId, err)
+			return executions, cursor, nil
+		}
+	}
 
 	return executions, cursor, nil
 }
