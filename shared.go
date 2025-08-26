@@ -19638,8 +19638,8 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		} else if strings.ToLower(appId) == "http" || strings.ToLower(action.AppID) == "http" {
 			action.AppID = "http"
 		} else {
-			log.Printf("[WARNING] Bad appid in single execution of App %s", appId)
-			return workflowExecution, errors.New(fmt.Sprintf("No App ID found matching %s", appId))
+			log.Printf("[WARNING] Bad appid in single execution of App '%s'", appId)
+			return workflowExecution, errors.New(fmt.Sprintf("No matching app found for '%s'. Did you choose an app to run?", appId))
 		}
 	}
 
@@ -20195,15 +20195,20 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	}
 
 	// VERY short sleeptime here on purpose
+	startTime := time.Now().Unix()
 	maxSeconds := 15
 	if project.Environment != "cloud" {
-		maxSeconds = 60
+		maxSeconds = 180 
+	}
+
+	if debug {
+		log.Printf("[DEBUG] Starting single action execution check for %s. Max seconds: %d", workflowExecution.ExecutionId, maxSeconds)
 	}
 
 	addedParams := []string{}
 	sleeptime := 100
 	for {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(time.Duration(sleeptime) * time.Millisecond)
 
 		newExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err != nil {
@@ -20293,8 +20298,11 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		}
 
 		cnt += 1
-		//log.Printf("Cnt: %d", cnt)
-		if cnt == (maxSeconds * (maxSeconds * 100 / sleeptime)) {
+
+		// Use startTime instead:
+		//if cnt == (maxSeconds * (maxSeconds * 100 / sleeptime)) {
+		if time.Now().Unix()-startTime > int64(maxSeconds) {
+
 
 			returnBody.Success = true
 
