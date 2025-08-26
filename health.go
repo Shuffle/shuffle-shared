@@ -550,29 +550,28 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			_, err := GetApikey(ctx, user.ApiKey)
 			if err != nil {
 				log.Printf("[WARNING] Failed getting api key for user in org: %s", err)
-				users, err := GetUsersByOrg(ctx, org.Id)
+				u, err := GetUser(ctx, user.Id)
 				if err != nil {
-					log.Printf("[ERROR] Failed getting users for org %s", org.Id)
+					log.Printf("[ERROR] Failed the user does not exist %s", err)
 					continue
 				}
 
-				for _, u := range users {
-					if u.Username == user.Username && len(u.ApiKey) > 0 {
-						org.Users[index].ApiKey = u.ApiKey
-						err = SetOrg(ctx, *org, org.Id)
-						if err != nil {
-							log.Printf("[WARNING] Failed to set apikey for user %s in org %s", user.Username, org.Id)
-						}
+				if len(u.ApiKey) > 0 {
+					org.Users[index].ApiKey = u.ApiKey
+					err = SetOrg(ctx, *org, org.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed to set apikey for user %s in org %s", user.Username, org.Id)
 					}
 				}
 			}
 
-			if user.Role == "admin" && len(user.ApiKey) > 0 {
+			if user.Role == "admin" && len(org.Users[index].ApiKey) > 0 {
 				log.Printf("[DEBUG] Found admin user with api key: %s", user.Id)
 				validIndex = index
 				break
 			}
 		}
+
 
 		if validIndex == -1 {
 			log.Printf("[ERROR] Failed getting valid apikey for admin user in org: %s which exists!", org.Id)
