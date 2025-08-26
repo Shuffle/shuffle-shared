@@ -31754,8 +31754,8 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		return
 	}
 
-	if len(input.Query) < 5 {
-		log.Printf("[WARNING] Input query too short in runActionAI: %s", input.Query)
+	if len(strings.TrimSpace(input.Query)) < 5 && len(strings.TrimSpace(input.ImageURL)) == 0 {
+		log.Printf("[WARNING] Input query too short in generateWorkflow: %s", input.Query)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Input query too short. Please provide a more detailed description of the workflow you want to generate"}`))
 		return
@@ -31926,8 +31926,8 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	if len(editRequest.Query) < 5 {
-		log.Printf("[WARNING] Input query too short in runActionAI: %s", editRequest.Query)
+	if len(strings.TrimSpace(editRequest.Query)) < 5 {
+		log.Printf("[WARNING] Input query too short in edit workflow: %s", editRequest.Query)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Input query too short. Please provide a more detailed description of the changes you want to make to the workflow"}`))
 		return
@@ -31958,12 +31958,13 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 	if err != nil {
 		reason := err.Error()
 		if strings.HasPrefix(reason, "AI rejected the task: ") {
+			log.Printf("[ERROR] AI rejected the task for org=%s user=%s", user.ActiveOrg.Id, user.Id)
 			reason = strings.TrimPrefix(reason, "AI rejected the task: ")
 			resp.WriteHeader(422)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
 			return
 		}
-		log.Printf("[ERROR] Failed to generate workflow AI response: %s", err)
+		log.Printf("[ERROR] Failed to edit workflow AI response for org %s, user %s: %s", user.ActiveOrg.Id, user.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
@@ -31981,7 +31982,9 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal workflow"}`))
 		return
 	}
-	
+
+	log.Printf("[INFO] AI Edited workflow with ID %s for user %s in org %s",  output.ID, user.Id, user.ActiveOrg.Id)
+
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(workflowJson)
 }

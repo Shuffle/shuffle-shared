@@ -7323,18 +7323,30 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 	}
 
 	categoryString := builder.String()
-	contentOutput, err := getTaskBreakdown(input, categoryString)
+	breakdown, err := getTaskBreakdown(input, categoryString)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("[DEBUG] AI response: %s", contentOutput)
-
-	err = checkIfRejected(contentOutput)
+	
+	err = checkIfRejected(breakdown)
 	if err != nil {
 		return nil, err
 	}
 
-	externalSetupInstructions := extractExternalSetup(contentOutput)
+	externalSetupInstructions, extractedWorkflow := ExtractExternalAndWorkflow(breakdown)
+
+	// So when we attempt to extract the
+	// "EXTERNAL SETUP" and "SHUFFLE WORKFLOW" sections, but if the
+	// extractor fails to find a workflow section we fall back to using
+	// the full breakdown so the JSON-generator stage isn't getting empty output
+
+	var contentOutput string
+	if strings.TrimSpace(extractedWorkflow) == "" {
+		// Fallback: use full breakdown if extractor didn't return a workflow
+		contentOutput = breakdown
+	} else {
+		contentOutput = extractedWorkflow
+	}
 
 	systemMessage := `You are a senior security automation assistant helping build workflows for an automation platform called **Shuffle**, which connects security tools through apps and their actions (similar to SOAR platforms).
 
@@ -8353,36 +8365,72 @@ func checkIfRejected(response string) error {
 	return errors.New("AI rejected the task: reason unknown")
 }
 
-func extractExternalSetup(response string) string {
+// func extractExternalSetup(response string) string {
+// 	lines := strings.Split(response, "\n")
+// 	var result []string
+// 	foundExternal := false
+
+// 	for _, rawLine := range lines {
+// 		line := strings.ToLower(strings.TrimSpace(rawLine))
+
+// 		clean := strings.Trim(line, "*# ")
+// 		if !foundExternal && strings.HasPrefix(clean, "1. external setup") {
+// 			foundExternal = true
+// 			result = append(result, rawLine)
+// 			continue
+// 		}
+
+// 		// Stop when SHUFFLE WORKFLOW starts
+// 		if foundExternal && strings.Contains(clean, "shuffle workflow") {
+// 			break
+// 		}
+
+// 		if foundExternal {
+// 			result = append(result, rawLine)
+// 		}
+// 	}
+
+// 	if !foundExternal {
+// 		return "AI did not include any external setup instructions"
+// 	}
+
+// 	return strings.Join(result, "\n")
+// }
+
+// ExtractExternalAndWorkflow pulls out the two top-level sections.
+// It returns externalSetup, shuffleWorkflow (both may be empty if not present).
+func ExtractExternalAndWorkflow(response string) (string, string) {
 	lines := strings.Split(response, "\n")
-	var result []string
-	foundExternal := false
 
-	for _, rawLine := range lines {
-		line := strings.ToLower(strings.TrimSpace(rawLine))
+	// Accept headings like:
+	// "1. EXTERNAL SETUP", "## 1) External Setup", "**1. external setup**", etc.
+	reExternal := regexp.MustCompile(`(?i)^\s*(?:[*#>\-+` + "`" + `]+\s*)*1[.)]?\s*external\s+setup\b`)
+	reWorkflow := regexp.MustCompile(`(?i)^\s*(?:[*#>\-+` + "`" + `]+\s*)*2[.)]?\s*shuffle\s+workflow\b`)
 
-		clean := strings.Trim(line, "*# ")
-		if !foundExternal && strings.HasPrefix(clean, "1. external setup") {
-			foundExternal = true
-			result = append(result, rawLine)
+	var ext []string
+	var wf []string
+	section := 0 // 0 none, 1 external, 2 workflow
+
+	for _, raw := range lines {
+		switch {
+		case reExternal.MatchString(raw):
+			section = 1
+			ext = append(ext, raw)
+			continue
+		case reWorkflow.MatchString(raw):
+			section = 2
+			wf = append(wf, raw)
 			continue
 		}
 
-		// Stop when SHUFFLE WORKFLOW starts
-		if foundExternal && strings.Contains(clean, "shuffle workflow") {
-			break
-		}
-
-		if foundExternal {
-			result = append(result, rawLine)
+		if section == 1 {
+			ext = append(ext, raw)
+		} else if section == 2 {
+			wf = append(wf, raw)
 		}
 	}
 
-	if !foundExternal {
-		return "AI did not include any external setup instructions"
-	}
-
-	return strings.Join(result, "\n")
+	return strings.TrimSpace(strings.Join(ext, "\n")), strings.TrimSpace(strings.Join(wf, "\n"))
 }
 
 func getTaskBreakdown(input QueryInput, categoryString string) (string, error) {
@@ -8415,6 +8463,7 @@ Your job:
 
    Also when ever you use the base url make sure you include it as is, for example if a vendor base url according to their open api spec or public doc is like this "https://api.vendor.com/v1"  or any other variation, just use the base url as is and do not change it in any way
    You are allowed to use your training to approximate well-known APIs, But keep in mind that first you must check the official API documentation of the target platform  or Open API specification, and only then you can use your training to approximate well-known APIs.
+   Important Exception: There is one Shuffle app that does not rely on an HTTP API: the Shuffle Tools app. It includes an action called run_ssh_command, which is designed for running commands on remote machines over SSH. This action does not have a base URL or any HTTP endpoint because it operates over SSH, not HTTP.
 
 This means:
 - You cannot perform an action unless the platform has a public API endpoint for it.
@@ -8447,6 +8496,8 @@ Don’t do: get_user_by_email → extract user_id → deactivate_user_by_id, if 
 12. Also we already have in-built mechanism to extract and store the response data from the actions or even from the trigger, so you do not need to add any extra steps to parse the response data, just use the response data directly in the next step using the label of the action or trigger.
 
 13. When generating the url and path, always write the path based on the actual variable you will use for substitution during execution and not the canonical placeholder from the official API. Always write the path based on what you will actually substitute, not what the public API doc shows.
+
+14. Include only the required steps for the task. Do not add optional, auxiliary, or logging steps. Keep the instructions precise, and focused solely on what is necessary to complete the task.
 
 ** Always use this strict format for approved requests:
 1. EXTERNAL SETUP
@@ -8713,52 +8764,6 @@ The "Shuffle Tools" app also supports SSH via the "run_ssh_command" action with 
 
 If from the user input if they didnt provided any of the above parameters you can use the default values 
 This is a utility action — no HTTP calls.
-
-** ERROR-AWARE DEBUGGING CAPABILITIES
-
-IMPORTANT: Only fix errors you can actually solve through parameter correction.
-
-When you receive workflow data that includes error information, you should:
-
-1. **Analyze Error Context**: Look for error fields in actions and workflows that indicate previous execution failures
-
-2. **AI-FIXABLE ERRORS - Only attempt to fix these specific types:**
-
-   **Parameter Value Issues ("40%" of errors) - FIX THESE:**
-   - Wrong data types: "string" instead of integer, boolean as "true" instead of true
-   - Missing required fields: empty values for mandatory parameters
-   - Incorrect format: dates, emails, IDs not matching expected patterns
-   - Wrong enum values: invalid status codes, incorrect method names
-
-   **API Endpoint Problems ("15%" of errors) - FIX THESE:**
-   - Wrong HTTP methods: using GET instead of POST for creation
-   - Incorrect paths: "/user" instead of "/users", missing path parameters
-   - Malformed URLs: missing protocols, wrong base URLs
-   - Wrong query parameter syntax: spaces instead of URL encoding
-
-   **Data Format Issues ("15%" of errors) - FIX THESE:**
-   - Malformed JSON: missing quotes, extra commas, wrong brackets
-   - Incorrect field mapping: wrong nested structure, misnamed fields
-   - Wrong content-type headers: missing "application/json" for JSON bodies
-
-3. **DO NOT ATTEMPT TO FIX - Leave these for humans:**
-   - Authentication secrets/tokens/API keys (you don't have access to real credentials)
-   - Business logic errors 
-   - Permission/authorization issues (user access rights)
-   - External system configuration (firewall, network, server setup)
-   - Data that requires domain expertise (specific user IDs, project names, etc.)
-
-4. **Smart Parameter Correction Process:**
-   - Read error messages carefully for specific hints about what's wrong
-   - Use standard API conventions (REST patterns, common field names)
-   - Fix obvious syntax errors (JSON formatting, URL structure)
-   - Correct common parameter mistakes (method names, data types)
-   - Preserve any working parameters - only change what's clearly broken
-
-5. **Error Fixing Priority:**
-   - If workflow contains errors, fix ONLY the AI-solvable ones listed above
-   - Preserve all working logic and parameters
-   - Focus on parameter values, formatting, and API call structure
 
 ** HANDLING EDIT INSTRUCTIONS
 
