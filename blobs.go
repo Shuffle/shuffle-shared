@@ -205,6 +205,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 						},
 						WorkflowAppActionParameter{
 							Name:  "standard",
+							Description: "The standard to use from https://github.com/Shuffle/standards/tree/main",
 							Value: "OCSF",
 							Multiline: false,
 						},

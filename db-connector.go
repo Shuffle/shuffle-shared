@@ -1169,12 +1169,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	dbsave := false
 	workflowExecution.Workflow.Image = ""
 
-	//newExec := cleanupProtectedKeys(*exec)
-	//exec = &newExec
 	workflowExecution = cleanupProtectedKeys(workflowExecution)
-
-	// FIXME: May be a problem here with setting it at all times~
-	//if workflowExecution.Status != "EXECUTING" {
 	validation, err := GetExecutionValidation(ctx, workflowExecution.ExecutionId)
 	if err == nil {
 		if workflowExecution.NotificationsCreated > 0 {
@@ -13561,10 +13556,15 @@ func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, 
 }
 
 func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int, inputcursor string) ([]CacheKeyData, string, error) {
+	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") {
+		return []CacheKeyData{}, "", errors.New("Not available in worker mode")
+	}
+
 	nameKey := "org_cache"
 	if strings.ToLower(category) == "default" {
 		category = ""
 	}
+
 
 	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
 	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, inputcursor, orgId, category)
