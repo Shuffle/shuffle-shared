@@ -2455,9 +2455,9 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 	if bodyerr == nil {
 		orboruserr := json.Unmarshal(body, &orborusData)
 		if orboruserr == nil {
-			if time.Now().Unix() > env.Checkin+120 {
+			if time.Now().Unix() > env.Checkin+90 {
 				if debug {
-					log.Printf("[DEBUG] Failover orborus to %s", orborusData.Uuid)
+					log.Printf("[DEBUG] Failover orborus to %s. Checkin: %d. Edit: %d", orborusData.Uuid, env.Checkin, env.Edited)
 				}
 
 				env.OrborusUuid = orborusData.Uuid
@@ -2476,8 +2476,14 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 	timeNow := time.Now().Unix()
 	if request.Method == "POST" {
 
-		// Updates every 90 seconds~
-		if time.Now().Unix() > env.Checkin+90 {
+		// Updates every 60 seconds~
+		if time.Now().Unix() > env.Checkin+60 {
+
+			// Print 1/10 times 
+			if rand.Intn(10) == 0 {
+				log.Printf("[INFO] Updating environment '%s' (%s) from Orborus checkin (60 sec timeout). Previous checkin: %d seconds ago", env.Name, env.Id, timeNow-env.Checkin)
+			}
+
 			env.RunningIp = GetRequestIp(request)
 
 			// Orborus label = custom label for Orborus
@@ -2515,6 +2521,10 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			if err != nil {
 				log.Printf("[ERROR] Failed updating environment: %s", err)
 			}
+		} else {
+			//if debug { 
+			//	log.Printf("[DEBUG] NOT updating env %s yet: %d seconds since checkin", env.Name, timeNow-env.Checkin)
+			//}
 		}
 	}
 

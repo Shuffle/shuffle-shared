@@ -31039,7 +31039,7 @@ func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 
 	protectedKeys, _, err := GetAllCacheKeys(context.Background(), exec.ExecutionOrg, "protected", 100, "")
 	if err != nil {
-		log.Printf("[ERROR] Failed getting protected keys for org %s: %s", exec.ExecutionOrg, err)
+		//log.Printf("[ERROR] Failed getting protected keys for org %s: %s", exec.ExecutionOrg, err)
 		return exec
 	}
 

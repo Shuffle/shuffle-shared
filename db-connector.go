@@ -2405,7 +2405,7 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 	env := &Environment{}
 	nameKey := "Environments"
 
-	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	cacheKey := fmt.Sprintf("%s_%s_%s", nameKey, orgId, id)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -2422,7 +2422,7 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 
-		// Or search?
+		// "should" -> "must"?
 		query := map[string]interface{}{
 			"size": 1000,
 			"query": map[string]interface{}{
@@ -5594,6 +5594,10 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &environments)
 			if err == nil {
+				//if debug { 
+				//	log.Printf("[DEBUG] Got %d environments from cache for orgId '%s'", len(environments), orgId)
+				//}
+
 				return environments, nil
 			}
 		} else {
@@ -5679,8 +5683,13 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			return environments, err
 		}
 
+		// Ensures we HAVE to match OrgId (somehow) :))
 		environments = []Environment{}
 		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.OrgId != orgId {
+				continue
+			}
+
 			environments = append(environments, hit.Source)
 		}
 	} else {
@@ -5697,7 +5706,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		//log.Printf("Got %d environments for org: %s", len(environments), environments)
 	}
 
-	if len(environments) == 0 {
+	if len(environments) == 0 && len(orgId) > 0 {
 		item := Environment{
 			Name:    "Shuffle",
 			Type:    "onprem",
@@ -5720,17 +5729,19 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 	}
 
 	//Check if this is suborg and get parent org environments if it distributed
-	foundOrg, err := GetOrg(ctx, orgId)
-	if err == nil && len(foundOrg.ChildOrgs) == 0 && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
-		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
-		if err == nil {
-			parentEnvs, err := GetEnvironments(ctx, parentOrg.Id)
+	if len(orgId) > 0 {
+		foundOrg, err := GetOrg(ctx, orgId)
+		if err == nil && len(foundOrg.ChildOrgs) == 0 && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
+			parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
 			if err == nil {
-				for _, parentEnv := range parentEnvs {
-					if !ArrayContains(parentEnv.SuborgDistribution, orgId) {
-						continue
+				parentEnvs, err := GetEnvironments(ctx, parentOrg.Id)
+				if err == nil {
+					for _, parentEnv := range parentEnvs {
+						if !ArrayContains(parentEnv.SuborgDistribution, orgId) {
+							continue
+						}
+						environments = append(environments, parentEnv)
 					}
-					environments = append(environments, parentEnv)
 				}
 			}
 		}
@@ -8542,7 +8553,6 @@ func SetAuthGroupDatastore(ctx context.Context, workflowappauthgroup AppAuthenti
 func SetEnvironment(ctx context.Context, env *Environment) error {
 	// clear session_token and API_token for user
 	nameKey := "Environments"
-
 	if env.Id == "" {
 		env.Id = uuid.NewV4().String()
 	}
@@ -8554,15 +8564,18 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 
 	env.Edited = timeNow
 
-	// New struct, to not add body, author etc
-	//log.Printf("[INFO] SETTING ENVIRONMENT %s", env.Id)
-	if project.DbType == "opensearch" {
-		data, err := json.Marshal(env)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in set env: %s", err)
-			return err
-		}
+	if debug {
+		log.Printf("[DEBUG] Setting environment %s (%s) for org '%s'. Checkin: %d", env.Name, env.Id, env.OrgId, env.Checkin)
+	}
 
+	data, err := json.Marshal(env)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set env: %s", err)
+		return err
+	}
+
+	// New struct, to not add body, author etc
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, env.Id, data)
 		if err != nil {
 			return err
@@ -8575,8 +8588,37 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 		}
 	}
 
-	cacheKey := fmt.Sprintf("%s_%s", nameKey, env.OrgId)
-	DeleteCache(ctx, cacheKey)
+	// Update it in cache as well
+	if project.CacheDb {
+		// Both name & ID references are used for orgs
+		cacheKey := fmt.Sprintf("%s_%s_%s", nameKey, env.OrgId, env.Id)
+		err = SetCache(ctx, cacheKey, data, 10)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for set env '%s': %s", cacheKey, err)
+		}
+
+		cacheKey = fmt.Sprintf("%s_%s_%s", nameKey, env.OrgId, env.Name)
+
+		err = SetCache(ctx, cacheKey, data, 10)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for set env '%s': %s", cacheKey, err)
+		}
+
+		// This ensures it works onprem WITHOUT an org
+		if project.Environment != "cloud" {
+			cacheKey2 := fmt.Sprintf("%s__%s", nameKey, env.Name)
+			if cacheKey2 != cacheKey {
+				err = SetCache(ctx, cacheKey2, data, 10)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting cache for set env '%s': %s", cacheKey, err)
+				}
+			}
+		}
+
+		// Handles both no orgid AND id
+		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, env.OrgId))
+		DeleteCache(ctx, fmt.Sprintf("%s_", nameKey))
+	}
 
 	return nil
 }
@@ -13521,7 +13563,10 @@ func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, 
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
-			log.Printf("[WARNING] Body of cache key count is bad. Status: %d. This is fixed by adding an item.", res.StatusCode)
+			if debug { 
+				log.Printf("[DEBUG] Body of cache key count is bad (1). Status: %d. This is fixed by adding an item.", res.StatusCode)
+			}
+
 			if res.StatusCode == 404 {
 				return count, nil // No keys found
 			}
@@ -13573,7 +13618,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	cursor := ""
 	cacheKeys := []CacheKeyData{}
 	if project.DbType == "opensearch" {
-		log.Printf("[DEBUG] GETTING cachekeys for org %s in item %s", orgId, nameKey)
+		//log.Printf("[DEBUG] GETTING cachekeys for org %s in item %s", orgId, nameKey)
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": max,
@@ -13636,7 +13681,9 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
-			log.Printf("[WARNING] Body of cachekeys is bad. Status: %d. This is fixed by adding an item.", res.StatusCode)
+			if debug { 
+				log.Printf("[DEBUG] Body of cachekeys is bad (2). Status: %d. This is fixed by adding an item.", res.StatusCode)
+			}
 
 			if res.StatusCode == 404 {
 				return cacheKeys, "", nil
@@ -15746,7 +15793,7 @@ func InitOpensearchIndexes() {
 			"conditions": {
 				"max_age": "90d",
 				"max_size": "40gb"
-				"max_docs": 1000000,
+				"max_docs": 1000000
 			}
 		}`))
 
