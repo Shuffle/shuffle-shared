@@ -15792,7 +15792,7 @@ func InitOpensearchIndexes() {
 		rolloverConfig := []byte(fmt.Sprintf(`{
 			"conditions": {
 				"max_age": "90d",
-				"max_size": "40gb"
+				"max_size": "40gb",
 				"max_docs": 1000000
 			}
 		}`))

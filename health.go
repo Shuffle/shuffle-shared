@@ -92,12 +92,12 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	baseURL := "https://shuffler.io"
 	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
-		log.Printf("[DEBUG] Setting the baseUrl for health check to %s", baseURL)
+		//log.Printf("[DEBUG] Setting the baseUrl for health check to %s", baseURL)
 		baseURL = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
 	if project.Environment != "cloud" {
-		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
+		//log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
 		baseURL = "http://localhost:5001"
 		if os.Getenv("BASE_URL") != "" {
 			baseURL = os.Getenv("BASE_URL")
@@ -487,7 +487,11 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 	//log.Printf("[DEBUG] Found %d workflows named SHUFFLE_INTERNAL_OPS_WORKFLOW: ", len(workflows))
 
 	for _, workflow := range workflows {
-		// delete these workflows
+		if workflow.Name != "Ops Dashboard Workflow" {
+			continue
+		}
+
+		// Delete ops workflows
 		err = DeleteKey(ctx, "workflow", workflow.ID)
 		if err != nil {
 			log.Printf("[DEBUG] Failed deleting key %s", workflow.ID)
@@ -566,7 +570,6 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if user.Role == "admin" && len(org.Users[index].ApiKey) > 0 {
-				log.Printf("[DEBUG] Found admin user with api key: %s", user.Id)
 				validIndex = index
 				break
 			}
@@ -580,7 +583,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("[DEBUG] Setting api key to that of user %s and org id to %s ", org.Users[validIndex].ApiKey, org.Id)
+		//log.Printf("[DEBUG] Setting api key to that of user %s and org id to %s ", org.Users[validIndex].ApiKey, org.Id)
 
 		orgId = org.Id
 		apiKey = org.Users[validIndex].ApiKey
@@ -720,7 +723,10 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	workflowHealthChannel := make(chan WorkflowHealth)
 	errorChannel := make(chan error)
 	go func() {
-		log.Printf("[DEBUG] Running workflowHealthChannel goroutine")
+		if debug { 
+			log.Printf("[DEBUG] Running workflowHealthChannel goroutine")
+		}
+
 		workflowHealth, err := RunOpsWorkflow(apiKey, orgId, "")
 		if err != nil {
 			if project.Environment == "cloud" {
@@ -978,18 +984,16 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string, orgId string) error {
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	if len(baseUrl) == 0 {
-		log.Printf("[DEBUG] Base url not set. Setting to default: for delete")
+		//log.Printf("[DEBUG] Base url not set. Setting to default: for delete")
 		baseUrl = "https://shuffler.io"
 	}
 
 	if project.Environment == "onprem" {
-		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
+		//log.Printf("[INFO] Onprem environment. Setting base url to localhost: for delete")
 		baseUrl = "http://localhost:5001"
 	}
 
 	if workflowHealth.Create == false || len(workflowHealth.WorkflowId) == 0 {
-		log.Printf("[DEBUG] Seems like workflow wasn't created properly, and then delete workflow was called.")
-		log.Printf("[DEBUG] Returning without deleting workflow. WorkflowHealth: %#v", workflowHealth)
 		return errors.New("Workflow wasn't created properly")
 	}
 
@@ -997,7 +1001,6 @@ func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string, orgId strin
 
 	// 4. Delete workflow
 	url := baseUrl + "/api/v1/workflows/" + id
-	log.Printf("[DEBUG] Deleting workflow with id: %s", id)
 
 	req, err := http.NewRequest("DELETE", url, nil)
 	if err != nil {
@@ -1180,7 +1183,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	}
 
 	if project.Environment == "onprem" {
-		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost")
+		//log.Printf("[DEBUG] Onprem environment. Setting base url to localhost")
 		baseUrl = "http://localhost:5001"
 	}
 
@@ -1444,12 +1447,12 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 	}
 
 	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
-		log.Printf("[DEBUG] Setting the baseUrl for health check to %s", baseUrl)
+		//log.Printf("[DEBUG] Setting the baseUrl for health check to %s", baseUrl)
 		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
 	if project.Environment != "cloud" {
-		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
+		//log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
 		baseUrl = "http://localhost:5001"
 		if os.Getenv("BASE_URL") != "" {
 			baseUrl = os.Getenv("BASE_URL")
@@ -1799,6 +1802,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	workflowData.Status = ""
 	workflowData.Name = "Ops Dashboard Workflow"
 	workflowData.Hidden = true
+	workflowData.BackgroundProcessing = true
 
 	miniOrg := OrgMini{
 		Id:    opsDashboardOrg.Id,
@@ -1841,12 +1845,12 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	// make a POST request to https://shuffler.io/api/v1/workflows
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	if len(baseUrl) == 0 {
-		log.Printf("[DEBUG] Base url not set. Setting to default")
+		//log.Printf("[DEBUG] Base url not set. Setting to default")
 		baseUrl = "https://shuffler.io"
 	}
 
 	if project.Environment == "onprem" {
-		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost")
+		//log.Printf("[DEBUG] Onprem environment. Setting base url to localhost")
 		baseUrl = "http://localhost:5001"
 	}
 
@@ -2635,7 +2639,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 	//log.Printf("PRE VARIABLES")
 	for _, variable := range workflow.WorkflowVariables {
 		if len(variable.Value) == 0 {
-			log.Printf("[WARNING] Health API: Workflow Variable %s is empty!", variable.Name)
+			//log.Printf("[WARNING] Health API: Workflow Variable %s is empty!", variable.Name)
 			workflow.Errors = append(workflow.Errors, fmt.Sprintf("Variable %s is empty!", variable.Name))
 		}
 	}
