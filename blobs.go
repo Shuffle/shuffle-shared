@@ -181,6 +181,72 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
+	} else if parsedActiontype == "ingest_tickets_webhook" {
+
+		defaultWorkflow := Workflow{
+			Name: actionType,
+			Description: "Ingest tickets through a webhook",
+			OrgId: orgId,
+			Start: startActionId,
+			Actions: []Action{
+				Action{
+					Name: "Translate standard",
+					AppID: "integration",
+					AppName: "Singul",
+					ID: startActionId,
+					AppVersion: "1.0.0",
+					Environment: actionEnv,
+					Label: "Ingest Ticket from Webhook",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "source_data",
+							Value: "$exec",
+							Multiline: true,
+						},
+						WorkflowAppActionParameter{
+							Name:  "standard",
+							Description: "The standard to use from https://github.com/Shuffle/standards/tree/main",
+							Value: "OCSF",
+							Multiline: false,
+						},
+					},
+				},
+			},
+			Triggers: []Trigger{
+				Trigger{
+					ID: startTriggerId,
+					Name: "Webhook",
+					TriggerType: "WEBHOOK",
+					Label: "Ingest",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "url",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "tmp",
+							Value: "", 
+						},
+						WorkflowAppActionParameter{
+							Name:  "auth_header",
+							Value: "", 
+						},
+						WorkflowAppActionParameter{
+							Name:  "custom_response_body",
+							Value: "", 
+						},
+						WorkflowAppActionParameter{
+							Name:  "await_response",
+							Value: "", 
+						},
+					},
+				},
+			},
+		}
+
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
 	} else if parsedActiontype == "threatlist_monitor" {
 		secondActionId := uuid.NewV4().String()
 
@@ -331,7 +397,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 	// Appends actions in the workflow 
 	positionAddition := float64(250)
-	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && len(appNames) > 0 {
+	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && len(appNames) > 0 && len(workflow.Triggers) == 1 && workflow.Triggers[0].TriggerType == "SCHEDULE" {
+
 		actionTemplate := workflow.Actions[0]
 
 		// Pre-defining it with a startnode that does nothing

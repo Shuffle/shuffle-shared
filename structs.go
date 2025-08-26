@@ -105,6 +105,7 @@ type QueryInput struct {
 	TimeEnded   int64        `json:"time_ended,omitempty"`
 	Formatting  string       `json:"formatting,omitempty"`
 	Environment string       `json:"environment,omitempty"`
+	ImageURL    string       `json:"image_url,omitempty"`
 
 	// For OpenAI assistant with Shuffle labels
 	ThreadId string `json:"thread_id,omitempty"`
@@ -1034,12 +1035,11 @@ type Org struct {
 	CreatorId string `json:"creator_id" datastore:"creator_id"`
 	Disabled  bool   `json:"disabled" datastore:"disabled"`
 
-	EulaSigned   bool        `json:"eula_signed" datastore:"eula_signed"`
-	EulaSignedBy string      `json:"eula_signed_by" datastore:"eula_signed_by"`
-	Billing      Billing     `json:"Billing" datastore:"Billing"`
-	CreatorOrg   string      `json:"creator_org" datastore:"creator_org"`
-	Branding     OrgBranding `json:"branding" datastore:"branding"`
-	LocalAIEnabled   bool    `json:"local_ai_enabled" datastore:"local_ai_enabled"` 	// AI availability for on-prem
+	EulaSigned     bool        `json:"eula_signed" datastore:"eula_signed"`
+	EulaSignedBy   string      `json:"eula_signed_by" datastore:"eula_signed_by"`
+	Billing        Billing     `json:"Billing" datastore:"Billing"`
+	CreatorOrg     string      `json:"creator_org" datastore:"creator_org"`
+	Branding       OrgBranding `json:"branding" datastore:"branding"`
 }
 
 type Billing struct {
@@ -1138,6 +1138,7 @@ type CacheKeyData struct {
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
 
+	Encrypted bool `json:"encrypted" datastore:"Encrypted"`
 	FormattedKey        string   `json:"formatted_key,omitempty" datastore:"FormattedKey"`
 	PublicAuthorization string   `json:"public_authorization,omitempty" datastore:"PublicAuthorization"` // Used for public authorization
 	SuborgDistribution  []string `json:"suborg_distribution" datastore:"suborg_distribution"`
@@ -1505,14 +1506,14 @@ type Workflow struct {
 
 	FormControl FormControl `json:"form_control" datastore:"form_control"`
 
-	Blogpost     string `json:"blogpost" yaml:"blogpost"`
-	Video        string `json:"video" yaml:"video"`
-	Status       string `json:"status" datastore:"status"`
-	WorkflowType string `json:"workflow_type" datastore:"workflow_type"`
-	Generated    bool   `json:"generated" datastore:"generated"`
-	Hidden       bool   `json:"hidden" datastore:"hidden"`
-	BackgroundProcessing bool `json:"background_processing" datastore:"background_processing"` // If the workflow should be processed in the background
-	UpdatedBy    string `json:"updated_by" datastore:"updated_by"`
+	Blogpost             string `json:"blogpost" yaml:"blogpost"`
+	Video                string `json:"video" yaml:"video"`
+	Status               string `json:"status" datastore:"status"`
+	WorkflowType         string `json:"workflow_type" datastore:"workflow_type"`
+	Generated            bool   `json:"generated" datastore:"generated"`
+	Hidden               bool   `json:"hidden" datastore:"hidden"`
+	BackgroundProcessing bool   `json:"background_processing" datastore:"background_processing"` // If the workflow should be processed in the background
+	UpdatedBy            string `json:"updated_by" datastore:"updated_by"`
 
 	// Whether it's manually validated or not
 	Validated  bool           `json:"validated" datastore:"validated"`
@@ -4174,8 +4175,11 @@ type OrborusStats struct {
 // Create struct
 type ExecutionReturn struct {
 	Success    bool                `json:"success"`
+	Id 		   string              `json:"id"`
 	Executions []WorkflowExecution `json:"executions"`
 	Cursor     string              `json:"cursor"`
+
+	Timeline []WidgetPointData `json:"timeline"`
 }
 
 // Create struct
@@ -4683,8 +4687,8 @@ type NGramItem struct {
 }
 
 type AIConfig struct {
-    Generated bool   `json:"generated" datastore:"generated"`
-    Prompt    string `json:"prompt" datastore:"prompt"`
-    Model     string `json:"model" datastore:"model"`
-    Status    string `json:"status" datastore:"status"`
+	Generated bool   `json:"generated" datastore:"generated"`
+	Prompt    string `json:"prompt" datastore:"prompt"`
+	Model     string `json:"model" datastore:"model"`
+	Status    string `json:"status" datastore:"status"`
 }

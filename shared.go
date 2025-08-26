@@ -3435,89 +3435,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	return User{}, errors.New("Missing authentication")
 }
 
-func CheckAndUpdateAIAvailability(ctx context.Context, orgId string) {
-	if project.Environment == "cloud" {
-		return
-	}
-
-	aiAvailable := detectLocalAIAvailability(ctx)
-	
-	err := updateOrgAIAvailability(ctx, orgId, aiAvailable)
-	if err != nil {
-		log.Printf("[WARNING] Failed to update AI availability for org %s: %s", orgId, err)
-	}
-}
-
-// detectLocalAIAvailability checks if local AI server is reachable and working
-func detectLocalAIAvailability(ctx context.Context) bool {
-	// Skip detection for cloud environment
-	if project.Environment == "cloud" {
-		return false
-	}
-
-	aiRequestUrl := os.Getenv("OPENAI_API_URL")
-	if len(aiRequestUrl) == 0 {
-		log.Printf("[DEBUG] OPENAI_API_URL not set, AI not available for on-prem")
-		return false
-	}
-
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if len(apiKey) == 0 {
-		log.Printf("[DEBUG] OPENAI_API_KEY not set, Trying to connect without API key")
-	}
-
-	selectedModel := os.Getenv("AI_MODEL")
-	if len(selectedModel) == 0 {
-		log.Printf("[DEBUG] AI_MODEL not set, AI not available for on-prem. Please specify which model to use.")
-		return false
-	}
-
-	// Lets make a simple HTTP HEAD request to check if AI server is reachable
-	client := http.Client{
-		Timeout: 3 * time.Second,
-	}
-	
-	headUrl := aiRequestUrl
-	if strings.HasSuffix(headUrl, "/v1") {
-		headUrl = strings.TrimSuffix(headUrl, "/v1")
-	}
-	
-	resp, err := client.Head(headUrl)
-	if err != nil {
-		log.Printf("[DEBUG] Local AI server not reachable at %s: %s", headUrl, err)
-		return false
-	}
-	defer resp.Body.Close()
-	
-	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		log.Printf("[DEBUG] Local AI server returned status %d for %s", resp.StatusCode, headUrl)
-		return false
-	}
-
-	log.Printf("[INFO] Local AI server is available at %s with model %s", aiRequestUrl, selectedModel)
-	return true
-}
-
-// updateOrgAIAvailability updates the LocalAIEnabled field for an organization
-func updateOrgAIAvailability(ctx context.Context, orgId string, aiEnabled bool) error {
-	org, err := GetOrg(ctx, orgId)
-	if err != nil {
-		return fmt.Errorf("failed to get org %s: %s", orgId, err)
-	}
-
-	// Only update if there's a change
-	if org != nil && org.LocalAIEnabled != aiEnabled {
-		org.LocalAIEnabled = aiEnabled
-		err = SetOrg(ctx, *org, orgId)
-		if err != nil {
-			return fmt.Errorf("failed to update org %s AI status: %s", orgId, err)
-		}
-		log.Printf("[INFO] Updated org %s LocalAIEnabled to %t", orgId, aiEnabled)
-	}
-
-	return nil
-}
-
 func HandleGetUserApps(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -4018,6 +3935,66 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+func GetExecTimeline(fileId string) []WidgetPointData {
+
+	backgroundCtx := context.Background()
+
+	// Set cache for it
+	if len(fileId) == 0 {
+		return []WidgetPointData{}
+	}
+
+	foundDates := []WidgetPointData{}
+	cacheId := fmt.Sprintf("exec_timeline_%s", fileId)
+	cache, err := GetCache(backgroundCtx, cacheId)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		err = json.Unmarshal(cacheData, &foundDates)
+		if err == nil {
+			return foundDates
+		}
+	}
+
+	for i := -30; i < 0; i++ {
+
+		startTimeInt := time.Now().AddDate(0, 0, i)
+		endTimeInt := time.Now().AddDate(0, 0, i+1)
+
+		// Normalize startTimeInt & endTimeInt to be at 00:00:00
+		startTimeInt = time.Date(startTimeInt.Year(), startTimeInt.Month(), startTimeInt.Day(), 0, 0, 0, 0, startTimeInt.Location())
+		endTimeInt = time.Date(endTimeInt.Year(), endTimeInt.Month(), endTimeInt.Day(), 0, 0, 0, 0, endTimeInt.Location())
+
+		startTimeNew := startTimeInt.Unix()
+		endTimeNew := endTimeInt.Unix()
+
+		execCount, err := GetWorkflowRunCount(backgroundCtx, fileId, startTimeNew, endTimeNew)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting workflow count for %s: %s", fileId, err)
+		}
+
+		foundDates = append(foundDates, WidgetPointData{
+			Key: startTimeInt.Format("Jan 2"),
+			Data: int64(execCount),
+
+			MetaData: WidgetMeta{
+				Color: "grey",
+			},
+		})
+	}
+
+	// Set cache for it
+	if project.CacheDb {
+		cacheData, err := json.Marshal(foundDates)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling exec timeline data: %s", err)
+		} else {
+			err = SetCache(backgroundCtx, cacheId, cacheData, 400) // 1 week
+		}
+	}
+
+	return foundDates
+}
+
 func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -4204,8 +4181,11 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 
 	newReturn := ExecutionReturn{
 		Success:    true,
+		Id:	   		fileId,
 		Cursor:     newCursor,
 		Executions: workflowExecutions,
+
+		Timeline: GetExecTimeline(fileId),
 	}
 
 	newjson, err := json.Marshal(newReturn)
@@ -12843,7 +12823,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	workflowExecution, err := GetWorkflowExecution(ctx, executionId)
 	if err != nil {
-		log.Printf("[ERROR] Failed getting execution (abort) %s: %s", executionId, err)
+		log.Printf("[ERROR][%s] Failed getting execution (abort): %s", executionId, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting execution ID %s because it doesn't exist (abort)."}`, executionId)))
 		return
@@ -13600,54 +13580,6 @@ func startWebhookTrigger(ctx context.Context, workflowId, triggerId, triggerName
 	return nil
 }
 
-// startScheduleTrigger - Core function to start a schedule trigger without HTTP handlers
-func startScheduleTrigger(ctx context.Context, workflowId, triggerId, cronExpression, executionArgument, environment string, user User, orgId string) error {
-	// Get the workflow first
-	workflow, err := GetWorkflow(ctx, workflowId)
-	if err != nil {
-		return fmt.Errorf("failed getting workflow %s: %s", workflowId, err)
-	}
-
-	// Validate access
-	if workflow.OrgId != orgId {
-		return fmt.Errorf("user doesn't have access to workflow %s", workflowId)
-	}
-
-	// For cloud environments, we need to set up GCP schedules
-	if project.Environment == "cloud" {
-		// This would typically involve creating a GCP Cloud Scheduler job
-		// The actual implementation depends on your GCP setup
-		log.Printf("[INFO] Setting up cloud schedule for trigger %s with cron %s", triggerId, cronExpression)
-	}
-
-	// Update the workflow trigger status
-	for triggerIndex, trigger := range workflow.Triggers {
-		if trigger.ID == triggerId {
-			workflow.Triggers[triggerIndex].Status = "running"
-			
-			// Update the cron parameter if needed
-			for paramIndex, param := range trigger.Parameters {
-				if param.Name == "cron" {
-					workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = cronExpression
-				} else if param.Name == "execution_argument" {
-					workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = executionArgument
-				}
-			}
-			
-			log.Printf("[INFO] Changed status of schedule trigger %s to running with cron %s", triggerId, cronExpression)
-			break
-		}
-	}
-
-	// Save the updated workflow
-	err = SetWorkflow(ctx, *workflow, workflow.ID)
-	if err != nil {
-		return fmt.Errorf("failed setting workflow %s: %s", workflow.ID, err)
-	}
-
-	log.Printf("[INFO] Set up schedule trigger %s with cron expression %s", triggerId, cronExpression)
-	return nil
-}
 
 // startAllWorkflowTriggers - Start all triggers for a workflow (most useful function)
 func startAllWorkflowTriggers(ctx context.Context, workflowId string, user User, orgId string) error {
@@ -13937,6 +13869,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Support & Admin user %s (%s) got access to app %s (cloud only)", user.Username, user.Id, app.ID)
+
 		} else if user.Role == "admin" && app.Owner == "" {
 			log.Printf("[AUDIT] Any admin can GET %s (%s), since it doesn't have an owner (GET).", app.Name, app.ID)
 		} else {
@@ -14853,11 +14786,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[AUDIT] Login successful for user %s (%s) with IP: %s, session: %s", userdata.Username, userdata.Id, ip, userdata.Session)
-
-	// Check and update AI availability for on-prem deployments after successful login
-	// if project.Environment != "cloud" {
-	// 	go CheckAndUpdateAIAvailability(ctx, userdata.ActiveOrg.Id)
-	// }
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(loginData))
@@ -18330,9 +18258,9 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	// Overwriting, as we don't want it to work that way
 	// Should use Org-Id header instead
 	orgId = user.ActiveOrg.Id
-
 	categoryList, categoryOk := request.URL.Query()["category"]
 	if categoryOk && len(categoryList) > 0 {
+		//category = categoryList[0]
 		category = categoryList[0]
 	}
 
@@ -18354,6 +18282,15 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[WARNING] No org ID provided in request. Returning 400.")
 			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false, "reason": "No org ID provided"}`))
+			return
+		}
+	}
+
+	// Requires being admin 
+	if strings.ToLower(category) == "protected" {
+		if user.Role != "admin" {
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Admin required to access protected category"}`))
 			return
 		}
 	}
@@ -18387,7 +18324,6 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	isSuccess := true
 	if keyList, keyOk := request.URL.Query()["key"]; keyOk && len(keyList) > 0 {
 		key := keyList[0]
-		log.Printf("[DEBUG] Loooking for key %s", key)
 
 		cacheId := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, key)
 		if len(category) > 0 {
@@ -20260,8 +20196,12 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 		newExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting single execution data: %s", err)
-			break
+
+			// In case we are too fast
+			if cnt > 2 {
+				log.Printf("[WARNING][%s] Failed getting single execution data: %s", workflowExecution.ExecutionId, err)
+				break
+			}
 		}
 
 		returnBody.Validation = newExecution.Workflow.Validation
@@ -23088,7 +23028,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			// Get the reference execution
 			oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
 			if err != nil {
-				log.Printf("[INFO] Failed getting execution (execution) %s: %s", referenceId[0], err)
+				log.Printf("[INFO][%s] Failed getting execution (execution) %s", referenceId[0], err)
 				return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
 			}
 
@@ -23432,7 +23372,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			// Will use the old name, but still continue with NEW ID
 			oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
 			if err != nil {
-				log.Printf("[ERROR] Failed getting execution (execution) %s: %s", referenceId[0], err)
+				log.Printf("[ERROR][%s] Failed getting execution (execution): %s", referenceId[0], err)
 				return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
 			}
 
@@ -24697,6 +24637,41 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		} else {
 			//log.Printf("[ERROR] Default KMS ID not found in organization. Will not be able to decrypt secrets.")
 		}
+	}
+
+	// Special Action cleanup in case authentication etc has gone wrong
+	// FIXME: Focused on URL field for now
+	for actionIndex, _ := range workflowExecution.Workflow.Actions {
+		found := []string{}
+
+		newparams := []WorkflowAppActionParameter{}
+		for paramIndex, _ := range workflowExecution.Workflow.Actions[actionIndex].Parameters { 
+
+			param := workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex]
+			if ArrayContains(found, param.Name) {
+
+				// Replaces the field
+				for existingParamIndex, _ := range newparams {
+					if param.Name != newparams[existingParamIndex].Name {
+
+						// Special for urls
+						if param.Name == "url" && strings.Contains(param.Value, "http") && !strings.Contains(newparams[existingParamIndex].Value, "http") {
+							newparams[existingParamIndex] = param
+						}
+
+						break
+					}
+				}
+
+				log.Printf("[ERROR][%s] Duplicate Field in Action: %#v", workflowExecution.ExecutionId, param.Name)
+				continue
+			}
+
+			newparams = append(newparams, param)
+			found = append(found, param.Name)
+		}
+
+		workflowExecution.Workflow.Actions[actionIndex].Parameters = newparams
 	}
 
 	// Handles org setting for subflows
@@ -30948,6 +30923,109 @@ func (tw *TimeWindow) cleanOldEvents(now time.Time) {
 	}
 }
 
+// Compute simple edit distance between two strings
+func editDistance(a, b string) int {
+	n := len(a)
+	m := len(b)
+	dp := make([][]int, n+1)
+	for i := range dp {
+		dp[i] = make([]int, m+1)
+		dp[i][0] = i
+	}
+	for j := 0; j <= m; j++ {
+		dp[0][j] = j
+	}
+	for i := 1; i <= n; i++ {
+		for j := 1; j <= m; j++ {
+			if a[i-1] == b[j-1] {
+				dp[i][j] = dp[i-1][j-1]
+			} else {
+				dp[i][j] = min(dp[i-1][j-1], min(dp[i-1][j], dp[i][j-1])) + 1
+			}
+		}
+	}
+	return dp[n][m]
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// SanitizeFuzzySubstring replaces any contiguous substring of haystack
+// that is close to secret with "***"
+func SanitizeFuzzySubstring(haystack, secret string, maxDistance int) string {
+	hayRunes := []rune(haystack)
+	hayLower := strings.ToLower(haystack)
+	secLower := strings.ToLower(secret)
+	secLen := len(secLower)
+	
+	i := 0
+	for i < len(hayRunes) {
+		bestMatchStart := -1
+		bestMatchEnd := -1
+		bestDistance := maxDistance + 1
+
+		// Iterate through possible window sizes
+		for windowLen := secLen - maxDistance; windowLen <= secLen + maxDistance && i+windowLen <= len(hayLower); windowLen++ {
+			if windowLen <= 0 {
+				continue
+			}
+
+			window := hayLower[i : i+windowLen]
+			distance := editDistance(window, secLower)
+
+			// Found a closer match within the tolerance
+			if distance <= maxDistance && distance < bestDistance {
+				bestDistance = distance
+				bestMatchStart = i
+				bestMatchEnd = i + windowLen
+			}
+		}
+
+		// If a match was found, sanitize and jump the index past the sanitized section
+		if bestMatchStart != -1 {
+			for j := bestMatchStart; j < bestMatchEnd; j++ {
+				hayRunes[j] = '*'
+			}
+			i = bestMatchEnd
+		} else {
+			// No match, move to the next character
+			i++
+		}
+	}
+	return string(hayRunes)
+}
+
+
+
+// Basic cleanup.
+func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
+	// Basic checks to return 
+	if os.Getenv("SHUFFLE_PROTECTED_CLEANUP_DISABLED") == "true" || project.Environment == "worker" {
+		return exec
+	}
+
+	protectedKeys, _, err := GetAllCacheKeys(context.Background(), exec.ExecutionOrg, "protected", 100, "")
+	if err != nil {
+		log.Printf("[ERROR] Failed getting protected keys for org %s: %s", exec.ExecutionOrg, err)
+		return exec
+	}
+
+	for _, protectedKey := range protectedKeys {
+
+		for resultKey, _ := range exec.Results { 
+
+			exec.Results[resultKey].Result = SanitizeFuzzySubstring(exec.Results[resultKey].Result, protectedKey.Value, 2) 
+		}
+
+	}
+
+	return exec
+}
+
 // Updates statuses in relevant areas according to what happened in the workflow run
 func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *WorkflowExecution {
 
@@ -31002,7 +31080,6 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		return exec
 	}
 
-	// FIXME: Is this necessary?
 	workflow, err := GetWorkflow(ctx, exec.Workflow.ID, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflow '%s': %s (exec status)", exec.Workflow.ID, err)
@@ -31562,6 +31639,7 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
 		return
 	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
@@ -31637,6 +31715,7 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		resp.Write([]byte(`{"success": false, "reason": "Input body is not valid JSON"}`))
 		return
 	}
+
 	var input QueryInput
 	err = json.Unmarshal(body, &input)
 	if err != nil {
@@ -31645,9 +31724,15 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		resp.Write([]byte(`{"success": false, "reason": "Input data invalid"}`))
 		return
 	}
+
+	if len(input.Query) < 5 {
+		log.Printf("[WARNING] Input query too short in runActionAI: %s", input.Query)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input query too short. Please provide a more detailed description of the workflow you want to generate"}`))
+		return
+	}
 	
 	workflow, err := GetWorkflow(ctx, input.WorkflowId)
-
 	if err != nil {
 		log.Printf("[ERROR] Failed to get workflow %s: %s", input.WorkflowId, err)
 	} else if workflow.OrgId != user.ActiveOrg.Id && len(workflow.OrgId) > 0 {
@@ -31661,16 +31746,18 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 	if err != nil {
 		reason := err.Error()
 		if strings.HasPrefix(reason, "AI rejected the task: ") {
+			log.Printf("[ERROR] AI rejected the task for org=%s user=%s", user.ActiveOrg.Id, user.Id)
 			reason = strings.TrimPrefix(reason, "AI rejected the task: ")
 			resp.WriteHeader(422)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
 			return
 		}
-		log.Printf("[ERROR] Failed to generate workflow AI response: %s", err)
+		log.Printf("[ERROR] Failed to generate workflow AI response for org %s, user %s: %s", user.ActiveOrg.Id, user.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
+
     if project.Environment == "cloud" {
 		IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
 		log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
@@ -31702,6 +31789,7 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
+
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(appsJson)
 }
@@ -31711,6 +31799,7 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 	if cors {
 		return
 	}
+
 	ctx := GetContext(request)
 	err := ValidateRequestOverload(resp, request)
 	if err != nil {
@@ -31719,6 +31808,7 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
 		return
 	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
@@ -31726,11 +31816,13 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
 	if !user.SupportAccess {
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
 		return
 	}
+
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to generate LLM workflows: %s (%s)", user.Username, user.Id)
 		resp.WriteHeader(403)
@@ -31774,7 +31866,9 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 			}
 		}
 		
-		log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/%d", monthlyUsage, currentCacheCount, aiUsageCount, aiLimit)
+		if debug { 
+			log.Printf("[DEBUG] AI usage breakdown - Monthly (dumped): %d, Cache (pending): %d, Total: %d/%d", monthlyUsage, currentCacheCount, aiUsageCount, aiLimit)
+		}
 		
 		if aiUsageCount >= aiLimit {
 			log.Printf("[AUDIT] Org %s (%s) has exceeded AI workflow editing limit (%d/%d)", user.ActiveOrg.Name, user.ActiveOrg.Id, aiUsageCount, aiLimit)
@@ -31802,6 +31896,14 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false, "reason": "Input data invalid"}`))
 		return
 	}
+
+	if len(editRequest.Query) < 5 {
+		log.Printf("[WARNING] Input query too short in runActionAI: %s", editRequest.Query)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input query too short. Please provide a more detailed description of the changes you want to make to the workflow"}`))
+		return
+	}
+
 	workflow, err := GetWorkflow(ctx, editRequest.WorkflowID)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get workflow %s: %s", editRequest.WorkflowID, err)
@@ -31837,10 +31939,12 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
+
 	if project.Environment == "cloud" {
 		IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
 		log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
 	}
+
 	workflowJson, err := json.Marshal(output)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal workflow %s: %s", editRequest.WorkflowID, err)
@@ -31848,6 +31952,7 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal workflow"}`))
 		return
 	}
+	
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(workflowJson)
 }
@@ -31868,7 +31973,7 @@ func startSchedule(trigger Trigger, authorization string, workflow Workflow) err
 	// Every 24 hours in cron
 	foundFrequency := "0 0 * * *"
 	for _, param := range trigger.Parameters {
-		if param.Name == "frequency" && len(param.Value) > 2 {
+		if param.Name == "cron" && len(param.Value) > 2 {
 			foundFrequency = param.Value
 		}
 	}
