@@ -2048,9 +2048,15 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 				startnodeFound = true
 			}
 
+			if strings.ToLower(strings.ReplaceAll(action.Name, " ", "_")) == "translate_standard" {
+				newActions = append(newActions, action)
+				continue
+			}
+
 			for _, field := range action.Parameters {
 				if (field.Name == "app_name" || field.Name == "appname") && (field.Value == "" || field.Value == "noapp") {
-					parsedError := fmt.Sprintf("Singul AI action %s is an app to use", action.Label)
+
+					parsedError := fmt.Sprintf("Singul action %s requires an app to use", action.Label)
 					if !ArrayContains(workflow.Errors, parsedError) {
 						workflow.Errors = append(workflow.Errors, parsedError)
 					}
