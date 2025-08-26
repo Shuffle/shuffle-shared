@@ -12220,10 +12220,21 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if len(tmpData.SSOConfig.SSOCertificate) > 0 {
 		savedCert := fixCertificate(tmpData.SSOConfig.SSOCertificate)
-
+		certLen := len([]byte(savedCert))
 		log.Printf("[INFO] Stripped down cert from %d to %d", len(tmpData.SSOConfig.SSOCertificate), len(savedCert))
 
-		org.SSOConfig.SSOCertificate = savedCert
+		// If the savedCert value is more than 1500 bytes in length then store it in SSOLongCertificate
+		if certLen > 1500 {
+			log.Printf("[INFO] Storing long sso certificate (>1500 bytes) for org %s (%s)", org.Name, org.Id)
+			org.SSOConfig.SSOLongCertificate = savedCert
+			org.SSOConfig.SSOCertificateHash = ssoCertHash(savedCert)
+			org.SSOConfig.SSOCertificate = ""
+		} else {
+			log.Printf("[INFO] Storing short sso certificate (<1500 bytes) for org %s (%s)", org.Name, org.Id)
+			org.SSOConfig.SSOCertificate = savedCert
+			org.SSOConfig.SSOCertificateHash = ""
+			org.SSOConfig.SSOLongCertificate = ""
+		}
 	}
 
 	if len(org.Defaults.NotificationWorkflow) > 0 && len(org.Defaults.NotificationWorkflow) != 36 {
@@ -21297,6 +21308,12 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 	return nil
 }
 
+// Function to hash the long sso certificates and use it in queries
+func ssoCertHash(normalized string) string {
+    sum := md5.Sum([]byte(normalized))
+    return hex.EncodeToString(sum[:])
+}
+
 func fixCertificate(parsedX509Key string) string {
 	parsedX509Key = strings.Replace(parsedX509Key, "&#13;", "", -1)
 	if strings.Contains(parsedX509Key, "BEGIN CERT") && strings.Contains(parsedX509Key, "END CERT") {
@@ -22193,7 +22210,15 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	matchingOrgs, err := GetOrgByField(ctx, "sso_config.sso_certificate", parsedX509Key)
-	if err != nil && len(matchingOrgs) == 0 {
+	
+	if (err != nil || len(matchingOrgs) == 0) {
+		log.Printf("[DEBUG] No org found for normal sso_certificate now check for the long sso certificate through sso_certificate_hash")
+		// Fallback to hash search for long certs are now supported
+		certHash := ssoCertHash(parsedX509Key)
+		matchingOrgs, err = GetOrgByField(ctx, "sso_config.sso_certificate_hash", certHash)
+	}
+
+	if err != nil || len(matchingOrgs) == 0 {
 		log.Printf("[DEBUG] BYTES FROM REQUEST (DEBUG): %s", string(bytesXML))
 
 		log.Printf("[WARNING] Bad certificate (%d): Failed to find a org with certificate matching the SSO", len(parsedX509Key))
@@ -22207,6 +22232,10 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		newOrgs := []Org{}
 		for _, org := range matchingOrgs {
 			if org.SSOConfig.SSOCertificate == parsedX509Key {
+				log.Print("[INFO] Found org (%s) with matching sso certificate", org.Id)
+				newOrgs = append(newOrgs, org)
+			} else if org.SSOConfig.SSOLongCertificate == parsedX509Key {
+				log.Print("[INFO] Found org (%s) with matching long sso certificate", org.Id)
 				newOrgs = append(newOrgs, org)
 			} else {
 				log.Printf("[WARNING] Skipping org append because bad cert: %d vs %d", len(org.SSOConfig.SSOCertificate), len(parsedX509Key))
