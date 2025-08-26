@@ -549,16 +549,29 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		for index, user := range org.Users {
 			_, err := GetApikey(ctx, user.ApiKey)
 			if err != nil {
-				log.Printf("[ERROR] Failed getting api key for user: %s", err)
-				continue
+				log.Printf("[WARNING] Failed getting api key for user in org: %s", err)
+				u, err := GetUser(ctx, user.Id)
+				if err != nil {
+					log.Printf("[ERROR] Failed the user does not exist %s", err)
+					continue
+				}
+
+				if len(u.ApiKey) > 0 {
+					org.Users[index].ApiKey = u.ApiKey
+					err = SetOrg(ctx, *org, org.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed to set apikey for user %s in org %s", user.Username, org.Id)
+					}
+				}
 			}
 
-			if user.Role == "admin" {
+			if user.Role == "admin" && len(org.Users[index].ApiKey) > 0 {
 				log.Printf("[DEBUG] Found admin user with api key: %s", user.Id)
 				validIndex = index
 				break
 			}
 		}
+
 
 		if validIndex == -1 {
 			log.Printf("[ERROR] Failed getting valid apikey for admin user in org: %s which exists!", org.Id)
