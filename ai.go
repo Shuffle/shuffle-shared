@@ -8527,6 +8527,20 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 	var err error
 
 	if input.ImageURL != "" {
+		userParts := []openai.ChatMessagePart{}
+		if input.Query != "" {
+			userParts = append(userParts, openai.ChatMessagePart{
+				Type: openai.ChatMessagePartTypeText,
+				Text: input.Query,
+			})
+		}
+
+		userParts = append(userParts, openai.ChatMessagePart{
+			Type: openai.ChatMessagePartTypeImageURL,
+			ImageURL: &openai.ChatMessageImageURL{
+				URL: input.ImageURL,
+			},
+		})
 		chatCompletion := openai.ChatCompletionRequest{
 			Model: model,
 			Messages: []openai.ChatCompletionMessage{
@@ -8536,18 +8550,7 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 				},
 				{
 					Role: openai.ChatMessageRoleUser,
-					MultiContent: []openai.ChatMessagePart{
-						{
-							Type: openai.ChatMessagePartTypeText,
-							Text: input.Query,
-						},
-						{
-							Type: openai.ChatMessagePartTypeImageURL,
-							ImageURL: &openai.ChatMessageImageURL{
-								URL: input.ImageURL,
-							},
-						},
-					},
+					MultiContent: userParts,
 				},
 			},
 		}
@@ -8556,6 +8559,7 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 			chatCompletion.MaxTokens = 0
 			chatCompletion.MaxCompletionTokens = maxTokens
 		}
+
 		contentOutput, err = RunAiQuery("", "", chatCompletion)
 
 	} else {
