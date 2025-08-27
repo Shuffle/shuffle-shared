@@ -73,6 +73,7 @@ func GetESIndexPrefix(index string) string {
 	if len(prefix) > 0 {
 		return fmt.Sprintf("%s_%s", prefix, index)
 	}
+
 	return index
 }
 
@@ -15702,14 +15703,18 @@ func InitOpensearchIndexes() {
 		return
 	}
 
+	if os.Getenv("SHUFFLE_SKIP_OPENSEARCH_INDEX_INIT") == "true" {
+		return
+	}
+
 	// Check if the "workflowexecution" index exists and configuring rollovers if possible
 	log.Printf("[INFO] Configuring Opensearch indexes for scaling")
 
 	ctx := context.Background()
 	relevantScaleIndexes := []string{
-		"workflowexecution",
-		"datastore_ngram",
-		"org_cache",
+		GetESIndexPrefix("workflowexecution"),
+		GetESIndexPrefix("datastore_ngram"),
+		GetESIndexPrefix("org_cache"),
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")
@@ -15762,6 +15767,30 @@ func InitOpensearchIndexes() {
 
 		if len(customConfig) > 0 {
 			indexConfig = []byte(customConfig)
+
+			// Check if alias is in the index or not, otherwise inject it
+			unmarshalled := map[string]interface{}{}
+			if err := json.Unmarshal(indexConfig, &unmarshalled); err != nil {
+				log.Printf("[ERROR] Invalid JSON in OPENSEARCH_INDEX_CONFIG (2): %s", err)
+			} else {
+				if _, ok := unmarshalled["aliases"]; !ok {
+					// Inject it
+					aliasPart := map[string]interface{}{
+						index: map[string]bool{
+							"is_write_index": true,
+						},
+					}
+					unmarshalled["aliases"] = aliasPart
+					newConfig, err := json.Marshal(unmarshalled)
+					if err != nil {
+						log.Printf("[ERROR] Invalid JSON in OPENSEARCH_INDEX_CONFIG (3): %s", err)
+					} else {
+						indexConfig = newConfig
+						log.Printf("[INFO] Injected alias into OPENSEARCH_INDEX_CONFIG for index %s", index)
+					}
+				}
+			}
+
 		}
 
 		index = strings.ToLower(GetESIndexPrefix(index))
