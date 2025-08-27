@@ -15843,7 +15843,7 @@ func InitOpensearchIndexes() {
 		if rolloverRes.IsError() {
 			log.Printf("[ERROR] Rollover config failed for %s: %s", index, rolloverRes.String())
 		} else {
-			fmt.Printf("[INFO] Rollover executed successfully for %s ✅", index)
+			log.Printf("[INFO] Rollover executed successfully for %s", index)
 		}
 
 
