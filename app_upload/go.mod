@@ -8,7 +8,7 @@ replace github.com/shuffle/shuffle-shared => ../
 
 require (
 	cloud.google.com/go/storage v1.55.0
-	github.com/docker/docker v28.2.2+incompatible
+	github.com/docker/docker v28.3.3+incompatible
 	github.com/shuffle/shuffle-shared v0.3.60
 	google.golang.org/api v0.236.0
 	gopkg.in/yaml.v2 v2.4.0
