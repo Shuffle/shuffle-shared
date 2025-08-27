@@ -12330,17 +12330,20 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				cacheData.Created = timeNow
 			}
 
+			if len(cacheData.Key) == 0 {
+				cacheData.Key = datastoreId
+			}
+
 			// Sets new keys in cache so they can be queried fast next time
-			if getCacheError != nil || config.Key == "" {
-				if debug { 
-					log.Printf("[DEBUG] Setting new cache key for org %s with key %s", cacheData.OrgId, datastoreId)
+			marshalledEntry, err := json.Marshal(cacheData)
+			if err == nil {
+				newCacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+				if len(config.Category) > 0 && config.Category != "default" {
+					newCacheId = fmt.Sprintf("%s_%s", newCacheId, config.Category)
 				}
 
-				marshalledEntry, err := json.Marshal(cacheData)
-				if err == nil {
-					cacheKey := fmt.Sprintf("org_cache_%s", datastoreId)
-					SetCache(ctx, cacheKey, marshalledEntry, 30)
-				}
+				newCacheId = fmt.Sprintf("org_cache_%s", newCacheId)
+				SetCache(ctx, newCacheId, marshalledEntry, 30)
 			}
 
 			// URL encode
