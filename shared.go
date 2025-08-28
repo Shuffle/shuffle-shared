@@ -23714,7 +23714,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					var queries map[string]string
 					err := json.Unmarshal([]byte(param.Value), &queries)
 					if err != nil {
-						log.Printf("[ERROR] Failed unmarshalling queries: %s", err)
+						log.Printf("[WARNING] Failed unmarshalling queries: %s", err)
 					} else {
 						for key, value := range queries {
 							newqueries += fmt.Sprintf("%s=%s&", key, value)

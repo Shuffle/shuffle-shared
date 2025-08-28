@@ -1170,7 +1170,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	dbsave := false
 	workflowExecution.Workflow.Image = ""
 
-	workflowExecution = cleanupProtectedKeys(workflowExecution)
+	//workflowExecution = cleanupProtectedKeys(workflowExecution)
 	validation, err := GetExecutionValidation(ctx, workflowExecution.ExecutionId)
 	if err == nil {
 		if workflowExecution.NotificationsCreated > 0 {
@@ -12351,8 +12351,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			if len(cacheData.PublicAuthorization) == 0 {
 				cacheData.PublicAuthorization = uuid.NewV4().String()
 			}
+
 			cacheData.Authorization = ""
-			//cacheData.Category = strings.ReplaceAll(strings.ToLower(cacheData.Category), " ", "_")
 
 			allKeys[index] = cacheData
 			if len(datastoreId) > 127 {
@@ -12407,6 +12407,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 		existingInfo = append(existingInfo, minKey)		
 	}
+
+	log.Printf("EXISTING: %#v", existingInfo)
 
 	handledKeys = []string{}
 	for key := range datastoreKeys {
