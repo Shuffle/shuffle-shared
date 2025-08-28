@@ -1646,7 +1646,6 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 	}
 
 	if dataType == "app_executions" || dataType == "childorg_app_executions" {
-		log.Printf("[INFO] Checking alert thresholds for org %s with data type %s", orgStatistics.OrgId, dataType)
 
 		validationOrg := org
 		validationOrgStatistics := orgStatistics
@@ -1674,13 +1673,6 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			currentThreshold = int64((int(percentage) / 50) * 50)
 		}
 
-		// If 50% and 100% alert are already set by user, and alert is send for that threshold, then skip
-		for _, AlertThreshold := range validationOrg.Billing.AlertThreshold {
-			if AlertThreshold.Percentage == int(currentThreshold) && AlertThreshold.Email_send {
-				log.Printf("[DEBUG] Alert threshold for %d%% already set and email sent for org %s", currentThreshold, validationOrg.Id)
-				return validationOrgStatistics
-			}
-		}
 
 		if currentThreshold >= 50 && currentThreshold > validationOrgStatistics.LastUsageAlertThreshold {
 
@@ -1706,24 +1698,40 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				firstAdmin = allAdmins[0]
 			}
 
-			newEmailList := []string{}
+			alertAlreadySet := false
+			// If 50% and 100% alert are already set by user, and alert is send for that threshold, then skip
+			for _, AlertThreshold := range validationOrg.Billing.AlertThreshold {
+				if AlertThreshold.Percentage == int(currentThreshold) && AlertThreshold.Email_send {
+					alertAlreadySet = true
+					break
+				}
+			}
 
-			if currentThreshold == 100 || currentThreshold == 50 {
+			newEmailList := []string{}
+			if alertAlreadySet && (currentThreshold == 100 || currentThreshold == 50) {
 				newEmailList = allAdmins
 			} else {
 				newEmailList = []string{"jay@shuffler.io", "support@shuffler.io"}
 			}
 
-			if !ArrayContains(newEmailList, "jay@shuffler.io") {
-				newEmailList = append(newEmailList, "jay@shuffler.io")
-			}
-
-			if !ArrayContains(newEmailList, "support@shuffler.io") {
-				newEmailList = append(newEmailList, "support@shuffler.io")
-			}
-
 			// send mail use different subject line as it will sent only to the team
 			Subject := fmt.Sprintf("[Shuffle]: You've reached the app-runs threshold limit for your account %s", firstAdmin)
+			leadInfo := ""
+			if validationOrg.LeadInfo.POV {
+				leadInfo = "POC"
+			}
+
+			if validationOrg.LeadInfo.Customer {
+				leadInfo = "Customer"
+			}
+
+			if validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.ServicePartner || validationOrg.LeadInfo.ChannelPartner {
+				leadInfo = "Partner"
+			}
+
+			if len(leadInfo) > 0 && (currentThreshold > 100) {
+				Subject = fmt.Sprintf("[Shuffle] %s: You've reached the app-runs threshold limit for your account %s", leadInfo, firstAdmin)
+			}
 
 			totalAppExecutions := validationOrgStatistics.MonthlyAppExecutions + validationOrgStatistics.MonthlyChildAppExecutions
 			AppRunsPercentage := float64(totalAppExecutions) / float64(validationOrg.SyncFeatures.AppExecutions.Limit) * 100
@@ -1737,6 +1745,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				"admin_email":               firstAdmin,
 			}
 
+			if currentThreshold > 100 {
+				substitutions["lead_info"] = leadInfo
+			}
+
 			err = sendMailSendgridV2(
 				newEmailList,
 				Subject,
@@ -1746,9 +1758,30 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			)
 
 			if err != nil {
-				log.Printf("[ERROR] Failed sending alert mail for child org in increment: %s", err)
+				log.Printf("[ERROR] Failed sending alert mail for child org in increment (1): %s", err)
 			} else {
-				log.Printf("[DEBUG] Successfully sent alert mail for child org %s to parent org %s", validationOrg.Name, validationOrg.Name)
+				log.Printf("[DEBUG] Successfully sent alert mail for child org %s to parent org %s (1)", validationOrg.Name, validationOrg.Name)
+			}
+
+			if currentThreshold == 100 || currentThreshold == 50 {
+				if len(leadInfo) > 0 {
+					Subject = fmt.Sprintf("[Shuffle] %s: You've reached the app-runs threshold limit for your account %s", leadInfo, firstAdmin)
+				}
+
+				substitutions["lead_info"] = leadInfo
+
+				err = sendMailSendgridV2(
+					[]string{"jay@shuffler.io", "support@shuffler.io"},
+					Subject,
+					substitutions,
+					false,
+					"d-3678d48b2b7144feb4b0b4cff7045016",
+				)
+				if err != nil {
+					log.Printf("[ERROR] Failed sending alert mail for child org in increment (2): %s", err)
+				} else {
+					log.Printf("[DEBUG] Successfully sent alert mail for child org %s to parent org %s (2)", validationOrg.Name, validationOrg.Name)
+				}
 			}
 
 			orgStatistics.LastUsageAlertThreshold = currentThreshold
