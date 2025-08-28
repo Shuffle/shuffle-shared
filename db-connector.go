@@ -12318,8 +12318,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			}
 
 
+			// Check for if the key already existed. Ok with 
+			// goroutine as we use heavy caching for this.
 			config, getCacheError := GetDatastoreKey(ctx, datastoreId, cacheData.Category)
-			if getCacheError == nil {
+			if getCacheError == nil && config.Created > 0 {
 				cacheData.Created = config.Created
 				cacheData.Authorization = config.Authorization
 				cacheData.SuborgDistribution = config.SuborgDistribution
@@ -12338,8 +12340,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			marshalledEntry, err := json.Marshal(cacheData)
 			if err == nil {
 				newCacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
-				if len(config.Category) > 0 && config.Category != "default" {
-					newCacheId = fmt.Sprintf("%s_%s", newCacheId, config.Category)
+				if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+					newCacheId = fmt.Sprintf("%s_%s", newCacheId, cacheData.Category)
 				}
 
 				newCacheId = fmt.Sprintf("org_cache_%s", newCacheId)
@@ -12742,7 +12744,6 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	nameKey := "org_cache"
 
 	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
-
 	if len(category) > 0 && category != "default" {
 		if !strings.HasSuffix(id, category) {
 			id = fmt.Sprintf("%s_%s", id, category)
@@ -13911,7 +13912,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			return cacheKeys, cursor, nil
 		}
 
-		err = SetCache(ctx, cacheKey, newcache, 30)
+		err = SetCache(ctx, cacheKey, newcache, 10)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating cache keys cache: %s", err)
 		}
@@ -15704,13 +15705,13 @@ func GetDatastoreNGramItem(ctx context.Context, key string) (*NGramItem, error) 
 			return ngramItem, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 60)
+		err = SetCache(ctx, cacheKey, data, 15)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for GetNGramItem '%s': %s", cacheKey, err)
 			return ngramItem, nil
 		}
 
-		log.Printf("[DEBUG] Successfully set cache for ngramitem with key %s", key)
+		//log.Printf("[DEBUG] Successfully set cache for ngramitem with key %s", key)
 	}
 
 	return ngramItem, nil

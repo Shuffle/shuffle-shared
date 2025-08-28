@@ -18711,6 +18711,9 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, cacheKey))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, orgId))
 
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", orgId, cacheData.Key))
+	DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", orgId, cacheData.Key, cacheData.Category))
+
 	log.Printf("[INFO] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
