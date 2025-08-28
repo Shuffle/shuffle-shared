@@ -1170,7 +1170,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	dbsave := false
 	workflowExecution.Workflow.Image = ""
 
-	//workflowExecution = cleanupProtectedKeys(workflowExecution)
+	workflowExecution = cleanupProtectedKeys(workflowExecution)
 	validation, err := GetExecutionValidation(ctx, workflowExecution.ExecutionId)
 	if err == nil {
 		if workflowExecution.NotificationsCreated > 0 {
@@ -13616,13 +13616,26 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		category = ""
 	}
 
-
 	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
 	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, inputcursor, orgId, category)
-	// Look for
 
-	cursor := ""
+	// Find cache and return instantly
 	cacheKeys := []CacheKeyData{}
+	if project.CacheDb && category == "protected" {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &cacheKeys)
+			if err == nil {
+				return cacheKeys, "", nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for appstats: %s", err)
+		}
+	}
+
+	// Look for
+	cursor := ""
 	if project.DbType == "opensearch" {
 		//log.Printf("[DEBUG] GETTING cachekeys for org %s in item %s", orgId, nameKey)
 		var buf bytes.Buffer
