@@ -883,8 +883,6 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	}
 
 	if org.Billing.AppRunsHardLimit > 0 && orgStats.MonthlyAppExecutions > org.Billing.AppRunsHardLimit {
-		log.Printf("[WARNING] Org %s (%s) has exceeded the app runs hard limit (%d/%d)", org.Name, org.Id, orgStats.MonthlyAppExecutions, org.Billing.AppRunsHardLimit)
-
 		return org, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the app runs hard limit (%d/%d)", org.Name, org.Id, orgStats.MonthlyAppExecutions, org.Billing.AppRunsHardLimit))
 	}
 
@@ -904,8 +902,6 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 			//return org, errors.New(fmt.Sprintf("Failed getting the creator organization statistics %s: %s", validationOrg.CreatorOrg, err))
 			return org, nil
 		}
-
-		log.Printf("[INFO] Using creator org %s (%s) for org %s (%s)", validationOrg.Name, validationOrg.Id, org.CreatorOrg, org.Id)
 	}
 
 	// Allows partners and POV users to run workflows without limits
@@ -921,7 +917,6 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
 
 	if totalAppExecutions >= validationOrg.SyncFeatures.AppExecutions.Limit {
-		log.Printf("[WARNING] Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit)
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit))
 	}
 

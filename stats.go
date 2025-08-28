@@ -1646,7 +1646,6 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 	}
 
 	if dataType == "app_executions" || dataType == "childorg_app_executions" {
-		log.Printf("[INFO] Checking alert thresholds for org %s with data type %s", orgStatistics.OrgId, dataType)
 
 		validationOrg := org
 		validationOrgStatistics := orgStatistics
