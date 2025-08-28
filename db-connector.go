@@ -12528,7 +12528,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			continue
 		}
 
-		go crossCorrelateNGrams(context.Background(), cacheData.OrgId, cacheData.Category, cacheData.Key, cacheData.Value)
+		//go crossCorrelateNGrams(context.Background(), cacheData.OrgId, cacheData.Category, cacheData.Key, cacheData.Value)
 	}
 
 	// Look for category triggers
