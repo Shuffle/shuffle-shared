@@ -490,7 +490,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 
 		if len(user.Session) != 0 {
 			log.Printf("[INFO] User session exists - resetting session")
-			expiration := time.Now().Add(3600 * time.Second)
+			expiration := time.Now().Add(24 * time.Hour)
 
 			newCookie := ConstructSessionCookie(user.Session, expiration)
 
@@ -542,7 +542,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 
 			log.Printf("[INFO] User session for %s (%s) is empty - create one!", user.Username, user.Id)
 			sessionToken := uuid.NewV4().String()
-			expiration := time.Now().Add(3600 * time.Second)
+			expiration := time.Now().Add(24 * time.Hour)
 			newCookie := ConstructSessionCookie(sessionToken, expiration)
 
 			// Does it not set both?
@@ -11555,7 +11555,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	expiration := time.Now().Add(3600 * time.Second)
+	expiration := time.Now().Add(24 * time.Hour)
 
 	newCookie := ConstructSessionCookie(user.Session, expiration)
 	http.SetCookie(resp, newCookie)
@@ -14703,7 +14703,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 	if len(userdata.Session) != 0 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
-		expiration := time.Now().Add(3600 * time.Second)
+		expiration := time.Now().Add(24 * time.Hour)
 
 		newCookie := ConstructSessionCookie(userdata.Session, expiration)
 		http.SetCookie(resp, newCookie)
@@ -14752,7 +14752,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] User session for %s (%s) is empty - create one!", userdata.Username, userdata.Id)
 
 		sessionToken := uuid.NewV4().String()
-		expiration := time.Now().Add(3600 * time.Second)
+		expiration := time.Now().Add(24 * time.Hour)
 		newCookie := ConstructSessionCookie(sessionToken, expiration)
 
 		// Does it not set both?
@@ -21685,7 +21685,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Role: role,
 				}
 
-				expiration := time.Now().Add(3600 * time.Second)
+				expiration := time.Now().Add(24 * time.Hour)
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (1)")
 					sessionToken := uuid.NewV4().String()
@@ -21860,7 +21860,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Role: role,
 				}
 
-				expiration := time.Now().Add(3600 * time.Second)
+				expiration := time.Now().Add(24 * time.Hour)
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
@@ -22042,7 +22042,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	newUser.Id = ID.String()
 	newUser.VerificationToken = verifyToken.String()
 
-	expiration := time.Now().Add(3600 * time.Second)
+	expiration := time.Now().Add(24 * time.Hour)
 	//if len(user.Session) == 0 {
 	log.Printf("[INFO] User does NOT have session - creating")
 	sessionToken := uuid.NewV4().String()
@@ -22369,7 +22369,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				}
 				//log.Printf("SESSION: %s", user.Session)
 
-				expiration := time.Now().Add(3600 * time.Second)
+				expiration := time.Now().Add(24 * time.Hour)
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating (1)")
 					sessionToken := uuid.NewV4().String()
@@ -22497,7 +22497,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					Role: user.Role,
 				}
 
-				expiration := time.Now().Add(3600 * time.Second)
+				expiration := time.Now().Add(24 * time.Hour)
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
@@ -27798,7 +27798,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 		// Check until 33350 (Orborus -> Worker and Worker -> Apps)
 		if strings.HasPrefix(parsedUrl.Host, "shuffle-") || parsedUrl.Port() == "33333" || parsedUrl.Port() == "33334" || parsedUrl.Port() == "33335" || parsedUrl.Port() == "33336" || parsedUrl.Port() == "33337" || parsedUrl.Port() == "33338" || parsedUrl.Port() == "33339" || parsedUrl.Port() == "33340" || parsedUrl.Port() == "33341" || parsedUrl.Port() == "33342" || parsedUrl.Port() == "33343" || parsedUrl.Port() == "33344" || parsedUrl.Port() == "33345" || parsedUrl.Port() == "33346" || parsedUrl.Port() == "33347" || parsedUrl.Port() == "33348" || parsedUrl.Port() == "33349" || parsedUrl.Port() == "33350" || parsedBackendUrl.Host == parsedUrl.Host {
 
-			log.Printf("[INFO] Running with internal proxy for %s", parsedUrl)
+			//log.Printf("[INFO] Running with internal proxy for %s", parsedUrl)
 			httpProxy = os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
 			httpsProxy = os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
 
