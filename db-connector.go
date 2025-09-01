@@ -12326,6 +12326,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				cacheData.Authorization = config.Authorization
 				cacheData.SuborgDistribution = config.SuborgDistribution
 				cacheData.PublicAuthorization = config.PublicAuthorization
+
+				cacheData.Existed = true
 			}
 
 			if cacheData.Created == 0 {
@@ -12398,16 +12400,19 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 
 		handledKeys = append(handledKeys, checkKey)
-		newArray = append(newArray, key)
 
 		// Details to help with filtering old vs new
 		// Built for the "is_in_datastore" shuffle tools action
 		minKey := DatastoreKeyMini{
 			Key: key.Key,
-			Existed: key.Edited > key.Created,
+			Existed: key.Existed,
 		}
 
 		existingInfo = append(existingInfo, minKey)		
+
+		key.Existed = false 
+		newArray = append(newArray, key)
+
 	}
 
 	//log.Printf("EXISTING: %#v", existingInfo)
@@ -12483,7 +12488,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 	}
 
-	log.Printf("[DEBUG] SetDatastoreKeyBulk: Successfully set %d keys in category %s for org %s", len(newArray), mainCategory, orgId)
+	log.Printf("[DEBUG] SetDatastoreKeyBulk: Successfully set %d key(s) in category %s for org %s", len(newArray), mainCategory, orgId)
 
 	/*
 		if project.CacheDb {

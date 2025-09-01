@@ -490,7 +490,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 
 		if len(user.Session) != 0 {
 			log.Printf("[INFO] User session exists - resetting session")
-			expiration := time.Now().Add(24 * time.Hour)
+			expiration := time.Now().Add(8 * time.Hour)
 
 			newCookie := ConstructSessionCookie(user.Session, expiration)
 
@@ -542,7 +542,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 
 			log.Printf("[INFO] User session for %s (%s) is empty - create one!", user.Username, user.Id)
 			sessionToken := uuid.NewV4().String()
-			expiration := time.Now().Add(24 * time.Hour)
+			expiration := time.Now().Add(8 * time.Hour)
 			newCookie := ConstructSessionCookie(sessionToken, expiration)
 
 			// Does it not set both?
@@ -3108,8 +3108,8 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			newEnv := OrborusStats{}
 			err = json.Unmarshal(cache.([]uint8), &newEnv)
 			if err == nil {
-				// Check if timestamp is within the last 60 seconds. If it is, overwrite newEnvironments
-				if newEnv.Timestamp > 0 && timenow-newEnv.Timestamp > 60 {
+				// Check if timestamp is within the last 180 seconds. If it is, overwrite newEnvironments
+				if newEnv.Timestamp > 0 && timenow-newEnv.Timestamp > 180 {
 					newEnvironments[envIndex].RunningIp = ""
 					newEnvironments[envIndex].Licensed = false
 					newEnvironments[envIndex].DataLake.Enabled = false
@@ -3338,7 +3338,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		} else {
 			// Check if both session tokens are set
 			// Compatibility issues
-			//expiration := time.Now().Add(3600 * time.Second)
+			//expiration := time.Now().Add(8 * time.Hour
 			newCookie.Expires = c.Expires
 			newCookie.MaxAge = c.MaxAge
 
@@ -11555,7 +11555,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	expiration := time.Now().Add(24 * time.Hour)
+	expiration := time.Now().Add(8 * time.Hour)
 
 	newCookie := ConstructSessionCookie(user.Session, expiration)
 	http.SetCookie(resp, newCookie)
@@ -14703,7 +14703,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 	if len(userdata.Session) != 0 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
-		expiration := time.Now().Add(24 * time.Hour)
+		expiration := time.Now().Add(8 * time.Hour)
 
 		newCookie := ConstructSessionCookie(userdata.Session, expiration)
 		http.SetCookie(resp, newCookie)
@@ -14752,7 +14752,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] User session for %s (%s) is empty - create one!", userdata.Username, userdata.Id)
 
 		sessionToken := uuid.NewV4().String()
-		expiration := time.Now().Add(24 * time.Hour)
+		expiration := time.Now().Add(8 * time.Hour)
 		newCookie := ConstructSessionCookie(sessionToken, expiration)
 
 		// Does it not set both?
@@ -16891,11 +16891,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						// Sets the value for the variable
 
 						if len(actionResult.Result) > 0 {
-							log.Printf("\n\n[DEBUG] SET EXEC VAR %s\n\n", execvar.Name)
+							//log.Printf("\n\n[DEBUG] SET EXEC VAR %s\n\n", execvar.Name)
 							workflowExecution.ExecutionVariables[index].Value = actionResult.Result
 							workflowExecution.Workflow.ExecutionVariables[index].Value = actionResult.Result
 						} else {
-							log.Printf("\n\n[DEBUG] SKIPPING EXEC VAR\n\n")
+							//log.Printf("\n\n[DEBUG] SKIPPING EXEC VAR\n\n")
 						}
 
 						break
@@ -19355,6 +19355,8 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		KeysExisted []DatastoreKeyMini `json:"keys_existed"`
 	}
 
+	log.Printf("EXISTINGINFO: %#v", existingInfo)
+
 	returnData := returnStruct{
 		Success: true,
 		KeysExisted: existingInfo,
@@ -21685,7 +21687,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Role: role,
 				}
 
-				expiration := time.Now().Add(24 * time.Hour)
+				expiration := time.Now().Add(8 * time.Hour)
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (1)")
 					sessionToken := uuid.NewV4().String()
@@ -21860,7 +21862,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Role: role,
 				}
 
-				expiration := time.Now().Add(24 * time.Hour)
+				expiration := time.Now().Add(8 * time.Hour)
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
@@ -22042,7 +22044,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	newUser.Id = ID.String()
 	newUser.VerificationToken = verifyToken.String()
 
-	expiration := time.Now().Add(24 * time.Hour)
+	expiration := time.Now().Add(8 * time.Hour)
 	//if len(user.Session) == 0 {
 	log.Printf("[INFO] User does NOT have session - creating")
 	sessionToken := uuid.NewV4().String()
@@ -22367,9 +22369,9 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					Id:   matchingOrgs[0].Id,
 					Role: user.Role,
 				}
-				//log.Printf("SESSION: %s", user.Session)
 
-				expiration := time.Now().Add(24 * time.Hour)
+				//log.Printf("SESSION: %s", user.Session)
+				expiration := time.Now().Add(8 * time.Hour)
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating (1)")
 					sessionToken := uuid.NewV4().String()
@@ -22497,7 +22499,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					Role: user.Role,
 				}
 
-				expiration := time.Now().Add(24 * time.Hour)
+				expiration := time.Now().Add(8 * time.Hour)
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()

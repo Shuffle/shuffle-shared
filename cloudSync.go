@@ -2466,7 +2466,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 
 			if env.OrborusUuid != orborusData.Uuid && len(env.OrborusUuid) > 0 {
 				resp.WriteHeader(409)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Orborus UUID mismatch. This means another Orborus (Leader) is already handling this Runtime Location queue."}`)))
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Orborus UUID mismatch. This means another Orborus (Leader) is already handling this Runtime Location queue. This persists past a few minutes with only one Orborus running, please contact support@shuffler.io"}`)))
 				return errors.New("Orborus UUID mismatch")
 			} else {
 				//env.Checkin = time.Now().Unix()
