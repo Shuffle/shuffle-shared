@@ -376,7 +376,7 @@ func BuildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 
 	// adding md5 based on input data to not overwrite earlier data.
 	generatedPath := "generated"
-	subpath := "../app_gen/openapi/"
+	subpath := "../app_gen/python-lib/"
 	identifier := fmt.Sprintf("%s-%s", swagger.Info.Title, curHash)
 	appPath := fmt.Sprintf("%s/%s", generatedPath, identifier)
 
