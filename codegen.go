@@ -383,10 +383,38 @@ func BuildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 	os.MkdirAll(appPath, os.ModePerm)
 	os.Mkdir(fmt.Sprintf("%s/src", appPath), os.ModePerm)
 
-	err := CopyFile(fmt.Sprintf("%sbaseline/Dockerfile", subpath), fmt.Sprintf("%s/%s", appPath, "Dockerfile"))
+	// File path no longer required
+	sourceDockerPath := fmt.Sprintf("%sbaseline/Dockerfile", subpath)
+	destDockerPath := fmt.Sprintf("%s/%s", appPath, "Dockerfile")
+
+	// Check if the full dest folders exists - otherwise make them
+	parsedPathSplit := strings.Split(destDockerPath, "/")
+	parsedPath := strings.Join(parsedPathSplit[0:len(parsedPathSplit)-1], "/")
+	if _, err := os.Stat(parsedPath); os.IsNotExist(err) {
+		os.MkdirAll(parsedPath, 0644)
+		log.Printf("[INFO] Created folder path for Dockerfile to ensure it exists: %s", parsedPath)
+	}
+
+	err := CopyFile(sourceDockerPath, destDockerPath)
 	if err != nil {
-		log.Println("[ERROR] Failed to move Dockerfile")
-		return appPath, err
+
+		// Keep it in blobs just in case?
+		foundDockerfile := GetBaseDockerfile() 
+		if len(foundDockerfile) > 0 {
+
+			// Writing it to both
+			ioutil.WriteFile(sourceDockerPath, []byte(foundDockerfile), 0644)
+			err = ioutil.WriteFile(destDockerPath, []byte(foundDockerfile), 0644)
+			if err != nil {
+				log.Printf("[ERROR] Failed to write Dockerfile from BaseDockerfile during app build: %s", err)
+				return appPath, err
+			} else {
+				log.Printf("[INFO] Successfully wrote Dockerfile from BaseDockerfile to path %s", destDockerPath)
+			}
+
+		} else {
+			log.Printf("[ERROR] Failed to move Dockerfile from location %s to location %s. Found Dockerfile len: %d", sourceDockerPath, destDockerPath, len(foundDockerfile))
+		}
 	}
 
 	parsedAppPath := fmt.Sprintf("%s/%s", appPath, "requirements.txt")
@@ -403,7 +431,7 @@ func BuildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 
 	err = CopyFile(fmt.Sprintf("%sbaseline/requirements.txt", subpath), fmt.Sprintf("%s/%s", appPath, "requirements.txt"))
 	if err != nil {
-		log.Println("Failed to move requrements.txt")
+		log.Printf("[ERROR] Failed to move requrements.txt")
 		return appPath, err
 	}
 
