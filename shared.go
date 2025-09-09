@@ -21061,11 +21061,15 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 		for _, trigger := range execution.Workflow.Triggers {
 			//log.Printf("Appname trigger (0): %s", trigger.AppName)
 			if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
+				// 0x0elliot: remove log later
+				log.Printf("[INFO][%s] Found user input or shuffle workflow trigger. Adding to action count", execution.ExecutionId)
 				extra += 1
 			}
 		}
 
 		if len(execution.Workflow.Actions)+extra == len(execution.Results) {
+			// 0x0elliot: remove log later
+			log.Printf("[INFO][%s] All actions have results (%d). Setting status to FINISHED. Actions: %d, Triggers: %d, Results: %d", execution.ExecutionId, len(execution.Workflow.Actions)+extra, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results))
 			execution.Status = "FINISHED"
 		}
 	}
