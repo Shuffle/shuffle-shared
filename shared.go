@@ -11186,9 +11186,9 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if workflowExecution.Status != "EXECUTING" {
-		log.Printf("[INFO] Workflow (%s) isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+		log.Printf("[INFO][%s] Workflow isn't executing and shouldn't be getting an app key", workflowExecution.ExecutionId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "Workflow isn't executing"}`))
+		resp.Write([]byte(`{"success": false, "Workflow isn't executing (1)"}`))
 		return
 	}
 
@@ -16445,7 +16445,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			childNodes = FindChildNodes(workflowExecution.Workflow, actionResult.Action.ID, []string{}, []string{})
 			//log.Printf("[DEBUG][%s] FOUND %d CHILDNODES\n\n", workflowExecution.ExecutionId, len(childNodes))
 			for _, nodeId := range childNodes {
-				log.Printf("[DEBUG][%s] Checking if node %s is already in results", workflowExecution.ExecutionId, nodeId)
+				if debug { 
+					log.Printf("[DEBUG][%s] Checking if node %s is already in results", workflowExecution.ExecutionId, nodeId)
+				}
+
 				if nodeId == actionResult.Action.ID {
 					log.Printf("[DEBUG][%s] Skipping marking node %s (%s) as anything", workflowExecution.ExecutionId, nodeId, actionResult.Action.Label)
 					continue
@@ -16457,11 +16460,17 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				for _, action := range workflowExecution.Workflow.Actions {
 					if action.ID == nodeId {
 						curAction = action
-						log.Printf("[DEBUG][%s] Found action %s (%s) for node %s", workflowExecution.ExecutionId, action.Label, action.ID, nodeId)
+						if debug { 
+							log.Printf("[DEBUG][%s] Found action %s (%s) for node %s", workflowExecution.ExecutionId, action.Label, action.ID, nodeId)
+						}
+
 						break
 					}
 				}
-				log.Printf("[DEBUG][%s] Found action with ID: %s", workflowExecution.ExecutionId, curAction.ID)
+
+				if debug { 
+					log.Printf("[DEBUG][%s] Found action with ID: %s", workflowExecution.ExecutionId, curAction.ID)
+				}
 
 				isTrigger := false
 				if len(curAction.ID) == 0 {
@@ -18803,7 +18812,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		if workflowExecution.Status != "EXECUTING" {
 			log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing"}`))
+			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing (2)"}`))
 			return
 		}
 
@@ -19085,19 +19094,21 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		if workflowExecution.Status != "EXECUTING" {
-			log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing"}`))
-			return
-		}
-
 		if workflowExecution.ExecutionOrg != org.Id {
 			log.Printf("[INFO] Org %s wasn't used to execute %s", org.Id, workflowExecution.ExecutionId)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Bad organization specified"}`))
 			return
 		}
+
+		/*
+		if workflowExecution.Status != "EXECUTING" {
+			log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing (3)"}`))
+			return
+		}
+		*/
 
 		executionId = workflowExecution.ExecutionId
 	}
@@ -19459,7 +19470,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		if workflowExecution.Status != "EXECUTING" {
 			log.Printf("[INFO] Workflow '%s' isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
 			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing"}`))
+			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing (4)"}`))
 			return
 		}
 
@@ -22955,6 +22966,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			}
 
+
+			// FIXME: Is execution ID missing?
+
 			if allowContinuation == false {
 				newExecId := fmt.Sprintf("%s_%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionId, workflowExecution.ExecutionSourceNode)
 				cache, err := GetCache(ctx, newExecId)
@@ -22962,7 +22976,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					cacheData := []byte(cache.([]uint8))
 
 					newexec := WorkflowExecution{}
-					log.Printf("[WARNING] Subflow exec %s already found - returning", newExecId)
+					log.Printf("[WARNING][%s] Subflow exec %s already found - returning", workflowExecution.ExecutionId, newExecId)
 
 					// Returning to be used in worker
 					err = json.Unmarshal(cacheData, &newexec)
