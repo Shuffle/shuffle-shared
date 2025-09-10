@@ -6000,7 +6000,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	for _, app := range allApps {
-		if strings.Contains(app.Name, "Tools") {
+		if strings.Contains(strings.ToLower(app.Name), "tools") {
 			log.Printf("APP-1: %s:%s (%s) - %s", app.Name, app.AppVersion, app.ID)
 		}
 	}
@@ -6061,7 +6061,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 						continue
 					}
 
-					//log.Printf("Got app %s:%s (%s)", innerApp.Name, innerApp.AppVersion, innerApp.ID)
 					/*
 						if innerApp.Public == false && innerApp.Sharing == false && gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 							if ArrayContains(importantApps, innerApp.Name) {
@@ -6082,6 +6081,13 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					}
 
 					allApps, innerApp = fixAppAppend(allApps, innerApp)
+
+					// Validating IF the right app is being appended/updated or not
+					//for _, app := range allApps {
+					//	if strings.Contains(strings.ToLower(app.Name), "tools") {
+					//		log.Printf("APP-INNER: %s:%s (%s) - %s", app.Name, app.AppVersion, app.ID)
+					//	}
+					//}
 
 				}
 
@@ -6128,6 +6134,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				appsAdded = append(appsAdded, publicApp.ID)
 				allApps = append(allApps, publicApp)
 			}
+		}
+	}
+
+	for _, app := range allApps {
+		if strings.Contains(strings.ToLower(app.Name), "tools") {
+			log.Printf("APP-2: %s:%s (%s) - %s", app.Name, app.AppVersion, app.ID)
 		}
 	}
 
@@ -6260,6 +6272,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		allApps = append(allApps, newApps...)
 	}
 
+	//for _, app := range allApps {
+	//	if strings.Contains(strings.ToLower(app.Name), "tools") {
+	//		log.Printf("APP-3: %s:%s (%s) - %s", app.Name, app.AppVersion, app.ID)
+	//	}
+	//}
+
 	// Deduplicate (e.g. multiple gmail)
 	dedupedApps := []WorkflowApp{}
 	for _, app := range allApps {
@@ -6382,6 +6400,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		return allApps[i].Edited > allApps[j].Edited
 	})
 
+	//for _, app := range allApps {
+	//	if strings.Contains(strings.ToLower(app.Name), "tools") {
+	//		log.Printf("APP-4: %s:%s (%s) - %s", app.Name, app.AppVersion, app.ID)
+	//	}
+	//}
+
 	// Fix Oauth2 issues
 	for appIndex, app := range allApps {
 		if app.Authentication.Type != "oauth2-app" {
@@ -6414,6 +6438,11 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 }
 
 func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, WorkflowApp) {
+	// Hardcoded for certain apps
+	if innerApp.Name == "Shuffle Tools" || innerApp.Name == "http" || innerApp.Name == "Shuffle AI" {
+		innerApp.Activated = true
+	}
+
 	newIndex := -1
 	newApp := WorkflowApp{}
 	found := false
@@ -6426,71 +6455,73 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 			//continue
 		}
 
-		if loopedApp.Name == innerApp.Name {
-			//log.Printf("[DEBUG] Found app %s:%s on index %d", loopedApp.Name, loopedApp.AppVersion, appIndex)
+		if loopedApp.Name != innerApp.Name {
+			continue
+		}
 
-			if ArrayContains(loopedApp.LoopVersions, innerApp.AppVersion) || loopedApp.AppVersion == innerApp.AppVersion {
+		//log.Printf("[DEBUG] Found app %s:%s on index %d", loopedApp.Name, loopedApp.AppVersion, appIndex)
 
-				if innerApp.Activated && !loopedApp.Activated {
-					newIndex = appIndex
-					newApp = innerApp
+		if ArrayContains(loopedApp.LoopVersions, innerApp.AppVersion) || loopedApp.AppVersion == innerApp.AppVersion {
 
-					//newApp.Versions = append(newApp.Versions, AppVersion{
-					//	Version: innerApp.AppVersion,
-					//	ID:      innerApp.ID,
-					//})
-					//newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
-
-					//newApp.Versions = loopedApp.Versions
-					//newApp.LoopVersions = loopedApp.Versions
-					found = false
-				} else {
-					found = true
-				}
-			} else {
-				//log.Printf("\n\nFound NEW version %s of app %s on index %d\n\n", innerApp.AppVersion, innerApp.Name, appIndex)
-
-				v2, err := semver.NewVersion(innerApp.AppVersion)
-				if err != nil {
-					log.Printf("[ERROR] Failed parsing original app version %s: %s", innerApp.AppVersion, err)
-					continue
-				}
-
-				appConstraint := fmt.Sprintf("> %s", loopedApp.AppVersion)
-				c, err := semver.NewConstraint(appConstraint)
-				if err != nil {
-					log.Printf("[ERROR] Failed preparing constraint %s: %s", appConstraint, err)
-					continue
-				}
-
-				// IF larger, change to this app
-				// IF smaller, just append to versions
-				if c.Check(v2) {
-					newApp = innerApp
-					newApp.Versions = loopedApp.Versions
-					newApp.LoopVersions = loopedApp.LoopVersions
-
-					//log.Printf("[DEBUG] New IS larger - changing app on index %d from %s to %s. Versions: %s", appIndex, loopedApp.AppVersion, innerApp.AppVersion, newApp.LoopVersions)
-				} else {
-					//log.Printf("[DEBUG] New is NOT larger: %s_%s (new) vs %s_%s - just appending", innerApp.Name, innerApp.AppVersion, loopedApp.Name, loopedApp.AppVersion)
-					newApp = loopedApp
-				}
-
-				newApp.Versions = append(newApp.Versions, AppVersion{
-					Version: innerApp.AppVersion,
-					ID:      innerApp.ID,
-				})
-				newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
+			if innerApp.Activated && !loopedApp.Activated {
 				newIndex = appIndex
-				//log.Printf("Versions for %s_%s: %s", newApp.Name, newApp.AppVersion, newApp.LoopVersions)
+				newApp = innerApp
+
+				//newApp.Versions = append(newApp.Versions, AppVersion{
+				//	Version: innerApp.AppVersion,
+				//	ID:      innerApp.ID,
+				//})
+				//newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
+
+				//newApp.Versions = loopedApp.Versions
+				//newApp.LoopVersions = loopedApp.Versions
+				found = false
+			} else {
+				found = true
+			}
+		} else {
+			//log.Printf("\n\nFound NEW version %s of app %s on index %d\n\n", innerApp.AppVersion, innerApp.Name, appIndex)
+
+			v2, err := semver.NewVersion(innerApp.AppVersion)
+			if err != nil {
+				log.Printf("[ERROR] Failed parsing original app version %s: %s", innerApp.AppVersion, err)
+				continue
 			}
 
-			break
+			appConstraint := fmt.Sprintf("> %s", loopedApp.AppVersion)
+			c, err := semver.NewConstraint(appConstraint)
+			if err != nil {
+				log.Printf("[ERROR] Failed preparing constraint %s: %s", appConstraint, err)
+				continue
+			}
+
+			// IF larger, change to this app
+			// IF smaller, just append to versions
+			if c.Check(v2) {
+				newApp = innerApp
+				newApp.Versions = loopedApp.Versions
+				newApp.LoopVersions = loopedApp.LoopVersions
+
+				//log.Printf("[DEBUG] New IS larger - changing app on index %d from %s to %s. Versions: %s", appIndex, loopedApp.AppVersion, innerApp.AppVersion, newApp.LoopVersions)
+			} else {
+				//log.Printf("[DEBUG] New is NOT larger: %s_%s (new) vs %s_%s - just appending", innerApp.Name, innerApp.AppVersion, loopedApp.Name, loopedApp.AppVersion)
+				newApp = loopedApp
+			}
+
+			newApp.Versions = append(newApp.Versions, AppVersion{
+				Version: innerApp.AppVersion,
+				ID:      innerApp.ID,
+			})
+			newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
+			newIndex = appIndex
+			//log.Printf("Versions for %s_%s: %s", newApp.Name, newApp.AppVersion, newApp.LoopVersions)
 		}
+
+		break
 	}
 
 	if newIndex >= 0 && newApp.ID != "" {
-		//log.Printf("Updating app on index %d to be %s:%s\n\n", newIndex, newApp.Name, newApp.AppVersion)
+		//log.Printf("Updating app on index %d to be %s:%s instead of %s\n\n", newIndex, newApp.Name, newApp.AppVersion, allApps[newIndex].AppVersion)
 		allApps[newIndex] = newApp
 	} else {
 		if !found {
