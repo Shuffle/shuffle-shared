@@ -18315,6 +18315,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+
 	ctx := GetContext(request)
 	org, err := GetOrg(ctx, orgId)
 	if err != nil {
@@ -18361,6 +18362,11 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			*cacheItem,
 		}
 	} else {
+
+		if debug { 
+			log.Printf("[DEBUG] Looking for keys in org %s and category %s", org.Id, category)
+		}
+
 		keys, newCursor, err = GetAllCacheKeys(ctx, org.Id, category, maxAmount, cursor)
 		if err != nil {
 			isSuccess = false
@@ -19163,6 +19169,12 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false, "reason": "Failed authentication or key doesn't exist"}`))
 			return
 		}
+
+		if cacheData.Category == "protected" {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed authentication or key doesn't exist"}`))
+			return
+		}
 	}
 
 	cacheData.Success = true
@@ -19516,9 +19528,9 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(existed) == 0 {
-		log.Printf("[INFO] Successfully set key '%s' for org '%s' (%s)", tmpData.Key, org.Name, tmpData.OrgId)
+		log.Printf("[INFO] Successfully set key '%s' for org '%s' (%s). Category: %s", tmpData.Key, org.Name, tmpData.OrgId, tmpData.Category)
 	} else {
-		log.Printf("[INFO] Successfully set key '%s' for org '%s' (%s). New key: %#v", tmpData.Key, org.Name, tmpData.OrgId, !existed[0].Existed)
+		log.Printf("[INFO] Successfully set key '%s' for org '%s' (%s). New key: %#v. Category: %s", tmpData.Key, org.Name, tmpData.OrgId, !existed[0].Existed, tmpData.Category)
 	}
 
 	type returnStruct struct {
@@ -31077,8 +31089,11 @@ func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 	for _, protectedKey := range protectedKeys {
 
 		for resultKey, _ := range exec.Results { 
-
-			exec.Results[resultKey].Result = SanitizeFuzzySubstring(exec.Results[resultKey].Result, protectedKey.Value, 2) 
+			if len(protectedKey.Value) <= 8 { 
+				exec.Results[resultKey].Result = strings.ReplaceAll(exec.Results[resultKey].Result, protectedKey.Value, "***")
+			} else {
+				exec.Results[resultKey].Result = SanitizeFuzzySubstring(exec.Results[resultKey].Result, protectedKey.Value, 2) 
+			}
 		}
 
 	}

@@ -5999,11 +5999,11 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-	for _, app := range allApps {
-		if strings.Contains(strings.ToLower(app.Name), "tools") {
-			log.Printf("APP-1: %s:%s (%s) - %s", app.Name, app.AppVersion, app.ID)
-		}
-	}
+	//for _, app := range allApps {
+	//	if strings.Contains(strings.ToLower(app.Name), "tools") {
+	//		log.Printf("APP-1: %s:%s (%s) - %s", app.Name, app.AppVersion, app.ID)
+	//	}
+	//}
 
 	// Find public apps
 
@@ -6137,11 +6137,11 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-	for _, app := range allApps {
-		if strings.Contains(strings.ToLower(app.Name), "tools") {
-			log.Printf("APP-2: %s:%s (%s) - %s", app.Name, app.AppVersion, app.ID)
-		}
-	}
+	//for _, app := range allApps {
+	//	if strings.Contains(strings.ToLower(app.Name), "tools") {
+	//		log.Printf("APP-2: %s:%s (%s) - %s", app.Name, app.AppVersion, app.ID)
+	//	}
+	//}
 
 
 	// PS: If you think there's an error here, it's probably in the Algolia upload of CloudSpecific
@@ -12127,7 +12127,10 @@ func GetDatastoreCategories(ctx context.Context, orgId string) ([]DatastoreCateg
 	}
 
 	if len(categories) == 0 {
-		log.Printf("[DEBUG] No categories found for org %s", orgId)
+		if debug { 
+			log.Printf("[DEBUG] No categories found for org %s", orgId)
+		}
+
 		return categories, nil
 	}
 
@@ -12348,7 +12351,6 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				datastoreId = fmt.Sprintf("%s_%s", datastoreId, cacheData.Category)
 			}
 
-
 			// Check for if the key already existed. Ok with 
 			// goroutine as we use heavy caching for this.
 			config, getCacheError := GetDatastoreKey(ctx, datastoreId, cacheData.Category)
@@ -12359,6 +12361,11 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				cacheData.PublicAuthorization = config.PublicAuthorization
 
 				cacheData.Existed = true
+			}
+
+			sameValue := false
+			if getCacheError == nil && config.Value == cacheData.Value {
+				sameValue = true
 			}
 
 			if cacheData.Created == 0 {
@@ -12380,6 +12387,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				newCacheId = fmt.Sprintf("org_cache_%s", newCacheId)
 				SetCache(ctx, newCacheId, marshalledEntry, 30)
 			}
+
 
 			// URL encode
 			datastoreId = url.QueryEscape(datastoreId)
@@ -12407,6 +12415,20 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				}
 			}
 
+			if sameValue { 
+				if debug { 
+					log.Printf("[DEBUG] SAME VALUE FOR KEY %s. Skipping datastore write.", cacheData.Key)
+				}
+
+				// FIXME: Should NOT be returning keys
+				// This would overwrite keys otherwise which is...
+				// unnecessary. At least it makes edited => last seen
+				// This may mean to sen nil to datastoreKeys & cacheKeys
+				// It does however still have to take into account Existed, which means we need to pass along details :)
+				//datastoreKeys <- *datastore.NameKey("", datastoreId, nil)
+				//cacheKeys <- CacheKeyData{}
+
+			}
 
 			datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
 			cacheKeys <- cacheData
@@ -12446,8 +12468,6 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 	}
 
-	//log.Printf("EXISTING: %#v", existingInfo)
-
 	handledKeys = []string{}
 	for key := range datastoreKeys {
 		if key.Name == "" {
@@ -12457,6 +12477,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		if ArrayContains(handledKeys, key.Name) {
 			continue
 		}
+
+		// Look for empty keys and continue if so:
+		//datastoreKeys <- *datastore.NameKey("", "", nil)
+		//cacheKeys <- CacheKeyData{}
 
 		handledKeys = append(handledKeys, key.Name)
 		dbKeys = append(dbKeys, &key)
@@ -12629,6 +12653,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 	}
 
+
+	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, "", orgId, mainCategory)
+	DeleteCache(ctx, cacheKey)
 	DeleteCache(ctx, fmt.Sprintf("datastore_category_%s", orgId))
 	return existingInfo, nil
 }
@@ -12889,7 +12916,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 							return cacheData, errors.New("Key doesn't exist")
 						}
 					} else {
-						log.Printf("[WARNING] Failed getting cacheKey %s: %s", newId, err)
+						log.Printf("[WARNING] Failed getting cacheKey '%s': %s", newId, err)
 
 						return cacheData, errors.New("Key doesn't exist")
 					}
@@ -13645,6 +13672,10 @@ func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, 
 
 func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int, inputcursor string) ([]CacheKeyData, string, error) {
 	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") {
+		if debug { 
+			log.Printf("[DEBUG] Disabled GetAllCacheKeys in swarm mode")
+		}
+
 		return []CacheKeyData{}, "", errors.New("Not available in worker mode")
 	}
 
@@ -13765,6 +13796,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		//log.Printf("[INFO] Got %d cachekeys for org %s (es)", len(newCacheKeys), orgId)
 		cacheKeys = newCacheKeys
 	} else {
+
 		// Query datastore with pages
 		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Order("-Edited")
 		if len(category) > 0 {
@@ -13772,7 +13804,6 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		}
 
 		query = query.Limit(max)
-
 		if inputcursor != "" {
 			outputcursor, err := datastore.DecodeCursor(inputcursor)
 			if err != nil {
@@ -13791,14 +13822,14 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			it := project.Dbclient.Run(ctx, query)
 
 			for {
-				innerWorkflow := CacheKeyData{}
-				_, err := it.Next(&innerWorkflow)
+				innerKey := CacheKeyData{}
+				_, err := it.Next(&innerKey)
 				if err != nil {
 					//log.Printf("[WARNING] Workflow iterator issue: %s", err)
 					break
 				}
 
-				cacheKeys = append(cacheKeys, innerWorkflow)
+				cacheKeys = append(cacheKeys, innerKey)
 			}
 
 			if err != iterator.Done {
