@@ -628,6 +628,32 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] Should get stats for key %s", statsKey)
 	}
 
+	currentMonth := time.Now().Month()
+	if int(currentMonth) != info.LastMonthlyResetMonth {
+		handleDailyCacheUpdate(info)
+		err = SetOrgStatistics(ctx, *info, info.OrgId)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting org stats after monthly reset for org %s: %s", orgId, err)
+		}
+	}
+
+	if len(org.CreatorOrg) > 0 {
+		// get stats for parent org as well
+		parentInfo, err := GetOrgStatistics(ctx, org.CreatorOrg)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting stats for parent org %s: %s", org.CreatorOrg, err)
+		} else {
+			currentMonth := time.Now().Month()
+			if int(currentMonth) != parentInfo.LastMonthlyResetMonth {
+				handleDailyCacheUpdate(parentInfo)
+				err = SetOrgStatistics(ctx, *parentInfo, parentInfo.OrgId)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting org stats after monthly reset for parent org %s: %s", org.CreatorOrg, err)
+				}
+			}
+		}
+	}
+
 	if len(info.DailyStatistics) > 0 {
 		// Sort the array
 		sort.Slice(info.DailyStatistics, func(i, j int) bool {
@@ -1528,7 +1554,14 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 
 		totalAppExecutions := orgStatistics.MonthlyAppExecutions + orgStatistics.MonthlyChildAppExecutions
 
-		if int64(AlertThreshold.Count) < totalAppExecutions && AlertThreshold.Email_send == false {
+		// Alert should be based on the current month usage, check if monthly reset happened if yes than only send alert
+		monthlyResetMonth := time.Now().Month()
+		shouldSendAlert := false
+		if orgStatistics.LastMonthlyResetMonth == int(monthlyResetMonth) {
+			shouldSendAlert = true
+		}
+
+		if int64(AlertThreshold.Count) < totalAppExecutions && AlertThreshold.Email_send == false && shouldSendAlert {
 
 			allAdmins := []string{}
 			firstAdmin := ""
@@ -1552,17 +1585,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				firstAdmin = allAdmins[0]
 			}
 
-			// var BccAddress []string
-			// if int64(AlertThreshold.Count) >= 5000 || int64(AlertThreshold.Count) >= 10000 && AlertThreshold.Email_send == false {
-			// 	BccAddress = []string{"support@shuffler.io", "jay@shuffler.io"}
-			// }
-
 			Subject := fmt.Sprintf("[Shuffle]: You've reached the app-runs threshold limit for your account %s", firstAdmin)
-			// mailbody := Mailcheck{
-			// 	Targets: []string{user.Username},
-			// 	Subject: "You have reached the threshold limit of app executions",
-			// 	Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
-			// }
 
 			AppRunsPercentage := float64(totalAppExecutions) / float64(org.SyncFeatures.AppExecutions.Limit) * 100
 
@@ -1579,18 +1602,14 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				allAdmins = append(allAdmins, "jay@shuffler.io")
 			}
 
-			if !ArrayContains(allAdmins, "support@shuffler.io") {
-				allAdmins = append(allAdmins, "support@shuffler.io")
-			}
-
 			err = sendMailSendgridV2(
-				allAdmins,
+				[]string{"support@shuffler.io"},
 				Subject,
 				substitutions,
 				false,
 				"d-3678d48b2b7144feb4b0b4cff7045016",
+				allAdmins,
 			)
-			// err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false, BccAddress)
 			if err != nil {
 				log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
 			} else {
@@ -1673,8 +1692,13 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			currentThreshold = int64((int(percentage) / 50) * 50)
 		}
 
+		monthlyResetMonth := time.Now().Month()
+		shouldSendAlert := false
+		if orgStatistics.LastMonthlyResetMonth == int(monthlyResetMonth) {
+			shouldSendAlert = true
+		}
 
-		if currentThreshold >= 50 && currentThreshold > validationOrgStatistics.LastUsageAlertThreshold {
+		if currentThreshold >= 50 && currentThreshold > validationOrgStatistics.LastUsageAlertThreshold && shouldSendAlert {
 
 			allAdmins := []string{}
 			firstAdmin := ""
@@ -1711,7 +1735,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			if alertAlreadySet && (currentThreshold == 100 || currentThreshold == 50) {
 				newEmailList = allAdmins
 			} else {
-				newEmailList = []string{"jay@shuffler.io", "support@shuffler.io"}
+				newEmailList = []string{"jay@shuffler.io"}
 			}
 
 			// send mail use different subject line as it will sent only to the team
@@ -1750,11 +1774,12 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			}
 
 			err = sendMailSendgridV2(
-				newEmailList,
+				[]string{"support@shuffler.io"},
 				Subject,
 				substitutions,
 				false,
 				"d-3678d48b2b7144feb4b0b4cff7045016",
+				newEmailList,
 			)
 
 			if err != nil {
@@ -1776,6 +1801,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 					substitutions,
 					false,
 					"d-3678d48b2b7144feb4b0b4cff7045016",
+					[]string{},
 				)
 				if err != nil {
 					log.Printf("[ERROR] Failed sending alert mail for child org in increment (2): %s", err)

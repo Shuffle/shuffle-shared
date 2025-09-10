@@ -12208,6 +12208,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.Billing.AppRunsHardLimit = tmpData.Billing.AppRunsHardLimit
 	}
 
+	if user.SupportAccess && tmpData.Editing == "internal_appruns_hard_limit" && tmpData.Billing.InternalAppRunsHardLimit != org.Billing.InternalAppRunsHardLimit {
+		org.Billing.InternalAppRunsHardLimit = tmpData.Billing.InternalAppRunsHardLimit
+	}
+
 	//Update mfa required value
 	if tmpData.MFARequired != org.MFARequired {
 		log.Printf("[AUDIT] Setting MFA required to %t for org %s (%s)", tmpData.MFARequired, org.Name, org.Id)
@@ -12709,8 +12713,8 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool, Bcc
 	return err
 }
 
-func sendMailSendgridV2(toEmail []string, subject string, substitutions map[string]interface{}, emailApp bool, templateID string) error {
-	log.Printf("[DEBUG] In mail sending with subject %s. TO: %s", subject, toEmail)
+func sendMailSendgridV2(toEmail []string, subject string, substitutions map[string]interface{}, emailApp bool, templateID string, bccEmail []string) error {
+	log.Printf("[DEBUG] In mail sending with subject %s. TO: %s, BCC: %s", subject, toEmail, bccEmail)
 
 	srequest := sendgrid.GetRequest(os.Getenv("SENDGRID_API_KEY"), "/v3/mail/send", "https://api.sendgrid.com")
 	srequest.Method = "POST"
@@ -12721,6 +12725,7 @@ func sendMailSendgridV2(toEmail []string, subject string, substitutions map[stri
 
 	type SendgridPersonalization struct {
 		To                  []SendgridEmail        `json:"to"`
+		Bcc                 []SendgridEmail        `json:"bcc,omitempty"`
 		Subject             string                 `json:"subject"`
 		DynamicTemplateData map[string]interface{} `json:"dynamic_template_data,omitempty"`
 	}
@@ -12735,6 +12740,7 @@ func sendMailSendgridV2(toEmail []string, subject string, substitutions map[stri
 		Personalizations: []SendgridPersonalization{
 			{
 				To:                  []SendgridEmail{},
+				Bcc:                 []SendgridEmail{},
 				Subject:             subject,
 				DynamicTemplateData: substitutions,
 			},
@@ -12751,6 +12757,13 @@ func sendMailSendgridV2(toEmail []string, subject string, substitutions map[stri
 
 	for _, email := range toEmail {
 		newBody.Personalizations[0].To = append(newBody.Personalizations[0].To,
+			SendgridEmail{
+				Email: strings.TrimSpace(email),
+			})
+	}
+
+	for _, email := range bccEmail {
+		newBody.Personalizations[0].Bcc = append(newBody.Personalizations[0].Bcc,
 			SendgridEmail{
 				Email: strings.TrimSpace(email),
 			})
