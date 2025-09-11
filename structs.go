@@ -1043,10 +1043,11 @@ type Org struct {
 }
 
 type Billing struct {
-	Email            string           `json:"Email" datastore:"Email"`
-	AppRunsHardLimit int64            `json:"app_runs_hard_limit" datastore:"app_runs_hard_limit"`
-	AlertThreshold   []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
-	Consultation     Consultation     `json:"Consultation" datastore:"Consultation"`
+	Email                    string           `json:"Email" datastore:"Email"`
+	AppRunsHardLimit         int64            `json:"app_runs_hard_limit" datastore:"app_runs_hard_limit"`
+	AlertThreshold           []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
+	Consultation             Consultation     `json:"Consultation" datastore:"Consultation"`
+	InternalAppRunsHardLimit int64            `json:"internal_app_runs_hard_limit" datastore:"internal_app_runs_hard_limit"`
 }
 
 type AlertThreshold struct {
