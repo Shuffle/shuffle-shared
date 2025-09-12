@@ -12491,8 +12491,22 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		var buf bytes.Buffer
 
 		for _, cacheData := range newArray {
+			cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+			if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+				cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
+			}
+
+			// URL encode
+			cacheId = url.QueryEscape(cacheId)
+			if len(cacheId) > 127 {
+				cacheId = cacheId[:127]
+			}
+
 			meta := map[string]map[string]string{
-				"index": {"_index": nameKey},
+				"index": {
+					"_index": nameKey,
+					"_id":    cacheId,
+				},
 			}
 
 			metaLine, err := json.Marshal(meta)
