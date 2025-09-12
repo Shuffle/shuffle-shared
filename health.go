@@ -547,36 +547,21 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		validIndex := -1
-
 		// Check which user exists and is admin
-		for index, user := range org.Users {
-			_, err := GetApikey(ctx, user.ApiKey)
+		for _, user := range org.Users {
+			user, err := GetUser(ctx, user.Id)
 			if err != nil {
 				log.Printf("[WARNING] Failed getting api key for user in org: %s", err)
-				u, err := GetUser(ctx, user.Id)
-				if err != nil {
-					log.Printf("[ERROR] Failed the user does not exist %s", err)
-					continue
-				}
-
-				if len(u.ApiKey) > 0 {
-					org.Users[index].ApiKey = u.ApiKey
-					err = SetOrg(ctx, *org, org.Id)
-					if err != nil {
-						log.Printf("[WARNING] Failed to set apikey for user %s in org %s", user.Username, org.Id)
-					}
-				}
+				continue
 			}
 
-			if user.Role == "admin" && len(org.Users[index].ApiKey) > 0 {
-				validIndex = index
+			if user.Role == "admin" && len(user.ApiKey) > 0 {
+				apiKey = user.ApiKey
 				break
 			}
 		}
 
-
-		if validIndex == -1 {
+		if apiKey == "" {
 			log.Printf("[ERROR] Failed getting valid apikey for admin user in org: %s which exists!", org.Id)
 			resp.WriteHeader(500)
 			resp.Write([]byte(`{"success": false, "reason": "Set up an admin user first!"}`))
@@ -586,7 +571,6 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		//log.Printf("[DEBUG] Setting api key to that of user %s and org id to %s ", org.Users[validIndex].ApiKey, org.Id)
 
 		orgId = org.Id
-		apiKey = org.Users[validIndex].ApiKey
 	}
 
 	platformHealth := HealthCheck{}
