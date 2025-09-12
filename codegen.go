@@ -673,8 +673,49 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		if len(urlSplit) > 2 {
 			tmpUrl = "/" + strings.Join(urlSplit[3:len(urlSplit)], "/")
 		}
+
 		if !strings.HasPrefix(url, "/") {
 			url = tmpUrl
+		}
+	}
+
+	functionname := strings.ToLower(fmt.Sprintf("%s_%s", method, name))
+	if strings.Contains(strings.ToLower(name), strings.ToLower(method)) {
+		functionname = strings.ToLower(name)
+	}
+
+	// Check for bad {} for python printf.
+	// If it's NOT closed before the next /  
+	openBrackets := strings.Count(url, "{")
+	closeBrackets := strings.Count(url, "}")
+	if openBrackets != closeBrackets {
+
+		removedChars := 0
+		for charPos, char := range url {
+			if char != '{' {
+				continue
+			}
+
+			// Find the next / or end of string
+			nextClose := strings.Index(url[charPos:], "}")
+			nextSlash := strings.Index(url[charPos:], "/")
+			if nextClose == -1 || (nextSlash != -1 && nextSlash < nextClose) {
+				// We have a problem
+				log.Printf("[ERROR] Unbalanced bracket at position %d in URL %s", charPos, url)
+
+				// Remove the bracket from the specific spot.
+				url = url[0:charPos-removedChars] + url[charPos-removedChars+1:len(url)]
+				removedChars += 1
+			}
+		}
+
+		openBrackets := strings.Count(url, "{")
+		closeBrackets := strings.Count(url, "}")
+		if openBrackets != closeBrackets {
+			log.Printf("[ERROR] Unbalanced brackets in generated URL %s - this might cause issues, so we're skipping the function. App: %s. Autofixing.", url, name)
+
+			// Makes the function not generate 
+			return functionname, "" 
 		}
 	}
 
@@ -719,10 +760,6 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		}
 	}
 
-	functionname := strings.ToLower(fmt.Sprintf("%s_%s", method, name))
-	if strings.Contains(strings.ToLower(name), strings.ToLower(method)) {
-		functionname = strings.ToLower(name)
-	}
 
 	bodyParameter := ""
 	bodyAddin := ""
@@ -968,7 +1005,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "hash_report") {
+	if strings.Contains(strings.ToLower(functionname), "delete_revoke_user_role") {
 		log.Printf("\n%s", data)
 	}
 
