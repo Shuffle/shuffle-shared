@@ -12389,8 +12389,13 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 					newCacheId = fmt.Sprintf("%s_%s", newCacheId, cacheData.Category)
 				}
 
+				newCacheId = url.QueryEscape(newCacheId)
+				if len(newCacheId) > 127 {
+					newCacheId = newCacheId[0:127]
+				}
+
 				newCacheId = fmt.Sprintf("org_cache_%s", newCacheId)
-				SetCache(ctx, newCacheId, marshalledEntry, 30)
+				SetCache(ctx, newCacheId, marshalledEntry, 60)
 			}
 
 
@@ -12422,7 +12427,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 			if sameValue { 
 				if debug { 
-					log.Printf("[DEBUG] SAME VALUE FOR KEY %s. Skipping datastore write.", cacheData.Key)
+					log.Printf("[DEBUG] SAME VALUE FOR KEY %s in category %s. SHOULD skip datastore write.", cacheData.Key, cacheData.Category)
 				}
 
 				// FIXME: Should NOT be returning keys
@@ -12962,7 +12967,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 			return cacheData, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 1440)
+		err = SetCache(ctx, cacheKey, data, 60)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for get cache key: %s", err)
 		}

@@ -19375,7 +19375,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[AUDIT] Running bulk upload for org %s to category '%s'", user.ActiveOrg.Id, mainCategory)
+	log.Printf("[AUDIT] Running bulk upload for org %s to category '%s. Keys: %d'", user.ActiveOrg.Id, mainCategory, len(tmpData))
 
 	existingInfo, err := SetDatastoreKeyBulk(ctx, tmpData)
 	if err != nil {
@@ -19391,7 +19391,9 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		KeysExisted []DatastoreKeyMini `json:"keys_existed"`
 	}
 
-	log.Printf("EXISTINGINFO: %#v", existingInfo)
+	if debug { 
+		log.Printf("[DEBUG] EXISTINGINFO: %#v", existingInfo)
+	}
 
 	returnData := returnStruct{
 		Success: true,
@@ -19400,6 +19402,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 	b, err := json.Marshal(returnData)
 	if err != nil {
+		log.Printf("[ERROR] Failed to marshal return data in set datastore key. Setting to JUST success true. This should NEVER happen. Details: %s", err)
 		b = []byte(`{"success": true}`)
 	}
 
