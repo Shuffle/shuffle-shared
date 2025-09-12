@@ -3151,6 +3151,10 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 }
 
 func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (User, error) {
+	if request == nil {
+		return User{}, errors.New("No request given")
+	}
+
 	var err error
 	apikey := request.Header.Get("Authorization")
 
@@ -24780,6 +24784,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		workflowExecution.WorkflowId = workflowExecution.Workflow.ID
 	}
 
+	discoveredUser, authErr := HandleApiAuthentication(nil, request)
+	if authErr == nil && len(discoveredUser.Username) > 0 {
+		workflowExecution.Workflow.UpdatedBy = discoveredUser.Username
+	}
+
 	if workflowExecution.Workflow.Sharing == "form" || len(workflowExecution.Workflow.FormControl.InputMarkdown) > 0 {
 		//log.Printf("[DEBUG][%s] FORM RUN. Running Org injection AND liquid template removal", workflowExecution.ExecutionId)
 
@@ -24800,8 +24809,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		// Overwriting it either way. Input NEEDS to be valid for map[string]interface{}{}
 		workflowExecution.ExecutionSource = "form"
-		discoveredUser, err := HandleApiAuthentication(nil, request)
-		if err != nil {
+		if authErr != nil {
 			log.Printf("[ERROR] Failed to find user during form execution: %s", err)
 		} else {
 			validMap["form_type"] = "Manual form run. Less results returned."

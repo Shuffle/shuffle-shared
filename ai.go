@@ -6310,15 +6310,51 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 }
 
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) (Action, error) {
-	//openai "github.com/sashabaranov/go-openai"
-	// Create the OpenAI body struct
-	systemMessage := `You are a general AI agent. You can make decisions based on the user input. You should output a list of decisions based on the input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it makes sense. 
+	// Metadata = org-specific context
+	// This e.g. makes "me" mean "users in my org" and such
+	metadata := ""
 
-category standalone: 
-analyze 
+	if len(execution.Workflow.UpdatedBy) > 0 {
+		metadata += fmt.Sprintf("Current person: %s\n", execution.Workflow.UpdatedBy)
+	}
+
+	if len(execution.Workflow.OrgId) == 0 && len(execution.ExecutionOrg) > 0 {
+		execution.Workflow.OrgId = execution.ExecutionOrg
+	}
+
+	if len(execution.Workflow.OrgId) > 0 {
+		ctx := context.Background()
+		org, err := GetOrg(ctx, execution.Workflow.OrgId)
+		if err == nil && len(org.Id) > 0 { 
+			metadata += fmt.Sprintf("Organization name: %s\n", org.Name)
+			admins := []string{}
+			users := []string{}
+			for _, user := range org.Users {
+				if user.Role == "admin" {
+					admins = append(admins, user.Username)
+				} else {
+					users = append(users, user.Username)
+				}
+			}
+
+			if len(admins) > 0 {
+				metadata += fmt.Sprintf("admins: %s\n", strings.Join(admins, ", "))
+			}
+
+			if len(users) > 0 { 
+				metadata += fmt.Sprintf("users: %s\n", strings.Join(users, ", "))
+			}
+		}
+
+	}
+
+	// Create the OpenAI body struct
+	systemMessage := `You are a general AI agent. You can make decisions based on the user input. You should output a list of decisions based on the input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it makes sense. If you need to ask for input multiple times in a row, ask both questions at the same time. Only ask if the User context doesn't contain the details you need. Assume authentication already exists for all your tools.
+
+standalone actions: 
 ask 
 
-category singul: `
+allowed actions: `
 	userMessage := ""
 
 	// Don't think this matters much
@@ -6383,9 +6419,13 @@ category singul: `
 		extraString = ""
 	}
 
-	systemMessage += fmt.Sprintf(`. Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "<tool name>", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. 
+	systemMessage += fmt.Sprintf(`. Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "<tool name>", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
+
+User Context:
+%s
 
 Formatting Rules:
+- Do NOT ask to narrow down the scope unless ABSOLUTELY necessary. Assume all the information is already in place.
 - If a tool or app is mentioned, add it to the tool field. Otherwise make the field empty.
 - Indexes should be the same if they should run in parallell. 
 - The confidence is between 0 and 1. 
@@ -6393,21 +6433,21 @@ Formatting Rules:
 - The {{action_name}} has to match EXACTLY the action name of a previous decision.
 - NEVER add unnecessary fields to the fields array, only add the ones that are absolutely needed for the action to run!
 - If you ask for user input, use the "ask" action and add a "question" field. 
+- Do NOT add empty decisions for now reason.
 
-Decision Field Rules: 
+Decision Rules: 
 - Do NOT add random fields and do NOT guess formatting e.g. body formatting
-- Fields can be set manually, or use previous action output by adding them in the format {{action_name}}, such as {"key": "body": "value": "{{tickets[0].fieldname}}} to get the first ticket output from a previous decision.
+- Fields can be set manually, or use previous action output by adding them in the format {{action_name}}, such as {"key": "body": "value": "{{tickets[0].fieldname}}} to get the first 'ticket' fieldname from a previous decision.
 
-%s`, strings.Join(typeOptions, ", "), extraString)
+%s`, strings.Join(typeOptions, ", "), metadata, extraString)
 
-	systemMessage += `If you are missing information (such as emails) to make a list of decisions, just add a single decision which asks them to clarify the input better.`
-
-	//contentOutput, err := RunAiQuery(systemMessage, userMessage)
+	//systemMessage += `If you are missing information (such as emails) to make a list of decisions, just add a single decision which asks them to clarify the input better.`
 
 	completionRequest := openai.ChatCompletionRequest{
 		//Model: "gpt-4o-mini",
 		//Model: "gpt-4.1-mini",
-		Model: "o4-mini", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
+		//Model: "o4-mini", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
+		Model: "gpt-5-mini", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
@@ -6532,6 +6572,7 @@ Decision Field Rules:
 
 	fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization)
 	client := GetExternalClient(fullUrl)
+	client.Timeout = time.Minute * 3 
 	req, err := http.NewRequest(
 		"POST",
 		fullUrl,
@@ -6700,7 +6741,10 @@ Decision Field Rules:
 
 		// Edgecase handling for LLM not being available etc
 		if len(choicesString) > 0 { 
+			log.Printf("\n\n[ERROR][%s] Found choicesString in AI Agent response error handling: %s\n\n", execution.ExecutionId, choicesString)
+
 		} else if len(openaiOutput.Choices) == 0 {
+			log.Printf("[ERROR][%s] No choices found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
 
 			// FIXME: This is specific to OpenAI, but may work for others :thinking:
 			newOutput := openai.ErrorResponse{}
@@ -6715,6 +6759,9 @@ Decision Field Rules:
 			}
 		} else {
 			choicesString = openaiOutput.Choices[0].Message.Content
+			if debug { 
+				log.Printf("[DEBUG] Found choices string: %s", choicesString)
+			}
 
 			// Handles reasoning models for Refusal control edgecases
 			// Not always sure why this is happening
