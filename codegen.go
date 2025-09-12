@@ -510,38 +510,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	extraQueries := ""
 	reservedKeys := []string{"BearerAuth", "ApiKeyAuth", "Oauth2", "BasicAuth", "JWT"}
 
-	if swagger.Components.SecuritySchemes != nil {
-		for key, value := range swagger.Components.SecuritySchemes {
-			if ArrayContains(reservedKeys, key) {
-				continue
-			}
-
-			//parsedKey := strings.Replace(key, "-", "_", -1)
-			parsedKey := FixFunctionName(key, "", true)
-
-			if value.Value.In == "header" {
-				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
-				if len(extraHeaders) > 0 {
-					extraHeaders += "\n        "
-				}
-
-				extraHeaders += fmt.Sprintf(`if %s != " ": request_headers["%s"] = %s`, parsedKey, key, parsedKey)
-			} else if value.Value.In == "query" {
-				log.Printf("Handling extra queries for %#v", parsedKey)
-				if strings.Contains(parsedKey, "=") {
-					parsedKey = strings.Split(parsedKey, "=")[0]
-				}
-
-				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
-				if len(extraQueries) > 0 {
-					extraQueries += "\n        "
-				}
-				extraQueries += fmt.Sprintf(`if %s != " ": params["%s"] = %s`, parsedKey, key, parsedKey)
-			} else {
-				//log.Printf("[WARNING] Can't handle type %s", value.Value.In)
-			}
-		}
-	}
+	// Predefined for auth
+	//invalidQueries := []string{"access_token", "username_basic", "password_basic", "apikey", "api_key"}	
 
 	// FIXME - this might break - need to check if ? or & should be set as query
 	parameterData := ""
@@ -555,6 +525,10 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			newParams := GetValidParameters([]string{parsedQuery})
 			if len(newParams) > 0 {
 				parsedQuery = newParams[0]
+			}
+
+			if strings.Contains(queryString, parsedQuery) {
+				continue
 			}
 
 			queryString += fmt.Sprintf("%s=\"\"", parsedQuery)
@@ -837,6 +811,39 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		parameterData = strings.Replace(parameterData, ", file_id", "", -1)
 	}
 
+	if swagger.Components.SecuritySchemes != nil {
+		for key, value := range swagger.Components.SecuritySchemes {
+			if ArrayContains(reservedKeys, key) {
+				continue
+			}
+
+			//parsedKey := strings.Replace(key, "-", "_", -1)
+			parsedKey := FixFunctionName(key, "", true)
+
+			if value.Value.In == "header" {
+				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
+				if len(extraHeaders) > 0 {
+					extraHeaders += "\n        "
+				}
+
+				extraHeaders += fmt.Sprintf(`if %s != " ": request_headers["%s"] = %s`, parsedKey, key, parsedKey)
+			} else if value.Value.In == "query" {
+				//log.Printf("Handling extra queries for %#v", parsedKey)
+				if strings.Contains(parsedKey, "=") {
+					parsedKey = strings.Split(parsedKey, "=")[0]
+				}
+
+				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
+				if len(extraQueries) > 0 {
+					extraQueries += "\n        "
+				}
+				extraQueries += fmt.Sprintf(`if %s != " ": params["%s"] = %s`, parsedKey, key, parsedKey)
+			} else {
+				//log.Printf("[WARNING] Can't handle type %s", value.Value.In)
+			}
+		}
+	}
+
 	// Extra param for url if it's changeable
 	// Extra param for authentication scheme(s)
 	// The last weird one is the body.. Tabs & spaces sucks.
@@ -849,6 +856,33 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		bodyParameter,
 		verifyParam,
 	)
+
+	// Dedup parameters 
+	parsedParametersSplit := strings.Split(parsedParameters, ",")
+	newParameters := []string{}
+	usedParams := []string{}
+	for _, param := range parsedParametersSplit {
+		param = strings.Trim(param, " ")
+		if param == "" {
+			continue
+		}
+
+		paramsplit := strings.Split(param, "=")
+		if len(paramsplit) > 1 {
+			param = paramsplit[0]
+		}
+
+		if !ArrayContains(usedParams, param) {
+			usedParams = append(usedParams, param)
+			if len(paramsplit) > 1 { 
+				param = strings.Join(paramsplit, "=")
+			}
+
+			newParameters = append(newParameters, param)
+		}
+	}
+
+	parsedParameters = strings.Join(newParameters, ", ")
 
 	// Handles default return value
 	handleFileString := "if not to_file:\n            return self.prepare_response(ret)\n\n        return ret.text"
@@ -2231,35 +2265,23 @@ func FixFunctionName(functionName, actualPath string, lowercase bool) string {
 		functionName = actualPath
 	}
 
-	functionName = strings.Replace(functionName, ".", "", -1)
-	functionName = strings.Replace(functionName, ",", "", -1)
-	functionName = strings.Replace(functionName, ":", "", -1)
-	functionName = strings.Replace(functionName, ".", "", -1)
-	functionName = strings.Replace(functionName, "&", "", -1)
-	functionName = strings.Replace(functionName, "/", "", -1)
-	functionName = strings.Replace(functionName, "\\", "", -1)
+	validCharacters := []rune("_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	newname := ""
+	for _, char := range functionName {
+		if string(char) == " " {
+			newname += "_"
+			continue
+		}
 
-	functionName = strings.Replace(functionName, "!", "", -1)
-	functionName = strings.Replace(functionName, "?", "", -1)
-	functionName = strings.Replace(functionName, "@", "", -1)
-	functionName = strings.Replace(functionName, "#", "", -1)
-	functionName = strings.Replace(functionName, "$", "", -1)
-	functionName = strings.Replace(functionName, "&", "", -1)
-	functionName = strings.Replace(functionName, "*", "", -1)
-	functionName = strings.Replace(functionName, "(", "", -1)
-	functionName = strings.Replace(functionName, ")", "", -1)
-	functionName = strings.Replace(functionName, "[", "", -1)
-	functionName = strings.Replace(functionName, "]", "", -1)
-	functionName = strings.Replace(functionName, "{", "", -1)
-	functionName = strings.Replace(functionName, "}", "", -1)
-	functionName = strings.Replace(functionName, `"`, "", -1)
-	functionName = strings.Replace(functionName, `'`, "", -1)
-	functionName = strings.Replace(functionName, `|`, "", -1)
-	functionName = strings.Replace(functionName, `~`, "", -1)
+		for _, rune := range validCharacters {
+			if char == rune {
+				newname += string(char)
+				break
+			}
+		}
+	}
 
-	functionName = strings.Replace(functionName, " ", "_", -1)
-	functionName = strings.Replace(functionName, "-", "_", -1)
-
+	functionName = newname
 	if lowercase == true {
 		functionName = strings.ToLower(functionName)
 	}
@@ -2327,6 +2349,7 @@ func ValidateParameterName(name string) string {
 func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Connect.Summary, actualPath, true)
+	//func FixParamname(paramname string) string {
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 

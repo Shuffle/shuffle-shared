@@ -9705,6 +9705,11 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		query := map[string]interface{}{
 			"from": 0,
 			"size": 1000,
+			"sort": map[string]interface{}{
+				"updated_at": map[string]interface{}{
+					"order": "desc",
+				},
+			},
 			"query": map[string]interface{}{
 				"match": map[string]interface{}{
 					"org_id": orgId,
@@ -9777,7 +9782,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-updated_at").Limit(200)
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-updated_at").Limit(250)
 		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 
 		if err != nil && len(notifications) == 0 {
