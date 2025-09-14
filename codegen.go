@@ -716,7 +716,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				headerParserCode = "if isinstance(headers, dict):\n            request_headers = headers\n        elif len(headers) > 0:\n            for header in str(headers).split(\"\\n\"):\n                if ':' in header:\n                    headersplit=header.split(':')\n                    request_headers[headersplit[0].strip()] = ':'.join(headersplit[1:]).strip()\n                elif '=' in header:\n                    headersplit=header.split('=')\n                    request_headers[headersplit[0].strip()] = '='.join(headersplit[1:]).strip()"
 
 			} else if strings.Contains(param, "queries=") {
-				queryParserCode = "\n        if len(queries) > 0:\n            if queries[0] == \"?\" or queries[0] == \"&\":\n                queries = queries[1:len(queries)]\n            if queries[len(queries)-1] == \"?\" or queries[len(queries)-1] == \"&\":\n                queries = queries[0:-1]\n            for query in queries.split(\"&\"):\n                 if isinstance(query, list) or isinstance(query, dict):\n                    try:\n                        query = json.dumps(query)\n                    except:\n                        pass\n                 if '=' in query:\n                    headersplit=query.split('=')\n                    params[requests.utils.quote(headersplit[0].strip())] = requests.utils.quote(headersplit[1].strip())\n                 else:\n                    params[requests.utils.quote(query.strip())] = None\n        params = '&'.join([k if v is None else f\"{k}={v}\" for k, v in params.items()])"
+				queryParserCode = "\n        if len(queries) > 0:\n            if isinstance(queries, dict):\n                params=queries\n            else:\n                if queries[0] == \"?\" or queries[0] == \"&\":\n                    queries = queries[1:len(queries)]\n                if queries[len(queries)-1] == \"?\" or queries[len(queries)-1] == \"&\":\n                    queries = queries[0:-1]\n                for query in queries.split(\"&\"):\n                     if isinstance(query, list) or isinstance(query, dict):\n                        try:\n                            query = json.dumps(query)\n                        except:\n                            pass\n                     if '=' in query:\n                        headersplit=query.split('=')\n                        params[requests.utils.quote(headersplit[0].strip())] = requests.utils.quote(headersplit[1].strip())\n                     else:\n                        params[requests.utils.quote(query.strip())] = None\n        params = '&'.join([k if v is None else f\"{k}={v}\" for k, v in params.items()])"
 
 			} else {
 				if !strings.Contains(url, fmt.Sprintf("{%s}", param)) {
@@ -892,6 +892,11 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		parsedDataCurlParser = `parsed_curl_command += f""" -d '{body}'""" if isinstance(body, str) else f""" -d '{body.decode("utf-8")}'"""`
 	}
 
+	// Makes sure to reformat references
+	if !strings.HasPrefix(parsedParameters, ",") {
+		parsedParameters = fmt.Sprintf(", %s", parsedParameters)
+	}
+
 	data := fmt.Sprintf(`    def %s(self%s):
         print(f"Started function %s")
         params={}
@@ -1039,7 +1044,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "delete_revoke_user_role") {
+	if strings.Contains(strings.ToLower(functionname), "get_list_all_issues") {
 		log.Printf("\n%s", data)
 	}
 

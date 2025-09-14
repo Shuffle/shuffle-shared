@@ -36,6 +36,7 @@ import (
 //var model = "gpt-4o-mini"
 //var model = "o4-mini"
 var standalone bool
+//var model = "gpt-5-mini"
 var model = "gpt-5-mini"
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID") 
@@ -1268,6 +1269,11 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		return app, WorkflowAppAction{}
 	}
 
+	if strings.TrimSpace(strings.ToLower(label)) == "api" || label == "custom_action" { 
+		log.Printf("[INFO] Skipping label '%s' in AutofixAppLabels for app %s (%s) as it's too generic", label, app.Name, app.ID)
+		return app, WorkflowAppAction{}
+	}
+
 	// // Double check if it has it or not
 	parsedLabel := strings.ToLower(strings.ReplaceAll(label, " ", "_"))
 	for _, action := range app.Actions {
@@ -1281,7 +1287,6 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 	// Fix the label to be as it is in category (uppercase + spaces)
 	// fml, there is no consistency to casing + underscores, so we keep the new
-
 	log.Printf("[INFO][AI] Running app fix for label '%s' for app %s (%s) with %d actions", label, app.Name, app.ID, len(app.Actions))
 
 	// Just a reset, as Other doesn't really achieve anything directly
@@ -6313,7 +6318,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 	// Metadata = org-specific context
 	// This e.g. makes "me" mean "users in my org" and such
 	metadata := ""
-
 	if len(execution.Workflow.UpdatedBy) > 0 {
 		metadata += fmt.Sprintf("Current person: %s\n", execution.Workflow.UpdatedBy)
 	}
@@ -6344,17 +6348,141 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 			if len(users) > 0 { 
 				metadata += fmt.Sprintf("users: %s\n", strings.Join(users, ", "))
 			}
+
+			decidedApps := ""
+			appauth, autherr := GetAllWorkflowAppAuth(ctx, org.Id)
+			if autherr == nil && len(appauth) > 0 {
+				preferredApps := []WorkflowApp{}
+				if len(org.SecurityFramework.SIEM.Name) > 0 {
+					preferredApps = append(preferredApps, WorkflowApp{
+						Categories: []string{"siem"},
+						Name: org.SecurityFramework.SIEM.Name,
+					})
+				}
+
+				if len(org.SecurityFramework.EDR.Name) > 0 {
+					//preferredApps += strings.ToLower(org.SecurityFramework.EDR.Name) + ", "
+					preferredApps = append(preferredApps, WorkflowApp{
+						Categories: []string{"eradication"},
+						Name: org.SecurityFramework.EDR.Name,
+					})
+				}
+
+				if len(org.SecurityFramework.Communication.Name) > 0 {
+					//preferredApps += strings.ToLower(org.SecurityFramework.Cases.Name) + ", "
+
+					preferredApps = append(preferredApps, WorkflowApp{
+						Categories: []string{"cases"},
+						Name: org.SecurityFramework.Communication.Name,
+					})
+				}
+
+				if len(org.SecurityFramework.Cases.Name) > 0 {
+					//preferredApps += strings.ToLower(org.SecurityFramework.Cases.Name) + ", "
+
+					preferredApps = append(preferredApps, WorkflowApp{
+						Categories: []string{"cases"},
+						Name: org.SecurityFramework.Cases.Name,
+					})
+				}
+
+				if len(org.SecurityFramework.Assets.Name) > 0 {
+					//preferredApps += strings.ToLower(org.SecurityFramework.Assets.Name) + ", "
+
+					preferredApps = append(preferredApps, WorkflowApp{
+						Categories: []string{"assets"},
+						Name: org.SecurityFramework.Assets.Name,
+					})
+				}
+
+				if len(org.SecurityFramework.Network.Name) > 0 {
+					//preferredApps += strings.ToLower(org.SecurityFramework.Network.Name) + ", "
+
+					preferredApps = append(preferredApps, WorkflowApp{
+						Categories: []string{"network"},
+						Name: org.SecurityFramework.Network.Name,
+					})
+				}
+
+				if len(org.SecurityFramework.Intel.Name) > 0 {
+					//preferredApps += strings.ToLower(org.SecurityFramework.Intel.Name) + ", "
+
+					preferredApps = append(preferredApps, WorkflowApp{
+						Categories: []string{"intel"},
+						Name: org.SecurityFramework.Intel.Name,
+					})
+				}
+
+				if len(org.SecurityFramework.IAM.Name) > 0 {
+					//preferredApps += strings.ToLower(org.SecurityFramework.IAM.Name) + ", "
+					preferredApps = append(preferredApps, WorkflowApp{
+						Categories: []string{"iam"},
+						Name: org.SecurityFramework.IAM.Name,
+					})
+				}
+
+				for _, auth := range appauth {
+					// ALWAYS append valid auth
+					if !auth.Validation.Valid {
+						continue
+					}
+
+					//lowerName := strings.ToLower(auth.App.Name)
+					log.Printf("APP CATEGORIES: %s\n", auth.App.Categories)
+					if len(auth.App.Categories) > 0 {
+						found := false
+						for _, preApp := range preferredApps {
+							if len(preApp.Categories) == 0 {
+								continue
+							}
+
+							if ArrayContains(preApp.Categories, strings.ToLower(auth.App.Categories[0]) ) {
+								found = true
+								break
+							}
+						}
+
+						if found {
+							continue
+						}
+					}
+
+					preferredApps = append(preferredApps, auth.App)
+				}
+
+				// FIXME: Pre-filter before this to ensure we have good 
+				// apps ONLY.
+				for _, preferredApp := range preferredApps {
+					if len(preferredApp.Name) == 0 {
+						continue
+					}
+
+					lowername := strings.ToLower(preferredApp.Name)
+					if strings.Contains(decidedApps, lowername) {
+						continue
+					}
+
+					decidedApps += lowername + ", "
+				}
+			}
+
+			if len(decidedApps) > 0 {
+				metadata += fmt.Sprintf("preferred tools: %s\n", decidedApps)
+			}
+
+
 		}
 
 	}
 
 	// Create the OpenAI body struct
-	systemMessage := `You are a general AI agent. You can make decisions based on the user input. You should output a list of decisions based on the input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it makes sense. If you need to ask for input multiple times in a row, ask both questions at the same time. Only ask if the User context doesn't contain the details you need. Assume authentication already exists for all your tools.
+	systemMessage := `You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it is absolutely necessary. If you need to ask for input multiple times in a row, ask both questions at the same time. Only ask if the User context doesn't contain the details you need, AND the question isn't about networking or authentication. 
 
-standalone actions: 
-ask 
+# agent actions: 
+- ask 
 
-allowed actions: `
+# integration actions: 
+`
 	userMessage := ""
 
 	// Don't think this matters much
@@ -6383,7 +6511,7 @@ allowed actions: `
 					continue
 				}
 
-				systemMessage += fmt.Sprintf("%s\n", strings.ReplaceAll(actionStr, " " , "_"))
+				systemMessage += fmt.Sprintf("- %s\n", strings.ReplaceAll(actionStr, " " , "_"))
 
 			}
 
@@ -6414,17 +6542,17 @@ allowed actions: `
 	// Will just have to make a translation system.
 	//typeOptions := []string{"ask", "singul", "workflow", "agent"}
 	typeOptions := []string{"ask", "singul"}
-	extraString := "Have a MINIMUM of two decisions. "
+	extraString := "Return a MINIMUM of two decisions in a JSON array. "
 	if len(typeOptions) == 0 {
 		extraString = ""
 	}
 
-	systemMessage += fmt.Sprintf(`. Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "<tool name>", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
+	systemMessage += fmt.Sprintf(`Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "<tool name>", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
 
-User Context:
+# User Context:
 %s
 
-Formatting Rules:
+# Formatting Rules:
 - Do NOT ask to narrow down the scope unless ABSOLUTELY necessary. Assume all the information is already in place.
 - If a tool or app is mentioned, add it to the tool field. Otherwise make the field empty.
 - Indexes should be the same if they should run in parallell. 
@@ -6432,10 +6560,12 @@ Formatting Rules:
 - Runs are how many times it should run requests (default: 1, * for all looped items). 
 - The {{action_name}} has to match EXACTLY the action name of a previous decision.
 - NEVER add unnecessary fields to the fields array, only add the ones that are absolutely needed for the action to run!
-- If you ask for user input, use the "ask" action and add a "question" field. 
-- Do NOT add empty decisions for now reason.
+- If you ask for user input, use the "ask" action and add a "question" field. Do NOT use this for authentication.
+- If you use the "API" action, make sure to fill the "tool". Additionally fill in "url", "method" and "body" fields.
+- Do NOT add empty decisions for no reason.
 
-Decision Rules: 
+# Decision Rules: 
+- NEVER ask for usernames, apikeys or other authentication information from the user.
 - Do NOT add random fields and do NOT guess formatting e.g. body formatting
 - Fields can be set manually, or use previous action output by adding them in the format {{action_name}}, such as {"key": "body": "value": "{{tickets[0].fieldname}}} to get the first 'ticket' fieldname from a previous decision.
 
@@ -6447,7 +6577,7 @@ Decision Rules:
 		//Model: "gpt-4o-mini",
 		//Model: "gpt-4.1-mini",
 		//Model: "o4-mini", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
-		Model: "gpt-5-mini", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
+		Model: "gpt-5-nano", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
@@ -6461,11 +6591,13 @@ Decision Rules:
 		//Temperature: 0.95, // Adds a tiny bit of randomness
 		Temperature: 1,
 
+		// json_object -> tends to want a single item and not an array
+		//ResponseFormat: &openai.ChatCompletionResponseFormat{
+		//	Type: "json_object",
+		//},
+
 		// Reasoning control
 		MaxCompletionTokens: 5000, 
-		ResponseFormat: &openai.ChatCompletionResponseFormat{
-			Type: "json_object",
-		},
 		ReasoningEffort: "medium",
 		Store: true,
 	}
@@ -6741,7 +6873,7 @@ Decision Rules:
 
 		// Edgecase handling for LLM not being available etc
 		if len(choicesString) > 0 { 
-			log.Printf("\n\n[ERROR][%s] Found choicesString in AI Agent response error handling: %s\n\n", execution.ExecutionId, choicesString)
+			log.Printf("\n\n[ERROR][%s] Found choicesString (1) in AI Agent response error handling: %s\n\n", execution.ExecutionId, choicesString)
 
 		} else if len(openaiOutput.Choices) == 0 {
 			log.Printf("[ERROR][%s] No choices found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
@@ -6760,7 +6892,7 @@ Decision Rules:
 		} else {
 			choicesString = openaiOutput.Choices[0].Message.Content
 			if debug { 
-				log.Printf("[DEBUG] Found choices string: %s", choicesString)
+				log.Printf("[DEBUG] Found choices string (2) - len: %d: %s", len(choicesString), choicesString)
 			}
 
 			// Handles reasoning models for Refusal control edgecases
@@ -6886,7 +7018,7 @@ Decision Rules:
 			// Which do we use:
 			// 1. Local Singul
 			if decision.Action == "" {
-				log.Printf("[ERROR] No action found in AI agent decision")
+				log.Printf("[ERROR] No action found in AI agent decision: %#v", decision)
 				continue
 			}
 
@@ -7216,10 +7348,10 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		MaxTokens:   maxTokens,
 	}
 
-	// Too specific, but.. :)
-	if model == "o4-mini" || model == "gpt-5-mini" {
+	// FIXME: Too specific. Should be self-corrective.. :)
+	if chatCompletion.MaxTokens > 0 && (model == "o4-mini" || model == "gpt-5-mini" || model == "gpt-5-nano") {
+		chatCompletion.MaxCompletionTokens = chatCompletion.MaxTokens
 		chatCompletion.MaxTokens = 0
-		chatCompletion.MaxCompletionTokens = maxTokens
 	}
 
 	// Rerun with the same chat IF POSSIBLE

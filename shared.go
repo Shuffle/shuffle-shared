@@ -4045,7 +4045,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id {
-			log.Printf("[AUDIT] User %s (%s) is accessing workflow '%s' (%s) executions as %s (get executions)", user.Username, user.Id, workflow.Name, workflow.ID, user.Role)
+			log.Printf("[AUDIT] User %s (%s) is accessing workflow '%s' (%s) executions V2 as %s (get executions)", user.Username, user.Id, workflow.Name, workflow.ID, user.Role)
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow execs (V2) for %s", user.Username, fileId)
 			checkExecOrg = false
@@ -16929,7 +16929,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("[INFO][%s] Updating %s (%s) in workflow from %s to %s", workflowExecution.ExecutionId, actionResult.Action.Name, actionResult.Action.ID, workflowExecution.Results[outerindex].Status, actionResult.Status)
+			log.Printf("[INFO][%s] Updating '%s' (%s) in workflow from %s to %s", workflowExecution.ExecutionId, actionResult.Action.Name, actionResult.Action.ID, workflowExecution.Results[outerindex].Status, actionResult.Status)
 
 			if workflowExecution.Results[outerindex].Status != actionResult.Status {
 				dbSave = true

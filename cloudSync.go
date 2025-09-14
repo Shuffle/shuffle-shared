@@ -2056,10 +2056,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
-	// Change timeout to be 30 seconds (just in case)
+	// Change timeout to be 300 seconds (just in case)
+	// Allows for reruns and self-correcting
 	client := GetExternalClient(url)
-	client.Timeout = 60 * time.Second
-
+	client.Timeout = 300 * time.Second
 	parsedFields := TranslateBadFieldFormats(decision.Fields)
 	parsedAction := CategoryAction{
 		AppName: decision.Tool,
@@ -2090,7 +2090,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed running agent decision: %s", execution.ExecutionId, err)
+		log.Printf("[ERROR][%s] Failed running agent decision (1). Timeout: %d: %s", execution.ExecutionId, client.Timeout, err)
 		return []byte{}, debugUrl, err
 	}
 
@@ -2164,11 +2164,11 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR][%s] Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
-		return body, debugUrl, errors.New(fmt.Sprintf("Failed running agent decision. Status code %d", resp.StatusCode))
+		return body, debugUrl, errors.New(fmt.Sprintf("Failed running agent decision (2). Status code %d", resp.StatusCode))
 	}
 
 	if outputMapped.Success == false {
-		return originalBody, debugUrl, errors.New("Failed running agent decision. Success false for Singul action")
+		return originalBody, debugUrl, errors.New("Failed running agent decision (3). Success false for Singul action")
 	}
 
 	/*
@@ -2236,7 +2236,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		decision.RunDetails.Status = "FAILURE"
 
 		if len(decision.RunDetails.RawResponse) == 0 {
-			decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start action. Raw Error: %s", err)
+			decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start decision action. Raw Error: %s", err)
 		}
 	} else {
 		decision.RunDetails.Status = "FINISHED"
