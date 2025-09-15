@@ -18208,8 +18208,11 @@ func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 }
 
 func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
-	//log.Printf("[DEBUG] Passphrase: %s", passphrase)
-	//log.Printf("Decrypting key: %s", data)
+	//if debug { 
+	//	log.Printf("[DEBUG] Passphrase: %s", passphrase)
+	//	log.Printf("Decrypting key: %s", data)
+	//}
+
 	key, err := create32Hash(passphrase)
 	if err != nil {
 		log.Printf("[ERROR] Failed hashing in decrypt: %s", err)
@@ -18237,7 +18240,11 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 
 	nonceSize := gcm.NonceSize()
 	if nonceSize > len(parsedData) {
-		log.Printf("[ERROR] Nonce size is larger than parsed data. Returning as if this is valid.")
+		//log.Printf("[ERROR] Nonce size is larger than parsed data in decryption. Returning as if this is valid. This should _never_ happen, but typically only happens IF the source data is invalid (e.g. 1/20 keys)")
+		//if debug { 
+		//	log.Printf("Returned: '%s'. Len %d vs %d", string(parsedData), nonceSize, len(parsedData))
+		//}
+
 		return data, nil
 	}
 
@@ -19831,9 +19838,12 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	// This is NOT a good solution, but a good bypass
-	if app.Authentication.Required {
+	if app.Authentication.Required || len(action.AuthenticationId) > 0 {
+
 		if len(action.AuthenticationId) > 0 {
-			//log.Printf("\n\n[INFO] Found auth ID for single action: %s\n\n", action.AuthenticationId)
+			if debug { 
+				log.Printf("[INFO][%s] Found auth ID for single action: %s", workflowExecution.ExecutionId, action.AuthenticationId)
+			}
 
 			// FIXME: How do we decide what fields to replace?
 			// The problem now is that some auth fields are being set and others maybe are not
@@ -19911,7 +19921,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	if runValidationAction {
-		log.Printf("[INFO] Running validation action for %s for org %s (%s)", app.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		log.Printf("\n\n[INFO] SHOULD BE Running validation action for %s for org %s (%s)\n\n", app.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 		// Find the action tagged to be used for validation:
 		// 1. Find the action in the app
@@ -19925,10 +19935,9 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		//}
 	}
 
-	newParams := []WorkflowAppActionParameter{}
 
 	// Auth is handled in PrepareWorkflowExec, so this may not be needed
-
+	newParams := []WorkflowAppActionParameter{}
 	originalUrl := ""
 	for _, param := range action.Parameters {
 		newName := GetValidParameters([]string{param.Name})
@@ -24732,35 +24741,35 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	// Special Action cleanup in case authentication etc has gone wrong
-	// FIXME: Focused on URL field for now
+	// FIXME: Focused on URL field primarily 
 	for actionIndex, _ := range workflowExecution.Workflow.Actions {
 		found := []string{}
 
 		newparams := []WorkflowAppActionParameter{}
 		for paramIndex, _ := range workflowExecution.Workflow.Actions[actionIndex].Parameters { 
-
 			param := workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex]
-			if ArrayContains(found, param.Name) {
 
-				// Replaces the field
-				for existingParamIndex, _ := range newparams {
-					if param.Name != newparams[existingParamIndex].Name {
-
-						// Special for urls
-						if param.Name == "url" && strings.Contains(param.Value, "http") && !strings.Contains(newparams[existingParamIndex].Value, "http") {
-							newparams[existingParamIndex] = param
-						}
-
-						break
-					}
-				}
-
-				log.Printf("[ERROR][%s] Duplicate Field in Action: %#v", workflowExecution.ExecutionId, param.Name)
+			if !ArrayContains(found, param.Name) {
+				newparams = append(newparams, param)
+				found = append(found, param.Name)
 				continue
 			}
 
-			newparams = append(newparams, param)
-			found = append(found, param.Name)
+			// Replaces the field
+			for existingParamIndex, _ := range newparams {
+				if param.Name != newparams[existingParamIndex].Name {
+					continue
+				}
+
+				// Special for urls
+				if param.Name == "url" && strings.Contains(param.Value, "http") && !strings.Contains(newparams[existingParamIndex].Value, "http") {
+					newparams[existingParamIndex] = param
+				}
+
+				break
+			}
+
+			log.Printf("[ERROR][%s] Duplicate Field in Action: %#v", workflowExecution.ExecutionId, param.Name)
 		}
 
 		workflowExecution.Workflow.Actions[actionIndex].Parameters = newparams
@@ -24879,9 +24888,10 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 				newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 				if err != nil {
 					if field.Key != "access_token" {
-						log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
+						log.Printf("[ERROR][%s] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", workflowExecution.ExecutionId, curAuth.OrgId, field.Key, err, curAuth.Label)
 						setField = false
 						//fieldLength = 0
+
 						break
 					} else {
 						continue
@@ -24895,8 +24905,6 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 					if strings.HasSuffix(string(newValue), "/") {
 						newValue = []byte(string(newValue)[0 : len(newValue)-1])
 					}
-
-					//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
 				}
 
 				fieldLength += len(newValue)
@@ -25050,7 +25058,9 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 			}
 		}
 	} else if strings.ToLower(curAuth.Type) == "oauth2" {
-		//log.Printf("[DEBUG] Should replace auth parameters (Oauth2)")
+		if debug { 
+			log.Printf("[DEBUG][%s] Should replace auth parameters (Oauth2)", workflowExecution.ExecutionId)
+		}
 
 		runRefresh := false
 		refreshUrl := ""
@@ -25075,7 +25085,10 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 			}
 
 			if param.Key != "url" && param.Key != "access_token" {
-				//log.Printf("Skipping key %s", param.Key)
+				//if debug { 
+				//	log.Printf("[DEBUG][%s] Skipping key %s in auth %s (%s)", workflowExecution.ExecutionId, param.Key, curAuth.Label, curAuth.Id)
+				//}
+
 				continue
 			}
 
@@ -25085,6 +25098,8 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 			})
 		}
 
+		// FIXME: Refresh isn't required ALL the time
+		// but we currently are doing it.
 		runRefresh = true
 		if runRefresh {
 			user := User{
@@ -25097,7 +25112,9 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 			if len(refreshUrl) == 0 {
 				log.Printf("[ERROR] No Oauth2 request to run, as no refresh url is set!")
 			} else {
-				//log.Printf("[INFO] Running Oauth2 request with URL %s", refreshUrl)
+				if debug { 
+					log.Printf("[INFO][%s] Running Oauth2 request with URL %s", workflowExecution.ExecutionId, refreshUrl)
+				}
 
 				newAuth, err := RunOauth2Request(ctx, user, curAuth, true)
 				if err != nil {
@@ -25130,7 +25147,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 					}
 
 					// FIXME: There used to be code here to stop the app, but for now we just continue with the old tokens
-				}
+				} 
 
 				allAuths[authIndex] = newAuth
 
@@ -25145,6 +25162,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 					newParams = append(newParams, WorkflowAppActionParameter{
 						Name:  param.Key,
 						Value: param.Value,
+						Configuration: true,
 					})
 				}
 			}

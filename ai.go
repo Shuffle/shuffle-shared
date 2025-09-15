@@ -374,19 +374,21 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 		return *httpOutput, []byte{}, err
 	}
 
-	if httpOutput.Status >= 300 && httpOutput.Status != 404 {
-		if debug { 
-			log.Printf("[DEBUG] Translated action failed with status: %d. Rerun Autocorrecting feature!", httpOutput.Status)
-		}
-
-		return *httpOutput, []byte{}, errors.New(fmt.Sprintf("Status: %d", httpOutput.Status))
-	}
-
 	marshalledBody, err := json.Marshal(httpOutput.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal Schemaless HTTP Body response body back to byte: %s", err)
 		return *httpOutput, []byte{}, err
 	}
+
+	// FIXME: Why 404 excluded? Weird.
+	if httpOutput.Status >= 300 && httpOutput.Status != 404 {
+		if debug { 
+			log.Printf("[INFO] Translated action failed with status: %d. Rerun Autocorrecting feature!. Body: %s", httpOutput.Status, string(marshalledBody))
+		}
+
+		return *httpOutput, []byte{}, errors.New(fmt.Sprintf("Status: %d", httpOutput.Status))
+	}
+
 
 	return *httpOutput, marshalledBody, nil
 }
@@ -688,6 +690,18 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		inputBody += "\n}"
 	}
 
+	// Check if the amount of {} in inputBody is the same
+	if strings.Count(inputBody, "{") != strings.Count(inputBody, "}") {
+		log.Printf("[ERROR] Input body has mismatched curly braces. Fixing it. InputBody: %s", inputBody)
+
+		// FIXME: Doesn't take into account key vs value, as it shouldn't change the value.
+		if strings.Count(inputBody, "{") > strings.Count(inputBody, "}") {
+			for i := 0; i < (strings.Count(inputBody, "{") - strings.Count(inputBody, "}")); i++ {
+				inputBody += "}"
+			}
+		}
+	}
+
 	// Append previous problems too
 	//log.Printf("[Critical] InputBody generated here: %s", inputBody)
 	//log.Printf("[Critical] OutputBodies generated here: %s", outputBodies)
@@ -899,8 +913,12 @@ func getBadOutputString(action Action, appname, inputdata, outputBody string, st
 		}
 
 		if len(param.Value) > 0 {
-			outputParams += fmt.Sprintf("\"%s\": \"%s\"", param.Name, param.Value)
+			outputParams += fmt.Sprintf("\"%s\": \"%s\", ", param.Name, param.Value)
 		}
+	}
+
+	if len(outputParams) > 2 {
+		outputParams = outputParams[:len(outputParams)-2]
 	}
 
 	outputData := fmt.Sprintf("Fields: %s\n\nHTTP Status: %d\nHTTP error: %s", outputParams, status, outputBody)
@@ -950,7 +968,9 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 	systemMessage := fmt.Sprintf("Output a valid HTTP body to %s in %s. Only add required fields. Output ONLY JSON without explainers.", newName, action.AppName)
 	userMessage := ""
 
-	log.Printf("\n\nBODY CREATE SYSTEM MESSAGE: %s\n\n", systemMessage)
+	if debug {
+		log.Printf("\n\n[DEBUG] BODY CREATE SYSTEM MESSAGE: %s\n\n", systemMessage)
+	}
 
 	contentOutput, err := RunAiQuery(systemMessage, userMessage)
 	if err != nil {
@@ -1269,8 +1289,8 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		return app, WorkflowAppAction{}
 	}
 
-	if strings.TrimSpace(strings.ToLower(label)) == "api" || label == "custom_action" { 
-		log.Printf("[INFO] Skipping label '%s' in AutofixAppLabels for app %s (%s) as it's too generic", label, app.Name, app.ID)
+	if strings.TrimSpace(strings.ToLower(label)) == "api" || label == "custom_action" || len(label) < 5 { 
+		//log.Printf("[INFO] Skipping label '%s' in AutofixAppLabels for app %s (%s) as it's too generic", label, app.Name, app.ID)
 		return app, WorkflowAppAction{}
 	}
 
@@ -6427,8 +6447,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 						continue
 					}
 
-					//lowerName := strings.ToLower(auth.App.Name)
-					log.Printf("APP CATEGORIES: %s\n", auth.App.Categories)
 					if len(auth.App.Categories) > 0 {
 						found := false
 						for _, preApp := range preferredApps {

@@ -2043,7 +2043,7 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 // As AI Agents can have multiple types of runs, this could change every time.
 func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, error) {
 	debugUrl := ""
-	log.Printf("[DEBUG][%s] Running agent decision action %s with tool %s", execution.ExecutionId, decision.Action, decision.Tool)
+	log.Printf("[INFO][%s] Running agent decision action '%s' with app '%s'. This is ran with Singul.", execution.ExecutionId, decision.Action, decision.Tool)
 
 	baseUrl := "https://shuffler.io"
 	if os.Getenv("BASE_URL") != "" {
@@ -2068,6 +2068,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		Fields: parsedFields,
 
 		SkipWorkflow: true,
+	}
+
+	if strings.ToLower(decision.Action) == "api" {
+		parsedAction.Action = "custom_action"
 	}
 
 	marshalledAction, err := json.Marshal(parsedAction)
