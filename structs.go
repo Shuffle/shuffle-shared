@@ -260,6 +260,9 @@ type WorkflowAppActionParameter struct {
 type Valuereplace struct {
 	Key   string `json:"key" datastore:"key" yaml:"key"`
 	Value string `json:"value" datastore:"value,noindex" yaml:"value"`
+
+	// Used for e.g. user input storage
+	Answer string `json:"details,omitempty" datastore:"details,noindex" yaml:"details,omitempty"`
 }
 
 type WorkflowAppAction struct {

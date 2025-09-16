@@ -19654,11 +19654,13 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 					OrgId: user.ActiveOrg.Id,
 					Owner: user.Username,
+					UpdatedBy: user.Username,
 					Start: action.ID,
 				},
 				Type: "AGENT",
 				Start: action.ID,
 				Status: "EXECUTING",
+				WorkflowId: workflowId,
 				ExecutionId: workflowId,
 				ExecutionOrg: user.ActiveOrg.Id,
 				StartedAt: int64(time.Now().Unix()),
@@ -19842,7 +19844,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 		if len(action.AuthenticationId) > 0 {
 			if debug { 
-				log.Printf("[INFO][%s] Found auth ID for single action: %s", workflowExecution.ExecutionId, action.AuthenticationId)
+				log.Printf("[DEBUG][%s] Found auth ID for single action: %s", workflowExecution.ExecutionId, action.AuthenticationId)
 			}
 
 			// FIXME: How do we decide what fields to replace?
@@ -23153,6 +23155,22 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			}
 
+			agentic := false
+			if len(start) == 0 && request != nil {
+				decisionId, decisionIdOk := request.URL.Query()["decision_id"]
+				if decisionIdOk {
+					log.Printf("[INFO][%s] Got decisionId %s inside Agentic decision", oldExecution.ExecutionId, decisionId[0])
+
+					agentic = true
+					if len(workflow.Actions) == 1 {
+						start = append(start, workflow.Actions[0].ID)
+						oldExecution.Results[0].Status = "WAITING"
+					} else {
+						log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Decision ID: %s", workflow.ID, decisionId[0])
+					}
+				}
+			}
+
 			if len(start) == 0 {
 				log.Printf("[ERROR] No start node found for workflow %s during workflow continuation", workflow.ID)
 				return workflowExecution, ExecInfo{}, fmt.Sprintf("No start node found for workflow continuation %s", workflow.ID), errors.New("No start node found for workflow continuation")
@@ -23164,7 +23182,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			for _, result := range oldExecution.Results {
 				if result.Action.ID == start[0] {
 					if result.Status == "ABORTED" {
-						log.Printf("[INFO] Found aborted result: %s (%s)", result.Action.Label, result.Action.ID)
+						log.Printf("[INFO][%s] Found aborted result: %s (%s)", oldExecution.ExecutionId, result.Action.Label, result.Action.ID)
 						if oldExecution.Status != "ABORTED" {
 							log.Printf("[INFO] Aborting execution %s as it should have already been aborted in the past", oldExecution.ExecutionId)
 							oldExecution.Status = "ABORTED"
@@ -23176,7 +23194,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 				}
 
-				if result.Status == "WAITING" {
+				if agentic {
+					log.Printf("[INFO][%s] Should fix the decision by injecting the values and continuing to the next step! :3", oldExecution.ExecutionId)
+					//os.Exit(3)
+
+				} else if result.Status == "WAITING" && !agentic {
 					log.Printf("[INFO][%s] Found relevant User Input result: %s (%s)", result.ExecutionId, result.Action.Label, result.Action.ID)
 
 					var userinputResp UserInputResponse

@@ -316,8 +316,9 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", authorization))
 	}
 
+	// Proper timeout
 	client := &http.Client{
-		Timeout: time.Second * 60,
+		Timeout: time.Second * 300,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -692,7 +693,9 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 
 	// Check if the amount of {} in inputBody is the same
 	if strings.Count(inputBody, "{") != strings.Count(inputBody, "}") {
-		log.Printf("[ERROR] Input body has mismatched curly braces. Fixing it. InputBody: %s", inputBody)
+		if debug { 
+			log.Printf("[ERROR] Debug: Input body has mismatched curly braces ({*%d vs }*%d). Fixing it. InputBody pre-fix: %s", strings.Count(inputBody, "{"), strings.Count(inputBody, "}"), inputBody)
+		}
 
 		// FIXME: Doesn't take into account key vs value, as it shouldn't change the value.
 		if strings.Count(inputBody, "{") > strings.Count(inputBody, "}") {
@@ -4940,7 +4943,7 @@ func workerPool(jobs <-chan openai.ToolCall, results chan<- AtomicOutput, wg *sy
 		req.Header.Set("Authorization", "Bearer "+user.ApiKey)
 
 		client := &http.Client{
-			Timeout: time.Second * 60,
+			Timeout: time.Second * 300,
 		}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -6338,8 +6341,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 	// Metadata = org-specific context
 	// This e.g. makes "me" mean "users in my org" and such
 	metadata := ""
+
 	if len(execution.Workflow.UpdatedBy) > 0 {
-		metadata += fmt.Sprintf("Current person: %s\n", execution.Workflow.UpdatedBy)
+		metadata += fmt.Sprintf("Current user: %s\n", execution.Workflow.UpdatedBy)
 	}
 
 	if len(execution.Workflow.OrgId) == 0 && len(execution.ExecutionOrg) > 0 {
@@ -7317,6 +7321,9 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 }
 
 // This can also be overridden by passing in a custom OpenAI ChatCompletion request
+// FIXME: We need some kind of failover for this so that the request 
+// doesn't go from Backend directly, but instead from app. This makes it
+// more versatile in general, and able to run from Onprem -> Local model
 func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
 	cnt := 0
 	maxTokens := 5000
