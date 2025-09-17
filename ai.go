@@ -6619,8 +6619,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		//},
 
 		// Reasoning control
+		//ReasoningEffort: "medium", // old
 		MaxCompletionTokens: 5000, 
-		ReasoningEffort: "medium",
+		ReasoningEffort: "low",
 		Store: true,
 	}
 
@@ -7371,6 +7372,20 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		Model: model,
 		Messages: []openai.ChatCompletionMessage{},
 		MaxTokens:   maxTokens,
+
+		// Needs overriding / control
+		// DRASTICALLY slows down requests
+		ReasoningEffort: "minimal",
+	}
+
+
+	if len(os.Getenv("SHUFFLE_REASONING_EFFORT")) > 0 {
+		availableOptions := []string{"", "minimal", "low", "medium", "high"}
+		if ArrayContains(availableOptions, strings.ToLower(os.Getenv("SHUFFLE_REASONING_EFFORT"))) {
+			chatCompletion.ReasoningEffort = strings.ToLower(os.Getenv("SHUFFLE_REASONING_EFFORT"))
+		} else {
+			log.Printf("[WARNING] Invalid REASONING_EFFORT option '%s'. Available options: %v. Defaulting to 'minimal' for non-configured requests.", os.Getenv("SHUFFLE_REASONING_EFFORT"), availableOptions)
+		}
 	}
 
 	// FIXME: Too specific. Should be self-corrective.. :)

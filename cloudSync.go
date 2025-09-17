@@ -2140,7 +2140,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	body := originalBody
 	defer resp.Body.Close()
 
-	log.Printf("\n\n\n[DEBUG][%s] Agent decision response: %s\n\n\n", execution.ExecutionId, string(body))
+	if debug { 
+		log.Printf("\n\n\n[DEBUG][%s] Agent decision response: %s\n\n\n", execution.ExecutionId, string(body))
+	}
+
 	// Try to map it into SchemalessOutput and grab "RawResponse"
 	outputMapped := SchemalessOutput{}
 	err = json.Unmarshal(body, &outputMapped)
@@ -2232,18 +2235,22 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 	go SetCache(ctx, decisionId, marshalledDecision, 60)
 
-	rawResponse, debugUrl, err := RunAgentDecisionSingulActionHandler(execution, decision)
-	decision.RunDetails.RawResponse = string(rawResponse)
-	decision.RunDetails.DebugUrl = debugUrl
-	if err != nil {
-		log.Printf("[ERROR][%s] Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
-		decision.RunDetails.Status = "FAILURE"
-
-		if len(decision.RunDetails.RawResponse) == 0 {
-			decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start decision action. Raw Error: %s", err)
-		}
+	if decision.Action == "user_input" || decision.Action == "ask" { 
 	} else {
-		decision.RunDetails.Status = "FINISHED"
+		// Singul handler
+		rawResponse, debugUrl, err := RunAgentDecisionSingulActionHandler(execution, decision)
+		decision.RunDetails.RawResponse = string(rawResponse)
+		decision.RunDetails.DebugUrl = debugUrl
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
+			decision.RunDetails.Status = "FAILURE"
+
+			if len(decision.RunDetails.RawResponse) == 0 {
+				decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start decision action. Raw Error: %s", err)
+			}
+		} else {
+			decision.RunDetails.Status = "FINISHED"
+		}
 	}
 
 	// 1. Send this back as a result for an action
@@ -2281,6 +2288,8 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	//?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 	client := GetExternalClient(url)
 
+	// This is exactly how results for decisions as sent huh 
+	// May need to do this for agentic question, answers as well
 	parsedAction := ActionResult{
 		ExecutionId:   execution.ExecutionId,
 		Authorization: execution.Authorization,

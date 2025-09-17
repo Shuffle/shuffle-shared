@@ -15928,6 +15928,8 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 }
 
 // Handles the recursiveness of a stream result sent to the backend with an Agent Decision
+// Used both in /streams from RunAgentDecisionAction() AND sendAgentActionSelfRequest()
+// Further used for e.g. Question answers as to further guide the agent
 func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
 	decisionIdSplit := strings.Split(actionResult.Status, "_")
 	decisionId := ""
@@ -15946,6 +15948,9 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	}
 
 	actionResult.Status = fmt.Sprintf("agent_%s", decisionId)
+	if debug { 
+		log.Printf("[DEBUG] Got decision ID '%s' for action result '%s'. Status: %s", decisionId, actionResult.Action.ID, actionResult.Status)
+	}
 
 	foundActionResultIndex := -1
 	for actionIndex, result := range workflowExecution.Results {
@@ -15957,7 +15962,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	if foundActionResultIndex < 0 {
 		log.Printf("[ERROR][%s] Action %s was not found", workflowExecution.ExecutionId, actionResult.Action.ID)
-		return &workflowExecution, false, errors.New(fmt.Sprintf("Agent node ID for decision ID %s not found", decisionId))
+		return &workflowExecution, false, errors.New(fmt.Sprintf("ActionResultIndex: Agent node ID for decision ID %s not found", decisionId))
 	}
 
 	mappedResult := AgentOutput{}
@@ -15986,7 +15991,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	if decisionIdResultIndex < 0 {
 		log.Printf("[ERROR][%s] Decision ID %s was not found. Skipping.", workflowExecution.ExecutionId, decisionId)
-		return &workflowExecution, false, errors.New(fmt.Sprintf("Agent node ID for decision ID %s not found", decisionId))
+		return &workflowExecution, false, errors.New(fmt.Sprintf("decisionIdResultIndex: Agent node ID for decision ID %s not found", decisionId))
 	}
 
 	// FIXME: Update the value of the decision here?
@@ -16053,7 +16058,8 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	//log.Printf("[DEBUG] TOTAL AGENT DECISIONS: %#v, FINISHED DECISIONS: %#v", len(mappedResult.Decisions), len(allFinishedDecisions))
+	log.Printf("[INFO] TOTAL AGENT DECISIONS: %#v, FINISHED DECISIONS: %#v", len(mappedResult.Decisions), len(allFinishedDecisions))
+
 	if len(allFinishedDecisions) == len(mappedResult.Decisions) {
 		go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 		return &workflowExecution, false, nil
@@ -16615,7 +16621,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		// type ActionResult struct {
 		for _, result := range workflowExecution.Results {
 			if debug {
-				log.Printf("[DEBUG][%s] Checking result %s (%s) with status %s", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID, result.Status)
+				log.Printf("[DEBUG][%s] Checking result '%s' (%s) with status %s", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID, result.Status)
 			}
 
 			if actionResult.Action.ID == result.Action.ID {
@@ -16955,7 +16961,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			workflowExecution.Results = append(workflowExecution.Results, actionResult)
 		}
 	} else {
-		log.Printf("[INFO][%s] Setting value of %s (INIT - %s) to %s (%d)", workflowExecution.ExecutionId, actionResult.Action.Label, actionResult.Action.ID, actionResult.Status, len(workflowExecution.Results))
+		log.Printf("[INFO][%s] Setting value of '%s' (INIT - %s) to %s (%d)", workflowExecution.ExecutionId, actionResult.Action.Label, actionResult.Action.ID, actionResult.Status, len(workflowExecution.Results))
 		workflowExecution.Results = append(workflowExecution.Results, actionResult)
 	}
 
@@ -23156,10 +23162,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			agentic := false
+			decisionId := ""
 			if len(start) == 0 && request != nil {
-				decisionId, decisionIdOk := request.URL.Query()["decision_id"]
+				decisionIds, decisionIdOk := request.URL.Query()["decision_id"]
 				if decisionIdOk {
-					log.Printf("[INFO][%s] Got decisionId %s inside Agentic decision", oldExecution.ExecutionId, decisionId[0])
+					log.Printf("[INFO][%s] Got decisionId %s inside Agentic decision", oldExecution.ExecutionId, decisionIds[0])
+					decisionId = decisionIds[0]
 
 					agentic = true
 					if len(workflow.Actions) == 1 {
@@ -23196,8 +23204,114 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 				if agentic {
 					log.Printf("[INFO][%s] Should fix the decision by injecting the values and continuing to the next step! :3", oldExecution.ExecutionId)
-					//os.Exit(3)
 
+					// 1. Find the result inside the result.Result -> AgentOutput 
+					unmarshalledDecision := AgentOutput{} 
+					err = json.Unmarshal([]byte(result.Result), &unmarshalledDecision)
+					if err != nil {
+						log.Printf("[ERROR][%s] Failed unmarshalling decision inside agentic workflow: %s", oldExecution.ExecutionId, err)
+						return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed handling decision for agentic runs. Please contact support@shuffler.io. Details: %s", err), err
+					} 
+
+					// Finds the local exec argument sent from User Input UI
+					execArg := request.URL.Query().Get("execution_argument")
+					if len(execArg) == 0 {
+						note := request.URL.Query().Get("note")
+						if len(note) > 0 {
+							execArg = note
+						}
+					}
+
+					fieldsChanged := false
+					for decisionIndex, decision := range unmarshalledDecision.Decisions {
+						if decision.RunDetails.Id != decisionId {
+							continue
+						}
+							
+						mappedArgument := map[string]string{}
+						err = json.Unmarshal([]byte(execArg), &mappedArgument)
+						if err != nil {
+							log.Printf("[ERROR][%s] Failed unmarshalling execution argument during agentic decision handling: %s", execArg, err)
+							break
+						}
+
+						handledNumber := []string{}
+						for key, value := range mappedArgument {
+							if ArrayContains(handledNumber, key) {
+								continue
+							}
+
+							handledNumber = append(handledNumber, key)
+							foundNumberSplit := strings.Split(key, "_")
+							if len(foundNumberSplit) != 2 {
+								continue
+							}
+
+							fieldNumber, err := strconv.Atoi(foundNumberSplit[1])
+							if err != nil {
+								continue
+							}
+
+							// Both start counting from 0
+							if len(decision.Fields) <= fieldNumber {
+								continue
+							}
+
+							log.Printf("Mapping field %d to value %s", fieldNumber, value)
+							decision.Fields[fieldNumber].Answer = value
+							fieldsChanged = true
+						}
+
+						if fieldsChanged { 
+							unmarshalledDecision.Decisions[decisionIndex] = decision
+
+							decision.RunDetails.Status = "FINISHED"
+							decision.RunDetails.CompletedAt = time.Now().Unix()
+
+							// Updates cache live
+							decisionId := fmt.Sprintf("agent-%s-%s", oldExecution.ExecutionId, decision.RunDetails.Id)
+							marshalledDecision, err := json.Marshal(decision)
+							if err != nil {
+								log.Printf("[ERROR][%s] Failed marshalling decision during agentic decision handling: %s", oldExecution.ExecutionId, err)
+							} else {
+								SetCache(ctx, decisionId, marshalledDecision, 60)
+							}
+
+						}
+
+						break
+					}
+
+					if !fieldsChanged {
+						return workflowExecution, ExecInfo{}, fmt.Sprintf("Did not find the decision inside the agentic workflow to update %s", decisionId), errors.New("Did not find the decision to update")
+					}
+
+					log.Printf("[INFO][%s] Found the decision inside the agentic workflow to update: %s", execArg, decisionId)
+
+					newDecisionBytes, err := json.Marshal(unmarshalledDecision)
+					if err != nil {
+						log.Printf("[ERROR][%s] Failed marshalling decision inside agentic workflow: %s", oldExecution.ExecutionId, err)
+					} else {
+						result.Result = string(newDecisionBytes)
+					}
+
+					//actionCacheId := fmt.Sprintf("%s_%s_result", oldExecution.ExecutionId, result.Action.ID)
+					//err = SetCache(ctx, actionCacheId, []byte(result.Result), 35)
+					//if err != nil {
+					//	log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
+					//}
+
+					// FIXME: Can we force continue the agent from here? Or do we send another action inbetween?
+					// go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
+
+					result.Status = fmt.Sprintf("%s_%s", "FINISHED", decisionId)
+
+					newExec, _, err := handleAgentDecisionStreamResult(*oldExecution, result) 
+					if err != nil {
+						log.Printf("[ERROR][%s] Failed handling agentic decision result: %s", oldExecution.ExecutionId, err)
+					}
+
+					return *newExec, ExecInfo{}, fmt.Sprintf("Agentic question handled (%s)", oldExecution.ExecutionId), errors.New("User Input: Agentic question action handled successfully!")
 				} else if result.Status == "WAITING" && !agentic {
 					log.Printf("[INFO][%s] Found relevant User Input result: %s (%s)", result.ExecutionId, result.Action.Label, result.Action.ID)
 
