@@ -628,32 +628,6 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] Should get stats for key %s", statsKey)
 	}
 
-	currentMonth := time.Now().Month()
-	if int(currentMonth) != info.LastMonthlyResetMonth {
-		handleDailyCacheUpdate(info)
-		err = SetOrgStatistics(ctx, *info, info.OrgId)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting org stats after monthly reset for org %s: %s", orgId, err)
-		}
-	}
-
-	if len(org.CreatorOrg) > 0 {
-		// get stats for parent org as well
-		parentInfo, err := GetOrgStatistics(ctx, org.CreatorOrg)
-		if err != nil {
-			log.Printf("[WARNING] Failed getting stats for parent org %s: %s", org.CreatorOrg, err)
-		} else {
-			currentMonth := time.Now().Month()
-			if int(currentMonth) != parentInfo.LastMonthlyResetMonth {
-				handleDailyCacheUpdate(parentInfo)
-				err = SetOrgStatistics(ctx, *parentInfo, parentInfo.OrgId)
-				if err != nil {
-					log.Printf("[WARNING] Failed setting org stats after monthly reset for parent org %s: %s", org.CreatorOrg, err)
-				}
-			}
-		}
-	}
-
 	if len(info.DailyStatistics) > 0 {
 		// Sort the array
 		sort.Slice(info.DailyStatistics, func(i, j int) bool {
