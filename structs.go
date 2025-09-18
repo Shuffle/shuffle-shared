@@ -465,6 +465,7 @@ type ExecutionInfo struct {
 	Additions               []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
 	LastMonthlyResetMonth   int                   `json:"last_monthly_reset_month" datastore:"last_monthly_reset_month"`
 	LastUsageAlertThreshold int64                 `json:"last_usage_alert_threshold" datastore:"last_usage_alert_threshold"`
+	UsageAlerts             []AlertThreshold      `json:"usage_alerts" datastore:"usage_alerts"`
 }
 
 type AdditionalUseConfig struct {

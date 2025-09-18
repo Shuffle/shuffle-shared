@@ -1408,6 +1408,11 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyAIUsage = 0
 		executionInfo.LastMonthlyResetMonth = currentMonth
 		executionInfo.LastUsageAlertThreshold = 0
+
+		// Reset all usage alerts to unsent
+		for index := range executionInfo.UsageAlerts {
+			executionInfo.UsageAlerts[index].Email_send = false
+		}
 	}
 
 	return executionInfo
@@ -1550,6 +1555,24 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		return orgStatistics
 	}
 
+	for _, alert := range org.Billing.AlertThreshold {
+		found := false
+		for _, statAlert := range orgStatistics.UsageAlerts {
+			if statAlert.Percentage == alert.Percentage || statAlert.Count == alert.Count {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			orgStatistics.UsageAlerts = append(orgStatistics.UsageAlerts, AlertThreshold{
+				Percentage: alert.Percentage,
+				Count:      alert.Count,
+				Email_send: alert.Email_send,
+			})
+		}
+	}
+
 	for index, AlertThreshold := range org.Billing.AlertThreshold {
 
 		totalAppExecutions := orgStatistics.MonthlyAppExecutions + orgStatistics.MonthlyChildAppExecutions
@@ -1561,7 +1584,15 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			shouldSendAlert = true
 		}
 
-		if int64(AlertThreshold.Count) < totalAppExecutions && AlertThreshold.Email_send == false && shouldSendAlert {
+		sendAlert := false
+		for _, alerts := range orgStatistics.UsageAlerts {
+			if alerts.Percentage == AlertThreshold.Percentage && alerts.Count == AlertThreshold.Count {
+				sendAlert = alerts.Email_send
+				break
+			}
+		}
+
+		if int64(AlertThreshold.Count) < totalAppExecutions && !sendAlert && shouldSendAlert {
 
 			allAdmins := []string{}
 			firstAdmin := ""
@@ -1623,6 +1654,15 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 					log.Printf("[ERROR] Failed setting org in increment: %s", err)
 					return orgStatistics
 				}
+
+				// update the the alert send in the statistics
+				for index, alerts := range orgStatistics.UsageAlerts {
+					if alerts.Percentage == AlertThreshold.Percentage && alerts.Count == AlertThreshold.Count {
+						orgStatistics.UsageAlerts[index].Email_send = true
+						break
+					}
+				}
+
 				log.Printf("[DEBUG] Successfully sent alert mail for org %s", orgId)
 			}
 		}
