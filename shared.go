@@ -16058,12 +16058,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	log.Printf("[INFO] TOTAL AGENT DECISIONS: %#v, FINISHED DECISIONS: %#v", len(mappedResult.Decisions), len(allFinishedDecisions))
-
-	if len(allFinishedDecisions) == len(mappedResult.Decisions) {
-		go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
-		return &workflowExecution, false, nil
-	}
+	log.Printf("[INFO] TOTAL AGENT DECISIONS: %#v, FINISHED DECISIONS: %#v. Missing decision IDs: %#v", len(mappedResult.Decisions), len(allFinishedDecisions), allFinishedDecisions)
 
 	// FIXME: How do we handle 3rd party memory sources?
 	if mappedResult.Memory == "shuffle_db" {
@@ -16082,6 +16077,22 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			}
 		}
 	}
+
+	if len(allFinishedDecisions) == len(mappedResult.Decisions) {
+		// Handle agent decisionmaking. Use the same
+		log.Printf("[INFO][%s] With the agent being finished, we are asking it whether it would like to do anything else", workflowExecution.ExecutionId)
+
+		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, actionResult.Action, true) 
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed handling agent execution start: %s", workflowExecution.ExecutionId, err)
+		}
+
+		_ = returnAction
+
+		//go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
+		return &workflowExecution, false, nil
+	}
+
 
 	return &workflowExecution, true, nil
 }
@@ -19675,7 +19686,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 			SetWorkflowExecution(ctx, exec, true)
 
-			action, err := HandleAiAgentExecutionStart(exec, action) 
+			action, err := HandleAiAgentExecutionStart(exec, action, false) 
 			if err != nil {
 				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
 			}
@@ -23262,11 +23273,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							fieldsChanged = true
 						}
 
-						if fieldsChanged { 
-							unmarshalledDecision.Decisions[decisionIndex] = decision
-
+						if fieldsChanged {
 							decision.RunDetails.Status = "FINISHED"
 							decision.RunDetails.CompletedAt = time.Now().Unix()
+							unmarshalledDecision.Decisions[decisionIndex] = decision
 
 							// Updates cache live
 							decisionId := fmt.Sprintf("agent-%s-%s", oldExecution.ExecutionId, decision.RunDetails.Id)

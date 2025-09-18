@@ -15825,6 +15825,7 @@ func InitOpensearchIndexes() {
 		GetESIndexPrefix("workflowexecution"),
 		GetESIndexPrefix("datastore_ngram"),
 		GetESIndexPrefix("org_cache"),
+		GetESIndexPrefix("notifications"),
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")

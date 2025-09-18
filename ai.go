@@ -6337,7 +6337,9 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 	return contentOutput
 }
 
-func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) (Action, error) {
+// createNextActions = false => start of agent to find initial decisions
+// createNextActions = true => mid-agent to decide next steps
+func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool) (Action, error) {
 	// Metadata = org-specific context
 	// This e.g. makes "me" mean "users in my org" and such
 	metadata := ""
@@ -6506,7 +6508,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 # integration actions: 
 `
 	userMessage := ""
-
 	// Don't think this matters much
 	// See: https://github.com/Shuffle/singul?tab=readme-ov-file#llm-controls
 	openaiAllowedApps := []string{"openai"}
@@ -6523,7 +6524,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		}
 
 		if param.Name == "input" {
-			userMessage = param.Value
+			if createNextActions == false {
+				userMessage = param.Value
+			} else {
+				userMessage = fmt.Sprintf("The original query was: %s", param.Value)
+			}
 		}
 
 		if param.Name == "action" {
@@ -6569,6 +6574,86 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		extraString = ""
 	}
 
+	// The starting decision number
+	lastFinishedIndex := -1
+
+	oldActionResult := ActionResult{}
+	_ = oldActionResult 
+	oldAgentOutput := AgentOutput{}
+	if createNextActions == true { 
+		extraString = "This is a continuation of a previous execution. ONLY output decisions that fit AFTER the last FINISHED decision. DO NOT repeat previous decisions, and make sure your indexing is on point. Output as an array of decisions.\n\nIF you don't want to add any new decision, add AT LEAST one decision saying why it is finished. Make the action 'finish' and category 'finish', and put the reason in the 'reason' field."
+
+		userMessageChanged := false
+
+		// Sets the user message to the current value
+		for _, result := range execution.Results {
+			if result.Action.ID != startNode.ID {
+				continue
+			}
+
+			oldActionResult = result
+
+			// Unmarshal the result and show decisions to make better decisions 
+			mappedResult := AgentOutput{}
+			err := json.Unmarshal([]byte(result.Result), &mappedResult)
+			if err != nil {
+				log.Printf("[ERROR][%s] Failed unmarshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
+				break
+			} 
+
+			oldAgentOutput = mappedResult
+			previousAnswers := ""
+			relevantDecisions := []AgentDecision{}
+			for _, mappedDecision := range mappedResult.Decisions {
+				if mappedDecision.RunDetails.Status != "FINISHED" && mappedDecision.RunDetails.Status != "SUCCESS" {
+					log.Printf("[DEBUG][%s] SKIPPING decision index %d with status %s", execution.ExecutionId, mappedDecision.I, mappedDecision.RunDetails.Status)
+					continue
+				}
+
+				if mappedDecision.I > lastFinishedIndex {
+					lastFinishedIndex = mappedDecision.I
+				}
+
+				for fieldIndex, field := range mappedDecision.Fields {
+					if field.Key == "question" { 
+						if len(field.Answer) > 0 { 
+							previousAnswers += fmt.Sprintf("'%s': '%s'\n", field.Value, field.Answer)
+						} else {
+							log.Printf("[WARNING][%s] No answer found for question '%s'. Index: %d", execution.ExecutionId, field.Value, fieldIndex)
+						}
+					}
+				}
+
+				relevantDecisions = append(relevantDecisions, mappedDecision)
+			}
+
+			//marshalledDecisions, err := json.MarshalIndent(mappedResult.Decisions, "", "  ")
+			marshalledDecisions, err := json.MarshalIndent(relevantDecisions, "", "  ")
+			if err != nil {
+				log.Printf("[ERROR][%s] Failed marshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
+				break
+			}
+
+			userMessage += fmt.Sprintf("\n\nPrevious decisions:\n%s", string(marshalledDecisions))
+			if len(previousAnswers) > 0 {
+				userMessage += fmt.Sprintf("\n\nAnswers to questions:\n%s", previousAnswers)
+			}
+			userMessage += "\n\nBased on the previous decisions, find out if any new decisions need to be added."
+			userMessageChanged = true
+		}
+
+		_ = userMessageChanged 
+		//log.Printf("[INFO] INFO NEXT NODE PREDICTIONS")
+		//os.Exit(3)
+	}
+
+	if lastFinishedIndex < -1 {
+		lastFinishedIndex = -1
+	}
+
+	// This makes it so we can start from this index.
+	lastFinishedIndex += 1
+
 	systemMessage += fmt.Sprintf(`Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "<tool name>", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
 
 # User Context:
@@ -6583,6 +6668,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 - The {{action_name}} has to match EXACTLY the action name of a previous decision.
 - NEVER add unnecessary fields to the fields array, only add the ones that are absolutely needed for the action to run!
 - If you ask for user input, use the "ask" action and add a "question" field. Do NOT use this for authentication.
+- Any answer to a question by the user is in the 'answer' variable for the same field. This is empty or non-existant by default.
 - If you use the "API" action, make sure to fill the "tool". Additionally fill in "url", "method" and "body" fields.
 - Do NOT add empty decisions for no reason.
 
@@ -6592,6 +6678,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 - Fields can be set manually, or use previous action output by adding them in the format {{action_name}}, such as {"key": "body": "value": "{{tickets[0].fieldname}}} to get the first 'ticket' fieldname from a previous decision.
 
 %s`, strings.Join(typeOptions, ", "), metadata, extraString)
+
 
 	//systemMessage += `If you are missing information (such as emails) to make a list of decisions, just add a single decision which asks them to clarify the input better.`
 
@@ -6764,6 +6851,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		return startNode, err
 	}
 
+	log.Printf("[INFO][%s] Started AI Agent action %s with app %s. Waiting for results...", execution.ExecutionId, startNode.ID, appname)
+
 	// Set timestamp as soon as it's ready
 	// https://pkg.go.dev/github.com/sashabaranov/go-openai#ChatCompletionMessage
 	for messageIndex, _ := range completionRequest.Messages {
@@ -6788,6 +6877,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		return startNode, err
 	}
 
+	// Maps OpenAI -> Result struct so we can handle it
 	resultMapping := ActionResult{}
 	err = json.Unmarshal(body, &resultMapping)
 	if err != nil {
@@ -6813,7 +6903,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		// They usually cause notifications to occur as well.
 		if len(additionalResultMapping.Errors) > 0 {
 			// Handle this.
-			//log.Printf("\n\n[ERROR][%s] BODY LEN: %d. Got %d errors from Agent AI subrequest", resultMapping.ExecutionId, len(body), len(additionalResultMapping.Errors))
+			if debug { 
+				log.Printf("\n\n[ERROR][%s] BODY LEN: %d. Got %d errors from Agent AI subrequest", resultMapping.ExecutionId, len(body), len(additionalResultMapping.Errors))
+			}
 		}
 
 		if len(additionalResultMapping.Parameters) > 0 {
@@ -7009,6 +7101,25 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 
 			Memory: memorizationEngine,
 		}
+		if createNextActions == true {
+			if oldAgentOutput.Status != "" {
+				agentOutput = oldAgentOutput
+				agentOutput.Status = "RUNNING"
+			}
+
+			log.Printf("Got %d NEW decisions", len(mappedDecisions))
+			additions := 0
+			for _, mappedDecision := range mappedDecisions {
+				log.Printf("GOT DECISION: %#v", mappedDecision)
+				if mappedDecision.I < lastFinishedIndex {
+					log.Printf("[ERROR][%s] Skipping decision with index %d as it is lower than last finished index %d", execution.ExecutionId, mappedDecision.I, lastFinishedIndex)
+					mappedDecision.I = lastFinishedIndex+additions
+					additions += 1
+				}
+
+				agentOutput.Decisions = append(agentOutput.Decisions, mappedDecision)
+			}
+		}
 
 		if resultMapping.Status == "FAILURE" {
 			agentOutput.Status = "FAILURE"
@@ -7024,6 +7135,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 			agentOutput.Input = parsedAgentInput
 		}
 
+		log.Printf("[INFO] Using LastFinishedIndex = %d", lastFinishedIndex)
+		decisionActionRan := false 
 		for decisionIndex, decision := range agentOutput.Decisions {
 			// Random generate an ID that's 10 chars long
 			if len(decision.RunDetails.Id) == 0 {
@@ -7034,7 +7147,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 				} else {
 					agentOutput.Decisions[decisionIndex].RunDetails.Id = base64.RawURLEncoding.EncodeToString(b)
 				}
-
 			}
 
 			// Send a Singul job. 
@@ -7045,14 +7157,37 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 				continue
 			}
 
-			if decision.I != 0 {
+			if decision.RunDetails.Status == "FINISHED" || decision.RunDetails.Status == "SUCCESS" {
+				log.Printf("[INFO][%s] Decision %d already finished. Skipping...", execution.ExecutionId, decision.I)
 				continue
 			}
 
-			// Do we run the singul action directly?
-			agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
-			agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
-			go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
+			// Startnumber huh... Hmm
+			if decision.I != lastFinishedIndex {
+				continue
+			}
+
+			// A self-corrective measure
+			if decision.Action == "finish" || decision.Category == "finish" {
+				log.Printf("[INFO][%s] Decision %d is a finish decision. Marking the agent as finished...", execution.ExecutionId, decision.I)
+				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+				agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+
+				agentOutput.CompletedAt = time.Now().Unix()
+				agentOutput.Status = "FINISHED" 
+
+			} else {
+				// Do we run the singul action directly?
+				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+				go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
+			}
+				
+			decisionActionRan = true
+		}
+
+		if !decisionActionRan {
+			log.Printf("[ERROR][%s] No decision action was run. Marking the agent as FAILURE.", execution.ExecutionId)
 		}
 
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
