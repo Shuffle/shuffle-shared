@@ -7206,7 +7206,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				}
 
 				SetWorkflowExecution(ctx, execution, true)
-				os.Exit(3)
+				//os.Exit(3)
 			}
 		}
 
