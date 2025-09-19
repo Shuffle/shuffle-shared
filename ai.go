@@ -657,17 +657,17 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		// Check if number
 		_, err := strconv.ParseFloat(param.Value, 64)
 		if err == nil {
-			inputBody += fmt.Sprintf("\"%s\": %s,\n", param.Name, param.Value)
+			inputBody += fmt.Sprintf("  \"%s\": %s,\n", param.Name, param.Value)
 			continue
 		}
 
 		// Check if bool
 		if param.Value == "true" || param.Value == "false" {
-			inputBody += fmt.Sprintf("\"%s\": %s,\n", param.Name, param.Value)
+			inputBody += fmt.Sprintf("  \"%s\": %s,\n", param.Name, param.Value)
 			continue
 		}
 
-		inputBody += fmt.Sprintf("\"%s\": \"%s\",\n", param.Name, param.Value)
+		inputBody += fmt.Sprintf("  \"%s\": \"%s\",\n", param.Name, param.Value)
 	}
 
 	// Remove comma at the end
@@ -1268,7 +1268,75 @@ func FixContentOutput(contentOutput string) string {
 	contentOutput = strings.Trim(contentOutput, "\n")
 	contentOutput = strings.Trim(contentOutput, "\t")
 
+	contentOutput = balanceJSONLikeString(contentOutput)
+
 	return contentOutput
+}
+
+// Attempts to safely balance JSON strings
+// This is because LLM's have a high chance of outputting them
+// .... slightly shittily, and they need some help sometimes.
+func balanceJSONLikeString(s string) string {
+	stack := []rune{}
+	result := []rune{}
+	inString := false
+	escape := false
+
+	for _, ch := range s {
+		if inString {
+			result = append(result, ch)
+			if escape {
+				escape = false
+				continue
+			}
+			if ch == '\\' {
+				escape = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		// Not inside a string
+		if ch == '"' {
+			inString = true
+			result = append(result, ch)
+			continue
+		}
+
+		if ch == '{' || ch == '[' {
+			stack = append(stack, ch)
+			result = append(result, ch)
+		} else if ch == '}' || ch == ']' {
+			if len(stack) == 0 {
+				// extra closing bracket, skip it
+				continue
+			}
+			last := stack[len(stack)-1]
+			if (last == '{' && ch == '}') || (last == '[' && ch == ']') {
+				stack = stack[:len(stack)-1]
+				result = append(result, ch)
+			} else {
+				// mismatched, skip it
+				continue
+			}
+		} else {
+			result = append(result, ch)
+		}
+	}
+
+	// close any still-open brackets/braces
+	for len(stack) > 0 {
+		open := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if open == '{' {
+			result = append(result, '}')
+		} else {
+			result = append(result, ']')
+		}
+	}
+
+	return string(result)
 }
 
 func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp, WorkflowAppAction) {
@@ -6624,17 +6692,17 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					}
 				}
 
+
 				relevantDecisions = append(relevantDecisions, mappedDecision)
 			}
 
-			//marshalledDecisions, err := json.MarshalIndent(mappedResult.Decisions, "", "  ")
 			marshalledDecisions, err := json.MarshalIndent(relevantDecisions, "", "  ")
 			if err != nil {
 				log.Printf("[ERROR][%s] Failed marshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
 				break
 			}
 
-			userMessage += fmt.Sprintf("\n\nPrevious decisions:\n%s", string(marshalledDecisions))
+			userMessage += fmt.Sprintf("\n\nPrevious decision results:\n%s", string(marshalledDecisions))
 			if len(previousAnswers) > 0 {
 				userMessage += fmt.Sprintf("\n\nAnswers to questions:\n%s", previousAnswers)
 			}
@@ -7031,19 +7099,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		// Found random JSON issues with [{} and similar, due to LLM instability.
 		mappedDecisions := []AgentDecision{}
 		decisionString := FixContentOutput(choicesString)
-		if strings.HasPrefix(decisionString, "[") && !strings.HasSuffix(decisionString, "]") {
-			decisionString = fmt.Sprintf("%s]", decisionString)
-		}
-
-		if !strings.HasPrefix(decisionString, `[`) && !strings.HasSuffix(decisionString, `]`) {
-			//decisionString = choicesString
-			decisionString = fmt.Sprintf("[%s]", decisionString)
-		}
-
-		// Set the raw response
-		if !strings.HasPrefix(decisionString, `[`) || !strings.HasSuffix(decisionString, `]`) {
-			decisionString = choicesString
-		}
 
 		// Find the first one and remove anything until that point
 		if !strings.HasPrefix(decisionString, `[`) {
@@ -7101,23 +7156,57 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 			Memory: memorizationEngine,
 		}
+
 		if createNextActions == true {
 			if oldAgentOutput.Status != "" {
 				agentOutput = oldAgentOutput
 				agentOutput.Status = "RUNNING"
 			}
 
-			log.Printf("Got %d NEW decisions", len(mappedDecisions))
+			log.Printf("Got %d NEW decision(s)", len(mappedDecisions))
 			additions := 0
 			for _, mappedDecision := range mappedDecisions {
 				log.Printf("GOT DECISION: %#v", mappedDecision)
 				if mappedDecision.I < lastFinishedIndex {
-					log.Printf("[ERROR][%s] Skipping decision with index %d as it is lower than last finished index %d", execution.ExecutionId, mappedDecision.I, lastFinishedIndex)
+					log.Printf("[WARNING][%s] Setting decision index %d to last finished index %d + additions %d", execution.ExecutionId, mappedDecision.I, lastFinishedIndex, additions)
+
 					mappedDecision.I = lastFinishedIndex+additions
 					additions += 1
 				}
 
 				agentOutput.Decisions = append(agentOutput.Decisions, mappedDecision)
+			}
+
+			// Realtime update so that it looks correct in the UI between requests
+			if len(mappedDecisions) > 0 { 
+				execution.Status = "EXECUTING"
+				agentOutput.Status = "RUNNING"
+
+				for resultIndex, result := range execution.Results {
+					if result.Action.ID != startNode.ID {
+						continue
+					}
+
+					// Re-marshal the result
+					agentOutputMarshalled, err := json.Marshal(agentOutput)
+					if err != nil {
+						log.Printf("[ERROR] Failed marshalling agent output in AI Agent response: %s", err)
+					} else {
+						execution.Results[resultIndex].Result = string(agentOutputMarshalled)
+					}
+
+					execution.Results[resultIndex].Status = "WAITING"
+
+					// Update the result in cache as actions are self-corrective
+					actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, result.Action.ID)
+					err = SetCache(ctx, actionCacheId, []byte(execution.Results[resultIndex].Result), 35)
+					if err != nil {
+						log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
+					}
+				}
+
+				SetWorkflowExecution(ctx, execution, true)
+				os.Exit(3)
 			}
 		}
 
@@ -7137,6 +7226,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 		log.Printf("[INFO] Using LastFinishedIndex = %d", lastFinishedIndex)
 		decisionActionRan := false 
+			
+		nextActionType := ""
 		for decisionIndex, decision := range agentOutput.Decisions {
 			// Random generate an ID that's 10 chars long
 			if len(decision.RunDetails.Id) == 0 {
@@ -7167,15 +7258,17 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				continue
 			}
 
-			// A self-corrective measure
+			nextActionType = decision.Action
+
+			// A self-corrective measure for last-finished index
 			if decision.Action == "finish" || decision.Category == "finish" {
 				log.Printf("[INFO][%s] Decision %d is a finish decision. Marking the agent as finished...", execution.ExecutionId, decision.I)
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 
-				agentOutput.CompletedAt = time.Now().Unix()
-				agentOutput.Status = "FINISHED" 
-
+			} else if decision.Action == "ask" || decision.Action == "question" { 
+				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 			} else {
 				// Do we run the singul action directly?
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
@@ -7197,6 +7290,36 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		}
 
 		resultMapping.Result = string(marshalledAgentOutput)
+
+		// Set the result in cache here as well (just in case)
+		actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, resultMapping.Action.ID)
+		err = SetCache(ctx, actionCacheId, []byte(resultMapping.Result), 35)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
+		}
+
+		// Makes sure ot update the execution itself as well
+		if createNextActions == true { 
+			if decisionActionRan {
+			}
+
+			// Initialised from an 'ask' request (question) to user
+			// These aren't properly being updated in the db, so 
+			// we need additional logic here to ensure it is being 
+			// set/started
+			if nextActionType == "ask" { 
+				// Ensure we update all of it
+				for resultIndex, result := range execution.Results {
+					if result.Action.ID != startNode.ID {
+						continue
+					}
+
+					execution.Results[resultIndex] = resultMapping
+				}
+			
+				SetWorkflowExecution(ctx, execution, true)
+			}
+		}
 
 	} else {
 		log.Printf("[ERROR] No result found in AI agent response. Status: %d. Body: %s", newresp.StatusCode, string(body))

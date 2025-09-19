@@ -2235,7 +2235,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 	go SetCache(ctx, decisionId, marshalledDecision, 60)
 
-	if decision.Action == "user_input" || decision.Action == "ask" { 
+	if decision.Action == "user_input" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" { 
 	} else {
 		// Singul handler
 		rawResponse, debugUrl, err := RunAgentDecisionSingulActionHandler(execution, decision)

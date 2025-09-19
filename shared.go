@@ -15949,7 +15949,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	actionResult.Status = fmt.Sprintf("agent_%s", decisionId)
 	if debug { 
-		log.Printf("[DEBUG] Got decision ID '%s' for action result '%s'. Status: %s", decisionId, actionResult.Action.ID, actionResult.Status)
+		log.Printf("[DEBUG][%s] Got decision ID '%s' for action result '%s'. Status: %s", workflowExecution.ExecutionId, decisionId, actionResult.Action.ID, actionResult.Status)
 	}
 
 	foundActionResultIndex := -1
@@ -16061,6 +16061,8 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	log.Printf("[INFO] TOTAL AGENT DECISIONS: %#v, FINISHED DECISIONS: %#v. Missing decision IDs: %#v", len(mappedResult.Decisions), len(allFinishedDecisions), allFinishedDecisions)
 
 	// FIXME: How do we handle 3rd party memory sources?
+	// This uses the built-in datastore mechanism so that the user
+	// can see and modify stuff themself as well.
 	if mappedResult.Memory == "shuffle_db" {
 		requestKey := fmt.Sprintf("chat_%s_%s", actionResult.ExecutionId, actionResult.Action.ID)
 		log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
@@ -16260,7 +16262,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		//log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
 	} else if actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent" {
 		if strings.HasPrefix(actionResult.Status, "agent_") {
-			log.Printf("[DEBUG] Got AI Agent response - STATUS: %#v, resp: %#v.", actionResult.Status, actionResult.Result)
+			if debug { 
+				log.Printf("[DEBUG] Got AI Agent response - STATUS: %#v, resp: %#v.", actionResult.Status, actionResult.Result)
+			}
 
 			return handleAgentDecisionStreamResult(workflowExecution, actionResult)
 		}
@@ -23198,7 +23202,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			//log.Printf("Result len: %d", len(oldExecution.Results))
 			newResults := []ActionResult{}
 			foundresult := ActionResult{}
-			for _, result := range oldExecution.Results {
+			for resultIndex, result := range oldExecution.Results {
 				if result.Action.ID == start[0] {
 					if result.Status == "ABORTED" {
 						log.Printf("[INFO][%s] Found aborted result: %s (%s)", oldExecution.ExecutionId, result.Action.Label, result.Action.ID)
@@ -23305,11 +23309,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						result.Result = string(newDecisionBytes)
 					}
 
-					//actionCacheId := fmt.Sprintf("%s_%s_result", oldExecution.ExecutionId, result.Action.ID)
-					//err = SetCache(ctx, actionCacheId, []byte(result.Result), 35)
-					//if err != nil {
-					//	log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
-					//}
+					actionCacheId := fmt.Sprintf("%s_%s_result", oldExecution.ExecutionId, result.Action.ID)
+					err = SetCache(ctx, actionCacheId, []byte(result.Result), 35)
+					if err != nil {
+						log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
+					}
+
+					oldExecution.Results[resultIndex] = result
 
 					// FIXME: Can we force continue the agent from here? Or do we send another action inbetween?
 					// go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
