@@ -4521,7 +4521,7 @@ type AgentDecisionRunDetails struct {
 
 	StartedAt   int64  `json:"started_at" datastore:"started_at"`
 	CompletedAt int64  `json:"completed_at" datastore:"completed_at"`
-	Type        string `json:"type" datastore:"type"`
+	Type        string `json:"type,omitempty" datastore:"type"`
 	Status      string `json:"status" datastore:"status"`
 	RawResponse string `json:"raw_response,omitempty" datastore:"raw_response"`
 	DebugUrl    string `json:"debug_url,omitempty" datastore:"debug_url"`

@@ -916,7 +916,7 @@ func getBadOutputString(action Action, appname, inputdata, outputBody string, st
 		}
 
 		if len(param.Value) > 0 {
-			outputParams += fmt.Sprintf("\"%s\": \"%s\", ", param.Name, param.Value)
+			outputParams += fmt.Sprintf("  \"%s\": \"%s\", ", param.Name, param.Value)
 		}
 	}
 
@@ -927,7 +927,7 @@ func getBadOutputString(action Action, appname, inputdata, outputBody string, st
 	outputData := fmt.Sprintf("Fields: %s\n\nHTTP Status: %d\nHTTP error: %s", outputParams, status, outputBody)
 
 	if debug { 
-		log.Printf("[DEBUG] Skipping output formatting (bad output string)")
+		log.Printf("[WARNING] Skipping automatic output formatting (bad output string). Is this necessary?")
 	}
 	//errorString := HandleOutputFormatting(string(outputData), inputdata, appname)
 
@@ -1268,6 +1268,7 @@ func FixContentOutput(contentOutput string) string {
 	contentOutput = strings.Trim(contentOutput, "\n")
 	contentOutput = strings.Trim(contentOutput, "\t")
 
+	// Attempts to balance it automatically
 	contentOutput = balanceJSONLikeString(contentOutput)
 
 	return contentOutput
@@ -6568,7 +6569,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	}
 
 	// Create the OpenAI body struct
-	systemMessage := `You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it is absolutely necessary. If you need to ask for input multiple times in a row, ask both questions at the same time. Only ask if the User context doesn't contain the details you need, AND the question isn't about networking or authentication. 
+	systemMessage := `You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it is absolutely necessary. Do NOT ask about networking or authentication unless explicitly specified. 
 
 # agent actions: 
 - ask 
@@ -6732,13 +6733,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 - If a tool or app is mentioned, add it to the tool field. Otherwise make the field empty.
 - Indexes should be the same if they should run in parallell. 
 - The confidence is between 0 and 1. 
-- Runs are how many times it should run requests (default: 1, * for all looped items). 
 - The {{action_name}} has to match EXACTLY the action name of a previous decision.
 - NEVER add unnecessary fields to the fields array, only add the ones that are absolutely needed for the action to run!
-- If you ask for user input, use the "ask" action and add a "question" field. Do NOT use this for authentication.
-- Any answer to a question by the user is in the 'answer' variable for the same field. This is empty or non-existant by default.
 - If you use the "API" action, make sure to fill the "tool". Additionally fill in "url", "method" and "body" fields.
-- Do NOT add empty decisions for no reason.
+- Any answer to a question by the user is in the 'answer' variable for the same decisions' field. This is empty or non-existant before the user has answered.
+- If you ask for user input, use the "ask" action and add one or multiple "question" fields. Do NOT use this for authentication or networking. Make MULTIPLE questions in the same decisions' fields - NOT multiple separate decisions in a row. Do NOT ask the user about confirming obvious information, nor to clarify or other 'optional' questions. Make assumption for them!
 
 # Decision Rules: 
 - NEVER ask for usernames, apikeys or other authentication information from the user.
@@ -6754,7 +6753,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		//Model: "gpt-4o-mini",
 		//Model: "gpt-4.1-mini",
 		//Model: "o4-mini", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
-		Model: "gpt-5-nano", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
+		Model: "gpt-5-mini", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
@@ -6765,8 +6764,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				Content: userMessage,
 			},
 		},
-		//Temperature: 0.95, // Adds a tiny bit of randomness
-		Temperature: 1,
+
+		// Move towards determinism
+		Temperature: 0,
 
 		// json_object -> tends to want a single item and not an array
 		//ResponseFormat: &openai.ChatCompletionResponseFormat{
@@ -7174,6 +7174,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					additions += 1
 				}
 
+				b := make([]byte, 6)
+				_, err := rand.Read(b)
+				if err == nil { 
+					mappedDecision.RunDetails.Id = base64.RawURLEncoding.EncodeToString(b)
+				} else {
+					log.Printf("[ERROR][%s] Failed generating random string for decision index %s-%d (2)", execution.ExecutionId, mappedDecision.Tool, mappedDecision.I)
+				}
+
 				agentOutput.Decisions = append(agentOutput.Decisions, mappedDecision)
 			}
 
@@ -7215,13 +7223,15 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			agentOutput.CompletedAt = time.Now().Unix()
 		}
 
-		if len(mappedDecisions) == 0 {
-			agentOutput.DecisionString = decisionString
-		}
+		if !createNextActions {
+			if len(mappedDecisions) == 0 {
+				agentOutput.DecisionString = decisionString
+			}
 
-		// Ensures we track them along the way
-		if len(parsedAgentInput) > 0 { 
-			agentOutput.Input = parsedAgentInput
+			// Ensures we track them along the way
+			if len(parsedAgentInput) > 0 { 
+				agentOutput.Input = parsedAgentInput
+			}
 		}
 
 		log.Printf("[INFO] Using LastFinishedIndex = %d", lastFinishedIndex)
@@ -7269,6 +7279,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			} else if decision.Action == "ask" || decision.Action == "question" { 
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+
 			} else {
 				// Do we run the singul action directly?
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
@@ -7307,7 +7318,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			// These aren't properly being updated in the db, so 
 			// we need additional logic here to ensure it is being 
 			// set/started
-			if nextActionType == "ask" { 
+			if nextActionType == "ask" || nextActionType == "finish" { 
 				// Ensure we update all of it
 				for resultIndex, result := range execution.Results {
 					if result.Action.ID != startNode.ID {
@@ -7630,6 +7641,9 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		Model: model,
 		Messages: []openai.ChatCompletionMessage{},
 		MaxTokens:   maxTokens,
+
+		// Move towards determinism
+		Temperature: 0,
 
 		// Needs overriding / control
 		// DRASTICALLY slows down requests
