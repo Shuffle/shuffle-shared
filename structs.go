@@ -2985,6 +2985,8 @@ type FileResponse struct {
 type SSOConfig struct {
 	SSOEntrypoint       string `json:"sso_entrypoint" datastore:"sso_entrypoint"`
 	SSOCertificate      string `json:"sso_certificate" datastore:"sso_certificate"`
+	SSOLongCertificate string `json:"sso_long_certificate" datastore:"sso_long_certificate,noindex"`
+    SSOCertificateHash  string `json:"sso_certificate_hash" datastore:"sso_certificate_hash"`	
 	OpenIdClientId      string `json:"client_id" datastore:"client_id"`
 	OpenIdClientSecret  string `json:"client_secret" datastore:"client_secret"`
 	OpenIdAuthorization string `json:"openid_authorization" datastore:"openid_authorization"`
