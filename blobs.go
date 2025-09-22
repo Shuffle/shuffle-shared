@@ -5,16 +5,17 @@ This file is for blobs that we use throughout Shuffle in many locations. If we w
 */
 
 import (
-	"context"
-	"encoding/json"
+	"os"
 	"errors"
+	"strings"
+	"context"
 	"fmt"
 	"log"
-	"os"
-	"strings"
+	"encoding/json"
 
 	uuid "github.com/satori/go.uuid"
 )
+
 
 // These are just specific examples for specific cases
 // FIXME: Should these be loaded from public workflows?
@@ -22,9 +23,9 @@ import (
 // That means each algorithm needs to be written as if-statements to
 // replace a specific part of a workflow :thinking:
 
-// Should workflows be written as YAML and be text-editable?
+// Should workflows be written as YAML and be text-editable? 
 func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction CategoryAction) (Workflow, error) {
-	actionType := categoryAction.Label
+	actionType := categoryAction.Label  
 	appNames := categoryAction.AppName
 
 	if len(orgId) == 0 {
@@ -37,7 +38,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 	}
 
 	// If-else with specific rules per workflow
-	// Make sure it uses workflow -> copies data, as
+	// Make sure it uses workflow -> copies data, as 
 	startActionId := uuid.NewV4().String()
 	startTriggerId := workflow.ID
 	if len(startTriggerId) == 0 {
@@ -51,41 +52,41 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		triggerEnv = "onprem"
 
 		envs, err := GetEnvironments(ctx, orgId)
-		if err == nil {
+		if err == nil { 
 			for _, env := range envs {
 				if env.Default {
 					actionEnv = env.Name
 					break
 				}
 			}
-		} else {
+		} else { 
 			actionEnv = "Shuffle"
 		}
 	}
 
 	if parsedActiontype == "correlate_categories" {
 		defaultWorkflow := Workflow{
-			Name:        actionType,
+			Name: actionType,
 			Description: "Correlates Datastore categories in Shuffle. The point is to graph data",
-			OrgId:       orgId,
-			Start:       startActionId,
+			OrgId: orgId,
+			Start: startActionId,
 			Actions: []Action{
 				Action{
-					ID:          startActionId,
-					Name:        "repeat_back_to_me",
-					AppName:     "Shuffle Tools",
-					AppVersion:  "1.2.0",
+					ID: startActionId,
+					Name: "repeat_back_to_me",
+					AppName: "Shuffle Tools",
+					AppVersion: "1.2.0",
 					Environment: actionEnv,
-					Label:       "Start",
-					IsStartNode: true,
+					Label: "Start",
+					IsStartNode: true, 
 					Position: Position{
 						X: 250,
 						Y: 0,
 					},
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
-							Name:      "call",
-							Value:     "Some code here hello",
+							Name:  "call",
+							Value: "Some code here hello",
 							Multiline: true,
 						},
 					},
@@ -130,19 +131,19 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		}
 
 		defaultWorkflow := Workflow{
-			Name:        actionType,
+			Name: actionType,
 			Description: "List tickets from different systems and ingest them",
-			OrgId:       orgId,
-			Start:       startActionId,
+			OrgId: orgId,
+			Start: startActionId,
 			Actions: []Action{
 				Action{
-					Name:        actionName,
-					AppID:       "integration",
-					AppName:     "Singul",
-					ID:          startActionId,
-					AppVersion:  "1.0.0",
+					Name: actionName,
+					AppID: "integration",
+					AppName: "Singul",
+					ID: startActionId,
+					AppVersion: "1.0.0",
 					Environment: actionEnv,
-					Label:       currentAction.Value,
+					Label: currentAction.Value,
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:  "app_name",
@@ -150,8 +151,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 						},
 						currentAction,
 						WorkflowAppActionParameter{
-							Name:      "fields",
-							Value:     "",
+							Name:  "fields",
+							Value: "",
 							Multiline: true,
 						},
 					},
@@ -159,19 +160,19 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			},
 			Triggers: []Trigger{
 				Trigger{
-					ID:          startTriggerId,
-					Name:        "Schedule",
+					ID: startTriggerId,
+					Name: "Schedule",
 					TriggerType: "SCHEDULE",
-					Label:       "Ingest tickets",
+					Label: "Ingest tickets",
 					Environment: triggerEnv,
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:  "cron",
-							Value: "0 0 * * *",
+							Value: "0 0 * * *", 
 						},
 						WorkflowAppActionParameter{
 							Name:  "execution_argument",
-							Value: "Automatically configured by Shuffle",
+							Value: "Automatically configured by Shuffle", 
 						},
 					},
 				},
@@ -183,40 +184,40 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 	} else if parsedActiontype == "ingest_tickets_webhook" {
 
 		defaultWorkflow := Workflow{
-			Name:        actionType,
+			Name: actionType,
 			Description: "Ingest tickets through a webhook",
-			OrgId:       orgId,
-			Start:       startActionId,
+			OrgId: orgId,
+			Start: startActionId,
 			Actions: []Action{
 				Action{
-					Name:        "Translate standard",
-					AppID:       "integration",
-					AppName:     "Singul",
-					ID:          startActionId,
-					AppVersion:  "1.0.0",
+					Name: "Translate standard",
+					AppID: "integration",
+					AppName: "Singul",
+					ID: startActionId,
+					AppVersion: "1.0.0",
 					Environment: actionEnv,
-					Label:       "Ingest Ticket from Webhook",
+					Label: "Ingest Ticket from Webhook",
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
-							Name:      "source_data",
-							Value:     "$exec",
+							Name:  "source_data",
+							Value: "$exec",
 							Multiline: true,
 						},
 						WorkflowAppActionParameter{
-							Name:        "standard",
+							Name:  "standard",
 							Description: "The standard to use from https://github.com/Shuffle/standards/tree/main",
-							Value:       "OCSF",
-							Multiline:   false,
+							Value: "OCSF",
+							Multiline: false,
 						},
 					},
 				},
 			},
 			Triggers: []Trigger{
 				Trigger{
-					ID:          startTriggerId,
-					Name:        "Webhook",
+					ID: startTriggerId,
+					Name: "Webhook",
 					TriggerType: "WEBHOOK",
-					Label:       "Ingest",
+					Label: "Ingest",
 					Environment: triggerEnv,
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
@@ -225,19 +226,19 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 						},
 						WorkflowAppActionParameter{
 							Name:  "tmp",
-							Value: "",
+							Value: "", 
 						},
 						WorkflowAppActionParameter{
 							Name:  "auth_header",
-							Value: "",
+							Value: "", 
 						},
 						WorkflowAppActionParameter{
 							Name:  "custom_response_body",
-							Value: "",
+							Value: "", 
 						},
 						WorkflowAppActionParameter{
 							Name:  "await_response",
-							Value: "",
+							Value: "", 
 						},
 					},
 				},
@@ -250,90 +251,90 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		secondActionId := uuid.NewV4().String()
 
 		defaultWorkflow := Workflow{
-			Name:        actionType,
+			Name: actionType,
 			Description: "Monitor threatlists and ingest regularly",
-			OrgId:       orgId,
-			Start:       startActionId,
+			OrgId: orgId,
+			Start: startActionId,
 			Actions: []Action{
 				Action{
-					Name:        "GET",
-					AppID:       "HTTP",
-					AppName:     "HTTP",
-					ID:          startActionId,
-					AppVersion:  "1.4.0",
+					Name: "GET",
+					AppID: "HTTP",
+					AppName: "HTTP",
+					ID: startActionId,
+					AppVersion: "1.4.0",
 					Environment: actionEnv,
-					Label:       "Get threatlist URLs",
+					Label: "Get threatlist URLs",
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:  "url",
 							Value: "$shuffle_cache.threatlist_urls.value.#",
 						},
 						WorkflowAppActionParameter{
-							Name:      "headers",
+							Name:  "headers",
 							Multiline: true,
-							Value:     "",
+							Value: "",
 						},
 					},
 				},
 				Action{
-					Name:        "execute_python",
-					AppID:       "Shuffle Tools",
-					AppName:     "Shuffle Tools",
-					ID:          secondActionId,
-					AppVersion:  "1.2.0",
+					Name: "execute_python",
+					AppID: "Shuffle Tools",
+					AppName: "Shuffle Tools",
+					ID: secondActionId,
+					AppVersion: "1.2.0",
 					Environment: actionEnv,
-					Label:       "Ingest IOCs",
+					Label: "Ingest IOCs",
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
-							Name:      "code",
+							Name:  "code",
 							Multiline: true,
-							Required:  true,
-							Value:     getIocIngestionScript(),
+							Required: true,
+							Value: getIocIngestionScript(),
 						},
 					},
 				},
 			},
 			Triggers: []Trigger{
 				Trigger{
-					ID:          startTriggerId,
-					Name:        "Schedule",
+					ID: startTriggerId,
+					Name: "Schedule",
 					TriggerType: "SCHEDULE",
-					Label:       "Pull threatlist URLs",
+					Label: "Pull threatlist URLs",
 					Environment: triggerEnv,
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:  "cron",
-							Value: "0 0 * * *",
+							Value: "0 0 * * *", 
 						},
 						WorkflowAppActionParameter{
 							Name:  "execution_argument",
-							Value: "Automatically configured by Shuffle",
+							Value: "Automatically configured by Shuffle", 
 						},
 					},
 				},
 			},
 			Branches: []Branch{
 				Branch{
-					SourceID:      startTriggerId,
+					SourceID: startTriggerId,
 					DestinationID: startActionId,
-					ID:            uuid.NewV4().String(),
+					ID: uuid.NewV4().String(),
 				},
 				Branch{
-					SourceID:      startActionId,
+					SourceID: startActionId,
 					DestinationID: secondActionId,
-					ID:            uuid.NewV4().String(),
+					ID: uuid.NewV4().String(),
 					Conditions: []Condition{
 						Condition{
 							Source: WorkflowAppActionParameter{
-								Name:  "source",
+								Name: "source",
 								Value: "{{ $get_threatlist_urls | size }}",
 							},
 							Condition: WorkflowAppActionParameter{
-								Name:  "condition",
+								Name: "condition",
 								Value: "larger than",
 							},
 							Destination: WorkflowAppActionParameter{
-								Name:  "destination",
+								Name: "destination",
 								Value: "0",
 							},
 						},
@@ -347,18 +348,18 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow.OrgId = orgId
 
 		/*
-			if len(workflow.WorkflowVariables) == 0 {
-				workflow.WorkflowVariables = defaultWorkflow.WorkflowVariables
-			}
+		if len(workflow.WorkflowVariables) == 0 {
+			workflow.WorkflowVariables = defaultWorkflow.WorkflowVariables
+		}
 
-			if len(workflow.Actions) == 0 {
-				workflow.Actions = defaultWorkflow.Actions
-			}
+		if len(workflow.Actions) == 0 {
+			workflow.Actions = defaultWorkflow.Actions
+		}
 
-			// Rules specific to this one
-			if len(workflow.Triggers) == 0 {
-				workflow.Triggers = defaultWorkflow.Triggers
-			}
+		// Rules specific to this one
+		if len(workflow.Triggers) == 0 {
+			workflow.Triggers = defaultWorkflow.Triggers
+		}
 		*/
 
 		// Get the item with key "threatlist_urls" from datastore
@@ -375,7 +376,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				log.Printf("[ERROR] Failed to marshal threatlist URLs: %s", err)
 			} else {
 				key := CacheKeyData{
-					Key:   "threatlist_urls",
+					Key: "threatlist_urls",
 					Value: fmt.Sprintf(`%s`, string(jsonMarshalled)),
 					OrgId: orgId,
 				}
@@ -394,7 +395,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		return workflow, errors.New("Workflow name or ID is empty")
 	}
 
-	// Appends actions in the workflow
+	// Appends actions in the workflow 
 	positionAddition := float64(250)
 	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && len(appNames) > 0 && len(workflow.Triggers) == 1 && workflow.Triggers[0].TriggerType == "SCHEDULE" {
 
@@ -403,21 +404,21 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		// Pre-defining it with a startnode that does nothing
 		workflow.Actions = []Action{
 			Action{
-				ID:          startActionId,
-				Name:        "repeat_back_to_me",
-				AppName:     "Shuffle Tools",
-				AppVersion:  "1.2.0",
+				ID: startActionId,
+				Name: "repeat_back_to_me",
+				AppName: "Shuffle Tools",
+				AppVersion: "1.2.0",
 				Environment: actionEnv,
-				Label:       "Start",
-				IsStartNode: true,
+				Label: "Start",
+				IsStartNode: true, 
 				Position: Position{
 					X: 250,
 					Y: 0,
 				},
 				Parameters: []WorkflowAppActionParameter{
 					WorkflowAppActionParameter{
-						Name:      "call",
-						Value:     "",
+						Name:  "call",
+						Value: "",
 						Multiline: true,
 					},
 				},
@@ -425,11 +426,11 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		}
 
 		// Point from trigger(s) to startnode (repeater)
-		for _, trigger := range workflow.Triggers {
+		for _, trigger := range workflow.Triggers { 
 			newBranch := Branch{
-				SourceID:      trigger.ID,
+				SourceID: trigger.ID,
 				DestinationID: workflow.Start,
-				ID:            uuid.NewV4().String(),
+				ID: uuid.NewV4().String(),
 			}
 
 			workflow.Branches = append(workflow.Branches, newBranch)
@@ -441,14 +442,15 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			newAction.Parameters = append([]WorkflowAppActionParameter(nil), actionTemplate.Parameters...)
 
 			// Positioning
-			newAction.Position.X = positionAddition * float64(appIndex)
+			newAction.Position.X = positionAddition*float64(appIndex)
 			newAction.Position.Y = positionAddition
+
 
 			// Point from startnode to current one
 			newBranch := Branch{
-				SourceID:      workflow.Start,
+				SourceID: workflow.Start,
 				DestinationID: newAction.ID,
-				ID:            uuid.NewV4().String(),
+				ID: uuid.NewV4().String(),
 			}
 
 			workflow.Branches = append(workflow.Branches, newBranch)
@@ -486,16 +488,16 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				Y: startYPosition,
 			}
 
-			startXPosition += positionAddition
+			startXPosition += positionAddition 
 		}
 
 		for actionIndex, _ := range workflow.Actions {
 			workflow.Actions[actionIndex].Position = Position{
 				X: startXPosition,
-				Y: startYPosition,
+				Y: startYPosition, 
 			}
 
-			startXPosition += positionAddition
+			startXPosition += positionAddition 
 		}
 	}
 
@@ -524,9 +526,9 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			}
 
 			newBranch := Branch{
-				SourceID:      sourceId,
+				SourceID: sourceId,
 				DestinationID: destId,
-				ID:            uuid.NewV4().String(),
+				ID: uuid.NewV4().String(),
 			}
 
 			workflow.Branches = append(workflow.Branches, newBranch)
@@ -552,9 +554,9 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			log.Printf("Missing branch: %s", action.ID)
 			// Create a branch from the previous action to this one
 			workflow.Branches = append(workflow.Branches, Branch{
-				SourceID:      workflow.Actions[actionIndex-1].ID,
+				SourceID: workflow.Actions[actionIndex-1].ID,
 				DestinationID: action.ID,
-				ID:            uuid.NewV4().String(),
+				ID: uuid.NewV4().String(),
 			})
 		}
 	}
