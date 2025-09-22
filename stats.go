@@ -628,32 +628,6 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] Should get stats for key %s", statsKey)
 	}
 
-	currentMonth := time.Now().Month()
-	if int(currentMonth) != info.LastMonthlyResetMonth {
-		handleDailyCacheUpdate(info)
-		err = SetOrgStatistics(ctx, *info, info.OrgId)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting org stats after monthly reset for org %s: %s", orgId, err)
-		}
-	}
-
-	if len(org.CreatorOrg) > 0 {
-		// get stats for parent org as well
-		parentInfo, err := GetOrgStatistics(ctx, org.CreatorOrg)
-		if err != nil {
-			log.Printf("[WARNING] Failed getting stats for parent org %s: %s", org.CreatorOrg, err)
-		} else {
-			currentMonth := time.Now().Month()
-			if int(currentMonth) != parentInfo.LastMonthlyResetMonth {
-				handleDailyCacheUpdate(parentInfo)
-				err = SetOrgStatistics(ctx, *parentInfo, parentInfo.OrgId)
-				if err != nil {
-					log.Printf("[WARNING] Failed setting org stats after monthly reset for parent org %s: %s", org.CreatorOrg, err)
-				}
-			}
-		}
-	}
-
 	if len(info.DailyStatistics) > 0 {
 		// Sort the array
 		sort.Slice(info.DailyStatistics, func(i, j int) bool {
@@ -1408,6 +1382,11 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyAIUsage = 0
 		executionInfo.LastMonthlyResetMonth = currentMonth
 		executionInfo.LastUsageAlertThreshold = 0
+
+		// Reset all usage alerts to unsent
+		for index := range executionInfo.UsageAlerts {
+			executionInfo.UsageAlerts[index].Email_send = false
+		}
 	}
 
 	return executionInfo
@@ -1550,6 +1529,24 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		return orgStatistics
 	}
 
+	for _, alert := range org.Billing.AlertThreshold {
+		found := false
+		for _, statAlert := range orgStatistics.UsageAlerts {
+			if statAlert.Percentage == alert.Percentage || statAlert.Count == alert.Count {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			orgStatistics.UsageAlerts = append(orgStatistics.UsageAlerts, AlertThreshold{
+				Percentage: alert.Percentage,
+				Count:      alert.Count,
+				Email_send: alert.Email_send,
+			})
+		}
+	}
+
 	for index, AlertThreshold := range org.Billing.AlertThreshold {
 
 		totalAppExecutions := orgStatistics.MonthlyAppExecutions + orgStatistics.MonthlyChildAppExecutions
@@ -1561,7 +1558,15 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			shouldSendAlert = true
 		}
 
-		if int64(AlertThreshold.Count) < totalAppExecutions && AlertThreshold.Email_send == false && shouldSendAlert {
+		sendAlert := false
+		for _, alerts := range orgStatistics.UsageAlerts {
+			if alerts.Percentage == AlertThreshold.Percentage && alerts.Count == AlertThreshold.Count {
+				sendAlert = alerts.Email_send
+				break
+			}
+		}
+
+		if int64(AlertThreshold.Count) < totalAppExecutions && !sendAlert && shouldSendAlert {
 
 			allAdmins := []string{}
 			firstAdmin := ""
@@ -1623,6 +1628,15 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 					log.Printf("[ERROR] Failed setting org in increment: %s", err)
 					return orgStatistics
 				}
+
+				// update the the alert send in the statistics
+				for index, alerts := range orgStatistics.UsageAlerts {
+					if alerts.Percentage == AlertThreshold.Percentage && alerts.Count == AlertThreshold.Count {
+						orgStatistics.UsageAlerts[index].Email_send = true
+						break
+					}
+				}
+
 				log.Printf("[DEBUG] Successfully sent alert mail for org %s", orgId)
 			}
 		}
