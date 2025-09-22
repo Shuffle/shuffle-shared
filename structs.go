@@ -260,6 +260,9 @@ type WorkflowAppActionParameter struct {
 type Valuereplace struct {
 	Key   string `json:"key" datastore:"key" yaml:"key"`
 	Value string `json:"value" datastore:"value,noindex" yaml:"value"`
+
+	// Used for e.g. user input storage
+	Answer string `json:"answer,omitempty" datastore:"answer,noindex" yaml:"answer,omitempty"`
 }
 
 type WorkflowAppAction struct {
@@ -465,6 +468,7 @@ type ExecutionInfo struct {
 	Additions               []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
 	LastMonthlyResetMonth   int                   `json:"last_monthly_reset_month" datastore:"last_monthly_reset_month"`
 	LastUsageAlertThreshold int64                 `json:"last_usage_alert_threshold" datastore:"last_usage_alert_threshold"`
+	UsageAlerts             []AlertThreshold      `json:"usage_alerts" datastore:"usage_alerts"`
 }
 
 type AdditionalUseConfig struct {
@@ -1043,10 +1047,11 @@ type Org struct {
 }
 
 type Billing struct {
-	Email            string           `json:"Email" datastore:"Email"`
-	AppRunsHardLimit int64            `json:"app_runs_hard_limit" datastore:"app_runs_hard_limit"`
-	AlertThreshold   []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
-	Consultation     Consultation     `json:"Consultation" datastore:"Consultation"`
+	Email                    string           `json:"Email" datastore:"Email"`
+	AppRunsHardLimit         int64            `json:"app_runs_hard_limit" datastore:"app_runs_hard_limit"`
+	AlertThreshold           []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
+	Consultation             Consultation     `json:"Consultation" datastore:"Consultation"`
+	InternalAppRunsHardLimit int64            `json:"internal_app_runs_hard_limit" datastore:"internal_app_runs_hard_limit"`
 }
 
 type AlertThreshold struct {
@@ -1138,6 +1143,7 @@ type CacheKeyData struct {
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
 
+	Existed bool `json:"existed,omitempty" datastore:"Existed"` // If the key existed before the update. Should always be set back to false.
 	Encrypted bool `json:"encrypted" datastore:"Encrypted"`
 	FormattedKey        string   `json:"formatted_key,omitempty" datastore:"FormattedKey"`
 	PublicAuthorization string   `json:"public_authorization,omitempty" datastore:"PublicAuthorization"` // Used for public authorization
@@ -4516,7 +4522,7 @@ type AgentDecisionRunDetails struct {
 
 	StartedAt   int64  `json:"started_at" datastore:"started_at"`
 	CompletedAt int64  `json:"completed_at" datastore:"completed_at"`
-	Type        string `json:"type" datastore:"type"`
+	Type        string `json:"type,omitempty" datastore:"type"`
 	Status      string `json:"status" datastore:"status"`
 	RawResponse string `json:"raw_response,omitempty" datastore:"raw_response"`
 	DebugUrl    string `json:"debug_url,omitempty" datastore:"debug_url"`
@@ -4554,6 +4560,7 @@ type AgentOutput struct {
 	NodeId      string `json:"node_id,omitempty" datastore:"node_id"`
 	Memory      string `json:"memory,omitempty" datastore:"memory"`
 	Input       string `json:"input" datastore:"input"`
+	Output 	 	string `json:"output,omitempty" datastore:"output"`
 }
 
 type HTTPWrapper struct {

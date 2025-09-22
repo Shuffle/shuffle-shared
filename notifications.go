@@ -589,14 +589,15 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 		return errors.New("No backend URL set for notification")
 	}
 
-	executionUrl := fmt.Sprintf("%s/api/v1/notifications", backendUrl)
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
+	notificationUrl := fmt.Sprintf("%s/api/v1/notifications", backendUrl)
+	client := GetExternalClient(notificationUrl)
+	//client := &http.Client{
+	//	Timeout: 5 * time.Second,
+	//}
 
 	req, err := http.NewRequest(
 		"POST",
-		executionUrl,
+		notificationUrl,
 		bytes.NewBuffer(b),
 	)
 
@@ -622,7 +623,7 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 	}
 
 
-	log.Printf("[DEBUG] Finished notification request to %s with status %d. Data: %s", executionUrl, newresp.StatusCode, string(respBody))
+	log.Printf("[DEBUG] Finished notification request to %s with status %d. Data: %s", notificationUrl, newresp.StatusCode, string(respBody))
 	return nil
 }
 
@@ -644,7 +645,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		org := os.Getenv("ORG")
 		environment := os.Getenv("ENVIRONMENT_NAME")
 		if len(auth) == 0 || len(org) == 0 || len(environment) == 0 {
-			log.Printf("[ERROR] Not generating notification, as no environment has been detected: %#v. This should not happen in Orborus.", project.Environment)
+			log.Printf("[ERROR] Not generating notification, as no project.Environment has been detected: %#v. This should not happen in Orborus. ENV: %s, AUTH: %d, ORG: %d", project.Environment, environment, len(auth), len(org))
 			return nil
 		}
 

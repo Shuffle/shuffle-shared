@@ -1,21 +1,22 @@
 package shuffle
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
-	"io/ioutil"
-	"log"
-	"net/http"
-	"net/url"
 	"os"
-	"path/filepath"
+	"fmt"
+	"log"
+	"time"
+	"bytes"
+	"errors"
 	"regexp"
 	"strings"
-	"time"
+	"context"
+	"net/url"
+	"net/http"
+	"io/ioutil"
+	"math/rand"
+	"path/filepath"
+	"encoding/json"
 
 	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
@@ -883,8 +884,6 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	}
 
 	if org.Billing.AppRunsHardLimit > 0 && orgStats.MonthlyAppExecutions > org.Billing.AppRunsHardLimit {
-		log.Printf("[WARNING] Org %s (%s) has exceeded the app runs hard limit (%d/%d)", org.Name, org.Id, orgStats.MonthlyAppExecutions, org.Billing.AppRunsHardLimit)
-
 		return org, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the app runs hard limit (%d/%d)", org.Name, org.Id, orgStats.MonthlyAppExecutions, org.Billing.AppRunsHardLimit))
 	}
 
@@ -904,8 +903,11 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 			//return org, errors.New(fmt.Sprintf("Failed getting the creator organization statistics %s: %s", validationOrg.CreatorOrg, err))
 			return org, nil
 		}
+	}
 
-		log.Printf("[INFO] Using creator org %s (%s) for org %s (%s)", validationOrg.Name, validationOrg.Id, org.CreatorOrg, org.Id)
+	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
+	if validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
+		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
 	}
 
 	// Allows partners and POV users to run workflows without limits
@@ -918,10 +920,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		return validationOrg, nil
 	}
 
-	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
-
 	if totalAppExecutions >= validationOrg.SyncFeatures.AppExecutions.Limit {
-		log.Printf("[WARNING] Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit)
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.SyncFeatures.AppExecutions.Limit))
 	}
 
@@ -2044,7 +2043,7 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 // As AI Agents can have multiple types of runs, this could change every time.
 func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, error) {
 	debugUrl := ""
-	log.Printf("[DEBUG][%s] Running agent decision action %s with tool %s", execution.ExecutionId, decision.Action, decision.Tool)
+	log.Printf("[INFO][%s] Running agent decision action '%s' with app '%s'. This is ran with Singul.", execution.ExecutionId, decision.Action, decision.Tool)
 
 	baseUrl := "https://shuffler.io"
 	if os.Getenv("BASE_URL") != "" {
@@ -2057,10 +2056,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
-	// Change timeout to be 30 seconds (just in case)
+	// Change timeout to be 300 seconds (just in case)
+	// Allows for reruns and self-correcting
 	client := GetExternalClient(url)
-	client.Timeout = 60 * time.Second
-
+	client.Timeout = 300 * time.Second
 	parsedFields := TranslateBadFieldFormats(decision.Fields)
 	parsedAction := CategoryAction{
 		AppName: decision.Tool,
@@ -2069,6 +2068,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		Fields: parsedFields,
 
 		SkipWorkflow: true,
+	}
+
+	if strings.ToLower(decision.Action) == "api" {
+		parsedAction.Action = "custom_action"
 	}
 
 	marshalledAction, err := json.Marshal(parsedAction)
@@ -2091,7 +2094,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed running agent decision: %s", execution.ExecutionId, err)
+		log.Printf("[ERROR][%s] Failed running agent decision (1). Timeout: %d: %s", execution.ExecutionId, client.Timeout, err)
 		return []byte{}, debugUrl, err
 	}
 
@@ -2137,7 +2140,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	body := originalBody
 	defer resp.Body.Close()
 
-	log.Printf("\n\n\n[DEBUG][%s] Agent decision response: %s\n\n\n", execution.ExecutionId, string(body))
+	if debug { 
+		log.Printf("\n\n\n[DEBUG][%s] Agent decision response: %s\n\n\n", execution.ExecutionId, string(body))
+	}
+
 	// Try to map it into SchemalessOutput and grab "RawResponse"
 	outputMapped := SchemalessOutput{}
 	err = json.Unmarshal(body, &outputMapped)
@@ -2165,11 +2171,11 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR][%s] Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
-		return body, debugUrl, errors.New(fmt.Sprintf("Failed running agent decision. Status code %d", resp.StatusCode))
+		return body, debugUrl, errors.New(fmt.Sprintf("Failed running agent decision (2). Status code %d", resp.StatusCode))
 	}
 
 	if outputMapped.Success == false {
-		return originalBody, debugUrl, errors.New("Failed running agent decision. Success false for Singul action")
+		return originalBody, debugUrl, errors.New("Failed running agent decision (3). Success false for Singul action")
 	}
 
 	/*
@@ -2229,18 +2235,22 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 	go SetCache(ctx, decisionId, marshalledDecision, 60)
 
-	rawResponse, debugUrl, err := RunAgentDecisionSingulActionHandler(execution, decision)
-	decision.RunDetails.RawResponse = string(rawResponse)
-	decision.RunDetails.DebugUrl = debugUrl
-	if err != nil {
-		log.Printf("[ERROR][%s] Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
-		decision.RunDetails.Status = "FAILURE"
-
-		if len(decision.RunDetails.RawResponse) == 0 {
-			decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start action. Raw Error: %s", err)
-		}
+	if decision.Action == "user_input" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" { 
 	} else {
-		decision.RunDetails.Status = "FINISHED"
+		// Singul handler
+		rawResponse, debugUrl, err := RunAgentDecisionSingulActionHandler(execution, decision)
+		decision.RunDetails.RawResponse = string(rawResponse)
+		decision.RunDetails.DebugUrl = debugUrl
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
+			decision.RunDetails.Status = "FAILURE"
+
+			if len(decision.RunDetails.RawResponse) == 0 {
+				decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start decision action. Raw Error: %s", err)
+			}
+		} else {
+			decision.RunDetails.Status = "FINISHED"
+		}
 	}
 
 	// 1. Send this back as a result for an action
@@ -2278,6 +2288,8 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	//?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 	client := GetExternalClient(url)
 
+	// This is exactly how results for decisions as sent huh 
+	// May need to do this for agentic question, answers as well
 	parsedAction := ActionResult{
 		ExecutionId:   execution.ExecutionId,
 		Authorization: execution.Authorization,
@@ -2455,9 +2467,9 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 	if bodyerr == nil {
 		orboruserr := json.Unmarshal(body, &orborusData)
 		if orboruserr == nil {
-			if time.Now().Unix() > env.Checkin+120 {
+			if time.Now().Unix() > env.Checkin+90 {
 				if debug {
-					log.Printf("[DEBUG] Failover orborus to %s", orborusData.Uuid)
+					log.Printf("[DEBUG] Failover orborus to %s. Checkin: %d. Edit: %d", orborusData.Uuid, env.Checkin, env.Edited)
 				}
 
 				env.OrborusUuid = orborusData.Uuid
@@ -2465,7 +2477,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 
 			if env.OrborusUuid != orborusData.Uuid && len(env.OrborusUuid) > 0 {
 				resp.WriteHeader(409)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Orborus UUID mismatch. This means another Orborus (Leader) is already handling this Runtime Location queue."}`)))
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Orborus UUID mismatch. This means another Orborus (Leader) is already handling this Runtime Location queue. This persists past a few minutes with only one Orborus running, please contact support@shuffler.io"}`)))
 				return errors.New("Orborus UUID mismatch")
 			} else {
 				//env.Checkin = time.Now().Unix()
@@ -2476,8 +2488,14 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 	timeNow := time.Now().Unix()
 	if request.Method == "POST" {
 
-		// Updates every 90 seconds~
-		if time.Now().Unix() > env.Checkin+90 {
+		// Updates every 60 seconds~
+		if time.Now().Unix() > env.Checkin+60 {
+
+			// Print 1/10 times 
+			if rand.Intn(10) == 0 {
+				log.Printf("[INFO] Updating environment '%s' (%s) from Orborus checkin (60 sec timeout). Previous checkin: %d seconds ago", env.Name, env.Id, timeNow-env.Checkin)
+			}
+
 			env.RunningIp = GetRequestIp(request)
 
 			// Orborus label = custom label for Orborus
@@ -2515,6 +2533,10 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			if err != nil {
 				log.Printf("[ERROR] Failed updating environment: %s", err)
 			}
+		} else {
+			//if debug { 
+			//	log.Printf("[DEBUG] NOT updating env %s yet: %d seconds since checkin", env.Name, timeNow-env.Checkin)
+			//}
 		}
 	}
 
