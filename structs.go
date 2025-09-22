@@ -4559,6 +4559,7 @@ type AgentOutput struct {
 	NodeId      string `json:"node_id,omitempty" datastore:"node_id"`
 	Memory      string `json:"memory,omitempty" datastore:"memory"`
 	Input       string `json:"input" datastore:"input"`
+	Output 	 	string `json:"output,omitempty" datastore:"output"`
 }
 
 type HTTPWrapper struct {

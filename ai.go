@@ -819,26 +819,31 @@ Input JSON Payload (ensure VALID JSON):
 
 			if !runString {
 				// Make map from val and marshal to byte
-
-				stringType := reflect.TypeOf(val).String()
-				if stringType == "map[string]interface {}" {
-					valByte, err := json.Marshal(val)
-					if err != nil {
-						log.Printf("[ERROR] Failed to marshal val in action fix for app %s with action %s: %s. Field: %s", appname, action.Name, err, param.Name)
-					} else {
-						formattedVal = string(valByte)
-					}
-				} else if valMap, ok := val.(map[string]interface{}); !ok {
-					valByte, err := json.Marshal(valMap)
-					if err != nil {
-						log.Printf("[ERROR] Failed to marshal valMap in action fix for app %s with action %s: %s. Field: %s", appname, action.Name, err, param.Name)
-						continue
-					}
-
-					formattedVal = string(valByte)
+				if val == nil {
+					log.Printf("[ERROR] Value for param %s is nil in action fix for app %s with action %s. Field: %s", param.Name, appname, action.Name, param.Name)
+					formattedVal = ""
+					continue
 				} else {
-					// Check if val is a map[string]interface{}, and not interface{} 
-					log.Printf("[ERROR] Failed to convert val of %#v to map[string]interface{} in action fix for app %s with action %s. Field: %s. Type: %#v. Value: %#v", param.Name, appname, action.Name, param.Name, reflect.TypeOf(val), val)
+					stringType := reflect.TypeOf(val).String()
+					if stringType == "map[string]interface {}" {
+						valByte, err := json.Marshal(val)
+						if err != nil {
+							log.Printf("[ERROR] Failed to marshal val in action fix for app %s with action %s: %s. Field: %s", appname, action.Name, err, param.Name)
+						} else {
+							formattedVal = string(valByte)
+						}
+					} else if valMap, ok := val.(map[string]interface{}); !ok {
+						valByte, err := json.Marshal(valMap)
+						if err != nil {
+							log.Printf("[ERROR] Failed to marshal valMap in action fix for app %s with action %s: %s. Field: %s", appname, action.Name, err, param.Name)
+							continue
+						}
+
+						formattedVal = string(valByte)
+					} else {
+						// Check if val is a map[string]interface{}, and not interface{} 
+						log.Printf("[ERROR] Failed to convert val of %#v to map[string]interface{} in action fix for app %s with action %s. Field: %s. Type: %#v. Value: %#v", param.Name, appname, action.Name, param.Name, reflect.TypeOf(val), val)
+					}
 				}
 			}
 
@@ -1006,7 +1011,7 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 				continue
 			}
 
-			log.Printf("[INFO] Found action %s in app %s", foundAction.Name, app.Name)
+			//log.Printf("[INFO] Found action %s in app %s", foundAction.Name, app.Name)
 			for paramIndex, param := range foundAction.Parameters {
 				if param.Name != currentParam {
 					continue
@@ -6638,7 +6643,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	// Will just have to make a translation system.
 	//typeOptions := []string{"ask", "singul", "workflow", "agent"}
 	typeOptions := []string{"ask", "singul"}
-	extraString := "Return a MINIMUM of two decisions in a JSON array. "
+	extraString := "Return a MINIMUM of one decision in a JSON array. "
 	if len(typeOptions) == 0 {
 		extraString = ""
 	}
@@ -6650,7 +6655,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	_ = oldActionResult 
 	oldAgentOutput := AgentOutput{}
 	if createNextActions == true { 
-		extraString = "This is a continuation of a previous execution. ONLY output decisions that fit AFTER the last FINISHED decision. DO NOT repeat previous decisions, and make sure your indexing is on point. Output as an array of decisions.\n\nIF you don't want to add any new decision, add AT LEAST one decision saying why it is finished. Make the action 'finish' and category 'finish', and put the reason in the 'reason' field."
+		extraString = "This is a continuation of a previous execution. ONLY output decisions that fit AFTER the last FINISHED decision. DO NOT repeat previous decisions, and make sure your indexing is on point. Output as an array of decisions.\n\nIF you don't want to add any new decision, add AT LEAST one decision saying why it is finished, summarising EXACTLY what the user wants in a user-friendly Markdown format, OR the format the user asked for. Make the action and category 'finish', and put the reason in the 'reason' field in a user friendly format."
 
 		userMessageChanged := false
 
@@ -6729,20 +6734,34 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 %s
 
 # Formatting Rules:
-- Do NOT ask to narrow down the scope unless ABSOLUTELY necessary. Assume all the information is already in place.
-- If a tool or app is mentioned, add it to the tool field. Otherwise make the field empty.
-- Indexes should be the same if they should run in parallell. 
-- The confidence is between 0 and 1. 
-- The {{action_name}} has to match EXACTLY the action name of a previous decision.
-- NEVER add unnecessary fields to the fields array, only add the ones that are absolutely needed for the action to run!
-- If you use the "API" action, make sure to fill the "tool". Additionally fill in "url", "method" and "body" fields.
-- Any answer to a question by the user is in the 'answer' variable for the same decisions' field. This is empty or non-existant before the user has answered.
-- If you ask for user input, use the "ask" action and add one or multiple "question" fields. Do NOT use this for authentication or networking. Make MULTIPLE questions in the same decisions' fields - NOT multiple separate decisions in a row. Do NOT ask the user about confirming obvious information, nor to clarify or other 'optional' questions. Make assumption for them!
+* Do NOT ask to narrow down the scope unless ABSOLUTELY necessary. Assume all the information is already in place.
+* If a tool or app is mentioned, add it to the tool field. Otherwise make the field empty.
+* Indexes should be the same if they should run in parallell. 
+* The confidence is between 0 and 1. 
+* The {{action_name}} has to match EXACTLY the action name of a previous decision.
+* NEVER add unnecessary fields to the fields array, only add the ones that are absolutely needed for the action to run!
+* If you use the "API" action, make sure to fill the "tool". Additionally fill in "url", "method" and "body" fields.
+* Any answer to a question by the user is in the 'answer' variable for the same decisions' field. This is empty or non-existant before the user has answered.
+* If you ask for user input, use the "ask" action and add one or multiple "question" fields. Do NOT use this for authentication or networking. Make MULTIPLE questions in the same decisions' fields - NOT multiple separate decisions in a row. 
 
 # Decision Rules: 
-- NEVER ask for usernames, apikeys or other authentication information from the user.
-- Do NOT add random fields and do NOT guess formatting e.g. body formatting
-- Fields can be set manually, or use previous action output by adding them in the format {{action_name}}, such as {"key": "body": "value": "{{tickets[0].fieldname}}} to get the first 'ticket' fieldname from a previous decision.
+* If your confidence in an action is more than 50%, just perform it instead of asking.
+* NEVER ask for usernames, apikeys or other authentication information from the user.
+* Do NOT add random fields and do NOT guess formatting e.g. body formatting
+* Fields can be set manually, or use previous action output by adding them in the format {{action_name}}, such as {"key": "body": "value": "{{tickets[0].fieldname}}} to get the first 'ticket' fieldname from a previous decision.
+
+# DOs:
+* DO Focus on performing actions, NOT user input. Questions are NOT necessary.
+* DO Assume their prompt had all the information needed 
+* DO Make decisions for the user. Assume the user wants to get something done, and do it. 
+
+# Do NOTs:
+* If unsure, do NOT ask. Just make a decision.
+* Do NOT Ask about confirmation of performing an action. Just perform it.
+* Do NOT Ask about authentication or networking 
+* Do NOT Ask about units, times, timezone etc. Examples: right now vs. tomorrow, celsius vs. fahrenheit, minutes vs. hours, etc. Assume they meant something reasonable!
+* Do NOT Ask about formatting, clarifications, etc. Assume they meant something reasonable!
+* Do NOT Ask unreasonable, unnecessary questions such as "how much detail about X?" or "what specific part of Y?". Make reasonable assumptions.
 
 %s`, strings.Join(typeOptions, ", "), metadata, extraString)
 
@@ -7166,7 +7185,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			log.Printf("Got %d NEW decision(s)", len(mappedDecisions))
 			additions := 0
 			for _, mappedDecision := range mappedDecisions {
-				log.Printf("GOT DECISION: %#v", mappedDecision)
 				if mappedDecision.I < lastFinishedIndex {
 					log.Printf("[WARNING][%s] Setting decision index %d to last finished index %d + additions %d", execution.ExecutionId, mappedDecision.I, lastFinishedIndex, additions)
 
@@ -7234,9 +7252,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 		}
 
-		log.Printf("[INFO] Using LastFinishedIndex = %d", lastFinishedIndex)
 		decisionActionRan := false 
-			
 		nextActionType := ""
 		for decisionIndex, decision := range agentOutput.Decisions {
 			// Random generate an ID that's 10 chars long
@@ -7275,6 +7291,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				log.Printf("[INFO][%s] Decision %d is a finish decision. Marking the agent as finished...", execution.ExecutionId, decision.I)
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+
+
+				agentOutput.Output = decision.Reason
 
 			} else if decision.Action == "ask" || decision.Action == "question" { 
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
