@@ -820,7 +820,7 @@ Input JSON Payload (ensure VALID JSON):
 			if !runString {
 				// Make map from val and marshal to byte
 				if val == nil {
-					log.Printf("[ERROR] Value for param %s is nil in action fix for app %s with action %s. Field: %s", param.Name, appname, action.Name, param.Name)
+					//log.Printf("[ERROR] Value for param %s is nil in action fix for app %s with action %s. Field: %s", param.Name, appname, action.Name, param.Name)
 					formattedVal = ""
 					continue
 				} else {
@@ -843,6 +843,7 @@ Input JSON Payload (ensure VALID JSON):
 					} else {
 						// Check if val is a map[string]interface{}, and not interface{} 
 						log.Printf("[ERROR] Failed to convert val of %#v to map[string]interface{} in action fix for app %s with action %s. Field: %s. Type: %#v. Value: %#v", param.Name, appname, action.Name, param.Name, reflect.TypeOf(val), val)
+						formattedVal = ""
 					}
 				}
 			}
@@ -6574,12 +6575,12 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	}
 
 	// Create the OpenAI body struct
-	systemMessage := `You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it is absolutely necessary. Do NOT ask about networking or authentication unless explicitly specified. 
+	systemMessage := `INTRODUCTION: 
+You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it is absolutely necessary. Do NOT ask about networking or authentication unless explicitly specified. 
 
-# agent actions: 
-- ask 
-
-# integration actions: 
+END INTRODUCTION
+---
+AVAILABLE ACTIONS:
 `
 	userMessage := ""
 	// Don't think this matters much
@@ -6728,41 +6729,48 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	// This makes it so we can start from this index.
 	lastFinishedIndex += 1
 
-	systemMessage += fmt.Sprintf(`Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "<tool name>", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
+	systemMessage += fmt.Sprintf(`
+END AVAILABLE ACTIONS
+---
+SECONDARY ACTIONS: 
+1. ask 
 
-# User Context:
+END SECONDARY ACTIONSACTIONS
+---
+DECISION FORMATTING 
+
+Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "<tool name>", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
+
+END DECISION FORMATTING
+---
+USER CONTEXT:
+
 %s
 
-# Formatting Rules:
-* Do NOT ask to narrow down the scope unless ABSOLUTELY necessary. Assume all the information is already in place.
-* If a tool or app is mentioned, add it to the tool field. Otherwise make the field empty.
-* Indexes should be the same if they should run in parallell. 
-* The confidence is between 0 and 1. 
-* The {{action_name}} has to match EXACTLY the action name of a previous decision.
-* NEVER add unnecessary fields to the fields array, only add the ones that are absolutely needed for the action to run!
-* If you use the "API" action, make sure to fill the "tool". Additionally fill in "url", "method" and "body" fields.
-* Any answer to a question by the user is in the 'answer' variable for the same decisions' field. This is empty or non-existant before the user has answered.
-* If you ask for user input, use the "ask" action and add one or multiple "question" fields. Do NOT use this for authentication or networking. Make MULTIPLE questions in the same decisions' fields - NOT multiple separate decisions in a row. 
+END USER CONTEXT
+--- 
+RULES:
+1. General Behavior
 
-# Decision Rules: 
-* If your confidence in an action is more than 50%, just perform it instead of asking.
-* NEVER ask for usernames, apikeys or other authentication information from the user.
-* Do NOT add random fields and do NOT guess formatting e.g. body formatting
-* Fields can be set manually, or use previous action output by adding them in the format {{action_name}}, such as {"key": "body": "value": "{{tickets[0].fieldname}}} to get the first 'ticket' fieldname from a previous decision.
+* Always perform the specified action; do not just provide an answer.
+* NEVER skip executing an action, even if some details are unclear. Fill missing fields only with safe defaults, but still execute.
+* NEVER ask the user for clarification, confirmations, or extra details unless it is absolutely unavoidable.
+* Focus entirely on performing tasks; gathering input is secondary.
 
-# DOs:
-* DO Focus on performing actions, NOT user input. Questions are NOT necessary.
-* DO Assume their prompt had all the information needed 
-* DO Make decisions for the user. Assume the user wants to get something done, and do it. 
+2. Action & Decision Rules
 
-# Do NOTs:
-* If unsure, do NOT ask. Just make a decision.
-* Do NOT Ask about confirmation of performing an action. Just perform it.
-* Do NOT Ask about authentication or networking 
-* Do NOT Ask about units, times, timezone etc. Examples: right now vs. tomorrow, celsius vs. fahrenheit, minutes vs. hours, etc. Assume they meant something reasonable!
-* Do NOT Ask about formatting, clarifications, etc. Assume they meant something reasonable!
-* Do NOT Ask unreasonable, unnecessary questions such as "how much detail about X?" or "what specific part of Y?". Make reasonable assumptions.
+* If confidence in an action > 0.5, execute it immediately.
+* Always execute API actions: fill required fields (tool, url, method, body) before performing.
+* NEVER ask for usernames, API keys, passwords, or authentication information.
+* NEVER ask for confirmation before performing an action.
+* NEVER skip execution because of minor missing details—fill them with reasonable defaults (e.g., default units or formats) and proceed.
+* Do NOT add unnecessary fields; only include fields required for the action.
+* Fields can reference previous action outputs using {{action_name}}. Example: {"body": "{{previous_action.field}}"}.
+* If questions are absolutely required, combine all into one "ask" action with multiple "question" fields. Do NOT create multiple separate decisions.
 
+END RULES
+---
+FINALISING:
 %s`, strings.Join(typeOptions, ", "), metadata, extraString)
 
 
