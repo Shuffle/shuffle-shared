@@ -33846,3 +33846,203 @@ func GetDockerClient() (*dockerclient.Client, string, error) {
 
 	return cli, dockerApiVersion, err
 }
+
+func HandleSimulateWorkflow(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// This is temporary, and we should also allow anonymous demo execution
+	_, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in simulate Workflow: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var workflowId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("[WARNING] Path too short: %d", len(location))
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow path not found"}`))
+			return
+		}
+
+		workflowId = location[4]
+	}
+
+	if len(workflowId) != 36 {
+		log.Printf("[WARNING] Bad workflow ID: %s", workflowId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Bad workflow ID"}`))
+		return
+	}
+
+	log.Printf("[INFO] Starting workflow simulation for ID: %s", workflowId)
+
+	ctx := GetContext(request)
+	workflow, err := GetWorkflow(ctx, workflowId, true)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflow %s for simulation: %s", workflowId, err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+		return
+	}
+
+	if !workflow.Public && workflow.Sharing != "public" {
+		log.Printf("[INFO] Workflow %s is not public, but allowing demo simulation anyway", workflowId)
+	}
+
+	finalExecution := simulateWorkflowExecutionNew(ctx, workflow)
+
+	response, err := json.Marshal(finalExecution)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal demo execution: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to serialize demo execution"}`))
+		return
+	}
+
+	log.Printf("[DEBUG] Returning complete execution with %d results", len(finalExecution.Results))
+	resp.WriteHeader(200)
+	resp.Write(response)
+}
+
+// implementation focusing on proper node traversal and realistic output
+func simulateWorkflowExecutionNew(ctx context.Context, workflow *Workflow) WorkflowExecution {
+	workflowExecution := WorkflowExecution{
+		Type:            "workflow",
+		Status:          "EXECUTING",
+		Start:           workflow.Start,
+		WorkflowId:      workflow.ID,
+		Result:          "",
+		StartedAt:       int64(time.Now().Unix()),
+		Workflow:        *workflow,
+		ExecutionSource: "default",
+	}
+
+	executionOrder := getNodeExecutionOrder(*workflow)
+	if len(executionOrder) == 0 {
+		log.Printf("[WARNING] No executable nodes found in workflow %s", workflowExecution.WorkflowId)
+		workflowExecution.Status = "FINISHED"
+		workflowExecution.CompletedAt = int64(time.Now().Unix())
+		return workflowExecution
+	}
+
+	var allResults []ActionResult
+
+	for i, node := range executionOrder {
+		log.Printf("[INFO] DEMO: Executing node %d: %s (%s)", i+1, node.Label, node.AppName)
+
+		demoData := generateDemoDataForNode(node.AppName, node.Name)
+
+		actionResult := ActionResult{
+			ExecutionId: workflowExecution.ExecutionId,
+			Action:      node,
+			Result:      demoData,
+			Status:      "SUCCESS",
+			StartedAt:   int64(time.Now().Unix() - int64(len(allResults)*2)),
+			CompletedAt: int64(time.Now().Unix() - int64(len(allResults)*2) + 1),
+		}
+
+		allResults = append(allResults, actionResult)
+	}
+
+	workflowExecution.Results = allResults
+	workflowExecution.Status = "FINISHED"
+
+	if len(allResults) > 0 {
+		workflowExecution.LastNode = allResults[len(allResults)-1].Action.ID
+		workflowExecution.Result = allResults[len(allResults)-1].Result
+	}
+
+	workflowExecution.CompletedAt = int64(time.Now().Unix())
+
+	return workflowExecution
+}
+
+// Helper function to determine execution order based on workflow.Branches connections
+func getNodeExecutionOrder(workflow Workflow) []Action {
+
+	var executionOrder []Action
+	visited := make(map[string]bool)
+	actionMap := make(map[string]Action)
+
+	for _, action := range workflow.Actions {
+		actionMap[action.ID] = action
+	}
+
+	for _, trigger := range workflow.Triggers {
+		triggerAction := Action{
+			ID:      trigger.ID,
+			Label:   trigger.Label,
+			AppName: trigger.AppName,
+			Name:    trigger.Name,
+		}
+		executionOrder = append(executionOrder, triggerAction)
+		visited[trigger.ID] = true
+	}
+
+	var startActionID string
+	for _, action := range workflow.Actions {
+		if action.IsStartNode {
+			startActionID = action.ID
+			break
+		}
+	}
+
+	if startActionID == "" {
+		return executionOrder
+	}
+
+	if startAction, exists := actionMap[startActionID]; exists {
+		executionOrder = append(executionOrder, startAction)
+		visited[startActionID] = true
+	}
+
+	for {
+		foundNew := false
+
+		for _, branch := range workflow.Branches {
+			if visited[branch.SourceID] && !visited[branch.DestinationID] {
+				if action, exists := actionMap[branch.DestinationID]; exists {
+					executionOrder = append(executionOrder, action)
+					visited[branch.DestinationID] = true
+					foundNew = true
+				}
+			}
+		}
+
+		if !foundNew {
+			break
+		}
+	}
+
+	for _, action := range workflow.Actions {
+		if !visited[action.ID] {
+			log.Printf("[INFO] DEMO: SKIPPING disconnected action: %s (not connected to main workflow)", action.Label)
+		}
+	}
+
+	return executionOrder
+}
+
+// Demo data generation functions for workflow simulation
+func generateDemoDataForNode(appName string, actionName string) string {
+
+	switch strings.ToLower(appName) {
+	case "wazuh":
+		return generateWazuhDemoData(actionName)
+	case "jira":
+		return generateJiraDemoData(actionName)
+	case "slack":
+		return generateSlackDemoData(actionName)
+	default:
+		return fmt.Sprintf(`{"app": "%s", "action": "%s", "status": "completed", "demo": true, "timestamp": "%s"}`,
+			appName, actionName, time.Now().Format("2006-01-02T15:04:05Z"))
+	}
+}
