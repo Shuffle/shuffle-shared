@@ -384,17 +384,45 @@ func BuildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 
 	// adding md5 based on input data to not overwrite earlier data.
 	generatedPath := "generated"
-	subpath := "../app_gen/openapi/"
+	subpath := "../app_gen/python-lib/"
 	identifier := fmt.Sprintf("%s-%s", swagger.Info.Title, curHash)
 	appPath := fmt.Sprintf("%s/%s", generatedPath, identifier)
 
 	os.MkdirAll(appPath, os.ModePerm)
 	os.Mkdir(fmt.Sprintf("%s/src", appPath), os.ModePerm)
 
-	err := CopyFile(fmt.Sprintf("%sbaseline/Dockerfile", subpath), fmt.Sprintf("%s/%s", appPath, "Dockerfile"))
+	// File path no longer required
+	sourceDockerPath := fmt.Sprintf("%sbaseline/Dockerfile", subpath)
+	destDockerPath := fmt.Sprintf("%s/%s", appPath, "Dockerfile")
+
+	// Check if the full dest folders exists - otherwise make them
+	parsedPathSplit := strings.Split(destDockerPath, "/")
+	parsedPath := strings.Join(parsedPathSplit[0:len(parsedPathSplit)-1], "/")
+	if _, err := os.Stat(parsedPath); os.IsNotExist(err) {
+		os.MkdirAll(parsedPath, 0644)
+		log.Printf("[INFO] Created folder path for Dockerfile to ensure it exists: %s", parsedPath)
+	}
+
+	err := CopyFile(sourceDockerPath, destDockerPath)
 	if err != nil {
-		log.Println("[ERROR] Failed to move Dockerfile")
-		return appPath, err
+
+		// Keep it in blobs just in case?
+		foundDockerfile := GetBaseDockerfile() 
+		if len(foundDockerfile) > 0 {
+
+			// Writing it to both
+			ioutil.WriteFile(sourceDockerPath, []byte(foundDockerfile), 0644)
+			err = ioutil.WriteFile(destDockerPath, []byte(foundDockerfile), 0644)
+			if err != nil {
+				log.Printf("[ERROR] Failed to write Dockerfile from BaseDockerfile during app build: %s", err)
+				return appPath, err
+			} else {
+				log.Printf("[INFO] Successfully wrote Dockerfile from BaseDockerfile to path %s", destDockerPath)
+			}
+
+		} else {
+			log.Printf("[ERROR] Failed to move Dockerfile from location %s to location %s. Found Dockerfile len: %d", sourceDockerPath, destDockerPath, len(foundDockerfile))
+		}
 	}
 
 	parsedAppPath := fmt.Sprintf("%s/%s", appPath, "requirements.txt")
@@ -411,7 +439,7 @@ func BuildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 
 	err = CopyFile(fmt.Sprintf("%sbaseline/requirements.txt", subpath), fmt.Sprintf("%s/%s", appPath, "requirements.txt"))
 	if err != nil {
-		log.Println("Failed to move requrements.txt")
+		log.Printf("[ERROR] Failed to move requrements.txt")
 		return appPath, err
 	}
 
@@ -490,38 +518,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	extraQueries := ""
 	reservedKeys := []string{"BearerAuth", "ApiKeyAuth", "Oauth2", "BasicAuth", "JWT"}
 
-	if swagger.Components.SecuritySchemes != nil {
-		for key, value := range swagger.Components.SecuritySchemes {
-			if ArrayContains(reservedKeys, key) {
-				continue
-			}
-
-			//parsedKey := strings.Replace(key, "-", "_", -1)
-			parsedKey := FixFunctionName(key, "", true)
-
-			if value.Value.In == "header" {
-				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
-				if len(extraHeaders) > 0 {
-					extraHeaders += "\n        "
-				}
-
-				extraHeaders += fmt.Sprintf(`if %s != " ": request_headers["%s"] = %s`, parsedKey, key, parsedKey)
-			} else if value.Value.In == "query" {
-				log.Printf("Handling extra queries for %#v", parsedKey)
-				if strings.Contains(parsedKey, "=") {
-					parsedKey = strings.Split(parsedKey, "=")[0]
-				}
-
-				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
-				if len(extraQueries) > 0 {
-					extraQueries += "\n        "
-				}
-				extraQueries += fmt.Sprintf(`if %s != " ": params["%s"] = %s`, parsedKey, key, parsedKey)
-			} else {
-				//log.Printf("[WARNING] Can't handle type %s", value.Value.In)
-			}
-		}
-	}
+	// Predefined for auth
+	//invalidQueries := []string{"access_token", "username_basic", "password_basic", "apikey", "api_key"}	
 
 	// FIXME - this might break - need to check if ? or & should be set as query
 	parameterData := ""
@@ -535,6 +533,10 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			newParams := GetValidParameters([]string{parsedQuery})
 			if len(newParams) > 0 {
 				parsedQuery = newParams[0]
+			}
+
+			if strings.Contains(queryString, parsedQuery) {
+				continue
 			}
 
 			queryString += fmt.Sprintf("%s=\"\"", parsedQuery)
@@ -653,8 +655,49 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		if len(urlSplit) > 2 {
 			tmpUrl = "/" + strings.Join(urlSplit[3:len(urlSplit)], "/")
 		}
+
 		if !strings.HasPrefix(url, "/") {
 			url = tmpUrl
+		}
+	}
+
+	functionname := strings.ToLower(fmt.Sprintf("%s_%s", method, name))
+	if strings.Contains(strings.ToLower(name), strings.ToLower(method)) {
+		functionname = strings.ToLower(name)
+	}
+
+	// Check for bad {} for python printf.
+	// If it's NOT closed before the next /  
+	openBrackets := strings.Count(url, "{")
+	closeBrackets := strings.Count(url, "}")
+	if openBrackets != closeBrackets {
+
+		removedChars := 0
+		for charPos, char := range url {
+			if char != '{' {
+				continue
+			}
+
+			// Find the next / or end of string
+			nextClose := strings.Index(url[charPos:], "}")
+			nextSlash := strings.Index(url[charPos:], "/")
+			if nextClose == -1 || (nextSlash != -1 && nextSlash < nextClose) {
+				// We have a problem
+				log.Printf("[ERROR] Unbalanced bracket at position %d in URL %s", charPos, url)
+
+				// Remove the bracket from the specific spot.
+				url = url[0:charPos-removedChars] + url[charPos-removedChars+1:len(url)]
+				removedChars += 1
+			}
+		}
+
+		openBrackets := strings.Count(url, "{")
+		closeBrackets := strings.Count(url, "}")
+		if openBrackets != closeBrackets {
+			log.Printf("[ERROR] Unbalanced brackets in generated URL %s - this might cause issues, so we're skipping the function. App: %s. Autofixing.", url, name)
+
+			// Makes the function not generate 
+			return functionname, "" 
 		}
 	}
 
@@ -681,7 +724,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				headerParserCode = "if isinstance(headers, dict):\n            request_headers = headers\n        elif len(headers) > 0:\n            for header in str(headers).split(\"\\n\"):\n                if ':' in header:\n                    headersplit=header.split(':')\n                    request_headers[headersplit[0].strip()] = ':'.join(headersplit[1:]).strip()\n                elif '=' in header:\n                    headersplit=header.split('=')\n                    request_headers[headersplit[0].strip()] = '='.join(headersplit[1:]).strip()"
 
 			} else if strings.Contains(param, "queries=") {
-				queryParserCode = "\n        if len(queries) > 0:\n            if queries[0] == \"?\" or queries[0] == \"&\":\n                queries = queries[1:len(queries)]\n            if queries[len(queries)-1] == \"?\" or queries[len(queries)-1] == \"&\":\n                queries = queries[0:-1]\n            for query in queries.split(\"&\"):\n                 if isinstance(query, list) or isinstance(query, dict):\n                    try:\n                        query = json.dumps(query)\n                    except:\n                        pass\n                 if '=' in query:\n                    headersplit=query.split('=')\n                    params[requests.utils.quote(headersplit[0].strip())] = requests.utils.quote(headersplit[1].strip())\n                 else:\n                    params[requests.utils.quote(query.strip())] = None\n        params = '&'.join([k if v is None else f\"{k}={v}\" for k, v in params.items()])"
+				queryParserCode = "\n        if len(queries) > 0:\n            if isinstance(queries, dict):\n                params=queries\n            else:\n                if queries[0] == \"?\" or queries[0] == \"&\":\n                    queries = queries[1:len(queries)]\n                if queries[len(queries)-1] == \"?\" or queries[len(queries)-1] == \"&\":\n                    queries = queries[0:-1]\n                for query in queries.split(\"&\"):\n                     if isinstance(query, list) or isinstance(query, dict):\n                        try:\n                            query = json.dumps(query)\n                        except:\n                            pass\n                     if '=' in query:\n                        headersplit=query.split('=')\n                        params[requests.utils.quote(headersplit[0].strip())] = requests.utils.quote(headersplit[1].strip())\n                     else:\n                        params[requests.utils.quote(query.strip())] = None\n        params = '&'.join([k if v is None else f\"{k}={v}\" for k, v in params.items()])"
 
 			} else {
 				if !strings.Contains(url, fmt.Sprintf("{%s}", param)) {
@@ -699,10 +742,6 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		}
 	}
 
-	functionname := strings.ToLower(fmt.Sprintf("%s_%s", method, name))
-	if strings.Contains(strings.ToLower(name), strings.ToLower(method)) {
-		functionname = strings.ToLower(name)
-	}
 
 	bodyParameter := ""
 	bodyAddin := ""
@@ -780,6 +819,39 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		parameterData = strings.Replace(parameterData, ", file_id", "", -1)
 	}
 
+	if swagger.Components.SecuritySchemes != nil {
+		for key, value := range swagger.Components.SecuritySchemes {
+			if ArrayContains(reservedKeys, key) {
+				continue
+			}
+
+			//parsedKey := strings.Replace(key, "-", "_", -1)
+			parsedKey := FixFunctionName(key, "", true)
+
+			if value.Value.In == "header" {
+				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
+				if len(extraHeaders) > 0 {
+					extraHeaders += "\n        "
+				}
+
+				extraHeaders += fmt.Sprintf(`if %s != " ": request_headers["%s"] = %s`, parsedKey, key, parsedKey)
+			} else if value.Value.In == "query" {
+				//log.Printf("Handling extra queries for %#v", parsedKey)
+				if strings.Contains(parsedKey, "=") {
+					parsedKey = strings.Split(parsedKey, "=")[0]
+				}
+
+				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
+				if len(extraQueries) > 0 {
+					extraQueries += "\n        "
+				}
+				extraQueries += fmt.Sprintf(`if %s != " ": params["%s"] = %s`, parsedKey, key, parsedKey)
+			} else {
+				//log.Printf("[WARNING] Can't handle type %s", value.Value.In)
+			}
+		}
+	}
+
 	// Extra param for url if it's changeable
 	// Extra param for authentication scheme(s)
 	// The last weird one is the body.. Tabs & spaces sucks.
@@ -793,12 +865,44 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		verifyParam,
 	)
 
+	// Dedup parameters 
+	parsedParametersSplit := strings.Split(parsedParameters, ",")
+	newParameters := []string{}
+	usedParams := []string{}
+	for _, param := range parsedParametersSplit {
+		param = strings.Trim(param, " ")
+		if param == "" {
+			continue
+		}
+
+		paramsplit := strings.Split(param, "=")
+		if len(paramsplit) > 1 {
+			param = paramsplit[0]
+		}
+
+		if !ArrayContains(usedParams, param) {
+			usedParams = append(usedParams, param)
+			if len(paramsplit) > 1 { 
+				param = strings.Join(paramsplit, "=")
+			}
+
+			newParameters = append(newParameters, param)
+		}
+	}
+
+	parsedParameters = strings.Join(newParameters, ", ")
+
 	// Handles default return value
 	handleFileString := "if not to_file:\n            return self.prepare_response(ret)\n\n        return ret.text"
 
 	parsedDataCurlParser := ""
 	if method == "post" || method == "patch" || method == "put" || method == "delete" {
 		parsedDataCurlParser = `parsed_curl_command += f""" -d '{body}'""" if isinstance(body, str) else f""" -d '{body.decode("utf-8")}'"""`
+	}
+
+	// Makes sure to reformat references
+	if !strings.HasPrefix(parsedParameters, ",") {
+		parsedParameters = fmt.Sprintf(", %s", parsedParameters)
 	}
 
 	data := fmt.Sprintf(`    def %s(self%s):
@@ -948,7 +1052,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "hash_report") {
+	if strings.Contains(strings.ToLower(functionname), "get_list_all_issues") {
 		log.Printf("\n%s", data)
 	}
 
@@ -2174,35 +2278,23 @@ func FixFunctionName(functionName, actualPath string, lowercase bool) string {
 		functionName = actualPath
 	}
 
-	functionName = strings.Replace(functionName, ".", "", -1)
-	functionName = strings.Replace(functionName, ",", "", -1)
-	functionName = strings.Replace(functionName, ":", "", -1)
-	functionName = strings.Replace(functionName, ".", "", -1)
-	functionName = strings.Replace(functionName, "&", "", -1)
-	functionName = strings.Replace(functionName, "/", "", -1)
-	functionName = strings.Replace(functionName, "\\", "", -1)
+	validCharacters := []rune("_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	newname := ""
+	for _, char := range functionName {
+		if string(char) == " " {
+			newname += "_"
+			continue
+		}
 
-	functionName = strings.Replace(functionName, "!", "", -1)
-	functionName = strings.Replace(functionName, "?", "", -1)
-	functionName = strings.Replace(functionName, "@", "", -1)
-	functionName = strings.Replace(functionName, "#", "", -1)
-	functionName = strings.Replace(functionName, "$", "", -1)
-	functionName = strings.Replace(functionName, "&", "", -1)
-	functionName = strings.Replace(functionName, "*", "", -1)
-	functionName = strings.Replace(functionName, "(", "", -1)
-	functionName = strings.Replace(functionName, ")", "", -1)
-	functionName = strings.Replace(functionName, "[", "", -1)
-	functionName = strings.Replace(functionName, "]", "", -1)
-	functionName = strings.Replace(functionName, "{", "", -1)
-	functionName = strings.Replace(functionName, "}", "", -1)
-	functionName = strings.Replace(functionName, `"`, "", -1)
-	functionName = strings.Replace(functionName, `'`, "", -1)
-	functionName = strings.Replace(functionName, `|`, "", -1)
-	functionName = strings.Replace(functionName, `~`, "", -1)
+		for _, rune := range validCharacters {
+			if char == rune {
+				newname += string(char)
+				break
+			}
+		}
+	}
 
-	functionName = strings.Replace(functionName, " ", "_", -1)
-	functionName = strings.Replace(functionName, "-", "_", -1)
-
+	functionName = newname
 	if lowercase == true {
 		functionName = strings.ToLower(functionName)
 	}
@@ -2270,6 +2362,7 @@ func ValidateParameterName(name string) string {
 func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Connect.Summary, actualPath, true)
+	//func FixParamname(paramname string) string {
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 
@@ -3805,7 +3898,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.1.7\nshuffle-sdk==0.0.28"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.1.8\nshuffle-sdk==0.0.30"
 }
 
 // Removes JSON values from the input
