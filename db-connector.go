@@ -5634,7 +5634,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		}
 
 		defer res.Body.Close()
-		if res.StatusCode == 404 {
+		if res.StatusCode == 404 && len(orgId) > 0 {
 			item := Environment{
 				Name:    "Shuffle",
 				Type:    "onprem",
