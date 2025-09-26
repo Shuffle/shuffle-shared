@@ -3268,25 +3268,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	if err == nil {
 		sessionToken := c.Value
 
-		newCookie := &http.Cookie{
-			Name:    "session_token",
-			Value:   sessionToken,
-			Expires: time.Now().Add(-100 * time.Hour),
-			MaxAge:  -1,
-			Path:    "/",
-		}
-
-		if project.Environment == "cloud" {
-			newCookie.Domain = ".shuffler.io"
-			newCookie.Secure = true
-			newCookie.HttpOnly = true
-		}
-
 		user, err := GetSessionNew(ctx, sessionToken)
 		if err != nil {
 			log.Printf("[WARNING] No valid session token for ID %s. Setting cookie to expire. May cause fallback problems.", sessionToken)
 
 			if resp != nil {
+				newCookie := constructSessionDeleteCookie()
 				http.SetCookie(resp, newCookie)
 
 				newCookie.Name = "__session"
@@ -3298,7 +3285,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			// Check if both session tokens are set
 			// Compatibility issues
 			//expiration := time.Now().Add(3600 * time.Second)
-			newCookie.Expires = c.Expires
+			newCookie := ConstructSessionCookie(sessionToken, c.Expires)
 			newCookie.MaxAge = c.MaxAge
 
 			_, err1 := request.Cookie("session_token")
@@ -3321,22 +3308,8 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		}
 
 		if len(user.Id) == 0 && len(user.Username) == 0 {
-
-			newCookie := &http.Cookie{
-				Name:    "session_token",
-				Value:   sessionToken,
-				Expires: time.Now().Add(-100 * time.Hour),
-				MaxAge:  -1,
-				Path:    "/",
-			}
-
-			if project.Environment == "cloud" {
-				newCookie.Domain = ".shuffler.io"
-				newCookie.Secure = true
-				newCookie.HttpOnly = true
-			}
-
 			if resp != nil {
+				newCookie := constructSessionDeleteCookie()
 				http.SetCookie(resp, newCookie)
 
 				newCookie.Name = "__session"
