@@ -31,6 +31,7 @@ import (
 var basepath = os.Getenv("SHUFFLE_FILE_LOCATION")
 var orgFileBucket = "shuffle_org_files"
 var maxFileSize = 10000000 // raw 10mb max filesize on cloud
+var maxFileSizeCloudCustomer =  5 * 1024 * 1024 * 1024 // 5GB max for custom cloud installs
 
 func init() {
 	if len(os.Getenv("SHUFFLE_ORG_BUCKET")) > 0 {
@@ -262,7 +263,6 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 
 	// read query parameter "remove_metadata"
 	removeMetadata := false
-
 	removeMetadataQuery, ok := request.URL.Query()["remove_metadata"]
 	if ok && len(removeMetadataQuery) > 0 {
 		if removeMetadataQuery[0] == "true" {
@@ -270,7 +270,6 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 			removeMetadata = true
 		}
 	}
-
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
@@ -390,6 +389,16 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 		file.Status = "deleted"
+
+		if len(file.SuborgDistribution) > 0 {
+			log.Printf("[INFO] File %s (%s) has suborg distribution, removing it from suborgs", file.Filename, file.Id)
+			for _, suborg := range file.SuborgDistribution {
+				cacheKey := fmt.Sprintf("files_%s_%s", suborg, file.Namespace)
+				DeleteCache(ctx, cacheKey)
+			}
+			file.SuborgDistribution = []string{}
+		}
+
 		err = SetFile(ctx, *file)
 		if err != nil {
 			log.Printf("[ERROR] Failed setting file to deleted: %s", err)
@@ -1229,14 +1238,20 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if project.Environment == "cloud" && len(body) > maxFileSize {
-		log.Printf("[ERROR] Max filesize is 10MB in cloud environment")
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "File too large. Max is 10mb per file."}`))
-		return
+	bodySize := len(body)
+	if project.Environment == "cloud" && bodySize > maxFileSize {
+		foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err == nil && foundOrg.LeadInfo.Customer || foundOrg.LeadInfo.Internal || foundOrg.LeadInfo.POV && bodySize < maxFileSizeCloudCustomer {
+			log.Printf("[AUDIT] Allowing larger file for customer/internal/POV org %s (%s). Filesize: %d", foundOrg.Name, foundOrg.Id, bodySize)
+		} else {
+			log.Printf("[ERROR] Max default size limit is 10MB. Please contact support@shuffler.io with details about your usecase if you want this extended.")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "File too large. Max is 10mb per file."}`))
+			return
+		}
 	}
 
-	file.FileSize = int64(len(body))
+	file.FileSize = int64(bodySize)
 	file.ContentType = http.DetectContentType(body)
 	file.Encrypted = true // not sure about what this does, maybe it has something to do with datastore encrypted column and stores file as encrypted in cloud storage?
 	file.LastEditor = user.Username
@@ -1274,8 +1289,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Successfully edited file ID %s", file.Id)
-
+	log.Printf("[INFO] Successfully uploaded file ID %s. Namespace: %s", file.Id, file.Namespace)
 	if file.Namespace == "sigma" {
 		execType := "CATEGORY_UPDATE"
 		err = SetDetectionOrborusRequest(ctx, user.ActiveOrg.Id, execType, file.Filename, "SIGMA", "SHUFFLE_DISCOVER")
@@ -1404,20 +1418,29 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	io.Copy(&buf, parsedFile)
 	contents := buf.Bytes()
 
+
+	bodySize := len(contents)
 	if project.Environment == "cloud" && len(contents) > maxFileSize {
-		file.Status = "maxsize_exceeded"
-		err = SetFile(ctx, *file)
-		if err != nil {
-			log.Printf("Failed setting file to uploading")
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed setting file to uploading"}`))
+		foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err == nil && foundOrg.LeadInfo.Customer || foundOrg.LeadInfo.Internal || foundOrg.LeadInfo.POV && bodySize < maxFileSizeCloudCustomer {
+			log.Printf("[AUDIT] Allowing larger file for customer/internal/POV org %s (%s). Filesize: %d", foundOrg.Name, foundOrg.Id, bodySize)
+		} else {
+			log.Printf("[ERROR] Max default size limit is 10MB. Please contact support@shuffler.io with details about your usecase if you want this extended.")
+
+			file.Status = "maxsize_exceeded"
+			err = SetFile(ctx, *file)
+			if err != nil {
+				log.Printf("Failed setting file to uploading")
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed setting file to uploading"}`))
+				return
+			}
+
+			log.Printf("[ERROR] Max filesize is 10MB in cloud environment (upload)")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "File too large. Max is 10mb"}`))
 			return
 		}
-
-		log.Printf("[ERROR] Max filesize is 10MB in cloud environment (upload)")
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "File too large. Max is 10mb"}`))
-		return
 	}
 
 	//if len(contents) < 50 && strings.HasSuffix(file.Filename, ".json"){

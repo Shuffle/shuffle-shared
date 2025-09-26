@@ -18,14 +18,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"crypto/sha1"
 
-	"cloud.google.com/go/storage"
-	docker "github.com/docker/docker/client"
-	"github.com/frikky/kin-openapi/openapi3"
-
-	//"github.com/satori/go.uuid"
 	"gopkg.in/yaml.v2"
+	"cloud.google.com/go/storage"
+	uuid "github.com/satori/go.uuid"
+	"github.com/frikky/kin-openapi/openapi3"
+	docker "github.com/docker/docker/client"
 )
 
 var downloadedImages = []string{}
@@ -181,6 +182,7 @@ func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bu
 		log.Printf("Packing failed to create zip file from bucket: %v", err)
 		return filename, err
 	}
+
 	if _, err := fmt.Fprintln(zipFile, requirements); err != nil {
 		return filename, err
 	}
@@ -191,13 +193,6 @@ func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bu
 		return filename, err
 	}
 
-	//src := client.Bucket(bucketName).Object(fmt.Sprintf("%s/baseline/%s", basePath, file))
-	//dst := client.Bucket(bucketName).Object(fmt.Sprintf("%s/%s", appPath, file))
-	//if _, err := dst.CopierFrom(src).Run(ctx); err != nil {
-	//	return "", err
-	//}
-
-	//log.Printf("Finished upload")
 	return filename, nil
 }
 
@@ -258,7 +253,7 @@ func GetAppbase() ([]byte, []byte, error) {
 
 	appbaseData, err := ioutil.ReadFile(appbase)
 	if err != nil {
-		// FIXME: Use an older commit of the file
+		// FIXME: Use an older commit of the file?
 		githubUrl := "https://raw.githubusercontent.com/Shuffle/app_sdk/refs/heads/main/shuffle_sdk/shuffle_sdk.py"
 		content, err := getGithubFile(githubUrl)
 		return content, []byte{}, err
@@ -284,7 +279,7 @@ func GetAppbaseGCP(ctx context.Context, client *storage.Client, bucketName strin
 		attrs, err := reference.Attrs(ctx)
 		if err == nil {
 			if attrs.Updated.Before(time.Now().AddDate(0, -1, 0)) {
-				log.Printf("[DEBUG] App base is older than 1 month on github. Offloading to direct github ref")
+				log.Printf("[WARNING] App base is older than 1 month on github. Offloading to direct github ref")
 			} else {
 				loadFromGithub = false
 			}
@@ -348,7 +343,20 @@ func BuildStructureGCP(ctx context.Context, client *storage.Client, identifier, 
 	basePath := "generated_apps"
 	//identifier := fmt.Sprintf("%s-%s", swagger.Info.Title, curHash)
 	appPath := fmt.Sprintf("%s/%s", basePath, identifier)
-	fileNames := []string{"Dockerfile", "requirements.txt"}
+	//fileNames := []string{"Dockerfile", "requirements.txt"}
+	//fileNames := []string{"Dockerfile", "requirements.txt"}
+	fileNames := []string{"Dockerfile"}
+	requirements := GetAppRequirements()
+	if len(requirements) > 0 {
+
+		// Write the requirements text to the file just so that it's ready
+		dst := client.Bucket(bucketName).Object(fmt.Sprintf("%s/%s", appPath, "requirements.txt"))
+		if _, err := dst.NewWriter(ctx).Write([]byte(requirements)); err != nil {
+			log.Printf("[ERROR] Failed to write requirements.txt during app build: %s", err)
+			fileNames = append(fileNames, "requirements.txt")
+		}
+	}
+
 	for _, file := range fileNames {
 		src := client.Bucket(bucketName).Object(fmt.Sprintf("%s/baseline/%s", basePath, file))
 		dst := client.Bucket(bucketName).Object(fmt.Sprintf("%s/%s", appPath, file))
@@ -368,22 +376,62 @@ func BuildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 
 	// adding md5 based on input data to not overwrite earlier data.
 	generatedPath := "generated"
-	subpath := "../app_gen/openapi/"
+	subpath := "../app_gen/python-lib/"
 	identifier := fmt.Sprintf("%s-%s", swagger.Info.Title, curHash)
 	appPath := fmt.Sprintf("%s/%s", generatedPath, identifier)
 
 	os.MkdirAll(appPath, os.ModePerm)
 	os.Mkdir(fmt.Sprintf("%s/src", appPath), os.ModePerm)
 
-	err := CopyFile(fmt.Sprintf("%sbaseline/Dockerfile", subpath), fmt.Sprintf("%s/%s", appPath, "Dockerfile"))
+	// File path no longer required
+	sourceDockerPath := fmt.Sprintf("%sbaseline/Dockerfile", subpath)
+	destDockerPath := fmt.Sprintf("%s/%s", appPath, "Dockerfile")
+
+	// Check if the full dest folders exists - otherwise make them
+	parsedPathSplit := strings.Split(destDockerPath, "/")
+	parsedPath := strings.Join(parsedPathSplit[0:len(parsedPathSplit)-1], "/")
+	if _, err := os.Stat(parsedPath); os.IsNotExist(err) {
+		os.MkdirAll(parsedPath, 0644)
+		log.Printf("[INFO] Created folder path for Dockerfile to ensure it exists: %s", parsedPath)
+	}
+
+	err := CopyFile(sourceDockerPath, destDockerPath)
 	if err != nil {
-		log.Println("Failed to move Dockerfile")
-		return appPath, err
+
+		// Keep it in blobs just in case?
+		foundDockerfile := GetBaseDockerfile() 
+		if len(foundDockerfile) > 0 {
+
+			// Writing it to both
+			ioutil.WriteFile(sourceDockerPath, []byte(foundDockerfile), 0644)
+			err = ioutil.WriteFile(destDockerPath, []byte(foundDockerfile), 0644)
+			if err != nil {
+				log.Printf("[ERROR] Failed to write Dockerfile from BaseDockerfile during app build: %s", err)
+				return appPath, err
+			} else {
+				log.Printf("[INFO] Successfully wrote Dockerfile from BaseDockerfile to path %s", destDockerPath)
+			}
+
+		} else {
+			log.Printf("[ERROR] Failed to move Dockerfile from location %s to location %s. Found Dockerfile len: %d", sourceDockerPath, destDockerPath, len(foundDockerfile))
+		}
+	}
+
+	parsedAppPath := fmt.Sprintf("%s/%s", appPath, "requirements.txt")
+	requirements := GetAppRequirements()
+	if len(requirements) > 0 {
+		// Write it to the file just so that it's ready
+		err = ioutil.WriteFile(parsedAppPath, []byte(requirements), 0644)
+		if err != nil {
+			log.Printf("[ERROR] Failed to write requirements.txt during app build: %s", err)
+		} else {
+			return appPath, nil
+		}
 	}
 
 	err = CopyFile(fmt.Sprintf("%sbaseline/requirements.txt", subpath), fmt.Sprintf("%s/%s", appPath, "requirements.txt"))
 	if err != nil {
-		log.Println("Failed to move requrements.txt")
+		log.Printf("[ERROR] Failed to move requrements.txt")
 		return appPath, err
 	}
 
@@ -462,38 +510,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	extraQueries := ""
 	reservedKeys := []string{"BearerAuth", "ApiKeyAuth", "Oauth2", "BasicAuth", "JWT"}
 
-	if swagger.Components.SecuritySchemes != nil {
-		for key, value := range swagger.Components.SecuritySchemes {
-			if ArrayContains(reservedKeys, key) {
-				continue
-			}
-
-			//parsedKey := strings.Replace(key, "-", "_", -1)
-			parsedKey := FixFunctionName(key, "", true)
-
-			if value.Value.In == "header" {
-				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
-				if len(extraHeaders) > 0 {
-					extraHeaders += "\n        "
-				}
-
-				extraHeaders += fmt.Sprintf(`if %s != " ": request_headers["%s"] = %s`, parsedKey, key, parsedKey)
-			} else if value.Value.In == "query" {
-				log.Printf("Handling extra queries for %#v", parsedKey)
-				if strings.Contains(parsedKey, "=") {
-					parsedKey = strings.Split(parsedKey, "=")[0]
-				}
-
-				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
-				if len(extraQueries) > 0 {
-					extraQueries += "\n        "
-				}
-				extraQueries += fmt.Sprintf(`if %s != " ": params["%s"] = %s`, parsedKey, key, parsedKey)
-			} else {
-				//log.Printf("[WARNING] Can't handle type %s", value.Value.In)
-			}
-		}
-	}
+	// Predefined for auth
+	//invalidQueries := []string{"access_token", "username_basic", "password_basic", "apikey", "api_key"}	
 
 	// FIXME - this might break - need to check if ? or & should be set as query
 	parameterData := ""
@@ -507,6 +525,10 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			newParams := GetValidParameters([]string{parsedQuery})
 			if len(newParams) > 0 {
 				parsedQuery = newParams[0]
+			}
+
+			if strings.Contains(queryString, parsedQuery) {
+				continue
 			}
 
 			queryString += fmt.Sprintf("%s=\"\"", parsedQuery)
@@ -590,8 +612,19 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 			// Add: client_id and client_secret in body as JSON?
 
-			// ADD: accessToken = field
-			authenticationSetup = fmt.Sprintf("authret = requests.get(f\"{url}%s\", headers=request_headers, auth=(username_basic, password_basic), verify=False)\n        if 'access_token' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['access_token']}\"\n        elif 'jwt' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['jwt']}\"\n        elif 'accessToken' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['accessToken']}\"\n        else:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"Found Bearer auth: {authret.text}\")", api.Authentication.TokenUri)
+			authType := "basic" 
+
+			// check x-jwt-auth-type
+			if swagger.Components.SecuritySchemes["x-jwt-auth-type-json"] != nil {
+				authType = "json"
+			}
+
+			if authType == "basic" {
+				// ADD: accessToken = field
+				authenticationSetup = fmt.Sprintf("authret = requests.get(f\"{url}%s\", headers=request_headers, auth=(username_basic, password_basic), verify=False)\n        if 'access_token' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['access_token']}\"\n        elif 'jwt' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['jwt']}\"\n        elif 'accessToken' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['accessToken']}\"\n        else:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"Found Bearer auth: {authret.text}\")", api.Authentication.TokenUri)
+			} else {
+				authenticationSetup = fmt.Sprintf("authret = requests.post(f\"{url}%s\", headers=request_headers, json={\"username\": username_basic, \"password\": password_basic}, verify=False)\n        if 'access_token' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['access_token']}\"\n        elif 'jwt' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['jwt']}\"\n        elif 'accessToken' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['accessToken']}\"\n        else:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"Found Bearer auth: {authret.text}\")", api.Authentication.TokenUri)	
+			}
 
 			//log.Printf("[DEBUG] Appending jwt code for authenticationSetup:\n        %s", authenticationSetup)
 		}
@@ -614,8 +647,49 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		if len(urlSplit) > 2 {
 			tmpUrl = "/" + strings.Join(urlSplit[3:len(urlSplit)], "/")
 		}
+
 		if !strings.HasPrefix(url, "/") {
 			url = tmpUrl
+		}
+	}
+
+	functionname := strings.ToLower(fmt.Sprintf("%s_%s", method, name))
+	if strings.Contains(strings.ToLower(name), strings.ToLower(method)) {
+		functionname = strings.ToLower(name)
+	}
+
+	// Check for bad {} for python printf.
+	// If it's NOT closed before the next /  
+	openBrackets := strings.Count(url, "{")
+	closeBrackets := strings.Count(url, "}")
+	if openBrackets != closeBrackets {
+
+		removedChars := 0
+		for charPos, char := range url {
+			if char != '{' {
+				continue
+			}
+
+			// Find the next / or end of string
+			nextClose := strings.Index(url[charPos:], "}")
+			nextSlash := strings.Index(url[charPos:], "/")
+			if nextClose == -1 || (nextSlash != -1 && nextSlash < nextClose) {
+				// We have a problem
+				log.Printf("[ERROR] Unbalanced bracket at position %d in URL %s", charPos, url)
+
+				// Remove the bracket from the specific spot.
+				url = url[0:charPos-removedChars] + url[charPos-removedChars+1:len(url)]
+				removedChars += 1
+			}
+		}
+
+		openBrackets := strings.Count(url, "{")
+		closeBrackets := strings.Count(url, "}")
+		if openBrackets != closeBrackets {
+			log.Printf("[ERROR] Unbalanced brackets in generated URL %s - this might cause issues, so we're skipping the function. App: %s. Autofixing.", url, name)
+
+			// Makes the function not generate 
+			return functionname, "" 
 		}
 	}
 
@@ -642,7 +716,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				headerParserCode = "if isinstance(headers, dict):\n            request_headers = headers\n        elif len(headers) > 0:\n            for header in str(headers).split(\"\\n\"):\n                if ':' in header:\n                    headersplit=header.split(':')\n                    request_headers[headersplit[0].strip()] = ':'.join(headersplit[1:]).strip()\n                elif '=' in header:\n                    headersplit=header.split('=')\n                    request_headers[headersplit[0].strip()] = '='.join(headersplit[1:]).strip()"
 
 			} else if strings.Contains(param, "queries=") {
-				queryParserCode = "\n        if len(queries) > 0:\n            if queries[0] == \"?\" or queries[0] == \"&\":\n                queries = queries[1:len(queries)]\n            if queries[len(queries)-1] == \"?\" or queries[len(queries)-1] == \"&\":\n                queries = queries[0:-1]\n            for query in queries.split(\"&\"):\n                 if isinstance(query, list) or isinstance(query, dict):\n                    try:\n                        query = json.dumps(query)\n                    except:\n                        pass\n                 if '=' in query:\n                    headersplit=query.split('=')\n                    params[requests.utils.quote(headersplit[0].strip())] = requests.utils.quote(headersplit[1].strip())\n                 else:\n                    params[requests.utils.quote(query.strip())] = None\n        params = '&'.join([k if v is None else f\"{k}={v}\" for k, v in params.items()])"
+				queryParserCode = "\n        if len(queries) > 0:\n            if isinstance(queries, dict):\n                params=queries\n            else:\n                if queries[0] == \"?\" or queries[0] == \"&\":\n                    queries = queries[1:len(queries)]\n                if queries[len(queries)-1] == \"?\" or queries[len(queries)-1] == \"&\":\n                    queries = queries[0:-1]\n                for query in queries.split(\"&\"):\n                     if isinstance(query, list) or isinstance(query, dict):\n                        try:\n                            query = json.dumps(query)\n                        except:\n                            pass\n                     if '=' in query:\n                        headersplit=query.split('=')\n                        params[requests.utils.quote(headersplit[0].strip())] = requests.utils.quote(headersplit[1].strip())\n                     else:\n                        params[requests.utils.quote(query.strip())] = None\n        params = '&'.join([k if v is None else f\"{k}={v}\" for k, v in params.items()])"
 
 			} else {
 				if !strings.Contains(url, fmt.Sprintf("{%s}", param)) {
@@ -660,10 +734,6 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		}
 	}
 
-	functionname := strings.ToLower(fmt.Sprintf("%s_%s", method, name))
-	if strings.Contains(strings.ToLower(name), strings.ToLower(method)) {
-		functionname = strings.ToLower(name)
-	}
 
 	bodyParameter := ""
 	bodyAddin := ""
@@ -741,6 +811,39 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		parameterData = strings.Replace(parameterData, ", file_id", "", -1)
 	}
 
+	if swagger.Components.SecuritySchemes != nil {
+		for key, value := range swagger.Components.SecuritySchemes {
+			if ArrayContains(reservedKeys, key) {
+				continue
+			}
+
+			//parsedKey := strings.Replace(key, "-", "_", -1)
+			parsedKey := FixFunctionName(key, "", true)
+
+			if value.Value.In == "header" {
+				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
+				if len(extraHeaders) > 0 {
+					extraHeaders += "\n        "
+				}
+
+				extraHeaders += fmt.Sprintf(`if %s != " ": request_headers["%s"] = %s`, parsedKey, key, parsedKey)
+			} else if value.Value.In == "query" {
+				//log.Printf("Handling extra queries for %#v", parsedKey)
+				if strings.Contains(parsedKey, "=") {
+					parsedKey = strings.Split(parsedKey, "=")[0]
+				}
+
+				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
+				if len(extraQueries) > 0 {
+					extraQueries += "\n        "
+				}
+				extraQueries += fmt.Sprintf(`if %s != " ": params["%s"] = %s`, parsedKey, key, parsedKey)
+			} else {
+				//log.Printf("[WARNING] Can't handle type %s", value.Value.In)
+			}
+		}
+	}
+
 	// Extra param for url if it's changeable
 	// Extra param for authentication scheme(s)
 	// The last weird one is the body.. Tabs & spaces sucks.
@@ -754,12 +857,44 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		verifyParam,
 	)
 
+	// Dedup parameters 
+	parsedParametersSplit := strings.Split(parsedParameters, ",")
+	newParameters := []string{}
+	usedParams := []string{}
+	for _, param := range parsedParametersSplit {
+		param = strings.Trim(param, " ")
+		if param == "" {
+			continue
+		}
+
+		paramsplit := strings.Split(param, "=")
+		if len(paramsplit) > 1 {
+			param = paramsplit[0]
+		}
+
+		if !ArrayContains(usedParams, param) {
+			usedParams = append(usedParams, param)
+			if len(paramsplit) > 1 { 
+				param = strings.Join(paramsplit, "=")
+			}
+
+			newParameters = append(newParameters, param)
+		}
+	}
+
+	parsedParameters = strings.Join(newParameters, ", ")
+
 	// Handles default return value
 	handleFileString := "if not to_file:\n            return self.prepare_response(ret)\n\n        return ret.text"
 
 	parsedDataCurlParser := ""
 	if method == "post" || method == "patch" || method == "put" || method == "delete" {
 		parsedDataCurlParser = `parsed_curl_command += f""" -d '{body}'""" if isinstance(body, str) else f""" -d '{body.decode("utf-8")}'"""`
+	}
+
+	// Makes sure to reformat references
+	if !strings.HasPrefix(parsedParameters, ",") {
+		parsedParameters = fmt.Sprintf(", %s", parsedParameters)
 	}
 
 	data := fmt.Sprintf(`    def %s(self%s):
@@ -909,7 +1044,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "hash_report") {
+	if strings.Contains(strings.ToLower(functionname), "get_list_all_issues") {
 		log.Printf("\n%s", data)
 	}
 
@@ -1941,7 +2076,7 @@ class %s(AppBase):
 if __name__ == "__main__":
     %s.run()
 `
-	
+
 	// From old when we actually used asyncio (:
 	//#asyncio.run(%s.run(), debug=True)
 	return baseString
@@ -2135,35 +2270,23 @@ func FixFunctionName(functionName, actualPath string, lowercase bool) string {
 		functionName = actualPath
 	}
 
-	functionName = strings.Replace(functionName, ".", "", -1)
-	functionName = strings.Replace(functionName, ",", "", -1)
-	functionName = strings.Replace(functionName, ":", "", -1)
-	functionName = strings.Replace(functionName, ".", "", -1)
-	functionName = strings.Replace(functionName, "&", "", -1)
-	functionName = strings.Replace(functionName, "/", "", -1)
-	functionName = strings.Replace(functionName, "\\", "", -1)
+	validCharacters := []rune("_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	newname := ""
+	for _, char := range functionName {
+		if string(char) == " " {
+			newname += "_"
+			continue
+		}
 
-	functionName = strings.Replace(functionName, "!", "", -1)
-	functionName = strings.Replace(functionName, "?", "", -1)
-	functionName = strings.Replace(functionName, "@", "", -1)
-	functionName = strings.Replace(functionName, "#", "", -1)
-	functionName = strings.Replace(functionName, "$", "", -1)
-	functionName = strings.Replace(functionName, "&", "", -1)
-	functionName = strings.Replace(functionName, "*", "", -1)
-	functionName = strings.Replace(functionName, "(", "", -1)
-	functionName = strings.Replace(functionName, ")", "", -1)
-	functionName = strings.Replace(functionName, "[", "", -1)
-	functionName = strings.Replace(functionName, "]", "", -1)
-	functionName = strings.Replace(functionName, "{", "", -1)
-	functionName = strings.Replace(functionName, "}", "", -1)
-	functionName = strings.Replace(functionName, `"`, "", -1)
-	functionName = strings.Replace(functionName, `'`, "", -1)
-	functionName = strings.Replace(functionName, `|`, "", -1)
-	functionName = strings.Replace(functionName, `~`, "", -1)
+		for _, rune := range validCharacters {
+			if char == rune {
+				newname += string(char)
+				break
+			}
+		}
+	}
 
-	functionName = strings.Replace(functionName, " ", "_", -1)
-	functionName = strings.Replace(functionName, "-", "_", -1)
-
+	functionName = newname
 	if lowercase == true {
 		functionName = strings.ToLower(functionName)
 	}
@@ -2231,6 +2354,7 @@ func ValidateParameterName(name string) string {
 func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Connect.Summary, actualPath, true)
+	//func FixParamname(paramname string) string {
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 
@@ -3766,7 +3890,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.1.0\nshuffle-sdk==0.0.25"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.1.8\nshuffle-sdk==0.0.31"
 }
 
 // Removes JSON values from the input
@@ -3905,14 +4029,20 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		return nil
 	}
 
+	var dwnImage sync.Mutex
+
 	// Remove from downloadedImages after 5 minutes for a redownload
 	time.AfterFunc(time.Minute*5, func() {
-		for i, img := range downloadedImages {
-			if img == imageName {
-				downloadedImages = append(downloadedImages[:i], downloadedImages[i+1:]...)
-				//log.Printf("[DEBUG] Removed image %s from downloaded images after 10 minutes, as to allow re-downloads.", imageName)
+		dwnImage.Lock()
+		defer dwnImage.Unlock()
+
+		cleanedImages := downloadedImages[:0] // len=0 cap=same, ptr same
+		for _, img := range downloadedImages {
+			if img != imageName {
+				cleanedImages = append(cleanedImages, img)
 			}
 		}
+		downloadedImages = cleanedImages
 	})
 
 	if ArrayContains(downloadedImages, imageName) && project.Environment == "worker" {
@@ -3937,6 +4067,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	} else {
 		//log.Printf("[DEBUG] Downloading image as POST request WITHOUT redirects due to not being cloud")
 	}
+	streamImage := false
 
 	// Set request timeout to 5 min (max)
 	topClient.Timeout = time.Minute * 10
@@ -4019,7 +4150,59 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	tar, err := os.Create(newFileName)
 	if err != nil {
 		log.Printf("[WARNING] Failed creating file: %s", err)
-		return err
+		streamImage = true
+	}
+
+	// @yashsinghcodes: This is for kubernetes where we cannot write into filesystem
+	// we can make this default at somepoint but for now it is not
+	// well tested.
+	if streamImage {
+		log.Printf("[INFO] Streaming image directly to dockercli")
+
+		dockercli, err := docker.NewEnvClient()
+		if err != nil {
+			log.Printf("[ERROR] Unable to create docker client (3): %s", err)
+			return err
+		}
+
+		defer dockercli.Close()
+		imageLoadResponse, err := dockercli.ImageLoad(context.Background(), newresp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed loading docker images: %s", err)
+			return err
+		}
+
+		defer imageLoadResponse.Body.Close()
+		body, err := ioutil.ReadAll(imageLoadResponse.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading docker image: %s", err)
+			return err
+		}
+
+		if strings.Contains(string(body), "no such file") {
+			return errors.New(string(body))
+		}
+
+		if strings.Contains(strings.ToLower(string(body)), "error") {
+			log.Printf("[ERROR] Error loading image %s: %s", imageName, string(body))
+			return errors.New(string(body))
+		}
+
+		baseTag := strings.Split(imageName, ":")
+		if len(baseTag) > 1 {
+			tag := baseTag[1]
+			//log.Printf("[DEBUG] Creating tag copies of downloaded containers from tag %s", tag)
+
+			// Remapping
+			ctx := context.Background()
+			dockercli.ImageTag(ctx, imageName, fmt.Sprintf("frikky/shuffle:%s", tag))
+			dockercli.ImageTag(ctx, imageName, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
+
+			downloadedImages = append(downloadedImages, fmt.Sprintf("frikky/shuffle:%s", tag))
+			downloadedImages = append(downloadedImages, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
+		}
+
+		return nil
 	}
 
 	defer tar.Close()
@@ -4118,7 +4301,7 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 
 		} else {
 			err := errors.New(fmt.Sprintf("Invalid image appname format: %s", version.Name))
-			return "", "", "", err 
+			return "", "", "", err
 		}
 	}
 
@@ -4140,7 +4323,9 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 		baseAppname = newstring[0 : len(newstring)-5]
 	}
 
-	log.Printf("%#v - BASEAPPNAME: %#v, %#v", appname, baseAppname, appnameSplit2)
+	if debug { 
+		log.Printf("%#v - BASEAPPNAME: %#v, %#v", appname, baseAppname, appnameSplit2)
+	}
 
 	// Check if baseAppname ends with _<md5> and if so, remove it
 	if len(appId) > 0 {
@@ -4156,4 +4341,281 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 	appname = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(appname, "_", "-"), ".", "-"))
 
 	return appname, baseAppname, appVersion, nil
+}
+
+func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType  string) error {
+	var err error
+
+	if runType == "run_workflow" { 
+
+	} else if runType == "webhook" { 
+		webhookUrl := ""
+		for _, option := range automation.Options {
+			if option.Key == "webhook_url" {
+				webhookUrl = option.Value
+				break
+			}
+		}
+
+		if !strings.HasPrefix(webhookUrl, "http") {
+			return errors.New(fmt.Sprintf("Webhook URL %s is not valid", webhookUrl))
+		}
+
+		parsedBody := WorkflowAppAction{
+			AppID: "HTTP",
+			AppName: "HTTP",
+			Environment: "cloud",
+			//Name: "custom_command",
+			Name: "POST",
+			NodeType: "action",
+			Parameters: []WorkflowAppActionParameter{
+				WorkflowAppActionParameter{
+					Name: "url",
+					Value: webhookUrl,
+				},
+				WorkflowAppActionParameter{
+					Name: "method",
+					Value: "POST",
+				},
+				WorkflowAppActionParameter{
+					Name: "body",
+					Value: string(marshalledBody),
+				},
+				WorkflowAppActionParameter{
+					Name: "headers",
+					Value: "Content-Type: application/json\nAccept: application/json",
+				},
+			},
+		}
+
+		if project.Environment != "cloud" {
+			environments, err := GetEnvironments(ctx, cacheData.OrgId)
+			if err != nil {
+				return err
+			}
+
+			for _, env := range environments {
+				if env.Default {
+					parsedBody.Environment = env.Name
+					break
+				}
+			}
+		}
+
+		marshalledBody, err = json.Marshal(parsedBody)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal parsedBody for webhook %s: %s", webhookUrl, err)
+			return err
+		}
+	}
+
+
+	// Find a user to use
+	org, err := GetOrg(ctx, cacheData.OrgId)
+	if err != nil {
+		return err
+	}
+
+	foundApikey := ""
+	for _, user := range org.Users {
+		if user.Role != "admin" {
+			continue
+		}
+
+		if len(user.ApiKey) > 0 {
+			foundApikey = user.ApiKey
+			break
+		} else {
+			foundUser, err := GetUser(ctx, user.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get user by ID %s: %s", user.Id, err)
+				continue
+			}
+
+			if len(foundUser.ApiKey) > 0 {
+				foundApikey = foundUser.ApiKey
+				break
+			}
+		}
+	}
+
+	// Send request to 
+	backendUrl := os.Getenv("BASE_URL")
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
+		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	//parsedUrl := fmt.Sprintf("%s/api/v1/apps/HTTP/run", backendUrl)
+	parsedUrl := fmt.Sprintf("%s%s", backendUrl, url)
+	client := &http.Client{
+		Timeout: time.Second * 5,
+	}
+
+	req, err := http.NewRequest(
+		"POST", 
+		parsedUrl, 
+		bytes.NewBuffer(marshalledBody),
+	)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request for webhook %s: %s", parsedUrl, err)
+		return err
+	}
+
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
+	req.Header.Add("Org-Id", cacheData.OrgId)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to send webhook request to %s: %s", parsedUrl, err)
+		return err
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read response body from webhook request to %s: %s", parsedUrl, err)
+		return err
+	}
+
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		log.Printf("[ERROR] Webhook request to %s failed with status code %d", parsedUrl, resp.StatusCode)
+		return errors.New(fmt.Sprintf("Webhook request failed with status code %d. Body: %s", resp.StatusCode, body))
+	}
+
+	return nil
+}
+
+func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAutomation) error {
+	if len(cacheData.OrgId) == 0 {
+		return errors.New("CacheKeyData.OrgId is required for handleRunAutomation")
+	}
+
+	ctx := context.Background()
+	parsedName := strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_")
+
+	// Unmarshal cacheData.Value to parsedOutput
+	parsedOutput := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(cacheData.Value), &parsedOutput); err != nil {
+		log.Printf("[ERROR] Failed to unmarshal cacheData.Value: %s", err)
+		parsedOutput["value"] = cacheData.Value
+	}
+
+	parsedOutput["shuffle_datastore"] = map[string]interface{}{ 
+		"action": "update",
+		"key": cacheData.Key,
+		"org_id": cacheData.OrgId,
+		"timestamp": cacheData.Edited,
+		"workflow_id": cacheData.WorkflowId,
+		"suborg_distribution": cacheData.SuborgDistribution,
+	}
+
+	marshalledBody, err := json.Marshal(parsedOutput)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal parsedOutput. Key %s, Category: %s, org: %s, err: %s", cacheData.Key, cacheData.Category, cacheData.OrgId, err)
+		return err
+	}
+
+	if parsedName == "correlate_categories" {
+		if debug { 
+		}
+
+		// Ensure the standard correlation-workflow exists 
+		seedString := fmt.Sprintf("%s_correlate_categories", cacheData.OrgId)
+		hash := sha1.New()
+		hash.Write([]byte(seedString))
+		hashBytes := hash.Sum(nil)
+
+		uuidBytes := make([]byte, 16)
+		copy(uuidBytes, hashBytes)
+		workflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
+		workflow, err := GetWorkflow(ctx, workflowId)
+		if err != nil || workflow.ID == "" || workflow.Name == "" {
+			log.Printf("[ERROR] Failed to get correlation workflow by ID %s: %s", workflowId, err)
+
+			categoryAction := CategoryAction{
+				Label: "correlate_categories",
+			}
+
+			workflow.ID = workflowId
+			newWorkflow, err := GetDefaultWorkflowByType(*workflow, cacheData.OrgId, categoryAction)
+			if err != nil || newWorkflow.ID == "" || newWorkflow.Name == "" {
+				log.Printf("[ERROR] Failed to get default workflow by type %s: %s", categoryAction.Label, err)
+				return errors.New(fmt.Sprintf("Failed to get default workflow by type %s: %s", categoryAction, err))
+			}
+
+			workflow = &newWorkflow
+			workflow.ID = workflowId
+
+			SetWorkflow(ctx, *workflow, workflowId)
+		}
+
+		for _, option := range automation.Options {
+			if option.Key != "datastore_categories" {
+				continue
+			}
+
+			if len(option.Value) == 0 {
+				continue
+			}
+
+			log.Printf("[DEBUG] Found datastore categories to correlate: %s. Workflow to run: %s", option.Value, workflow.ID)
+
+			//func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType  string) error {
+			go handleDatastoreAutomationWebhook(
+				ctx, 
+				marshalledBody, 
+				cacheData, 
+				automation, 
+				fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), 
+				"run_workflow",
+			)
+		}
+
+	} else if parsedName == "run_workflow" {
+		if debug { 
+			log.Printf("[DEBUG] Running workflow %s for org %s", automation.Options[0].Value, cacheData.OrgId) 
+		}
+
+		for _, option := range automation.Options {
+			if option.Key != "workflow_id" {
+				continue
+			}
+
+			if len(option.Value) == 0 {
+				continue
+			}
+
+			cacheData.WorkflowId = option.Value
+			workflowIds := strings.Split(option.Value, ",")
+
+			handled := []string{}
+			for _, workflowId := range workflowIds {
+				workflowId = strings.TrimSpace(workflowId)
+				if ArrayContains(handled, workflowId) {
+					continue
+				}
+
+				handled = append(handled, workflowId)
+				go handleDatastoreAutomationWebhook(ctx, marshalledBody, cacheData, automation, fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), "run_workflow")
+			}
+
+			break
+		}
+
+	} else if parsedName == "send_webhook" {
+		if debug { 
+			log.Printf("[DEBUG] Sending webhook for url %s", automation.Options[0].Value)
+		}
+
+		return handleDatastoreAutomationWebhook(ctx, marshalledBody, cacheData, automation, "/api/v1/apps/HTTP/run", "webhook")
+
+		// Send the webhook using the HTTP app with a POST request
+
+	} else {
+		return fmt.Errorf("Unknown automation name %s", automation.Name)
+	}
+
+	return nil
 }

@@ -1,40 +1,45 @@
 package shuffle
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
-	"time"
 	"sort"
-	"errors"
-	"strings"
-	"context"
 	"strconv"
+	"strings"
+	"time"
 
-	"net/http"
-	"math/rand"
-	"io/ioutil"
 	"encoding/json"
+	"io/ioutil"
+	"math/rand"
+	"net/http"
 
-	"github.com/satori/go.uuid"
 	"cloud.google.com/go/datastore"
 	gomemcache "github.com/bradfitz/gomemcache/memcache"
+	"github.com/satori/go.uuid"
 )
 
-var dbInterval = 0x20
-//var dbInterval = 0x4
+// FIXME: There is some issue when going past 0x9 (>0xA) with how 
+// cache is being counted locally
+//var dbInterval = 0x20
+var dbInterval = 0x9
+
+// var dbInterval = 0x4
 var PredictableDataTypes = []string{
-    "app_executions",
-    "workflow_executions",
-    "workflow_executions_finished",
-    "workflow_executions_failed",
-    "app_executions_failed",
+	"app_executions",
+	"childorg_app_executions",
+	"workflow_executions",
+	"workflow_executions_finished",
+	"workflow_executions_failed",
+	"app_executions_failed",
 	"app_executions_cloud",
-    "subflow_executions",
-    "org_sync_actions",
-    "workflow_executions_cloud",
-    "workflow_executions_onprem",
-    "api_usage",
-    "ai_executions",
+	"subflow_executions",
+	"org_sync_actions",
+	"workflow_executions_cloud",
+	"workflow_executions_onprem",
+	"api_usage",
+	"ai_executions",
 }
 
 func HandleGetWidget(resp http.ResponseWriter, request *http.Request) {
@@ -376,10 +381,10 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Should get stats for key %s for the last %d days", statsKey, statDays)
 
 	totalEntires := 0
-	totalValue := 0 
+	totalValue := 0
 	statEntries := []AdditionalUseConfig{}
 	info.DailyStatistics = append(info.DailyStatistics, DailyStatistics{
-		Date: time.Now(),
+		Date:      time.Now(),
 		Additions: info.Additions,
 	})
 
@@ -388,7 +393,7 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		// Check if the date is more than statDays ago
 		shouldAppend := true
 		if daily.Date.Before(time.Now().AddDate(0, 0, -statDays)) {
-			shouldAppend = false 
+			shouldAppend = false
 		}
 
 		for _, addition := range daily.Additions {
@@ -500,7 +505,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	var statsKey string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
-		// Just falling back 
+		// Just falling back
 		if len(location) <= 4 {
 		} else {
 			orgId = location[4]
@@ -562,7 +567,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Sideload app runs, workflow runs and subflow runs (just in case)
-	// This makes numbers accurate even when less than  dbDumpInterval 
+	// This makes numbers accurate even when less than  dbDumpInterval
 	key := fmt.Sprintf("cache_%s_app_executions", orgId)
 	cacheItem, err := GetCache(ctx, key)
 	if err == nil {
@@ -732,7 +737,18 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		return err
 	}
 
-	if len(tmpOrgDetail.ManagerOrgs) > 0 && dataType == "app_executions" || dataType == "app_runs" {
+	// Ensuring we at least have one.
+	if len(tmpOrgDetail.ManagerOrgs) == 0 && len(tmpOrgDetail.CreatorOrg) > 0 {
+		tmpOrgDetail.ManagerOrgs = append(tmpOrgDetail.ManagerOrgs, OrgMini{
+			Id: tmpOrgDetail.CreatorOrg,
+		})
+	}
+
+	// FIXME: Can look for childorg_app_executions here as well which
+	// would make tracking app runs at scale recursively work
+	// The problem is... recursion (:
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "app_executions") {
 		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
 			if len(managerOrg.Id) == 36 {
 				IncrementCache(ctx, managerOrg.Id, "childorg_app_executions", int(dbDumpInterval))
@@ -814,49 +830,67 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 
 		//log.Printf("[DEBUG] Incremented org stats for %s", orgId)
 	} else {
-		tx, err := project.Dbclient.NewTransaction(ctx)
-		if err != nil {
-			log.Printf("[WARNING] Error in cache dump: %s", err)
-			return err
-		}
+		maxRetries := 3
+		for i := 0; i < maxRetries; i++ {
+			concurrentTxn = false
 
-		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
-		if err := tx.Get(key, orgStatistics); err != nil {
+			tx, err := project.Dbclient.NewTransaction(ctx)
+			if err != nil {
+				log.Printf("[WARNING] Error in cache dump: %s", err)
+				return err
+			}
 
-			if strings.Contains(fmt.Sprintf("%s", err), "no such entity") {
-				log.Printf("[DEBUG] Continuing by creating entity for org %s", orgId)
-			} else {
-				log.Printf("[ERROR] Failed getting stats in increment: %s", err)
+			key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
+			if err := tx.Get(key, orgStatistics); err != nil {
+				if strings.Contains(fmt.Sprintf("%s", err), "no such entity") {
+					log.Printf("[DEBUG] Continuing by creating entity for org %s", orgId)
+				} else {
+					if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+						log.Printf("[ERROR] Failed getting stats in increment: %s", err)
+						tx.Rollback()
+						return err
+					}
+				}
+			}
+
+			if orgStatistics.OrgName == "" || orgStatistics.OrgName == orgStatistics.OrgId {
+				org, err := GetOrg(ctx, orgId)
+				if err == nil {
+					orgStatistics.OrgName = org.Name
+				}
+
+				orgStatistics.OrgId = orgId
+			}
+
+			orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
+			orgStatistics = handleDailyCacheUpdate(orgStatistics)
+
+			// Transaction control
+			if _, err := tx.Put(key, orgStatistics); err != nil {
+				log.Printf("[WARNING] Failed setting stats: %s", err)
 				tx.Rollback()
 				return err
 			}
-		}
 
-		if orgStatistics.OrgName == "" || orgStatistics.OrgName == orgStatistics.OrgId {
-			org, err := GetOrg(ctx, orgId)
-			if err == nil {
-				orgStatistics.OrgName = org.Name
+			if _, err = tx.Commit(); err != nil {
+				log.Printf("[ERROR] Failed commiting stats: %s", err)
+				if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
+					concurrentTxn = true
+					errMsg = fmt.Sprintf("%s", err)
+					time.Sleep(time.Duration(200*(i+1)) * time.Millisecond)
+					continue
+				}
+				return err
 			}
 
-			orgStatistics.OrgId = orgId
+			break
 		}
 
-		orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
-		orgStatistics = handleDailyCacheUpdate(orgStatistics)
-		// Transaction control
-		if _, err := tx.Put(key, orgStatistics); err != nil {
-			log.Printf("[WARNING] Failed setting stats: %s", err)
-			tx.Rollback()
-			return err
+		if concurrentTxn {
+			log.Printf("[ERROR] Failed to update stats for org %s after %d retries: concurrent transaction error: %s", orgId, maxRetries, errMsg)
+			return errors.New(errMsg)
 		}
 
-		if _, err = tx.Commit(); err != nil {
-			log.Printf("[ERROR] Failed commiting stats: %s", err)
-			if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
-				concurrentTxn = true
-				errMsg = fmt.Sprintf("%s", err)
-			}
-		}
 	}
 
 	// Could use cache for everything, really
@@ -892,7 +926,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 	}
 
 	if len(orgId) != 36 {
-		log.Printf("[ERROR] Increment Stats with bad OrgId %s for type %s", orgId, dataType)
+		log.Printf("[ERROR] Increment Stats with bad OrgId '%s' for type '%s'", orgId, dataType)
 		return
 	}
 
@@ -1214,7 +1248,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 				foundData := item.([]uint8)
 				foundItem, err = strconv.Atoi(string(foundData))
 				if err != nil {
-					log.Printf("[ERROR] Failed converting item to int: %s", err)
+					log.Printf("[ERROR] Stat tracking fail: Failed converting item to int: %s. Datatype: %s", err, dataType)
 					foundItem = incrementAmount
 					//foundItem = foundData
 				} else {
@@ -1231,8 +1265,10 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 			//log.Printf("[DEBUG] Dumping cache for %s with amount %d", key, foundItem)
 		} else {
 			// Set cache
-			//setCacheValue := []byte(fmt.Sprintf("%d", foundItem))
 			//setCacheValue := []byte(strconv.FormatInt(int64(foundItem), 16))
+			//setCacheValue := []byte(fmt.Sprintf("%d", foundItem))
+
+			// FIXME: Something is wrong here past 0x9 :O
 			setCacheValue := []byte(fmt.Sprintf("%x", foundItem))
 			err = SetCache(ctx, key, setCacheValue, 86400)
 			if err != nil {
@@ -1265,6 +1301,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	newDay := DailyStatistics{
 		Date:                       timeYesterday,
 		AppExecutions:              executionInfo.DailyAppExecutions,
+		ChildAppExecutions:         executionInfo.DailyChildAppExecutions,
 		AppExecutionsFailed:        executionInfo.DailyAppExecutionsFailed,
 		SubflowExecutions:          executionInfo.DailySubflowExecutions,
 		WorkflowExecutions:         executionInfo.DailyWorkflowExecutions,
@@ -1282,8 +1319,21 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 
 	executionInfo.DailyStatistics = append(executionInfo.DailyStatistics, newDay)
 
+	// Cleaning up old stuff we don't use for now
+	executionInfo.HourlyAppExecutions = 0
+	executionInfo.HourlyChildAppExecutions = 0
+	executionInfo.HourlyAppExecutionsFailed = 0
+	executionInfo.HourlySubflowExecutions = 0
+	executionInfo.HourlyWorkflowExecutions = 0
+	executionInfo.HourlyWorkflowExecutionsFinished = 0
+	executionInfo.HourlyWorkflowExecutionsFailed = 0
+	executionInfo.HourlyOrgSyncActions = 0
+	executionInfo.HourlyCloudExecutions = 0
+	executionInfo.HourlyOnpremExecutions = 0
+
 	// Reset daily
 	executionInfo.DailyAppExecutions = 0
+	executionInfo.DailyChildAppExecutions = 0
 	executionInfo.DailyAppExecutionsFailed = 0
 	executionInfo.DailySubflowExecutions = 0
 	executionInfo.DailyWorkflowExecutions = 0
@@ -1295,19 +1345,9 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.DailyApiUsage = 0
 	executionInfo.DailyAIUsage = 0
 
-	// Cleaning up old stuff we don't use for now
-	executionInfo.HourlyAppExecutions = 0
-	executionInfo.HourlyAppExecutionsFailed = 0
-	executionInfo.HourlySubflowExecutions = 0
-	executionInfo.HourlyWorkflowExecutions = 0
-	executionInfo.HourlyWorkflowExecutionsFinished = 0
-	executionInfo.HourlyWorkflowExecutionsFailed = 0
-	executionInfo.HourlyOrgSyncActions = 0
-	executionInfo.HourlyCloudExecutions = 0
-	executionInfo.HourlyOnpremExecutions = 0
-
 	// Weekly
 	executionInfo.WeeklyAppExecutions = 0
+	executionInfo.WeeklyChildAppExecutions = 0
 	executionInfo.WeeklyAppExecutionsFailed = 0
 	executionInfo.WeeklySubflowExecutions = 0
 	executionInfo.WeeklyWorkflowExecutions = 0
@@ -1317,8 +1357,36 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.WeeklyCloudExecutions = 0
 	executionInfo.WeeklyOnpremExecutions = 0
 
+	// Cleans up "random" stats as well
 	for additionIndex, _ := range executionInfo.Additions {
+		executionInfo.Additions[additionIndex].Value = 0
 		executionInfo.Additions[additionIndex].DailyValue = 0
+	}
+
+	now := time.Now()
+	currentMonth := int(now.Month())
+	if executionInfo.LastMonthlyResetMonth != currentMonth {
+		log.Printf("[DEBUG] Resetting monthly stats for org %s on %s", executionInfo.OrgId, now.Format("2006-01-02"))
+
+		executionInfo.MonthlyAppExecutions = 0
+		executionInfo.MonthlyChildAppExecutions = 0
+		executionInfo.MonthlyAppExecutionsFailed = 0
+		executionInfo.MonthlySubflowExecutions = 0
+		executionInfo.MonthlyWorkflowExecutions = 0
+		executionInfo.MonthlyWorkflowExecutionsFinished = 0
+		executionInfo.MonthlyWorkflowExecutionsFailed = 0
+		executionInfo.MonthlyOrgSyncActions = 0
+		executionInfo.MonthlyCloudExecutions = 0
+		executionInfo.MonthlyOnpremExecutions = 0
+		executionInfo.MonthlyApiUsage = 0
+		executionInfo.MonthlyAIUsage = 0
+		executionInfo.LastMonthlyResetMonth = currentMonth
+		executionInfo.LastUsageAlertThreshold = 0
+
+		// Reset all usage alerts to unsent
+		for index := range executionInfo.UsageAlerts {
+			executionInfo.UsageAlerts[index].Email_send = false
+		}
 	}
 
 	return executionInfo
@@ -1335,16 +1403,12 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.DailyChildAppExecutions += int64(increment)
 		orgStatistics.HourlyChildAppExecutions += int64(increment)
 
-	} else if dataType == "app_executions" || strings.HasPrefix(dataType, "app_executions") {
+	} else if dataType == "app_executions" {
 		orgStatistics.TotalAppExecutions += int64(increment)
 		orgStatistics.MonthlyAppExecutions += int64(increment)
 		orgStatistics.WeeklyAppExecutions += int64(increment)
 		orgStatistics.DailyAppExecutions += int64(increment)
 		orgStatistics.HourlyAppExecutions += int64(increment)
-
-		if dataType != "app_executions" {
-			appendCustom = true
-		}
 
 	} else if dataType == "workflow_executions" {
 		orgStatistics.TotalWorkflowExecutions += int64(increment)
@@ -1414,8 +1478,13 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		appendCustom = true
 	}
 
+	if strings.HasPrefix(dataType, "app_executions") && dataType != "app_executions" {
+		appendCustom = true
+	}
+
 	if appendCustom {
 		//log.Printf("[DEBUG] Appending custom data type %s for org %s", dataType, orgStatistics.OrgId)
+		dataType = strings.ToLower(strings.Replace(dataType, " ", "_", -1))
 
 		found := false
 		for additionIndex, addition := range orgStatistics.Additions {
@@ -1437,6 +1506,8 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				Key:        dataType,
 				Value:      int64(increment),
 				DailyValue: int64(increment),
+
+				//Date: 0,
 			})
 		}
 	}
@@ -1458,40 +1529,96 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		return orgStatistics
 	}
 
+	for _, alert := range org.Billing.AlertThreshold {
+		found := false
+		for _, statAlert := range orgStatistics.UsageAlerts {
+			if statAlert.Percentage == alert.Percentage || statAlert.Count == alert.Count {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			orgStatistics.UsageAlerts = append(orgStatistics.UsageAlerts, AlertThreshold{
+				Percentage: alert.Percentage,
+				Count:      alert.Count,
+				Email_send: alert.Email_send,
+			})
+		}
+	}
+
 	for index, AlertThreshold := range org.Billing.AlertThreshold {
 
-		if int64(AlertThreshold.Count) < orgStatistics.MonthlyAppExecutions && AlertThreshold.Email_send == false {
+		totalAppExecutions := orgStatistics.MonthlyAppExecutions + orgStatistics.MonthlyChildAppExecutions
+
+		// Alert should be based on the current month usage, check if monthly reset happened if yes than only send alert
+		monthlyResetMonth := time.Now().Month()
+		shouldSendAlert := false
+		if orgStatistics.LastMonthlyResetMonth == int(monthlyResetMonth) {
+			shouldSendAlert = true
+		}
+
+		sendAlert := false
+		for _, alerts := range orgStatistics.UsageAlerts {
+			if alerts.Percentage == AlertThreshold.Percentage && alerts.Count == AlertThreshold.Count {
+				sendAlert = alerts.Email_send
+				break
+			}
+		}
+
+		if int64(AlertThreshold.Count) < totalAppExecutions && !sendAlert && shouldSendAlert {
+
+			allAdmins := []string{}
+			firstAdmin := ""
+			allShufflerEmails := true
 
 			for _, user := range org.Users {
 				if user.Role == "admin" {
-					// var BccAddress []string
-					// if int64(AlertThreshold.Count) >= 5000 || int64(AlertThreshold.Count) >= 10000 && AlertThreshold.Email_send == false {
-					// 	BccAddress = []string{"support@shuffler.io", "jay@shuffler.io"}
-					// }
-					Subject := fmt.Sprintf("[Support] You have reached the threshold limit of app executions")
-					// mailbody := Mailcheck{
-					// 	Targets: []string{user.Username},
-					// 	Subject: "You have reached the threshold limit of app executions",
-					// 	Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
-					// }
+					allAdmins = append(allAdmins, user.Username)
 
-					substitutions := map[string]interface{}{
-						"AlertThreshold": AlertThreshold.Count,
+					if firstAdmin == "" && !strings.Contains(user.Username, "shuffler.io") {
+						firstAdmin = user.Username
 					}
-					err = sendMailSendgridV2(
-						[]string{user.Username, "support@shuffler.io", "jay@shuffler.io"},
-						Subject,
-						substitutions,
-						false,
-						"d-3678d48b2b7144feb4b0b4cff7045016",
-					)
-					// err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false, BccAddress)
-					if err != nil {
-						log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
-					} else {
-						emailSend = true
+
+					if !strings.Contains(user.Username, "shuffler.io") {
+						allShufflerEmails = false
 					}
 				}
+			}
+
+			if allShufflerEmails && firstAdmin == "" && len(allAdmins) > 0 {
+				firstAdmin = allAdmins[0]
+			}
+
+			Subject := fmt.Sprintf("[Shuffle]: You've reached the app-runs threshold limit for your account %s", firstAdmin)
+
+			AppRunsPercentage := float64(totalAppExecutions) / float64(org.SyncFeatures.AppExecutions.Limit) * 100
+
+			substitutions := map[string]interface{}{
+				"app_runs_usage":            totalAppExecutions,
+				"app_runs_limit":            org.SyncFeatures.AppExecutions.Limit,
+				"app_runs_usage_percentage": int64(AppRunsPercentage),
+				"org_name":                  org.Name,
+				"org_id":                    org.Id,
+				"admin_email":               firstAdmin,
+			}
+
+			if !ArrayContains(allAdmins, "jay@shuffler.io") {
+				allAdmins = append(allAdmins, "jay@shuffler.io")
+			}
+
+			err = sendMailSendgridV2(
+				[]string{"support@shuffler.io"},
+				Subject,
+				substitutions,
+				false,
+				"d-3678d48b2b7144feb4b0b4cff7045016",
+				allAdmins,
+			)
+			if err != nil {
+				log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
+			} else {
+				emailSend = true
 			}
 
 			if emailSend {
@@ -1501,8 +1628,203 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 					log.Printf("[ERROR] Failed setting org in increment: %s", err)
 					return orgStatistics
 				}
+
+				// update the the alert send in the statistics
+				for index, alerts := range orgStatistics.UsageAlerts {
+					if alerts.Percentage == AlertThreshold.Percentage && alerts.Count == AlertThreshold.Count {
+						orgStatistics.UsageAlerts[index].Email_send = true
+						break
+					}
+				}
+
 				log.Printf("[DEBUG] Successfully sent alert mail for org %s", orgId)
 			}
+		}
+	}
+
+	// hard limit aleart
+	if org.Billing.AppRunsHardLimit > 0 && orgStatistics.MonthlyAppExecutions > org.Billing.AppRunsHardLimit {
+		// send alert to all admin in the orgs
+		subject := fmt.Sprintf("App Runs Hard Limit Exceeded for Org %s (%s)", org.Name, org.Id)
+		message := fmt.Sprintf(
+			`Dear Team,
+
+			Your organization <strong>%s</strong> (ID: %s) has exceeded the monthly app runs hard limit of <strong>%d</strong> runs.
+
+			<strong>Current usage:</strong> %d app runs.
+			
+			As a result, all workflows have been temporarily blocked until the start of the next billing cycle.
+			To increase your organization's hard limit, please visit the admin panel of the parent organization.
+			If you have any questions, feel free to reach out to us at <a href="mailto:support@shuffler.io">support@shuffler.io</a>.
+			
+			Note: This is an automated message sent by Shuffle to notify you about the exceeded app runs hard limit.
+
+			Best regards, 
+			The Shuffler Team`,
+			org.Name, org.Id, org.Billing.AppRunsHardLimit, orgStatistics.MonthlyAppExecutions,
+		)
+
+		admins := []string{}
+
+		for _, user := range org.Users {
+			if user.Role == "admin" {
+				admins = append(admins, user.Username)
+			}
+		}
+
+		err = sendMailSendgrid(admins, subject, message, false, []string{})
+		if err != nil {
+			log.Printf("[ERROR] Failed sending alert email to admins of org %s (%s): %s", org.Name, org.Id, err)
+		}
+	}
+
+	if dataType == "app_executions" || dataType == "childorg_app_executions" {
+
+		validationOrg := org
+		validationOrgStatistics := orgStatistics
+
+		if len(org.CreatorOrg) > 0 {
+			validationOrg, err = GetOrg(ctx, org.CreatorOrg)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting parent org in increment: %s", err)
+				return validationOrgStatistics
+			}
+
+			validationOrgStatistics, err = GetOrgStatistics(ctx, org.CreatorOrg)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting parent org statistics in increment: %s", err)
+				return validationOrgStatistics
+			}
+		}
+
+		totalExecutions := float64(validationOrgStatistics.MonthlyAppExecutions) + float64(validationOrgStatistics.MonthlyChildAppExecutions)
+		limit := float64(validationOrg.SyncFeatures.AppExecutions.Limit)
+		percentage := (totalExecutions / limit) * 100
+
+		var currentThreshold int64
+		if percentage >= 50 {
+			currentThreshold = int64((int(percentage) / 50) * 50)
+		}
+
+		monthlyResetMonth := time.Now().Month()
+		shouldSendAlert := false
+		if orgStatistics.LastMonthlyResetMonth == int(monthlyResetMonth) {
+			shouldSendAlert = true
+		}
+
+		if currentThreshold >= 50 && currentThreshold > validationOrgStatistics.LastUsageAlertThreshold && shouldSendAlert {
+
+			allAdmins := []string{}
+			firstAdmin := ""
+			allShufflerEmails := true
+
+			for _, user := range org.Users {
+				if user.Role == "admin" {
+					allAdmins = append(allAdmins, user.Username)
+
+					if firstAdmin == "" && !strings.Contains(user.Username, "shuffler.io") {
+						firstAdmin = user.Username
+					}
+
+					if !strings.Contains(user.Username, "shuffler.io") {
+						allShufflerEmails = false
+					}
+				}
+			}
+
+			if allShufflerEmails && firstAdmin == "" && len(allAdmins) > 0 {
+				firstAdmin = allAdmins[0]
+			}
+
+			alertAlreadySet := false
+			// If 50% and 100% alert are already set by user, and alert is send for that threshold, then skip
+			for _, AlertThreshold := range validationOrg.Billing.AlertThreshold {
+				if AlertThreshold.Percentage == int(currentThreshold) && AlertThreshold.Email_send {
+					alertAlreadySet = true
+					break
+				}
+			}
+
+			newEmailList := []string{}
+			if alertAlreadySet && (currentThreshold == 100 || currentThreshold == 50) {
+				newEmailList = allAdmins
+			} else {
+				newEmailList = []string{"jay@shuffler.io"}
+			}
+
+			// send mail use different subject line as it will sent only to the team
+			Subject := fmt.Sprintf("[Shuffle]: You've reached the app-runs threshold limit for your account %s", firstAdmin)
+			leadInfo := ""
+			if validationOrg.LeadInfo.POV {
+				leadInfo = "POC"
+			}
+
+			if validationOrg.LeadInfo.Customer {
+				leadInfo = "Customer"
+			}
+
+			if validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.ServicePartner || validationOrg.LeadInfo.ChannelPartner {
+				leadInfo = "Partner"
+			}
+
+			if len(leadInfo) > 0 && (currentThreshold > 100) {
+				Subject = fmt.Sprintf("[Shuffle] %s: You've reached the app-runs threshold limit for your account %s", leadInfo, firstAdmin)
+			}
+
+			totalAppExecutions := validationOrgStatistics.MonthlyAppExecutions + validationOrgStatistics.MonthlyChildAppExecutions
+			AppRunsPercentage := float64(totalAppExecutions) / float64(validationOrg.SyncFeatures.AppExecutions.Limit) * 100
+
+			substitutions := map[string]interface{}{
+				"app_runs_usage":            totalAppExecutions,
+				"app_runs_limit":            validationOrg.SyncFeatures.AppExecutions.Limit,
+				"app_runs_usage_percentage": int64(AppRunsPercentage),
+				"org_name":                  validationOrg.Name,
+				"org_id":                    validationOrg.Id,
+				"admin_email":               firstAdmin,
+			}
+
+			if currentThreshold > 100 {
+				substitutions["lead_info"] = leadInfo
+			}
+
+			err = sendMailSendgridV2(
+				[]string{"support@shuffler.io"},
+				Subject,
+				substitutions,
+				false,
+				"d-3678d48b2b7144feb4b0b4cff7045016",
+				newEmailList,
+			)
+
+			if err != nil {
+				log.Printf("[ERROR] Failed sending alert mail for child org in increment (1): %s", err)
+			} else {
+				log.Printf("[DEBUG] Successfully sent alert mail for child org %s to parent org %s (1)", validationOrg.Name, validationOrg.Name)
+			}
+
+			if currentThreshold == 100 || currentThreshold == 50 {
+				if len(leadInfo) > 0 {
+					Subject = fmt.Sprintf("[Shuffle] %s: You've reached the app-runs threshold limit for your account %s", leadInfo, firstAdmin)
+				}
+
+				substitutions["lead_info"] = leadInfo
+
+				err = sendMailSendgridV2(
+					[]string{"jay@shuffler.io", "support@shuffler.io"},
+					Subject,
+					substitutions,
+					false,
+					"d-3678d48b2b7144feb4b0b4cff7045016",
+					[]string{},
+				)
+				if err != nil {
+					log.Printf("[ERROR] Failed sending alert mail for child org in increment (2): %s", err)
+				} else {
+					log.Printf("[DEBUG] Successfully sent alert mail for child org %s to parent org %s (2)", validationOrg.Name, validationOrg.Name)
+				}
+			}
+
+			orgStatistics.LastUsageAlertThreshold = currentThreshold
 		}
 	}
 

@@ -1,8 +1,571 @@
 package shuffle
 
+/*
+This file is for blobs that we use throughout Shuffle in many locations. If we want to optimise Shuffle, we need to use structured data stored somewhere, but just creating blobs is a quick way to get a lot of things up and running until it needs proper fixing
+*/
+
 import (
 	"os"
+	"errors"
+	"strings"
+	"context"
+	"fmt"
+	"log"
+	"encoding/json"
+
+	uuid "github.com/satori/go.uuid"
 )
+
+
+// These are just specific examples for specific cases
+// FIXME: Should these be loaded from public workflows?
+// I kind of think so ~
+// That means each algorithm needs to be written as if-statements to
+// replace a specific part of a workflow :thinking:
+
+// Should workflows be written as YAML and be text-editable? 
+func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction CategoryAction) (Workflow, error) {
+	actionType := categoryAction.Label  
+	appNames := categoryAction.AppName
+
+	if len(orgId) == 0 {
+		return workflow, errors.New("Organization ID is empty. Can't generate workflow.")
+	}
+
+	parsedActiontype := strings.ReplaceAll(strings.ToLower(actionType), " ", "_")
+	if strings.Contains(strings.ToLower(actionType), "threat feed") {
+		parsedActiontype = "threatlist_monitor"
+	}
+
+	// If-else with specific rules per workflow
+	// Make sure it uses workflow -> copies data, as 
+	startActionId := uuid.NewV4().String()
+	startTriggerId := workflow.ID
+	if len(startTriggerId) == 0 {
+		startTriggerId = uuid.NewV4().String()
+	}
+
+	actionEnv := "Cloud"
+	triggerEnv := "Cloud"
+	ctx := context.Background()
+	if project.Environment != "cloud" {
+		triggerEnv = "onprem"
+
+		envs, err := GetEnvironments(ctx, orgId)
+		if err == nil { 
+			for _, env := range envs {
+				if env.Default {
+					actionEnv = env.Name
+					break
+				}
+			}
+		} else { 
+			actionEnv = "Shuffle"
+		}
+	}
+
+	if parsedActiontype == "correlate_categories" {
+		defaultWorkflow := Workflow{
+			Name: actionType,
+			Description: "Correlates Datastore categories in Shuffle. The point is to graph data",
+			OrgId: orgId,
+			Start: startActionId,
+			Actions: []Action{
+				Action{
+					ID: startActionId,
+					Name: "repeat_back_to_me",
+					AppName: "Shuffle Tools",
+					AppVersion: "1.2.0",
+					Environment: actionEnv,
+					Label: "Start",
+					IsStartNode: true, 
+					Position: Position{
+						X: 250,
+						Y: 0,
+					},
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "call",
+							Value: "Some code here hello",
+							Multiline: true,
+						},
+					},
+				},
+			},
+		}
+
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+
+	} else if parsedActiontype == "ingest_tickets" || parsedActiontype == "ingest_assets" || parsedActiontype == "ingest_users" {
+		actionName := "Cases"
+		currentAction := WorkflowAppActionParameter{
+			Name:  "action",
+			Value: "List tickets",
+			Options: []string{
+				"List tickets",
+				"Create ticket",
+				"Close ticket",
+				"Add comment",
+			},
+		}
+
+		if parsedActiontype == "ingest_assets" {
+			actionName = "Assets"
+			currentAction.Value = "List assets"
+			currentAction.Options = []string{
+				"List assets",
+				"Get asset",
+				"Search assets",
+				"Create asset",
+			}
+		} else if parsedActiontype == "ingest_users" {
+			actionName = "IAM"
+			currentAction.Value = "List users"
+			currentAction.Options = []string{
+				"List users",
+				"Get users",
+				"Search users",
+				"Create user",
+			}
+		}
+
+		defaultWorkflow := Workflow{
+			Name: actionType,
+			Description: "List tickets from different systems and ingest them",
+			OrgId: orgId,
+			Start: startActionId,
+			Actions: []Action{
+				Action{
+					Name: actionName,
+					AppID: "integration",
+					AppName: "Singul",
+					ID: startActionId,
+					AppVersion: "1.0.0",
+					Environment: actionEnv,
+					Label: currentAction.Value,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "app_name",
+							Value: "",
+						},
+						currentAction,
+						WorkflowAppActionParameter{
+							Name:  "fields",
+							Value: "",
+							Multiline: true,
+						},
+					},
+				},
+			},
+			Triggers: []Trigger{
+				Trigger{
+					ID: startTriggerId,
+					Name: "Schedule",
+					TriggerType: "SCHEDULE",
+					Label: "Ingest tickets",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "cron",
+							Value: "0 0 * * *", 
+						},
+						WorkflowAppActionParameter{
+							Name:  "execution_argument",
+							Value: "Automatically configured by Shuffle", 
+						},
+					},
+				},
+			},
+		}
+
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+	} else if parsedActiontype == "ingest_tickets_webhook" {
+
+		defaultWorkflow := Workflow{
+			Name: actionType,
+			Description: "Ingest tickets through a webhook",
+			OrgId: orgId,
+			Start: startActionId,
+			Actions: []Action{
+				Action{
+					Name: "Translate standard",
+					AppID: "integration",
+					AppName: "Singul",
+					ID: startActionId,
+					AppVersion: "1.0.0",
+					Environment: actionEnv,
+					Label: "Ingest Ticket from Webhook",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "source_data",
+							Value: "$exec",
+							Multiline: true,
+						},
+						WorkflowAppActionParameter{
+							Name:  "standard",
+							Description: "The standard to use from https://github.com/Shuffle/standards/tree/main",
+							Value: "OCSF",
+							Multiline: false,
+						},
+					},
+				},
+			},
+			Triggers: []Trigger{
+				Trigger{
+					ID: startTriggerId,
+					Name: "Webhook",
+					TriggerType: "WEBHOOK",
+					Label: "Ingest",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "url",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "tmp",
+							Value: "", 
+						},
+						WorkflowAppActionParameter{
+							Name:  "auth_header",
+							Value: "", 
+						},
+						WorkflowAppActionParameter{
+							Name:  "custom_response_body",
+							Value: "", 
+						},
+						WorkflowAppActionParameter{
+							Name:  "await_response",
+							Value: "", 
+						},
+					},
+				},
+			},
+		}
+
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+	} else if parsedActiontype == "threatlist_monitor" {
+		secondActionId := uuid.NewV4().String()
+
+		defaultWorkflow := Workflow{
+			Name: actionType,
+			Description: "Monitor threatlists and ingest regularly",
+			OrgId: orgId,
+			Start: startActionId,
+			Actions: []Action{
+				Action{
+					Name: "GET",
+					AppID: "HTTP",
+					AppName: "HTTP",
+					ID: startActionId,
+					AppVersion: "1.4.0",
+					Environment: actionEnv,
+					Label: "Get threatlist URLs",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "url",
+							Value: "$shuffle_cache.threatlist_urls.value.#",
+						},
+						WorkflowAppActionParameter{
+							Name:  "headers",
+							Multiline: true,
+							Value: "",
+						},
+					},
+				},
+				Action{
+					Name: "execute_python",
+					AppID: "Shuffle Tools",
+					AppName: "Shuffle Tools",
+					ID: secondActionId,
+					AppVersion: "1.2.0",
+					Environment: actionEnv,
+					Label: "Ingest IOCs",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "code",
+							Multiline: true,
+							Required: true,
+							Value: getIocIngestionScript(),
+						},
+					},
+				},
+			},
+			Triggers: []Trigger{
+				Trigger{
+					ID: startTriggerId,
+					Name: "Schedule",
+					TriggerType: "SCHEDULE",
+					Label: "Pull threatlist URLs",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "cron",
+							Value: "0 0 * * *", 
+						},
+						WorkflowAppActionParameter{
+							Name:  "execution_argument",
+							Value: "Automatically configured by Shuffle", 
+						},
+					},
+				},
+			},
+			Branches: []Branch{
+				Branch{
+					SourceID: startTriggerId,
+					DestinationID: startActionId,
+					ID: uuid.NewV4().String(),
+				},
+				Branch{
+					SourceID: startActionId,
+					DestinationID: secondActionId,
+					ID: uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name: "source",
+								Value: "{{ $get_threatlist_urls | size }}",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name: "condition",
+								Value: "larger than",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name: "destination",
+								Value: "0",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		// For now while testing
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+
+		/*
+		if len(workflow.WorkflowVariables) == 0 {
+			workflow.WorkflowVariables = defaultWorkflow.WorkflowVariables
+		}
+
+		if len(workflow.Actions) == 0 {
+			workflow.Actions = defaultWorkflow.Actions
+		}
+
+		// Rules specific to this one
+		if len(workflow.Triggers) == 0 {
+			workflow.Triggers = defaultWorkflow.Triggers
+		}
+		*/
+
+		// Get the item with key "threatlist_urls" from datastore
+		ctx := GetContext(nil)
+		_, err := GetDatastoreKey(ctx, "threatlist_urls", "")
+		if err != nil {
+			//log.Printf("[INFO] Failed to get threatlist URLs from datastore. Making it.: %s", err)
+			urls := []string{
+				"https://sslbl.abuse.ch/blacklist/sslblacklist.csv",
+			}
+
+			jsonMarshalled, err := json.Marshal(urls)
+			if err != nil {
+				log.Printf("[ERROR] Failed to marshal threatlist URLs: %s", err)
+			} else {
+				key := CacheKeyData{
+					Key: "threatlist_urls",
+					Value: fmt.Sprintf(`%s`, string(jsonMarshalled)),
+					OrgId: orgId,
+				}
+
+				err = SetDatastoreKey(ctx, key)
+				if err != nil {
+					log.Printf("[ERROR] Failed to set threatlist URLs in datastore: %s", err)
+				} else {
+					log.Printf("[INFO] Successfully set threatlist URLs in datastore")
+				}
+			}
+		}
+	}
+
+	if len(workflow.Name) == 0 || len(workflow.Actions) == 0 {
+		return workflow, errors.New("Workflow name or ID is empty")
+	}
+
+	// Appends actions in the workflow 
+	positionAddition := float64(250)
+	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && len(appNames) > 0 && len(workflow.Triggers) == 1 && workflow.Triggers[0].TriggerType == "SCHEDULE" {
+
+		actionTemplate := workflow.Actions[0]
+
+		// Pre-defining it with a startnode that does nothing
+		workflow.Actions = []Action{
+			Action{
+				ID: startActionId,
+				Name: "repeat_back_to_me",
+				AppName: "Shuffle Tools",
+				AppVersion: "1.2.0",
+				Environment: actionEnv,
+				Label: "Start",
+				IsStartNode: true, 
+				Position: Position{
+					X: 250,
+					Y: 0,
+				},
+				Parameters: []WorkflowAppActionParameter{
+					WorkflowAppActionParameter{
+						Name:  "call",
+						Value: "",
+						Multiline: true,
+					},
+				},
+			},
+		}
+
+		// Point from trigger(s) to startnode (repeater)
+		for _, trigger := range workflow.Triggers { 
+			newBranch := Branch{
+				SourceID: trigger.ID,
+				DestinationID: workflow.Start,
+				ID: uuid.NewV4().String(),
+			}
+
+			workflow.Branches = append(workflow.Branches, newBranch)
+		}
+
+		for appIndex, appName := range strings.Split(appNames, ",") {
+			newAction := actionTemplate
+			newAction.ID = uuid.NewV4().String()
+			newAction.Parameters = append([]WorkflowAppActionParameter(nil), actionTemplate.Parameters...)
+
+			// Positioning
+			newAction.Position.X = positionAddition*float64(appIndex)
+			newAction.Position.Y = positionAddition
+
+
+			// Point from startnode to current one
+			newBranch := Branch{
+				SourceID: workflow.Start,
+				DestinationID: newAction.ID,
+				ID: uuid.NewV4().String(),
+			}
+
+			workflow.Branches = append(workflow.Branches, newBranch)
+
+			appNameIndex := -1
+			for paramIndex, param := range actionTemplate.Parameters {
+				if param.Name == "app_name" || param.Name == "appName" {
+					appNameIndex = paramIndex
+					break
+				}
+			}
+
+			newAction.Label += " " + appName
+			if appNameIndex >= 0 {
+				newAction.Parameters[appNameIndex].Value = appName
+			} else {
+				newAction.Parameters = append(newAction.Parameters, WorkflowAppActionParameter{
+					Name:  "app_name",
+					Value: appName,
+				})
+
+				appNameIndex = len(newAction.Parameters) - 1
+			}
+
+			workflow.Actions = append(workflow.Actions, newAction)
+		}
+	}
+
+	if workflow.Actions[0].Position.X == 0 && workflow.Actions[0].Position.Y == 0 {
+		startXPosition := float64(0)
+		startYPosition := float64(0)
+		for triggerIndex, _ := range workflow.Triggers {
+			workflow.Triggers[triggerIndex].Position = Position{
+				X: startXPosition,
+				Y: startYPosition,
+			}
+
+			startXPosition += positionAddition 
+		}
+
+		for actionIndex, _ := range workflow.Actions {
+			workflow.Actions[actionIndex].Position = Position{
+				X: startXPosition,
+				Y: startYPosition, 
+			}
+
+			startXPosition += positionAddition 
+		}
+	}
+
+	if len(workflow.Actions) > 0 {
+		for _, action := range workflow.Actions {
+			if action.AppID == "integration" || action.AppName == "Singul" {
+
+				for _, param := range action.Parameters {
+					if (param.Name == "app_name" || param.Name == "appName") && len(param.Value) == 0 {
+						log.Printf("[DEBUG] Should verify if an app of type '%s' exists", action.Name)
+					}
+				}
+			}
+		}
+	}
+
+	if len(workflow.Actions)+len(workflow.Triggers) > 1 {
+		if len(workflow.Branches) == 0 {
+			// Connect from trigger -> action
+
+			sourceId := ""
+			destId := ""
+			if len(workflow.Triggers) == 1 {
+				sourceId = workflow.Triggers[0].ID
+				destId = workflow.Start
+			}
+
+			newBranch := Branch{
+				SourceID: sourceId,
+				DestinationID: destId,
+				ID: uuid.NewV4().String(),
+			}
+
+			workflow.Branches = append(workflow.Branches, newBranch)
+		}
+	}
+
+	// Check if the action has branches at all
+	// This is not efficientm but ensures they all at least run
+	for actionIndex, action := range workflow.Actions {
+		if actionIndex == 0 {
+			continue
+		}
+
+		found := false
+		for _, branch := range workflow.Branches {
+			if branch.SourceID == action.ID || branch.DestinationID == action.ID {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			log.Printf("Missing branch: %s", action.ID)
+			// Create a branch from the previous action to this one
+			workflow.Branches = append(workflow.Branches, Branch{
+				SourceID: workflow.Actions[actionIndex-1].ID,
+				DestinationID: action.ID,
+				ID: uuid.NewV4().String(),
+			})
+		}
+	}
+
+	// API-available, but not UI visible by default
+	//workflow.Hidden = true
+
+	return workflow, nil
+}
 
 func GetPublicDetections() []DetectionResponse {
 	return []DetectionResponse{
@@ -669,4 +1232,202 @@ func GetUsecaseData() string {
         ]
     }
 ]`)
+}
+
+func GetTriggerData(triggerType string) string {
+	switch strings.ToLower(triggerType) {
+	case "webhook":
+		return "data:image/png;base64,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"
+	case "schedule":
+		return "data:image/png;base64,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"
+	default:
+		return ""
+	}
+}
+							
+func getIocIngestionScript() string {
+	return `import os
+import re
+import json
+import uuid
+import time
+import requests
+
+input_data = json.loads(r'''$get_threatlist_urls''')
+upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
+
+parsed_headers = {}
+if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
+  parsed_headers["Authorization"] = "Bearer %s" % os.environ.get("SHUFFLE_AUTHORIZATION", "")
+else:
+  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+
+# This is shitty, but is used for a basic test. 
+regexsearch = {
+  "md5": r"\b[a-fA-F0-9]{32}\b",
+  "sha1": r'\b[a-fA-F0-9]{40}\b',
+  "sha256": r"\b[a-fA-F0-9]{64}\b",
+  "ip": r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.|$)){4}\b",
+  "domain": r"\b(?:[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,63}\b",
+}
+
+all_items = {
+  "md5": {},
+  "sha1": {},
+  "sha256": {},
+  "ip": {},
+  "domain": {},
+}
+
+if not isinstance(input_data, list):
+  input_data = [input_data]
+
+## Assuming
+max_items = 1000
+threat_timeout = 90 # days
+for content in input_data:
+  iocs = content["body"]
+
+  found_type = ""
+  searchspace = iocs[0:1000]
+  for key, value in regexsearch.items():
+    match = re.search(value, searchspace)
+    if match:
+      found_type = key
+      break
+
+  if len(found_type) == 0:
+    continue
+
+  appended_items = []
+  discovered_split_index = -1
+  datestamp_index = -1
+
+  cnt = 0
+  for line in iocs.split("\n"):
+    if len(line) < 3:
+      continue
+
+    if line.startswith("#"):
+      continue
+
+    if cnt > max_items:
+      continue
+
+    # Remove ANYTHING after # on the line
+    line = line.split("#")[0].strip()
+
+    linesplit = line.split(",")
+    if discovered_split_index >= 0:
+      if datestamp_index >= 0:
+        # Check if the timestamp is more than 90 days ago (threat_timeout)
+        try:
+          timestamp = time.strptime(linesplit[datestamp_index], "%Y-%m-%d %H:%M:%S")
+          current_time = time.time()
+          if (current_time - time.mktime(timestamp)) / (24 * 3600) > threat_timeout:
+            continue
+        except ValueError:
+          continue
+
+      appended_items.append(linesplit[discovered_split_index])
+
+    else:
+      # Discovering pattern
+      cnt += 1
+      linesplit = line.split(",")
+      if len(linesplit) == 1:
+        discovered_split_index = 0
+      else:
+        itemcnt = 0
+
+        for item in linesplit:
+          # Check if item is a timestamp
+          import time
+          try:
+            time.strptime(item, "%Y-%m-%d %H:%M:%S")
+            datestamp_index = itemcnt
+
+            # Check if the timestamp is more than 90 days ago. If so, break and continue
+          except ValueError:
+            pass
+
+          match = re.search(regexsearch[found_type], item)
+          if match:
+            discovered_split_index = itemcnt
+            break
+
+          itemcnt += 1
+
+        if discovered_split_index >= 0:
+          appended_items.append(linesplit[discovered_split_index])
+
+  # Parsing STIX
+  for item in appended_items:
+    key = item.strip()
+
+    if key in all_items:
+      if content["url"] not in all_items[found_type][key]["urls"]:
+              all_items[found_type][key] = all_items[found_type][key]["urls"].append(content["url"])
+    else:
+
+      # Silly workaround to ensure we got a good UUID
+      # But keeping it deterministic for now
+      static_namespace = "c59d2471-df00-48ae-bc18-dd76e84a60df"
+      stix_id = f"indicator--{uuid.uuid5(uuid.UUID(static_namespace), key)}"
+
+      stix_pattern = ""
+      if found_type == "md5":
+        stix_pattern = "[file:hashes.MD5 = '%s']" % (key)
+      elif found_type == "sha1":
+        stix_pattern = "[file:hashes.SHA1 = '%s']" % (key)
+      elif found_type == "sha256":
+        stix_pattern = "[file:hashes.SHA256 = '%s']" % (key)
+      elif found_type == "ip":
+        stix_pattern = "[ipv4-addr:value = '%s']" % (key)
+      elif found_type == "domain":
+        stix_pattern = "[domain-name:value = '%s']" % (key)
+
+      all_items[found_type][key] = {
+        "type": "indicator",
+        "spec_version": "2.1",
+        "id": stix_id,
+        "pattern": stix_pattern,
+        "pattern_type": "stix",
+
+        "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "modified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+
+		"x_raw_pattern": key,
+        "urls": [content["url"]],
+      }
+
+for k, v in all_items.items():
+    new_list = []
+
+    cnt = 0
+    for subkey, subval in v.items():
+        subval["external_references"] = []
+        for url in subval["urls"]:
+            subval["external_references"].append({
+                "source_name": "threatfeed",
+                "url": url,
+            })
+
+        del subval["urls"]
+        new_list.append({
+            "key": subkey,
+            "category": "%s_indicators" % k,
+            "value": json.dumps(subval),
+        })
+
+        cnt += 1
+        #if cnt == 100:
+        #    break
+
+    if len(new_list) > 0:
+        print("Uploading %s items of type %s" % (len(new_list), k))
+        ret = requests.post(upload_url, json=new_list, headers=parsed_headers)
+        print(ret.text)
+        print(ret.status_code)
+	`
 }
