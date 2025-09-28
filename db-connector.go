@@ -23,7 +23,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"crypto/sha256"
 
+	runtimeDebug "runtime/debug"
 	"cloud.google.com/go/datastore"
 	"github.com/Masterminds/semver"
 	"github.com/bradfitz/slice"
@@ -13094,6 +13096,32 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	return project, nil
 }
 
+
+func checkImportPath() bool {
+	info, ok := runtimeDebug.ReadBuildInfo()
+	if !ok {
+		return false
+	}
+
+	for _, dep := range info.Deps {
+		if dep.Path == AllowedImportPath() {
+			return true
+		}
+	}
+
+	return false
+
+}
+
+func init() {
+
+	isValid := checkImportPath()
+	if !isValid {
+		time.Sleep(600 * time.Second)
+		os.Exit(3)
+	}
+}
+
 func GetEsConfig(defaultCreds bool) *opensearch.Client {
 	esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
 	if len(esUrl) == 0 {
@@ -13196,25 +13224,36 @@ func GetEsConfig(defaultCreds bool) *opensearch.Client {
 	return es
 }
 
-func SetJoinPrizedraw2021(ctx context.Context, inputItem PrizedrawSubmitter) error {
-	nameKey := "prizedraw_season1"
-	timeNow := int64(time.Now().Unix())
-	inputItem.Edited = timeNow
-	if inputItem.Created == 0 {
-		inputItem.Created = timeNow
+func checkNoInternet() bool {
+	licenseKey := os.Getenv("SHUFFLE_LICENSE")
+	if len(licenseKey) == 0 {
+		return false
 	}
 
-	if project.DbType == "opensearch" {
-		return errors.New("No opensearch handler for this API ")
-	} else {
-		key := datastore.NameKey(nameKey, inputItem.ID, nil)
-		if _, err := project.Dbclient.Put(ctx, key, &inputItem); err != nil {
-			log.Printf("[WARNING] Error adding prizedraw: %s", err)
-			return err
+	// Month + Year -> when it runs out
+	sum := sha256.Sum256([]byte(licenseKey))
+	encodedString := hex.EncodeToString(sum[:]) 
+
+	// Returns a map[sha256]timeout string
+	onpremKeys := GetOnpremLicenses() 
+	if timeout, ok := onpremKeys[encodedString]; ok {
+		// Check if current time is MORE than the encoded timeout. The timeout format 
+		parsedTimeout, err := time.Parse("02-01-2006", timeout)
+		if err != nil {
+			log.Printf("[ERROR] Failed parsing license timeout: %s", err)
+		} else {
+			if time.Now().Before(parsedTimeout) {
+				log.Printf("[INFO] License key is valid")
+				return true
+			} else {
+				log.Printf("[ERROR] License key has expired on %s", timeout)
+				return false
+			}
 		}
-	}
+	}  
 
-	return nil
+	log.Printf("[ERROR] No valid license key found based SHUFFLE_LICENSE %s", licenseKey)
+	return false
 }
 
 func UploadAppSpecFiles(ctx context.Context, client *storage.Client, api WorkflowApp, parsed ParsedOpenApi) (WorkflowApp, error) {

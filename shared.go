@@ -65,11 +65,13 @@ var SSOUrl = ""
 var kmsDebug = false
 
 var debug = os.Getenv("DEBUG") == "true"
+var sandboxProject = "shuffle-sandbox-337810"
 
 func GetProject() ShuffleStorage {
 	return project
 }
 
+// Injects the header in all requests
 func RequestMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -78,16 +80,10 @@ func RequestMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-var sandboxProject = "shuffle-sandbox-337810"
-
+// In case we need custom context control in the future
+// This is used ~everywhere, and used to exist due to GCP AppEngine's custom
+// context handling
 func GetContext(request *http.Request) context.Context {
-	return context.Background()
-
-	if project.Environment == "cloud" && len(memcached) == 0 {
-		// No longer prevalent due to Appengine update and running pure Go backend
-		//return appengine.NewContext(request)
-	}
-
 	return context.Background()
 }
 
