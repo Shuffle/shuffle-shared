@@ -785,7 +785,7 @@ func GetAllAppCategories() []AppCategory {
 }
 
 func AllowedImportPath() string {
-	return "github.com/shuffle/shuffle-sharedd"
+	return "github.com/shuffle/shuffle-shared"
 }
 
 func GetWorkflowTest() []byte {
@@ -946,7 +946,7 @@ func GetOnpremLicenses() map[string]string {
 	// key: expiry 
 	// Format: DD-MM-YYYY
 	return map[string]string{
-		"59d02d3ecb38795bce88e558d69bb7b54e7280d4b859c0366fc111af51713d35": "01-09-2025",
+		"59d02d3ecb38795bce88e558d69bb7b54e7280d4b859c0366fc111af51713d35": "01-10-2025",
 		"53c4dd93924b6a525e3e245f1efe1c51d2e9523dc7bc93774b4cc271524b61f4": "01-11-2026",
 		"defaaab6db5a198fbbd0a5a147f327c95585892fae46ade91e6b33862a0793cb": "01-12-2026",
 		"6d14d869a4bd42b93240fd78b55851854224075aef4725c49667ad58abcb03e9": "01-01-2027",
