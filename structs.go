@@ -4530,6 +4530,7 @@ type AgentDecisionRunDetails struct {
 
 // Each decision
 type AgentDecision struct {
+
 	// Predictive Agent data
 	I          int            `json:"i" datastore:"i"`
 	Action     string         `json:"action" datastore:"action"`
