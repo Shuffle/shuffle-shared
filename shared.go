@@ -15989,7 +15989,9 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	}
 
 	if strings.Contains(actionResult.Result, decisionId) {
-		log.Printf("[DEBUG][%s] Mapped decision result for decision ID '%s': %s", workflowExecution.ExecutionId, decisionId, actionResult.Result)
+		if debug { 
+			log.Printf("[DEBUG][%s] Mapping decision result for decision ID '%s': %s", workflowExecution.ExecutionId, decisionId, actionResult.Result)
+		}
 
 		newDecision := AgentDecision{}
 		//err = json.Unmarshal([]byte(actionResult.Result), &mappedResult.Decisions[decisionIdResultIndex])
