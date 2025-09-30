@@ -1144,6 +1144,7 @@ type CacheKeyData struct {
 	Edited  int64 `json:"edited" datastore:"Edited"`
 
 	Existed bool `json:"existed,omitempty" datastore:"Existed"` // If the key existed before the update. Should always be set back to false.
+	Changed bool `json:"changed,omitempty" datastore:"Changed"` // If the value was changed. Should always be set back to false.
 	Encrypted bool `json:"encrypted" datastore:"Encrypted"`
 	FormattedKey        string   `json:"formatted_key,omitempty" datastore:"FormattedKey"`
 	PublicAuthorization string   `json:"public_authorization,omitempty" datastore:"PublicAuthorization"` // Used for public authorization

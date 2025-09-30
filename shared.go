@@ -3605,6 +3605,19 @@ func ArrayContainsLower(visited []string, id string) bool {
 	for _, item := range visited {
 		if strings.ToLower(item) == strings.ToLower(id) {
 			found = true
+			break
+		}
+	}
+
+	return found
+}
+
+func ArrayContainsInt(visited []int, id int) bool {
+	found := false
+	for _, item := range visited {
+		if item == id {
+			found = true
+			break
 		}
 	}
 
@@ -3616,6 +3629,7 @@ func ArrayContains(visited []string, id string) bool {
 	for _, item := range visited {
 		if item == id {
 			found = true
+			break
 		}
 	}
 
@@ -19435,9 +19449,20 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		KeysExisted []DatastoreKeyMini `json:"keys_existed"`
 	}
 
+	/*
+	// For testing deduplication
 	if debug { 
-		log.Printf("[DEBUG] EXISTINGINFO: %#v", existingInfo)
+		found := []string{}
+		for _, existing := range existingInfo {
+			if ArrayContains(found, existing.Key) {
+				log.Printf("[DEBUG] Key %s already found in existing info", existing.Key)
+				continue
+			}
+
+			found = append(found, existing.Key)
+		}
 	}
+	*/
 
 	returnData := returnStruct{
 		Success: true,
