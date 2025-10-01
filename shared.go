@@ -30271,6 +30271,55 @@ func fixOrgUsers(ctx context.Context, foundOrg Org) error {
 	return nil
 }
 
+func HandleCheckLicense(ctx context.Context, org Org) Org {
+
+	shuffleLicenseKey := os.Getenv("SHUFFLE_LICENSE")
+
+	if org.CloudSync {
+		cacheKey := fmt.Sprintf("org_sync_features_%s", org.Id)
+		syncFeatures, err := GetCache(ctx, cacheKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get cache in HandleCheckLicense: %v", err)
+			return org
+		}
+		features := SyncFeatures{}
+		if data, ok := syncFeatures.([]byte); ok {
+			if err := json.Unmarshal(data, &features); err == nil {
+				org.SyncFeatures.MultiEnv.Limit = features.MultiEnv.Limit
+				org.SyncFeatures.MultiEnv.Active = features.MultiEnv.Active
+
+				if features.MultiTenant.Limit < 3 {
+					org.SyncFeatures.MultiTenant.Limit = 3
+				} else {
+					org.SyncFeatures.MultiTenant.Limit = features.MultiTenant.Limit
+				}
+
+				org.SyncFeatures.MultiTenant.Active = features.MultiTenant.Active
+
+				org.SyncFeatures.Branding.Limit = features.Branding.Limit
+				org.SyncFeatures.Branding.Active = features.Branding.Active
+			}
+		}
+
+	} else if len(shuffleLicenseKey) > 0 {
+
+		license := checkNoInternet()
+		if license == true {
+			org.SyncFeatures.MultiEnv.Limit = 100
+			org.SyncFeatures.MultiEnv.Active = true
+
+			org.SyncFeatures.MultiTenant.Limit = 1000
+			org.SyncFeatures.MultiTenant.Active = true
+
+			org.SyncFeatures.Branding.Limit = 100
+			org.SyncFeatures.Branding.Active = true
+		}
+
+	}
+
+	return org
+}
+
 func IsLicensed(ctx context.Context, org Org) bool {
 	if project.Environment == "cloud" && len(org.ManagerOrgs) > 0 {
 		return true
