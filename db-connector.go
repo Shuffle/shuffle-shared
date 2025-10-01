@@ -3040,7 +3040,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		}
 	}
 
-	if stats.OrgId != orgId {
+	if (stats.OrgId != orgId) && (len(orgId) > 0) {
 		log.Printf("[WARNING] Org stats data corruption detected. Fixing org stats for org %s (was %s)", orgId, stats.OrgId)
 		stats.OrgId = orgId
 		org, err := GetOrg(ctx, orgId)
