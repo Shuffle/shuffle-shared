@@ -1118,6 +1118,14 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 		}
+
+		if len(org.CreatorOrg) == 0 && project.Environment == "onprem" {
+			log.Printf("I am checking HandleCheckLicense function")
+			parentOrg := HandleCheckLicense(ctx, *org)
+			log.Printf("parentorg mutlitennat limit: %v, active: %v", parentOrg.SyncFeatures.MultiTenant.Limit, parentOrg.SyncFeatures.MultiTenant.Active)
+			org = &parentOrg
+			log.Printf("org mutlitennat limit: %v, active: %v", org.SyncFeatures.MultiTenant.Limit, org.SyncFeatures.MultiTenant.Active)
+		}
 	}
 
 	// Make sure to add all orgs that are childs IF you have access
@@ -11715,21 +11723,22 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 			parentOrg.SyncUsage.MultiTenant.Counter = int64(len(childOrgs))
 		}
 
-		if len(childOrgs) >= 5 && !parentOrg.SyncFeatures.MultiTenant.Active {
+		isLicensed := checkNoInternet()
+		if !parentOrg.CloudSync && !isLicensed && len(childOrgs) >= 3 {
+			log.Printf("[WARNING] Organization %s has exceeded the free plan limit of 3 sub-organizations. An enterprise license is required to create additional sub-organizations.", parentOrg.Id)
 			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "You can't make more than 1 sub-organizations without cloud sync being active. Check out /docs/organization#hybrid-features or contact support@shuffler.io to learn more."}`))
+			resp.Write([]byte(`{"success": false, "reason": "The free plan allows up to 3 sub-organizations. To create more, please upgrade to an enterprise license or contact support@shuffler.io for more information"}`))
 			return
 		}
 
-		if parentOrg.SyncFeatures.MultiTenant.Active == true && parentOrg.SyncFeatures.MultiTenant.Limit == 0 {
-			parentOrg.SyncFeatures.MultiTenant.Limit = 10
-		}
-
-		if parentOrg.SyncFeatures.MultiTenant.Active == true && parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit {
+		org := HandleCheckLicense(ctx, *parentOrg)
+		parentOrg = &org
+		if parentOrg.SyncFeatures.MultiTenant.Active && parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit {
 			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "You can only make %d sub-organizations. Contact support@shuffler.io to increase this limit"}`))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have made %d/%d sub-organizations. To create more, please upgrade to an enterprise license or contact support@shuffler.io for more information"}`, parentOrg.SyncUsage.MultiTenant.Counter, parentOrg.SyncFeatures.MultiTenant.Limit)))
 			return
 		}
+
 	}
 
 	orgId := uuid.NewV4().String()

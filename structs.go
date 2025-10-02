@@ -1242,6 +1242,7 @@ type SyncFeatures struct {
 	Schedule           SyncData    `json:"schedule" datastore:"schedule"`
 	Apps               SyncData    `json:"apps" datastore:"apps"`
 	ShuffleGPT         SyncData    `json:"shuffle_gpt" datastore:"shuffle_gpt"`
+	Branding           SyncData    `json:"branding" datastore:"branding"`
 }
 
 type SyncData struct {
