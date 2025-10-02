@@ -6777,7 +6777,6 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 
-		// FIXME: Overwrite necessary?
 		query := map[string]interface{}{
 			"size": 1000,
 			"sort": map[string]interface{}{
@@ -6798,6 +6797,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
+
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get apps): %s", err)
 			return []WorkflowApp{}, err
@@ -6866,12 +6866,14 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 			}
 
 			if !innerApp.IsValid {
+				log.Printf("[INFO] Skipping invalid app %s (%s)", innerApp.Name, innerApp.ID)
 				continue
 			}
 
 			allApps, innerApp = fixAppAppend(allApps, innerApp)
 		}
 
+		/*
 		deletions := false
 		for key, value := range duplicates {
 			if len(value) <= 10 {
@@ -6896,6 +6898,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 				allApps = newAllApps
 			}
 		}
+		*/
 
 	} else {
 		cursorStr := ""
@@ -13176,7 +13179,6 @@ func checkImportPath() bool {
 }
 
 func init() {
-
 	isValid := checkImportPath()
 	if !isValid {
 		time.Sleep(600 * time.Second)
@@ -13305,7 +13307,10 @@ func checkNoInternet() bool {
 			log.Printf("[ERROR] Failed parsing license timeout: %s", err)
 		} else {
 			if time.Now().Before(parsedTimeout) {
-				log.Printf("[INFO] License key is valid")
+				if debug { 
+					log.Printf("[DEBUG] License key is valid")
+				}
+
 				return true
 			} else {
 				log.Printf("[ERROR] License key has expired on %s", timeout)

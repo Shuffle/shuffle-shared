@@ -15926,9 +15926,6 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	log.Printf("\n\nDECISION 1\n\n")
-
-	//log.Printf("[DEBUG] HANDLE AGENT DECISION RESULT '%s' -> '%s'!", actionResult.Status, decisionId)
 	if len(decisionId) == 0 {
 		log.Printf("[ERROR][%s] No decision ID found for node %s. This means we can't map the decision result in any way. Should we set the agent to FAILURE? RAW Status: %#v", actionResult.ExecutionId, actionResult.Action.ID, actionResult.Status)
 		return &workflowExecution, false, errors.New("Agent decision failed")
@@ -15947,16 +15944,12 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	log.Printf("\n\nDECISION 2\n\n")
-
 	if foundActionResultIndex < 0 {
 		log.Printf("[ERROR][%s] Action '%s' was NOT found with any result in the execution (yet)", workflowExecution.ExecutionId, actionResult.Action.ID)
 		return &workflowExecution, false, errors.New(fmt.Sprintf("ActionResultIndex: Agent node ID for decision ID %s not found", decisionId))
 	}
 
 	mappedResult := AgentOutput{}
-
-	log.Printf("\n\nDECISION 3\n\n")
 
 	//err := json.Unmarshal([]byte(actionResult.Result), &mappedResult)
 	err := json.Unmarshal([]byte(workflowExecution.Results[foundActionResultIndex].Result), &mappedResult)
@@ -15980,8 +15973,6 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			break
 		}
 	}
-
-	log.Printf("\n\nDECISION 4\n\n")
 
 	if decisionIdResultIndex < 0 {
 		log.Printf("[ERROR][%s] Decision ID %s was not found. Skipping.", workflowExecution.ExecutionId, decisionId)
@@ -16018,17 +16009,15 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		//decisionCache := fmt.Sprintf("%s_%s_decision_%s", workflowExecution.ExecutionId, actionResult.Action.ID, decisionId)
 	}
 
-	log.Printf("[DEBUG][%s] Action '%s' AND decision ID '%s' (%d). Decision Index: %d. Continue decisionmaking!", workflowExecution.ExecutionId, actionResult.Action.ID, decisionId, decisionIdResultIndex, decisionIndex)
-
-	log.Printf("\n\nDECISION 5: %s\n\n", mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status)
+	if debug { 
+		log.Printf("[DEBUG][%s] Action '%s' AND decision ID '%s' (%d). Decision Index: %d. Continue decisionmaking!", workflowExecution.ExecutionId, actionResult.Action.ID, decisionId, decisionIdResultIndex, decisionIndex)
+	}
 
 	if mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status == "FAILURE" || mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status == "ABORTED" {
 
 		go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 		return &workflowExecution, false, nil
 	}
-
-	log.Printf("\n\nDECISION 6: %s\n\n", mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status)
 
 	//mappedResult.Decisions[decisionIdResultIndex] = actionResult.Result
 
