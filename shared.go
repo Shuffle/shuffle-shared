@@ -1120,11 +1120,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(org.CreatorOrg) == 0 && project.Environment == "onprem" {
-			log.Printf("I am checking HandleCheckLicense function")
 			parentOrg := HandleCheckLicense(ctx, *org)
-			log.Printf("parentorg mutlitennat limit: %v, active: %v", parentOrg.SyncFeatures.MultiTenant.Limit, parentOrg.SyncFeatures.MultiTenant.Active)
 			org = &parentOrg
-			log.Printf("org mutlitennat limit: %v, active: %v", org.SyncFeatures.MultiTenant.Limit, org.SyncFeatures.MultiTenant.Active)
 		}
 	}
 
