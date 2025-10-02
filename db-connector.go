@@ -6777,7 +6777,6 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 
-		// FIXME: Overwrite necessary?
 		query := map[string]interface{}{
 			"size": 1000,
 			"sort": map[string]interface{}{
@@ -6798,6 +6797,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
+
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get apps): %s", err)
 			return []WorkflowApp{}, err
@@ -6866,12 +6866,14 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 			}
 
 			if !innerApp.IsValid {
+				log.Printf("[INFO] Skipping invalid app %s (%s)", innerApp.Name, innerApp.ID)
 				continue
 			}
 
 			allApps, innerApp = fixAppAppend(allApps, innerApp)
 		}
 
+		/*
 		deletions := false
 		for key, value := range duplicates {
 			if len(value) <= 10 {
@@ -6896,6 +6898,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 				allApps = newAllApps
 			}
 		}
+		*/
 
 	} else {
 		cursorStr := ""
@@ -12301,7 +12304,6 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	nameKey := "org_cache"
 	timeNow := int64(time.Now().Unix())
 
-	newArray := []CacheKeyData{}
 	dbKeys := []*datastore.Key{}
 
 	existingInfo := []DatastoreKeyMini{}
@@ -12348,6 +12350,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		go func(cacheData CacheKeyData, index int) {
 			defer wg.Done()
 
+			cacheData.Existed = false
+			cacheData.Changed = false 
 			cacheData.Created = timeNow
 			cacheData.Edited = timeNow
 
@@ -12368,8 +12372,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				cacheData.PublicAuthorization = config.PublicAuthorization
 
 				cacheData.Existed = true
-			}
+			} 
 
+			cacheData.Changed = true 
 			sameValue := false
 			if getCacheError == nil && config.Value == cacheData.Value {
 				sameValue = true
@@ -12429,7 +12434,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 			if sameValue { 
 				if debug { 
-					log.Printf("[DEBUG] SAME VALUE FOR KEY %s in category %s. SHOULD skip datastore write.", cacheData.Key, cacheData.Category)
+					cacheData.Changed = false 
+					//log.Printf("[DEBUG] SAME VALUE FOR KEY %s in category %s. SHOULD skip datastore write.", cacheData.Key, cacheData.Category)
 				}
 
 				// FIXME: Should NOT be returning keys
@@ -12453,18 +12459,25 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	close(datastoreKeys)
 
 	// Ensures no duplicates
+	newArray := []CacheKeyData{}
 	handledKeys := []string{}
+
+	skippedKeys := []string{}
 	for key := range cacheKeys {
 		if key.Key == "" {
 			continue
 		}
-		
+
+		// Assumes duplicates 
 		checkKey := fmt.Sprintf("%s_%s", key.Key, key.Category)
 		if ArrayContains(handledKeys, checkKey) {
+			if debug { 
+				log.Printf("[DEBUG] Skipping duplicate key %s in category %s", key.Key, key.Category)
+			}
+
+			handledKeys = append(handledKeys, checkKey)
 			continue
 		}
-
-		handledKeys = append(handledKeys, checkKey)
 
 		// Details to help with filtering old vs new
 		// Built for the "is_in_datastore" shuffle tools action
@@ -12474,8 +12487,15 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 
 		existingInfo = append(existingInfo, minKey)		
+		if !key.Changed {
+			parsedKey := fmt.Sprintf("%s_%s_%s", key.OrgId, key.Key, key.Category)
+			skippedKeys = append(skippedKeys, parsedKey)
+			//log.Printf("[DEBUG] Key %s did NOT change, skipping database", parsedKey)
+			continue
+		}
 
 		key.Existed = false 
+		key.Changed = false
 		newArray = append(newArray, key)
 
 	}
@@ -12486,22 +12506,67 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			continue
 		}
 
+		// Duplicate handler
 		if ArrayContains(handledKeys, key.Name) {
 			continue
 		}
 
-		// Look for empty keys and continue if so:
-		//datastoreKeys <- *datastore.NameKey("", "", nil)
-		//cacheKeys <- CacheKeyData{}
+		if ArrayContains(skippedKeys, key.Name) {
+			continue
+		}
 
+		// Look for empty keys and continue if so:
 		handledKeys = append(handledKeys, key.Name)
 		dbKeys = append(dbKeys, &key)
+	}
+
+	// Autofixer on the fly
+	if len(newArray) != len(dbKeys) {
+		dbKeys = []*datastore.Key{}
+
+		// FIXME: newArray backwards to ALWAYS have latest key? Is latest last
+		// or first in the array? :thinking:
+		handledKeys := []string{}
+		skippedIndexes := []int{}
+		for skipIndex, cacheData:= range newArray {
+			datastoreId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+			if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+				// Adds category on the end
+				datastoreId = fmt.Sprintf("%s_%s", datastoreId, cacheData.Category)
+			}
+
+			if ArrayContains(handledKeys, datastoreId) {
+				skippedIndexes = append(skippedIndexes, skipIndex)
+				continue
+			}
+
+			handledKeys = append(handledKeys, datastoreId)
+
+			dbKeys = append(dbKeys, datastore.NameKey(nameKey, strings.ToLower(datastoreId), nil) )
+		}
+
+		// Cleanup newArray again due to transactional handler
+		// Example where problems show up are nested items:
+		// 		Multiple emails in the same thread
+		if len(skippedIndexes) > 0 {
+			newDeduped := []CacheKeyData{}
+			for index, val := range newArray {
+				if ArrayContainsInt(skippedIndexes, index) {
+					continue
+				}
+
+				newDeduped = append(newDeduped, val)
+			}
+
+			newArray = newDeduped
+		}
 	}
 
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 
+		// Bulk encoding them
 		for _, cacheData := range newArray {
 			cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
 			if len(cacheData.Category) > 0 && cacheData.Category != "default" {
@@ -13114,7 +13179,6 @@ func checkImportPath() bool {
 }
 
 func init() {
-
 	isValid := checkImportPath()
 	if !isValid {
 		time.Sleep(600 * time.Second)
@@ -13243,7 +13307,10 @@ func checkNoInternet() bool {
 			log.Printf("[ERROR] Failed parsing license timeout: %s", err)
 		} else {
 			if time.Now().Before(parsedTimeout) {
-				log.Printf("[INFO] License key is valid")
+				if debug { 
+					log.Printf("[DEBUG] License key is valid")
+				}
+
 				return true
 			} else {
 				log.Printf("[ERROR] License key has expired on %s", timeout)
@@ -13864,6 +13931,8 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Order("-Edited")
 		if len(category) > 0 {
 			query = query.Filter("category =", category)
+		} else {
+			query = query.Filter("category =", "")
 		}
 
 		query = query.Limit(max)

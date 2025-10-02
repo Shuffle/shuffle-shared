@@ -5500,10 +5500,6 @@ func runAtomicChatRequest(ctx context.Context, user User, input QueryInput) (str
 	// Or could we dynamically fill this in for the user based on what labels they have? This is interesting...
 	runReply := openai.Run{}
 	if len(input.RunId) == 0 {
-
-		//instructions := "Figure out what they want to do based on their input using the available functions. If they ask what you can do, list out the available functions only. Always output valid Markdown. If the status code is not less than 300, make it clear that there was a bug and the user needs to modify it. If you can't find a matching function, use the discover_intent() function and ask if it's ok to run it to find their intent. If you see a workflow ID and execution ID, add a link at the bottom in following format: https://shuffler.io/workflows/{workflow_id}?execution_id={execution_id}"
-		//instructions := fmt.Sprintf("If they ask what you can do, list out the available functions only. Always output valid Markdown. If the status code is not less than 300, make it clear that there was a bug and the user needs to modify the workflow. Output simple answers that are to the point with minimal text. If you see a workflow ID and execution ID, add a link at the bottom in following format: https://shuffler.io/workflows/{workflow_id}?execution_id={execution_id}, and don't mention anything about it otherwise. My username is %s and my organization is %s. Any function can get the parameter 'dryrun' even though it is not specified. Dryrun is used if they don't explicitly say to run the workflow.", user.Username, user.ActiveOrg.Name)
-
 		// No dryrun
 		instructions := fmt.Sprintf("If they ask what you can do, list out the available functions only. Always output valid Markdown. If the status code is not less than 300, make it clear that there was a bug and the user needs to modify the workflow. Output simple answers that are to the point with minimal text. If you see a workflow ID and execution ID, add a link at the bottom in following format: https://shuffler.io/workflows/{workflow_id}?execution_id={execution_id}, and don't mention anything about it otherwise. My username is %s and my organization is %s", user.Username, user.ActiveOrg.Name)
 
@@ -6576,11 +6572,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	// Create the OpenAI body struct
 	systemMessage := `INTRODUCTION: 
-You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it is absolutely necessary. Do NOT ask about networking or authentication unless explicitly specified. 
+You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%. These are a last resort. Do NOT ask about networking or authentication unless explicitly specified. 
 
 END INTRODUCTION
 ---
-AVAILABLE ACTIONS:
+SINGUL ACTIONS:
 `
 	userMessage := ""
 	// Don't think this matters much
@@ -6643,7 +6639,7 @@ AVAILABLE ACTIONS:
 
 	// Will just have to make a translation system.
 	//typeOptions := []string{"ask", "singul", "workflow", "agent"}
-	typeOptions := []string{"ask", "singul"}
+	typeOptions := []string{"standalone", "singul"}
 	extraString := "Return a MINIMUM of one decision in a JSON array. "
 	if len(typeOptions) == 0 {
 		extraString = ""
@@ -6730,16 +6726,19 @@ AVAILABLE ACTIONS:
 	lastFinishedIndex += 1
 
 	systemMessage += fmt.Sprintf(`
-END AVAILABLE ACTIONS
+END SINGUL ACTIONS
 ---
-SECONDARY ACTIONS: 
+STANDALONE ACTIONS: 
 1. ask 
+2. answer
 
-END SECONDARY ACTIONSACTIONS
+These actions have the category 'standalone' and should only be used if absolutely necessary. Always prefer using the available actions.
+
+END STANDALONE ACTIONS
 ---
 DECISION FORMATTING 
 
-Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "<tool name>", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
+Available categories: %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "<tool name>", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
 
 END DECISION FORMATTING
 ---
@@ -6753,13 +6752,14 @@ RULES:
 1. General Behavior
 
 * Always perform the specified action; do not just provide an answer.
+* Fields is an array based on key: value pairs. Don't add unnecessary fields. If using 'ask', the key is 'question' and the value is the question to ask. If using 'answer', the key is 'output' and the value is what to answer.
 * NEVER skip executing an action, even if some details are unclear. Fill missing fields only with safe defaults, but still execute.
 * NEVER ask the user for clarification, confirmations, or extra details unless it is absolutely unavoidable.
 * Focus entirely on performing tasks; gathering input is secondary.
 
 2. Action & Decision Rules
 
-* If confidence in an action > 0.5, execute it immediately.
+* If confidence in an action > 0.7, execute it immediately.
 * Always execute API actions: fill required fields (tool, url, method, body) before performing.
 * NEVER ask for usernames, API keys, passwords, or authentication information.
 * NEVER ask for confirmation before performing an action.
@@ -7271,6 +7271,7 @@ FINALISING:
 					log.Printf("[ERROR][%s] Failed generating random string for decision index %s-%d", execution.ExecutionId, decision.Tool, decision.I)
 				} else {
 					agentOutput.Decisions[decisionIndex].RunDetails.Id = base64.RawURLEncoding.EncodeToString(b)
+					decision.RunDetails.Id = agentOutput.Decisions[decisionIndex].RunDetails.Id
 				}
 			}
 
@@ -7307,11 +7308,65 @@ FINALISING:
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 
-			} else {
+			} else if decision.Category != "standalone" { 
 				// Do we run the singul action directly?
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+
 				go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
+
+
+			} else {
+				if decision.Category == "standalone" { 
+
+					// FIXME: Maybe need to send this to myself
+					decision.RunDetails.StartedAt = time.Now().Unix()
+					decision.RunDetails.CompletedAt = time.Now().Unix()
+					decision.RunDetails.Status = "FINISHED"
+
+					marshalledDecision, err := json.Marshal(decision)
+					if err != nil {
+						log.Printf("[ERROR] Failed marshalling decision in AI Agent decision handler: %s", err)
+					} else {
+						actionResult := ActionResult{
+							ExecutionId:   execution.ExecutionId,
+							Authorization: execution.Authorization,
+
+							// Map in the node ID (action ID) and decision ID to set/continue the right result
+							Action: Action{
+								AppName: "AI Agent",
+								Label:   fmt.Sprintf("Agent Decision %s", decision.RunDetails.Id),
+								ID:      agentOutput.NodeId,
+							},
+							Status: fmt.Sprintf("%s_%s", decision.RunDetails.Status, decision.RunDetails.Id),
+							Result: string(marshalledDecision),
+						}
+
+						// This is required as the result for the agent isn't set yet on the first run
+						if decisionIndex == 0 {
+							go func() {
+								time.Sleep(2 * time.Second)
+
+								newExec, err := GetWorkflowExecution(context.Background(), execution.ExecutionId)
+								if err != nil {
+									log.Printf("[ERROR] Failed getting workflow execution for handling first decision in AI Agent: %s", err)
+								} else {
+									execution = *newExec
+								}
+
+								handleAgentDecisionStreamResult(execution, actionResult)
+							}()
+						} else {
+							handleAgentDecisionStreamResult(execution, actionResult)
+						}
+					}
+
+				} else {
+					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+					agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+
+					log.Printf("\n\n\n\n\n[ERROR] Action '%s' with category '%s' is NOT supported in AI Agent decisions. Skipping...\n\n\n\n\n", decision.Action, decision.Category)
+				}
 			}
 				
 			decisionActionRan = true

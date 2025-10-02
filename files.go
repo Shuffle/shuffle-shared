@@ -406,7 +406,7 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
 			return
 		}
-	
+
 		outputFiles, err := FindSimilarFile(ctx, file.Md5sum, file.OrgId)
 		log.Printf("[INFO] Found %d similar files for Md5 '%s'", len(outputFiles), file.Md5sum)
 		if len(outputFiles) > 0 {
@@ -418,7 +418,7 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 		}
-	
+		
 		nameKey := "Files"
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", nameKey, file.OrgId, file.Md5sum))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, file.OrgId))
@@ -426,7 +426,7 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 
 	if removeMetadata {
 		//Actually delete it
-		err = DeleteKey(ctx, "files", fileId)
+		err = DeleteKey(ctx, "Files", fileId)
 		if err != nil {
 			log.Printf("Failed deleting file with ID %s: %s", fileId, err)
 			resp.WriteHeader(401)
@@ -434,6 +434,24 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 		log.Printf("[INFO] Deleted file %s from database", fileId)
+
+		// If we delete a file but keep its metadata, then the file is marked as deleted and cache is cleared, 
+		// but when we query for a list of files, all the files including those marked as deleted might be cached. 
+		// So next time when we try to delete the metadata of an already deleted file, those files might still show up 
+		// in the API response and in the UI because of caching.
+
+		// Clear any caches for the deleted file to ensure immediate removal
+		if len(file.SuborgDistribution) > 0 {
+			log.Printf("[INFO] File %s (%s) has suborg distribution, clearing cache for suborgs", file.Filename, file.Id)
+			for _, suborg := range file.SuborgDistribution {
+				cacheKey := fmt.Sprintf("files_%s_%s", suborg, file.Namespace)
+				DeleteCache(ctx, cacheKey)
+			}
+		}
+
+		nameKey := "Files"
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", nameKey, file.OrgId, file.Md5sum))
+		DeleteCache(ctx, fmt.Sprintf("files_%s_%s", file.OrgId, file.Namespace))
 	}
 
 	log.Printf("[INFO] Successfully deleted file %s for org %s", fileId, user.ActiveOrg.Id)

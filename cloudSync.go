@@ -2041,7 +2041,7 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 
 // This is JUST for Singul actions with AI agents.
 // As AI Agents can have multiple types of runs, this could change every time.
-func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, error) {
+func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, error) {
 	debugUrl := ""
 	log.Printf("[INFO][%s] Running agent decision action '%s' with app '%s'. This is ran with Singul.", execution.ExecutionId, decision.Action, decision.Tool)
 
@@ -2077,7 +2077,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	marshalledAction, err := json.Marshal(parsedAction)
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed marshalling action in agent decision: %s", execution.ExecutionId, err)
-		return []byte{}, debugUrl, err
+		return []byte{}, debugUrl, decision.Tool, err
 	}
 
 	req, err := http.NewRequest(
@@ -2088,20 +2088,35 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed creating request for agent decision: %s", execution.ExecutionId, err)
-		return []byte{}, debugUrl, err
+		return []byte{}, debugUrl, decision.Tool, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed running agent decision (1). Timeout: %d: %s", execution.ExecutionId, client.Timeout, err)
-		return []byte{}, debugUrl, err
+		return []byte{}, debugUrl, decision.Tool, err
 	}
 
+	appname := decision.Tool
+	appId := ""
+	_ = appId
 	for key, value := range resp.Header {
+		log.Printf("\n\n\n\n[DEBUG][%s] HEADER: key: %s, value: %s\n\n\n\n", execution.ExecutionId, key, value)
+		if key == "X-Appname" && len(value) > 0 {
+			appname = value[0]
+			continue
+		}
+
+		if key == "X-Appid" && len(value) > 0 {
+			appId = value[0]
+			continue
+		}
+
 		if key != "X-Debug-Url" {
 			continue
 		}
+
 
 		/*
 			if !strings.HasPrefix(key, "X-") {
@@ -2131,10 +2146,11 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		*/
 	}
 
+
 	originalBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed reading body from agent decision: %s", execution.ExecutionId, err)
-		return []byte{}, debugUrl, err
+		return []byte{}, debugUrl, appname, err
 	}
 
 	body := originalBody
@@ -2149,7 +2165,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	err = json.Unmarshal(body, &outputMapped)
 	if err != nil {
 		log.Printf("[ERROR] Failed unmarshalling agent decision response: %s", err)
-		return body, debugUrl, err
+		return body, debugUrl, appname, err
 	}
 
 	if val, ok := outputMapped.RawResponse.(string); ok {
@@ -2171,11 +2187,11 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR][%s] Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
-		return body, debugUrl, errors.New(fmt.Sprintf("Failed running agent decision (2). Status code %d", resp.StatusCode))
+		return body, debugUrl, appname, errors.New(fmt.Sprintf("Failed running agent decision (2). Status code %d", resp.StatusCode))
 	}
 
 	if outputMapped.Success == false {
-		return originalBody, debugUrl, errors.New("Failed running agent decision (3). Success false for Singul action")
+		return originalBody, debugUrl, appname, errors.New("Failed running agent decision (3). Success false for Singul action")
 	}
 
 	/*
@@ -2193,7 +2209,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		}
 	*/
 
-	return body, debugUrl, nil
+	return body, debugUrl, appname, nil
 }
 
 // Runs an Agent Decision -> returns the result from it
@@ -2235,10 +2251,15 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 	go SetCache(ctx, decisionId, marshalledDecision, 60)
 
-	if decision.Action == "user_input" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" { 
+	if decision.Action == "user_input" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" || decision.Category == "standalone" { 
 	} else {
 		// Singul handler
-		rawResponse, debugUrl, err := RunAgentDecisionSingulActionHandler(execution, decision)
+		rawResponse, debugUrl, appname, err := RunAgentDecisionSingulActionHandler(execution, decision)
+
+		if len(appname) > 0 { 
+			decision.Tool = appname
+		}
+
 		decision.RunDetails.RawResponse = string(rawResponse)
 		decision.RunDetails.DebugUrl = debugUrl
 		if err != nil {

@@ -3610,6 +3610,19 @@ func ArrayContainsLower(visited []string, id string) bool {
 	for _, item := range visited {
 		if strings.ToLower(item) == strings.ToLower(id) {
 			found = true
+			break
+		}
+	}
+
+	return found
+}
+
+func ArrayContainsInt(visited []int, id int) bool {
+	found := false
+	for _, item := range visited {
+		if item == id {
+			found = true
+			break
 		}
 	}
 
@@ -3621,6 +3634,7 @@ func ArrayContains(visited []string, id string) bool {
 	for _, item := range visited {
 		if item == id {
 			found = true
+			break
 		}
 	}
 
@@ -15905,6 +15919,8 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 // Handles the recursiveness of a stream result sent to the backend with an Agent Decision
 // Used both in /streams from RunAgentDecisionAction() AND sendAgentActionSelfRequest()
 // Further used for e.g. Question answers as to further guide the agent
+
+// Also locally callable as we are doing in ai.go -> decision.Category == "standalone" -> ActionResult{}
 func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
 	decisionIdSplit := strings.Split(actionResult.Status, "_")
 	decisionId := ""
@@ -15916,15 +15932,14 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	//log.Printf("[DEBUG] HANDLE AGENT DECISION RESULT '%s' -> '%s'!", actionResult.Status, decisionId)
 	if len(decisionId) == 0 {
-		log.Printf("[ERROR][%s] No decision ID found for node %s. This means we can't map the decision result in any way. Should we set the agent to FAILURE?", actionResult.ExecutionId, actionResult.Action.ID)
+		log.Printf("[ERROR][%s] No decision ID found for node %s. This means we can't map the decision result in any way. Should we set the agent to FAILURE? RAW Status: %#v", actionResult.ExecutionId, actionResult.Action.ID, actionResult.Status)
 		return &workflowExecution, false, errors.New("Agent decision failed")
 	}
 
 	actionResult.Status = fmt.Sprintf("agent_%s", decisionId)
 	if debug { 
-		log.Printf("[DEBUG][%s] Got decision ID '%s' for action result '%s'. Status: %s", workflowExecution.ExecutionId, decisionId, actionResult.Action.ID, actionResult.Status)
+		log.Printf("[DEBUG][%s] Got decision ID '%s' for agent '%s'. Ref: %s", workflowExecution.ExecutionId, decisionId, actionResult.Action.ID, actionResult.Status)
 	}
 
 	foundActionResultIndex := -1
@@ -15936,11 +15951,12 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	}
 
 	if foundActionResultIndex < 0 {
-		log.Printf("[ERROR][%s] Action %s was not found", workflowExecution.ExecutionId, actionResult.Action.ID)
+		log.Printf("[ERROR][%s] Action '%s' was NOT found with any result in the execution (yet)", workflowExecution.ExecutionId, actionResult.Action.ID)
 		return &workflowExecution, false, errors.New(fmt.Sprintf("ActionResultIndex: Agent node ID for decision ID %s not found", decisionId))
 	}
 
 	mappedResult := AgentOutput{}
+
 	//err := json.Unmarshal([]byte(actionResult.Result), &mappedResult)
 	err := json.Unmarshal([]byte(workflowExecution.Results[foundActionResultIndex].Result), &mappedResult)
 	if err != nil {
@@ -15969,12 +15985,42 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		return &workflowExecution, false, errors.New(fmt.Sprintf("decisionIdResultIndex: Agent node ID for decision ID %s not found", decisionId))
 	}
 
-	// FIXME: Update the value of the decision here?
-	//mappedResult.Decisions[decisionIdResultIndex] = actionResult.Result
+	if strings.Contains(actionResult.Result, decisionId) {
+		if debug { 
+			log.Printf("[DEBUG][%s] Mapping decision result for decision ID '%s': %s", workflowExecution.ExecutionId, decisionId, actionResult.Result)
+		}
 
-	//log.Printf("[DEBUG][%s] Action '%s' AND decision ID '%s' (%d). Decision Index: %d. Continue decisionmaking!", workflowExecution.ExecutionId, actionResult.Action.ID, decisionId, decisionIdResultIndex, decisionIndex)
+		newDecision := AgentDecision{}
+		//err = json.Unmarshal([]byte(actionResult.Result), &mappedResult.Decisions[decisionIdResultIndex])
+		err = json.Unmarshal([]byte(actionResult.Result), &newDecision)
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed unmarshalling agent decision result for decision ID '%s': %s. Data: %s", workflowExecution.ExecutionId, decisionId, err, actionResult.Result)
+		} else {
+			if newDecision.RunDetails.Status != "" && newDecision.RunDetails.Id != "" && (newDecision.RunDetails.Status != mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status || newDecision.RunDetails.StartedAt != mappedResult.Decisions[decisionIdResultIndex].RunDetails.StartedAt || newDecision.RunDetails.CompletedAt != mappedResult.Decisions[decisionIdResultIndex].RunDetails.CompletedAt) {
+
+				log.Printf("[DEBUG][%s] Updating decision ID '%s' with new status '%s' (old: '%s')", workflowExecution.ExecutionId, decisionId, newDecision.RunDetails.Status, mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status)
+
+				mappedResult.Decisions[decisionIdResultIndex] = newDecision
+
+				// Set cache for action, agent & decision here as well (?)
+				decisionCacheId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, newDecision.RunDetails.Id)
+				err = SetCache(context.Background(), decisionCacheId, []byte(actionResult.Result), 300)
+				if err != nil {
+					log.Printf("[ERROR][%s] Failed setting cache for decision ID '%s': %s", workflowExecution.ExecutionId, decisionId, err)
+				}
+			}
+		}
+
+		// Update cache here as well
+		//decisionCache := fmt.Sprintf("%s_%s_decision_%s", workflowExecution.ExecutionId, actionResult.Action.ID, decisionId)
+	}
+
+	if debug { 
+		log.Printf("[DEBUG][%s] Action '%s' AND decision ID '%s' (%d). Decision Index: %d. Continue decisionmaking!", workflowExecution.ExecutionId, actionResult.Action.ID, decisionId, decisionIdResultIndex, decisionIndex)
+	}
 
 	if mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status == "FAILURE" || mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status == "ABORTED" {
+
 		go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 		return &workflowExecution, false, nil
 	}
@@ -16040,7 +16086,9 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	// can see and modify stuff themself as well.
 	if mappedResult.Memory == "shuffle_db" {
 		requestKey := fmt.Sprintf("chat_%s_%s", actionResult.ExecutionId, actionResult.Action.ID)
-		log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
+		if debug { 
+			log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
+		}
 
 		ctx := context.Background()
 		agentRequestMemory, err := GetDatastoreKey(ctx, requestKey, "agent_requests")
@@ -19398,9 +19446,20 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		KeysExisted []DatastoreKeyMini `json:"keys_existed"`
 	}
 
+	/*
+	// For testing deduplication
 	if debug { 
-		log.Printf("[DEBUG] EXISTINGINFO: %#v", existingInfo)
+		found := []string{}
+		for _, existing := range existingInfo {
+			if ArrayContains(found, existing.Key) {
+				log.Printf("[DEBUG] Key %s already found in existing info", existing.Key)
+				continue
+			}
+
+			found = append(found, existing.Key)
+		}
 	}
+	*/
 
 	returnData := returnStruct{
 		Success: true,
