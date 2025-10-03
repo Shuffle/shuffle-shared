@@ -106,7 +106,6 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-
 	envFound := false
 	for _, env := range environments {
 		if env.Name == pipeline.Environment {
@@ -123,7 +122,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	availableCommands := []string{
-		"create", "delete", "start", "stop",
+		"create", "start", "stop", "delete", 
 	}
 
 	matchingCommand := ""
@@ -144,8 +143,13 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	// Look for PIPELINE_ command that exists in the queue already
 	startCommand := strings.ToUpper(strings.Split(pipeline.Type, " ")[0])
 
+	if len(pipeline.ID) == 0 && len(pipeline.TriggerId) > 0 {
+		pipeline.ID = pipeline.TriggerId
+	}
+
 	//check if this is the first time creating the pipeline
-	pipelineInfo, err := GetPipeline(ctx, pipeline.TriggerId)
+	//pipelineInfo, err := GetPipeline(ctx, pipeline.TriggerId)
+	pipelineInfo, err := GetPipeline(ctx, pipeline.ID)
 	if err != nil {
 		if (startCommand == "DELETE" || startCommand == "STOP") && err.Error() == "pipeline doesn't exist" {
 			log.Printf("[WARNING] Failed getting pipeline %s, reason: %s", pipeline.TriggerId, err)
@@ -157,6 +161,23 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		}
 	} else if startCommand == "CREATE" {
 		startCommand = "START"
+	}
+
+	if len(pipelineInfo.ID) == 0 && len(pipeline.ID) > 0 {
+		pipelineInfo = &Pipeline{
+			ID: pipeline.ID,
+			Name: pipeline.Name,
+			Type: pipeline.Type,
+			OrgId: user.ActiveOrg.Id,
+			Command: pipeline.Command,
+			Environment: pipeline.Environment,
+
+			PipelineId: pipeline.PipelineId,
+		}
+	}
+
+	if len(pipelineInfo.PipelineId) == 0 && len(pipelineInfo.ID) > 0 {
+		pipelineInfo.PipelineId = pipelineInfo.ID
 	}
 
 	//parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), user.ActiveOrg.Id)
@@ -183,7 +204,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	// 2. Send to environment queue
 	execRequest := ExecutionRequest{
 		Type:              formattedType,
-		ExecutionId:       uuid.New().String(),
+		ExecutionId:       pipeline.ID,
 		ExecutionSource:   pipeline.Name,
 		ExecutionArgument: pipeline.Command,
 		Priority:          11,
@@ -196,7 +217,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 
 		err := deletePipeline(ctx, *pipelineInfo)
 		if err != nil {
-			resp.WriteHeader(401)
+		 	resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Failed deleting the pipeline."}`))
 			return
 		}
@@ -212,7 +233,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 			return
 		}
 
-		log.Printf("[INFO] Stopped the pipeline successfully", pipelineInfo.ID)
+		log.Printf("[INFO] Successfully sent stop request for the pipeline '%s' in environment '%s'. This does NOT mean that it will disappear right away. Check Orborus logs for more details.", pipelineInfo.ID, pipelineInfo.Environment)
 	} else {
 
 		pipelineData.Name = pipeline.Name

@@ -516,7 +516,7 @@ type Environment struct {
 	// This makes leader/follower model work for failovers
 	OrborusUuid string `json:"orborus_uuid" datastore:"orborus_uuid"`
 
-	Licensed bool       `json:"licensed" datastore:"licensed"`
+	//Licensed bool       `json:"licensed" datastore:"licensed"`
 	RunType  string     `json:"run_type" datastore:"run_type"`
 	DataLake LakeConfig `json:"data_lake" datastore:"data_lake"`
 

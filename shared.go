@@ -3112,17 +3112,17 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 				// Check if timestamp is within the last 180 seconds. If it is, overwrite newEnvironments
 				if newEnv.Timestamp > 0 && timenow-newEnv.Timestamp > 180 {
 					newEnvironments[envIndex].RunningIp = ""
-					newEnvironments[envIndex].Licensed = false
+					//newEnvironments[envIndex].Licensed = false
 					newEnvironments[envIndex].DataLake.Enabled = false
 				} else {
 					newEnvironments[envIndex].DataLake = newEnv.DataLake
 					newEnvironments[envIndex].RunningIp = newEnv.RunningIp
-					newEnvironments[envIndex].Licensed = newEnv.Licensed
+					//newEnvironments[envIndex].Licensed = newEnv.Licensed
 				}
 			}
 		} else {
 			newEnvironments[envIndex].RunningIp = ""
-			newEnvironments[envIndex].Licensed = false
+			//newEnvironments[envIndex].Licensed = false
 			newEnvironments[envIndex].DataLake.Enabled = false
 		}
 
@@ -30409,9 +30409,9 @@ func IsLicensed(ctx context.Context, org Org) bool {
 			continue
 		}
 
-		if env.Licensed {
-			return true
-		}
+		//if env.Licensed {
+		//	return true
+		//}
 	}
 
 	return false

@@ -43,7 +43,7 @@ func init() {
 	//log.Printf("[DEBUG] Inside Files Init with org bucket name %#v", orgFileBucket)
 }
 
-func fileAuthentication(request *http.Request) (string, error) {
+func fileExecutionAuthentication(request *http.Request) (string, error) {
 	executionId, ok := request.URL.Query()["execution_id"]
 	if ok && len(executionId) > 0 {
 		ctx := GetContext(request)
@@ -177,7 +177,7 @@ func HandleGetFileMeta(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[AUDIT] INITIAL Api authentication failed in file deletion: %s", err)
 
-		orgId, err := fileAuthentication(request)
+		orgId, err := fileExecutionAuthentication(request)
 		if err != nil {
 			log.Printf("[ERROR] Bad file authentication in get: %s", err)
 			resp.WriteHeader(401)
@@ -301,7 +301,7 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[AUDIT] INITIAL Api authentication failed in file deletion: %s", err)
 
-		orgId, err := fileAuthentication(request)
+		orgId, err := fileExecutionAuthentication(request)
 		if err != nil {
 			log.Printf("[ERROR] Bad file authentication in delete: %s", err)
 			resp.WriteHeader(401)
@@ -519,6 +519,51 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 	return files, nil
 }
 
+// Normal orborus auth. E.g. used for file downloads
+func envOrborusAuth(request *http.Request) (string, error) {
+	currentUrl := request.URL.String()
+	orgId := request.Header.Get("Org-Id")
+	if len(orgId) == 0 {
+		log.Printf("[AUDIT] No Org-Id set for url %s", currentUrl)
+		return "", errors.New("No org-id header set")
+	}
+
+	auth := request.Header.Get("Authorization")
+	if len(auth) == 0 {
+		log.Printf("[AUDIT] No Authorization header set for url %s", currentUrl)
+		return "", errors.New("No authorization header set (environment auth)")
+	}
+
+	// Get the org
+	ctx := GetContext(request)
+	foundOrg, err := GetOrg(ctx, orgId)
+	if err != nil {
+		log.Printf("[AUDIT] Couldn't find org %s for url %s: %s", orgId, currentUrl, err)
+		return "", errors.New("Couldn't find org")
+	}
+
+	foundEnvironments, err := GetEnvironments(ctx, foundOrg.Id)
+	if err != nil {
+		log.Printf("[AUDIT] Couldn't find environments for org %s for url %s: %s", foundOrg.Id, currentUrl, err)
+		return "", errors.New("Couldn't find environments for org")
+	}
+
+	if strings.HasPrefix(auth, "Bearer ") {
+		auth = strings.Split(auth, " ")[1]
+	}
+
+	for _, item := range foundEnvironments {
+		// Check auth
+		if item.Auth == auth && item.Archived == false {
+			return item.OrgId, nil
+		}
+	}
+
+	return "", errors.New("No environment matched")
+
+
+}
+
 func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -553,13 +598,21 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		//log.Printf("[AUDIT] INITIAL Api authentication failed in file download: %s", err)
+		var fileerr error
+		var envErr error
 
-		orgId, fileerr := fileAuthentication(request)
+		orgId := ""
+		orgId, fileerr = fileExecutionAuthentication(request)
 		if fileerr != nil {
-			log.Printf("[WARNING] Bad authentication in get namespace AFTER trying normal user auth %s: %s & %s", namespace, err, fileerr)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
+
+			// Uses orborus env auth to check access to an org
+			orgId, envErr = envOrborusAuth(request)
+			if envErr != nil {
+				log.Printf("[WARNING] Bad authentication in get namespace AFTER trying normal user auth AND file exec auth %s: %s & %s. Env err: %s", namespace, err, fileerr, envErr)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
 		}
 
 		user.ActiveOrg.Id = orgId
@@ -892,7 +945,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 
-		orgId, err := fileAuthentication(request)
+		orgId, err := fileExecutionAuthentication(request)
 		if err != nil {
 			log.Printf("[WARNING] Bad user & file authentication in get for ID %s: %s", fileId, err)
 			resp.WriteHeader(401)
@@ -1193,7 +1246,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[AUDIT] INITIAL Api authentication failed in file upload: %s", err)
-		orgId, err := fileAuthentication(request)
+		orgId, err := fileExecutionAuthentication(request)
 		if err != nil {
 			log.Printf("[WARNING] Bad file authentication in edit file: %s", err)
 			resp.WriteHeader(401)
@@ -1356,7 +1409,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[AUDIT] INITIAL Api authentication failed in file upload: %s", err)
 
-		orgId, err := fileAuthentication(request)
+		orgId, err := fileExecutionAuthentication(request)
 		if err != nil {
 			log.Printf("[WARNING] Bad file authentication in upload file: %s", err)
 			resp.WriteHeader(401)
@@ -1618,7 +1671,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		//log.Printf("[AUDIT] INITIAL Api authentication failed in file creation: %s", err)
 
-		orgId, err := fileAuthentication(request)
+		orgId, err := fileExecutionAuthentication(request)
 		if err != nil {
 			log.Printf("[ERROR] Bad file authentication in create file: %s", err)
 			resp.WriteHeader(401)
