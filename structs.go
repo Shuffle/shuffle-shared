@@ -145,6 +145,7 @@ type RetStruct struct {
 	SyncFeatures    SyncFeatures `json:"sync_features"`
 	SessionKey      string       `json:"session_key"`
 	IntervalSeconds int64        `json:"interval_seconds"`
+	Subscriptions   []PaymentSubscription `json:"subscriptions,omitempty"`
 }
 
 type AppMini struct {
