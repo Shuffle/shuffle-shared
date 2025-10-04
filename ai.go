@@ -7576,7 +7576,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, workflowId)
 	if err != nil || workflow.ID == "" {
-		log.Printf("[WARNING] Failed to get workflow by ID in GenerateSingulWorkflows: %s", err)
+		log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, err)
 	}
 
 	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction)

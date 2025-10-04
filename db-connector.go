@@ -8173,8 +8173,8 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	// FIXME: Due to a possibility of ID reusage on duplication, we re-randomize ID's IF the workflow is new
 	// Due to caching, this is kind of fine.
 	foundWorkflow, err := GetWorkflow(ctx, id)
-	if err != nil || foundWorkflow.ID == "" {
-		log.Printf("[INFO] Workflow %s doesn't exist, randomizing IDs for Triggers", id)
+	if (err != nil || foundWorkflow.ID == "") && !foundWorkflow.BackgroundProcessing {
+		log.Printf("[INFO] Workflow %s doesn't exist, randomizing IDs for Triggers during init", id)
 
 		// Old ID + Org ID as seed -> generate new uuid
 		for triggerIndex, trigger := range workflow.Triggers {
