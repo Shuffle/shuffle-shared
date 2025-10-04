@@ -3040,6 +3040,23 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		}
 	}
 
+	if (stats.OrgId != orgId) && (len(orgId) > 0) {
+		log.Printf("[WARNING] Org stats data corruption detected. Fixing org stats for org %s (was %s)", orgId, stats.OrgId)
+		stats.OrgId = orgId
+		org, err := GetOrg(ctx, orgId)
+		if err == nil {
+			stats.OrgName = org.Name
+			err = SetOrgStatistics(ctx, *stats, orgId)
+			if err != nil {
+				log.Printf("[WARNING] Failed fixing org stats for org %s: %s", orgId, err)
+			} else {
+				log.Printf("[INFO] Fixed org stats for org %s", orgId)
+			}
+		} else {
+			log.Printf("[WARNING] Failed getting org during org stats fix for org %s: %s", orgId, err)
+		}
+	}
+
 	for dailyStatIndex, _ := range stats.DailyStatistics {
 		for additionIndex, _ := range stats.DailyStatistics[dailyStatIndex].Additions {
 			stats.DailyStatistics[dailyStatIndex].Additions[additionIndex].Date = stats.DailyStatistics[dailyStatIndex].Date
