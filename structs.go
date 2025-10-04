@@ -145,6 +145,7 @@ type RetStruct struct {
 	SyncFeatures    SyncFeatures `json:"sync_features"`
 	SessionKey      string       `json:"session_key"`
 	IntervalSeconds int64        `json:"interval_seconds"`
+	Subscriptions   []PaymentSubscription `json:"subscriptions,omitempty"`
 }
 
 type AppMini struct {
@@ -1165,6 +1166,7 @@ type PaymentSubscription struct {
 	CancellationDate int64    `json:"cancellationdate" datastore:"cancellationdate"`
 	Enddate          int64    `json:"enddate" datastore:"enddate"`
 	Name             string   `json:"name" datastore:"name"`
+	SupportLevel     string   `json:"support_level" datastore:"support_level"`
 	Recurrence       string   `json:"recurrence" datastore:"recurrence"`
 	Reference        string   `json:"reference" datastore:"reference"`
 	Level            string   `json:"level" datastore:"level"`
