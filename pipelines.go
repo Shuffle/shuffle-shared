@@ -93,7 +93,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		if len(pipeline.Environment) < 1 {
 			log.Printf("[WARNING] Environment is required for new pipelines")
 			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "No environment found"}`))
+			resp.Write([]byte(`{"success": false, "reason": "No matching environment found"}`))
 			return
 		}
 	}

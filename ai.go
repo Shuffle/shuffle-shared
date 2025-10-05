@@ -7574,9 +7574,11 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
+	initialising := false
 	workflow, err := GetWorkflow(ctx, workflowId)
 	if err != nil || workflow.ID == "" {
 		log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, err)
+		initialising = true
 	}
 
 	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction)
@@ -7604,6 +7606,20 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	workflow.BackgroundProcessing = true
+	workflow.OrgId = user.ActiveOrg.Id
+	if initialising {
+
+		// Because the workflow needs to exist before triggers can be started
+		err = SetWorkflow(ctx, *workflow, workflow.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed to set workflow in GenerateSingulWorkflows: %s", err)
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to set workflow"}`))
+			return
+		}
+	}
+
 	// Ensure triggers are started
 	for triggerIndex, trigger := range workflow.Triggers {
 		if trigger.ID == "" {
@@ -7611,12 +7627,14 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if trigger.TriggerType == "SCHEDULE" {
+			log.Printf("[INFO] Starting schedule for trigger %s in workflow %s", trigger.ID, workflow.ID)
 			err = startSchedule(workflow.Triggers[triggerIndex], user.ApiKey, *workflow)
 			if err == nil {
 				workflow.Triggers[triggerIndex].Status = "Running"
 			}
 
 		} else if trigger.TriggerType == "WEBHOOK" {
+			log.Printf("[INFO] Starting webhook for trigger %s in workflow %s", trigger.ID, workflow.ID)
 
 			hook := Hook{
 				Status: "running",
@@ -7658,8 +7676,114 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	workflow.BackgroundProcessing = true
-	workflow.OrgId = user.ActiveOrg.Id
+	// Find images etc
+	org := &Org{}
+	orgChanged := false 
+	allApps, err := GetPrioritizedApps(ctx, user)
+	if err == nil { 
+		for actionIndex, action := range workflow.Actions {
+			if len(action.LargeImage) > 0 {
+				continue
+			}
+
+			// Find the inner app
+			newAppname := strings.ToLower(strings.ReplaceAll(action.AppName, " ", "_"))
+			if newAppname == "singul" {
+				appParamIndex := -1
+				for paramIndex, param := range action.Parameters {
+					if param.Name != "app_name" {
+						continue
+					}
+
+					appParamIndex = paramIndex
+					newAppname = strings.ToLower(strings.ReplaceAll(param.Value, " ", "_"))
+					break
+				}
+
+				if appParamIndex >= 0 && len(newAppname) == 0 {
+					category := strings.ToLower(action.Name)
+					if len(category) > 0 {
+						if len(org.Id) == 0 {
+							org, err = GetOrg(ctx, user.ActiveOrg.Id)
+							if err != nil {
+								log.Printf("[ERROR] Failed getting org in GenerateSingulWorkflows: %s", err)
+							}
+						}
+
+						foundId := ""
+						if category == "cases" {
+							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Cases.Name
+							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Cases.LargeImage
+							foundId = org.SecurityFramework.Cases.ID
+						} else if category == "communication" || category == "comms" {
+							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Communication.Name
+							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Communication.LargeImage
+							foundId = org.SecurityFramework.Communication.ID
+						} else if category == "iam" {
+							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.IAM.Name
+							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.IAM.LargeImage
+							foundId = org.SecurityFramework.IAM.ID
+						} else if category == "assets" {
+							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Assets.Name
+							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Assets.LargeImage
+							foundId = org.SecurityFramework.Assets.ID
+						} else if category == "edr" || category == "eradication" { 
+							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.EDR.Name
+							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.EDR.LargeImage
+							foundId = org.SecurityFramework.EDR.ID
+						} else if category == "intel" {
+							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Intel.Name
+							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Intel.LargeImage
+							foundId = org.SecurityFramework.Intel.ID
+						} else if category == "network" {
+							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.Network.LargeImage
+							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.Network.Name
+							foundId = org.SecurityFramework.Network.ID
+						} else if category == "siem" {
+							workflow.Actions[actionIndex].LargeImage = org.SecurityFramework.SIEM.LargeImage 
+							workflow.Actions[actionIndex].Parameters[appParamIndex].Value = org.SecurityFramework.SIEM.Name	
+							foundId = org.SecurityFramework.SIEM.ID
+						} else {
+							log.Printf("[ERROR] Invalid category '%s' for Singul action in workflow %s", category, workflow.ID)
+						}
+
+						if !ArrayContains(org.ActiveApps, foundId) {
+							orgChanged = true
+							org.ActiveApps = append(org.ActiveApps, foundId)
+						}
+					}
+				}
+			}
+
+			for _, app := range allApps {
+				innerAppname := strings.ToLower(strings.ReplaceAll(app.Name, " ", "_"))
+				if innerAppname != newAppname {
+					continue
+				}
+
+				if len(app.LargeImage) == 0 {
+					continue
+				}
+
+				workflow.Actions[actionIndex].LargeImage = app.LargeImage
+				break
+			}
+
+			if len(workflow.Actions[actionIndex].LargeImage) == 0 {
+				if debug { 
+					log.Printf("[DEBUG] Missing app image for app '%s'", action.AppName)
+				}
+			}
+		}
+	}
+
+	if orgChanged {
+		go SetOrg(context.Background(), *org, org.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed updating org in GenerateSingulWorkflows: %s", err)
+		}
+	}
+
 	err = SetWorkflow(ctx, *workflow, workflow.ID)
 	if err != nil {
 		log.Printf("[ERROR] Failed to set workflow in GenerateSingulWorkflows: %s", err)

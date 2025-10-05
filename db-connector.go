@@ -6995,6 +6995,9 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 
 	// Onprem indexing: workflowqueue-%s -> workflowqueue-environmentname
 	// Cloud: workflowqueue-%s-%s -> workflowqueue-environmentname-orgid
+	if executionRequest.ExecutionId == "" {
+		executionRequest.ExecutionId = uuid.NewV4().String()
+	}
 
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
@@ -8190,7 +8193,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	// FIXME: Due to a possibility of ID reusage on duplication, we re-randomize ID's IF the workflow is new
 	// Due to caching, this is kind of fine.
 	foundWorkflow, err := GetWorkflow(ctx, id)
-	if (err != nil || foundWorkflow.ID == "") && !foundWorkflow.BackgroundProcessing {
+	if (err != nil || foundWorkflow.ID == "") && !workflow.BackgroundProcessing {
 		log.Printf("[INFO] Workflow %s doesn't exist, randomizing IDs for Triggers during init", id)
 
 		// Old ID + Org ID as seed -> generate new uuid
