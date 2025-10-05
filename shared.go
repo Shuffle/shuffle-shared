@@ -4567,7 +4567,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	workflowsChan := make(chan []Workflow)
 	schedulesChan := make(chan []ScheduleOld)
 	hooksChan := make(chan []Hook)
-	pipelinesChan := make(chan []PipelineInfoMini)
+	pipelinesChan := make(chan []PipelineInfo)
 
 	errChan := make(chan error)
 
@@ -4618,7 +4618,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		pipelines := []PipelineInfoMini{}
+		pipelines := []PipelineInfo{}
 		for _, env := range environments {
 			if env.Archived {
 				continue
@@ -4674,7 +4674,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	hookMap := map[string]Hook{}
 	scheduleMap := map[string]ScheduleOld{}
-	pipelineMap := map[string]PipelineInfoMini{}
+	pipelineMap := map[string]PipelineInfo{}
 
 	for _, hook := range hooks {
 		hookMap[hook.Id] = hook

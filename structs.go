@@ -526,7 +526,7 @@ type Environment struct {
 
 type LakeConfig struct {
 	Enabled   bool               `json:"enabled" datastore:"enabled"`
-	Pipelines []PipelineInfoMini `json:"pipelines" datastore:"pipelines"`
+	Pipelines []PipelineInfo `json:"pipelines" datastore:"pipelines"`
 }
 
 // Saves some data, not sure what to have here lol
@@ -2567,7 +2567,7 @@ type SubResponse struct {
 }
 
 type AllTriggersWrapper struct {
-	Pipelines []PipelineInfoMini `json:"pipelines"`
+	Pipelines []PipelineInfo 	 `json:"pipelines"`
 	WebHooks  []Hook             `json:"webhooks"`
 	Schedules []ScheduleOld      `json:"schedules"`
 }
@@ -4462,16 +4462,6 @@ type DetectionResponse struct {
 	DownloadRepo string `json:"download_repo"`
 }
 
-type PipelineInfoMini struct {
-	Name       string `json:"name"`
-	ID         string `json:"id"`
-	Definition string `json:"definition"`
-	TotalRuns  int    `json:"total_runs"`
-	CreatedAt  int64  `json:"created_at"`
-
-	Environment string `json:"environment"`
-}
-
 // The raw output from pipelines in Tenzir
 type PipelineInfo struct {
 	ID           string `json:"id"`
@@ -4502,6 +4492,9 @@ type PipelineInfo struct {
 	} `json:"autodelete"`
 	TTL          any `json:"ttl"`
 	RemainingTTL any `json:"remaining_ttl"`
+
+	// Shuffle ref
+	Environment string `json:"environment"`
 }
 
 type PipelineInfoWrapper struct {
