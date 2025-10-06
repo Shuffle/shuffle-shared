@@ -12199,6 +12199,12 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if tmpData.Editing == "subscription_update" && !user.SupportAccess {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Support access required"}`))
+		return
+	}
+
 	// Allow editing a specific subscription card from UI except Eula and Reference
 	if tmpData.Editing == "subscription_update" {
 		idx := tmpData.SubscriptionIndex
