@@ -1957,6 +1957,8 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 		Field2 string `json:"field_2"` // Password
 		Field3 string `json:"field_3"` // Branch
 		Path  string `json:"path"` 
+
+		Namespace string `json:"namespace"`
 	}
 
 	var input tmpStruct
@@ -1983,12 +1985,28 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 	repo := ""
 	path := input.Path
 
+	treeIndex := -1
+	newPath := ""
 	for cnt, item := range urlSplit[3:] { 
+		// Auto parsing url
+		if item == "tree" && treeIndex == -1 && cnt > 1 {
+			treeIndex = cnt
+		}
+
 		if cnt == 0 {
 			owner = item
 		} else if cnt == 1 {
 			repo = item
+		} else {
+			if treeIndex != -1 && (path == "" || path == "/") && cnt > treeIndex+1 {
+				newPath = fmt.Sprintf("%s/%s", newPath, item)
+			}
 		}
+	}
+
+	if len(newPath) > 0 {
+		newPath = strings.TrimPrefix(newPath, "/")
+		path = newPath
 	}
 
 	log.Printf("[DEBUG] Loading standard with git: %s/%s/%s", owner, repo, path)
@@ -2006,10 +2024,18 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 		files = files[:50]
 	}
 
+	// Expects them in the root level... hmm
+	// FIXME: Recurse
 	for _, item := range files {
+		log.Printf("[DEBUG] Downloading standard file %s", *item.Path)
 		fileContent, _, _, err := client.Repositories.GetContents(ctx, owner, repo, *item.Path, nil)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting file %s: %s", *item.Path, err)
+			continue
+		}
+
+		if fileContent == nil || fileContent.Content == nil {
+			log.Printf("[ERROR] No content in file %s", *item.Path)
 			continue
 		}
 
@@ -2038,10 +2064,15 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 			DownloadPath: downloadPath,
 			Subflows:     []string{},
 			StorageArea:  "local",
-			Namespace:    path,
+			Namespace:    strings.ReplaceAll(strings.ReplaceAll(path, "/", "_"), "..", "_"),
 			Tags:         []string{
-				"standard",
+				input.URL,
+				path,
 			},
+		}
+
+		if len(input.Namespace) > 0 {
+			file.Namespace = input.Namespace
 		}
 
 		if project.Environment == "cloud" {
