@@ -141,10 +141,10 @@ type ExecutionRequest struct {
 }
 
 type RetStruct struct {
-	Success         bool         `json:"success"`
-	SyncFeatures    SyncFeatures `json:"sync_features"`
-	SessionKey      string       `json:"session_key"`
-	IntervalSeconds int64        `json:"interval_seconds"`
+	Success         bool                  `json:"success"`
+	SyncFeatures    SyncFeatures          `json:"sync_features"`
+	SessionKey      string                `json:"session_key"`
+	IntervalSeconds int64                 `json:"interval_seconds"`
 	Subscriptions   []PaymentSubscription `json:"subscriptions,omitempty"`
 }
 
@@ -525,7 +525,7 @@ type Environment struct {
 }
 
 type LakeConfig struct {
-	Enabled   bool               `json:"enabled" datastore:"enabled"`
+	Enabled   bool           `json:"enabled" datastore:"enabled"`
 	Pipelines []PipelineInfo `json:"pipelines" datastore:"pipelines"`
 }
 
@@ -1040,11 +1040,11 @@ type Org struct {
 	CreatorId string `json:"creator_id" datastore:"creator_id"`
 	Disabled  bool   `json:"disabled" datastore:"disabled"`
 
-	EulaSigned     bool        `json:"eula_signed" datastore:"eula_signed"`
-	EulaSignedBy   string      `json:"eula_signed_by" datastore:"eula_signed_by"`
-	Billing        Billing     `json:"Billing" datastore:"Billing"`
-	CreatorOrg     string      `json:"creator_org" datastore:"creator_org"`
-	Branding       OrgBranding `json:"branding" datastore:"branding"`
+	EulaSigned   bool        `json:"eula_signed" datastore:"eula_signed"`
+	EulaSignedBy string      `json:"eula_signed_by" datastore:"eula_signed_by"`
+	Billing      Billing     `json:"Billing" datastore:"Billing"`
+	CreatorOrg   string      `json:"creator_org" datastore:"creator_org"`
+	Branding     OrgBranding `json:"branding" datastore:"branding"`
 }
 
 type Billing struct {
@@ -1144,13 +1144,13 @@ type CacheKeyData struct {
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
 
-	Existed bool `json:"existed,omitempty" datastore:"Existed"` // If the key existed before the update. Should always be set back to false.
-	Changed bool `json:"changed,omitempty" datastore:"Changed"` // If the value was changed. Should always be set back to false.
-	Encrypted bool `json:"encrypted" datastore:"Encrypted"`
+	Existed             bool     `json:"existed,omitempty" datastore:"Existed"` // If the key existed before the update. Should always be set back to false.
+	Changed             bool     `json:"changed,omitempty" datastore:"Changed"` // If the value was changed. Should always be set back to false.
+	Encrypted           bool     `json:"encrypted" datastore:"Encrypted"`
 	FormattedKey        string   `json:"formatted_key,omitempty" datastore:"FormattedKey"`
 	PublicAuthorization string   `json:"public_authorization,omitempty" datastore:"PublicAuthorization"` // Used for public authorization
 	SuborgDistribution  []string `json:"suborg_distribution" datastore:"suborg_distribution"`
-	RevisionId   string   `json:"revision_id" datastore:"revision_id"`
+	RevisionId          string   `json:"revision_id" datastore:"revision_id"`
 }
 type SyncConfig struct {
 	Interval int64  `json:"interval" datastore:"interval"`
@@ -2568,9 +2568,9 @@ type SubResponse struct {
 }
 
 type AllTriggersWrapper struct {
-	Pipelines []PipelineInfo 	 `json:"pipelines"`
-	WebHooks  []Hook             `json:"webhooks"`
-	Schedules []ScheduleOld      `json:"schedules"`
+	Pipelines []PipelineInfo `json:"pipelines"`
+	WebHooks  []Hook         `json:"webhooks"`
+	Schedules []ScheduleOld  `json:"schedules"`
 }
 
 type SubWrapper struct {
@@ -2984,6 +2984,7 @@ type BaseFile struct {
 	FileSize           int64    `json:"filesize"`
 	OrgId              string   `json:"org_id"`
 	SuborgDistribution []string `json:"suborg_distribution"`
+	Tags               []string `json:"tags,omitempty" datastore:"tags"`
 }
 
 type FileResponse struct {
@@ -2996,8 +2997,8 @@ type FileResponse struct {
 type SSOConfig struct {
 	SSOEntrypoint       string `json:"sso_entrypoint" datastore:"sso_entrypoint"`
 	SSOCertificate      string `json:"sso_certificate" datastore:"sso_certificate"`
-	SSOLongCertificate string `json:"sso_long_certificate" datastore:"sso_long_certificate,noindex"`
-    SSOCertificateHash  string `json:"sso_certificate_hash" datastore:"sso_certificate_hash"`	
+	SSOLongCertificate  string `json:"sso_long_certificate" datastore:"sso_long_certificate,noindex"`
+	SSOCertificateHash  string `json:"sso_certificate_hash" datastore:"sso_certificate_hash"`
 	OpenIdClientId      string `json:"client_id" datastore:"client_id"`
 	OpenIdClientSecret  string `json:"client_secret" datastore:"client_secret"`
 	OpenIdAuthorization string `json:"openid_authorization" datastore:"openid_authorization"`
@@ -4188,7 +4189,7 @@ type OrborusStats struct {
 // Create struct
 type ExecutionReturn struct {
 	Success    bool                `json:"success"`
-	Id 		   string              `json:"id"`
+	Id         string              `json:"id"`
 	Executions []WorkflowExecution `json:"executions"`
 	Cursor     string              `json:"cursor"`
 
@@ -4559,7 +4560,7 @@ type AgentOutput struct {
 	NodeId      string `json:"node_id,omitempty" datastore:"node_id"`
 	Memory      string `json:"memory,omitempty" datastore:"memory"`
 	Input       string `json:"input" datastore:"input"`
-	Output 	 	string `json:"output,omitempty" datastore:"output"`
+	Output      string `json:"output,omitempty" datastore:"output"`
 }
 
 type HTTPWrapper struct {

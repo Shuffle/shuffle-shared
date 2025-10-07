@@ -667,6 +667,8 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 				FileSize:           file.FileSize,
 				OrgId:              file.OrgId,
 				SuborgDistribution: file.SuborgDistribution,
+						
+				Tags:         file.Tags,
 			})
 		}
 	}
@@ -696,6 +698,8 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 							FileSize:           file.FileSize,
 							OrgId:              file.OrgId,
 							SuborgDistribution: file.SuborgDistribution,
+				
+							Tags:         file.Tags,
 						})
 					}
 				}
@@ -832,6 +836,8 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 						Md5Sum: file.Md5sum,
 						Status: file.Status,
 						FileSize: file.FileSize,
+
+						Tags:		 file.Tags,
 					})
 				}
 			}
