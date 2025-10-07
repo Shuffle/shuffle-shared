@@ -1585,7 +1585,9 @@ func UploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 	} else {
 		log.Printf("[INFO] No similar file found with md5 %s. Original Md5: %s", md5, file.OriginalMd5sum)
 		if len(file.OriginalMd5sum) > 0 && file.OriginalMd5sum != md5 {
-			log.Printf("[DEBUG] Md5 has changed!")
+			if debug { 
+				log.Printf("[DEBUG] Md5 has changed for ID %s!", file.Id)
+			}
 		}
 
 		if len(encryptionKey) > 0 {
