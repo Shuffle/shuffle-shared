@@ -19254,7 +19254,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
 		log.Printf("[INFO] Organization '%s' doesn't exist in get cache: %s", tmpData.OrgId, err)
@@ -19352,9 +19351,22 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if len(cacheData.PublicAuthorization) == 0 {
+		cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
+		if len(tmpData.Category) > 0 && tmpData.Category != "default" { 
+			cacheId = fmt.Sprintf("%s_%s", cacheId, tmpData.Category)
+		}
+
+		cacheId = url.QueryEscape(cacheId)
+		parsedKey := fmt.Sprintf("org_cache_%s", cacheId)
+		DeleteCache(ctx, parsedKey)
+		if debug { 
+			log.Printf("[DEBUG] Deleting cache key %s since it had no public auth but auth was required. Probably means cache problem.", parsedKey)
+		}
+	}
+
 	if requireCacheAuth {
 		authQuery := query.Get("authorization")
-
 		log.Printf("[INFO] Cache auth required for '%s'. Input auth: %s. Required auth: %#v", tmpData.Key, authQuery, cacheData.PublicAuthorization)
 		if cacheData.PublicAuthorization == "" || authQuery != cacheData.PublicAuthorization {
 			resp.WriteHeader(401)

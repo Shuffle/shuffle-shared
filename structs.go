@@ -1150,6 +1150,7 @@ type CacheKeyData struct {
 	FormattedKey        string   `json:"formatted_key,omitempty" datastore:"FormattedKey"`
 	PublicAuthorization string   `json:"public_authorization,omitempty" datastore:"PublicAuthorization"` // Used for public authorization
 	SuborgDistribution  []string `json:"suborg_distribution" datastore:"suborg_distribution"`
+	RevisionId   string   `json:"revision_id" datastore:"revision_id"`
 }
 type SyncConfig struct {
 	Interval int64  `json:"interval" datastore:"interval"`
