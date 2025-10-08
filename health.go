@@ -1973,6 +1973,130 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	return workflowData.ID, nil
 }
 
+// Create datastore
+// read it
+// delete it
+func RunOpsDatastore(baseUrl, apikey, orgId string) (DatastoreHealth, error) {
+	datastoreHealth := DatastoreHealth{
+		Create: false,
+		Read: false,
+		Result: "",
+		Delete: false,
+	}
+
+	// create datastore entry
+	PAYLOAD := `{"key": "SHUFFLE_HEALTH_CHECK", "value": [1,2,3,4,5,6,7,8]}, "category": "SHUFFLE_HEALTH_CHECK"}`
+	url := fmt.Sprint("%s/api/v1/orgs/%s/set_cache", baseUrl, orgId)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request (%s) for set_cache %s", url, err)
+		return datastoreHealth, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apikey)
+	req.Header.Set("Content-Type", "application/json")
+
+	// Follow proxy and stuff
+	client := GetExternalClient(baseUrl)
+	resp, err := client.Do(req)
+	resp.Body.Close()
+	if err != nil {
+		log.Printf("[ERROR] Failed to send request (%s) for set_cache %s", url, err)
+		return datastoreHealth, err
+	}
+
+	if resp.StatusCode != 200 {
+		return datastoreHealth, errors.New("Failed to create cache internal server error not 200 status code")
+	}
+	
+	datastoreHealth.Create = true
+	//read datastore entry
+	PAYLOAD = fmt.Sprint(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK"}`, orgId)
+	url = fmt.Sprint("%s/api/v1/orgs/%s/get_cache", baseUrl, orgId)
+	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request (%s) for get_cache: %s", url, err)
+		return datastoreHealth, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apikey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to send request to get_cache: %s", err)
+		return datastoreHealth, err
+	}
+
+	dataStoreValue, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read datastore return value: %s", err)
+	}
+
+	datastoreHealth.Result = string(dataStoreValue)
+	resp.Body.Close()
+	datastoreHealth.Read = true
+
+	// Delete
+	PAYLOAD = fmt.Sprint(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK"}`, orgId)
+	url = fmt.Sprint("%s/api/v1/orgs/%s/delete_key", baseUrl, orgId)
+	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request (%s) for delete_key: %s", url, err)
+		return datastoreHealth, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apikey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to send request to delete_key: %s", err)
+		return datastoreHealth, err
+	}
+
+	datastoreHealth.Delete = true
+	return datastoreHealth, nil
+}
+
+func RunFileHealthOps(baseUrl, apikey, orgId string) (FileHealth, error) {
+	fileHealth := FileHealth{
+		Create: false,
+		FileId: "",
+		GetFile: false,
+		Delete: false,
+	}
+
+	PAYLOAD := fmt.Sprintf(`{"filename": "SHUFFLE_HEALTH_TEST_FILE", "org_id": "%s", "workflow_id": "global"}`, orgId)
+	url := fmt.Sprintf("%s/api/v1/files/create", baseUrl)
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
+	if err != nil {
+		log.Printf("[ERROR] Failed to create new request for create file(%s): %s", url, err)
+		return fileHealth, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apikey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := GetExternalClient(baseUrl)
+	resp, err := client.Do(req)
+	resp.Body.Close()
+	if err != nil {
+		log.Printf("[ERROR] Failed to send request (%s) for set_cache %s", url, err)
+		return fileHealth, err
+	}
+
+	if resp.StatusCode != 200 {
+		return fileHealth, errors.New("Failed to create cache internal server error not 200 status code")
+	}
+	
+	fileHealth.Create = true
+	//Read metadata
+	
+	return fileHealth, nil
+}
+
 func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, []string, error) {
 	orgUpdated := false
 	startnodeFound := false
