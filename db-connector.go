@@ -5781,6 +5781,51 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		}
 	}
 
+	hideEnvs := false
+	multiEnvLimit := 0
+	if project.Environment == "onprem" {
+		currentOrg, err := GetOrg(ctx, orgId)
+		if err != nil {
+			log.Printf("[WARNING] Failed to get current org %s: %v", orgId, err)
+			return environments, nil
+		}
+
+		parentOrg := currentOrg
+		if len(currentOrg.CreatorOrg) > 0 {
+			parentOrg, err = GetOrg(ctx, currentOrg.CreatorOrg)
+			if err != nil {
+				log.Printf("[WARNING] Failed to get parent org %s: %v", currentOrg.CreatorOrg, err)
+				parentOrg = currentOrg
+			}
+		}
+
+		licenseOrg := HandleCheckLicense(ctx, *parentOrg)
+		multiEnvLimit = int(licenseOrg.SyncFeatures.MultiEnv.Limit)
+		log.Printf("multiEnvLimit is: %d", multiEnvLimit)
+		if !licenseOrg.SyncFeatures.MultiEnv.Active && int64(len(environments)) > int64(multiEnvLimit) {
+			hideEnvs = true
+		}
+	}
+
+	if hideEnvs && len(environments) > multiEnvLimit {
+		sort.Slice(environments, func(i, j int) bool {
+			return environments[i].Created < environments[j].Created
+		})
+
+		newEnvs := []Environment{}
+		for i, env := range environments {
+			if env.Default {
+				env.Archived = false
+			} else if i < multiEnvLimit {
+				env.Archived = false
+			} else {
+				env.Archived = true
+			}
+			newEnvs = append(newEnvs, env)
+		}
+		environments = newEnvs
+	}
+
 	//log.Printf("\n\n[DEBUG2] Getting environments2 for orgId %s\n\n", orgId)
 
 	if project.CacheDb {
