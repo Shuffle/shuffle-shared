@@ -30537,6 +30537,10 @@ func fixOrgUsers(ctx context.Context, foundOrg Org) error {
 
 func HandleCheckLicense(ctx context.Context, org Org) Org {
 
+	if project.Environment == "cloud" {
+		return org
+	}
+
 	shuffleLicenseKey := os.Getenv("SHUFFLE_LICENSE")
 	if org.CloudSync {
 		cacheKey := fmt.Sprintf("org_sync_features_%s", org.Id)
@@ -30548,7 +30552,63 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 		features := SyncFeatures{}
 		if data, ok := syncFeatures.([]byte); ok {
 			if err := json.Unmarshal(data, &features); err == nil {
-				org.SyncFeatures = features
+
+				org.SyncFeatures.MultiEnv.Active = features.MultiEnv.Active
+				org.SyncFeatures.MultiEnv.Limit = features.MultiEnv.Limit
+
+				org.SyncFeatures.MultiTenant.Active = features.MultiTenant.Active
+				org.SyncFeatures.MultiTenant.Limit = features.MultiTenant.Limit
+
+				org.SyncFeatures.Branding.Active = features.Branding.Active
+
+				org.SyncFeatures.AppExecutions.Active = features.AppExecutions.Active
+				org.SyncFeatures.AppExecutions.Limit = features.AppExecutions.Limit
+
+				org.SyncFeatures.Webhook.Active = features.Webhook.Active
+				org.SyncFeatures.Webhook.Limit = features.Webhook.Limit
+
+				org.SyncFeatures.Schedules.Active = features.Schedules.Active
+				org.SyncFeatures.Schedules.Limit = features.Schedules.Limit
+
+				org.SyncFeatures.UserInput.Active = features.UserInput.Active
+				org.SyncFeatures.UserInput.Limit = features.UserInput.Limit
+
+				org.SyncFeatures.SendMail.Active = features.SendMail.Active
+				org.SyncFeatures.SendMail.Limit = features.SendMail.Limit
+
+				org.SyncFeatures.SendSms.Active = features.SendSms.Active
+				org.SyncFeatures.SendSms.Limit = features.SendSms.Limit
+
+				org.SyncFeatures.Updates.Active = features.Updates.Active
+				org.SyncFeatures.Updates.Limit = features.Updates.Limit
+
+				org.SyncFeatures.EmailTrigger.Active = features.EmailTrigger.Active
+				org.SyncFeatures.EmailTrigger.Limit = features.EmailTrigger.Limit
+
+				org.SyncFeatures.Notifications.Active = features.Notifications.Active
+				org.SyncFeatures.Notifications.Limit = features.Notifications.Limit
+
+				org.SyncFeatures.Workflows.Active = features.Workflows.Active
+				org.SyncFeatures.Workflows.Limit = features.Workflows.Limit
+
+				org.SyncFeatures.Autocomplete.Active = features.Autocomplete.Active
+				org.SyncFeatures.Autocomplete.Limit = features.Autocomplete.Limit
+
+				org.SyncFeatures.WorkflowExecutions.Active = features.WorkflowExecutions.Active
+				org.SyncFeatures.WorkflowExecutions.Limit = features.WorkflowExecutions.Limit
+
+				org.SyncFeatures.Authentication.Active = features.Authentication.Active
+				org.SyncFeatures.Authentication.Limit = features.Authentication.Limit
+
+				org.SyncFeatures.Schedule.Active = features.Schedule.Active
+				org.SyncFeatures.Schedule.Limit = features.Schedule.Limit
+
+				org.SyncFeatures.Apps.Active = features.Apps.Active
+				org.SyncFeatures.Apps.Limit = features.Apps.Limit
+
+				org.SyncFeatures.ShuffleGPT.Active = features.ShuffleGPT.Active
+				org.SyncFeatures.ShuffleGPT.Limit = features.ShuffleGPT.Limit
+
 				if !features.MultiTenant.Active && features.MultiTenant.Limit > 3 {
 					org.SyncFeatures.MultiTenant.Limit = 3
 				}
@@ -30599,6 +30659,15 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.ShuffleGPT.Active = true
 		}
 
+	} else {
+		log.Printf("[WARNING] Org %v does not have an enterprise license. Please purchase an enterprise license to unlock production-ready features. Contact support@shuffler.io for more information.", org.Id)
+		org.SyncFeatures.MultiEnv.Limit = 1
+		org.SyncFeatures.MultiEnv.Active = false
+
+		org.SyncFeatures.MultiTenant.Limit = 3
+		org.SyncFeatures.MultiTenant.Active = false
+
+		org.SyncFeatures.Branding.Active = false
 	}
 
 	return org
