@@ -751,7 +751,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 	}
 
 	for _, user := range authOrg.Users {
-		if user.Role == "admin" && len(user.ApiKey) > 0 && len(selectedApikey) == 0 {
+		if user.Role == "admin" && len(user.Id) > 0 && len(selectedApikey) == 0 {
 			// Checking if it's the right active org
 			// FIXME: Should it need to be in the active org? Shouldn't matter? :thinking:
 			foundUser, err := GetUser(ctx, user.Id)
