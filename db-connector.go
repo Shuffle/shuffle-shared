@@ -3040,6 +3040,23 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		}
 	}
 
+	if (stats.OrgId != orgId) && (len(orgId) > 0) {
+		log.Printf("[WARNING] Org stats data corruption detected. Fixing org stats for org %s (was %s)", orgId, stats.OrgId)
+		stats.OrgId = orgId
+		org, err := GetOrg(ctx, orgId)
+		if err == nil {
+			stats.OrgName = org.Name
+			err = SetOrgStatistics(ctx, *stats, orgId)
+			if err != nil {
+				log.Printf("[WARNING] Failed fixing org stats for org %s: %s", orgId, err)
+			} else {
+				log.Printf("[INFO] Fixed org stats for org %s", orgId)
+			}
+		} else {
+			log.Printf("[WARNING] Failed getting org during org stats fix for org %s: %s", orgId, err)
+		}
+	}
+
 	for dailyStatIndex, _ := range stats.DailyStatistics {
 		for additionIndex, _ := range stats.DailyStatistics[dailyStatIndex].Additions {
 			stats.DailyStatistics[dailyStatIndex].Additions[additionIndex].Date = stats.DailyStatistics[dailyStatIndex].Date
@@ -5776,7 +5793,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		if environments[envIndex].Type == "onprem" {
 			if env.Checkin > 0 && timenow-env.Checkin > 90 {
 				environments[envIndex].RunningIp = ""
-				environments[envIndex].Licensed = false
+				//environments[envIndex].Licensed = false
 			}
 		}
 	}
@@ -7023,6 +7040,9 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 
 	// Onprem indexing: workflowqueue-%s -> workflowqueue-environmentname
 	// Cloud: workflowqueue-%s-%s -> workflowqueue-environmentname-orgid
+	if executionRequest.ExecutionId == "" {
+		executionRequest.ExecutionId = uuid.NewV4().String()
+	}
 
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
@@ -8218,8 +8238,8 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	// FIXME: Due to a possibility of ID reusage on duplication, we re-randomize ID's IF the workflow is new
 	// Due to caching, this is kind of fine.
 	foundWorkflow, err := GetWorkflow(ctx, id)
-	if err != nil || foundWorkflow.ID == "" {
-		log.Printf("[INFO] Workflow %s doesn't exist, randomizing IDs for Triggers", id)
+	if (err != nil || foundWorkflow.ID == "") && !workflow.BackgroundProcessing {
+		log.Printf("[INFO] Workflow %s doesn't exist, randomizing IDs for Triggers during init", id)
 
 		// Old ID + Org ID as seed -> generate new uuid
 		for triggerIndex, trigger := range workflow.Triggers {
@@ -9349,6 +9369,7 @@ func GetPipeline(ctx context.Context, triggerId string) (*Pipeline, error) {
 		// 	return &Pipeline{}, err
 		// }
 	}
+
 	return pipeline, nil
 }
 
@@ -12607,6 +12628,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 	}
 
+	for _, cacheData := range newArray {
+		go SetDatastoreKeyRevision(context.Background(), cacheData) 
+	}
+
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -12794,6 +12819,72 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	DeleteCache(ctx, cacheKey)
 	DeleteCache(ctx, fmt.Sprintf("datastore_category_%s", orgId))
 	return existingInfo, nil
+}
+
+func SetDatastoreKeyRevision(ctx context.Context, cacheData CacheKeyData) error {
+	nameKey := "org_cache_revisions"
+	timeNow := int64(time.Now().Unix())
+	cacheData.Edited = timeNow
+	cacheData.RevisionId = uuid.NewV4().String()
+	if cacheData.Created == 0 {
+		cacheData.Created = timeNow
+	}
+
+	cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+	if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+		cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
+	}
+
+	cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.RevisionId)
+
+	// URL encode
+	cacheId = url.QueryEscape(cacheId)
+	if len(cacheId) > 127 {
+		cacheId = cacheId[:127]
+	}
+
+	cacheData.Authorization = ""
+	if len(cacheData.PublicAuthorization) == 0 {
+		cacheData.PublicAuthorization = uuid.NewV4().String()
+	}
+
+	cacheData.Category = strings.ReplaceAll(strings.ToLower(cacheData.Category), " ", "_")
+
+	// Test just for protected category (for now)
+	if cacheData.Category == "protected" { 
+		return errors.New("Not storing revisions for protected category keys")
+	}
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(cacheData)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling in set cache key: %s", err)
+		return nil
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, cacheId, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, cacheId, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
+			log.Printf("[ERROR] Error setting org cache: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting cache for set cache key '%s': %s", cacheKey, err)
+		}
+	}
+
+	DeleteCache(ctx, fmt.Sprintf("datastore_category_revisions_%s", cacheData.OrgId))
+	return nil
 }
 
 // Used for cache for individual organizations
@@ -15823,7 +15914,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 				log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
 			}
 
-			log.Printf("[DEBUG] Created new ngram item for %s with key %s", ngramSearchKey, parsedValue)
+			log.Printf("[DEBUG] Created new ngram item for %s with key '%s'", ngramSearchKey, parsedValue)
 			continue
 		}
 
@@ -15978,7 +16069,9 @@ func InitOpensearchIndexes() {
 		GetESIndexPrefix("workflowexecution"),
 		GetESIndexPrefix("datastore_ngram"),
 		GetESIndexPrefix("org_cache"),
+		GetESIndexPrefix("org_cache_revisions"),
 		GetESIndexPrefix("notifications"),
+		GetESIndexPrefix("shuffle_logs"),
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")

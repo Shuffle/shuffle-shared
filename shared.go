@@ -139,7 +139,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	}
 
 	//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:8000")
-	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me, Org-Id, Authorization, X-Debug-Url")
+	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me, Org-Id, Org, Authorization, X-Debug-Url")
 	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, PATCH")
 	resp.Header().Set("Access-Control-Allow-Credentials", "true")
 
@@ -1087,36 +1087,23 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			org.SyncFeatures.MultiEnv.Usage = int64(len(envs))
 		}
 
-		if len(org.Subscriptions) == 0 && project.Environment == "cloud" {
-			gotSig := getSignatureSample(*org)
-			if len(gotSig.Eula) > 0 {
-				org.Subscriptions = append(org.Subscriptions, gotSig)
+		if len(org.Subscriptions) == 0 && len(org.CreatorOrg) == 0 {
+			// Only when there is no subscription in the org and it's not a suborg :)
+			// Placeholder subscription that to add at very first time
+			base := buildBaseSubscription(*org, org.SyncFeatures.AppExecutions.Limit)
+			org.Subscriptions = append(org.Subscriptions, base)
+
+			if err := SetOrg(ctx, *org, org.Id); err != nil {
+				log.Printf("[WARNING] Failed to persist base subscription for org %s: %s", org.Id, err)
+			} else {
+				log.Printf("[INFO] Added a base subscription (%s) for org %s", base.Name, org.Id)
 			}
-		} else {
-			for i, sub := range org.Subscriptions {
-				if !sub.EulaSigned {
-					continue
-				}
-
-				alertFound := false
-				for featIndex, feature := range sub.Features {
-					if strings.Contains(feature, "alert@shuffler.io") {
-						alertFound = true
-					}
-
-					if strings.Contains(strings.ToLower(feature), "nightly worker") {
-						org.Subscriptions[i].Features[featIndex] = strings.Replace(feature, "Sign EULA first", os.Getenv("NIGHTLY_WORKER_URL"), -1)
-					}
-
-					if strings.Contains(strings.ToLower(feature), "stable worker") {
-						org.Subscriptions[i].Features[featIndex] = strings.Replace(feature, "Sign EULA first", os.Getenv("LICENSED_WORKER_URL"), -1)
-					}
-				}
-
-				if !alertFound {
-					org.Subscriptions[i].Features = append(org.Subscriptions[i].Features, "Critical events: alert@shuffler.io")
-				}
-			}
+		} else if len(org.CreatorOrg) == 0 && project.Environment == "onprem" {
+			// This is used to update the subscription for the onprem orgs
+			// That have cloud sync active
+			// Not a suborg
+			cloudOrg := HandleCheckLicense(ctx, *org)
+			org = &cloudOrg
 		}
 
 		if len(org.CreatorOrg) == 0 && project.Environment == "onprem" {
@@ -3175,17 +3162,17 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 				// Check if timestamp is within the last 180 seconds. If it is, overwrite newEnvironments
 				if newEnv.Timestamp > 0 && timenow-newEnv.Timestamp > 180 {
 					newEnvironments[envIndex].RunningIp = ""
-					newEnvironments[envIndex].Licensed = false
+					//newEnvironments[envIndex].Licensed = false
 					newEnvironments[envIndex].DataLake.Enabled = false
 				} else {
 					newEnvironments[envIndex].DataLake = newEnv.DataLake
 					newEnvironments[envIndex].RunningIp = newEnv.RunningIp
-					newEnvironments[envIndex].Licensed = newEnv.Licensed
+					//newEnvironments[envIndex].Licensed = newEnv.Licensed
 				}
 			}
 		} else {
 			newEnvironments[envIndex].RunningIp = ""
-			newEnvironments[envIndex].Licensed = false
+			//newEnvironments[envIndex].Licensed = false
 			newEnvironments[envIndex].DataLake.Enabled = false
 		}
 
@@ -4643,7 +4630,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	workflowsChan := make(chan []Workflow)
 	schedulesChan := make(chan []ScheduleOld)
 	hooksChan := make(chan []Hook)
-	pipelinesChan := make(chan []PipelineInfoMini)
+	pipelinesChan := make(chan []PipelineInfo)
 
 	errChan := make(chan error)
 
@@ -4694,7 +4681,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		pipelines := []PipelineInfoMini{}
+		pipelines := []PipelineInfo{}
 		for _, env := range environments {
 			if env.Archived {
 				continue
@@ -4750,7 +4737,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	hookMap := map[string]Hook{}
 	scheduleMap := map[string]ScheduleOld{}
-	pipelineMap := map[string]PipelineInfoMini{}
+	pipelineMap := map[string]PipelineInfo{}
 
 	for _, hook := range hooks {
 		hookMap[hook.Id] = hook
@@ -12044,6 +12031,95 @@ func getSignatureSample(org Org) PaymentSubscription {
 	return PaymentSubscription{}
 }
 
+func buildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription {
+
+	now := int64(time.Now().Unix())
+	log.Printf("[DEBUG] Building base subscription for org %s that has %d monthly exec limit", org.Id, monthlyExecLimit)
+	// Default values
+	planName := ""
+	supportLevel := ""
+	features := []string{}
+	amount := "0"
+	parsedEula := GetOnpremPaidEula()
+	eulaSigned := false
+
+	if project.Environment == "cloud" {
+		// Cloud licenses
+		if monthlyExecLimit >= 300000 {
+			planName = "Cloud Enterprise License"
+			supportLevel = "Enterprise Support"
+			features = []string{
+				"∞ Days Workflow Backup",
+				"∞ Users",
+				"Critical Response",
+				"On-Call Support",
+				"Setup and Maintenance",
+				"Key Management System",
+				"Custom Integrations",
+				"Custom Scaling Options",
+				"Billing and Invoice Included",
+				"Custom Contract",
+			}
+			amount = "870" // Just for placeholder
+		} else if monthlyExecLimit >= 12000 {
+			planName = "Cloud Scale License"
+			supportLevel = "Standard Support"
+			features = []string{
+				"30 Days workflow run history",
+				"14 Days workflow backup",
+				"15 Users",
+				"Select Datacenter Region",
+			}
+			amount = "32" // Just for placeholder
+		} else if monthlyExecLimit >= 2000 && monthlyExecLimit < 12000 {
+			planName = "Free License"
+			supportLevel = "Community Support"
+			features = []string{
+				"All 2500+ Apps",
+				"All usecase templates",
+				"1 Day workflow run history",
+				"7 Days workflow backup",
+				"5 Users",
+			}
+			amount = "0" // Just for placeholder
+		}
+	} else {
+		// Open source licenses
+		planName = "Open Source License"
+		supportLevel = "Community Support"
+		features = []string{
+			"All 2500+ Apps",
+			"All usecase templates",
+			"Custom Workflows",
+			"1 Hour Workflow Run History",
+			"1 Hour Workflow Backup",
+		}
+		amount = "0" // Just for placeholder
+	}
+
+	t := time.Now().UTC()
+	firstNextMonth := time.Date(t.Year(), t.Month()+1, 1, 0, 0, 0, 0, time.UTC)
+	endDate := int64(firstNextMonth.Unix())
+
+	return PaymentSubscription{
+		Active:           true,
+		Startdate:        now,
+		Enddate:          endDate,
+		CancellationDate: 0,
+		Name:             planName,
+		SupportLevel:     supportLevel,
+		Recurrence:       string("monthly"),
+		Amount:           amount,
+		Currency:         string("USD"),
+		Level:            "1",
+		Reference:        "", // IMPORTANT: empty for base/unpaid
+		Limit:            0,
+		Features:         features,
+		EulaSigned:       eulaSigned,
+		Eula:             parsedEula,
+	}
+}
+
 func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -12098,8 +12174,9 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		LeadInfo    []string  `json:"lead_info" datastore:"lead_info"`
 		MFARequired bool      `json:"mfa_required" datastore:"mfa_required"`
 
-		CreatorConfig string              `json:"creator_config" datastore:"creator_config"`
-		Subscription  PaymentSubscription `json:"subscription" datastore:"subscription"`
+		CreatorConfig     string              `json:"creator_config" datastore:"creator_config"`
+		Subscription      PaymentSubscription `json:"subscription" datastore:"subscription"`
+		SubscriptionIndex int                 `json:"subscription_index" datastore:"subscription_index"`
 
 		SyncFeatures    SyncFeatures `json:"sync_features" datastore:"sync_features"`
 		Billing         Billing      `json:"billing" datastore:"billing"`
@@ -12182,6 +12259,53 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] User %s doesn't have edit rights to %s", user.Id, org.Id)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if tmpData.Editing == "subscription_update" && !user.SupportAccess {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Support access required"}`))
+		return
+	}
+
+	// Allow editing a specific subscription card from UI except Eula and Reference
+	if tmpData.Editing == "subscription_update" {
+		idx := tmpData.SubscriptionIndex
+		if idx < 0 || idx >= len(org.Subscriptions) {
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "invalid subscription index"}`))
+			return
+		}
+
+		// Preserve immutable fields
+		existing := org.Subscriptions[idx]
+		updated := tmpData.Subscription
+		updated.Eula = existing.Eula
+
+		// Do not overwrite existing EULA signature info if it's already signed
+		if existing.EulaSigned {
+			updated.EulaSigned = existing.EulaSigned
+			updated.EulaSignedBy = existing.EulaSignedBy
+		} else if len(tmpData.Subscription.Eula) > 0 && tmpData.Subscription.Eula == existing.Eula && tmpData.Subscription.Active {
+			// This will handle the eula signing
+			updated.EulaSigned = true
+			updated.EulaSignedBy = user.Username
+		}
+		// Do not overwrite subscription reference number
+		updated.Reference = existing.Reference
+
+		// Apply the rest
+		org.Subscriptions[idx] = updated
+
+		if err := SetOrg(ctx, *org, org.Id); err != nil {
+			log.Printf("[WARNING] Failed to update subscription for org %s: %s", org.Id, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true}`))
 		return
 	}
 
@@ -12508,24 +12632,24 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if tmpData.Subscription.EulaSigned == true {
-		log.Printf("[DEBUG] EULA signed for %s", org.Id)
+	// if tmpData.Subscription.EulaSigned == true {
+	// 	log.Printf("[DEBUG] EULA signed for %s", org.Id)
 
-		// Compare cloud vs onprem
-		sigSample := getSignatureSample(*org)
-		if len(sigSample.Eula) > 0 && sigSample.Eula == tmpData.Subscription.Eula && sigSample.Name == tmpData.Subscription.Name && sigSample.Active {
-			for subIndex, sub := range org.Subscriptions {
-				if len(sub.EulaSignedBy) == 0 {
-					org.Subscriptions[subIndex].EulaSignedBy = user.Username
-				}
-			}
+	// 	// Compare cloud vs onprem
+	// 	sigSample := getSignatureSample(*org)
+	// 	if len(sigSample.Eula) > 0 && sigSample.Eula == tmpData.Subscription.Eula && sigSample.Name == tmpData.Subscription.Name && sigSample.Active {
+	// 		for subIndex, sub := range org.Subscriptions {
+	// 			if len(sub.EulaSignedBy) == 0 {
+	// 				org.Subscriptions[subIndex].EulaSignedBy = user.Username
+	// 			}
+	// 		}
 
-			org.Subscriptions = append(org.Subscriptions, tmpData.Subscription)
+	// 		org.Subscriptions = append(org.Subscriptions, tmpData.Subscription)
 
-			org.EulaSignedBy = user.Username
-			org.EulaSigned = true
-		}
-	}
+	// 		org.EulaSignedBy = user.Username
+	// 		org.EulaSigned = true
+	// 	}
+	// }
 
 	if project.Environment == "cloud" && user.SupportAccess && tmpData.SyncFeatures.Editing {
 		log.Printf("[DEBUG] Updating features for org %s (%s)", org.Name, org.Id)
@@ -18987,7 +19111,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if debug {
-		log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v", tmpData.Key, tmpData.OrgId, err)
+		log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v. Cache ID: %s", tmpData.Key, tmpData.OrgId, err, string(cacheId))
 	}
 
 	if err != nil || len(cacheData.Key) == 0 {
@@ -19018,12 +19142,12 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		cacheId = fmt.Sprintf("%s_%s", cacheId, tmpData.Category)
 	}
 
+	cacheId = url.QueryEscape(cacheId)
 	if len(cacheId) > 127 {
 		cacheId = cacheId[:127]
 	}
 
 	entity := "org_cache"
-	go DeleteKey(ctx, entity, url.QueryEscape(cacheId))
 	err = DeleteKey(ctx, entity, cacheId)
 	if err != nil {
 		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete) (2)", tmpData.Key, tmpData.OrgId)
@@ -19193,7 +19317,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
 		log.Printf("[INFO] Organization '%s' doesn't exist in get cache: %s", tmpData.OrgId, err)
@@ -19291,9 +19414,22 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if len(cacheData.PublicAuthorization) == 0 {
+		cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
+		if len(tmpData.Category) > 0 && tmpData.Category != "default" { 
+			cacheId = fmt.Sprintf("%s_%s", cacheId, tmpData.Category)
+		}
+
+		cacheId = url.QueryEscape(cacheId)
+		parsedKey := fmt.Sprintf("org_cache_%s", cacheId)
+		DeleteCache(ctx, parsedKey)
+		if debug { 
+			log.Printf("[DEBUG] Deleting cache key %s since it had no public auth but auth was required. Probably means cache problem.", parsedKey)
+		}
+	}
+
 	if requireCacheAuth {
 		authQuery := query.Get("authorization")
-
 		log.Printf("[INFO] Cache auth required for '%s'. Input auth: %s. Required auth: %#v", tmpData.Key, authQuery, cacheData.PublicAuthorization)
 		if cacheData.PublicAuthorization == "" || authQuery != cacheData.PublicAuthorization {
 			resp.WriteHeader(401)
@@ -30419,6 +30555,21 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			}
 		}
 
+		// For the subsctiption
+		subscriptionCacheKey := fmt.Sprintf("org_subscriptions_%s", org.Id)
+		cachedData, err := GetCache(ctx, subscriptionCacheKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get cache for org (%s) subscriptions in HandleCheckLicense: %v", org.Id, err)
+			return org
+		} else if data, ok := cachedData.([]byte); ok {
+			subscriptionsList := []PaymentSubscription{}
+			if err := json.Unmarshal(data, &subscriptionsList); err == nil {
+				org.Subscriptions = subscriptionsList
+			} else {
+				log.Printf("[ERROR] Failed to parse cached subscriptions for org (%s) in HandleCheckLicense: %v", org.Id, err)
+			}
+		}
+
 	} else if len(shuffleLicenseKey) > 0 {
 
 		license := checkNoInternet()
@@ -30477,9 +30628,9 @@ func IsLicensed(ctx context.Context, org Org) bool {
 			continue
 		}
 
-		if env.Licensed {
-			return true
-		}
+		//if env.Licensed {
+		//	return true
+		//}
 	}
 
 	return false

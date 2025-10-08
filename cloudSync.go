@@ -2538,7 +2538,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 				}
 
 				if orborusData.Swarm {
-					env.Licensed = true
+					//env.Licensed = true
 					env.RunType = "docker"
 				}
 

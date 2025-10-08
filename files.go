@@ -43,7 +43,7 @@ func init() {
 	//log.Printf("[DEBUG] Inside Files Init with org bucket name %#v", orgFileBucket)
 }
 
-func fileAuthentication(request *http.Request) (string, error) {
+func fileExecutionAuthentication(request *http.Request) (string, error) {
 	executionId, ok := request.URL.Query()["execution_id"]
 	if ok && len(executionId) > 0 {
 		ctx := GetContext(request)
@@ -177,7 +177,7 @@ func HandleGetFileMeta(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[AUDIT] INITIAL Api authentication failed in file deletion: %s", err)
 
-		orgId, err := fileAuthentication(request)
+		orgId, err := fileExecutionAuthentication(request)
 		if err != nil {
 			log.Printf("[ERROR] Bad file authentication in get: %s", err)
 			resp.WriteHeader(401)
@@ -301,7 +301,7 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[AUDIT] INITIAL Api authentication failed in file deletion: %s", err)
 
-		orgId, err := fileAuthentication(request)
+		orgId, err := fileExecutionAuthentication(request)
 		if err != nil {
 			log.Printf("[ERROR] Bad file authentication in delete: %s", err)
 			resp.WriteHeader(401)
@@ -519,6 +519,51 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 	return files, nil
 }
 
+// Normal orborus auth. E.g. used for file downloads
+func envOrborusAuth(request *http.Request) (string, error) {
+	currentUrl := request.URL.String()
+	orgId := request.Header.Get("Org-Id")
+	if len(orgId) == 0 {
+		log.Printf("[AUDIT] No Org-Id set for url %s", currentUrl)
+		return "", errors.New("No org-id header set")
+	}
+
+	auth := request.Header.Get("Authorization")
+	if len(auth) == 0 {
+		log.Printf("[AUDIT] No Authorization header set for url %s", currentUrl)
+		return "", errors.New("No authorization header set (environment auth)")
+	}
+
+	// Get the org
+	ctx := GetContext(request)
+	foundOrg, err := GetOrg(ctx, orgId)
+	if err != nil {
+		log.Printf("[AUDIT] Couldn't find org %s for url %s: %s", orgId, currentUrl, err)
+		return "", errors.New("Couldn't find org")
+	}
+
+	foundEnvironments, err := GetEnvironments(ctx, foundOrg.Id)
+	if err != nil {
+		log.Printf("[AUDIT] Couldn't find environments for org %s for url %s: %s", foundOrg.Id, currentUrl, err)
+		return "", errors.New("Couldn't find environments for org")
+	}
+
+	if strings.HasPrefix(auth, "Bearer ") {
+		auth = strings.Split(auth, " ")[1]
+	}
+
+	for _, item := range foundEnvironments {
+		// Check auth
+		if item.Auth == auth && item.Archived == false {
+			return item.OrgId, nil
+		}
+	}
+
+	return "", errors.New("No environment matched")
+
+
+}
+
 func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -553,13 +598,21 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		//log.Printf("[AUDIT] INITIAL Api authentication failed in file download: %s", err)
+		var fileerr error
+		var envErr error
 
-		orgId, fileerr := fileAuthentication(request)
+		orgId := ""
+		orgId, fileerr = fileExecutionAuthentication(request)
 		if fileerr != nil {
-			log.Printf("[WARNING] Bad authentication in get namespace AFTER trying normal user auth %s: %s & %s", namespace, err, fileerr)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
+
+			// Uses orborus env auth to check access to an org
+			orgId, envErr = envOrborusAuth(request)
+			if envErr != nil {
+				log.Printf("[WARNING] Bad authentication in get namespace AFTER trying normal user auth AND file exec auth %s: %s & %s. Env err: %s", namespace, err, fileerr, envErr)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
 		}
 
 		user.ActiveOrg.Id = orgId
@@ -614,6 +667,8 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 				FileSize:           file.FileSize,
 				OrgId:              file.OrgId,
 				SuborgDistribution: file.SuborgDistribution,
+						
+				Tags:         file.Tags,
 			})
 		}
 	}
@@ -643,6 +698,8 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 							FileSize:           file.FileSize,
 							OrgId:              file.OrgId,
 							SuborgDistribution: file.SuborgDistribution,
+				
+							Tags:         file.Tags,
 						})
 					}
 				}
@@ -779,6 +836,8 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 						Md5Sum: file.Md5sum,
 						Status: file.Status,
 						FileSize: file.FileSize,
+
+						Tags:		 file.Tags,
 					})
 				}
 			}
@@ -892,7 +951,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 
-		orgId, err := fileAuthentication(request)
+		orgId, err := fileExecutionAuthentication(request)
 		if err != nil {
 			log.Printf("[WARNING] Bad user & file authentication in get for ID %s: %s", fileId, err)
 			resp.WriteHeader(401)
@@ -1193,7 +1252,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[AUDIT] INITIAL Api authentication failed in file upload: %s", err)
-		orgId, err := fileAuthentication(request)
+		orgId, err := fileExecutionAuthentication(request)
 		if err != nil {
 			log.Printf("[WARNING] Bad file authentication in edit file: %s", err)
 			resp.WriteHeader(401)
@@ -1356,7 +1415,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[AUDIT] INITIAL Api authentication failed in file upload: %s", err)
 
-		orgId, err := fileAuthentication(request)
+		orgId, err := fileExecutionAuthentication(request)
 		if err != nil {
 			log.Printf("[WARNING] Bad file authentication in upload file: %s", err)
 			resp.WriteHeader(401)
@@ -1526,7 +1585,9 @@ func UploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 	} else {
 		log.Printf("[INFO] No similar file found with md5 %s. Original Md5: %s", md5, file.OriginalMd5sum)
 		if len(file.OriginalMd5sum) > 0 && file.OriginalMd5sum != md5 {
-			log.Printf("[DEBUG] Md5 has changed!")
+			if debug { 
+				log.Printf("[DEBUG] Md5 has changed for ID %s!", file.Id)
+			}
 		}
 
 		if len(encryptionKey) > 0 {
@@ -1618,7 +1679,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		//log.Printf("[AUDIT] INITIAL Api authentication failed in file creation: %s", err)
 
-		orgId, err := fileAuthentication(request)
+		orgId, err := fileExecutionAuthentication(request)
 		if err != nil {
 			log.Printf("[ERROR] Bad file authentication in create file: %s", err)
 			resp.WriteHeader(401)
@@ -1904,6 +1965,8 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 		Field2 string `json:"field_2"` // Password
 		Field3 string `json:"field_3"` // Branch
 		Path  string `json:"path"` 
+
+		Namespace string `json:"namespace"`
 	}
 
 	var input tmpStruct
@@ -1930,12 +1993,28 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 	repo := ""
 	path := input.Path
 
+	treeIndex := -1
+	newPath := ""
 	for cnt, item := range urlSplit[3:] { 
+		// Auto parsing url
+		if item == "tree" && treeIndex == -1 && cnt > 1 {
+			treeIndex = cnt
+		}
+
 		if cnt == 0 {
 			owner = item
 		} else if cnt == 1 {
 			repo = item
+		} else {
+			if treeIndex != -1 && (path == "" || path == "/") && cnt > treeIndex+1 {
+				newPath = fmt.Sprintf("%s/%s", newPath, item)
+			}
 		}
+	}
+
+	if len(newPath) > 0 {
+		newPath = strings.TrimPrefix(newPath, "/")
+		path = newPath
 	}
 
 	log.Printf("[DEBUG] Loading standard with git: %s/%s/%s", owner, repo, path)
@@ -1953,10 +2032,18 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 		files = files[:50]
 	}
 
+	// Expects them in the root level... hmm
+	// FIXME: Recurse
 	for _, item := range files {
+		log.Printf("[DEBUG] Downloading standard file %s", *item.Path)
 		fileContent, _, _, err := client.Repositories.GetContents(ctx, owner, repo, *item.Path, nil)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting file %s: %s", *item.Path, err)
+			continue
+		}
+
+		if fileContent == nil || fileContent.Content == nil {
+			log.Printf("[ERROR] No content in file %s", *item.Path)
 			continue
 		}
 
@@ -1985,10 +2072,15 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 			DownloadPath: downloadPath,
 			Subflows:     []string{},
 			StorageArea:  "local",
-			Namespace:    path,
+			Namespace:    strings.ReplaceAll(strings.ReplaceAll(path, "/", "_"), "..", "_"),
 			Tags:         []string{
-				"standard",
+				input.URL,
+				path,
 			},
+		}
+
+		if len(input.Namespace) > 0 {
+			file.Namespace = input.Namespace
 		}
 
 		if project.Environment == "cloud" {
