@@ -3111,7 +3111,9 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	for _, environment := range environments {
 		if len(environment.Id) == 0 {
 			environment.Id = uuid.NewV4().String()
-		// For on-premise users without a valid license, only display default environments on the frontend.
+		}
+
+		// For onprem users without a valid license, only display default environments on the frontend.
 		if hideEnvs && !environment.Default {
 			continue
 		}
