@@ -2615,6 +2615,39 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		//}
 	}
 
+	if project.Environment == "onprem" {
+		currentOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
+			return
+		}
+
+		parentOrg := currentOrg
+		if len(currentOrg.CreatorOrg) > 0 {
+			parentOrg, err = GetOrg(ctx, currentOrg.CreatorOrg)
+			if err != nil {
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
+				return
+			}
+		}
+		envs, err := GetEnvironments(ctx, currentOrg.Id)
+		if err != nil {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environments of organization"}`)))
+			return
+		}
+
+		licenseOrg := HandleCheckLicense(ctx, *parentOrg)
+		if !licenseOrg.SyncFeatures.MultiEnv.Active && int64(len(envs)) > licenseOrg.SyncFeatures.MultiEnv.Limit {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have reached the limit of %d environments for your subscription. Upgrade to an enterprise plan or contact support@shuffler.io for more info."}`, licenseOrg.SyncFeatures.MultiEnv.Limit)))
+			return
+		}
+
+	}
+
 	// Validate input here
 	defaults := 0
 	parsedEnvs := []Environment{}
@@ -3036,10 +3069,40 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	hideEnvs := false
+	if project.Environment == "onprem" {
+		currentOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
+			return
+		}
+
+		parentOrg := currentOrg
+		if len(currentOrg.CreatorOrg) > 0 {
+			parentOrg, err = GetOrg(ctx, currentOrg.CreatorOrg)
+			if err != nil {
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
+				return
+			}
+		}
+
+		licenseOrg := HandleCheckLicense(ctx, *parentOrg)
+		if !licenseOrg.SyncFeatures.MultiEnv.Active && int64(len(environments)) > licenseOrg.SyncFeatures.MultiEnv.Limit {
+			hideEnvs = true
+		}
+	}
+
 	newEnvironments := []Environment{}
 	for _, environment := range environments {
 		if len(environment.Id) == 0 {
 			environment.Id = uuid.NewV4().String()
+		}
+
+		// For onprem users without a valid license, only display default environments on the frontend.
+		if hideEnvs && !environment.Default {
+			continue
 		}
 
 		found := false
@@ -30475,7 +30538,6 @@ func fixOrgUsers(ctx context.Context, foundOrg Org) error {
 func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 	shuffleLicenseKey := os.Getenv("SHUFFLE_LICENSE")
-
 	if org.CloudSync {
 		cacheKey := fmt.Sprintf("org_sync_features_%s", org.Id)
 		syncFeatures, err := GetCache(ctx, cacheKey)
@@ -30486,66 +30548,10 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 		features := SyncFeatures{}
 		if data, ok := syncFeatures.([]byte); ok {
 			if err := json.Unmarshal(data, &features); err == nil {
-
-				// Syncing all features from cloud to onprem
-				org.SyncFeatures.AppExecutions.Limit = features.AppExecutions.Limit
-				org.SyncFeatures.AppExecutions.Active = features.AppExecutions.Active
-
-				org.SyncFeatures.MultiEnv.Limit = features.MultiEnv.Limit
-				org.SyncFeatures.MultiEnv.Active = features.MultiEnv.Active
-
-				org.SyncFeatures.MultiTenant.Limit = features.MultiTenant.Limit
-				org.SyncFeatures.MultiTenant.Active = features.MultiTenant.Active
-
-				org.SyncFeatures.MultiRegion.Limit = features.MultiRegion.Limit
-				org.SyncFeatures.MultiRegion.Active = features.MultiRegion.Active
-
-				org.SyncFeatures.Webhook.Limit = features.Webhook.Limit
-				org.SyncFeatures.Webhook.Active = features.Webhook.Active
-
-				org.SyncFeatures.Schedules.Limit = features.Schedules.Limit
-				org.SyncFeatures.Schedules.Active = features.Schedules.Active
-
-				org.SyncFeatures.UserInput.Limit = features.UserInput.Limit
-				org.SyncFeatures.UserInput.Active = features.UserInput.Active
-
-				org.SyncFeatures.SendMail.Limit = features.SendMail.Limit
-				org.SyncFeatures.SendMail.Active = features.SendMail.Active
-
-				org.SyncFeatures.SendSms.Limit = features.SendSms.Limit
-				org.SyncFeatures.SendSms.Active = features.SendSms.Active
-
-				org.SyncFeatures.EmailTrigger.Limit = features.EmailTrigger.Limit
-				org.SyncFeatures.EmailTrigger.Active = features.EmailTrigger.Active
-
-				org.SyncFeatures.Notifications.Limit = features.Notifications.Limit
-				org.SyncFeatures.Notifications.Active = features.Notifications.Active
-
-				org.SyncFeatures.Workflows.Limit = features.Workflows.Limit
-				org.SyncFeatures.Workflows.Active = features.Workflows.Active
-
-				org.SyncFeatures.Autocomplete.Limit = features.Autocomplete.Limit
-				org.SyncFeatures.Autocomplete.Active = features.Autocomplete.Active
-
-				org.SyncFeatures.WorkflowExecutions.Limit = features.WorkflowExecutions.Limit
-				org.SyncFeatures.WorkflowExecutions.Active = features.WorkflowExecutions.Active
-
-				org.SyncFeatures.Authentication.Limit = features.Authentication.Limit
-				org.SyncFeatures.Authentication.Active = features.Authentication.Active
-
-				org.SyncFeatures.ShuffleGPT.Limit = features.ShuffleGPT.Limit
-				org.SyncFeatures.ShuffleGPT.Active = features.ShuffleGPT.Active
-
-				if features.MultiTenant.Limit < 3 {
+				org.SyncFeatures = features
+				if !features.MultiTenant.Active && features.MultiTenant.Limit > 3 {
 					org.SyncFeatures.MultiTenant.Limit = 3
-				} else {
-					org.SyncFeatures.MultiTenant.Limit = features.MultiTenant.Limit
 				}
-
-				org.SyncFeatures.MultiTenant.Active = features.MultiTenant.Active
-
-				org.SyncFeatures.Branding.Limit = features.Branding.Limit
-				org.SyncFeatures.Branding.Active = features.Branding.Active
 			}
 		}
 
@@ -30573,12 +30579,26 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 			org.SyncFeatures.MultiTenant.Limit = 1000
 			org.SyncFeatures.MultiTenant.Active = true
-
-			org.SyncFeatures.Branding.Limit = 100
 			org.SyncFeatures.Branding.Active = true
+
+			org.SyncFeatures.AppExecutions.Active = true
+			org.SyncFeatures.Webhook.Active = true
+			org.SyncFeatures.Schedules.Active = true
+			org.SyncFeatures.UserInput.Active = true
+			org.SyncFeatures.SendMail.Active = true
+			org.SyncFeatures.SendSms.Active = true
+			org.SyncFeatures.Updates.Active = true
+			org.SyncFeatures.EmailTrigger.Active = true
+			org.SyncFeatures.Notifications.Active = true
+			org.SyncFeatures.Workflows.Active = true
+			org.SyncFeatures.Autocomplete.Active = true
+			org.SyncFeatures.WorkflowExecutions.Active = true
+			org.SyncFeatures.Authentication.Active = true
+			org.SyncFeatures.Schedule.Active = true
+			org.SyncFeatures.Apps.Active = true
+			org.SyncFeatures.ShuffleGPT.Active = true
 		}
 
-		// Add the static subscription data for the licensed (No internet orgs) orgs
 	}
 
 	return org
