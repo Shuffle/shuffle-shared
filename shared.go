@@ -17668,7 +17668,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 			}
 		} else {
 			// OpenSearch (on-premise) handling
-			log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
+			// log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
 			if len(tmpJson) >= 1000000 {
 				// Clean up results' actions
 
@@ -17795,10 +17795,10 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					}
 
 					newResults = append(newResults, item)
-					log.Printf("[DEBUG][%s] newResults: %d and item labelled %s length is: %d", workflowExecution.ExecutionId, len(newResults), item.Action.Label, len(item.Result))
+					// log.Printf("[DEBUG][%s] newResults: %d and item labelled %s length is: %d", workflowExecution.ExecutionId, len(newResults), item.Action.Label, len(item.Result))
 				}
 
-				log.Printf("[DEBUG][%s](%s) Overwriting executions results now! newResults length: %d", workflowExecution.ExecutionId, saveLocationInfo, len(newResults))
+				// log.Printf("[DEBUG][%s](%s) Overwriting executions results now! newResults length: %d", workflowExecution.ExecutionId, saveLocationInfo, len(newResults))
 				workflowExecution.Results = newResults
 
 				// Handle WorkflowExecution.Result field if too large
@@ -17863,13 +17863,13 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					for resultIndex, result := range workflowExecution.Results {
 						actionData, err := json.Marshal(result.Action)
 						if err == nil {
-							log.Printf("[DEBUG] Result Size (%s - action: %d). Value size: %d", result.Action.Label, len(actionData), len(result.Result))
+							// log.Printf("[DEBUG] Result Size (%s - action: %d). Value size: %d", result.Action.Label, len(actionData), len(result.Result))
 						}
 
 						if len(actionData) > 10000 {
 							for paramIndex, param := range result.Action.Parameters {
 								if len(param.Value) > 10000 {
-									log.Printf("[WARNING][%s] Parameter %s in action %s is too large (%d). Removing value.", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
+									// log.Printf("[WARNING][%s] Parameter %s in action %s is too large (%d). Removing value.", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
 									workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
 								}
 							}
