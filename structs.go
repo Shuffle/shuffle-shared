@@ -1684,11 +1684,14 @@ type SelectedDetectionRules struct {
 }
 
 type DetectionFileInfo struct {
-	FileName    string `json:"file_name" yaml:"file_name"`
+	FileName string `json:"file_name" yaml:"file_name"`
+	FileId   string `json:"file_id"`
+	Tags 	[]string `json:"tags" yaml:"tags"`
+
 	RuleTitle   string `json:"title" yaml:"title"`
 	Description string `json:"description" yaml:"description"`
-	FileId      string `json:"file_id"`
 	IsEnabled   bool   `json:"is_enabled"`
+	Status      string `json:"status" yaml:"status"`
 }
 
 type AppAuthenticationGroup struct {

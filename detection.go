@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
-	"os"
 
 	"errors"
 	"sort"
@@ -70,6 +68,7 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 
 	var sigmaFileInfo []DetectionFileInfo
 
+	// FIXME: Goroutine + Cache necessary
 	for _, file := range files {
 		if file.OrgId != user.ActiveOrg.Id {
 			continue
@@ -80,54 +79,16 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		var fileContent []byte
-		if file.Encrypted {
-			if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-				log.Printf("[ERROR] No namespace handler for cloud decryption (detection)!")
-				//continue
-			} else {
-				Openfile, err := os.Open(file.DownloadPath)
-				if err != nil {
-					log.Printf("[ERROR] Failed to open file %s: %s", file.Filename, err)
-					continue
-				}
-				defer Openfile.Close()
 
-				allText := []byte{}
-				buf := make([]byte, 1024)
-				for {
-					n, err := Openfile.Read(buf)
-					if err == io.EOF {
-						break
-					}
+		//if project.CacheDb {
+		//	detectionContentId := fmt.Sprintf("detectionfile-%s", file.Id)
+		//	cachedContent, err := GetCache(ctx, detectionContentId)
+		//	if err == nil {
 
-					if err != nil {
-						log.Printf("[ERROR] Failed to read file %s: %s", file.Filename, err)
-						continue
-					}
-
-					if n > 0 {
-						allText = append(allText, buf[:n]...)
-					}
-				}
-
-				passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-				if len(file.ReferenceFileId) > 0 {
-					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
-				}
-
-				decryptedData, err := HandleKeyDecryption(allText, passphrase)
-				if err != nil {
-					log.Printf("[ERROR] Failed decrypting file %s: %s", file.Filename, err)
-					continue
-				}
-
-				fileContent = []byte(decryptedData)
-			}
-		} else {
-			fileContent, err = ioutil.ReadFile(file.DownloadPath)
+		if len(fileContent) == 0 { 
+			fileContent, err = GetFileContent(ctx, &file, nil)
 			if err != nil {
-				log.Printf("[ERROR] Failed to read file %s: %s", file.Filename, err)
-				continue
+				log.Printf("[ERROR] Failed getting detection file content for %s (%s): %s", file.Filename, file.Id, err)
 			}
 		}
 
@@ -157,7 +118,8 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		rule.FileId = file.Id
-		rule.FileName = strings.Trim(file.Filename, ".yml")
+		rule.Tags = file.Tags
+		rule.FileName = strings.TrimSuffix(strings.TrimSuffix(file.Filename, ".yaml"),".yml")
 		sigmaFileInfo = append(sigmaFileInfo, rule)
 	}
 

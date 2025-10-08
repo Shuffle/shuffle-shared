@@ -473,6 +473,12 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		return statEntries[i].Date.Before(statEntries[j].Date)
 	})
 
+	if debug && totalValue == 0 {
+		log.Printf("[DEBUG] Found %d entries with 0 in all. Force-adding data to first entry.", len(statEntries))
+		chosenIndex := rand.Intn(len(statEntries))
+		statEntries[chosenIndex].Value = int64(rand.Intn(10) + 1)
+	}
+
 	marshalledEntries, err := json.Marshal(statEntries)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshal in get org stats: %s", err)
@@ -489,7 +495,8 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	successful := totalValue != 0
+	//successful := totalValue != 0
+	successful := true
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": %v, "key": "%s", "total": %d, "available_keys": %s, "entries": %s}`, successful, strings.ReplaceAll(statsKey, "\"", ""), totalValue, string(availableStats), string(marshalledEntries))))
