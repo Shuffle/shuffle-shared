@@ -433,7 +433,7 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	statEntries = mergedEntries
 
 	// Check if entries exist for the last X statDays
-	// Backfill any missing ones
+	// Backfill any missing ones so that the number is correct
 	if len(statEntries) < statDays {
 		// Find the missing days
 		missingDays := []time.Time{}
@@ -468,16 +468,43 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		statEntries = append(statEntries, toAppend...)
 	}
 
+	// Append cache for right now as it may not be in the DB yet 
+	for statEntryIndex, statEntry := range statEntries {
+		if statEntry.Date.Day() == time.Now().Day() && statEntry.Date.Month() == time.Now().Month() && statEntry.Date.Year() == time.Now().Year() {
+			for _, addition := range info.Additions {
+				if addition.Key != statsKey {
+					continue
+				}
+
+				key := fmt.Sprintf("cache_%s_%s", orgId, addition.Key)
+				cacheItem, err := GetCache(ctx, key)
+				if err == nil {
+					parsedItem := []byte(cacheItem.([]uint8))
+					increment, err := strconv.Atoi(string(parsedItem))
+					if err == nil {
+						statEntries[statEntryIndex].Value += int64(increment)
+						totalValue += int(increment)
+					}
+				}
+
+				break
+			}
+		}
+	}
+
 	// Sort statentries by date
 	sort.Slice(statEntries, func(i, j int) bool {
 		return statEntries[i].Date.Before(statEntries[j].Date)
 	})
 
+	// For debugging stats that don't show up by injecting them 
+	/*
 	if debug && totalValue == 0 {
 		log.Printf("[DEBUG] Found %d entries for '%s' with 0 in data. Force-adding data to first entry.", len(statEntries), statsKey)
 		chosenIndex := rand.Intn(len(statEntries))
 		statEntries[chosenIndex].Value = int64(rand.Intn(10) + 1)
 	}
+	*/
 
 	marshalledEntries, err := json.Marshal(statEntries)
 	if err != nil {
@@ -628,6 +655,24 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.WeeklySubflowExecutions += int64(increment)
 			info.DailySubflowExecutions += int64(increment)
 			info.HourlySubflowExecutions += int64(increment)
+		}
+	}
+
+	for additionCnt, addition := range info.Additions {
+
+		key := fmt.Sprintf("cache_%s_%s", orgId, addition.Key)
+		cacheItem, err = GetCache(ctx, key)
+		if err == nil {
+			parsedItem := []byte(cacheItem.([]uint8))
+			increment, err := strconv.Atoi(string(parsedItem))
+			if err == nil {
+				info.Additions[additionCnt].Value += int64(increment)
+			}
+		}
+
+		// In case a lot of use
+		if additionCnt > 10 {
+			break
 		}
 	}
 
@@ -1232,7 +1277,6 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 
 	} else {
 		// Get the cache, but use requestCache instead of memcache
-		//log.Printf("[DEBUG] Incrementing cache for %s with amount %d", key, incrementAmount)
 		foundItem := 1
 		item, err := GetCache(ctx, key)
 		if err != nil {
@@ -1269,7 +1313,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 
 		if foundItem >= int(dbDumpInterval) {
 			// Memcache dump first to keep the counter going for other executions
-			go SetCache(ctx, key, []byte(fmt.Sprintf("%x", 0)), 86400)
+			go SetCache(context.Background(), key, []byte(fmt.Sprintf("%x", 0)), 86400)
 			IncrementCacheDump(ctx, orgId, dataType, foundItem)
 
 			//log.Printf("[DEBUG] Dumping cache for %s with amount %d", key, foundItem)

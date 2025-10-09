@@ -12453,7 +12453,7 @@ func UpdateDetectionStats(ctx context.Context, cacheData CacheKeyData) {
 	}
 
 	detectionStatname := fmt.Sprintf("detection_rule_%s", strings.TrimSpace(strings.ToLower(strings.ReplaceAll(ruleName, " ", "_"))))
-	IncrementCache(ctx, cacheData.OrgId, detectionStatname, 10)
+	IncrementCache(ctx, cacheData.OrgId, detectionStatname, 1)
 	if debug {
 		log.Printf("[DEBUG] Incremented detection stat '%s' for org %s", detectionStatname, cacheData.OrgId)
 	}

@@ -1,17 +1,18 @@
 package shuffle
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
+	"context"
 	"net/http"
+	"io/ioutil"
+	"crypto/sha1"
+	"encoding/json"
 
-	"errors"
 	"sort"
-	"strings"
 	"time"
+	"errors"
+	"strings"
 
 	uuid "github.com/satori/go.uuid"
 	"gopkg.in/yaml.v2"
@@ -562,14 +563,42 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 
 	log.Printf("[AUDIT] User '%s' (%s) is trying to detection-connect to %s", user.Username, user.Id, strings.ToUpper(detectionType))
 
+	// Uses the same system we are using in the ai.go standard workflow creation
 	workflow := Workflow{}
-	if detectionType == "siem" {
+	if detectionType == "siem" || detectionType == "sigma" {
+		categoryAction := CategoryAction{
+			Label: "Ingest Tickets_webhook",
+			Category: "cases",
+		}
+
+		seedString := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, categoryAction.Label)
+		hash := sha1.New()
+		hash.Write([]byte(seedString))
+		hashBytes := hash.Sum(nil)
+
+		uuidBytes := make([]byte, 16)
+		copy(uuidBytes, hashBytes)
+		workflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
 
 		ctx := GetContext(request)
-		workflow, err = ConfigureDetectionWorkflow(ctx, user.ActiveOrg.Id, "TENZIR-SIGMA")
-		if err != nil {
-			log.Printf("[ERROR] Failed to create Sigma handling workflow: %s", err)
+		foundWorkflow, err := GetWorkflow(ctx, workflowId)
+		if err != nil || workflow.ID == "" {
+			log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, err)
+			//initialising = true
+			newWorkflow, err := GetDefaultWorkflowByType(*foundWorkflow, user.ActiveOrg.Id, categoryAction)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get default workflow in GenerateSingulWorkflows: %s", err)
+				resp.WriteHeader(http.StatusInternalServerError)
+				resp.Write([]byte(`{"success": false, "reason": "Failed to get default workflow for this category. Please contact support@shuffler.io"}`))
+				return
+			}
+
+			workflow = newWorkflow
+		} else {
+			workflow = *foundWorkflow
 		}
+
+		workflow.ID = workflowId
 
 		log.Printf("[DEBUG] Sending orborus request to start Sigma handling IF an available environment is found.")
 
@@ -942,6 +971,7 @@ func ConfigureDetectionWorkflow(ctx context.Context, orgId, workflowType string)
 
 	// FIXME: Add a changeout for ANY schemaless node to use the correct
 	// action in it
+	workflow.BackgroundProcessing = true
 	log.Printf("[DEBUG] Saving workflow for org %s", orgId)
 	err = SetWorkflow(ctx, workflow, workflow.ID)
 	if err != nil {
