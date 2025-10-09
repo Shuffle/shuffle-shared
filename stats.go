@@ -474,7 +474,7 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	})
 
 	if debug && totalValue == 0 {
-		log.Printf("[DEBUG] Found %d entries with 0 in all. Force-adding data to first entry.", len(statEntries))
+		log.Printf("[DEBUG] Found %d entries for '%s' with 0 in data. Force-adding data to first entry.", len(statEntries), statsKey)
 		chosenIndex := rand.Intn(len(statEntries))
 		statEntries[chosenIndex].Value = int64(rand.Intn(10) + 1)
 	}
@@ -869,8 +869,11 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 				orgStatistics.OrgId = orgId
 			}
 
+			log.Printf("ORGSTATS PRE: %#v", orgStatistics.Additions)
 			orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
+			log.Printf("ORGSTATS POST: %#v", orgStatistics.Additions)
 			orgStatistics = handleDailyCacheUpdate(orgStatistics)
+			log.Printf("ORGSTATS POST2: %#v", orgStatistics.Additions)
 
 			// Transaction control
 			if _, err := tx.Put(key, orgStatistics); err != nil {
@@ -1298,7 +1301,12 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 
 		// Check if the day.Date is the same as yesterday and return if it is
 		if day.Date.Format("2006-12-02") == timeYesterdayFormatted {
-			//log.Printf("[DEBUG] Daily stats already updated for %s. Data: %#v", day.Date, day)
+			log.Printf("[DEBUG] Daily stats already updated for %s. Data: %#v", day.Date, day)
+
+			for additionIndex, _ := range executionInfo.Additions {
+				executionInfo.Additions[additionIndex].DailyValue = 0
+			}
+
 			return executionInfo
 		}
 	}
@@ -1490,9 +1498,11 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 	}
 
 	if appendCustom {
-		//log.Printf("[DEBUG] Appending custom data type %s for org %s", dataType, orgStatistics.OrgId)
-		dataType = strings.ToLower(strings.Replace(dataType, " ", "_", -1))
+		if debug { 
+			log.Printf("[DEBUG] Appending custom data type %s for org %s. Amount: %d", dataType, orgStatistics.OrgId, increment)
+		}
 
+		dataType = strings.ToLower(strings.Replace(dataType, " ", "_", -1))
 		found := false
 		for additionIndex, addition := range orgStatistics.Additions {
 			if addition.Key != dataType {
@@ -1503,16 +1513,20 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			amount := int64(increment)
 
 			orgStatistics.Additions[additionIndex].Value += amount
-			orgStatistics.Additions[additionIndex].DailyValue += amount
+			//orgStatistics.Additions[additionIndex].DailyValue += amount
 
 			break
+		}
+
+		if debug {
+			log.Printf("[DEBUG] After processing custom data type %s for org %s. Amount: %d. Found: %v", dataType, orgStatistics.OrgId, increment, found)
 		}
 
 		if !found {
 			orgStatistics.Additions = append(orgStatistics.Additions, AdditionalUseConfig{
 				Key:        dataType,
 				Value:      int64(increment),
-				DailyValue: int64(increment),
+				//DailyValue: int64(increment),
 
 				//Date: 0,
 			})
@@ -1608,6 +1622,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				"org_name":                  org.Name,
 				"org_id":                    org.Id,
 				"admin_email":               firstAdmin,
+			}
+
+			if !ArrayContains(allAdmins, "chris@shuffler.io") {
+				allAdmins = append(allAdmins, "chris@shuffler.io")
 			}
 
 			if !ArrayContains(allAdmins, "jay@shuffler.io") {
@@ -1756,7 +1774,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			if alertAlreadySet && (currentThreshold == 100 || currentThreshold == 50) {
 				newEmailList = allAdmins
 			} else {
-				newEmailList = []string{"jay@shuffler.io"}
+				newEmailList = []string{"chris@shuffler.io", "jay@shuffler.io"}
 			}
 
 			// send mail use different subject line as it will sent only to the team
@@ -1817,7 +1835,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				substitutions["lead_info"] = leadInfo
 
 				err = sendMailSendgridV2(
-					[]string{"jay@shuffler.io", "support@shuffler.io"},
+					[]string{"chris@shuffler.io", "jay@shuffler.io", "support@shuffler.io"},
 					Subject,
 					substitutions,
 					false,
