@@ -598,6 +598,17 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 			workflowExecution.Workflow.Comments[actionIndex].Position.Y = float64(0)
 		}
 
+		// Compresses and removes unecessary things
+		workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
+
+		executionData, err = json.Marshal(workflowExecution)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshalling execution for ES: %s", err)
+			return err
+		}
+
+		log.Printf("[INFO] Final string size of execution is: %d", len(executionData))
+
 		err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
 		if err != nil {
 			log.Printf("[ERROR] Failed saving new execution %s: %s", workflowExecution.ExecutionId, err)
@@ -1040,9 +1051,6 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 }
 
 func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecution, action ActionResult) (string, error) {
-	projectName := os.Getenv("SHUFFLE_GCEPROJECT")
-	bucketName := project.BucketName
-
 	fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, action.Action.ID)
 
 	cacheKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, action.Action.ID)
@@ -1054,29 +1062,56 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
-	bucket := project.StorageClient.Bucket(bucketName)
-	obj := bucket.Object(fullParsedPath)
-	fileReader, err := obj.NewReader(ctx)
-	if err != nil {
-		log.Printf("[ERROR] Failed reading file '%s' from bucket %s: %s. Will try with alternative solution.", fullParsedPath, bucketName, err)
+	var data []byte
+	var err error
 
-		if projectName != "shuffler" {
-			bucketName = fmt.Sprintf("%s.appspot.com", projectName)
-			bucket = project.StorageClient.Bucket(bucketName)
-			obj = bucket.Object(fullParsedPath)
-			fileReader, err = obj.NewReader(ctx)
-			if err != nil {
-				log.Printf("[ERROR] Failed reading file '%s' again from bucket %s: %s", fullParsedPath, bucketName, err)
-				return "", err
+	if project.DbType == "opensearch" {
+		// On-premise: read from local filesystem
+		basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
+		if len(basepath) == 0 {
+			basepath = "files"
+		}
+		
+		localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+		data, err = ioutil.ReadFile(localPath)
+		if err != nil {
+			// Use DEBUG for file not found (expected on first save), ERROR for other issues
+			if os.IsNotExist(err) {
+				log.Printf("[DEBUG] File '%s' does not exist yet (expected on first save): %s", localPath, err)
+			} else {
+				log.Printf("[ERROR] Failed reading file '%s' from local storage: %s", localPath, err)
 			}
-		} else {
 			return "", err
 		}
-	}
+	} else {
+		// Cloud: read from bucket
+		projectName := os.Getenv("SHUFFLE_GCEPROJECT")
+		bucketName := project.BucketName
+		
+		bucket := project.StorageClient.Bucket(bucketName)
+		obj := bucket.Object(fullParsedPath)
+		fileReader, err := obj.NewReader(ctx)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading file '%s' from bucket %s: %s. Will try with alternative solution.", fullParsedPath, bucketName, err)
 
-	data, err := ioutil.ReadAll(fileReader)
-	if err != nil {
-		return "", err
+			if projectName != "shuffler" {
+				bucketName = fmt.Sprintf("%s.appspot.com", projectName)
+				bucket = project.StorageClient.Bucket(bucketName)
+				obj = bucket.Object(fullParsedPath)
+				fileReader, err = obj.NewReader(ctx)
+				if err != nil {
+					log.Printf("[ERROR] Failed reading file '%s' again from bucket %s: %s", fullParsedPath, bucketName, err)
+					return "", err
+				}
+			} else {
+				return "", err
+			}
+		}
+
+		data, err = ioutil.ReadAll(fileReader)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	if project.CacheDb {
@@ -1648,6 +1683,21 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 					} else {
 						//log.Printf("[DEBUG][%s] Found a new value to parse with exec argument", workflowExecution.ExecutionId)
 						workflowExecution.ExecutionArgument = newValue
+					}
+				}
+
+				if strings.Contains(workflowExecution.Result, "Result too large to handle") {
+					baseResult := &ActionResult{
+						Result: workflowExecution.Result,
+						Action: Action{ID: "execution_result"},
+					}
+
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseResult)
+					if err != nil {
+						log.Printf("[DEBUG][%s] Failed to parse in execution file value for Result: %s", workflowExecution.ExecutionId, err)
+					} else {
+						log.Printf("[DEBUG][%s] Found a new value to parse with Result field", workflowExecution.ExecutionId)
+						workflowExecution.Result = newValue
 					}
 				}
 

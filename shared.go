@@ -17729,6 +17729,217 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					}
 				}
 			}
+		} else {
+			// OpenSearch (on-premise) handling
+			// log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
+			if len(tmpJson) >= 1000000 {
+				// Clean up results' actions
+
+				log.Printf("[DEBUG][%s](%s) ExecutionVariables size: %d, Result size: %d, executionArgument size: %d, Results size: %d", workflowExecution.ExecutionId, saveLocationInfo, len(workflowExecution.ExecutionVariables), len(workflowExecution.Result), len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
+
+				dbSave = true
+				//log.Printf("[WARNING][%s] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", workflowExecution.ExecutionId, len(tmpJson), saveLocationInfo)
+				actionId := "execution_argument"
+
+				// Arbitrary reduction size
+				maxSize := 50000
+				basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
+				if len(basepath) == 0 {
+					basepath = "files"
+				}
+
+				log.Printf("[DEBUG] Execution Argument length is %d for execution Id %s (%s)", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId, saveLocationInfo)
+
+				if len(workflowExecution.ExecutionArgument) > maxSize {
+					itemSize := len(workflowExecution.ExecutionArgument)
+					baseResult := fmt.Sprintf(`{
+								"success": false,
+								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+								"size": %d,
+								"extra": "",
+								"id": "%s_%s"
+							}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+					log.Printf("[DEBUG] len(executionArgument) is %d for execution Id %s", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId)
+
+					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+					localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+					
+					// Write file to local filesystem
+					if err := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); err != nil {
+						// Try creating directory if write fails
+						dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+						if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+							log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
+							workflowExecution.ExecutionArgument = baseResult
+						} else {
+							// Retry write after creating directory
+							if retryErr := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); retryErr != nil {
+								log.Printf("[WARNING] Failed writing new exec file to local storage after creating directory: %s", retryErr)
+								workflowExecution.ExecutionArgument = baseResult
+							} else {
+								log.Printf("[DEBUG] Saved execution argument to local file %s", localPath)
+								workflowExecution.ExecutionArgument = fmt.Sprintf(`{
+									"success": false,
+									"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+									"size": %d,
+									"extra": "replace",
+									"id": "%s_%s"
+								}`, itemSize, workflowExecution.ExecutionId, actionId)
+							}
+						}
+					} else {
+						log.Printf("[DEBUG] Saved execution argument to local file %s", localPath)
+						workflowExecution.ExecutionArgument = fmt.Sprintf(`{
+							"success": false,
+							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+							"size": %d,
+							"extra": "replace",
+							"id": "%s_%s"
+						}`, itemSize, workflowExecution.ExecutionId, actionId)
+					}
+				}
+
+				newResults := []ActionResult{}
+				//shuffle-large-executions
+				for _, item := range workflowExecution.Results {
+					log.Printf("[DEBUG] Result length is %d for execution Id %s (%s)", len(item.Result), workflowExecution.ExecutionId, saveLocationInfo)
+					if len(item.Result) > maxSize {
+						log.Printf("[WARNING][%s](%s) result length is larger than maxSize for %s (%d)", workflowExecution.ExecutionId, saveLocationInfo, item.Action.Label, len(item.Result))
+
+						itemSize := len(item.Result)
+						baseResult := fmt.Sprintf(`{
+								"success": false,
+								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+								"size": %d,
+								"extra": "",
+								"id": "%s_%s"
+							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
+
+						// 1. Get the value and set it instead if it exists
+						// 2. If it doesn't exist, add it
+						_, err := getExecutionFileValue(ctx, workflowExecution, item)
+						if err == nil {
+							//log.Printf("[DEBUG][%s] Found execution file locally for '%s'. Not saving another.", workflowExecution.ExecutionId, item.Action.Label)
+						} else {
+							fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
+							localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+							
+							// Try writing file, create directory if needed
+							if err := ioutil.WriteFile(localPath, []byte(item.Result), 0644); err != nil {
+								// Try creating directory if write fails
+								dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+								if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+									log.Printf("[WARNING][%s] Failed creating directory and writing file: %s (original: %s)", workflowExecution.ExecutionId, mkdirErr, err)
+									item.Result = baseResult
+									newResults = append(newResults, item)
+									continue
+								}
+								
+								// Retry write after creating directory
+								if retryErr := ioutil.WriteFile(localPath, []byte(item.Result), 0644); retryErr != nil {
+									log.Printf("[WARNING][%s] Failed writing new exec file to local storage after creating directory: %s", workflowExecution.ExecutionId, retryErr)
+									item.Result = baseResult
+									newResults = append(newResults, item)
+									continue
+								}
+							}
+							
+							log.Printf("[DEBUG] Saved action result to local file %s", localPath)
+						}
+
+						item.Result = fmt.Sprintf(`{
+								"success": false,
+								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+								"size": %d,
+								"extra": "replace",
+								"id": "%s_%s"
+							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
+					}
+
+					newResults = append(newResults, item)
+					// log.Printf("[DEBUG][%s] newResults: %d and item labelled %s length is: %d", workflowExecution.ExecutionId, len(newResults), item.Action.Label, len(item.Result))
+				}
+
+				// log.Printf("[DEBUG][%s](%s) Overwriting executions results now! newResults length: %d", workflowExecution.ExecutionId, saveLocationInfo, len(newResults))
+				workflowExecution.Results = newResults
+
+				// Handle WorkflowExecution.Result field if too large
+				if len(workflowExecution.Result) > maxSize {
+					log.Printf("[WARNING][%s] Result field is too large (%d bytes), saving to file", workflowExecution.ExecutionId, len(workflowExecution.Result))
+					
+					itemSize := len(workflowExecution.Result)
+					actionId := "execution_result"
+					baseResult := fmt.Sprintf(`{
+						"success": false,
+						"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+						"size": %d,
+						"extra": "",
+						"id": "%s_%s"
+					}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+					localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+					
+					// Write file to local filesystem
+					if err := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); err != nil {
+						// Try creating directory if write fails
+						dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+						if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+							log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
+							workflowExecution.Result = baseResult
+						} else {
+							// Retry write after creating directory
+							if retryErr := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); retryErr != nil {
+								log.Printf("[WARNING] Failed writing Result file to local storage after creating directory: %s", retryErr)
+								workflowExecution.Result = baseResult
+							} else {
+								log.Printf("[DEBUG] Saved Result field to local file %s", localPath)
+								workflowExecution.Result = fmt.Sprintf(`{
+									"success": false,
+									"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+									"size": %d,
+									"extra": "replace",
+									"id": "%s_%s"
+								}`, itemSize, workflowExecution.ExecutionId, actionId)
+							}
+						}
+					} else {
+						log.Printf("[DEBUG] Saved Result field to local file %s", localPath)
+						workflowExecution.Result = fmt.Sprintf(`{
+							"success": false,
+							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+							"size": %d,
+							"extra": "replace",
+							"id": "%s_%s"
+						}`, itemSize, workflowExecution.ExecutionId, actionId)
+					}
+				}
+			}
+
+			jsonString, err := json.Marshal(workflowExecution)
+			if err == nil {
+				log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
+				if len(jsonString)> 1000000 {
+					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
+
+					for resultIndex, result := range workflowExecution.Results {
+						actionData, err := json.Marshal(result.Action)
+						if err == nil {
+							// log.Printf("[DEBUG] Result Size (%s - action: %d). Value size: %d", result.Action.Label, len(actionData), len(result.Result))
+						}
+
+						if len(actionData) > 10000 {
+							for paramIndex, param := range result.Action.Parameters {
+								if len(param.Value) > 10000 {
+									// log.Printf("[WARNING][%s] Parameter %s in action %s is too large (%d). Removing value.", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
+									workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -30537,6 +30748,10 @@ func fixOrgUsers(ctx context.Context, foundOrg Org) error {
 
 func HandleCheckLicense(ctx context.Context, org Org) Org {
 
+	if project.Environment == "cloud" {
+		return org
+	}
+
 	shuffleLicenseKey := os.Getenv("SHUFFLE_LICENSE")
 	if org.CloudSync {
 		cacheKey := fmt.Sprintf("org_sync_features_%s", org.Id)
@@ -30548,7 +30763,63 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 		features := SyncFeatures{}
 		if data, ok := syncFeatures.([]byte); ok {
 			if err := json.Unmarshal(data, &features); err == nil {
-				org.SyncFeatures = features
+
+				org.SyncFeatures.MultiEnv.Active = features.MultiEnv.Active
+				org.SyncFeatures.MultiEnv.Limit = features.MultiEnv.Limit
+
+				org.SyncFeatures.MultiTenant.Active = features.MultiTenant.Active
+				org.SyncFeatures.MultiTenant.Limit = features.MultiTenant.Limit
+
+				org.SyncFeatures.Branding.Active = features.Branding.Active
+
+				org.SyncFeatures.AppExecutions.Active = features.AppExecutions.Active
+				org.SyncFeatures.AppExecutions.Limit = features.AppExecutions.Limit
+
+				org.SyncFeatures.Webhook.Active = features.Webhook.Active
+				org.SyncFeatures.Webhook.Limit = features.Webhook.Limit
+
+				org.SyncFeatures.Schedules.Active = features.Schedules.Active
+				org.SyncFeatures.Schedules.Limit = features.Schedules.Limit
+
+				org.SyncFeatures.UserInput.Active = features.UserInput.Active
+				org.SyncFeatures.UserInput.Limit = features.UserInput.Limit
+
+				org.SyncFeatures.SendMail.Active = features.SendMail.Active
+				org.SyncFeatures.SendMail.Limit = features.SendMail.Limit
+
+				org.SyncFeatures.SendSms.Active = features.SendSms.Active
+				org.SyncFeatures.SendSms.Limit = features.SendSms.Limit
+
+				org.SyncFeatures.Updates.Active = features.Updates.Active
+				org.SyncFeatures.Updates.Limit = features.Updates.Limit
+
+				org.SyncFeatures.EmailTrigger.Active = features.EmailTrigger.Active
+				org.SyncFeatures.EmailTrigger.Limit = features.EmailTrigger.Limit
+
+				org.SyncFeatures.Notifications.Active = features.Notifications.Active
+				org.SyncFeatures.Notifications.Limit = features.Notifications.Limit
+
+				org.SyncFeatures.Workflows.Active = features.Workflows.Active
+				org.SyncFeatures.Workflows.Limit = features.Workflows.Limit
+
+				org.SyncFeatures.Autocomplete.Active = features.Autocomplete.Active
+				org.SyncFeatures.Autocomplete.Limit = features.Autocomplete.Limit
+
+				org.SyncFeatures.WorkflowExecutions.Active = features.WorkflowExecutions.Active
+				org.SyncFeatures.WorkflowExecutions.Limit = features.WorkflowExecutions.Limit
+
+				org.SyncFeatures.Authentication.Active = features.Authentication.Active
+				org.SyncFeatures.Authentication.Limit = features.Authentication.Limit
+
+				org.SyncFeatures.Schedule.Active = features.Schedule.Active
+				org.SyncFeatures.Schedule.Limit = features.Schedule.Limit
+
+				org.SyncFeatures.Apps.Active = features.Apps.Active
+				org.SyncFeatures.Apps.Limit = features.Apps.Limit
+
+				org.SyncFeatures.ShuffleGPT.Active = features.ShuffleGPT.Active
+				org.SyncFeatures.ShuffleGPT.Limit = features.ShuffleGPT.Limit
+
 				if !features.MultiTenant.Active && features.MultiTenant.Limit > 3 {
 					org.SyncFeatures.MultiTenant.Limit = 3
 				}
@@ -30599,6 +30870,15 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.ShuffleGPT.Active = true
 		}
 
+	} else {
+		log.Printf("[WARNING] Org %v does not have an enterprise license. Please purchase an enterprise license to unlock production-ready features. Contact support@shuffler.io for more information.", org.Id)
+		org.SyncFeatures.MultiEnv.Limit = 1
+		org.SyncFeatures.MultiEnv.Active = false
+
+		org.SyncFeatures.MultiTenant.Limit = 3
+		org.SyncFeatures.MultiTenant.Active = false
+
+		org.SyncFeatures.Branding.Active = false
 	}
 
 	return org
