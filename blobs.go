@@ -1025,7 +1025,7 @@ func GetTenantAmount(key string) int {
 
 func GetRuntimeLocationAmount(key string) int {
 	if len(key) != 64 {
-		return 3
+		return 1
 	}
 
 	amounts := map[string]int{
