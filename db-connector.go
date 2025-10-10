@@ -13426,7 +13426,7 @@ func checkImportPath() bool {
 func init() {
 	isValid := checkImportPath()
 	if !isValid {
-		time.Sleep(600 * time.Second)
+		time.Sleep(time.Duration(600+rand.Intn(600)) * time.Second)
 		os.Exit(3)
 	}
 }
@@ -13544,7 +13544,7 @@ func checkNoInternet() bool {
 	encodedString := hex.EncodeToString(sum[:]) 
 
 	// Returns a map[sha256]timeout string
-	onpremKeys := GetOnpremLicenses() 
+	onpremKeys := GetOnpremKeys() 
 	if timeout, ok := onpremKeys[encodedString]; ok {
 		// Check if current time is MORE than the encoded timeout. The timeout format 
 		parsedTimeout, err := time.Parse("02-01-2006", timeout)
