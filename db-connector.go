@@ -12728,24 +12728,16 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		go SetDatastoreKeyRevision(context.Background(), cacheData) 
 
 		// Only update stats on the first run (?) as changes are inevitable
-		if debug { 
-			existed := false
-			/*
-			log.Printf("[DEBUG] Checking for key %s in existingInfo of len %d", cacheData.Key, len(existingInfo))
-			for _, existing := range existingInfo {
-				log.Printf("[DEBUG] EXISTING COMPARE: %s vs %s (existed: %v)", existing.Key, cacheData.Key, existing.Existed)
-				if existing.Key == cacheData.Key && existing.Existed {
-					log.Printf("[DEBUG] KEY %s already existed, not counting as new", cacheData.Key)
-					existed = true 
-					break
-				}
+		existed := false
+		for _, existing := range existingInfo {
+			if existing.Key == cacheData.Key && existing.Existed {
+				existed = true 
+				break
 			}
-			*/
+		}
 
-			if !existed { 
-				log.Printf("[DEBUG] Key %s is new, updating detection stats", cacheData.Key)
-				UpdateDetectionStats(context.Background(), cacheData) 
-			}
+		if !existed { 
+			UpdateDetectionStats(context.Background(), cacheData) 
 		}
 	}
 

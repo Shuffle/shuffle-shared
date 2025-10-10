@@ -914,11 +914,8 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 				orgStatistics.OrgId = orgId
 			}
 
-			log.Printf("ORGSTATS PRE: %#v", orgStatistics.Additions)
 			orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
-			log.Printf("ORGSTATS POST: %#v", orgStatistics.Additions)
 			orgStatistics = handleDailyCacheUpdate(orgStatistics)
-			log.Printf("ORGSTATS POST2: %#v", orgStatistics.Additions)
 
 			// Transaction control
 			if _, err := tx.Put(key, orgStatistics); err != nil {
