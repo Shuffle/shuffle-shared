@@ -785,8 +785,9 @@ func GetAllAppCategories() []AppCategory {
 	return categories
 }
 
+// Simple check 
 func AllowedImportPath() string {
-	return "github.com/shuffle/shuffle-shared"
+	return strings.Join([]string{"github.com", "shuffle", "shuffle-shared"}, "/")
 }
 
 func GetWorkflowTest() []byte {
