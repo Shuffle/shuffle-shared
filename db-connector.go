@@ -13533,10 +13533,10 @@ func GetEsConfig(defaultCreds bool) *opensearch.Client {
 	return es
 }
 
-func checkNoInternet() bool {
+func checkNoInternet() (bool, string) {
 	licenseKey := os.Getenv("SHUFFLE_LICENSE")
 	if len(licenseKey) == 0 {
-		return false
+		return false, ""
 	}
 
 	// Month + Year -> when it runs out
@@ -13556,16 +13556,16 @@ func checkNoInternet() bool {
 					log.Printf("[DEBUG] License key is valid")
 				}
 
-				return true
+				return true, timeout
 			} else {
 				log.Printf("[ERROR] License key has expired on %s", timeout)
-				return false
+				return false, timeout
 			}
 		}
 	}  
 
 	log.Printf("[ERROR] No valid license key found based SHUFFLE_LICENSE %s", licenseKey)
-	return false
+	return false, ""
 }
 
 func UploadAppSpecFiles(ctx context.Context, client *storage.Client, api WorkflowApp, parsed ParsedOpenApi) (WorkflowApp, error) {
