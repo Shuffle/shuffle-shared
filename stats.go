@@ -1342,8 +1342,6 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 
 		// Check if the day.Date is the same as yesterday and return if it is
 		if day.Date.Format("2006-12-02") == timeYesterdayFormatted {
-			log.Printf("[DEBUG] Daily stats already updated for %s. Data: %#v", day.Date, day)
-
 			for additionIndex, _ := range executionInfo.Additions {
 				executionInfo.Additions[additionIndex].DailyValue = 0
 			}
