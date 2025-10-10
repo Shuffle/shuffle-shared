@@ -11784,7 +11784,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 			parentOrg.SyncUsage.MultiTenant.Counter = int64(len(childOrgs))
 		}
 
-		isLicensed := checkNoInternet()
+		isLicensed, _ := checkNoInternet()
 		if !parentOrg.CloudSync && !isLicensed && len(childOrgs) >= 3 {
 			log.Printf("[WARNING] Organization %s has exceeded the free plan limit of 3 sub-organizations. An enterprise license is required to create additional sub-organizations.", parentOrg.Id)
 			resp.WriteHeader(400)
@@ -30843,7 +30843,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 	} else if len(shuffleLicenseKey) > 0 {
 
-		license := checkNoInternet()
+		license, timeout := checkNoInternet()
 		if license == true {
 			org.SyncFeatures.MultiEnv.Limit = 100
 			org.SyncFeatures.MultiEnv.Active = true
@@ -30869,6 +30869,64 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.Apps.Active = true
 			org.SyncFeatures.ShuffleGPT.Active = true
 		}
+
+		parsedEula := GetOnpremPaidEula()
+
+		log.Printf("[DEBUG] Org has the Enterprise License Key")
+
+		var endDate int64
+		var cancellationDate int64
+		active := false
+
+		features := []string{
+			"∞ Days Workflow Run History",
+			"∞ Days Workflow Backup",
+			"∞ Users",
+			"Air Gap Environment",
+			"Critical Response",
+			"On-Call Support",
+			"Setup and Maintenance",
+			"Key Management System",
+			"Custom Integrations",
+			"Custom Scaling Options",
+			"Billing and Invoice Included",
+			"Custom Contract",
+		}
+
+		if license {
+			parsedTimeout, err := time.Parse("02-01-2006", timeout)
+			if err != nil {
+				log.Printf("[ERROR] Failed parsing license timeout: %s", err)
+				parsedTimeout = time.Now()
+			}
+			endDate = parsedTimeout.Unix()
+			cancellationDate = 0
+			active = true
+		} else {
+			endDate = time.Now().Unix()
+			cancellationDate = time.Now().Unix()
+			active = false
+		}
+
+		subscription := PaymentSubscription{
+			Name:             "Enterprise License",
+			Active:           active,
+			CancellationDate: cancellationDate,
+			SupportLevel:     "Enterprise Support",
+			Startdate:        time.Now().Unix(),
+			Enddate:          endDate,
+			Recurrence:       string("monthly"),
+			Amount:           "0",
+			Currency:         string("USD"),
+			Level:            "1",
+			Reference:        "",
+			Limit:            1,
+			Features:         features,
+			EulaSigned:       true,
+			Eula:             parsedEula,
+		}
+
+		org.Subscriptions = []PaymentSubscription{subscription}
 
 	} else {
 		log.Printf("[WARNING] Org %v does not have an enterprise license. Please purchase an enterprise license to unlock production-ready features. Contact support@shuffler.io for more information.", org.Id)
