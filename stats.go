@@ -1926,7 +1926,8 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			}
 
 			if (currentThreshold == 100 || currentThreshold == 50) && len(leadInfo) > 0 {
-				secondCacheKey := generateAlertCacheKey(validationOrg.Id, fmt.Sprintf("second_%d", currentThreshold), []string{"lalitdeore00@gmail.com"})
+				secondEmailList := []string{"chris@shuffler.io", "jay@shuffler.io", "support@shuffler.io"}
+				secondCacheKey := generateAlertCacheKey(validationOrg.Id, fmt.Sprintf("second_%d", currentThreshold), secondEmailList)
 				if !checkAndSetAlertCache(ctx, secondCacheKey) {
 					log.Printf("[DEBUG] Skipping duplicate second alert for org %s, threshold %d%% - alert sent within last minute", validationOrg.Id, currentThreshold)
 				} else {
