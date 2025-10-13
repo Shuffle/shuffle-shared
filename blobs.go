@@ -1107,7 +1107,7 @@ func GetRuntimeLocationAmount(key string) int {
 }
 
 func GetBrandingAvailable(key string) bool {
-	if key == "83695c44dc8767ed11b3a0960e6bebefdeb6a2b02ef864f587d4e0815cba975a" {
+	if key == "f2a3b6d37929a8de75b753f68043f20aeca54b090eb6bb3c0eeedb6ddd10ae1b" {
 		return true
 	}
 
