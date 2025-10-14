@@ -32702,17 +32702,22 @@ func (c *AuditLogCollector) collectLinuxAuditLogs(ctx context.Context) {
 }
 
 func (c *AuditLogCollector) collectMacOSAuditLogs(ctx context.Context) {
+	// Collect different types of security-relevant logs
 	go c.collectMacOSUnifiedLogs(ctx)
+	go c.collectMacOSAuthLogs(ctx)
 	
-	systemLogPath := "/var/log/system.log"
-	if _, err := os.Stat(systemLogPath); err == nil {
-		go c.tailLogFile(ctx, systemLogPath, "system")
+	// BSM audit is optional - only try if explicitly enabled
+	if os.Getenv("SHUFFLE_ENABLE_BSM_AUDIT") == "true" {
+		go c.collectMacOSBSMaudit(ctx)
 	}
 }
 
-// collectMacOSUnifiedLogs uses the macOS unified logging system
+// collectMacOSUnifiedLogs uses the macOS unified logging system with a simple approach
 func (c *AuditLogCollector) collectMacOSUnifiedLogs(ctx context.Context) {
-	cmd := exec.Command("log", "stream", "--level", "info", "--style", "json")
+	log.Printf("[INFO] Starting macOS unified log collection")
+	
+	// Start with a simple log stream that actually works
+	cmd := exec.Command("log", "stream", "--level", "info", "--type", "log")
 	
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -32725,6 +32730,8 @@ func (c *AuditLogCollector) collectMacOSUnifiedLogs(ctx context.Context) {
 		return
 	}
 	
+	log.Printf("[INFO] Successfully started log stream")
+	
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		select {
@@ -32736,7 +32743,9 @@ func (c *AuditLogCollector) collectMacOSUnifiedLogs(ctx context.Context) {
 			return
 		default:
 			line := scanner.Text()
-			c.parseMacOSLogEntry(line)
+			if line != "" {
+				c.parseSimpleMacOSLogEntry(line)
+			}
 		}
 	}
 	
@@ -32789,6 +32798,158 @@ func (c *AuditLogCollector) parseMacOSLogEntry(line string) {
 	}
 }
 
+func (c *AuditLogCollector) parseSimpleMacOSLogEntry(line string) {
+	// this just looks for keywords in the log line
+	// not sure how reliable this is, but it's a start lol
+	lowerLine := strings.ToLower(line)
+	isSecurityRelevant := strings.Contains(lowerLine, "login") ||
+		strings.Contains(lowerLine, "auth") ||
+		strings.Contains(lowerLine, "sudo") ||
+		strings.Contains(lowerLine, "password") ||
+		strings.Contains(lowerLine, "session") ||
+		strings.Contains(lowerLine, "security") ||
+		strings.Contains(lowerLine, "loginwindow") ||
+		strings.Contains(lowerLine, "securityd")
+	
+	if !isSecurityRelevant {
+		return
+	}
+	
+	entry := AuditLogEntry{
+		Timestamp: time.Now(),
+		Platform:  "darwin",
+		Source:    "unified_log",
+		Message:   line,
+		RawData:   line,
+		EventType: "security",
+	}
+	
+	// Basic process extraction from log format
+	if strings.Contains(line, ": ") {
+		parts := strings.Split(line, ": ")
+		if len(parts) > 1 {
+			processField := parts[0]
+			if strings.Contains(processField, "[") {
+				procParts := strings.Split(processField, "[")
+				if len(procParts) > 0 {
+					entry.ProcessInfo = &ProcessInfo{
+						ProcessName: strings.TrimSpace(procParts[0]),
+					}
+				}
+			}
+		}
+	}
+	
+	if c.shouldFilterLog(&entry) {
+		return
+	}
+	
+	select {
+	case c.LogChannel <- entry:
+	default:
+		// Channel full, drop the log
+	}
+}
+
+// collectMacOSAuthLogs monitors auth.log and system authentication events
+func (c *AuditLogCollector) collectMacOSAuthLogs(ctx context.Context) {
+	log.Printf("[INFO] Starting macOS auth log collection")
+	
+	// Just monitor some basic log files that might exist
+	logPaths := []string{
+		"/var/log/auth.log",
+		"/var/log/system.log",
+		"/var/log/secure.log",
+	}
+	
+	for _, logPath := range logPaths {
+		if _, err := os.Stat(logPath); err == nil {
+			log.Printf("[INFO] Monitoring log file: %s", logPath)
+			go c.tailLogFile(ctx, logPath, filepath.Base(logPath))
+		}
+	}
+}
+
+// collectMacOSBSMaudit collects from macOS BSM audit system
+func (c *AuditLogCollector) collectMacOSBSMaudit(ctx context.Context) {
+	// Check if audit is enabled
+	cmd := exec.Command("sudo", "audit", "-s")
+	if err := cmd.Run(); err != nil {
+		log.Printf("[WARNING] BSM audit not available or not enabled: %v", err)
+		return
+	}
+	
+	// Monitor current audit trail
+	auditDir := "/var/audit"
+	if _, err := os.Stat(auditDir); err != nil {
+		log.Printf("[WARNING] Audit directory not accessible: %v", err)
+		return
+	}
+	
+	// Use praudit to read audit records in real-time
+	cmd = exec.Command("sudo", "praudit", "-l")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Printf("[ERROR] Failed to create stdout pipe for praudit: %v", err)
+		return
+	}
+	
+	if err := cmd.Start(); err != nil {
+		log.Printf("[ERROR] Failed to start praudit: %v", err)
+		return
+	}
+	
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			cmd.Process.Kill()
+			return
+		case <-c.StopChan:
+			cmd.Process.Kill()
+			return
+		default:
+			line := scanner.Text()
+			c.parseBSMAuditEntry(line)
+		}
+	}
+}
+
+// parseBSMAuditEntry parses BSM audit entries
+func (c *AuditLogCollector) parseBSMAuditEntry(line string) {
+	entry := AuditLogEntry{
+		Timestamp: time.Now(),
+		Platform:  "darwin",
+		Source:    "bsm_audit",
+		Message:   line,
+		RawData:   line,
+		EventType: "audit",
+	}
+	
+	// Extract process info if available (basic parsing)
+	if strings.Contains(line, "process") {
+		// This is a simplified parser - BSM audit format is complex
+		fields := strings.Fields(line)
+		for i, field := range fields {
+			if field == "process" && i+1 < len(fields) {
+				entry.ProcessInfo = &ProcessInfo{
+					ProcessName: fields[i+1],
+				}
+				break
+			}
+		}
+	}
+	
+	if c.shouldFilterLog(&entry) {
+		return
+	}
+	
+	select {
+	case c.LogChannel <- entry:
+	default:
+		// Channel full, drop the log
+	}
+}
 
 func (c *AuditLogCollector) collectJournalLogs(ctx context.Context) {
 	cmd := exec.Command("journalctl", "-f", "-o", "json", "--since", "now")
