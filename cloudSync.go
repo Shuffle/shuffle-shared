@@ -24,8 +24,12 @@ import (
 	"github.com/go-git/go-billy/v5/memfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
+
 	//"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v5/plumbing/transport"
+	gitHttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/storage/memory"
 
 	uuid "github.com/satori/go.uuid"
@@ -1112,7 +1116,12 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	}
 
 	if len(org.Defaults.WorkflowUploadBranch) == 0 {
-		org.Defaults.WorkflowUploadBranch = "master"
+		// Default to 'main' for Azure DevOps, 'master' for others
+		if strings.Contains(org.Defaults.WorkflowUploadRepo, "dev.azure.com") {
+			org.Defaults.WorkflowUploadBranch = "main"
+		} else {
+			org.Defaults.WorkflowUploadBranch = "master"
+		}
 	}
 
 	if org.Defaults.WorkflowUploadRepo == "" || org.Defaults.WorkflowUploadToken == "" {
@@ -1122,18 +1131,8 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	}
 
 	org.Defaults.WorkflowUploadRepo = strings.TrimSpace(org.Defaults.WorkflowUploadRepo)
-	if strings.HasPrefix(org.Defaults.WorkflowUploadRepo, "https://") {
-		org.Defaults.WorkflowUploadRepo = strings.Replace(org.Defaults.WorkflowUploadRepo, "https://", "", 1)
-		org.Defaults.WorkflowUploadRepo = strings.Replace(org.Defaults.WorkflowUploadRepo, "http://", "", 1)
-	}
 
-	if strings.HasSuffix(org.Defaults.WorkflowUploadRepo, ".git") {
-		org.Defaults.WorkflowUploadRepo = strings.TrimSuffix(org.Defaults.WorkflowUploadRepo, ".git")
-	}
-
-	//log.Printf("[DEBUG] Uploading workflow %s to repo %s for org %s (%s)", workflow.ID, org.Defaults.WorkflowUploadRepo, org.Name, org.Id)
-
-	// Remove images
+	// Remove images from workflow before backup
 	workflow.Image = ""
 	for actionIndex, _ := range workflow.Actions {
 		workflow.Actions[actionIndex].LargeImage = ""
@@ -1155,12 +1154,39 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		return err
 	}
 
-	commitMessage := fmt.Sprintf("User '%s' updated workflow '%s' with status '%s'", workflow.UpdatedBy, workflow.Name, workflow.Status)
-	urlEncodedPassword := url.QueryEscape(org.Defaults.WorkflowUploadToken)
-	location := fmt.Sprintf("https://%s:%s@%s.git", org.Defaults.WorkflowUploadUsername, urlEncodedPassword, org.Defaults.WorkflowUploadRepo)
+	commitMessage := fmt.Sprintf("User '%s' updated workflow '%s' with status '%s' at %s", workflow.UpdatedBy, workflow.Name, workflow.Status, time.Now().Format("2006-01-02 15:04:05"))
+	repoURL := org.Defaults.WorkflowUploadRepo
+	repoURL = strings.TrimPrefix(repoURL, "https://")
+	repoURL = strings.TrimPrefix(repoURL, "http://")
 
-	newRepoName := strings.Replace(strings.Replace(location, org.Defaults.WorkflowUploadToken, "****", -1), urlEncodedPassword, "****", -1)
-	log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, newRepoName)
+	var location string
+	var isAzureDevOps bool
+
+	if strings.Contains(repoURL, "dev.azure.com") {
+		isAzureDevOps = true
+		location = fmt.Sprintf("https://%s", repoURL)
+		log.Printf("[DEBUG] Detected Azure DevOps repository")
+	} else {
+		isAzureDevOps = false
+		// Only append .git if the URL contains github.com
+		if strings.Contains(repoURL, "github.com") && !strings.HasSuffix(repoURL, ".git") {
+			repoURL += ".git"
+		}
+
+		urlEncodedPassword := url.QueryEscape(org.Defaults.WorkflowUploadToken)
+		location = fmt.Sprintf("https://%s:%s@%s", org.Defaults.WorkflowUploadUsername, urlEncodedPassword, repoURL)
+
+	}
+
+	maskedRepo := location
+	if !isAzureDevOps {
+		maskedRepo = strings.ReplaceAll(location, org.Defaults.WorkflowUploadToken, "****")
+		if urlEncodedPassword := url.QueryEscape(org.Defaults.WorkflowUploadToken); urlEncodedPassword != org.Defaults.WorkflowUploadToken {
+			maskedRepo = strings.ReplaceAll(maskedRepo, urlEncodedPassword, "****")
+		}
+	}
+
+	log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, maskedRepo)
 
 	fs := memfs.New()
 	if len(workflow.Status) == 0 {
@@ -1170,65 +1196,94 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	//filePath := fmt.Sprintf("/%s/%s.json", workflow.Status, workflow.ID)
 	filePath := fmt.Sprintf("%s/%s/%s_%s.json", workflow.ExecutingOrg.Id, workflow.Status, strings.ReplaceAll(workflow.Name, " ", "-"), workflow.ID)
 
-	// Specify the file path within the repository
-	repo, err := git.Clone(memory.NewStorage(), fs, &git.CloneOptions{
+	cloneOptions := &git.CloneOptions{
 		URL: location,
-	})
-	if err != nil {
-		newErr := strings.ReplaceAll(err.Error(), org.Defaults.WorkflowUploadToken, "****")
-		newErr = strings.ReplaceAll(newErr, urlEncodedPassword, "****")
+	}
 
-		log.Printf("[ERROR] Error cloning repo '%s' (workflow backup): %s", newRepoName, newErr)
+	// For Azure DevOps, add additional auth configuration and capability handling
+	if isAzureDevOps {
+		transport.UnsupportedCapabilities = []capability.Capability{
+			capability.ThinPack,
+		}
+
+		cloneOptions.Auth = &gitHttp.BasicAuth{
+			Username: org.Defaults.WorkflowUploadUsername, // Use the username for Azure DevOps
+			Password: org.Defaults.WorkflowUploadToken,
+		}
+	}
+
+	repo, err := git.Clone(memory.NewStorage(), fs, cloneOptions)
+	if err != nil {
+		errMsg := err.Error()
+		if isAzureDevOps {
+			log.Printf("[ERROR] Azure DevOps clone failed. Check: 1) PAT has Code(R/W) permissions, 2) Branch '%s' exists, 3) Repo URL is correct", org.Defaults.WorkflowUploadBranch)
+		}
+		log.Printf("[ERROR] Error cloning repo '%s': %s", maskedRepo, strings.ReplaceAll(errMsg, org.Defaults.WorkflowUploadToken, "****"))
 		return err
 	}
 
-	// Initialize a new Git repository in memory
-	w := &git.Worktree{}
-
-	// Create a new commit with the in-memory file
-	w, err = repo.Worktree()
+	w, err := repo.Worktree()
 	if err != nil {
-		newErr := strings.ReplaceAll(err.Error(), org.Defaults.WorkflowUploadToken, "****")
-		newErr = strings.ReplaceAll(newErr, urlEncodedPassword, "****")
-
-		log.Printf("[ERROR] Error getting worktree for repo '%s' (2): %s", newRepoName, newErr)
+		log.Printf("[ERROR] Error getting worktree for repo '%s': %s", maskedRepo, err)
 		return err
 	}
 
 	// Write the byte blob to the in-memory file system
 	file, err := fs.Create(filePath)
 	if err != nil {
-		newErr := strings.ReplaceAll(err.Error(), org.Defaults.WorkflowUploadToken, "****")
-
-		log.Printf("[ERROR] Creating git file: %v", newErr)
+		log.Printf("[ERROR] Creating file in repo '%s': %v", maskedRepo, err)
 		return err
 	}
-
 	defer file.Close()
-	//_, err = io.Copy(file, bytes.NewReader(workflowData))
-	_, err = io.Copy(file, bytes.NewReader(workflowData))
-	if err != nil {
-		log.Printf("[ERROR] Writing data to git file: %v", err)
+
+	if _, err = io.Copy(file, bytes.NewReader(workflowData)); err != nil {
+		log.Printf("[ERROR] Writing data to file: %v", err)
 		return err
 	}
 
-	// Add the file to the staging area
-	_, err = w.Add(filePath)
-	if err != nil {
-		log.Printf("[ERROR] Error adding file to git staging area (2): %s", err)
+	if _, err = w.Add(filePath); err != nil {
+		log.Printf("[ERROR] Adding file to staging area: %s", err)
 		return err
 	}
 
-	// Commit the changes
+	// Check if there are any changes to commit
+	status, err := w.Status()
+	if err != nil {
+		log.Printf("[ERROR] Getting working tree status: %v", err)
+		return err
+	}
+
+	hasChanges := false
+	for _, fileStatus := range status {
+		if fileStatus.Staging != git.Unmodified {
+			hasChanges = true
+			break
+		}
+	}
+
+	if !hasChanges {
+		log.Printf("[INFO] No changes detected for workflow %s (%s). File content is identical to existing version.", workflow.Name, workflow.ID)
+		return nil
+	}
+
+	authorName := org.Defaults.WorkflowUploadUsername
+	if authorName == "" {
+		if isAzureDevOps {
+			authorName = "Workflow Automation"
+		} else {
+			authorName = "Shuffle User"
+		}
+	}
+
 	_, err = w.Commit(commitMessage, &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  org.Defaults.WorkflowUploadUsername,
+			Name:  authorName,
 			Email: "",
 			When:  time.Now(),
 		},
 	})
 	if err != nil {
-		log.Printf("[ERROR] Committing git changes: %v (2)", err)
+		log.Printf("[ERROR] Committing changes: %v", err)
 		return err
 	}
 
@@ -1237,18 +1292,25 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	// Push the changes to a remote repository (replace URL with your repository URL)
 	// fmt.Sprintf("refs/heads/%s:refs/heads/%s", org.Defaults.WorkflowUploadBranch, org.Defaults.WorkflowUploadBranch)},
 	ref := fmt.Sprintf("refs/heads/%s:refs/heads/%s", org.Defaults.WorkflowUploadBranch, org.Defaults.WorkflowUploadBranch)
-	err = repo.Push(&git.PushOptions{
+
+	pushOptions := &git.PushOptions{
 		RemoteName: "origin",
 		RefSpecs:   []config.RefSpec{config.RefSpec(ref)},
-		RemoteURL:  location,
-	})
+	}
+
+	// Set authentication for push operations for both Azure DevOps and GitHub
+	pushOptions.Auth = &gitHttp.BasicAuth{
+		Username: org.Defaults.WorkflowUploadUsername,
+		Password: org.Defaults.WorkflowUploadToken,
+	}
+
+	err = repo.Push(pushOptions)
 	if err != nil {
-		log.Printf("[ERROR] Change git Push issue: %v (2)", err)
+		log.Printf("[ERROR] Git push failed for repo '%s': %v", maskedRepo, err)
 		return err
 	}
 
-	log.Printf("[DEBUG] File uploaded successfully to '%s'!", newRepoName)
-
+	log.Printf("[DEBUG] Workflow successfully uploaded to '%s'!", maskedRepo)
 	return nil
 }
 
