@@ -1104,6 +1104,13 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			// Not a suborg
 			cloudOrg := HandleCheckLicense(ctx, *org)
 			org = &cloudOrg
+		} else if len(org.CreatorOrg) > 0 && project.Environment == "onprem" {
+			parentOrg, err := GetOrg(ctx, org.CreatorOrg)
+			if err == nil && len(parentOrg.Subscriptions) > 0 {
+				licenseOrg := HandleCheckLicense(ctx, *parentOrg)
+				parentOrg = &licenseOrg
+				org.Subscriptions = parentOrg.Subscriptions
+			}
 		}
 
 		if len(org.CreatorOrg) == 0 && project.Environment == "onprem" {
@@ -3070,6 +3077,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	hideEnvs := false
+	parentOrgMain := Org{}
 	if project.Environment == "onprem" {
 		currentOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
 		if err != nil {
@@ -3089,22 +3097,52 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		licenseOrg := HandleCheckLicense(ctx, *parentOrg)
-		if !licenseOrg.SyncFeatures.MultiEnv.Active && int64(len(environments)) > licenseOrg.SyncFeatures.MultiEnv.Limit {
+		parentOrgMain = licenseOrg
+		if int64(len(environments)) > licenseOrg.SyncFeatures.MultiEnv.Limit {
 			hideEnvs = true
 		}
 	}
 
 	newEnvironments := []Environment{}
+	sort.Slice(environments, func(i, j int) bool {
+		return environments[i].Created < environments[j].Created
+	})
+
+	filteredEnvironments := []Environment{}
+	if hideEnvs {
+		defaultEnvs := []Environment{}
+		nonDefaultEnvs := []Environment{}
+		for _, env := range environments {
+			if len(env.Id) == 0 {
+				env.Id = uuid.NewV4().String()
+			}
+
+
+			if env.Default {
+				defaultEnvs = append(defaultEnvs, env)
+			} else {
+				nonDefaultEnvs = append(nonDefaultEnvs, env)
+			}
+		}
+
+		filteredEnvironments = append(filteredEnvironments, defaultEnvs...)
+		limit := int(parentOrgMain.SyncFeatures.MultiEnv.Limit)
+		for i, env := range nonDefaultEnvs {
+			if i < (limit - 1) {
+				filteredEnvironments = append(filteredEnvironments, env)
+			}
+		}
+
+		environments = filteredEnvironments
+	} else {
+		for i := range environments {
+			if len(environments[i].Id) == 0 {
+				environments[i].Id = uuid.NewV4().String()
+			}
+		}
+	}
+
 	for _, environment := range environments {
-		if len(environment.Id) == 0 {
-			environment.Id = uuid.NewV4().String()
-		}
-
-		// For onprem users without a valid license, only display default environments on the frontend.
-		if hideEnvs && !environment.Default {
-			continue
-		}
-
 		found := false
 		for _, oldEnv := range newEnvironments {
 			if oldEnv.Name == environment.Name {
@@ -11784,7 +11822,8 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 			parentOrg.SyncUsage.MultiTenant.Counter = int64(len(childOrgs))
 		}
 
-		isLicensed, _ := checkNoInternet()
+		license := checkNoInternet()
+		isLicensed := license.Valid
 		if !parentOrg.CloudSync && !isLicensed && len(childOrgs) >= 3 {
 			log.Printf("[WARNING] Organization %s has exceeded the free plan limit of 3 sub-organizations. An enterprise license is required to create additional sub-organizations.", parentOrg.Id)
 			resp.WriteHeader(400)
@@ -30758,11 +30797,33 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 		syncFeatures, err := GetCache(ctx, cacheKey)
 		if err != nil {
 			log.Printf("[ERROR] Failed to get cache in HandleCheckLicense: %v", err)
+			org.SyncFeatures.MultiEnv.Active = false
+			org.SyncFeatures.MultiEnv.Limit = 1
+
+			org.SyncFeatures.MultiTenant.Active = false
+			org.SyncFeatures.MultiTenant.Limit = 3
+
+			org.SyncFeatures.Branding.Active = false
+			org.Licensed = false
 			return org
 		}
 		features := SyncFeatures{}
 		if data, ok := syncFeatures.([]byte); ok {
 			if err := json.Unmarshal(data, &features); err == nil {
+				licenseCacheKey := fmt.Sprintf("org_licensed_%s", org.Id)
+				licensed, err := GetCache(ctx, licenseCacheKey)
+				if err != nil {
+					org.Licensed = false
+				} else if data, ok := licensed.([]byte); ok {
+					licenseData := string(data)
+					if licenseData == "true" {
+						org.Licensed = true
+					} else {
+						org.Licensed = false
+					}
+				} else {
+					org.Licensed = false
+				}
 
 				org.SyncFeatures.MultiEnv.Active = features.MultiEnv.Active
 				org.SyncFeatures.MultiEnv.Limit = features.MultiEnv.Limit
@@ -30843,14 +30904,17 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 	} else if len(shuffleLicenseKey) > 0 {
 
-		license, timeout := checkNoInternet()
-		if license == true {
-			org.SyncFeatures.MultiEnv.Limit = 100
-			org.SyncFeatures.MultiEnv.Active = true
+		license := checkNoInternet()
+		if license.Valid == true {
 
-			org.SyncFeatures.MultiTenant.Limit = 1000
-			org.SyncFeatures.MultiTenant.Active = true
-			org.SyncFeatures.Branding.Active = true
+			org.Licensed = true
+
+			org.SyncFeatures.MultiEnv.Limit = license.Environment.Limit
+			org.SyncFeatures.MultiEnv.Active = license.Environment.Active
+
+			org.SyncFeatures.MultiTenant.Limit = license.Tenant.Limit
+			org.SyncFeatures.MultiTenant.Active = license.Tenant.Active
+			org.SyncFeatures.Branding.Active = license.Branding
 
 			org.SyncFeatures.AppExecutions.Active = true
 			org.SyncFeatures.Webhook.Active = true
@@ -30868,6 +30932,15 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.Schedule.Active = true
 			org.SyncFeatures.Apps.Active = true
 			org.SyncFeatures.ShuffleGPT.Active = true
+		} else {
+			org.Licensed = false
+			org.SyncFeatures.MultiEnv.Limit = 1
+			org.SyncFeatures.MultiEnv.Active = false
+
+			org.SyncFeatures.MultiTenant.Limit = 3
+			org.SyncFeatures.MultiTenant.Active = false
+
+			org.SyncFeatures.Branding.Active = false
 		}
 
 		parsedEula := GetOnpremPaidEula()
@@ -30893,8 +30966,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			"Custom Contract",
 		}
 
-		if license {
-			parsedTimeout, err := time.Parse("02-01-2006", timeout)
+		if license.Valid {
+			parsedTimeout, err := time.Parse("02-01-2006", license.Timeout)
 			if err != nil {
 				log.Printf("[ERROR] Failed parsing license timeout: %s", err)
 				parsedTimeout = time.Now()
@@ -30930,6 +31003,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 	} else {
 		log.Printf("[WARNING] Org %v does not have an enterprise license. Please purchase an enterprise license to unlock production-ready features. Contact support@shuffler.io for more information.", org.Id)
+
+		org.Licensed = false
 		org.SyncFeatures.MultiEnv.Limit = 1
 		org.SyncFeatures.MultiEnv.Active = false
 
