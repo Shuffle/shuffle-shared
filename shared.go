@@ -20064,7 +20064,7 @@ func CheckHookAuth(request *http.Request, auth string) error {
 			found := false
 
 			joinedItemValue := strings.Join(lineSplit[1:], "=")
-			log.Printf("[INFO] Checking %s = %s", validationHeader, joinedItemValue)
+			// log.Printf("[INFO] Checking %s = %s", validationHeader, joinedItemValue)
 			for key, value := range request.Header {
 				if strings.ToLower(key) == validationHeader && len(value) > 0 {
 					//log.Printf("FOUND KEY %s. Value: %s", validationHeader, value)
@@ -32702,35 +32702,36 @@ func (c *AuditLogCollector) collectLinuxAuditLogs(ctx context.Context) {
 }
 
 func (c *AuditLogCollector) collectMacOSAuditLogs(ctx context.Context) {
-	// Collect different types of security-relevant logs
-	go c.collectMacOSUnifiedLogs(ctx)
-	go c.collectMacOSAuthLogs(ctx)
-	
-	// BSM audit is optional - only try if explicitly enabled
-	if os.Getenv("SHUFFLE_ENABLE_BSM_AUDIT") == "true" {
-		go c.collectMacOSBSMaudit(ctx)
-	}
+	go c.collectMacOSSecurityLogs(ctx)
 }
 
-// collectMacOSUnifiedLogs uses the macOS unified logging system with a simple approach
-func (c *AuditLogCollector) collectMacOSUnifiedLogs(ctx context.Context) {
-	log.Printf("[INFO] Starting macOS unified log collection")
+// collectMacOSSecurityLogs collects all security-relevant logs with one predicate
+func (c *AuditLogCollector) collectMacOSSecurityLogs(ctx context.Context) {
+	log.Printf("[INFO] Starting macOS security log collection")
 	
-	// Start with a simple log stream that actually works
-	cmd := exec.Command("log", "stream", "--level", "info", "--type", "log")
+	predicate := `(subsystem == "com.apple.opendirectoryd" && category == "auth") ||
+		process == "login" ||
+		process == "sshd" ||
+		process == "sudo" ||
+		process == "su"`
+	
+	cmd := exec.Command("log", "stream", 
+		"--predicate", predicate,
+		"--info", "--debug",
+		"--style", "json")
 	
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("[ERROR] Failed to create stdout pipe for log stream: %v", err)
+		log.Printf("[ERROR] Failed to create stdout pipe for security log stream: %v", err)
 		return
 	}
 	
 	if err := cmd.Start(); err != nil {
-		log.Printf("[ERROR] Failed to start log stream: %v", err)
+		log.Printf("[ERROR] Failed to start security log stream: %v", err)
 		return
 	}
 	
-	log.Printf("[INFO] Successfully started log stream")
+	log.Printf("[INFO] Successfully started security log stream")
 	
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
@@ -32744,23 +32745,29 @@ func (c *AuditLogCollector) collectMacOSUnifiedLogs(ctx context.Context) {
 		default:
 			line := scanner.Text()
 			if line != "" {
-				c.parseSimpleMacOSLogEntry(line)
+				c.parseMacOSLogEntry(line)
 			}
 		}
 	}
 	
 	if err := scanner.Err(); err != nil {
-		log.Printf("[ERROR] Error reading log stream: %v", err)
+		log.Printf("[ERROR] Error reading security log stream: %v", err)
 	}
 }
 
 func (c *AuditLogCollector) parseMacOSLogEntry(line string) {
+	// First, let's see what we're actually getting
+	log.Printf("[DEBUG] Raw log line: %s", line)
+	
 	var logData map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &logData); err != nil {
+		log.Printf("[ERROR] Failed to parse JSON: %v", err)
+		// If JSON parsing fails, treat it as plain text
+		c.parseSimpleMacOSLogEntry(line)
 		return
 	}
 
-	log.Printf("[DEBUG] macOS log entry: %v", logData)
+	log.Printf("[DEBUG] Parsed JSON log entry: %v", logData)
 	
 	entry := AuditLogEntry{
 		Timestamp: time.Now(),
