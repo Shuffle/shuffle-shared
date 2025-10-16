@@ -13491,39 +13491,119 @@ func GetEsConfig(defaultCreds bool) *opensearch.Client {
 	return es
 }
 
-func checkNoInternet() (bool, string) {
+func checkNoInternet() OnpremLicense {
+
+	license := OnpremLicense{}
 	licenseKey := os.Getenv("SHUFFLE_LICENSE")
 	if len(licenseKey) == 0 {
-		return false, ""
+		return license
 	}
 
-	// Month + Year -> when it runs out
-	sum := sha256.Sum256([]byte(licenseKey))
-	encodedString := hex.EncodeToString(sum[:]) 
+	if len(licenseKey) < 32 {
+		log.Printf("[ERROR] License key is too short")
+		return license
+	}
+
+	// Split the license key into chunks of 32 characters
+	licenseParts := []string{}
+	for i := 0; i < len(licenseKey); i += 32 {
+		end := i + 32
+
+		if end > len(licenseKey) {
+			end = len(licenseKey)
+		}
+		licenseParts = append(licenseParts, licenseKey[i:end])
+	}
+
+	licenseKeyPart := licenseParts[0]
+	sum := sha256.Sum256([]byte(licenseKeyPart))
+	encodedString := hex.EncodeToString(sum[:])
+
+	tenantKey := ""
+	if len(licenseParts) > 1 {
+		tenantKey = licenseParts[1]
+	}
+
+	tenantHash := sha256.Sum256([]byte(tenantKey))
+	encodedTenant := hex.EncodeToString(tenantHash[:])
+	environmentKey := ""
+	if len(licenseParts) > 2 {
+		environmentKey = licenseParts[2]
+	}
+
+	environmentHash := sha256.Sum256([]byte(environmentKey))
+	encodedEnvironment := hex.EncodeToString(environmentHash[:])
+
+	branding := ""
+	if len(licenseParts) > 3 {
+		branding = licenseParts[3]
+	}
+
+	brandingHash := sha256.Sum256([]byte(branding))
+	encodedBranding := hex.EncodeToString(brandingHash[:])
 
 	// Returns a map[sha256]timeout string
-	onpremKeys := GetOnpremKeys() 
+	onpremKeys := GetOnpremKeys()
 	if timeout, ok := onpremKeys[encodedString]; ok {
-		// Check if current time is MORE than the encoded timeout. The timeout format 
+		// Check if current time is MORE than the encoded timeout. The timeout format
 		parsedTimeout, err := time.Parse("02-01-2006", timeout)
 		if err != nil {
 			log.Printf("[ERROR] Failed parsing license timeout: %s", err)
 		} else {
 			if time.Now().Before(parsedTimeout) {
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG] License key is valid")
 				}
 
-				return true, timeout
+				license.Valid = true
+				license.Timeout = timeout
+
+				if len(tenantKey) > 0 && len(encodedTenant) > 0 {
+					amount := GetTenantAmount(encodedTenant)
+					license.Tenant.Limit = int64(amount)
+					if amount > 3 {
+						license.Tenant.Active = true
+					} else {
+						license.Tenant.Active = false
+					}
+				} else {
+					license.Tenant.Limit = 3
+					license.Tenant.Active = false
+				}
+
+				//check env limit
+				if len(environmentKey) > 0 && len(encodedEnvironment) > 0 {
+					amount := GetRuntimeLocationAmount(encodedEnvironment)
+					license.Environment.Limit = int64(amount)
+					if amount > 1 {
+						license.Environment.Active = true
+					} else {
+						license.Environment.Active = false
+					}
+
+				} else {
+					license.Environment.Limit = 1
+					license.Environment.Active = false
+				}
+
+				//check branding enable
+				if len(branding) > 0 && len(encodedBranding) > 0 {
+					branding := GetBrandingAvailable(encodedBranding)
+					license.Branding = branding
+				} else {
+					license.Branding = false
+				}
+
+				return license
 			} else {
 				log.Printf("[ERROR] License key has expired on %s", timeout)
-				return false, timeout
+				return license
 			}
 		}
-	}  
+	}
 
 	log.Printf("[ERROR] No valid license key found based SHUFFLE_LICENSE %s", licenseKey)
-	return false, ""
+	return license
 }
 
 func UploadAppSpecFiles(ctx context.Context, client *storage.Client, api WorkflowApp, parsed ParsedOpenApi) (WorkflowApp, error) {

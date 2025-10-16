@@ -146,6 +146,7 @@ type RetStruct struct {
 	SessionKey      string                `json:"session_key"`
 	IntervalSeconds int64                 `json:"interval_seconds"`
 	Subscriptions   []PaymentSubscription `json:"subscriptions,omitempty"`
+	Licensed        bool                  `json:"licensed"`
 }
 
 type AppMini struct {
@@ -996,6 +997,19 @@ type UsecaseInfo struct {
 	Created int64 `datastore:"created" json:"created"`
 }
 
+type OnpremLimits struct {
+	Limit  int64 `json:"limit" datastore:"limit"`
+	Active bool  `json:"active" datastore:"active"`
+}
+
+type OnpremLicense struct {
+	Valid       bool         `json:"valid" datastore:"valid"`
+	Tenant      OnpremLimits `json:"tenant" datastore:"tenant"`
+	Environment OnpremLimits `json:"environment" datastore:"environment"`
+	Timeout     string       `json:"timeout" datastore:"timeout"`
+	Branding    bool         `json:"branding" datastore:"branding"`
+}
+
 type Org struct {
 	Name            string       `json:"name" datastore:"name"`
 	Description     string       `json:"description" datastore:"description"`
@@ -1045,6 +1059,7 @@ type Org struct {
 	Billing      Billing     `json:"Billing" datastore:"Billing"`
 	CreatorOrg   string      `json:"creator_org" datastore:"creator_org"`
 	Branding     OrgBranding `json:"branding" datastore:"branding"`
+	Licensed     bool        `json:"licensed" datastore:"licensed"` //Track onprem license
 }
 
 type Billing struct {
