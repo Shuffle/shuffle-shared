@@ -247,6 +247,77 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
+
+		baseUrl := ""
+		if len(os.Getenv("BASE_URL")) > 0 {
+			baseUrl = os.Getenv("BASE_URL")
+		} 
+
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		}
+
+
+		// } else if parsedActiontype == "ingest_tickets_webhook" {
+		// Force starting pipelines if possible as well
+		environments, err := GetEnvironments(ctx, orgId)
+		if err == nil && len(baseUrl) > 0 {
+			foundEnv := ""
+			for _, env := range environments {
+				if env.Archived {
+					continue
+				}
+
+				if strings.ToLower(env.Type) == "cloud" {
+					continue
+				}
+
+				foundEnv = env.Name
+				if env.DataLake.Enabled {
+					break
+				}
+			}
+
+			if len(foundEnv) > 0 { 
+				commands := []string{
+					"load_tcp \"0.0.0.0:1514\" { read_syslog } | import",
+					fmt.Sprintf("export live=true | sigma \"/tmp/sigma_rules\" | to \"%s/api/v1/hooks/webhook_%s\"", baseUrl, startTriggerId),
+				}
+
+				for _, command := range commands { 
+					pipeline := &Pipeline{
+						ID: uuid.NewV4().String(),
+						Name: command,
+						Type: "START",
+						OrgId: orgId,
+						Command: command,
+						Environment: foundEnv,
+					}
+
+					pipeline.PipelineId = pipeline.ID
+					formattedType := fmt.Sprintf("PIPELINE_START")
+					execRequest := ExecutionRequest{
+						Type:              formattedType,
+						ExecutionId:       pipeline.ID,
+						ExecutionSource:   pipeline.Name,
+						ExecutionArgument: pipeline.Command,
+						Priority:          11,
+					}
+
+					parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), orgId)
+					if project.Environment != "cloud" {
+						parsedEnv = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-"))
+					}
+
+					log.Printf("[INFO] Starting pipeline '%s' in env '%s'", command, parsedEnv)
+					err = SetWorkflowQueue(ctx, execRequest, parsedEnv)
+					if err != nil {
+						log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+					}
+				}
+			}
+		}
+
 	} else if parsedActiontype == "threatlist_monitor" {
 		secondActionId := uuid.NewV4().String()
 
@@ -950,7 +1021,6 @@ func GetWorkflowRunAmount(key string) int {
 	}
 
 	amounts := map[string]int{
-		"b7ed808ef4477addf587965c7e60262d4456579dd02df0659a882c43fcdd01de": 10000,
 		"9e1c2cbeb6dec36cadb8a2143e1d120ce26af8baa38dcbd6900c2772cfa09314": 20000,
 		"8d3cfee6e227dfa78895c1aaa752c43eed5cb964e68b0f03f198d8debab2f34d": 30000,
 		"797dcc02455ec959f777987ae3cbd90f9c6ff289d1a20a363b7be83f0e66a72b": 40000,

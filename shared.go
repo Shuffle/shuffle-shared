@@ -18281,8 +18281,19 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 			//if len(string(body)) < 500 {
 			//	log.Printf("%s",
 			//}
+
+			parsedResult := ResultChecker{
+				Success: false,
+				Reason:  fmt.Sprintf("Issue in JSON/YAML: %s", err),
+			}
+
 			resp.WriteHeader(422)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi to json and yaml. Is version defined?: %s"}`, err)))
+			marshalledResult, err := json.Marshal(parsedResult)
+			if err == nil {
+				resp.Write(marshalledResult)
+			} else {
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi to json and yaml. Is version defined?: %s"}`, err)))
+			}
 			return
 		} else {
 			log.Printf("[INFO] Successfully parsed YAML (3)!")
