@@ -4719,3 +4719,53 @@ type AIConfig struct {
 	Model     string `json:"model" datastore:"model"`
 	Status    string `json:"status" datastore:"status"`
 }
+
+// EDR and Audit Log Monitoring Structs
+type AuditLogEntry struct {
+	Timestamp   time.Time              `json:"timestamp"`
+	EventID     string                 `json:"event_id"`
+	EventType   string                 `json:"event_type"`
+	Source      string                 `json:"source"`
+	Level       string                 `json:"level"`
+	ProcessInfo *ProcessInfo           `json:"process_info,omitempty"`
+	UserInfo    *UserInfo              `json:"user_info,omitempty"`
+	Message     string                 `json:"message"`
+	RawData     string                 `json:"raw_data,omitempty"`
+	Platform    string                 `json:"platform"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+}
+
+type ProcessInfo struct {
+	PID         int    `json:"pid"`
+	ProcessName string `json:"process_name"`
+	CommandLine string `json:"command_line,omitempty"`
+	ParentPID   int    `json:"parent_pid,omitempty"`
+}
+
+type UserInfo struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	Groups   []string `json:"groups,omitempty"`
+}
+
+type TelemetryConfig struct {
+	Enabled       bool              `json:"enabled"`
+	Modes         []string          `json:"modes"`
+	BufferSize    int               `json:"buffer_size"`
+	FlushInterval time.Duration     `json:"flush_interval"`
+	Filters       []TelemetryFilter `json:"filters,omitempty"`
+}
+
+type TelemetryFilter struct {
+	Type     string   `json:"type"`
+	Include  []string `json:"include,omitempty"`
+	Exclude  []string `json:"exclude,omitempty"`
+}
+
+type AuditLogCollector struct {
+	Config     TelemetryConfig
+	Platform   string
+	LogChannel chan AuditLogEntry
+	StopChan   chan bool
+	mu         sync.Mutex
+}
