@@ -20041,11 +20041,13 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	type returnStruct struct {
-		Success bool `json:"success"`
+		Success     bool               `json:"success"`
+		KeysExisted []DatastoreKeyMini `json:"keys_existed"`
 	}
 
 	returnData := returnStruct{
-		Success: true,
+		Success:     true,
+		KeysExisted: existed,
 	}
 
 	b, err := json.Marshal(returnData)
