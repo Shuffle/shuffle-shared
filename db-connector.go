@@ -12414,52 +12414,6 @@ func SetDatastoreCategoryConfig(ctx context.Context, category DatastoreCategoryU
 	return nil
 }
 
-func UpdateDetectionStats(ctx context.Context, cacheData CacheKeyData) {
-	if len(cacheData.Category) == 0 || cacheData.Category == "default" {
-		return
-	}
-
-	if len(cacheData.OrgId) == 0 {
-		return
-	}
-
-	// Handle Detection
-	category := strings.ToLower(cacheData.Category)
-	if category != "ticket" && category != "detection" && category != "tickets" && category != "detections" {
-		if debug {
-			log.Printf("[WARNING] Debug: Not a detection or ticket category, skipping detection stats update for category '%s'", category)
-		}
-
-		return
-	}
-
-	// Should we verify the data here?
-	// Look for whether "rule" is set.
-	mappedContent := map[string]interface{}{}
-	err := json.Unmarshal([]byte(cacheData.Value), &mappedContent)
-	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling detection content for stats update: %s", err)
-	}
-
-	if mappedContent["rule"] == nil {
-		log.Printf("[WARNING] No rule found in detection content, skipping stats update")
-		return
-	}
-
-	ruleName := fmt.Sprintf("%v", mappedContent["rule"])
-	if len(ruleName) == 0 {
-		log.Printf("[WARNING] No rule name found in detection content, skipping stats update")
-		return
-	}
-
-	detectionStatname := fmt.Sprintf("detection_rule_%s", strings.TrimSpace(strings.ToLower(strings.ReplaceAll(ruleName, " ", "_"))))
-	IncrementCache(ctx, cacheData.OrgId, detectionStatname, 1)
-	if debug {
-		log.Printf("[DEBUG] Incremented detection stat '%s' for org %s", detectionStatname, cacheData.OrgId)
-	}
-
-}
-
 // Used for cache for individual organizations
 // Tracks key by key, and scales pretty well :3
 func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]DatastoreKeyMini, error) {

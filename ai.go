@@ -7156,6 +7156,14 @@ FINALISING:
 			}
 		}
 
+		missingStartupAuth := false
+		if strings.Contains(decisionString, "InvalidURL") || strings.Contains(decisionString, "http:///v1") {
+			errorMessage = "No authentication method was found for your LLM. Please add authentication and try again."
+			missingStartupAuth = true
+		}
+
+		_ = missingStartupAuth
+
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 			Role: "assistant",
 			Content: string(bodyString),
@@ -7182,6 +7190,10 @@ FINALISING:
 			StartedAt: time.Now().Unix(),
 
 			Memory: memorizationEngine,
+		}
+
+		if len(errorMessage) > 0 {
+			agentOutput.Output = errorMessage
 		}
 
 		if createNextActions == true {
