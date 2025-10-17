@@ -413,6 +413,7 @@ type ExecutionInfo struct {
 	TotalCloudExecutions            int64 `json:"total_cloud_executions" datastore:"total_cloud_executions"`
 	TotalOnpremExecutions           int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
 	TotalAIUsage                    int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
+	TotalChildWorkflowExecutions    int64 `json:"total_child_workflow_executions" datastore:"total_child_workflow_executions"`
 
 	MonthlyApiUsage                   int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
 	MonthlyChildAppExecutions         int64 `json:"monthly_child_app_executions,omitempty" datastore:"monthly_child_app_executions"`
@@ -420,6 +421,7 @@ type ExecutionInfo struct {
 	MonthlyAppExecutionsFailed        int64 `json:"monthly_app_executions_failed,omitempty" datastore:"monthly_app_executions_failed"`
 	MonthlySubflowExecutions          int64 `json:"monthly_subflow_executions,omitempty" datastore:"monthly_subflow_executions"`
 	MonthlyWorkflowExecutions         int64 `json:"monthly_workflow_executions,omitempty" datastore:"monthly_workflow_executions"`
+	MonthlyChildWorkflowExecutions    int64 `json:"monthly_child_workflow_executions,omitempty" datastore:"monthly_child_workflow_executions"`
 	MonthlyWorkflowExecutionsFinished int64 `json:"monthly_workflow_executions_finished,omitempty" datastore:"monthly_workflow_executions_finished"`
 	MonthlyWorkflowExecutionsFailed   int64 `json:"monthly_workflow_executions_failed,omitempty" datastore:"monthly_workflow_executions_failed"`
 	MonthlyOrgSyncActions             int64 `json:"monthly_org_sync_actions,omitempty" datastore:"monthly_org_sync_actions"`
@@ -432,6 +434,7 @@ type ExecutionInfo struct {
 	WeeklyAppExecutionsFailed        int64 `json:"weekly_app_executions_failed,omitempty" datastore:"weekly_app_executions_failed"`
 	WeeklySubflowExecutions          int64 `json:"weekly_subflow_executions,omitempty" datastore:"weekly_subflow_executions"`
 	WeeklyWorkflowExecutions         int64 `json:"weekly_workflow_executions,omitempty" datastore:"weekly_workflow_executions"`
+	WeeklyChildWorkflowExecutions    int64 `json:"weekly_child_workflow_executions,omitempty" datastore:"weekly_child_workflow_executions"`
 	WeeklyWorkflowExecutionsFinished int64 `json:"weekly_workflow_executions_finished,omitempty" datastore:"weekly_workflow_executions_finished"`
 	WeeklyWorkflowExecutionsFailed   int64 `json:"weekly_workflow_executions_failed,omitempty" datastore:"weekly_workflow_executions_failed"`
 	WeeklyOrgSyncActions             int64 `json:"weekly_org_sync_actions,omitempty" datastore:"weekly_org_sync_actions"`
@@ -444,6 +447,7 @@ type ExecutionInfo struct {
 	DailyAppExecutionsFailed        int64 `json:"daily_app_executions_failed" datastore:"daily_app_executions_failed"`
 	DailySubflowExecutions          int64 `json:"daily_subflow_executions" datastore:"daily_subflow_executions"`
 	DailyWorkflowExecutions         int64 `json:"daily_workflow_executions" datastore:"daily_workflow_executions"`
+	DailyChildWorkflowExecutions    int64 `json:"daily_child_workflow_executions" datastore:"daily_child_workflow_executions"`
 	DailyWorkflowExecutionsFinished int64 `json:"daily_workflow_executions_finished" datastore:"daily_workflow_executions_finished"`
 	DailyWorkflowExecutionsFailed   int64 `json:"daily_workflow_executions_failed" datastore:"daily_workflow_executions_failed"`
 	DailyOrgSyncActions             int64 `json:"daily_org_sync_actions" datastore:"daily_org_sync_actions"`
@@ -456,6 +460,7 @@ type ExecutionInfo struct {
 	HourlyAppExecutionsFailed        int64 `json:"hourly_app_executions_failed,omitempty" datastore:"hourly_app_executions_failed"`
 	HourlySubflowExecutions          int64 `json:"hourly_subflow_executions,omitempty" datastore:"hourly_subflow_executions"`
 	HourlyWorkflowExecutions         int64 `json:"hourly_workflow_executions,omitempty" datastore:"hourly_workflow_executions"`
+	HourlyChildWorkflowExecutions    int64 `json:"hourly_child_workflow_executions,omitempty" datastore:"hourly_child_workflow_executions"`
 	HourlyWorkflowExecutionsFinished int64 `json:"hourly_workflow_executions_finished,omitempty" datastore:"hourly_workflow_executions_finished"`
 	HourlyWorkflowExecutionsFailed   int64 `json:"hourly_workflow_executions_failed,omitempty" datastore:"hourly_workflow_executions_failed"`
 	HourlyOrgSyncActions             int64 `json:"hourly_org_sync_actions,omitempty" datastore:"hourly_org_sync_actions"`
@@ -1003,11 +1008,12 @@ type OnpremLimits struct {
 }
 
 type OnpremLicense struct {
-	Valid       bool         `json:"valid" datastore:"valid"`
-	Tenant      OnpremLimits `json:"tenant" datastore:"tenant"`
-	Environment OnpremLimits `json:"environment" datastore:"environment"`
-	Timeout     string       `json:"timeout" datastore:"timeout"`
-	Branding    bool         `json:"branding" datastore:"branding"`
+	Valid              bool         `json:"valid" datastore:"valid"`
+	Tenant             OnpremLimits `json:"tenant" datastore:"tenant"`
+	Environment        OnpremLimits `json:"environment" datastore:"environment"`
+	WorkflowExecutions OnpremLimits `json:"workflow_executions" datastore:"workflow_executions"`
+	Timeout            string       `json:"timeout" datastore:"timeout"`
+	Branding           bool         `json:"branding" datastore:"branding"`
 }
 
 type Org struct {
