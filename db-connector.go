@@ -13493,7 +13493,23 @@ func GetEsConfig(defaultCreds bool) *opensearch.Client {
 
 func checkNoInternet() OnpremLicense {
 
-	license := OnpremLicense{}
+	license := OnpremLicense{
+		Valid: false,
+		Tenant: OnpremLimits{
+			Active: false,
+			Limit:  3,
+		},
+		Environment: OnpremLimits{
+			Active: false,
+			Limit:  1,
+		},
+		WorkflowExecutions: OnpremLimits{
+			Active: false,
+			Limit:  10000,
+		},
+		Timeout:  "",
+		Branding: false,
+	}
 	licenseKey := os.Getenv("SHUFFLE_LICENSE")
 	if len(licenseKey) == 0 {
 		return license
@@ -13519,29 +13535,36 @@ func checkNoInternet() OnpremLicense {
 	sum := sha256.Sum256([]byte(licenseKeyPart))
 	encodedString := hex.EncodeToString(sum[:])
 
-	tenantKey := ""
+	workflowLimitKey := ""
 	if len(licenseParts) > 1 {
-		tenantKey = licenseParts[1]
+		workflowLimitKey = licenseParts[1]
+	}
+
+	workflowLimitHash := sha256.Sum256([]byte(workflowLimitKey))
+	encodedWorkflowLimit := hex.EncodeToString(workflowLimitHash[:])
+
+	tenantKey := ""
+	if len(licenseParts) > 2 {
+		tenantKey = licenseParts[2]
 	}
 
 	tenantHash := sha256.Sum256([]byte(tenantKey))
 	encodedTenant := hex.EncodeToString(tenantHash[:])
 	environmentKey := ""
-	if len(licenseParts) > 2 {
-		environmentKey = licenseParts[2]
+	if len(licenseParts) > 3 {
+		environmentKey = licenseParts[3]
 	}
 
 	environmentHash := sha256.Sum256([]byte(environmentKey))
 	encodedEnvironment := hex.EncodeToString(environmentHash[:])
 
 	branding := ""
-	if len(licenseParts) > 3 {
-		branding = licenseParts[3]
+	if len(licenseParts) > 4 {
+		branding = licenseParts[4]
 	}
 
 	brandingHash := sha256.Sum256([]byte(branding))
 	encodedBranding := hex.EncodeToString(brandingHash[:])
-
 	// Returns a map[sha256]timeout string
 	onpremKeys := GetOnpremKeys()
 	if timeout, ok := onpremKeys[encodedString]; ok {
@@ -13592,6 +13615,17 @@ func checkNoInternet() OnpremLicense {
 					license.Branding = branding
 				} else {
 					license.Branding = false
+				}
+
+				//check workflow limit
+				if len(workflowLimitKey) > 0 && len(encodedWorkflowLimit) > 0 {
+					amount := GetWorkflowRunAmount(encodedWorkflowLimit)
+					license.WorkflowExecutions.Limit = int64(amount)
+					if amount > 10000 {
+						license.WorkflowExecutions.Active = true
+					} else {
+						license.WorkflowExecutions.Active = false
+					}
 				}
 
 				return license
