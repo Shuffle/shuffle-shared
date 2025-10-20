@@ -607,7 +607,9 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 			return err
 		}
 
-		log.Printf("[INFO] Final string size of execution is: %d", len(executionData))
+		if debug { 
+			log.Printf("[DEBUG] Final string size of execution is: %d", len(executionData))
+		}
 
 		err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
 		if err != nil {
@@ -9849,6 +9851,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
+
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get notifications): %s", err)
 			return notifications, err
@@ -9859,7 +9862,6 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			return notifications, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -9875,14 +9877,18 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			}
 		}
 
-		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return notifications, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
-
-		}
-
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return notifications, err
+		}
+
+		if res.StatusCode == 400 {
+			log.Printf("[WARNING] Bad request when getting notifications: %s. Is the index initialised?", respBody)
+			return notifications, nil
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return notifications, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
 		wrapped := NotificationSearchWrapper{}
@@ -12214,8 +12220,13 @@ func GetDatastoreCategories(ctx context.Context, orgId string) ([]DatastoreCateg
 
 		defer res.Body.Close()
 		if res.IsError() {
-			log.Printf("[WARNING] Failed datastore category query: %s", res.String())
-			return categories, errors.New(res.String())
+			if strings.Contains(res.String(), "index_not_found_exception") {
+			} else {
+				log.Printf("[WARNING] Failed datastore category query: %s", res.String())
+				return categories, errors.New(res.String())
+			}
+
+			return categories, nil
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
@@ -12877,6 +12888,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 	}
 
+	if len(mainCategory) == 0 {
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", nameKey, "", orgId))
+	}
 
 	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, "", orgId, mainCategory)
 	DeleteCache(ctx, cacheKey)
@@ -13493,7 +13507,23 @@ func GetEsConfig(defaultCreds bool) *opensearch.Client {
 
 func checkNoInternet() OnpremLicense {
 
-	license := OnpremLicense{}
+	license := OnpremLicense{
+		Valid: false,
+		Tenant: OnpremLimits{
+			Active: false,
+			Limit:  3,
+		},
+		Environment: OnpremLimits{
+			Active: false,
+			Limit:  1,
+		},
+		WorkflowExecutions: OnpremLimits{
+			Active: false,
+			Limit:  10000,
+		},
+		Timeout:  "",
+		Branding: false,
+	}
 	licenseKey := os.Getenv("SHUFFLE_LICENSE")
 	if len(licenseKey) == 0 {
 		return license
@@ -13519,29 +13549,36 @@ func checkNoInternet() OnpremLicense {
 	sum := sha256.Sum256([]byte(licenseKeyPart))
 	encodedString := hex.EncodeToString(sum[:])
 
-	tenantKey := ""
+	workflowLimitKey := ""
 	if len(licenseParts) > 1 {
-		tenantKey = licenseParts[1]
+		workflowLimitKey = licenseParts[1]
+	}
+
+	workflowLimitHash := sha256.Sum256([]byte(workflowLimitKey))
+	encodedWorkflowLimit := hex.EncodeToString(workflowLimitHash[:])
+
+	tenantKey := ""
+	if len(licenseParts) > 2 {
+		tenantKey = licenseParts[2]
 	}
 
 	tenantHash := sha256.Sum256([]byte(tenantKey))
 	encodedTenant := hex.EncodeToString(tenantHash[:])
 	environmentKey := ""
-	if len(licenseParts) > 2 {
-		environmentKey = licenseParts[2]
+	if len(licenseParts) > 3 {
+		environmentKey = licenseParts[3]
 	}
 
 	environmentHash := sha256.Sum256([]byte(environmentKey))
 	encodedEnvironment := hex.EncodeToString(environmentHash[:])
 
 	branding := ""
-	if len(licenseParts) > 3 {
-		branding = licenseParts[3]
+	if len(licenseParts) > 4 {
+		branding = licenseParts[4]
 	}
 
 	brandingHash := sha256.Sum256([]byte(branding))
 	encodedBranding := hex.EncodeToString(brandingHash[:])
-
 	// Returns a map[sha256]timeout string
 	onpremKeys := GetOnpremKeys()
 	if timeout, ok := onpremKeys[encodedString]; ok {
@@ -13592,6 +13629,17 @@ func checkNoInternet() OnpremLicense {
 					license.Branding = branding
 				} else {
 					license.Branding = false
+				}
+
+				//check workflow limit
+				if len(workflowLimitKey) > 0 && len(encodedWorkflowLimit) > 0 {
+					amount := GetWorkflowRunAmount(encodedWorkflowLimit)
+					license.WorkflowExecutions.Limit = int64(amount)
+					if amount > 10000 {
+						license.WorkflowExecutions.Active = true
+					} else {
+						license.WorkflowExecutions.Active = false
+					}
 				}
 
 				return license
@@ -13985,7 +14033,7 @@ func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, 
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"size": 100000,
+			"size": 10000,
 			"sort": map[string]interface{}{
 				"edited": map[string]interface{}{
 					"order": "desc",
@@ -14047,7 +14095,7 @@ func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, 
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
 			if debug { 
-				log.Printf("[DEBUG] Body of cache key count is bad (1). Status: %d. This is fixed by adding an item.", res.StatusCode)
+				log.Printf("[DEBUG] Body of cache key count is bad (1). Status: %d. This is fixed by adding an item. Body: %s", res.StatusCode, string(respBody))
 			}
 
 			if res.StatusCode == 404 {
@@ -14113,6 +14161,10 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for appstats: %s", err)
 		}
+	}
+
+	if max > 10000 {
+		max = 10000
 	}
 
 	// Look for
@@ -14182,12 +14234,13 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
 			if debug { 
-				log.Printf("[DEBUG] Body of cachekeys is bad (2). Status: %d. This is fixed by adding an item.", res.StatusCode)
+				//log.Printf("[DEBUG] Body of cachekeys is bad (2). Status: %d. This is fixed by adding an item.", res.StatusCode)
 			}
 
 			if res.StatusCode == 404 {
 				return cacheKeys, "", nil
 			}
+
 			return cacheKeys, "", errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
@@ -14198,12 +14251,28 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		}
 
 		newCacheKeys := []CacheKeyData{}
+		deletedKeys := 0
 		for _, hit := range wrapped.Hits.Hits {
+			// Handles a bug from 2.1.0 where keys didn't get assigned properly
+			if len(hit.ID) == 20 {
+				err = DeleteKey(context.Background(), nameKey, hit.ID)
+				if err != nil {
+					log.Printf("[ERROR] Failed deleting bad datastore key %s: %s", hit.ID, err)
+				}
+
+				deletedKeys += 1
+				continue
+			}
+
 			if hit.Source.OrgId != orgId {
 				continue
 			}
 
 			newCacheKeys = append(newCacheKeys, hit.Source)
+		}
+
+		if deletedKeys > 0 {
+			log.Printf("[WARNING] Removed %d bad datastore key(s) for org %s. This is an autofix for issues from 2.1.0.", deletedKeys, orgId)
 		}
 
 		//log.Printf("[INFO] Got %d cachekeys for org %s (es)", len(newCacheKeys), orgId)
@@ -16219,6 +16288,8 @@ func InitOpensearchIndexes() {
 		GetESIndexPrefix("org_cache_revisions"),
 		GetESIndexPrefix("notifications"),
 		GetESIndexPrefix("shuffle_logs"),
+		GetESIndexPrefix("environments"),
+		GetESIndexPrefix("notifications"),
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")
