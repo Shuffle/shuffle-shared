@@ -8,7 +8,6 @@ import (
 	"time"
 	"bytes"
 	"errors"
-	"regexp"
 	"strings"
 	"context"
 	"net/url"
@@ -19,6 +18,7 @@ import (
 	"encoding/json"
 
 	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
+	"github.com/frikky/schemaless"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
@@ -2122,12 +2122,34 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	// Allows for reruns and self-correcting
 	client := GetExternalClient(url)
 	client.Timeout = 300 * time.Second
-	parsedFields := TranslateBadFieldFormats(decision.Fields)
+
+	newFields := []schemaless.Valuereplace{}
+	for _, field := range decision.Fields {
+		newFields = append(newFields, schemaless.Valuereplace{
+			Key:   field.Key,
+			Value: field.Value,
+
+			Answer:      field.Answer,
+		})
+	}
+
+	parsedFields := schemaless.TranslateBadFieldFormats(newFields)
+
+	oldFields := []Valuereplace{}
+	for _, field := range parsedFields {
+		oldFields = append(oldFields, Valuereplace{
+			Key:   field.Key,
+			Value: field.Value,
+
+			Answer:      field.Answer,
+		})
+	}
+
 	parsedAction := CategoryAction{
 		AppName: decision.Tool,
 		Label:   decision.Action,
 
-		Fields: parsedFields,
+		Fields: oldFields,
 
 		SkipWorkflow: true,
 	}
@@ -2449,86 +2471,6 @@ func HandleCloudSyncAuthentication(resp http.ResponseWriter, request *http.Reque
 	}
 
 	return SyncKey{}, errors.New("Missing authentication")
-}
-
-// Fixes potential decision return or reference problems:
-// {{list_tickets}} -> $list_tickets
-// {{list_tickets[0].description}} -> $list_tickets.#0.description
-// {{ticket.description}} -> $ticket.description
-func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
-	for fieldIndex, _ := range fields {
-		field := fields[fieldIndex]
-		if !strings.Contains(field.Value, "{{") || !strings.Contains(field.Value, "}}") {
-			continue
-		}
-
-		// Used for testing
-		//field.Value = strings.ReplaceAll(field.Value, `{{list_tickets[0].summary}}`, `{{ list_tickets[].summary }}`)
-
-		// Regex match {{list_tickets[0].description}} and {{ list_tickets[].description }} and {{ list_tickets[:] }}
-		//re := regexp.MustCompile(`{{\s*([a-zA-Z0-9_]+)(\[[0-9]+\])?(\.[a-zA-Z0-9_]+)?\s*}}`)
-		re := regexp.MustCompile(`{{\s*([a-zA-Z0-9_]+)(\[[0-9]*\])?(\.[a-zA-Z0-9_]+)?\s*}}`)
-		matches := re.FindAllStringSubmatch(field.Value, -1)
-		if len(matches) == 0 {
-			continue
-		}
-
-		stringBuild := "$"
-		for _, match := range matches {
-
-			for i, matchValue := range match {
-				if i == 0 {
-					continue
-				}
-
-				if i != 1 {
-					if len(matchValue) > 0 && !strings.HasPrefix(matchValue, ".") {
-						stringBuild += "."
-					}
-				}
-
-				if strings.HasPrefix(matchValue, "[") && strings.HasSuffix(matchValue, "]") {
-					// Find the formats:
-					// [] -> #
-					// [:] -> #
-					// [0] -> #0
-					// [0:1] -> #0-1
-					// [0:] -> #0-max
-					if matchValue == "[]" || matchValue == "[:]" {
-						stringBuild += "#"
-					} else if strings.Contains(matchValue, ":") {
-						parts := strings.Split(matchValue, ":")
-						if len(parts) == 2 {
-							stringBuild += fmt.Sprintf("#%s-%s", parts[0], parts[1])
-						} else {
-							stringBuild += fmt.Sprintf("#%s-max", parts[0])
-						}
-
-						stringBuild += fmt.Sprintf("#%s", matchValue)
-					} else {
-						// Remove the brackets
-						matchValue = strings.ReplaceAll(matchValue, "[", "")
-						matchValue = strings.ReplaceAll(matchValue, "]", "")
-						stringBuild += fmt.Sprintf("#%s", matchValue)
-					}
-
-					continue
-				}
-
-				stringBuild += matchValue
-			}
-
-			if len(match) > 1 {
-				field.Value = strings.ReplaceAll(field.Value, match[0], stringBuild)
-				fields[fieldIndex].Value = field.Value
-				//log.Printf("VALUE: %#v", field.Value)
-			}
-
-			stringBuild = "$"
-		}
-	}
-
-	return fields
 }
 
 func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http.ResponseWriter, env *Environment) error {

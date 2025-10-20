@@ -378,7 +378,9 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[INFO] Should get stats for key %s for the last %d days", statsKey, statDays)
+	if debug { 
+		log.Printf("[DEBUG] Should get stats for key %s for the last %d days", statsKey, statDays)
+	}
 
 	totalEntires := 0
 	totalValue := 0
@@ -678,9 +680,10 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(statsKey) > 0 {
-		log.Printf("[INFO] Should get stats for key %s", statsKey)
-	}
+	_ = statsKey
+	//if len(statsKey) > 0 {
+	//	log.Printf("[INFO] Should get stats for key %s", statsKey)
+	//}
 
 	if len(info.DailyStatistics) > 0 {
 		// Sort the array
@@ -806,6 +809,14 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
 			if len(managerOrg.Id) == 36 {
 				IncrementCache(ctx, managerOrg.Id, "childorg_app_executions", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "workflow_executions") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_workflow_executions", int(dbDumpInterval))
 			}
 		}
 	}
@@ -1382,6 +1393,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.HourlySubflowExecutions = 0
 	executionInfo.HourlyWorkflowExecutions = 0
 	executionInfo.HourlyWorkflowExecutionsFinished = 0
+	executionInfo.HourlyChildWorkflowExecutions = 0
 	executionInfo.HourlyWorkflowExecutionsFailed = 0
 	executionInfo.HourlyOrgSyncActions = 0
 	executionInfo.HourlyCloudExecutions = 0
@@ -1394,6 +1406,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.DailySubflowExecutions = 0
 	executionInfo.DailyWorkflowExecutions = 0
 	executionInfo.DailyWorkflowExecutionsFinished = 0
+	executionInfo.DailyChildWorkflowExecutions = 0
 	executionInfo.DailyWorkflowExecutionsFailed = 0
 	executionInfo.DailyOrgSyncActions = 0
 	executionInfo.DailyCloudExecutions = 0
@@ -1412,6 +1425,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.WeeklyOrgSyncActions = 0
 	executionInfo.WeeklyCloudExecutions = 0
 	executionInfo.WeeklyOnpremExecutions = 0
+	executionInfo.WeeklyChildWorkflowExecutions = 0
 
 	// Cleans up "random" stats as well
 	for additionIndex, _ := range executionInfo.Additions {
@@ -1430,6 +1444,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlySubflowExecutions = 0
 		executionInfo.MonthlyWorkflowExecutions = 0
 		executionInfo.MonthlyWorkflowExecutionsFinished = 0
+		executionInfo.MonthlyChildWorkflowExecutions = 0
 		executionInfo.MonthlyWorkflowExecutionsFailed = 0
 		executionInfo.MonthlyOrgSyncActions = 0
 		executionInfo.MonthlyCloudExecutions = 0
@@ -1504,6 +1519,12 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.DailyWorkflowExecutions += int64(increment)
 		orgStatistics.HourlyWorkflowExecutions += int64(increment)
 
+	} else if dataType == "childorg_workflow_executions" {
+		orgStatistics.TotalChildWorkflowExecutions += int64(increment)
+		orgStatistics.MonthlyChildWorkflowExecutions += int64(increment)
+		orgStatistics.WeeklyChildWorkflowExecutions += int64(increment)
+		orgStatistics.DailyChildWorkflowExecutions += int64(increment)
+		orgStatistics.HourlyChildWorkflowExecutions += int64(increment)
 	} else if dataType == "workflow_executions_finished" {
 		orgStatistics.TotalWorkflowExecutionsFinished += int64(increment)
 		orgStatistics.MonthlyWorkflowExecutionsFinished += int64(increment)
@@ -1970,8 +1991,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 }
 
 func UpdateDetectionStats(ctx context.Context, cacheData CacheKeyData) {
-	log.Printf("\n\n\nDETECTION STAT UPDATE!!\n\n\n")
-
+	//log.Printf("\n\n\nDETECTION STAT UPDATE!!\n\n\n")
 	if len(cacheData.Category) == 0 || cacheData.Category == "default" {
 		return
 	}

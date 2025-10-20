@@ -849,14 +849,14 @@ Input JSON Payload (ensure VALID JSON):
 				}
 			}
 
-			inputFields := []Valuereplace{
-				Valuereplace{
+			inputFields := []schemaless.Valuereplace{
+				schemaless.Valuereplace{
 					Key: param.Name,
 					Value: formattedVal,
 				},
 			}
 
-			responseFields := TranslateBadFieldFormats(inputFields)
+			responseFields := schemaless.TranslateBadFieldFormats(inputFields)
 			if len(responseFields) > 0 {
 				if responseFields[0].Value != formattedVal {
 					if debug { 
@@ -4338,14 +4338,14 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 		//log.Printf("[DEBUG] Autoformatted output to %s", contentOutput)
 	}
 
-	sampleFields := []Valuereplace{
-		Valuereplace{ 
+	sampleFields := []schemaless.Valuereplace{
+		schemaless.Valuereplace{ 
 			Key: "body",
 			Value: contentOutput,
 		},
 	}
 
-	sampleFields = TranslateBadFieldFormats(sampleFields) 
+	sampleFields = schemaless.TranslateBadFieldFormats(sampleFields) 
 	if len(sampleFields) > 0 {
 		contentOutput = sampleFields[0].Value
 	}

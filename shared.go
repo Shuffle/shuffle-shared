@@ -2651,7 +2651,7 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		licenseOrg := HandleCheckLicense(ctx, *parentOrg)
-		if !licenseOrg.SyncFeatures.MultiEnv.Active && int64(len(envs)) > licenseOrg.SyncFeatures.MultiEnv.Limit {
+		if int64(len(envs)) > licenseOrg.SyncFeatures.MultiEnv.Limit {
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have reached the limit of %d environments for your subscription. Upgrade to an enterprise plan or contact support@shuffler.io for more info."}`, licenseOrg.SyncFeatures.MultiEnv.Limit)))
 			return
@@ -17962,7 +17962,10 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 			jsonString, err := json.Marshal(workflowExecution)
 			if err == nil {
-				log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
+				if debug { 
+					log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
+				}
+
 				if len(jsonString)> 1000000 {
 					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
 
@@ -30822,6 +30825,10 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 			org.SyncFeatures.Branding.Active = false
 			org.Licensed = false
+
+			org.SyncFeatures.WorkflowExecutions.Limit = 10000
+			org.SyncFeatures.WorkflowExecutions.Active = false
+
 			return org
 		}
 		features := SyncFeatures{}
@@ -30835,20 +30842,43 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 					licenseData := string(data)
 					if licenseData == "true" {
 						org.Licensed = true
+						org.SyncFeatures.MultiEnv.Active = features.MultiEnv.Active
+						org.SyncFeatures.MultiEnv.Limit = features.MultiEnv.Limit
+
+						org.SyncFeatures.MultiTenant.Active = features.MultiTenant.Active
+						org.SyncFeatures.MultiTenant.Limit = features.MultiTenant.Limit
+
+						org.SyncFeatures.Branding.Active = features.Branding.Active
+
+						org.SyncFeatures.WorkflowExecutions.Active = features.WorkflowExecutions.Active
+						if features.WorkflowExecutions.Limit < 10000 {
+							org.SyncFeatures.WorkflowExecutions.Limit = 10000
+						} else {
+							org.SyncFeatures.WorkflowExecutions.Limit = features.WorkflowExecutions.Limit
+						}
 					} else {
-						org.Licensed = false
+						org.SyncFeatures.MultiEnv.Active = false
+						org.SyncFeatures.MultiEnv.Limit = 1
+
+						org.SyncFeatures.MultiTenant.Active = false
+						org.SyncFeatures.MultiTenant.Limit = 3
+
+						org.SyncFeatures.Branding.Active = features.Branding.Active
+						org.SyncFeatures.WorkflowExecutions.Limit = 10000
+						org.SyncFeatures.WorkflowExecutions.Active = false
 					}
 				} else {
 					org.Licensed = false
+					org.SyncFeatures.MultiEnv.Active = false
+					org.SyncFeatures.MultiEnv.Limit = 1
+
+					org.SyncFeatures.MultiTenant.Active = false
+					org.SyncFeatures.MultiTenant.Limit = 3
+
+					org.SyncFeatures.Branding.Active = features.Branding.Active
+					org.SyncFeatures.WorkflowExecutions.Limit = 10000
+					org.SyncFeatures.WorkflowExecutions.Active = false
 				}
-
-				org.SyncFeatures.MultiEnv.Active = features.MultiEnv.Active
-				org.SyncFeatures.MultiEnv.Limit = features.MultiEnv.Limit
-
-				org.SyncFeatures.MultiTenant.Active = features.MultiTenant.Active
-				org.SyncFeatures.MultiTenant.Limit = features.MultiTenant.Limit
-
-				org.SyncFeatures.Branding.Active = features.Branding.Active
 
 				org.SyncFeatures.AppExecutions.Active = features.AppExecutions.Active
 				org.SyncFeatures.AppExecutions.Limit = features.AppExecutions.Limit
@@ -30883,9 +30913,6 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 				org.SyncFeatures.Autocomplete.Active = features.Autocomplete.Active
 				org.SyncFeatures.Autocomplete.Limit = features.Autocomplete.Limit
 
-				org.SyncFeatures.WorkflowExecutions.Active = features.WorkflowExecutions.Active
-				org.SyncFeatures.WorkflowExecutions.Limit = features.WorkflowExecutions.Limit
-
 				org.SyncFeatures.Authentication.Active = features.Authentication.Active
 				org.SyncFeatures.Authentication.Limit = features.Authentication.Limit
 
@@ -30902,6 +30929,17 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 					org.SyncFeatures.MultiTenant.Limit = 3
 				}
 			}
+		} else {
+			org.Licensed = false
+			org.SyncFeatures.MultiEnv.Active = false
+			org.SyncFeatures.MultiEnv.Limit = 1
+
+			org.SyncFeatures.MultiTenant.Active = false
+			org.SyncFeatures.MultiTenant.Limit = 3
+
+			org.SyncFeatures.Branding.Active = false
+			org.SyncFeatures.WorkflowExecutions.Limit = 10000
+			org.SyncFeatures.WorkflowExecutions.Active = false
 		}
 
 		// For the subsctiption
@@ -30932,6 +30970,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.MultiTenant.Limit = license.Tenant.Limit
 			org.SyncFeatures.MultiTenant.Active = license.Tenant.Active
 			org.SyncFeatures.Branding.Active = license.Branding
+			org.SyncFeatures.WorkflowExecutions.Active = license.WorkflowExecutions.Active
+			org.SyncFeatures.WorkflowExecutions.Limit = license.WorkflowExecutions.Limit
 
 			org.SyncFeatures.AppExecutions.Active = true
 			org.SyncFeatures.Webhook.Active = true
@@ -30944,7 +30984,6 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.Notifications.Active = true
 			org.SyncFeatures.Workflows.Active = true
 			org.SyncFeatures.Autocomplete.Active = true
-			org.SyncFeatures.WorkflowExecutions.Active = true
 			org.SyncFeatures.Authentication.Active = true
 			org.SyncFeatures.Schedule.Active = true
 			org.SyncFeatures.Apps.Active = true
@@ -30958,6 +30997,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.MultiTenant.Active = false
 
 			org.SyncFeatures.Branding.Active = false
+
+			org.SyncFeatures.WorkflowExecutions.Active = false
+			org.SyncFeatures.WorkflowExecutions.Limit = 10000
 		}
 
 		parsedEula := GetOnpremPaidEula()
@@ -31019,7 +31061,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 		org.Subscriptions = []PaymentSubscription{subscription}
 
 	} else {
-		log.Printf("[WARNING] Org %v does not have an enterprise license. Please purchase an enterprise license to unlock production-ready features. Contact support@shuffler.io for more information.", org.Id)
+		if debug { 
+			log.Printf("[DEBUG] Org %v does not have an enterprise license. Please purchase an enterprise license to unlock production-ready features. Contact support@shuffler.io for more information.", org.Id)
+		}
 
 		org.Licensed = false
 		org.SyncFeatures.MultiEnv.Limit = 1
@@ -31029,6 +31073,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 		org.SyncFeatures.MultiTenant.Active = false
 
 		org.SyncFeatures.Branding.Active = false
+
+		org.SyncFeatures.WorkflowExecutions.Active = false
+		org.SyncFeatures.WorkflowExecutions.Limit = 10000
 	}
 
 	return org
