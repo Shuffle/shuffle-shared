@@ -1970,8 +1970,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 }
 
 func UpdateDetectionStats(ctx context.Context, cacheData CacheKeyData) {
-	log.Printf("\n\n\nDETECTION STAT UPDATE!!\n\n\n")
-
+	//log.Printf("\n\n\nDETECTION STAT UPDATE!!\n\n\n")
 	if len(cacheData.Category) == 0 || cacheData.Category == "default" {
 		return
 	}
