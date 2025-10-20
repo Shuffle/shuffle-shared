@@ -17962,7 +17962,10 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 			jsonString, err := json.Marshal(workflowExecution)
 			if err == nil {
-				log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
+				if debug { 
+					log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
+				}
+
 				if len(jsonString)> 1000000 {
 					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
 
@@ -31058,7 +31061,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 		org.Subscriptions = []PaymentSubscription{subscription}
 
 	} else {
-		log.Printf("[WARNING] Org %v does not have an enterprise license. Please purchase an enterprise license to unlock production-ready features. Contact support@shuffler.io for more information.", org.Id)
+		if debug { 
+			log.Printf("[DEBUG] Org %v does not have an enterprise license. Please purchase an enterprise license to unlock production-ready features. Contact support@shuffler.io for more information.", org.Id)
+		}
 
 		org.Licensed = false
 		org.SyncFeatures.MultiEnv.Limit = 1

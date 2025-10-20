@@ -378,7 +378,9 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[INFO] Should get stats for key %s for the last %d days", statsKey, statDays)
+	if debug { 
+		log.Printf("[DEBUG] Should get stats for key %s for the last %d days", statsKey, statDays)
+	}
 
 	totalEntires := 0
 	totalValue := 0
@@ -678,9 +680,10 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(statsKey) > 0 {
-		log.Printf("[INFO] Should get stats for key %s", statsKey)
-	}
+	_ = statsKey
+	//if len(statsKey) > 0 {
+	//	log.Printf("[INFO] Should get stats for key %s", statsKey)
+	//}
 
 	if len(info.DailyStatistics) > 0 {
 		// Sort the array
