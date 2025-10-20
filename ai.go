@@ -39,7 +39,8 @@ var standalone bool
 //var model = "gpt-5-mini"
 var model = "gpt-5-mini"
 var fallbackModel = ""
-var assistantId = os.Getenv("OPENAI_ASSISTANT_ID") 
+var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
+var docsVectorStoreID = os.Getenv("OPENAI_DOCS_VS_ID")
 var assistantModel = model
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
@@ -6244,10 +6245,20 @@ func getWorkflowSuggestionAIResponse(ctx context.Context, resp http.ResponseWrit
 
 // Todo:
 func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) {
-	log.Printf("[INFO] Getting support suggestion for query: %s", input.Query)
+	log.Printf("[INFO] Getting support suggestion for query: %s for org: %s", input.Query, org.Id)
 
-	reply := runSupportRequest(ctx, input)
+	// reply := runSupportRequest(ctx, input)
+	reply, err := runSupportLLMAssistant(ctx, input)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to run support LLM assistant: %s", err)
+		resp.WriteHeader(501) 
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get a response from the AI assistant."}`))
+		return
+	}
+
 	if len(reply) == 0 {
+		log.Printf("[ERROR] AI assistant returned an empty reply for query: %s for org: %s", input.Query, org.Id)
 		resp.WriteHeader(501)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get support response"}`))
 		return
@@ -10486,4 +10497,175 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(workflowJson)
+}
+
+func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, error) {
+
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" || assistantId == "" {
+		return "", errors.New("OPENAI_API_KEY and ASSISTANT_ID must be set")
+	}
+
+	config := openai.DefaultConfig(apiKey)
+	config.AssistantVersion = "v2"
+	client := openai.NewClientWithConfig(config)
+	temperature := float32(0.4)
+
+	var threadID string
+	isValidThread := false
+
+	if strings.TrimSpace(input.ThreadId) != "" {
+		cacheKey := fmt.Sprintf("support_assistant_thread_%s", input.ThreadId)
+		cachedData, err := GetCache(ctx, cacheKey)
+
+		if err == nil && cachedData != nil {
+			orgId := fmt.Sprintf("%v", cachedData)
+			if len(orgId) > 0 && orgId == input.OrgId {
+				threadID = input.ThreadId
+				isValidThread = true
+				value := []byte(input.OrgId)
+				// Refresh the cache TTL
+				_ = SetCache(ctx, cacheKey, value, 60)
+
+			}
+		}
+	}
+
+	if !isValidThread {
+		thread, err := client.CreateThread(ctx, openai.ThreadRequest{
+			Messages: []openai.ThreadMessage{
+				{
+					Role:    openai.ThreadMessageRoleUser,
+					Content: input.Query,
+				},
+			},
+			ToolResources: &openai.ToolResourcesRequest{
+				FileSearch: &openai.FileSearchToolResourcesRequest{
+					VectorStoreIDs: []string{docsVectorStoreID},
+				},
+			}})
+
+		if err != nil {
+			return "", fmt.Errorf("failed to create thread: %w", err)
+		}
+
+		threadID = thread.ID
+		cacheKey := fmt.Sprintf("support_assistant_thread_%s", threadID)
+		value := []byte(input.OrgId)
+
+		// Cache the thread ID for future use
+		_ = SetCache(ctx, cacheKey, value, 60)
+	}
+
+	instructions := `
+You are an expert support assistant named "Shuffler AI" built by shuffle. Your entire knowledge base is a set of provided documents. Your goal is to answer the user's question accurately and based ONLY on the information within these documents.
+
+**Rules:**
+1.  **Ground Your Answer:** Find the relevant information in the documents before answering. Do not use any outside knowledge.
+2.  **Be Honest:** If you cannot find a clear answer in the documents, do not make one up. Your response MUST be: "I couldn't find an answer in the documentation for your question. Please contact support@shuffler.io for further assistance."
+3.  **Be Professional:** Maintain a helpful and professional tone. Keep your answer clear and directly address the user's question.
+4.  **Be Helpful:** Provide as much relevant information as possible from the documents to fully answer the user's question. Keep in mind that, the goal is help the user solve their problem using the provided documents. So please ensure your answer is thorough and well-supported by the documentation, try to provide links to relevant sections whenever possible and if you are sure about it the accuracy of those links.
+5.  **Proper Formatting:** Make sure you don't include characters in your response that might break our json parsing (e.g., unescaped quotes, backslashes, etc.), Do not include any citations to the files used in the response text.
+
+Based on these rules and the provided documents, please answer the question:`
+
+	run, err := client.CreateRun(ctx, threadID, openai.RunRequest{
+		AssistantID:         assistantId,
+		Instructions:        instructions,
+		Temperature:         &temperature,
+		MaxCompletionTokens: 2048,
+		ToolChoice:          "required",
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("failed to create run: %w", err)
+	}
+
+	timeout := time.After(2 * time.Minute) // 2-minute timeout
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return "", errors.New("timed out while waiting for the assistant's response")
+		case <-ticker.C:
+			runStatus, err := client.RetrieveRun(ctx, threadID, run.ID)
+			if err != nil {
+				return "", fmt.Errorf("failed to check run status: %w", err)
+			}
+
+			if runStatus.Status == openai.RunStatusCompleted {
+				limit := 20
+				order := "desc"
+				after := ""
+				before := ""
+				runID := run.ID
+				messages, err := client.ListMessage(ctx, threadID, &limit, &order, &after, &before, &runID)
+				if err != nil {
+					return "", fmt.Errorf("failed to get messages: %w", err)
+				}
+
+				var answerText string
+				var sourceFiles []string
+
+				for _, message := range messages.Messages {
+					if message.Role == openai.ChatMessageRoleAssistant {
+						if len(message.Content) > 0 && message.Content[0].Type == "text" && message.Content[0].Text != nil {
+							answerText = message.Content[0].Text.Value
+
+							for _, rawAnnotation := range message.Content[0].Text.Annotations {
+								annotation, ok := rawAnnotation.(map[string]any)
+								if !ok {
+									continue
+								}
+
+								if annoType, ok := annotation["type"].(string); ok && annoType == "file_citation" {
+									if fileCitationMap, ok := annotation["file_citation"].(map[string]any); ok {
+										if fileID, ok := fileCitationMap["file_id"].(string); ok {
+											file, err := client.GetFile(ctx, fileID)
+											if err == nil {
+												isDuplicate := false
+												for _, existingFile := range sourceFiles {
+													if existingFile == file.FileName {
+														isDuplicate = true
+														break
+													}
+												}
+												if !isDuplicate {
+													sourceFiles = append(sourceFiles, file.FileName)
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+						break
+					}
+				}
+
+				if answerText == "" {
+					return "", errors.New("assistant did not return a message")
+				}
+
+				re := regexp.MustCompile(`【.*?】`)
+				cleanAnswerText := re.ReplaceAllString(answerText, "")
+
+				if len(sourceFiles) > 0 {
+					cleanAnswerText += "\n\n**Sources:**"
+					for _, filename := range sourceFiles {
+						slug := strings.TrimSuffix(filename, ".md")
+						cleanAnswerText += fmt.Sprintf("\n- https://shuffler.io/docs/%s", slug)
+					}
+				}
+
+				return cleanAnswerText, nil
+			}
+
+			if runStatus.Status == openai.RunStatusFailed || runStatus.Status == openai.RunStatusCancelled || runStatus.Status == openai.RunStatusExpired {
+				return "", fmt.Errorf("run ended with status '%s'", runStatus.Status)
+			}
+		}
+	}
 }
