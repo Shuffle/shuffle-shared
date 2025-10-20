@@ -6246,10 +6246,8 @@ func getWorkflowSuggestionAIResponse(ctx context.Context, resp http.ResponseWrit
 // Todo:
 func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) {
 	log.Printf("[INFO] Getting support suggestion for query: %s for org: %s", input.Query, org.Id)
-
 	// reply := runSupportRequest(ctx, input)
 	reply, threadId, err := runSupportLLMAssistant(ctx, input)
-
 	if err != nil {
 		log.Printf("[ERROR] Failed to run support LLM assistant: %s", err)
 		resp.WriteHeader(501) 
@@ -10526,7 +10524,7 @@ func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, stri
 				isValidThread = true
 				value := []byte(input.OrgId)
 				// Refresh the cache TTL
-				_ = SetCache(ctx, cacheKey, value, 60)
+				_ = SetCache(ctx, cacheKey, value, 1440)
 
 			}
 		}
@@ -10555,7 +10553,7 @@ func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, stri
 		value := []byte(input.OrgId)
 
 		// Cache the thread ID for future use
-		_ = SetCache(ctx, cacheKey, value, 60)
+		_ = SetCache(ctx, cacheKey, value, 1440)
 	}
 
 	instructions := `
