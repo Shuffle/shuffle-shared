@@ -6248,7 +6248,7 @@ func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWrite
 	log.Printf("[INFO] Getting support suggestion for query: %s for org: %s", input.Query, org.Id)
 
 	// reply := runSupportRequest(ctx, input)
-	reply, err := runSupportLLMAssistant(ctx, input)
+	reply, threadId, err := runSupportLLMAssistant(ctx, input)
 
 	if err != nil {
 		log.Printf("[ERROR] Failed to run support LLM assistant: %s", err)
@@ -6267,6 +6267,7 @@ func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWrite
 	newResponse := AtomicOutput{
 		Success: true,
 		Reason:  reply,
+		ThreadId: threadId,
 	}
 
 	// Marshal it
@@ -10499,11 +10500,11 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 	resp.Write(workflowJson)
 }
 
-func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, error) {
+func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, string, error) {
 
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" || assistantId == "" {
-		return "", errors.New("OPENAI_API_KEY and ASSISTANT_ID must be set")
+		return "", "", errors.New("OPENAI_API_KEY and ASSISTANT_ID must be set")
 	}
 
 	config := openai.DefaultConfig(apiKey)
@@ -10546,7 +10547,7 @@ func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, erro
 			}})
 
 		if err != nil {
-			return "", fmt.Errorf("failed to create thread: %w", err)
+			return "", "", fmt.Errorf("failed to create thread: %w", err)
 		}
 
 		threadID = thread.ID
@@ -10562,7 +10563,7 @@ You are an expert support assistant named "Shuffler AI" built by shuffle. Your e
 
 **Rules:**
 1.  **Ground Your Answer:** Find the relevant information in the documents before answering. Do not use any outside knowledge.
-2.  **Be Honest:** If you cannot find a clear answer in the documents, do not make one up. Your response MUST be: "I couldn't find an answer in the documentation for your question. Please contact support@shuffler.io for further assistance."
+2.  **Be Honest:** If you cannot find a clear answer in the documents, do not make one up. You have to tell the user that you couldn't find an answer in the documentation for your question. Please contact support@shuffler.io for further assistance."
 3.  **Be Professional:** Maintain a helpful and professional tone. Keep your answer clear and directly address the user's question.
 4.  **Be Helpful:** Provide as much relevant information as possible from the documents to fully answer the user's question. Keep in mind that, the goal is help the user solve their problem using the provided documents. So please ensure your answer is thorough and well-supported by the documentation, try to provide links to relevant sections whenever possible and if you are sure about it the accuracy of those links.
 5.  **Proper Formatting:** Make sure you don't include characters in your response that might break our json parsing (e.g., unescaped quotes, backslashes, etc.), Do not include any citations to the files used in the response text.
@@ -10578,7 +10579,7 @@ Based on these rules and the provided documents, please answer the question:`
 	})
 
 	if err != nil {
-		return "", fmt.Errorf("failed to create run: %w", err)
+		return "", "", fmt.Errorf("failed to create run: %w", err)
 	}
 
 	timeout := time.After(2 * time.Minute) // 2-minute timeout
@@ -10588,11 +10589,11 @@ Based on these rules and the provided documents, please answer the question:`
 	for {
 		select {
 		case <-timeout:
-			return "", errors.New("timed out while waiting for the assistant's response")
+			return "", "", errors.New("timed out while waiting for the assistant's response")
 		case <-ticker.C:
 			runStatus, err := client.RetrieveRun(ctx, threadID, run.ID)
 			if err != nil {
-				return "", fmt.Errorf("failed to check run status: %w", err)
+				return "", "", fmt.Errorf("failed to check run status: %w", err)
 			}
 
 			if runStatus.Status == openai.RunStatusCompleted {
@@ -10603,7 +10604,7 @@ Based on these rules and the provided documents, please answer the question:`
 				runID := run.ID
 				messages, err := client.ListMessage(ctx, threadID, &limit, &order, &after, &before, &runID)
 				if err != nil {
-					return "", fmt.Errorf("failed to get messages: %w", err)
+					return "", "", fmt.Errorf("failed to get messages: %w", err)
 				}
 
 				var answerText string
@@ -10646,7 +10647,7 @@ Based on these rules and the provided documents, please answer the question:`
 				}
 
 				if answerText == "" {
-					return "", errors.New("assistant did not return a message")
+					return "", "", errors.New("assistant did not return a message")
 				}
 
 				re := regexp.MustCompile(`【.*?】`)
@@ -10660,11 +10661,11 @@ Based on these rules and the provided documents, please answer the question:`
 					}
 				}
 
-				return cleanAnswerText, nil
+				return cleanAnswerText, threadID, nil
 			}
 
 			if runStatus.Status == openai.RunStatusFailed || runStatus.Status == openai.RunStatusCancelled || runStatus.Status == openai.RunStatusExpired {
-				return "", fmt.Errorf("run ended with status '%s'", runStatus.Status)
+				return "", "", fmt.Errorf("run ended with status '%s'", runStatus.Status)
 			}
 		}
 	}
