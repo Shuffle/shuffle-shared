@@ -10514,23 +10514,32 @@ func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, stri
 	isValidThread := false
 
 	if strings.TrimSpace(input.ThreadId) != "" {
+		log.Printf("[DEBUG] Checking existing thread for the org %s", input.OrgId)
 		cacheKey := fmt.Sprintf("support_assistant_thread_%s", input.ThreadId)
 		cachedData, err := GetCache(ctx, cacheKey)
+		if err != nil {
+			log.Printf("[WARNING] Failed to get cache for thread %s: %s", threadID, err)
+		}
 
-		if err == nil && cachedData != nil {
+		if cachedData != nil {
 			orgId := fmt.Sprintf("%v", cachedData)
 			if len(orgId) > 0 && orgId == input.OrgId {
+				log.Printf("[INFO] Found existing thread %s for org %s", input.ThreadId, input.OrgId)
 				threadID = input.ThreadId
 				isValidThread = true
 				value := []byte(input.OrgId)
 				// Refresh the cache TTL
-				_ = SetCache(ctx, cacheKey, value, 1440)
+				err = SetCache(ctx, cacheKey, value, 1440)
+				if err != nil {
+					log.Printf("[WARNING] Failed to refresh cache for thread %s: %s", threadID, err)
+				}
 
 			}
 		}
 	}
 
 	if !isValidThread {
+		log.Printf("[DEBUG] Creating new thread for org %s", input.OrgId)
 		thread, err := client.CreateThread(ctx, openai.ThreadRequest{
 			Messages: []openai.ThreadMessage{
 				{
@@ -10548,12 +10557,17 @@ func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, stri
 			return "", "", fmt.Errorf("failed to create thread: %w", err)
 		}
 
+		log.Printf("[INFO] Thread created successfully for org %s: %s", input.OrgId, thread.ID)
+
 		threadID = thread.ID
 		cacheKey := fmt.Sprintf("support_assistant_thread_%s", threadID)
 		value := []byte(input.OrgId)
 
 		// Cache the thread ID for future use
-		_ = SetCache(ctx, cacheKey, value, 1440)
+		err = SetCache(ctx, cacheKey, value, 1440)
+		if err != nil {
+			log.Printf("[WARNING] Failed to set cache for thread %s: %s", threadID, err)
+		}
 	}
 
 	instructions := `
