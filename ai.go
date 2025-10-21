@@ -6243,7 +6243,6 @@ func getWorkflowSuggestionAIResponse(ctx context.Context, resp http.ResponseWrit
 	resp.Write(output)
 }
 
-// Todo:
 func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) {
 	log.Printf("[INFO] Getting support suggestion for query: %s for org: %s", input.Query, org.Id)
 	// reply := runSupportRequest(ctx, input)
@@ -6256,7 +6255,7 @@ func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWrite
 	}
 
 	if len(reply) == 0 {
-		log.Printf("[ERROR] AI assistant returned an empty reply for query: %s for org: %s", input.Query, org.Id)
+		log.Printf("[ERROR] AI assistant returned an empty reply for org: %s", org.Id)
 		resp.WriteHeader(501)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get support response"}`))
 		return
@@ -10522,7 +10521,11 @@ func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, stri
 		}
 
 		if cachedData != nil {
-			orgId := fmt.Sprintf("%v", cachedData)
+			orgId := ""
+			if byteSlice, ok := cachedData.([]byte); ok {
+				orgId = string(byteSlice)
+			}
+
 			if len(orgId) > 0 && orgId == input.OrgId {
 				log.Printf("[INFO] Found existing thread %s for org %s", input.ThreadId, input.OrgId)
 				threadID = input.ThreadId
@@ -10538,7 +10541,20 @@ func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, stri
 		}
 	}
 
-	if !isValidThread {
+	if isValidThread {
+		log.Printf("[DEBUG] Adding new message to existing thread %s", threadID)
+		_, err := client.CreateMessage(
+			ctx,
+			threadID,
+			openai.MessageRequest{
+				Role:    "user",
+				Content: input.Query,
+			},
+		)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to create message: %w", err)
+		}
+	} else {
 		log.Printf("[DEBUG] Creating new thread for org %s", input.OrgId)
 		thread, err := client.CreateThread(ctx, openai.ThreadRequest{
 			Messages: []openai.ThreadMessage{
@@ -10609,12 +10625,11 @@ Based on these rules and the provided documents, please answer the question:`
 			}
 
 			if runStatus.Status == openai.RunStatusCompleted {
-				limit := 20
+				limit := 50
 				order := "desc"
 				after := ""
 				before := ""
-				runID := run.ID
-				messages, err := client.ListMessage(ctx, threadID, &limit, &order, &after, &before, &runID)
+				messages, err := client.ListMessage(ctx, threadID, &limit, &order, &after, &before, nil)
 				if err != nil {
 					return "", "", fmt.Errorf("failed to get messages: %w", err)
 				}
