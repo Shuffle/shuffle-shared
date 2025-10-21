@@ -31004,7 +31004,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 		parsedEula := GetOnpremPaidEula()
 
-		log.Printf("[DEBUG] Org has the Enterprise License Key")
+		if debug { 
+			log.Printf("[DEBUG] Org has the Enterprise License Key")
+		}
 
 		var endDate int64
 		var cancellationDate int64

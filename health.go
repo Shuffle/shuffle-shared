@@ -538,7 +538,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	apiKey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
 	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
 	if project.Environment == "onprem" && (len(apiKey) == 0 || len(orgId) == 0) {
-		log.Printf("[DEBUG] Ops dashboard api key or org not set. Getting first org and user that is valid")
+		//log.Printf("[DEBUG] Ops dashboard api key or org not set. Getting first org and user that is valid")
 		org, err := GetFirstOrg(ctx)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting first org: %s", err)
@@ -573,6 +573,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		orgId = org.Id
 	}
 
+	log.Printf("[INFO] Running ops health check for org %s with api key %s", orgId, apiKey)
 	platformHealth := HealthCheck{}
 	force := request.URL.Query().Get("force")
 	cacheKey := fmt.Sprintf("ops-health-check")
@@ -1769,8 +1770,6 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		log.Println("[ERROR] unmarshalling Ops workflowData JSON data:", err)
 		return "", errors.New("Error unmarshalling JSON data: " + err.Error())
 	}
-
-	log.Printf("[DEBUG] Original workflow has ID: %s", workflowData.ID)
 
 	variables := workflowData.WorkflowVariables
 	for _, variable := range variables {

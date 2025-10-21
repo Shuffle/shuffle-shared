@@ -41,6 +41,7 @@ import (
 
 	//opensearch "github.com/shuffle/opensearch-go"
 	opensearch "github.com/opensearch-project/opensearch-go"
+	//elasticsearch "github.com/elastic/go-elasticsearch/v8"
 	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
 )
 
@@ -3736,6 +3737,15 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	return curOrg, nil
 }
 
+
+func init() {
+	isValid := checkImportPath()
+	if !isValid {
+		time.Sleep(time.Duration(600+rand.Intn(600)) * time.Second)
+		os.Exit(3)
+	}
+}
+
 func GetFirstOrg(ctx context.Context) (*Org, error) {
 	nameKey := "Organizations"
 
@@ -7122,7 +7132,7 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 	return nil
 }
 
-func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionRequestWrapper, error) {
+func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Environment) (ExecutionRequestWrapper, error) {
 	id = strings.ReplaceAll(id, " ", "-")
 	nameKey := fmt.Sprintf("workflowqueue-%s", id)
 	executions := []ExecutionRequest{}
@@ -7226,7 +7236,6 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 
 		executions = []ExecutionRequest{}
 		for _, hit := range wrapped.Hits.Hits {
-
 			executions = append(executions, hit.Source)
 		}
 	} else {
@@ -7240,6 +7249,83 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 				}, err
 			}
 		}
+	}
+
+	if project.Environment != "cloud" && len(inputEnv) > 0 && len(executions) > 0 {
+		env := inputEnv[0]
+
+		orgId := env.OrgId
+		org, err := GetOrg(ctx, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting org %s for queue: %s", orgId, err)
+			return ExecutionRequestWrapper{
+				Data: executions,
+			}, nil
+		}
+
+		parentOrg := org
+		if len(org.CreatorOrg) > 0 {
+			parentOrg, err = GetOrg(ctx, org.CreatorOrg)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting parent org %s for queue: %s", org.CreatorOrg, err)
+				return ExecutionRequestWrapper{
+					Data: executions,
+				}, nil
+			}
+		}
+
+		licenseOrg := HandleCheckLicense(ctx, *parentOrg)
+		stats, err := GetOrgStatistics(ctx, parentOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting statistics for org %s: %s", parentOrg.Id, err)
+
+			stats.MonthlyWorkflowExecutions = 0
+			stats.MonthlyChildWorkflowExecutions = 0
+		}
+
+		limit := licenseOrg.SyncFeatures.WorkflowExecutions.Limit
+		totalWorkflowExecutions := stats.MonthlyWorkflowExecutions + stats.MonthlyChildWorkflowExecutions
+
+		if totalWorkflowExecutions > limit {
+			cacheKey := fmt.Sprintf("org-%s-last-queue-send", orgId)
+			currentTime := time.Now().Unix()
+			lastSendCache, err := GetCache(ctx, cacheKey)
+			if err == nil {
+				var lastSendTime int64
+				if timeBytes, ok := lastSendCache.([]byte); ok {
+					if unmarshallErr := json.Unmarshal(timeBytes, &lastSendTime); unmarshallErr == nil {
+						timeSinceLastSend := currentTime - lastSendTime
+
+						if timeSinceLastSend < 60 {
+							log.Printf("[INFO] Rate limiting: Org %s exceeded the 10K usage quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
+							//executionRequests.Data = []ExecutionRequest{}
+							executions = []ExecutionRequest{}
+						} else {
+							if len(executions) > 1 {
+								log.Printf("[INFO] Rate limiting: Org %s exceeded the 10K usage quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
+								executions = executions[0:1]
+							}
+
+							timeBytes, _ := json.Marshal(currentTime)
+							if cacheErr := SetCache(ctx, cacheKey, timeBytes, 1); cacheErr != nil {
+								log.Printf("[WARNING] Failed to set rate limiting cache for org %s: %s", orgId, cacheErr)
+							}
+						}
+					}
+				}
+			} else {
+
+				if len(executions) > 1 {
+					log.Printf("[INFO] Rate limiting: Org %s exceeded the 10K usage quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
+					executions = executions[0:1]
+				}
+
+				timeBytes, _ := json.Marshal(currentTime)
+				if cacheErr := SetCache(ctx, cacheKey, timeBytes, 1); cacheErr != nil {
+					log.Printf("[WARNING] Failed to set initial rate limiting cache for org %s: %s", orgId, cacheErr)
+				}
+			}
+		} 
 	}
 
 	return ExecutionRequestWrapper{
@@ -9883,7 +9969,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		}
 
 		if res.StatusCode == 400 {
-			log.Printf("[WARNING] Bad request when getting notifications: %s. Is the index initialised?", respBody)
+			//log.Printf("[WARNING] Bad request when getting notifications: %s. Is the index initialised?", respBody)
 			return notifications, nil
 		}
 
@@ -13320,7 +13406,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		ret, err := project.Es.Info()
 		if err != nil {
 			if strings.Contains(fmt.Sprintf("%s", err), "the client noticed that the server is not a supported distribution") {
-				log.Printf("[ERROR] Version is not supported - most likely Elasticsearch >= 8.0.0.")
+				log.Printf("[ERROR] Version is not supported - most likely Elasticsearch >= 8.0.0: %s -> %s", ret, err)
 			}
 		}
 
@@ -13395,12 +13481,17 @@ func checkImportPath() bool {
 
 }
 
-func init() {
-	isValid := checkImportPath()
-	if !isValid {
-		time.Sleep(time.Duration(600+rand.Intn(600)) * time.Second)
-		os.Exit(3)
-	}
+type customTransport struct {
+	apiKey string
+	rt     http.RoundTripper
+}
+
+func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Inject custom Authorization header
+	req.Header.Set("Authorization", "ApiKey "+t.apiKey)
+
+	// You can also inject other headers here, e.g. X-Custom-Header
+	return t.rt.RoundTrip(req)
 }
 
 func GetEsConfig(defaultCreds bool) *opensearch.Client {
@@ -13440,6 +13531,7 @@ func GetEsConfig(defaultCreds bool) *opensearch.Client {
 
 		// User Agent to work with Elasticsearch 8
 	}
+
 	//APIKey:        os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
 	//CloudID:       os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),
 
@@ -13497,6 +13589,19 @@ func GetEsConfig(defaultCreds bool) *opensearch.Client {
 	}
 
 	config.Transport = transport
+
+	if len(os.Getenv("SHUFFLE_OPENSEARCH_APIKEY")) > 0 {
+
+		config.Username = ""
+		config.Password = ""
+		config.Transport = &customTransport{
+			apiKey: os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
+			rt:     http.DefaultTransport,
+		}
+
+		log.Printf("[DEBUG] Using API Key authentication for Opensearch")
+	} 
+
 	es, err := opensearch.NewClient(config)
 	if err != nil {
 		log.Fatalf("[ERROR] Database client for ELASTICSEARCH error during init (fatal): %s", err)
@@ -13588,9 +13693,6 @@ func checkNoInternet() OnpremLicense {
 			log.Printf("[ERROR] Failed parsing license timeout: %s", err)
 		} else {
 			if time.Now().Before(parsedTimeout) {
-				if debug {
-					log.Printf("[DEBUG] License key is valid")
-				}
 
 				license.Valid = true
 				license.Timeout = timeout
