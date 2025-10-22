@@ -6675,9 +6675,20 @@ SINGUL ACTIONS:
 			oldAgentOutput = mappedResult
 			previousAnswers := ""
 			relevantDecisions := []AgentDecision{}
+
+			hasFailure := false
 			for _, mappedDecision := range mappedResult.Decisions {
+				if mappedDecision.RunDetails.Status == "FAILURE" {
+					// Overrides as to get the correct index
+					if lastFinishedIndex < mappedDecision.I {
+						lastFinishedIndex = mappedDecision.I
+					}
+
+					hasFailure = true 
+				}
+
 				if mappedDecision.RunDetails.Status != "FINISHED" && mappedDecision.RunDetails.Status != "SUCCESS" {
-					log.Printf("[DEBUG][%s] SKIPPING decision index %d with status %s", execution.ExecutionId, mappedDecision.I, mappedDecision.RunDetails.Status)
+					log.Printf("[DEBUG][%s] SKIPPING decision index %d (%s) with status %s", execution.ExecutionId, mappedDecision.I, mappedDecision.RunDetails.Id, mappedDecision.RunDetails.Status)
 					continue
 				}
 
@@ -6703,6 +6714,10 @@ SINGUL ACTIONS:
 			if err != nil {
 				log.Printf("[ERROR][%s] Failed marshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
 				break
+			}
+
+			if hasFailure { 
+				userMessage += "\n\nSome of the previous decisions failed. Finalise the agent.\n\n"
 			}
 
 			userMessage += fmt.Sprintf("\n\nPrevious decision results:\n%s", string(marshalledDecisions))
@@ -6767,6 +6782,7 @@ RULES:
 * Do NOT add unnecessary fields; only include fields required for the action.
 * Fields can reference previous action outputs using {{action_name}}. Example: {"body": "{{previous_action.field}}"}.
 * If questions are absolutely required, combine all into one "ask" action with multiple "question" fields. Do NOT create multiple separate decisions.
+* If any decision has failed, add the finish decision.
 
 END RULES
 ---
@@ -7202,7 +7218,19 @@ FINALISING:
 				agentOutput.Status = "RUNNING"
 			}
 
-			log.Printf("Got %d NEW decision(s)", len(mappedDecisions))
+			if debug { 
+				log.Printf("[DEBUG] Got %d NEW decision(s)", len(mappedDecisions))
+			}
+
+			// Verbose error handling optimisations
+			for _, mappedDecision := range mappedDecisions {
+				if mappedDecision.I == lastFinishedIndex && mappedDecision.RunDetails.Status == "FAILURE" {
+					if debug { 
+						log.Printf("\n\n\n\n\nMAPPING TO FAILURE DUE TO DECISION INDEX AND STATUS!!! Decisions that aren't 'finalise' should be ignored\n\n\n\n\n\n\n")
+					}
+				}
+			}
+
 			additions := 0
 			for _, mappedDecision := range mappedDecisions {
 				if mappedDecision.I < lastFinishedIndex {
@@ -7257,8 +7285,9 @@ FINALISING:
 		}
 
 		if resultMapping.Status == "FAILURE" {
-			agentOutput.Status = "FAILURE"
-			agentOutput.CompletedAt = time.Now().Unix()
+			log.Printf("\n\n\n\n\nMAPPING TO FAILURE!!!\n\n\nn\n\n\n\n")
+			//agentOutput.Status = "FAILURE"
+			//agentOutput.CompletedAt = time.Now().Unix()
 		}
 
 		if !createNextActions {
@@ -7315,6 +7344,11 @@ FINALISING:
 
 
 				agentOutput.Output = decision.Reason
+				agentOutput.Status = "FINISHED"
+				agentOutput.CompletedAt = time.Now().Unix()
+
+				//workflowExecution.Results[resultIndex].Status = "SUCCESS"
+				//go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 
 			} else if decision.Action == "ask" || decision.Action == "question" { 
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
@@ -7426,9 +7460,25 @@ FINALISING:
 			}
 		}
 
+
+		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status == "EXECUTING" {
+			log.Printf("[INFO][%s] AI Agent action %s finished.", execution.ExecutionId, startNode.ID)
+			for resultIndex, result := range execution.Results {
+				if result.Action.ID != startNode.ID {
+					continue
+				}
+
+				execution.Results[resultIndex].Status = "SUCCESS"
+				execution.Results[resultIndex].CompletedAt = agentOutput.CompletedAt
+				go sendAgentActionSelfRequest("SUCCESS", execution, execution.Results[resultIndex])
+				break
+			}
+		}
+
 	} else {
 		log.Printf("[ERROR] No result found in AI agent response. Status: %d. Body: %s", newresp.StatusCode, string(body))
 	}
+
 
 	if memorizationEngine == "shuffle_db" {
 		requestKey := fmt.Sprintf("chat_%s_%s", execution.ExecutionId, startNode.ID)

@@ -16226,6 +16226,15 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed unmarshalling agent decision result for decision ID '%s': %s. Data: %s", workflowExecution.ExecutionId, decisionId, err, actionResult.Result)
 		} else {
+			if newDecision.Action == "answer" {
+				if debug { 
+					log.Printf("[DEBUG] Auto-finishing 'answer' decision for decision ID '%s'", decisionId)
+				}
+
+				newDecision.RunDetails.Status = "FINISHED"
+				mappedResult.Decisions[decisionIdResultIndex] = newDecision
+			}
+
 			if newDecision.RunDetails.Status != "" && newDecision.RunDetails.Id != "" && (newDecision.RunDetails.Status != mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status || newDecision.RunDetails.StartedAt != mappedResult.Decisions[decisionIdResultIndex].RunDetails.StartedAt || newDecision.RunDetails.CompletedAt != mappedResult.Decisions[decisionIdResultIndex].RunDetails.CompletedAt) {
 
 				log.Printf("[DEBUG][%s] Updating decision ID '%s' with new status '%s' (old: '%s')", workflowExecution.ExecutionId, decisionId, newDecision.RunDetails.Status, mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status)
@@ -16250,9 +16259,12 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	}
 
 	if mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status == "FAILURE" || mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status == "ABORTED" {
+		if debug { 
+			log.Printf("[DEBUG] Auto-failing agent due to decision ID '%s' being in status '%s'", decisionId, mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status)
+		}
 
-		go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
-		return &workflowExecution, false, nil
+		//go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
+		//return &workflowExecution, false, nil
 	}
 
 	//mappedResult.Decisions[decisionIdResultIndex] = actionResult.Result
@@ -16261,6 +16273,12 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	allFinishedDecisions := []string{}
 	for decisionId, curDecision := range mappedResult.Decisions {
 		if curDecision.RunDetails.Status == "FINISHED" {
+			allFinishedDecisions = append(allFinishedDecisions, curDecision.RunDetails.Id)
+		} else if curDecision.RunDetails.Status == "FAILURE" {
+			if debug { 
+				log.Printf("[DEBUG] Treating decision ID '%s' as finished due to FAILURE status", curDecision.RunDetails.Id)
+			}
+
 			allFinishedDecisions = append(allFinishedDecisions, curDecision.RunDetails.Id)
 		}
 
@@ -16298,8 +16316,8 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		if len(failedDecisions) > 0 {
 			log.Printf("[WARNING][%s] Failed decision found. Should exit out agent %s. It should have exited before this point.", workflowExecution.ExecutionId, decisionId)
 
-			go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
-			break
+			//go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
+			//break
 		}
 
 		if len(foundDecisions) == len(finishedDecisions) {
@@ -20639,7 +20657,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		// 1. Find the decision & reset cache
 		// 2. Update the execution itself to not have the relevant data
 		if len(decisionId) > 0 {
-			log.Printf("[DEBUG][%s] Handling Single action rerun for AI Agent decision. DecisionID: %#v", oldExec.ExecutionId, decisionId)
+			log.Printf("[DEBUG][%s] Handling Single action RERUN for AI Agent decision. DecisionID: %#v", oldExec.ExecutionId, decisionId)
 
 			if foundResultIndex == -1 {
 				return workflowExecution, errors.New("Failed to find the action. Please try again or contact support@shuffler.io if this persists.")
@@ -20653,25 +20671,68 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 			availableDecisions := []string{}
 			foundDecisionIndex := -1
+			decisionPosition := -1
+
+			newDecisions := []AgentDecision{}
 			for decisionIndex, decision := range mappedOutput.Decisions {
 				availableDecisions = append(availableDecisions, decision.RunDetails.Id)
 				if decision.RunDetails.Id != decisionId {
+					if decision.Action == "finish" {
+						if debug { 
+							log.Printf("[DEBUG] Removing the 'finish' action due to rerun")
+						}
+
+						continue
+					}
+
+					newDecisions = append(newDecisions, decision)
+
 					continue
 				}
 
-				foundDecisionIndex = decisionIndex
-
+				// The position in the hierarchy
+				decisionPosition = mappedOutput.Decisions[decisionIndex].I
+				foundDecisionIndex = decisionIndex 
 				mappedOutput.CompletedAt = 0
 				mappedOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 				mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = 0
 				mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse = ""
 				mappedOutput.Decisions[decisionIndex].RunDetails.DebugUrl = ""
-				break
+
+				newDecisions = append(newDecisions, mappedOutput.Decisions[decisionIndex])
 			}
 
 			if foundDecisionIndex == -1 {
 				return workflowExecution, errors.New(fmt.Sprintf("Failed to find and rerun decision '%s' out of '%s' in execution %s. Please try again or contact support@shuffler.io if the error persists.", decisionId, strings.Join(availableDecisions, ","), oldExec.ExecutionId))
 			}
+
+			// Removing everything AFTER the one we are currently on
+			// Has to be done in a wonky way due to not having ordered arrays
+			newNewDecisions := []AgentDecision{}
+			for _, newDecision := range newDecisions {
+				if decisionPosition != -1 && newDecision.I > decisionPosition && newDecision.RunDetails.Id != decisionId {
+					if debug {
+						log.Printf("[DEBUG] SKIPPING decision %s as it's after the rerun position", newDecision.RunDetails.Id)
+					}
+
+					continue
+				}
+
+				if newDecision.RunDetails.Status == "" {
+					continue
+				}
+
+				newNewDecisions = append(newNewDecisions, newDecision)
+			}
+
+
+			for newDecisionIndex, newDecision := range newNewDecisions {
+				if newDecision.RunDetails.Id == decisionId {
+					foundDecisionIndex = newDecisionIndex
+				}
+			}
+
+			mappedOutput.Decisions = newNewDecisions 
 
 			mappedOutput.Status = "WAITING"
 			marshalledResult, err := json.Marshal(mappedOutput)

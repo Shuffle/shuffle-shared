@@ -1263,6 +1263,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						continue
 					} else if decision.RunDetails.Status == "FAILURE" {
+						//finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						failedFound = true
 						continue
 					}
@@ -1285,16 +1286,23 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					}
 				}
 
+				// FIXME: Is failure hadnling here necessary?
+				// Changed it to do failure handling better in the agent itself
+				// due to having a 'finish' action that should handle it properly
 				if failedFound {
 					decisionsUpdated = true
 
+					/*
 					mappedOutput.Status = "FAILURE"
 					mappedOutput.CompletedAt = time.Now().Unix()
 					workflowExecution.Results[resultIndex].Status = "ABORTED"
 
 					go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[resultIndex])
+					*/
 
-				} else if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
+				} 
+
+				if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
 					decisionsUpdated = true
 					mappedOutput.Status = "FINISHED"
 					mappedOutput.CompletedAt = time.Now().Unix()
