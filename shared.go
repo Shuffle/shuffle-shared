@@ -28462,19 +28462,22 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 	return workflowExecution, relevantActions
 }
 
-func isNoProxyHost(noProxy, host string) bool {
+func isNoProxyHost(noProxy, inputHost string) bool {
 	// Normalize the host by removing the port if present
-	host, _, err := net.SplitHostPort(host)
+	host, _, err := net.SplitHostPort(inputHost)
 	if err != nil {
-		log.Printf("[ERROR] Failed to split host and port: %s", err)
+		//log.Printf("[ERROR] Failed to split host and port: %s", err)
+		host = inputHost
 	}
 
 	host = strings.TrimSpace(host) // Fallback to trimming
-
-	for _, noProxyEntry := range strings.Split(noProxy, ",") {
-		noProxyEntry, _, err := net.SplitHostPort(noProxyEntry)
+	noProxies := strings.Split(noProxy, ",")
+	for _, noProxyEntry := range noProxies {
+		newProxyEntry, _, err := net.SplitHostPort(noProxyEntry)
 		if err != nil {
-			log.Printf("[ERROR] Failed to split host and port for NOPROXY: %s", err)
+			//log.Printf("[ERROR] Failed to split host and port for NOPROXY: %s", err)
+		} else {
+			noProxyEntry = newProxyEntry
 		}
 
 		noProxyEntry = strings.TrimSpace(noProxyEntry)
