@@ -6645,6 +6645,7 @@ SINGUL ACTIONS:
 		extraString = ""
 	}
 
+
 	// The starting decision number
 	lastFinishedIndex := -1
 
@@ -6652,7 +6653,7 @@ SINGUL ACTIONS:
 	_ = oldActionResult 
 	oldAgentOutput := AgentOutput{}
 	if createNextActions == true { 
-		extraString = "This is a continuation of a previous execution. ONLY output decisions that fit AFTER the last FINISHED decision. DO NOT repeat previous decisions, and make sure your indexing is on point. Output as an array of decisions.\n\nIF you don't want to add any new decision, add AT LEAST one decision saying why it is finished, summarising EXACTLY what the user wants in a user-friendly Markdown format, OR the format the user asked for. Make the action and category 'finish', and put the reason in the 'reason' field in a user friendly format."
+		extraString = "This is a continuation of a previous execution. ONLY output decisions that fit AFTER the last FINISHED decision. DO NOT repeat previous decisions, and make sure your indexing is on point. Output as an array of decisions.\n\nIF you don't want to add any new decision, add AT LEAST one decision saying why it is finished, summarising EXACTLY what the user wants in a user-friendly Markdown format, OR the format the user asked for. Make the action and category 'finish', and put the reason in the 'reason' field. Do NOT summarize or explain. JUST give exactly the final answer and nothing more."
 
 		userMessageChanged := false
 
@@ -6716,6 +6717,10 @@ SINGUL ACTIONS:
 				break
 			}
 
+			if len(userMessage) == 0 && len(oldAgentOutput.OriginalInput) > 0 {
+				userMessage = fmt.Sprintf("Original input: %s", oldAgentOutput.OriginalInput)
+			}
+
 			if hasFailure { 
 				userMessage += "\n\nSome of the previous decisions failed. Finalise the agent.\n\n"
 			}
@@ -6724,6 +6729,7 @@ SINGUL ACTIONS:
 			if len(previousAnswers) > 0 {
 				userMessage += fmt.Sprintf("\n\nAnswers to questions:\n%s", previousAnswers)
 			}
+
 			userMessage += "\n\nBased on the previous decisions, find out if any new decisions need to be added."
 			userMessageChanged = true
 		}
@@ -7283,7 +7289,6 @@ FINALISING:
 				}
 
 				SetWorkflowExecution(ctx, execution, true)
-				//os.Exit(3)
 			}
 		}
 
@@ -7301,6 +7306,8 @@ FINALISING:
 			// Ensures we track them along the way
 			if len(parsedAgentInput) > 0 { 
 				agentOutput.Input = parsedAgentInput
+
+				agentOutput.OriginalInput = userMessage
 			}
 		}
 
@@ -7347,15 +7354,29 @@ FINALISING:
 
 
 				agentOutput.Output = decision.Reason
+				for _, decisionField := range decision.Fields {
+					if (decisionField.Key == "output" || decisionField.Key == "body") && len(decisionField.Value) > 0 {
+						agentOutput.Output = decisionField.Value
+					} 
+				}
+
 				agentOutput.Status = "FINISHED"
 				agentOutput.CompletedAt = time.Now().Unix()
 
 				//workflowExecution.Results[resultIndex].Status = "SUCCESS"
 				//go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 
+			//} else if decision.Action == "answer" {
+			//	agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+			//	agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
+			//	agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+
+				//go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
+
 			} else if decision.Action == "ask" || decision.Action == "question" { 
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+
 
 			} else if decision.Category != "standalone" { 
 				// Do we run the singul action directly?
@@ -7366,12 +7387,15 @@ FINALISING:
 
 
 			} else {
-				if decision.Category == "standalone" { 
 
+				if decision.Category == "standalone" || decision.Action == "answer" { 
 					// FIXME: Maybe need to send this to myself
-					decision.RunDetails.StartedAt = time.Now().Unix()
-					decision.RunDetails.CompletedAt = time.Now().Unix()
-					decision.RunDetails.Status = "FINISHED"
+
+					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+					agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
+					agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+
+					decision = agentOutput.Decisions[decisionIndex]
 
 					marshalledDecision, err := json.Marshal(decision)
 					if err != nil {
@@ -7391,7 +7415,7 @@ FINALISING:
 							Result: string(marshalledDecision),
 						}
 
-						// This is required as the result for the agent isn't set yet on the first run
+						// This is required as the result for the agent isn't set yet on the first run. Minor delay to wait up a bit
 						if decisionIndex == 0 {
 							go func() {
 								time.Sleep(2 * time.Second)
@@ -7449,7 +7473,7 @@ FINALISING:
 			// These aren't properly being updated in the db, so 
 			// we need additional logic here to ensure it is being 
 			// set/started
-			if nextActionType == "ask" || nextActionType == "finish" { 
+			if nextActionType == "ask" || nextActionType == "finish" || nextActionType == "answer" {  
 				// Ensure we update all of it
 				for resultIndex, result := range execution.Results {
 					if result.Action.ID != startNode.ID {

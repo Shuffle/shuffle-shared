@@ -1705,9 +1705,9 @@ type SelectedDetectionRules struct {
 }
 
 type DetectionFileInfo struct {
-	FileName string `json:"file_name" yaml:"file_name"`
-	FileId   string `json:"file_id"`
-	Tags 	[]string `json:"tags" yaml:"tags"`
+	FileName string   `json:"file_name" yaml:"file_name"`
+	FileId   string   `json:"file_id"`
+	Tags     []string `json:"tags" yaml:"tags"`
 
 	RuleTitle   string `json:"title" yaml:"title"`
 	Description string `json:"description" yaml:"description"`
@@ -4578,13 +4578,14 @@ type AgentOutput struct {
 	// For easy testing
 	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
 	// For tracking of details parent<->child
-	StartedAt   int64  `json:"started_at,omitempty" datastore:"started_at"`
-	CompletedAt int64  `json:"completed_at,omitempty" datastore:"completed_at"`
-	ExecutionId string `json:"execution_id,omitempty" datastore:"execution_id"`
-	NodeId      string `json:"node_id,omitempty" datastore:"node_id"`
-	Memory      string `json:"memory,omitempty" datastore:"memory"`
-	Input       string `json:"input" datastore:"input"`
-	Output      string `json:"output,omitempty" datastore:"output"`
+	StartedAt     int64  `json:"started_at,omitempty" datastore:"started_at"`
+	CompletedAt   int64  `json:"completed_at,omitempty" datastore:"completed_at"`
+	ExecutionId   string `json:"execution_id,omitempty" datastore:"execution_id"`
+	NodeId        string `json:"node_id,omitempty" datastore:"node_id"`
+	Memory        string `json:"memory,omitempty" datastore:"memory"`
+	Input         string `json:"input" datastore:"input"`
+	Output        string `json:"output,omitempty" datastore:"output"`
+	OriginalInput string `json:"original_input,omitempty" datastore:"original_input"`
 }
 
 type HTTPWrapper struct {
@@ -4749,8 +4750,8 @@ type ProcessInfo struct {
 }
 
 type UserInfo struct {
-	UserID   string `json:"user_id"`
-	Username string `json:"username"`
+	UserID   string   `json:"user_id"`
+	Username string   `json:"username"`
 	Groups   []string `json:"groups,omitempty"`
 }
 
@@ -4763,9 +4764,9 @@ type TelemetryConfig struct {
 }
 
 type TelemetryFilter struct {
-	Type     string   `json:"type"`
-	Include  []string `json:"include,omitempty"`
-	Exclude  []string `json:"exclude,omitempty"`
+	Type    string   `json:"type"`
+	Include []string `json:"include,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
 }
 
 type AuditLogCollector struct {
