@@ -10602,6 +10602,8 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		return
 	}
 
+	
+
 	output, err := generateWorkflowJson(ctx, input, user, workflow)
 	if err != nil {
 		reason := err.Error()
@@ -10805,7 +10807,8 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	output, err := editWorkflowWithLLM(ctx, workflow, user, editRequest)
+	output, err := 	editWorkflowWithLLMV2(ctx, workflow, user, editRequest)
+
 	if err != nil {
 		reason := err.Error()
 		if strings.HasPrefix(reason, "AI rejected the task: ") {
@@ -10820,6 +10823,8 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
+
+	
 
 	if project.Environment == "cloud" {
 		IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
@@ -10838,6 +10843,448 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(workflowJson)
+}
+
+// func newGeneratePrototypeWorkflow() *Workflow {
+// 	return &Workflow{
+// 		ID: uuid.NewV4().String(),
+// 		Actions: []Action{
+// 			{
+// 				ID:         uuid.NewV4().String(),
+// 				AppName:   "Prototype",
+// 				Label:     "Generate Prototype",
+// 				Parameters: []WorkflowAppActionParameter{},
+// 			},
+// 		},
+// 		Triggers:  []Trigger{},
+// 		Branches:  []Branch{},
+// 	}
+// }
+
+func editWorkflowWithLLMV2(ctx context.Context, workflow *Workflow, user User, input WorkflowEditAIRequest) (*Workflow, error) {
+
+	// we are going to split this into multiple stages where
+	// stage 1 is going to be a intent classifier
+
+	// at this stage it breaks down what should be done to full the user request
+
+	// 1. Identify the intent
+	// intent := classifyIntent(input)
+
+	// // 2. Extract relevant entities
+	// entities := extractEntities(input)
+
+	// // 3. Determine the required actions
+	// actions := determineActions(intent, entities)
+
+	// lets start by identifying the multiple intents
+
+	intents, err := classifyMultipleIntents(input.Query)
+
+	if err != nil {
+		return nil, err
+	}
+
+	for _, task := range intents.Tasks {
+		log.Printf("[DEBUG] Detected intent: %s on target node: %s from source text: %s", task.Intent, task.TargetNode, task.SourceText)
+		// for now lets imagine there are seperate fucntions to handle each intent so lets focus for now on ADD_NODE intent
+		switch task.Intent {
+		case "ADD_NODE":
+			workflow, err = handleAddNodeTask(ctx, workflow, task, input.Environment, user)
+			if err != nil {
+				return workflow, err
+			}
+		case "REMOVE_NODE":
+			// workflow, err = handleRemoveNodeTask(ctx, workflow, task, input.Environment, user)
+			// if err != nil {
+			// 	return workflow, err
+			// }
+		}
+	}
+
+	return workflow, nil
+}
+
+func handleAddNodeTask(ctx context.Context, workflow *Workflow, task WorkflowIntentTask, environment string, user User) (*Workflow, error) {
+
+	systemMessage := `Generate a single JSON node (action or trigger) for Shuffle workflow based on user request.
+
+CRITICAL RULES:
+- Use real API endpoints and standard HTTP methods (GET/POST/PUT/DELETE/PATCH)
+- Never leave "url" field empty - use actual API base URLs like https://api.vendor.com
+- For unknown APIs, use standard patterns: https://api.vendor.com/v1 or https://vendor.com/api
+- For on-premise systems, use templates: https://<server-ip>/api/v1
+
+node in shuffle comes in two types: Trigger and Action, Trigger is the starting point of workflow and action is the step that performs some operation
+Here is an example format of an action
+
+ADDING A NEW APP ACTION or TRIGGER
+     If the user says:
+      - Add a step to send an email after this
+	  - Insert a new action before X
+	  - Add an enrichment step between trigger and Slack
+
+	  Some important notes:
+	    when adding a new app action, keep in mind that:
+		Each app and action in the workflow represents a real API call. When modifying actions or adding new ones:
+		- Use public OpenAPI specs or common API conventions
+		- Accurately infer the correct method, endpoint, headers, and parameters
+		- Avoid guessing random fields, stick to what’s real or well-known
+		- If you're unsure of an API detail, **make an educated guess using real-world patterns.**
+		- You must never leave the "url" field empty.
+
+			If you know the official base URL, use it directly
+			If you're unsure, guess using common formats like:
+
+			https://api.vendor.com/v1
+			https://vendor.com/api or 
+			https://api.vendor.com
+
+			Also when ever you use the base url make sure you include it as is, for example if a vendor base url according to their open api spec or public doc is like this "https://api.vendor.com/v1"  or any other variation, just use the base url as is and do not change it in any way
+			You are allowed to use your training to approximate well-known APIs
+			Do **not** leave the field out or null under any circumstance
+
+			example "url": "https://slack.com/api"
+
+			The only two times where the url can be less relevant is when you are using the "Shuffle Tools" app and its actions like "execute_python" or "run_ssh_command" even in these cases provide something like this "url": "https://shuffle.io"
+			The other case is when the api server is actually running on premises where the url is not known in advance, for example fortigate firewall or Classic Active Directory (AD), in those case you can use template urls like "url": "https://<fortigate-ip>/api/v2", "url": "https://<your-server-ip>/api/v1"
+			But apart from these cases most of the platforms are in the cloud and you can find the base url in their documentation or OpenAPI spec, so you can use that as the url.
+		
+			Here is the format for adding a new action:
+			Action format
+
+			 "action" :{
+				"id": "sample-id", // do not stress about this, the system will generate a unique ID for you
+				"app_name": "string",  // e.g., "Jira"
+				"action_name": "custom_action", // always keep as "custom_action" except for the Shuffle Tools app where it can be "execute_python" or "run_ssh_command"
+				
+				TRIGGER FORMAT:
+				{
+				"trigger": {
+					"app_name": "Webhook|Schedule",
+					"label": "unique_label_name",
+					"parameters": [
+					{"name": "url|cron", "value": "webhook_url|cron_expression"}
+					]
+				}
+				}
+
+SPECIAL CASES:
+- Shuffle Tools app: use "execute_python" or "run_ssh_command" as action_name, url: "https://shuffle.io"
+- Reference previous steps: use $exec.field_name or $label_name.field_name
+
+Return ONLY the JSON object, no explanations.
+`
+
+	finalContentOutput, err := RunAiQuery(systemMessage, task.SourceText)
+	if err != nil {
+		return nil, err
+	}
+
+	var nodeResponse AddNodeResponse
+	err = json.Unmarshal([]byte(finalContentOutput), &nodeResponse)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse add node response: %s", err)
+	}
+
+	var newWorkflowApp WorkflowApp
+	var newTriggerApp Trigger
+
+	// Use the parsed response
+	if nodeResponse.Trigger != nil {
+		TriggerImage := GetTriggerData(nodeResponse.Trigger.AppName)
+		switch strings.ToLower(nodeResponse.Trigger.AppName) {
+		case "webhook":
+			ID := uuid.NewV4().String()
+			webhookURL := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", ID)
+			if project.Environment != "cloud" {
+				if len(os.Getenv("BASE_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("BASE_URL"), ID)
+				} else if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"), ID)
+				} else {
+					port := os.Getenv("PORT")
+					if len(port) == 0 {
+						port = "5001"
+					}
+					webhookURL = fmt.Sprintf("http://localhost:%s/api/v1/hooks/webhook_%s", port, ID)
+				}
+			}
+
+			newTriggerApp = Trigger{
+				AppName:     "Webhook",
+				AppVersion:  "1.0.0",
+				Label:       nodeResponse.Trigger.Label,
+				TriggerType: "WEBHOOK",
+				ID:          ID,
+				Description: "Custom HTTP input trigger",
+				LargeImage:  TriggerImage,
+				Environment: environment,
+				Status:      "uninitialized",
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "url", Value: webhookURL},
+					{Name: "tmp", Value: ""},
+					{Name: "auth_headers", Value: ""},
+					{Name: "custom_response_body", Value: ""},
+					{Name: "await_response", Value: "v1"},
+				},
+			}
+		case "schedule":
+			ScheduleValue := "*/25 * * * *"
+			if len(nodeResponse.Trigger.Params) != 0 {
+				ScheduleValue = nodeResponse.Trigger.Params[0].Value
+			}
+			newTriggerApp = Trigger{
+				AppName:     "Schedule",
+				AppVersion:  "1.0.0",
+				Label:       nodeResponse.Trigger.Label,
+				TriggerType: "SCHEDULE",
+				ID:          uuid.NewV4().String(),
+				Description: "Schedule time trigger",
+				LargeImage:  TriggerImage,
+				Environment: environment,
+				Status:      "uninitialized",
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "cron", Value: ScheduleValue},
+					{Name: "execution_argument", Value: ""},
+				},
+			}
+
+		default:
+			return nil, fmt.Errorf("unsupported trigger app name: %s", nodeResponse.Trigger.AppName)
+		}
+	} else if nodeResponse.Action != nil {
+		// Handle action
+		newActionItem := nodeResponse.Action
+		AppName := strings.TrimSpace(newActionItem.AppName)
+		if AppName != "" {
+			foundApps, err := FindWorkflowAppByName(ctx, newActionItem.AppName)
+			if err == nil && len(foundApps) > 0 {
+				newWorkflowApp = foundApps[0]
+			} else {
+				// Fallback to Algolia search for public apps
+				algoliaApp, err := HandleAlgoliaAppSearch(ctx, newActionItem.AppName)
+				if err == nil && len(algoliaApp.ObjectID) > 0 {
+					// Get the actual app from Algolia result
+					discoveredApp := &WorkflowApp{}
+					standalone := os.Getenv("STANDALONE") == "true"
+					if standalone {
+						discoveredApp, err = GetSingulApp("", algoliaApp.ObjectID)
+					} else {
+						discoveredApp, err = GetApp(ctx, algoliaApp.ObjectID, user, false)
+					}
+					if err == nil {
+						newWorkflowApp = *discoveredApp
+					}
+				}
+			}
+		}
+	}
+
+	// Now add the created trigger/action to the workflow and handle branches
+	if nodeResponse.Trigger != nil {
+		// Calculate trigger position based on existing nodes
+		triggerX := -312.6988673793812 // Default position
+		triggerY := 190.6413454035773
+
+		// If we have existing triggers, position before the first one
+		if len(workflow.Triggers) > 0 {
+			triggerX = workflow.Triggers[0].Position.X - 437.0
+		} else if len(workflow.Actions) > 0 {
+			// If no triggers but actions exist, position before first action
+			triggerX = workflow.Actions[0].Position.X - 437.0
+		}
+		// If no nodes exist, use default position
+
+		newTriggerApp.Position = Position{
+			X: triggerX,
+			Y: triggerY,
+		}
+
+		// Add trigger to the workflow
+		workflow.Triggers = append(workflow.Triggers, newTriggerApp)
+
+		// Create branch from trigger to first action (if actions exist)
+		if len(workflow.Actions) > 0 {
+			firstAction := workflow.Actions[0]
+			newBranch := Branch{
+				ID:            uuid.NewV4().String(),
+				SourceID:      newTriggerApp.ID,
+				DestinationID: firstAction.ID,
+			}
+			workflow.Branches = append(workflow.Branches, newBranch)
+
+			// Update workflow start if needed
+			if workflow.Start == "" {
+				workflow.Start = firstAction.ID
+			}
+		}
+
+	} else if nodeResponse.Action != nil {
+		// Create new action from the AI response and found app
+		var newAction Action
+
+		if newWorkflowApp.Name != "" {
+			// Use found app
+			newAction = Action{
+				ID:          uuid.NewV4().String(),
+				AppName:     newWorkflowApp.Name,
+				AppVersion:  newWorkflowApp.AppVersion,
+				Label:       nodeResponse.Action.Label,
+				Name:        nodeResponse.Action.ActionName,
+				Environment: environment,
+				IsValid:     true,
+				IsStartNode: false,
+			}
+		} else {
+			// Fallback - create basic HTTP action
+			newAction = Action{
+				ID:          uuid.NewV4().String(),
+				AppName:     nodeResponse.Action.AppName,
+				AppVersion:  "1.0.0",
+				Label:       nodeResponse.Action.Label,
+				Name:        nodeResponse.Action.ActionName,
+				Environment: environment,
+				IsValid:     true,
+				IsStartNode: false,
+			}
+		}
+
+		// Add parameters from AI response
+		var parameters []WorkflowAppActionParameter
+		for _, param := range nodeResponse.Action.Params {
+			parameters = append(parameters, WorkflowAppActionParameter{
+				Name:  param.Name,
+				Value: param.Value,
+			})
+		}
+		newAction.Parameters = parameters
+
+		// Calculate action position - add at the end
+		actionX := -312.6988673793812 // Default position
+		actionY := 190.6413454035773
+
+		// Position after the rightmost existing node
+		if len(workflow.Actions) > 0 {
+			actionX = workflow.Actions[len(workflow.Actions)-1].Position.X + 437.0
+		} else if len(workflow.Triggers) > 0 {
+			actionX = workflow.Triggers[len(workflow.Triggers)-1].Position.X + 437.0
+			newAction.IsStartNode = true
+		} else {
+			newAction.IsStartNode = true
+		}
+
+		newAction.Position = Position{
+			X: actionX,
+			Y: actionY,
+		}
+
+		// Add action to workflow
+		workflow.Actions = append(workflow.Actions, newAction)
+
+		// Create branch connecting to new action
+		actionCount := len(workflow.Actions)
+		var sourceID string
+
+		if actionCount > 1 {
+			// Connect from previous action
+			sourceID = workflow.Actions[actionCount-2].ID
+		} else if len(workflow.Triggers) > 0 {
+			// Connect from last trigger
+			sourceID = workflow.Triggers[len(workflow.Triggers)-1].ID
+			workflow.Start = newAction.ID
+		} else {
+			// First action in empty workflow
+			workflow.Start = newAction.ID
+		}
+
+		if sourceID != "" {
+			workflow.Branches = append(workflow.Branches, Branch{
+				ID:            uuid.NewV4().String(),
+				SourceID:      sourceID,
+				DestinationID: newAction.ID,
+			})
+		}
+	}
+
+	return workflow, nil
+}
+
+func handleRemoveNodeTask(ctx context.Context, workflow *Workflow, task WorkflowIntentTask, environment string, user User) (*Workflow, error) {
+	// Implement logic to remove a node from the workflow based on the task details
+	return workflow, nil
+}
+
+func classifyMultipleIntents(userInput string) (*WorkflowIntentResponse, error) {
+
+	systemMessage := `You are a Senior Workflow Analyst and intent classifier. You operate within the Shuffle security automation platform. Your SOLE mission is to deconstruct a user's natural language request into a precise, ordered list of machine-readable tasks.
+	                 You are a part of workflow editor system, Here a workflow in shuffle is basically a set of nodes where each node will perform an action and these are represented in json format, Now users will want to edit this existing workflow will type what they want to edit in the natural language and given the complexity of editing workflow with LLM's we splitted this into multiple stages where you being stage 1 here in this stage we decide what set of steps we exactly need to do edit workflow
+	                 You must classify the user's request into one or more of the following atomic intents. These are the only tools at your disposal.
+					 We have the following atomic intents:
+					 1) ADD_NODE: Use when the user wants to add a new action or step to the workflow.
+					 2) MODIFY_ACTION_PARAMETER: Use when the user wants to change a specific setting, field, or value within an existing node.
+					 3) REMOVE_NODE: Use when the user wants to delete an existing action or step from the workflow.
+					 4) ADD_CONDITION: Use when the user introduces "if-then" logic, a check, or a decision point. This is a special form of adding a node. In our workflow format sometimes we don't want the logic to go to the next node, just like we have circuit breaker to stop the flow of electric current. Keep in mind this is only useful for cases where we can allow it based on single field like if some_field < condition> some_field if this is true only then proceed to next step then yes this is the one we need
+					 5) REMOVE_CONDITION: Use when the user wants to delete an existing condition from the workflow.
+					 6) NO_ACTION_NEEDED: Use when the user's request is too ambiguous or does not require any changes to the workflow.
+
+					 You MUST respond with ONLY a single, valid JSON object containing a "tasks" array. The tasks must be in chronological order.
+					 Here is the format 
+
+					{
+						"intent": "INTENT_NAME",
+						"target_node": "User's description of the node being targeted.",
+						"source_text": "The exact part of the user's prompt that this task corresponds to."
+					}
+
+					Example in Action:
+					User Request: "Change the Jira ticket's priority to 'Highest' and then add a step to send the ticket URL to the '#security-alerts' Slack channel."
+
+					{
+						"tasks": [
+							{
+							"intent": "MODIFY_ACTION_PARAMETER",
+							"target_node": "Jira ticket",
+							"source_text": "Change the Jira ticket's priority to 'Highest'"
+							},
+							{
+							"intent": "ADD_NODE",
+							"target_node": null,
+							"source_text": "add a step to send the ticket URL to the '#security-alerts' Slack channel"
+							}
+						]
+					}
+
+					 `
+
+	// Implement the logic to call the LLM with the system prompt and user input
+	finalContentOutput, err := RunAiQuery(systemMessage, userInput)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
+		return nil, err
+	}
+
+	if len(finalContentOutput) == 0 {
+		return nil, errors.New("AI response is empty")
+	}
+
+	finalContentOutput = strings.TrimSpace(finalContentOutput)
+	finalContentOutput = strings.TrimPrefix(finalContentOutput, "```json")
+	finalContentOutput = strings.TrimPrefix(finalContentOutput, "```")
+	finalContentOutput = strings.TrimSuffix(finalContentOutput, "```")
+	finalContentOutput = strings.TrimSpace(finalContentOutput)
+
+	log.Printf("[DEBUG] classifyMultipleIntents LLM output: %s", finalContentOutput)
+
+	// Parse the JSON response into our struct
+	var intentResponse WorkflowIntentResponse
+	err = json.Unmarshal([]byte(finalContentOutput), &intentResponse)
+	if err != nil {
+		log.Printf("[ERROR] Failed to unmarshal intent classification response: %s", err)
+		return nil, fmt.Errorf("failed to parse AI intent response: %s", err)
+	}
+
+	return &intentResponse, nil
 }
 
 func runSupportLLMAssistant(ctx context.Context, input QueryInput, user User) (string, string, error) {
