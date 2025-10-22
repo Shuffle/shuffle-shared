@@ -6572,7 +6572,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	// Create the OpenAI body struct
 	systemMessage := `INTRODUCTION: 
-You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%. These are a last resort. Do NOT ask about networking or authentication unless explicitly specified. 
+You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%, is not the last action AND it can't be done with an API. These actions are a last resort. Do NOT ask about networking or authentication unless explicitly specified. 
 
 END INTRODUCTION
 ---
@@ -6770,7 +6770,8 @@ RULES:
 * Fields is an array based on key: value pairs. Don't add unnecessary fields. If using 'ask', the key is 'question' and the value is the question to ask. If using 'answer', the key is 'output' and the value is what to answer.
 * NEVER skip executing an action, even if some details are unclear. Fill missing fields only with safe defaults, but still execute.
 * NEVER ask the user for clarification, confirmations, or extra details unless it is absolutely unavoidable.
-* Focus entirely on performing tasks; gathering input is secondary.
+* If realtime data is required, ALWAYS use an Singul APIs to get it.
+* ALWAYS output the same language as the original question. 
 
 2. Action & Decision Rules
 
@@ -6782,7 +6783,9 @@ RULES:
 * Do NOT add unnecessary fields; only include fields required for the action.
 * Fields can reference previous action outputs using {{action_name}}. Example: {"body": "{{previous_action.field}}"}.
 * If questions are absolutely required, combine all into one "ask" action with multiple "question" fields. Do NOT create multiple separate decisions.
+* Retry actions if the result was irrelevant. After three retries of a failed decision, add the finish decision. 
 * If any decision has failed, add the finish decision.
+* If a formatting is specified for the output, use it exactly how explained for the finish decision.
 
 END RULES
 ---
@@ -7325,7 +7328,7 @@ FINALISING:
 			}
 
 			if decision.RunDetails.Status == "FINISHED" || decision.RunDetails.Status == "SUCCESS" {
-				log.Printf("[INFO][%s] Decision %d already finished. Skipping...", execution.ExecutionId, decision.I)
+				//log.Printf("[INFO][%s] Decision %d already finished. Skipping...", execution.ExecutionId, decision.I)
 				continue
 			}
 
