@@ -36,6 +36,7 @@ import (
 //var model = "gpt-4o-mini"
 //var model = "o4-mini"
 var standalone bool
+
 //var model = "gpt-5-mini"
 var model = "gpt-5-mini"
 var fallbackModel = ""
@@ -6801,6 +6802,15 @@ FINALISING:
 
 	//systemMessage += `If you are missing information (such as emails) to make a list of decisions, just add a single decision which asks them to clarify the input better.`
 
+	agentReasoningEffort := "minimal"
+
+	newReasoningEffort := os.Getenv("AI_AGENT_REASONING_EFFORT")
+	if len(newReasoningEffort) > 0 {
+		if newReasoningEffort == "minimal" || newReasoningEffort == "low" || newReasoningEffort == "medium" || newReasoningEffort == "high" {
+			agentReasoningEffort = newReasoningEffort
+		}
+	}
+
 	completionRequest := openai.ChatCompletionRequest{
 		//Model: "gpt-4o-mini",
 		//Model: "gpt-4.1-mini",
@@ -6828,7 +6838,7 @@ FINALISING:
 		// Reasoning control
 		//ReasoningEffort: "medium", // old
 		MaxCompletionTokens: 5000, 
-		ReasoningEffort: "low",
+		ReasoningEffort: agentReasoningEffort,
 		Store: true,
 	}
 
@@ -7350,6 +7360,7 @@ FINALISING:
 			if decision.Action == "finish" || decision.Category == "finish" {
 				log.Printf("[INFO][%s] Decision %d is a finish decision. Marking the agent as finished...", execution.ExecutionId, decision.I)
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+				agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 
 

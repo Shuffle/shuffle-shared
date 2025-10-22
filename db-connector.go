@@ -1336,9 +1336,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						mappedOutput.CompletedAt = 0
 						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 
-						if debug { 
-							log.Printf("[DEBUG] All decisions finished but no finish action found.")
-						}
+						//if debug { 
+						//	log.Printf("[DEBUG] All decisions finished but no finish action found.")
+						//}
 					}
 
 				}
