@@ -4652,6 +4652,17 @@ type AIConditionValue struct {
 	Value string `json:"value"`
 }
 
+// Structs for AI intent classification response
+type WorkflowIntentResponse struct {
+	Tasks []WorkflowIntentTask `json:"tasks"`
+}
+
+type WorkflowIntentTask struct {
+	Intent     string  `json:"intent"`
+	TargetNode *string `json:"target_node"` // Pointer to allow null values
+	SourceText string  `json:"source_text"`
+}
+
 type AppCategoryItem struct {
 	AppName    string   `json:"app_name"`
 	Categories []string `json:"categories"`
@@ -4713,6 +4724,12 @@ type AIConfig struct {
 	Prompt    string `json:"prompt" datastore:"prompt"`
 	Model     string `json:"model" datastore:"model"`
 	Status    string `json:"status" datastore:"status"`
+}
+
+// New struct for ADD_NODE LLM response (singular keys)
+type AddNodeResponse struct {
+	Trigger *AITriggerItem `json:"trigger,omitempty"`
+	Action  *AIActionItem  `json:"action,omitempty"`
 }
 
 // EDR and Audit Log Monitoring Structs
