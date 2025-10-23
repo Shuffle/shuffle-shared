@@ -481,7 +481,7 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 
 	if len(workflows) == 0 {
 		//log.Printf("[DEBUG] Couldn't find any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
-		return errors.New("Failed finding workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
+		return errors.New("Failed finding workflow named Ops Dashboard Workflow")
 	}
 
 	//log.Printf("[DEBUG] Found %d workflows named SHUFFLE_INTERNAL_OPS_WORKFLOW: ", len(workflows))
@@ -747,9 +747,21 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			errorChannel <- err
 		}()
 
+		datastoreHealthChannel := make(chan DatastoreHealth)
+		go func() {
+			datastoreHealth, err := RunOpsDatastore(apiKey, orgId)
+			if err != nil {
+				log.Printf("[ERROR] Failed running datastore health check: %s", err)
+			}
+
+			datastoreHealthChannel <- datastoreHealth
+			errorChannel <- err
+		}()
+
 		// Use channel for getting RunOpsWorkflow function results
 		platformHealth.Apps = <-openapiAppHealthChannel
 		platformHealth.PythonApps = <-pythonAppHealthChannel
+		platformHealth.Datastore = <-datastoreHealthChannel
 	}
 
 	platformHealth.Workflows = <-workflowHealthChannel
@@ -1977,7 +1989,16 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 // Create datastore
 // read it
 // delete it
-func RunOpsDatastore(baseUrl, apikey, orgId string) (DatastoreHealth, error) {
+func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
+	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	if len(baseUrl) == 0 {
+		baseUrl = "https://shuffler.io"
+	}
+
+	if project.Environment == "onprem" {
+		baseUrl = "http://localhost:5001"
+	}
+
 	datastoreHealth := DatastoreHealth{
 		Create: false,
 		Read: false,
@@ -1986,8 +2007,8 @@ func RunOpsDatastore(baseUrl, apikey, orgId string) (DatastoreHealth, error) {
 	}
 
 	// create datastore entry
-	PAYLOAD := `{"key": "SHUFFLE_HEALTH_CHECK", "value": [1,2,3,4,5,6,7,8]}, "category": "SHUFFLE_HEALTH_CHECK"}`
-	url := fmt.Sprint("%s/api/v1/orgs/%s/set_cache", baseUrl, orgId)
+	PAYLOAD := `{"key": "SHUFFLE_HEALTH_CHECK", "value": "yesy"}, "category": "SHUFFLE_HEALTH_CHECK"}`
+	url := fmt.Sprintf("%s/api/v1/orgs/%s/set_cache", baseUrl, orgId)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
 		log.Printf("[ERROR] Failed to create request (%s) for set_cache %s", url, err)
@@ -2006,14 +2027,12 @@ func RunOpsDatastore(baseUrl, apikey, orgId string) (DatastoreHealth, error) {
 		return datastoreHealth, err
 	}
 
-	if resp.StatusCode != 200 {
-		return datastoreHealth, errors.New("Failed to create cache internal server error not 200 status code")
-	}
+	log.Printf("Org-Id: %s", orgId)
 	
 	datastoreHealth.Create = true
 	//read datastore entry
-	PAYLOAD = fmt.Sprint(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK"}`, orgId)
-	url = fmt.Sprint("%s/api/v1/orgs/%s/get_cache", baseUrl, orgId)
+	PAYLOAD = fmt.Sprintf(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK"}`, orgId)
+	url = fmt.Sprintf("%s/api/v1/orgs/%s/get_cache", baseUrl, orgId)
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
 		log.Printf("[ERROR] Failed to create request (%s) for get_cache: %s", url, err)
@@ -2039,8 +2058,8 @@ func RunOpsDatastore(baseUrl, apikey, orgId string) (DatastoreHealth, error) {
 	datastoreHealth.Read = true
 
 	// Delete
-	PAYLOAD = fmt.Sprint(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK"}`, orgId)
-	url = fmt.Sprint("%s/api/v1/orgs/%s/delete_key", baseUrl, orgId)
+	PAYLOAD = fmt.Sprintf(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK"}`, orgId)
+	url = fmt.Sprintf("%s/api/v1/orgs/%s/delete_cache", baseUrl, orgId)
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
 		log.Printf("[ERROR] Failed to create request (%s) for delete_key: %s", url, err)
@@ -2094,6 +2113,7 @@ func RunFileHealthOps(baseUrl, apikey, orgId string) (FileHealth, error) {
 	
 	fileHealth.Create = true
 	//Read metadata
+	//Delete file
 	
 	return fileHealth, nil
 }
