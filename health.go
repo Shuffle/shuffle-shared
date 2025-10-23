@@ -1784,6 +1784,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	workflowData.Public = false
 	workflowData.Status = ""
 	workflowData.Name = "Ops Dashboard Workflow"
+	workflowData.ID = "shuffler-doti-ohea-lthc-heckworkflow"
 	workflowData.Hidden = true
 	workflowData.BackgroundProcessing = true
 
