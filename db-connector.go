@@ -1324,21 +1324,47 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				} 
 
 				if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
+
+					// Check if requests was recently sent or not
+					cacheId := fmt.Sprintf("agent-%s-%s-fixexec-finished-check", workflowExecution.ExecutionId, action.ID)
+					if _, err := GetCache(ctx, cacheId); err == nil {
+						// Recently sent, skip
+						//log.Printf("[INFO][%s] Recently handled all decisions finished for agent action %s - skipping.", workflowExecution.ExecutionId, action.ID)
+						continue
+					}
+
+					// Set cache to prevent multiple sends
+					SetCache(ctx, cacheId, []byte("handled"), 1)
+
+					decisionsUpdated = true
 					if finishDecisionFound {
-						decisionsUpdated = true
+						log.Printf("[INFO][%s] All decisions finished for agent action %s - marking as FINISHED.", workflowExecution.ExecutionId, action.ID)
+
 						mappedOutput.Status = "FINISHED"
 						mappedOutput.CompletedAt = time.Now().Unix()
 
 						workflowExecution.Results[resultIndex].Status = "SUCCESS"
-						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
-					} else {
-						mappedOutput.Status = "WAITING"
-						mappedOutput.CompletedAt = 0
-						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 
-						//if debug { 
-						//	log.Printf("[DEBUG] All decisions finished but no finish action found.")
-						//}
+						go func() {
+							time.Sleep(1 * time.Second)
+							go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+						}()
+					} else {
+						log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found, marking as WAITING.", workflowExecution.ExecutionId, action.ID)
+
+						mappedOutput.Status = "RUNNING"
+						mappedOutput.CompletedAt = 0
+						workflowExecution.Results[resultIndex].Status = "WAITING"
+
+						if workflowExecution.Status == "FINISHED" {
+							workflowExecution.Status = "EXECUTING"
+						}
+
+						// To ensure the execution is actually updated
+						go func() {
+							time.Sleep(1 * time.Second)
+							sendAgentActionSelfRequest("WAITING", workflowExecution, workflowExecution.Results[resultIndex])
+						}()
 					}
 
 				}

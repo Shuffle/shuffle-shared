@@ -6412,10 +6412,21 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool) (Action, error) {
+
+	// A handler to ensure we ALWAYS focus on next actions if a node starts late
+	// or is missing context, but has previous decisions
+	for _, result := range execution.Results {
+		if result.Action.ID != startNode.ID {
+			continue
+		}
+
+		createNextActions = true
+		break
+	}
+
 	// Metadata = org-specific context
 	// This e.g. makes "me" mean "users in my org" and such
 	metadata := ""
-
 	if len(execution.Workflow.UpdatedBy) > 0 {
 		metadata += fmt.Sprintf("Current user: %s\n", execution.Workflow.UpdatedBy)
 	}
@@ -6424,152 +6435,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		execution.Workflow.OrgId = execution.ExecutionOrg
 	}
 
-	if len(execution.Workflow.OrgId) > 0 {
-		ctx := context.Background()
-		org, err := GetOrg(ctx, execution.Workflow.OrgId)
-		if err == nil && len(org.Id) > 0 { 
-			metadata += fmt.Sprintf("Organization name: %s\n", org.Name)
-			admins := []string{}
-			users := []string{}
-			for _, user := range org.Users {
-				if user.Role == "admin" {
-					admins = append(admins, user.Username)
-				} else {
-					users = append(users, user.Username)
-				}
-			}
-
-			if len(admins) > 0 {
-				metadata += fmt.Sprintf("admins: %s\n", strings.Join(admins, ", "))
-			}
-
-			if len(users) > 0 { 
-				metadata += fmt.Sprintf("users: %s\n", strings.Join(users, ", "))
-			}
-
-			decidedApps := ""
-			appauth, autherr := GetAllWorkflowAppAuth(ctx, org.Id)
-			if autherr == nil && len(appauth) > 0 {
-				preferredApps := []WorkflowApp{}
-				if len(org.SecurityFramework.SIEM.Name) > 0 {
-					preferredApps = append(preferredApps, WorkflowApp{
-						Categories: []string{"siem"},
-						Name: org.SecurityFramework.SIEM.Name,
-					})
-				}
-
-				if len(org.SecurityFramework.EDR.Name) > 0 {
-					//preferredApps += strings.ToLower(org.SecurityFramework.EDR.Name) + ", "
-					preferredApps = append(preferredApps, WorkflowApp{
-						Categories: []string{"eradication"},
-						Name: org.SecurityFramework.EDR.Name,
-					})
-				}
-
-				if len(org.SecurityFramework.Communication.Name) > 0 {
-					//preferredApps += strings.ToLower(org.SecurityFramework.Cases.Name) + ", "
-
-					preferredApps = append(preferredApps, WorkflowApp{
-						Categories: []string{"cases"},
-						Name: org.SecurityFramework.Communication.Name,
-					})
-				}
-
-				if len(org.SecurityFramework.Cases.Name) > 0 {
-					//preferredApps += strings.ToLower(org.SecurityFramework.Cases.Name) + ", "
-
-					preferredApps = append(preferredApps, WorkflowApp{
-						Categories: []string{"cases"},
-						Name: org.SecurityFramework.Cases.Name,
-					})
-				}
-
-				if len(org.SecurityFramework.Assets.Name) > 0 {
-					//preferredApps += strings.ToLower(org.SecurityFramework.Assets.Name) + ", "
-
-					preferredApps = append(preferredApps, WorkflowApp{
-						Categories: []string{"assets"},
-						Name: org.SecurityFramework.Assets.Name,
-					})
-				}
-
-				if len(org.SecurityFramework.Network.Name) > 0 {
-					//preferredApps += strings.ToLower(org.SecurityFramework.Network.Name) + ", "
-
-					preferredApps = append(preferredApps, WorkflowApp{
-						Categories: []string{"network"},
-						Name: org.SecurityFramework.Network.Name,
-					})
-				}
-
-				if len(org.SecurityFramework.Intel.Name) > 0 {
-					//preferredApps += strings.ToLower(org.SecurityFramework.Intel.Name) + ", "
-
-					preferredApps = append(preferredApps, WorkflowApp{
-						Categories: []string{"intel"},
-						Name: org.SecurityFramework.Intel.Name,
-					})
-				}
-
-				if len(org.SecurityFramework.IAM.Name) > 0 {
-					//preferredApps += strings.ToLower(org.SecurityFramework.IAM.Name) + ", "
-					preferredApps = append(preferredApps, WorkflowApp{
-						Categories: []string{"iam"},
-						Name: org.SecurityFramework.IAM.Name,
-					})
-				}
-
-				for _, auth := range appauth {
-					// ALWAYS append valid auth
-					if !auth.Validation.Valid {
-						continue
-					}
-
-					if len(auth.App.Categories) > 0 {
-						found := false
-						for _, preApp := range preferredApps {
-							if len(preApp.Categories) == 0 {
-								continue
-							}
-
-							if ArrayContains(preApp.Categories, strings.ToLower(auth.App.Categories[0]) ) {
-								found = true
-								break
-							}
-						}
-
-						if found {
-							continue
-						}
-					}
-
-					preferredApps = append(preferredApps, auth.App)
-				}
-
-				// FIXME: Pre-filter before this to ensure we have good 
-				// apps ONLY.
-				for _, preferredApp := range preferredApps {
-					if len(preferredApp.Name) == 0 {
-						continue
-					}
-
-					lowername := strings.ToLower(preferredApp.Name)
-					if strings.Contains(decidedApps, lowername) {
-						continue
-					}
-
-					decidedApps += lowername + ", "
-				}
-			}
-
-			if len(decidedApps) > 0 {
-				metadata += fmt.Sprintf("preferred tools: %s\n", decidedApps)
-			}
-
-
-		}
-
-	}
+	ctx := context.Background()
 
 	// Create the OpenAI body struct
 	systemMessage := `INTRODUCTION: 
@@ -6586,6 +6452,8 @@ SINGUL ACTIONS:
 	runOpenaiRequest := false
 	appname := ""
 
+	decidedApps := []string{}
+
 	memorizationEngine := "shuffle_db"
 	for _, param := range startNode.Parameters {
 		if param.Name == "app_name" {
@@ -6599,30 +6467,63 @@ SINGUL ACTIONS:
 			if createNextActions == false {
 				userMessage = param.Value
 			} else {
-				userMessage = fmt.Sprintf("The original query was: %s", param.Value)
+				userMessage = fmt.Sprintf("Original input: '%s'", param.Value)
 			}
 		}
 
 		if param.Name == "action" {
 			for _, actionStr := range strings.Split(param.Value, ",") {
 				actionStr = strings.ToLower(strings.TrimSpace(actionStr))
-				if actionStr == "nothing" {
+				log.Printf("STR: '%s'", actionStr)
+				if actionStr == "" || actionStr == "nothing" {
 					continue
 				}
 
-				systemMessage += fmt.Sprintf("- %s\n", strings.ReplaceAll(actionStr, " " , "_"))
+				log.Printf("ACTIONSTR: '%s'", actionStr)
+				if strings.HasPrefix(actionStr, "app:") {
 
+					trimmedActionStr := strings.TrimPrefix(actionStr, "app:")
+					sortedAppActions := getPrioritisedAppActions(ctx, trimmedActionStr, 10)
+					if len(sortedAppActions) > 0 { 
+						// Cuts off the potential md5:appname prefix
+						if len(trimmedActionStr) > 33 && string(trimmedActionStr[32]) == ":" {
+							trimmedActionStr = trimmedActionStr[33:]
+						}
+
+						decidedApps = append(decidedApps, trimmedActionStr)
+						systemMessage += fmt.Sprintf("The next %d actions are for %s:\n", len(sortedAppActions), trimmedActionStr)
+						for _, sortedAppAction := range sortedAppActions {
+							systemMessage += fmt.Sprintf("%s() # %s\n", strings.ReplaceAll(sortedAppAction.Name, " ", "_"), sortedAppAction.Label)
+						}
+					} else {
+						log.Printf("[ERROR] Failed getting prioritised app actions for app '%s'", strings.TrimPrefix(actionStr, "app:"))
+					}
+
+				} else {
+					systemMessage += fmt.Sprintf("- %s\n", strings.ReplaceAll(actionStr, " " , "_"))
+				}
 			}
+
+			log.Printf("PARAM: %s", param.Value)
+			log.Printf("Systemmessage: %s", systemMessage)
+			//os.Exit(3)
 
 			systemMessage += "\n\n"
 		}
 
+
 		if param.Name == "memory" {
 			// Handle memory injection (may use Singul?)
+			if debug { 
+				log.Printf("[DEBUG] Memory parameter found: %s", param.Value)
+			}
 		}
 
 		if param.Name == "storage" {
 			// Handle storage injection (how?)
+			if debug {
+				log.Printf("[DEBUG] Storage parameter found: %s", param.Value)
+			}
 		}
 	}
 
@@ -6719,7 +6620,7 @@ SINGUL ACTIONS:
 			}
 
 			if len(userMessage) == 0 && len(oldAgentOutput.OriginalInput) > 0 {
-				userMessage = fmt.Sprintf("Original input: %s", oldAgentOutput.OriginalInput)
+				userMessage = fmt.Sprintf("Original input: '%s'", oldAgentOutput.OriginalInput)
 			}
 
 			if hasFailure { 
@@ -6746,6 +6647,157 @@ SINGUL ACTIONS:
 
 	// This makes it so we can start from this index.
 	lastFinishedIndex += 1
+
+	if len(execution.Workflow.OrgId) > 0 {
+		org, err := GetOrg(ctx, execution.Workflow.OrgId)
+		if err == nil && len(org.Id) > 0 { 
+			metadata += fmt.Sprintf("Organization name: %s\n", org.Name)
+			admins := []string{}
+			users := []string{}
+			for _, user := range org.Users {
+				if user.Role == "admin" {
+					admins = append(admins, user.Username)
+				} else {
+					users = append(users, user.Username)
+				}
+			}
+
+			if len(admins) > 0 {
+				metadata += fmt.Sprintf("admins: %s\n", strings.Join(admins, ", "))
+			}
+
+			if len(users) > 0 { 
+				metadata += fmt.Sprintf("users: %s\n", strings.Join(users, ", "))
+			}
+
+			if len(decidedApps) > 0 { 
+				metadata += fmt.Sprintf("\n\nPREFERRED TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
+			} else {
+				decidedApps := ""
+				appauth, autherr := GetAllWorkflowAppAuth(ctx, org.Id)
+				if autherr == nil && len(appauth) > 0 {
+					preferredApps := []WorkflowApp{}
+					if len(org.SecurityFramework.SIEM.Name) > 0 {
+						preferredApps = append(preferredApps, WorkflowApp{
+							Categories: []string{"siem"},
+							Name: org.SecurityFramework.SIEM.Name,
+						})
+					}
+
+					if len(org.SecurityFramework.EDR.Name) > 0 {
+						//preferredApps += strings.ToLower(org.SecurityFramework.EDR.Name) + ", "
+						preferredApps = append(preferredApps, WorkflowApp{
+							Categories: []string{"eradication"},
+							Name: org.SecurityFramework.EDR.Name,
+						})
+					}
+
+					if len(org.SecurityFramework.Communication.Name) > 0 {
+						//preferredApps += strings.ToLower(org.SecurityFramework.Cases.Name) + ", "
+
+						preferredApps = append(preferredApps, WorkflowApp{
+							Categories: []string{"cases"},
+							Name: org.SecurityFramework.Communication.Name,
+						})
+					}
+
+					if len(org.SecurityFramework.Cases.Name) > 0 {
+						//preferredApps += strings.ToLower(org.SecurityFramework.Cases.Name) + ", "
+
+						preferredApps = append(preferredApps, WorkflowApp{
+							Categories: []string{"cases"},
+							Name: org.SecurityFramework.Cases.Name,
+						})
+					}
+
+					if len(org.SecurityFramework.Assets.Name) > 0 {
+						//preferredApps += strings.ToLower(org.SecurityFramework.Assets.Name) + ", "
+
+						preferredApps = append(preferredApps, WorkflowApp{
+							Categories: []string{"assets"},
+							Name: org.SecurityFramework.Assets.Name,
+						})
+					}
+
+					if len(org.SecurityFramework.Network.Name) > 0 {
+						//preferredApps += strings.ToLower(org.SecurityFramework.Network.Name) + ", "
+
+						preferredApps = append(preferredApps, WorkflowApp{
+							Categories: []string{"network"},
+							Name: org.SecurityFramework.Network.Name,
+						})
+					}
+
+					if len(org.SecurityFramework.Intel.Name) > 0 {
+						//preferredApps += strings.ToLower(org.SecurityFramework.Intel.Name) + ", "
+
+						preferredApps = append(preferredApps, WorkflowApp{
+							Categories: []string{"intel"},
+							Name: org.SecurityFramework.Intel.Name,
+						})
+					}
+
+					if len(org.SecurityFramework.IAM.Name) > 0 {
+						//preferredApps += strings.ToLower(org.SecurityFramework.IAM.Name) + ", "
+						preferredApps = append(preferredApps, WorkflowApp{
+							Categories: []string{"iam"},
+							Name: org.SecurityFramework.IAM.Name,
+						})
+					}
+
+					for _, auth := range appauth {
+						// ALWAYS append valid auth
+						if !auth.Validation.Valid {
+							continue
+						}
+
+						if len(auth.App.Categories) > 0 {
+							found := false
+							for _, preApp := range preferredApps {
+								if len(preApp.Categories) == 0 {
+									continue
+								}
+
+								if ArrayContains(preApp.Categories, strings.ToLower(auth.App.Categories[0]) ) {
+									found = true
+									break
+								}
+							}
+
+							if found {
+								continue
+							}
+						}
+
+						if len(auth.App.Categories) > 0 && strings.ToUpper(auth.App.Categories[0]) == "AI" {
+							continue
+						}
+
+						preferredApps = append(preferredApps, auth.App)
+					}
+
+					// FIXME: Pre-filter before this to ensure we have good 
+					// apps ONLY.
+					for _, preferredApp := range preferredApps {
+						if len(preferredApp.Name) == 0 {
+							continue
+						}
+
+						lowername := strings.ToLower(preferredApp.Name)
+						if strings.Contains(decidedApps, lowername) {
+							continue
+						}
+
+						decidedApps += lowername + ", "
+					}
+				}
+
+				if len(decidedApps) > 0 {
+					metadata += fmt.Sprintf("\n\nPREFERRED TOOLS: %s\n\n", decidedApps)
+				}
+			}
+		}
+	}
 
 	systemMessage += fmt.Sprintf(`
 END SINGUL ACTIONS
@@ -6802,8 +6854,7 @@ FINALISING:
 
 	//systemMessage += `If you are missing information (such as emails) to make a list of decisions, just add a single decision which asks them to clarify the input better.`
 
-	agentReasoningEffort := "minimal"
-
+	agentReasoningEffort := "low"
 	newReasoningEffort := os.Getenv("AI_AGENT_REASONING_EFFORT")
 	if len(newReasoningEffort) > 0 {
 		if newReasoningEffort == "minimal" || newReasoningEffort == "low" || newReasoningEffort == "medium" || newReasoningEffort == "high" {
@@ -6812,10 +6863,7 @@ FINALISING:
 	}
 
 	completionRequest := openai.ChatCompletionRequest{
-		//Model: "gpt-4o-mini",
-		//Model: "gpt-4.1-mini",
-		//Model: "o4-mini", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
-		Model: "gpt-5-mini", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
+		Model: "gpt-5-mini", 
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
@@ -6842,7 +6890,6 @@ FINALISING:
 		Store: true,
 	}
 
-	ctx := context.Background()
 	initialAgentRequestBody, err := json.MarshalIndent(completionRequest, "", "  ")
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed marshalling input for action %s: %s", execution.ExecutionId, startNode.ID, err)

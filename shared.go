@@ -16059,6 +16059,10 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
 	_, err := GetCache(ctx, cacheKey)
 	if err == nil {
+		if debug { 
+			log.Printf("[DEBUG][%s] Agent self-request for Agent Result '%s' with status '%s' has already been sent. Skipping.", workflowExecution.ExecutionId, actionResult.Action.ID, status)
+		}
+
 		return nil
 	} else {
 		SetCache(ctx, cacheKey, []byte("1"), 1)
@@ -33415,4 +33419,56 @@ func (c *AuditLogCollector) priorityToLevel(priority string) string {
 	default:
 		return "INFO"
 	}
+}
+
+// getPrioritisedAppActions returns actions for an app, prioritised by most
+// likely to be used. 
+// Simple sorting:
+// 1. Categorised & Labeled actions
+// 2. Most used actions across the platform
+// 3. SHOULD BE MORE :))
+func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount int) []WorkflowAppAction {
+	returnActions := []WorkflowAppAction{}
+	appName := inputApp
+	foundApp := &WorkflowApp{}
+	appId := ""
+	var err error
+
+	if strings.Contains(inputApp, ":") || len(inputApp) == 32 {
+		appnamesplit := strings.Split(inputApp, ":")
+		appId = appnamesplit[0]
+		if len(appId) != 32 {
+			appId = ""
+		}
+	}
+
+	if len(appId) == 32 {
+		foundApp, err = GetApp(ctx, appId, User{}, false) 
+		if err != nil {
+			log.Printf("[ERROR] Failed getting app %s for prioritised actions: %s", appId, err)
+			return returnActions
+		}
+	} 
+
+	if foundApp.ID == "" && len(appName) > 0 {
+		log.Printf("[ERROR] Should find app based on name (not implemented)")
+	}
+
+	for _, action := range foundApp.Actions {
+		if action.Name == "custom_action" {
+			continue
+		}
+
+		if len(action.CategoryLabel) > 0 {
+			log.Printf("ACTION TAG: %#v => %#v", action.Label, action.CategoryLabel)
+			returnActions = append(returnActions, action)
+			continue
+		}
+
+		if len(returnActions) > maxAmount {
+			break
+		}
+	}
+
+	return returnActions
 }
