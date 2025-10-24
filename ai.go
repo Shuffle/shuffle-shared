@@ -1874,6 +1874,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 
 		//log.Printf("[INFO] Parsed labels: %s", parseCategories)
 		systemMessage := "Check if the input categories match any of the categories and action labels. Return the matching category, action label and all required fields in JSON. Required fields are in paranethesis, and should be output in the 'fields' key. If appname is specified add it. If not, output as json {\"success\": false, \"appname\": \"\"} with the name of a brand or app that can answer the question"
+		
 		apiKey := os.Getenv("AI_API_KEY")
 		if apiKey == "" {
 			fmt.Println("[WARNING] AI_API_KEY not found, failing over to OPENAI_API_KEY...")
@@ -4854,8 +4855,6 @@ func init() {
 		log.Println("[WARNING] AI_MODEL is not set, falling back to OPENAI_MODEL environment variable.")
 		model = os.Getenv("OPENAI_MODEL")
 	}
-
-
 
 	if len(os.Getenv("FALLBACK_AI_MODEL")) > 0 {
 		fallbackModel = os.Getenv("FALLBACK_AI_MODEL")
