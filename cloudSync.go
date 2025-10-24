@@ -2186,7 +2186,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	appId := ""
 	_ = appId
 	for key, value := range resp.Header {
-		log.Printf("\n\n\n\n[DEBUG][%s] HEADER: key: %s, value: %s\n\n\n\n", execution.ExecutionId, key, value)
+		//if debug { 
+		//	log.Printf("\n\n\n\n[DEBUG][%s] HEADER: key: %s, value: %s\n\n\n\n", execution.ExecutionId, key, value)
+		//}
+
 		if key == "X-Appname" && len(value) > 0 {
 			appname = value[0]
 			continue
@@ -2335,7 +2338,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 	go SetCache(ctx, decisionId, marshalledDecision, 60)
 
-	if decision.Action == "user_input" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" || decision.Category == "standalone" { 
+	if decision.Action == "user_input" || decision.Action == "answer" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" || decision.Category == "standalone" { 
 	} else {
 		// Singul handler
 		rawResponse, debugUrl, appname, err := RunAgentDecisionSingulActionHandler(execution, decision)

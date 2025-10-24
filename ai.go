@@ -36,6 +36,7 @@ import (
 //var model = "gpt-4o-mini"
 //var model = "o4-mini"
 var standalone bool
+
 //var model = "gpt-5-mini"
 var model = "gpt-5-mini"
 var fallbackModel = ""
@@ -6600,7 +6601,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	// Create the OpenAI body struct
 	systemMessage := `INTRODUCTION: 
-You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%. These are a last resort. Do NOT ask about networking or authentication unless explicitly specified. 
+You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%, is not the last action AND it can't be done with an API. These actions are a last resort. Do NOT ask about networking or authentication unless explicitly specified. 
 
 END INTRODUCTION
 ---
@@ -6673,6 +6674,7 @@ SINGUL ACTIONS:
 		extraString = ""
 	}
 
+
 	// The starting decision number
 	lastFinishedIndex := -1
 
@@ -6680,7 +6682,7 @@ SINGUL ACTIONS:
 	_ = oldActionResult 
 	oldAgentOutput := AgentOutput{}
 	if createNextActions == true { 
-		extraString = "This is a continuation of a previous execution. ONLY output decisions that fit AFTER the last FINISHED decision. DO NOT repeat previous decisions, and make sure your indexing is on point. Output as an array of decisions.\n\nIF you don't want to add any new decision, add AT LEAST one decision saying why it is finished, summarising EXACTLY what the user wants in a user-friendly Markdown format, OR the format the user asked for. Make the action and category 'finish', and put the reason in the 'reason' field in a user friendly format."
+		extraString = "This is a continuation of a previous execution. ONLY output decisions that fit AFTER the last FINISHED decision. DO NOT repeat previous decisions, and make sure your indexing is on point. Output as an array of decisions.\n\nIF you don't want to add any new decision, add AT LEAST one decision saying why it is finished, summarising EXACTLY what the user wants in a user-friendly Markdown format, OR the format the user asked for. Make the action and category 'finish', and put the reason in the 'reason' field. Do NOT summarize or explain. JUST give exactly the final answer and nothing more."
 
 		userMessageChanged := false
 
@@ -6703,9 +6705,20 @@ SINGUL ACTIONS:
 			oldAgentOutput = mappedResult
 			previousAnswers := ""
 			relevantDecisions := []AgentDecision{}
+
+			hasFailure := false
 			for _, mappedDecision := range mappedResult.Decisions {
+				if mappedDecision.RunDetails.Status == "FAILURE" {
+					// Overrides as to get the correct index
+					if lastFinishedIndex < mappedDecision.I {
+						lastFinishedIndex = mappedDecision.I
+					}
+
+					hasFailure = true 
+				}
+
 				if mappedDecision.RunDetails.Status != "FINISHED" && mappedDecision.RunDetails.Status != "SUCCESS" {
-					log.Printf("[DEBUG][%s] SKIPPING decision index %d with status %s", execution.ExecutionId, mappedDecision.I, mappedDecision.RunDetails.Status)
+					log.Printf("[DEBUG][%s] SKIPPING decision index %d (%s) with status %s", execution.ExecutionId, mappedDecision.I, mappedDecision.RunDetails.Id, mappedDecision.RunDetails.Status)
 					continue
 				}
 
@@ -6733,10 +6746,19 @@ SINGUL ACTIONS:
 				break
 			}
 
+			if len(userMessage) == 0 && len(oldAgentOutput.OriginalInput) > 0 {
+				userMessage = fmt.Sprintf("Original input: %s", oldAgentOutput.OriginalInput)
+			}
+
+			if hasFailure { 
+				userMessage += "\n\nSome of the previous decisions failed. Finalise the agent.\n\n"
+			}
+
 			userMessage += fmt.Sprintf("\n\nPrevious decision results:\n%s", string(marshalledDecisions))
 			if len(previousAnswers) > 0 {
 				userMessage += fmt.Sprintf("\n\nAnswers to questions:\n%s", previousAnswers)
 			}
+
 			userMessage += "\n\nBased on the previous decisions, find out if any new decisions need to be added."
 			userMessageChanged = true
 		}
@@ -6783,7 +6805,8 @@ RULES:
 * Fields is an array based on key: value pairs. Don't add unnecessary fields. If using 'ask', the key is 'question' and the value is the question to ask. If using 'answer', the key is 'output' and the value is what to answer.
 * NEVER skip executing an action, even if some details are unclear. Fill missing fields only with safe defaults, but still execute.
 * NEVER ask the user for clarification, confirmations, or extra details unless it is absolutely unavoidable.
-* Focus entirely on performing tasks; gathering input is secondary.
+* If realtime data is required, ALWAYS use an Singul APIs to get it.
+* ALWAYS output the same language as the original question. 
 
 2. Action & Decision Rules
 
@@ -6795,6 +6818,9 @@ RULES:
 * Do NOT add unnecessary fields; only include fields required for the action.
 * Fields can reference previous action outputs using {{action_name}}. Example: {"body": "{{previous_action.field}}"}.
 * If questions are absolutely required, combine all into one "ask" action with multiple "question" fields. Do NOT create multiple separate decisions.
+* Retry actions if the result was irrelevant. After three retries of a failed decision, add the finish decision. 
+* If any decision has failed, add the finish decision.
+* If a formatting is specified for the output, use it exactly how explained for the finish decision.
 
 END RULES
 ---
@@ -6803,6 +6829,15 @@ FINALISING:
 
 
 	//systemMessage += `If you are missing information (such as emails) to make a list of decisions, just add a single decision which asks them to clarify the input better.`
+
+	agentReasoningEffort := "minimal"
+
+	newReasoningEffort := os.Getenv("AI_AGENT_REASONING_EFFORT")
+	if len(newReasoningEffort) > 0 {
+		if newReasoningEffort == "minimal" || newReasoningEffort == "low" || newReasoningEffort == "medium" || newReasoningEffort == "high" {
+			agentReasoningEffort = newReasoningEffort
+		}
+	}
 
 	completionRequest := openai.ChatCompletionRequest{
 		//Model: "gpt-4o-mini",
@@ -6831,7 +6866,7 @@ FINALISING:
 		// Reasoning control
 		//ReasoningEffort: "medium", // old
 		MaxCompletionTokens: 5000, 
-		ReasoningEffort: "low",
+		ReasoningEffort: agentReasoningEffort,
 		Store: true,
 	}
 
@@ -7230,7 +7265,19 @@ FINALISING:
 				agentOutput.Status = "RUNNING"
 			}
 
-			log.Printf("Got %d NEW decision(s)", len(mappedDecisions))
+			if debug { 
+				log.Printf("[DEBUG] Got %d NEW decision(s)", len(mappedDecisions))
+			}
+
+			// Verbose error handling optimisations
+			for _, mappedDecision := range mappedDecisions {
+				if mappedDecision.I == lastFinishedIndex && mappedDecision.RunDetails.Status == "FAILURE" {
+					if debug { 
+						log.Printf("\n\n\n\n\nMAPPING TO FAILURE DUE TO DECISION INDEX AND STATUS!!! Decisions that aren't 'finalise' should be ignored\n\n\n\n\n\n\n")
+					}
+				}
+			}
+
 			additions := 0
 			for _, mappedDecision := range mappedDecisions {
 				if mappedDecision.I < lastFinishedIndex {
@@ -7280,13 +7327,13 @@ FINALISING:
 				}
 
 				SetWorkflowExecution(ctx, execution, true)
-				//os.Exit(3)
 			}
 		}
 
 		if resultMapping.Status == "FAILURE" {
-			agentOutput.Status = "FAILURE"
-			agentOutput.CompletedAt = time.Now().Unix()
+			log.Printf("\n\n\n\n\nMAPPING TO FAILURE!!!\n\n\nn\n\n\n\n")
+			//agentOutput.Status = "FAILURE"
+			//agentOutput.CompletedAt = time.Now().Unix()
 		}
 
 		if !createNextActions {
@@ -7297,6 +7344,8 @@ FINALISING:
 			// Ensures we track them along the way
 			if len(parsedAgentInput) > 0 { 
 				agentOutput.Input = parsedAgentInput
+
+				agentOutput.OriginalInput = userMessage
 			}
 		}
 
@@ -7324,7 +7373,7 @@ FINALISING:
 			}
 
 			if decision.RunDetails.Status == "FINISHED" || decision.RunDetails.Status == "SUCCESS" {
-				log.Printf("[INFO][%s] Decision %d already finished. Skipping...", execution.ExecutionId, decision.I)
+				//log.Printf("[INFO][%s] Decision %d already finished. Skipping...", execution.ExecutionId, decision.I)
 				continue
 			}
 
@@ -7339,14 +7388,34 @@ FINALISING:
 			if decision.Action == "finish" || decision.Category == "finish" {
 				log.Printf("[INFO][%s] Decision %d is a finish decision. Marking the agent as finished...", execution.ExecutionId, decision.I)
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+				agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 
 
 				agentOutput.Output = decision.Reason
+				for _, decisionField := range decision.Fields {
+					if (decisionField.Key == "output" || decisionField.Key == "body") && len(decisionField.Value) > 0 {
+						agentOutput.Output = decisionField.Value
+					} 
+				}
+
+				agentOutput.Status = "FINISHED"
+				agentOutput.CompletedAt = time.Now().Unix()
+
+				//workflowExecution.Results[resultIndex].Status = "SUCCESS"
+				//go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+
+			//} else if decision.Action == "answer" {
+			//	agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+			//	agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
+			//	agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+
+				//go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
 
 			} else if decision.Action == "ask" || decision.Action == "question" { 
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+
 
 			} else if decision.Category != "standalone" { 
 				// Do we run the singul action directly?
@@ -7357,12 +7426,15 @@ FINALISING:
 
 
 			} else {
-				if decision.Category == "standalone" { 
 
+				if decision.Category == "standalone" || decision.Action == "answer" { 
 					// FIXME: Maybe need to send this to myself
-					decision.RunDetails.StartedAt = time.Now().Unix()
-					decision.RunDetails.CompletedAt = time.Now().Unix()
-					decision.RunDetails.Status = "FINISHED"
+
+					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+					agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
+					agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+
+					decision = agentOutput.Decisions[decisionIndex]
 
 					marshalledDecision, err := json.Marshal(decision)
 					if err != nil {
@@ -7382,7 +7454,7 @@ FINALISING:
 							Result: string(marshalledDecision),
 						}
 
-						// This is required as the result for the agent isn't set yet on the first run
+						// This is required as the result for the agent isn't set yet on the first run. Minor delay to wait up a bit
 						if decisionIndex == 0 {
 							go func() {
 								time.Sleep(2 * time.Second)
@@ -7440,7 +7512,7 @@ FINALISING:
 			// These aren't properly being updated in the db, so 
 			// we need additional logic here to ensure it is being 
 			// set/started
-			if nextActionType == "ask" || nextActionType == "finish" { 
+			if nextActionType == "ask" || nextActionType == "finish" || nextActionType == "answer" {  
 				// Ensure we update all of it
 				for resultIndex, result := range execution.Results {
 					if result.Action.ID != startNode.ID {
@@ -7454,9 +7526,25 @@ FINALISING:
 			}
 		}
 
+
+		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status == "EXECUTING" {
+			log.Printf("[INFO][%s] AI Agent action %s finished.", execution.ExecutionId, startNode.ID)
+			for resultIndex, result := range execution.Results {
+				if result.Action.ID != startNode.ID {
+					continue
+				}
+
+				execution.Results[resultIndex].Status = "SUCCESS"
+				execution.Results[resultIndex].CompletedAt = agentOutput.CompletedAt
+				go sendAgentActionSelfRequest("SUCCESS", execution, execution.Results[resultIndex])
+				break
+			}
+		}
+
 	} else {
 		log.Printf("[ERROR] No result found in AI agent response. Status: %d. Body: %s", newresp.StatusCode, string(body))
 	}
+
 
 	if memorizationEngine == "shuffle_db" {
 		requestKey := fmt.Sprintf("chat_%s_%s", execution.ExecutionId, startNode.ID)

@@ -1233,12 +1233,12 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				continue
 			}
 
-			if innerresult.Status != "WAITING" {
+			if innerresult.Status != "WAITING" && innerresult.Status != "SUCCESS" {
 				found = true
 				result = innerresult
 				break
 
-			} else if innerresult.Status == "WAITING" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
+			} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
 				// Auto fixing decision data based on cache for better decisionmaking
 				//log.Printf("[DEBUG] Found action result %s with WAITING status", action.AppName)
 
@@ -1253,22 +1253,44 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 				finishedDecisions := []string{}
 				failedFound := false
+				finishDecisionFound := false
 				// FIXME: Optimize it to not run too far past "FINISHED" on cache searches
 				for decisionIndex, decision := range mappedOutput.Decisions {
+					if decision.Action == "finish" {
+						finishDecisionFound = true
+					}
+
 					if decision.RunDetails.Status == "NOT IMPLEMENTED" {
 						continue
 					}
 
+					decisionId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
 					if decision.RunDetails.Status == "FINISHED" {
 						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						continue
 					} else if decision.RunDetails.Status == "FAILURE" {
+						//finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						failedFound = true
 						continue
+					} else {
+						if decision.RunDetails.CompletedAt > 0 {
+							if debug { 
+								log.Printf("[DEBUG] Rewriting decision %s to FINISHED based on completed at timestamp.", decision.RunDetails.Id)
+							}
+
+							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+							finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+							decisionsUpdated = true
+
+							marshalledDecision, err := json.Marshal(mappedOutput.Decisions[decisionIndex])
+							if err == nil {
+								err = SetCache(ctx, decisionId, marshalledDecision, 60)
+							}
+							continue
+						}
 					}
 
 					//log.Printf("[DEBUG] Check cache for %s with status %s", decision.RunDetails.Id, decision.RunDetails.Status)
-					decisionId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
 					cache, err := GetCache(ctx, decisionId)
 					if err == nil {
 						foundDecision := AgentDecision{}
@@ -1285,22 +1307,40 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					}
 				}
 
+				// FIXME: Is failure hadnling here necessary?
+				// Changed it to do failure handling better in the agent itself
+				// due to having a 'finish' action that should handle it properly
 				if failedFound {
 					decisionsUpdated = true
 
+					/*
 					mappedOutput.Status = "FAILURE"
 					mappedOutput.CompletedAt = time.Now().Unix()
 					workflowExecution.Results[resultIndex].Status = "ABORTED"
 
 					go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[resultIndex])
+					*/
 
-				} else if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
-					decisionsUpdated = true
-					mappedOutput.Status = "FINISHED"
-					mappedOutput.CompletedAt = time.Now().Unix()
-					workflowExecution.Results[resultIndex].Status = "SUCCESS"
+				} 
 
-					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+				if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
+					if finishDecisionFound {
+						decisionsUpdated = true
+						mappedOutput.Status = "FINISHED"
+						mappedOutput.CompletedAt = time.Now().Unix()
+
+						workflowExecution.Results[resultIndex].Status = "SUCCESS"
+						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+					} else {
+						mappedOutput.Status = "WAITING"
+						mappedOutput.CompletedAt = 0
+						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+
+						//if debug { 
+						//	log.Printf("[DEBUG] All decisions finished but no finish action found.")
+						//}
+					}
+
 				}
 
 				if decisionsUpdated {
@@ -3739,6 +3779,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 
 
 func init() {
+
 	isValid := checkImportPath()
 	if !isValid {
 		time.Sleep(time.Duration(600+rand.Intn(600)) * time.Second)
