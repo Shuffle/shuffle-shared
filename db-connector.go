@@ -708,8 +708,17 @@ func GetEsConfig(defaultCreds bool) *opensearchapi.Client {
 		Password:      password,
 		MaxRetries:    5,
 		RetryOnStatus: []int{500, 502, 503, 504, 429, 403},
+	}
 
-		// User Agent to work with Elasticsearch 8
+	if len(os.Getenv("SHUFFLE_OPENSEARCH_APIKEY")) > 0 {
+		config.Username = ""
+		config.Password = ""
+		if config.Header == nil {
+			config.Header = make(http.Header)
+		}
+
+		config.Header["Authorization"] = []string{"ApiKey " + os.Getenv("SHUFFLE_OPENSEARCH_APIKEY")}
+
 	}
 
 	//APIKey:        os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
@@ -769,26 +778,12 @@ func GetEsConfig(defaultCreds bool) *opensearchapi.Client {
 	}
 
 	config.Transport = transport
-
-	if len(os.Getenv("SHUFFLE_OPENSEARCH_APIKEY")) > 0 {
-
-		config.Username = ""
-		config.Password = ""
-		config.Transport = &customTransport{
-			apiKey: os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
-			rt:     http.DefaultTransport,
-		}
-
-		if debug {
-			log.Printf("[DEBUG] Using API Key authentication for Opensearch")
-		}
-	}
-
 	es, err := opensearchapi.NewClient(
 		opensearchapi.Config{
 			Client: config,
 		},
 	)
+
 	if err != nil {
 		log.Fatalf("[ERROR] Database client for ELASTICSEARCH error during init (fatal): %s", err)
 	}
@@ -1268,6 +1263,10 @@ func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afte
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return liveExecs, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get live execution status): %s", err)
 			return liveExecs, err
 		}
@@ -2608,6 +2607,10 @@ func FindSimilarFilename(ctx context.Context, filename, orgId string) ([]File, e
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return files, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (find file filename): %s", err)
 			return files, err
 		}
@@ -2768,6 +2771,10 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return files, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (find file md5): %s", err)
 			return files, err
 		}
@@ -2931,6 +2938,10 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return env, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get environment): %s", err)
 			return env, err
 		}
@@ -3086,6 +3097,10 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return 0, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflow run count): %s", err)
 			return 0, err
 		}
@@ -3197,6 +3212,10 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return orgs, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
 			return orgs, err
 		}
@@ -3639,6 +3658,10 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return workflows, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflows): %s", err)
 			return workflows, err
 		}
@@ -3715,6 +3738,10 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				},
 			})
 			if err != nil {
+				if strings.Contains(err.Error(), "index_not_found_exception") {
+					return workflows, nil 
+				}
+
 				log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
 				return workflows, err
 			}
@@ -4191,7 +4218,12 @@ func GetFirstOrg(ctx context.Context) (*Org, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return curOrg, err
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get first org): %s", err)
+
 			return curOrg, err
 		}
 
@@ -4267,7 +4299,9 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 		if strings.Contains(err.Error(), "context deadline exceeded") {
 			resp, err = project.Es.Index(context.Background(), req)
 			if err != nil {
-				log.Printf("[ERROR] Error getting response from Opensearch (index ES) - 2: %s", err)
+				if strings.Contains(err.Error(), "index_not_found_exception") {
+					log.Printf("[ERROR] Error getting response from Opensearch (index ES) - 2: %s", err)
+				}
 			}
 		} else {
 			log.Printf("[ERROR] Error getting response from Opensearch (index ES) - 1: %s", err)
@@ -5110,6 +5144,10 @@ func FindWorkflowByName(ctx context.Context, name string) ([]Workflow, error) {
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return workflows, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflows named): %s", err)
 			return workflows, err
 		}
@@ -5208,6 +5246,10 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return apps, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (find app by name): %s", err)
 			return apps, err
 		}
@@ -5308,6 +5350,10 @@ func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return []User{}, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (find user): %s", err)
 			return []User{}, err
 		}
@@ -5404,6 +5450,10 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return []User{}, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (find user): %s", err)
 			return []User{}, err
 		}
@@ -6009,6 +6059,10 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return allworkflowappAuths, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get app auth): %s", err)
 			return allworkflowappAuths, err
 		}
@@ -6173,6 +6227,10 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return environments, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get environments): %s", err)
 			return environments, err
 		}
@@ -7185,6 +7243,10 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return []WorkflowApp{}, nil 
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get apps): %s", err)
 			return []WorkflowApp{}, err
 		}
@@ -7388,6 +7450,10 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return []WorkflowApp{}, nil 
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get apps): %s", err)
 			return []WorkflowApp{}, err
 		}
@@ -7629,6 +7695,10 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return ExecutionRequestWrapper{}, nil 
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflow queue): %s", err)
 			return ExecutionRequestWrapper{}, err
 		}
@@ -7657,7 +7727,11 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 				},
 			})
 			if err != nil {
-				log.Printf("[ERROR] Error getting response from Opensearch (get workflow queue): %s", err)
+				if strings.Contains(err.Error(), "index_not_found_exception") {
+					log.Printf("[ERROR] Error getting response from Opensearch (get workflow queue): %s", err)
+					return ExecutionRequestWrapper{}, nil 
+				}
+
 				return ExecutionRequestWrapper{}, err
 			}
 
@@ -7917,6 +7991,10 @@ func GetPlatformHealth(ctx context.Context, beforeTimestamp int, afterTimestamp 
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return health, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get latest platform health): %s", err)
 			return health, err
 		}
@@ -8085,6 +8163,10 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return workflows, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
 			return workflows, err
 		}
@@ -8279,6 +8361,10 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return workflows, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
 			return workflows, err
 		}
@@ -9229,6 +9315,10 @@ func GetHooks(ctx context.Context, OrgId string) ([]Hook, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return []Hook{}, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get hooks): %s", err)
 			return []Hook{}, err
 		}
@@ -9321,6 +9411,10 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return []Pipeline{}, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get pipelines): %s", err)
 			return []Pipeline{}, err
 		}
@@ -9429,6 +9523,10 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return User{}, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get api keys): %s", err)
 			return User{}, err
 		}
@@ -9540,6 +9638,10 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return User{}, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get api keys): %s", err)
 			return User{}, err
 		}
@@ -10237,6 +10339,10 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return notifications, nil
+			}
+			
 			log.Printf("[ERROR] Error getting response from Opensearch (get notifications): %s", err)
 			return notifications, err
 		}
@@ -10382,6 +10488,10 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return notifications, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get user notifications): %s", err)
 			return notifications, err
 		}
@@ -10518,6 +10628,10 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return files, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get files): %s", err)
 			return files, err
 		}
@@ -10789,6 +10903,10 @@ func GetAuthGroups(ctx context.Context, orgId string) ([]AppAuthenticationGroup,
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return appAuths, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get app auths): %s", err)
 			return appAuths, err
 		}
@@ -10862,6 +10980,10 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return schedules, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get schedules): %s", err)
 			return schedules, err
 		}
@@ -11054,6 +11176,10 @@ func GetAllWorkflows(ctx context.Context) ([]Workflow, error) {
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return workflows, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflows): %s", err)
 			return workflows, err
 		}
@@ -11127,6 +11253,10 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return []User{}, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get all users): %s", err)
 			return []User{}, err
 		}
@@ -11336,6 +11466,10 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return executions, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflow executions): %s", err)
 			return executions, err
 		}
@@ -11519,6 +11653,10 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return executions, cursor, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflow executions): %s", err)
 			return executions, cursor, err
 		}
@@ -11894,6 +12032,10 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return executions, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflow executions): %s", err)
 			return executions, err
 		}
@@ -12164,6 +12306,10 @@ func GetOrgByField(ctx context.Context, fieldName, value string) ([]Org, error) 
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return orgs, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get app exec values): %s", err)
 			return orgs, err
 		}
@@ -12244,7 +12390,12 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 				TrackTotalHits: true,
 			},
 		})
+
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return []Org{}, nil
+			} 
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get org): %s", err)
 			return []Org{}, err
 		}
@@ -12484,6 +12635,10 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 			},
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return workflows, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get app exec values): %s", err)
 			return workflows, err
 		}
@@ -12623,6 +12778,10 @@ func GetDatastoreCategories(ctx context.Context, orgId string) ([]DatastoreCateg
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return categories, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get datastore categories): %s", err)
 			return categories, err
 		}
@@ -13172,6 +13331,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		if err != nil {
 			body, err := ioutil.ReadAll(res.Body)
 			if err != nil {
+				if strings.Contains(err.Error(), "index_not_found_exception") {
+					return existingInfo, nil
+				}
+
 				log.Printf("[ERROR] Error getting response from Opensearch (set datastore key bulk): %s", err)
 				return existingInfo, err
 			}
@@ -14405,6 +14568,10 @@ func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, 
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return count, nil 
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get cache key count): %s", err)
 			return count, err
 		}
@@ -14547,6 +14714,10 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return cacheKeys, "", nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get cachekeys): %s", err)
 			return cacheKeys, "", err
 		}
@@ -14875,6 +15046,10 @@ func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return deals, nil
+			}
+
 			log.Printf("[ERROR] Error getting response from Opensearch (get deals): %s", err)
 			return deals, err
 		}
@@ -16079,6 +16254,9 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "not_found") {
+				return nil 
+			}
 			log.Printf("[WARNING] Error in DELETE: %s", err)
 			return err
 		}
@@ -16733,7 +16911,9 @@ func InitOpensearchIndexes() {
 		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if err != nil {
-			log.Printf("[WARNING] Error creating index %s: %s", index, err)
+			if !strings.Contains(fmt.Sprintf("%s", err), "serverless mode") {
+				log.Printf("[WARNING] Error creating index %s: %s", index, err)
+			}
 		} else {
 			if res.IsError() {
 				if !strings.Contains(res.String(), "resource_already_exists_exception") {
@@ -16762,8 +16942,12 @@ func InitOpensearchIndexes() {
 			Index: index,
 			Body: bytes.NewReader(rolloverConfig),
 		})
+
 		if err != nil {
-			log.Printf("[ERROR] Problem during rollover config for %s: %s", index, err)
+			if !strings.Contains(fmt.Sprintf("%s", err), "serverless mode") && !strings.Contains(fmt.Sprintf("%s", err), "status: 404") {
+				log.Printf("[WARNING] Problem during rollover config for %s: %s", index, err)
+			}
+
 			continue
 		}
 

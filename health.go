@@ -1046,30 +1046,12 @@ func fixOpensearch() error {
 		}
 	  }`
 
-	// Get the username and password from environment variables
-	username := os.Getenv("SHUFFLE_OPENSEARCH_USERNAME")
-	if len(username) == 0 {
-		log.Printf("[DEBUG] Opensearch username not set. Setting to default")
-		username = "admin"
-	}
-
-	password := os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD")
-	if len(password) == 0 {
-		log.Printf("[DEBUG] Opensearch password not set. Setting to default")
-		password = "admin"
-	}
-
 	opensearchUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
 	if len(opensearchUrl) == 0 {
-		log.Printf("[DEBUG] Opensearch url not set. Setting to default")
-		opensearchUrl = "http://localhost:9200"
+		opensearchUrl = "https://shuffle-opensearch:9200"
 	}
-
 	opensearchIndex := GetESIndexPrefix("workflowexecution")
-
 	apiUrl := fmt.Sprintf("%s/%s/_mapping", opensearchUrl, opensearchIndex)
-
-	log.Printf("[DEBUG] apiurl for fixing opensearch: %s", apiUrl)
 
 	// Create a new request
 	req, err := http.NewRequest("PUT", apiUrl, bytes.NewBufferString(mapping))
@@ -1078,32 +1060,29 @@ func fixOpensearch() error {
 	}
 
 	// Set the request headers
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(username, password)
-
-	// Create a new HTTP client
-	client := &http.Client{}
+	foundClient := GetEsConfig(false)
 
 	// Send the request in a loop until a 200 status code is received
-	res, err := client.Do(req)
+	//res, err := foundClient.Transport.Do(req)
+	res, err := foundClient.Client.Transport.Perform(req)
 	if err != nil {
-		log.Printf("Error sending the request while fixing execution body: %s", err)
+		log.Printf("[ERROR] Error sending the request while fixing execution body: %s", err)
 		return err
 	}
 
 	// Read the response body
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		log.Printf("Error reading the response body while fixing execution body: %s", err)
+		log.Printf("[ERROR] Error reading the response body while fixing execution body: %s", err)
 		return err
 	}
-	res.Body.Close()
 
+	res.Body.Close()
 	if res.StatusCode == 200 {
 		log.Printf("Index created successfully: %s. Opensearch mappings should be fixed.", body)
 		return nil
 	} else {
-		log.Printf("Failed to create index, retrying: %s", body)
+		log.Printf("[ERROR] Failed to create index, retrying: %s", body)
 		return errors.New("Failed index mapping")
 	}
 
@@ -1236,24 +1215,30 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed running health check workflow: %s. The status code is: %d", id, resp.StatusCode)
+		log.Printf("[ERROR] Failed running health check workflow: %s. The status code is %d", id, resp.StatusCode)
 
 		// print the response body
 		respBodyErr, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			log.Printf("[ERROR] Failed reading health check HTTP response body: %s", err)
 		} else {
-			log.Printf("[ERROR] Health check running Workflow Response: %s", respBodyErr)
-		}
-		if project.Environment == "onprem" {
-			log.Printf("Trying to fix opensearch mappings")
-			err = fixOpensearch()
-			if err != nil {
-				log.Printf("[ERROR] Failed fixing opensearch mappings: %s", err)
+			if strings.Contains(string(respBodyErr), "illegal_arugment") {
 			} else {
-				log.Printf("[DEBUG] Fixed opensearch mappings successfully! Maybe try ops dashboard again?")
+				log.Printf("[ERROR] Health check running Workflow Response: %s", respBodyErr)
 			}
 		}
+
+		/*
+		if project.Environment == "onprem" {
+			//log.Printf("Trying to fix opensearch mappings")
+			//err = fixOpensearch()
+			//if err != nil {
+			//	log.Printf("[ERROR] Failed fixing opensearch mappings: %s", err)
+			//} else {
+			//	log.Printf("[DEBUG] Fixed opensearch mappings successfully! Maybe try ops dashboard again?")
+			//}
+		}
+		*/
 		// return workflowHealth, err
 	}
 
