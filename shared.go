@@ -16217,7 +16217,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	if strings.Contains(actionResult.Result, decisionId) {
 		if debug {
-			log.Printf("[DEBUG][%s] Mapping decision result for decision ID '%s': %s", workflowExecution.ExecutionId, decisionId, actionResult.Result)
+			log.Printf("[DEBUG][%s] Mapping decision result (stream result) for decision ID '%s'", workflowExecution.ExecutionId, decisionId)
 		}
 
 		newDecision := AgentDecision{}
@@ -16305,7 +16305,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 				continue
 			} else if foundDecision.RunDetails.Status == "FAILED" {
 				failedDecisions = append(failedDecisions, foundDecision.RunDetails.Id)
-			} else if foundDecision.RunDetails.Status == "FINISHED" {
+			} else if foundDecision.RunDetails.Status == "FINISHED" || foundDecision.RunDetails.Status == "IGNORED" {
 				finishedDecisions = append(finishedDecisions, foundDecision.RunDetails.Id)
 			} else {
 				log.Printf("[ERROR][%s] No handler for run status %s", workflowExecution.ExecutionId, foundDecision.RunDetails.Status)
@@ -23795,6 +23795,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						}
 					}
 
+					cleanupFailures := false
 					fieldsChanged := false
 					for decisionIndex, decision := range unmarshalledDecision.Decisions {
 						if decision.RunDetails.Id != decisionId {
@@ -23806,7 +23807,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							findContinue = true
 						}
 
-						log.Printf("[INFO][%s] Found the decision inside the agentic workflow to update: %s", execArg, decisionId)
+						//log.Printf("[INFO][%s] Found the decision inside the agentic workflow to update: %s", execArg, decisionId)
 
 						mappedArgument := map[string]string{}
 						err = json.Unmarshal([]byte(execArg), &mappedArgument)
@@ -23814,8 +23815,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							log.Printf("[ERROR][%s] Failed unmarshalling execution argument during agentic decision handling: %s", execArg, err)
 							break
 						}
-
-						log.Printf("Found mapped argument: %#v", mappedArgument)
 
 						handledNumber := []string{}
 						for key, value := range mappedArgument {
@@ -23838,6 +23837,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									decision.Reason = "Continued by adding task details"
 
 									fieldsChanged = true
+									cleanupFailures = true
 									break
 								} 
 
@@ -23888,11 +23888,39 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						break
 					}
 
+					// Cleans them up to be "IGNORED" instead
+					// This is a concept to allow for better UX
+					// Only runs if you "continue" running an agent run
+					if cleanupFailures {
+						log.Printf("\n\n\nRunning CLEANUP!!\n\n\n")
+						for decisionIndex, _ := range unmarshalledDecision.Decisions {
+							decision := unmarshalledDecision.Decisions[decisionIndex]
+							if decision.RunDetails.Status != "FAILURE" {
+								continue
+							}
+
+							log.Printf("\n\n\nFOUND FAILURE TO CLEANUP!!\n\n\n")
+
+							decision.RunDetails.Status = "IGNORED"
+							unmarshalledDecision.Decisions[decisionIndex] = decision
+
+							decisionId := fmt.Sprintf("agent-%s-%s", oldExecution.ExecutionId, decision.RunDetails.Id)
+							marshalledDecision, err := json.Marshal(decision)
+							if err != nil {
+								log.Printf("[ERROR][%s] Failed marshalling decision during agentic decision handling: %s", oldExecution.ExecutionId, err)
+							} else {
+								SetCache(ctx, decisionId, marshalledDecision, 60)
+							}
+
+							fieldsChanged = true
+						}
+					}
+
 					if !fieldsChanged {
 						return workflowExecution, ExecInfo{}, fmt.Sprintf("Could not find decision '%s' inside the agentic workflow", decisionId), errors.New(fmt.Sprintf("Could not find decision '%s'", decisionId))
 					}
 
-					log.Printf("[INFO][%s] Found the decision inside the agentic workflow to update: %s", execArg, decisionId)
+					//log.Printf("[INFO][%s] Found the decision inside the agentic workflow to update: %s", execArg, decisionId)
 
 					newDecisionBytes, err := json.Marshal(unmarshalledDecision)
 					if err != nil {

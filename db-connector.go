@@ -1766,7 +1766,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					}
 
 					decisionId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
-					if decision.RunDetails.Status == "FINISHED" {
+					if decision.RunDetails.Status == "FINISHED" || decision.RunDetails.Status == "IGNORED" {
 						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						continue
 					} else if decision.RunDetails.Status == "FAILURE" {

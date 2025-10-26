@@ -7412,6 +7412,10 @@ FINALISING:
 				continue
 			}
 
+			if decision.RunDetails.Status == "IGNORED" {
+				continue
+			}
+
 			// Startnumber huh... Hmm
 			if decision.I != lastFinishedIndex {
 				continue
