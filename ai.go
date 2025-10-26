@@ -1874,9 +1874,15 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 
 		//log.Printf("[INFO] Parsed labels: %s", parseCategories)
 		systemMessage := "Check if the input categories match any of the categories and action labels. Return the matching category, action label and all required fields in JSON. Required fields are in paranethesis, and should be output in the 'fields' key. If appname is specified add it. If not, output as json {\"success\": false, \"appname\": \"\"} with the name of a brand or app that can answer the question"
+		
+		apiKey := os.Getenv("AI_API_KEY")
+		if apiKey == "" {
+			fmt.Println("[WARNING] AI_API_KEY not found, failing over to OPENAI_API_KEY...")
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		}
 
 		// Parses the input and returns the category and action label
-		openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
+		openaiClient := openai.NewClient(apiKey)
 		openaiResp, err := openaiClient.CreateChatCompletion(
 			context.Background(),
 			openai.ChatCompletionRequest{
@@ -4845,6 +4851,9 @@ func init() {
 
 	if len(os.Getenv("AI_MODEL")) > 0 {
 		model = os.Getenv("AI_MODEL")
+	} else if len(os.Getenv("OPENAI_MODEL")) > 0 {
+		log.Println("[WARNING] AI_MODEL is not set, falling back to OPENAI_MODEL environment variable.")
+		model = os.Getenv("OPENAI_MODEL")
 	}
 
 	if len(os.Getenv("FALLBACK_AI_MODEL")) > 0 {
@@ -5196,9 +5205,14 @@ func ValidateLabelAvailability(category string, availableLabels []string) {
 		}]
 		```
 	*/
+	apiKey := os.Getenv("AI_API_KEY")
+	if apiKey == "" {
+		fmt.Println("[WARNING] AI_API_KEY not found, failing over to OPENAI_API_KEY...")
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
 
 	ctx := context.Background()
-	config := openai.DefaultConfig(os.Getenv("OPENAI_API_KEY"))
+	config := openai.DefaultConfig(apiKey)
 	config.AssistantVersion = "v2"
 	openaiClient := openai.NewClientWithConfig(
 		config,
@@ -5398,7 +5412,13 @@ func ValidateLabelAvailability(category string, availableLabels []string) {
 
 func runAtomicChatRequest(ctx context.Context, user User, input QueryInput) (string, string, string, bool) {
 
-	config := openai.DefaultConfig(os.Getenv("OPENAI_API_KEY"))
+	apiKey := os.Getenv("AI_API_KEY")
+	if apiKey == "" {
+		log.Println("[WARNING] AI_API_KEY not found, failing over to OPENAI_API_KEY...")
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
+
+	config := openai.DefaultConfig(apiKey)
 	config.AssistantVersion = "v2"
 	openaiClient := openai.NewClientWithConfig(
 		config,
@@ -6392,7 +6412,14 @@ TBD
 */
 
 func runSupportRequest(ctx context.Context, input QueryInput) string {
-	chatModel := os.Getenv("OPENAI_SUPPORT_MODEL")
+
+	supportModel := os.Getenv("AI_SUPPORT_MODEL")
+	if supportModel == "" {
+		fmt.Println("[WARNING] AI_SUPPORT_MODEL not found, failing over to OPENAI_SUPPORT_MODEL...")
+		supportModel = os.Getenv("OPENAI_SUPPORT_MODEL")
+	}
+
+	chatModel := supportModel
 	if len(chatModel) == 0 {
 		chatModel = "ft:gpt-3.5-turbo-0613:shuffle::80d8lt3J"
 	}
@@ -7952,10 +7979,34 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	maxTokens := 5000
 	maxCharacters := 100000
 
-	config := openai.DefaultConfig(os.Getenv("OPENAI_API_KEY"))
+	apiKey := os.Getenv("AI_API_KEY")
+	aiRequestUrl := os.Getenv("AI_API_URL")
+	aiApiVersion := os.Getenv("AI_API_VERSION")
+	orgId := os.Getenv("AI_API_ORG")
 
-	aiRequestUrl := os.Getenv("OPENAI_API_URL")
-	if len(os.Getenv("OPENAI_API_URL")) > 0 {
+	if len(apiKey) == 0 {
+		   log.Println("[WARNING] AI_API_KEY not found, failing over to OPENAI_API_KEY...")
+		   apiKey = os.Getenv("OPENAI_API_KEY")
+	}
+
+	if len(aiRequestUrl) == 0 {
+		log.Println("[WARNING] AI_API_URL not found, failing over to OPENAI_API_URL...")
+		aiRequestUrl = os.Getenv("OPENAI_API_URL")
+	}
+
+	if len(aiApiVersion) == 0 {
+		log.Println("[WARNING] AI_API_VERSION not found, failing over to OPENAI_API_VERSION...")
+		aiApiVersion = os.Getenv("OPENAI_API_VERSION")
+	}
+
+	if len(orgId) == 0 {
+		log.Println("[WARNING] AI_API_ORG not found, failing over to OPENAI_API_ORG...")
+		orgId = os.Getenv("OPENAI_API_ORG")
+	}
+
+	config := openai.DefaultConfig(apiKey)
+
+	if len(aiRequestUrl) > 0 {
 		config.BaseURL = aiRequestUrl
 
 		if strings.Contains("azure", aiRequestUrl) {
@@ -7971,12 +8022,12 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		}
 	}
 
-	if len(os.Getenv("OPENAI_API_ORG")) > 0 {
-		config.OrgID = os.Getenv("OPENAI_API_ORG")
+	if len(orgId) > 0 {
+		config.OrgID = orgId
 	}
 
-	if len(os.Getenv("OPENAI_API_VERSION")) > 0 {
-		config.APIVersion = os.Getenv("OPENAI_API_VERSION")
+	if len(aiApiVersion) > 0 {
+		config.APIVersion = aiApiVersion
 	}
 
 	openaiClient := openai.NewClientWithConfig(config)
@@ -10478,7 +10529,20 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 			return
 		}
 	} else {
-		aiEnabled := os.Getenv("OPENAI_API_URL") != "" && os.Getenv("AI_MODEL") != ""
+		aiRequestUrl := os.Getenv("AI_API_URL")
+		aiModel := os.Getenv("AI_MODEL")
+
+		if len(aiRequestUrl) == 0 {
+		   log.Println("[WARNING] AI_API_URL not found, failing over to OPENAI_API_URL...")
+		   aiRequestUrl = os.Getenv("OPENAI_API_URL")
+		}
+
+		if len(aiModel) == 0 {
+		   log.Println("[WARNING] AI_MODEL not found, failing over to OPENAI_MODEL...")
+		   aiModel = os.Getenv("OPENAI_MODEL")
+		}
+
+		aiEnabled := aiRequestUrl != "" && aiModel != ""
 		if !aiEnabled {
 			resp.WriteHeader(503)
 			resp.Write([]byte(`{"success": false, "reason": "AI features are not enabled on this instance. Learn how to self-host by clicking this, or going here: /docs/AI#self-hosting-models"}`))
