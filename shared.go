@@ -23801,6 +23801,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							continue
 						}
 
+						findContinue := false
+						if decision.Action == "finish" {
+							findContinue = true
+						}
+
+						log.Printf("[INFO][%s] Found the decision inside the agentic workflow to update: %s", execArg, decisionId)
+
 						mappedArgument := map[string]string{}
 						err = json.Unmarshal([]byte(execArg), &mappedArgument)
 						if err != nil {
@@ -23808,8 +23815,35 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							break
 						}
 
+						log.Printf("Found mapped argument: %#v", mappedArgument)
+
 						handledNumber := []string{}
 						for key, value := range mappedArgument {
+							// Handles special case for Continuing an existing Agent run by modifying the "finish" action
+							if findContinue {
+								// The only key we care about in this case
+								if key == "continue" {
+									// Overwrite everything
+									decision.Fields = []Valuereplace{
+										Valuereplace{ 
+											Key: "continue",
+											Value: "How do you want to continue?",
+											Answer: value,
+										},
+									}
+
+									decision.Action = "ask"
+									decision.Tool = "ask"
+									decision.Category = "standalone"
+									decision.Reason = "Continued by adding task details"
+
+									fieldsChanged = true
+									break
+								} 
+
+								continue
+							}
+
 							if ArrayContains(handledNumber, key) {
 								continue
 							}
@@ -23855,7 +23889,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					if !fieldsChanged {
-						return workflowExecution, ExecInfo{}, fmt.Sprintf("Did not find the decision inside the agentic workflow to update %s", decisionId), errors.New("Did not find the decision to update")
+						return workflowExecution, ExecInfo{}, fmt.Sprintf("Could not find decision '%s' inside the agentic workflow", decisionId), errors.New(fmt.Sprintf("Could not find decision '%s'", decisionId))
 					}
 
 					log.Printf("[INFO][%s] Found the decision inside the agentic workflow to update: %s", execArg, decisionId)

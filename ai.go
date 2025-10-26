@@ -1870,7 +1870,6 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 
 		apiKey := os.Getenv("AI_API_KEY")
 		if apiKey == "" {
-			fmt.Println("[WARNING] AI_API_KEY not found, failing over to OPENAI_API_KEY...")
 			apiKey = os.Getenv("OPENAI_API_KEY")
 		}
 
@@ -5197,7 +5196,6 @@ func ValidateLabelAvailability(category string, availableLabels []string) {
 	*/
 	apiKey := os.Getenv("AI_API_KEY")
 	if apiKey == "" {
-		fmt.Println("[WARNING] AI_API_KEY not found, failing over to OPENAI_API_KEY...")
 		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
 
@@ -5404,7 +5402,6 @@ func runAtomicChatRequest(ctx context.Context, user User, input QueryInput) (str
 
 	apiKey := os.Getenv("AI_API_KEY")
 	if apiKey == "" {
-		log.Println("[WARNING] AI_API_KEY not found, failing over to OPENAI_API_KEY...")
 		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
 
@@ -6413,7 +6410,6 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 
 	supportModel := os.Getenv("AI_SUPPORT_MODEL")
 	if supportModel == "" {
-		fmt.Println("[WARNING] AI_SUPPORT_MODEL not found, failing over to OPENAI_SUPPORT_MODEL...")
 		supportModel = os.Getenv("OPENAI_SUPPORT_MODEL")
 	}
 
@@ -6437,6 +6433,7 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 // createNextActions = true => mid-agent to decide next steps
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool) (Action, error) {
 
+	aiStarttime := time.Now().Unix()
 	// A handler to ensure we ALWAYS focus on next actions if a node starts late
 	// or is missing context, but has previous decisions
 	for _, result := range execution.Results {
@@ -6463,7 +6460,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	// Create the OpenAI body struct
 	systemMessage := `INTRODUCTION: 
-You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%, is not the last action AND it can't be done with an API. These actions are a last resort. Do NOT ask about networking or authentication unless explicitly specified. 
+You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%, is not the last action AND it can't be done with an API. These actions are a last resort. Use Markdown with focus on human readability. Do NOT ask about networking or authentication unless explicitly specified. 
 
 END INTRODUCTION
 ---
@@ -6577,7 +6574,7 @@ SINGUL ACTIONS:
 	_ = oldActionResult
 	oldAgentOutput := AgentOutput{}
 	if createNextActions == true {
-		extraString = "This is a continuation of a previous execution. ONLY output decisions that fit AFTER the last FINISHED decision. DO NOT repeat previous decisions, and make sure your indexing is on point. Output as an array of decisions.\n\nIF you don't want to add any new decision, add AT LEAST one decision saying why it is finished, summarising EXACTLY what the user wants in a user-friendly Markdown format, OR the format the user asked for. Make the action and category 'finish', and put the reason in the 'reason' field. Do NOT summarize, explain or say things like 'user said'. JUST give exactly the final answer and nothing more."
+		extraString = "This is a continuation of a previous execution. ONLY output decisions that fit AFTER the last FINISHED decision. DO NOT repeat previous decisions, and make sure your indexing is on point. Output as an array of decisions.\n\nIF you don't want to add any new decision, add AT LEAST one decision saying why it is finished, summarising EXACTLY what the user wants in a user-friendly Markdown format, OR the format the user asked for. Make the action and category 'finish', and put the reason in the 'reason' field. Do NOT summarize, explain or say things like 'user said'. JUST give exactly the final answer and nothing more, in past tense. If any action failed, make sure to mention why"
 
 		userMessageChanged := false
 
@@ -6852,6 +6849,7 @@ RULES:
 * NEVER ask the user for clarification, confirmations, or extra details unless it is absolutely unavoidable.
 * If realtime data is required, ALWAYS use an Singul APIs to get it.
 * ALWAYS output the same language as the original question. 
+* ALWAYS format questions using Markdown formatting, with a focus on human readability. 
 
 2. Action & Decision Rules
 
@@ -6864,7 +6862,7 @@ RULES:
 * Fields can reference previous action outputs using {{action_name}}. Example: {"body": "{{previous_action.field}}"}.
 * If questions are absolutely required, combine all into one "ask" action with multiple "question" fields. Do NOT create multiple separate decisions.
 * Retry actions if the result was irrelevant. After three retries of a failed decision, add the finish decision. 
-* If any decision has failed, add the finish decision.
+* If any decision has failed, add the finish decision with details about the failure.
 * If a formatting is specified for the output, use it exactly how explained for the finish decision.
 
 END RULES
@@ -7424,7 +7422,7 @@ FINALISING:
 			// A self-corrective measure for last-finished index
 			if decision.Action == "finish" || decision.Category == "finish" {
 				log.Printf("[INFO][%s] Decision %d is a finish decision. Marking the agent as finished...", execution.ExecutionId, decision.I)
-				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = aiStarttime
 				agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 
@@ -7546,7 +7544,7 @@ FINALISING:
 			// These aren't properly being updated in the db, so
 			// we need additional logic here to ensure it is being
 			// set/started
-			if nextActionType == "ask" || nextActionType == "finish" || nextActionType == "answer" {
+			if nextActionType == "ask" || nextActionType == "question" || nextActionType == "finish" || nextActionType == "answer" {
 				// Ensure we update all of it
 				for resultIndex, result := range execution.Results {
 					if result.Action.ID != startNode.ID {
@@ -7971,22 +7969,18 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	orgId := os.Getenv("AI_API_ORG")
 
 	if len(apiKey) == 0 {
-		log.Println("[WARNING] AI_API_KEY not found, failing over to OPENAI_API_KEY...")
 		apiKey = os.Getenv("OPENAI_API_KEY")
 	}
 
 	if len(aiRequestUrl) == 0 {
-		log.Println("[WARNING] AI_API_URL not found, failing over to OPENAI_API_URL...")
 		aiRequestUrl = os.Getenv("OPENAI_API_URL")
 	}
 
 	if len(aiApiVersion) == 0 {
-		log.Println("[WARNING] AI_API_VERSION not found, failing over to OPENAI_API_VERSION...")
 		aiApiVersion = os.Getenv("OPENAI_API_VERSION")
 	}
 
 	if len(orgId) == 0 {
-		log.Println("[WARNING] AI_API_ORG not found, failing over to OPENAI_API_ORG...")
 		orgId = os.Getenv("OPENAI_API_ORG")
 	}
 
@@ -10514,12 +10508,10 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		aiModel := os.Getenv("AI_MODEL")
 
 		if len(aiRequestUrl) == 0 {
-			log.Println("[WARNING] AI_API_URL not found, failing over to OPENAI_API_URL...")
 			aiRequestUrl = os.Getenv("OPENAI_API_URL")
 		}
 
 		if len(aiModel) == 0 {
-			log.Println("[WARNING] AI_MODEL not found, failing over to OPENAI_MODEL...")
 			aiModel = os.Getenv("OPENAI_MODEL")
 		}
 
