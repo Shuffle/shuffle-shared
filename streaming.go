@@ -1,11 +1,11 @@
 package shuffle
 
 import (
-	"log"
-	"strings"
-	"net/http"
-	"io/ioutil"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"strings"
 	"time"
 )
 
@@ -80,14 +80,14 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	}
 
 	/*
-	streamKey := fmt.Sprintf("%s_stream_users", workflow.ID)
-	cache, err = GetCache(ctx, streamKey, user.Id, 30)
-	if err != nil {
-		log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
-	} else {
-		// We are here to get the users in the stream
-		cacheData := []byte(cache.([]uint8))
-	}
+		streamKey := fmt.Sprintf("%s_stream_users", workflow.ID)
+		cache, err = GetCache(ctx, streamKey, user.Id, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
+		} else {
+			// We are here to get the users in the stream
+			cacheData := []byte(cache.([]uint8))
+		}
 	*/
 
 	// FIXME: Should append to the stream and keep some items in memory
@@ -180,7 +180,6 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	resp.Header().Set("Content-Type", "text/event-stream")
 	resp.WriteHeader(http.StatusOK)
 
-
 	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
 	previousCache := []byte{}
 	for {
@@ -203,7 +202,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 					if err != nil {
 						log.Printf("[ERROR] Failed in writing stream to user '%s' (%s): %s", user.Username, user.Id, err)
 
-						if strings.Contains(err.Error(), "broken pipe") { 
+						if strings.Contains(err.Error(), "broken pipe") {
 							break
 						}
 					} else {
@@ -222,8 +221,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("[DEBUG] Failed getting cache for %s: %s", user.Id, err)
 		}
 
-		// FIXME: This is a hack to make sure we don't fully utilize the thread 
+		// FIXME: This is a hack to make sure we don't fully utilize the thread
 		time.Sleep(100 * time.Millisecond)
 	}
 }
-

@@ -708,7 +708,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	workflowHealthChannel := make(chan WorkflowHealth)
 	errorChannel := make(chan error)
 	go func() {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Running workflowHealthChannel goroutine")
 		}
 
@@ -2224,13 +2224,13 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 				if project.Environment == "cloud" {
 					tmpApp, err := GetApp(ctx, action.AppID, user, false)
 					if err == nil {
-							handled = true
-							action.AppID = tmpApp.ID
-							if strings.ToLower(tmpApp.Name) == "http" || strings.ToLower(tmpApp.Name) == "email" || strings.ToLower(tmpApp.Name) == "shuffle tools" {
-							} else {
-								newOrgApps = append(newOrgApps, action.AppID)
-							}
-							workflowapps = append(workflowapps, *tmpApp)
+						handled = true
+						action.AppID = tmpApp.ID
+						if strings.ToLower(tmpApp.Name) == "http" || strings.ToLower(tmpApp.Name) == "email" || strings.ToLower(tmpApp.Name) == "shuffle tools" {
+						} else {
+							newOrgApps = append(newOrgApps, action.AppID)
+						}
+						workflowapps = append(workflowapps, *tmpApp)
 					} else {
 						appid, err := HandleAlgoliaAppSearch(ctx, action.AppName)
 						if err == nil && len(appid.ObjectID) > 0 {
@@ -2240,7 +2240,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 								handled = true
 								action.AppID = tmpApp.ID
 								if strings.ToLower(tmpApp.Name) == "http" || strings.ToLower(tmpApp.Name) == "email" || strings.ToLower(tmpApp.Name) == "shuffle tools" {
-								}else {
+								} else {
 									newOrgApps = append(newOrgApps, action.AppID)
 								}
 								workflowapps = append(workflowapps, *tmpApp)

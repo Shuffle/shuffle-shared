@@ -20,9 +20,9 @@ import (
 	"github.com/satori/go.uuid"
 )
 
-// FIXME: There is some issue when going past 0x9 (>0xA) with how 
+// FIXME: There is some issue when going past 0x9 (>0xA) with how
 // cache is being counted locally
-//var dbInterval = 0x20
+// var dbInterval = 0x20
 var dbInterval = 0x9
 
 // var dbInterval = 0x4
@@ -378,7 +378,7 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] Should get stats for key %s for the last %d days", statsKey, statDays)
 	}
 
@@ -470,7 +470,7 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		statEntries = append(statEntries, toAppend...)
 	}
 
-	// Append cache for right now as it may not be in the DB yet 
+	// Append cache for right now as it may not be in the DB yet
 	for statEntryIndex, statEntry := range statEntries {
 		if statEntry.Date.Day() == time.Now().Day() && statEntry.Date.Month() == time.Now().Month() && statEntry.Date.Year() == time.Now().Year() {
 			for _, addition := range info.Additions {
@@ -499,13 +499,13 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		return statEntries[i].Date.Before(statEntries[j].Date)
 	})
 
-	// For debugging stats that don't show up by injecting them 
+	// For debugging stats that don't show up by injecting them
 	/*
-	if debug && totalValue == 0 {
-		log.Printf("[DEBUG] Found %d entries for '%s' with 0 in data. Force-adding data to first entry.", len(statEntries), statsKey)
-		chosenIndex := rand.Intn(len(statEntries))
-		statEntries[chosenIndex].Value = int64(rand.Intn(10) + 1)
-	}
+		if debug && totalValue == 0 {
+			log.Printf("[DEBUG] Found %d entries for '%s' with 0 in data. Force-adding data to first entry.", len(statEntries), statsKey)
+			chosenIndex := rand.Intn(len(statEntries))
+			statEntries[chosenIndex].Value = int64(rand.Intn(10) + 1)
+		}
 	*/
 
 	marshalledEntries, err := json.Marshal(statEntries)
@@ -530,8 +530,6 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": %v, "key": "%s", "total": %d, "available_keys": %s, "entries": %s}`, successful, strings.ReplaceAll(statsKey, "\"", ""), totalValue, string(availableStats), string(marshalledEntries))))
 }
-
-
 
 func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -829,9 +827,9 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 
 		id := strings.ToLower(orgId)
 		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
-    DocumentID: id,
-})
+			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: id,
+		})
 		if err != nil {
 			log.Printf("[WARNING] Error in org STATS get: %s", err)
 			return err
@@ -1594,7 +1592,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 	}
 
 	if appendCustom {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Appending custom data type %s for org %s. Amount: %d", dataType, orgStatistics.OrgId, increment)
 		}
 
@@ -1620,8 +1618,8 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 
 		if !found {
 			orgStatistics.Additions = append(orgStatistics.Additions, AdditionalUseConfig{
-				Key:        dataType,
-				Value:      int64(increment),
+				Key:   dataType,
+				Value: int64(increment),
 				//DailyValue: int64(increment),
 
 				//Date: 0,
