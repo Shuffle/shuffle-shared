@@ -39,10 +39,11 @@ import (
 	gomemcache "github.com/bradfitz/gomemcache/memcache"
 	"google.golang.org/appengine/memcache"
 
-	//opensearch "github.com/shuffle/opensearch-go"
-	opensearch "github.com/opensearch-project/opensearch-go"
+	opensearch "github.com/shuffle/opensearch-go/v4"
+	//opensearch "github.com/opensearch-project/opensearch-go"
 	//elasticsearch "github.com/elastic/go-elasticsearch/v8"
-	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
+	//"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
+	"github.com/shuffle/opensearch-go/v4/opensearchapi"
 )
 
 var requestCache = cache.New(60*time.Minute, 60*time.Minute)
@@ -61,7 +62,7 @@ type ShuffleStorage struct {
 	StorageClient storage.Client
 	Environment   string
 	CacheDb       bool
-	Es            opensearch.Client
+	Es            opensearchapi.Client
 	DbType        string
 	CloudUrl      string
 	BucketName    string
@@ -673,6 +674,294 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	return nil
 }
 
+func GetEsConfig(defaultCreds bool) *opensearchapi.Client {
+	esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
+	if len(esUrl) == 0 {
+		esUrl = "https://shuffle-opensearch:9200"
+	}
+
+	username := os.Getenv("SHUFFLE_OPENSEARCH_USERNAME")
+	if len(username) == 0 {
+		username = "admin"
+	}
+
+	password := os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD")
+	if len(password) == 0 {
+		// New password that is set by default.
+		// Security Audit points to changing this during onboarding.
+		password = "StrongShufflePassword321!"
+	}
+
+	if defaultCreds {
+		log.Printf("[DEBUG] Using default credentials for Opensearch (previous versions)")
+
+		username = "admin"
+		password = "admin"
+	}
+
+	log.Printf("[DEBUG] Using custom opensearch url '%s'", esUrl)
+
+	// https://github.com/elastic/go-opensearch/blob/f741c073f324c15d3d401d945ee05b0c410bd06d/opensearch.go#L98
+	config := opensearch.Config{
+		Addresses:     strings.Split(esUrl, ","),
+		Username:      username,
+		Password:      password,
+		MaxRetries:    5,
+		RetryOnStatus: []int{500, 502, 503, 504, 429, 403},
+
+		// User Agent to work with Elasticsearch 8
+	}
+
+	//APIKey:        os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
+	//CloudID:       os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),
+
+	//config.Transport.TLSClientConfig
+	//transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := http.DefaultTransport.(*http.Transport)
+	transport.MaxIdleConnsPerHost = 100
+	transport.ResponseHeaderTimeout = time.Second * 10
+	transport.Proxy = nil
+
+	if len(os.Getenv("SHUFFLE_OPENSEARCH_PROXY")) > 0 {
+		httpProxy := os.Getenv("SHUFFLE_OPENSEARCH_PROXY")
+
+		url_i := url.URL{}
+		url_proxy, err := url_i.Parse(httpProxy)
+		if err == nil {
+			log.Printf("[DEBUG] Setting Opensearch proxy to %s", httpProxy)
+			transport.Proxy = http.ProxyURL(url_proxy)
+		} else {
+			log.Printf("[ERROR] Failed setting proxy for %s", httpProxy)
+		}
+	}
+
+	skipSSLVerify := false
+	if strings.ToLower(os.Getenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY")) == "true" {
+		//log.Printf("[DEBUG] SKIPPING SSL verification with Opensearch")
+		skipSSLVerify = true
+	}
+
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion:         tls.VersionTLS11,
+		InsecureSkipVerify: skipSSLVerify,
+	}
+
+	//https://github.com/elastic/go-opensearch/blob/master/_examples/security/opensearch-cluster.yml
+	certificateLocation := os.Getenv("SHUFFLE_OPENSEARCH_CERTIFICATE_FILE")
+	if len(certificateLocation) > 0 {
+		cert, err := ioutil.ReadFile(certificateLocation)
+		if err != nil {
+			log.Fatalf("[WARNING] Failed configuring certificates: %s not found", err)
+		} else {
+			config.CACert = cert
+
+			//if transport.TLSClientConfig.RootCAs, err = x509.SystemCertPool(); err != nil {
+			//	log.Fatalf("[ERROR] Problem adding system CA: %s", err)
+			//}
+
+			//// --> Add the custom certificate authority
+			//if ok := transport.TLSClientConfig.RootCAs.AppendCertsFromPEM(cert); !ok {
+			//	log.Fatalf("[ERROR] Problem adding CA from file %q", *cert)
+			//}
+		}
+
+		log.Printf("[INFO] Added certificate %s elastic client.", certificateLocation)
+	}
+
+	config.Transport = transport
+
+	if len(os.Getenv("SHUFFLE_OPENSEARCH_APIKEY")) > 0 {
+
+		config.Username = ""
+		config.Password = ""
+		config.Transport = &customTransport{
+			apiKey: os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
+			rt:     http.DefaultTransport,
+		}
+
+		if debug { 
+			log.Printf("[DEBUG] Using API Key authentication for Opensearch")
+		}
+	} 
+
+	es, err := opensearchapi.NewClient(
+		opensearchapi.Config{
+			Client: config,
+		},
+	)
+	if err != nil {
+		log.Fatalf("[ERROR] Database client for ELASTICSEARCH error during init (fatal): %s", err)
+	}
+
+	return es
+}
+
+func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
+	nameKey := "workflowexecution"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+
+	// Loads of cache management to ensure we have the latest version of the execution no matter what
+	workflowExecution := &WorkflowExecution{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &workflowExecution)
+
+			if err == nil || len(workflowExecution.ExecutionId) > 0 {
+				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
+				if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
+					baseArgument := &ActionResult{
+						Result: workflowExecution.ExecutionArgument,
+						Action: Action{ID: "execution_argument"},
+					}
+
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
+					if err != nil {
+						log.Printf("[DEBUG][%s] Failed to parse in execution file value for exec argument: %s (3)", workflowExecution.ExecutionId, err)
+					} else {
+						//log.Printf("[DEBUG][%s] Found a new value to parse with exec argument", workflowExecution.ExecutionId)
+						workflowExecution.ExecutionArgument = newValue
+					}
+				}
+
+				if strings.Contains(workflowExecution.Result, "Result too large to handle") {
+					baseResult := &ActionResult{
+						Result: workflowExecution.Result,
+						Action: Action{ID: "execution_result"},
+					}
+
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseResult)
+					if err != nil {
+						log.Printf("[DEBUG][%s] Failed to parse in execution file value for Result: %s", workflowExecution.ExecutionId, err)
+					} else {
+						log.Printf("[DEBUG][%s] Found a new value to parse with Result field", workflowExecution.ExecutionId)
+						workflowExecution.Result = newValue
+					}
+				}
+
+				for valueIndex, value := range workflowExecution.Results {
+					if strings.Contains(value.Result, "Result too large to handle") {
+						newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
+						if err != nil {
+							continue
+						}
+
+						workflowExecution.Results[valueIndex].Result = newValue
+					}
+				}
+
+				// Fixes missing pieces
+				newexec, _ := Fixexecution(ctx, *workflowExecution)
+				workflowExecution = &newexec
+
+				return workflowExecution, nil
+			} else {
+				//log.Printf("[WARNING] Failed getting workflowexecution: %s", err)
+			}
+		} else {
+		}
+	}
+
+	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && project.Environment != "cloud" {
+		return workflowExecution, errors.New("ExecutionId doesn't exist in cache")
+	}
+
+	if project.DbType == "opensearch" {
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: id, 
+		})
+
+		if err != nil {
+			log.Printf("[WARNING][%s] Error for %s: %s", workflowExecution.ExecutionId, cacheKey, err)
+			return workflowExecution, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return workflowExecution, errors.New("execution doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return workflowExecution, err
+		}
+
+		wrapped := ExecWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil && len(wrapped.Source.ExecutionId) == 0 {
+			return workflowExecution, err
+		}
+
+		workflowExecution = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
+			if strings.Contains(err.Error(), `cannot load field`) {
+				err = nil
+			} else {
+				return workflowExecution, err
+			}
+		}
+
+		// A workaround for large bits of information for execution argument
+		if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
+			//log.Printf("[DEBUG] Found prefix %s to be replaced for exec argument (3)", workflowExecution.ExecutionArgument)
+			baseArgument := &ActionResult{
+				Result: workflowExecution.ExecutionArgument,
+				Action: Action{ID: "execution_argument"},
+			}
+			newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
+			if err != nil {
+				log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (4)", err)
+			} else {
+				//log.Printf("[DEBUG] Found a new value to parse with exec argument")
+				workflowExecution.ExecutionArgument = newValue
+			}
+		}
+
+		// Parsing as file.
+		//log.Printf("[DEBUG] Got execution %s. Results: ~%d/%d", id, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
+		for valueIndex, value := range workflowExecution.Results {
+			if strings.Contains(value.Result, "Result too large to handle") {
+				//log.Printf("[DEBUG] Found prefix %s to be replaced (2)", value.Result)
+				newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
+				if err != nil {
+					log.Printf("[DEBUG] Failed to parse in execution file value %s (5)", err)
+					continue
+				}
+
+				workflowExecution.Results[valueIndex].Result = newValue
+			}
+		}
+	}
+
+	//log.Printf("[DEBUG] Returned execution %s with %d results (1)", id, len(workflowExecution.Results))
+
+	// Fixes missing pieces
+	newexec, _ := Fixexecution(ctx, *workflowExecution)
+	workflowExecution = &newexec
+
+	//log.Printf("[DEBUG] Returned execution %s with %d results (2)", id, len(workflowExecution.Results))
+
+	if project.CacheDb && workflowExecution.Authorization != "" {
+		newexecution, err := json.Marshal(workflowExecution)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling execution: %s", err)
+			return workflowExecution, nil
+		}
+
+		err = SetCache(ctx, id, newexecution, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating execution: %s", err)
+		}
+	}
+
+	return workflowExecution, nil
+}
+
 func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afterTimestamp int, limit int, mode string) ([]LiveExecutionStatus, error) {
 	nameKey := "live_execution_status"
 	liveExecs := []LiveExecutionStatus{}
@@ -760,18 +1049,22 @@ func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afte
 			return liveExecs, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+        		TrackTotalHits: true, 
+    		},
+		})
+
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get live execution status): %s", err)
 			return liveExecs, err
 		}
-		defer res.Body.Close()
 
+		res := resp.Inspect().Response
+
+		defer res.Body.Close()
 		if res.StatusCode != 200 && res.StatusCode != 201 {
 			return liveExecs, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
@@ -1720,168 +2013,6 @@ func GetWorkflowExecutionByAuth(ctx context.Context, authId string) (*WorkflowEx
 			if err != nil {
 				log.Printf("[WARNING] Failed caching workflow execution %s: %s", cacheKey, err)
 			}
-		}
-	}
-
-	return workflowExecution, nil
-}
-
-func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
-	nameKey := "workflowexecution"
-	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-
-	// Loads of cache management to ensure we have the latest version of the execution no matter what
-	workflowExecution := &WorkflowExecution{}
-	if project.CacheDb {
-		cache, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &workflowExecution)
-
-			if err == nil || len(workflowExecution.ExecutionId) > 0 {
-				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
-				if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
-					baseArgument := &ActionResult{
-						Result: workflowExecution.ExecutionArgument,
-						Action: Action{ID: "execution_argument"},
-					}
-
-					newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
-					if err != nil {
-						log.Printf("[DEBUG][%s] Failed to parse in execution file value for exec argument: %s (3)", workflowExecution.ExecutionId, err)
-					} else {
-						//log.Printf("[DEBUG][%s] Found a new value to parse with exec argument", workflowExecution.ExecutionId)
-						workflowExecution.ExecutionArgument = newValue
-					}
-				}
-
-				if strings.Contains(workflowExecution.Result, "Result too large to handle") {
-					baseResult := &ActionResult{
-						Result: workflowExecution.Result,
-						Action: Action{ID: "execution_result"},
-					}
-
-					newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseResult)
-					if err != nil {
-						log.Printf("[DEBUG][%s] Failed to parse in execution file value for Result: %s", workflowExecution.ExecutionId, err)
-					} else {
-						log.Printf("[DEBUG][%s] Found a new value to parse with Result field", workflowExecution.ExecutionId)
-						workflowExecution.Result = newValue
-					}
-				}
-
-				for valueIndex, value := range workflowExecution.Results {
-					if strings.Contains(value.Result, "Result too large to handle") {
-						newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
-						if err != nil {
-							continue
-						}
-
-						workflowExecution.Results[valueIndex].Result = newValue
-					}
-				}
-
-				// Fixes missing pieces
-				newexec, _ := Fixexecution(ctx, *workflowExecution)
-				workflowExecution = &newexec
-
-				return workflowExecution, nil
-			} else {
-				//log.Printf("[WARNING] Failed getting workflowexecution: %s", err)
-			}
-		} else {
-		}
-	}
-
-	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && project.Environment != "cloud" {
-		return workflowExecution, errors.New("ExecutionId doesn't exist in cache")
-	}
-
-	if project.DbType == "opensearch" {
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
-		if err != nil {
-			log.Printf("[WARNING][%s] Error for %s: %s", workflowExecution.ExecutionId, cacheKey, err)
-			return workflowExecution, err
-		}
-
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return workflowExecution, errors.New("execution doesn't exist")
-		}
-
-		defer res.Body.Close()
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return workflowExecution, err
-		}
-
-		wrapped := ExecWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil && len(wrapped.Source.ExecutionId) == 0 {
-			return workflowExecution, err
-		}
-
-		workflowExecution = &wrapped.Source
-	} else {
-		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
-		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
-			if strings.Contains(err.Error(), `cannot load field`) {
-				err = nil
-			} else {
-				return workflowExecution, err
-			}
-		}
-
-		// A workaround for large bits of information for execution argument
-		if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
-			//log.Printf("[DEBUG] Found prefix %s to be replaced for exec argument (3)", workflowExecution.ExecutionArgument)
-			baseArgument := &ActionResult{
-				Result: workflowExecution.ExecutionArgument,
-				Action: Action{ID: "execution_argument"},
-			}
-			newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
-			if err != nil {
-				log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (4)", err)
-			} else {
-				//log.Printf("[DEBUG] Found a new value to parse with exec argument")
-				workflowExecution.ExecutionArgument = newValue
-			}
-		}
-
-		// Parsing as file.
-		//log.Printf("[DEBUG] Got execution %s. Results: ~%d/%d", id, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
-		for valueIndex, value := range workflowExecution.Results {
-			if strings.Contains(value.Result, "Result too large to handle") {
-				//log.Printf("[DEBUG] Found prefix %s to be replaced (2)", value.Result)
-				newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
-				if err != nil {
-					log.Printf("[DEBUG] Failed to parse in execution file value %s (5)", err)
-					continue
-				}
-
-				workflowExecution.Results[valueIndex].Result = newValue
-			}
-		}
-	}
-
-	//log.Printf("[DEBUG] Returned execution %s with %d results (1)", id, len(workflowExecution.Results))
-
-	// Fixes missing pieces
-	newexec, _ := Fixexecution(ctx, *workflowExecution)
-	workflowExecution = &newexec
-
-	//log.Printf("[DEBUG] Returned execution %s with %d results (2)", id, len(workflowExecution.Results))
-
-	if project.CacheDb && workflowExecution.Authorization != "" {
-		newexecution, err := json.Marshal(workflowExecution)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling execution: %s", err)
-			return workflowExecution, nil
-		}
-
-		err = SetCache(ctx, id, newexecution, 30)
-		if err != nil {
-			log.Printf("[WARNING] Failed updating execution: %s", err)
 		}
 	}
 
@@ -13559,122 +13690,6 @@ func (t *customTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// You can also inject other headers here, e.g. X-Custom-Header
 	return t.rt.RoundTrip(req)
-}
-
-func GetEsConfig(defaultCreds bool) *opensearch.Client {
-	esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
-	if len(esUrl) == 0 {
-		esUrl = "https://shuffle-opensearch:9200"
-	}
-
-	username := os.Getenv("SHUFFLE_OPENSEARCH_USERNAME")
-	if len(username) == 0 {
-		username = "admin"
-	}
-
-	password := os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD")
-	if len(password) == 0 {
-		// New password that is set by default.
-		// Security Audit points to changing this during onboarding.
-		password = "StrongShufflePassword321!"
-	}
-
-	if defaultCreds {
-		log.Printf("[DEBUG] Using default credentials for Opensearch (previous versions)")
-
-		username = "admin"
-		password = "admin"
-	}
-
-	log.Printf("[DEBUG] Using custom opensearch url '%s'", esUrl)
-
-	// https://github.com/elastic/go-opensearch/blob/f741c073f324c15d3d401d945ee05b0c410bd06d/opensearch.go#L98
-	config := opensearch.Config{
-		Addresses:     strings.Split(esUrl, ","),
-		Username:      username,
-		Password:      password,
-		MaxRetries:    5,
-		RetryOnStatus: []int{500, 502, 503, 504, 429, 403},
-
-		// User Agent to work with Elasticsearch 8
-	}
-
-	//APIKey:        os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
-	//CloudID:       os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),
-
-	//config.Transport.TLSClientConfig
-	//transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport := http.DefaultTransport.(*http.Transport)
-	transport.MaxIdleConnsPerHost = 100
-	transport.ResponseHeaderTimeout = time.Second * 10
-	transport.Proxy = nil
-
-	if len(os.Getenv("SHUFFLE_OPENSEARCH_PROXY")) > 0 {
-		httpProxy := os.Getenv("SHUFFLE_OPENSEARCH_PROXY")
-
-		url_i := url.URL{}
-		url_proxy, err := url_i.Parse(httpProxy)
-		if err == nil {
-			log.Printf("[DEBUG] Setting Opensearch proxy to %s", httpProxy)
-			transport.Proxy = http.ProxyURL(url_proxy)
-		} else {
-			log.Printf("[ERROR] Failed setting proxy for %s", httpProxy)
-		}
-	}
-
-	skipSSLVerify := false
-	if strings.ToLower(os.Getenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY")) == "true" {
-		//log.Printf("[DEBUG] SKIPPING SSL verification with Opensearch")
-		skipSSLVerify = true
-	}
-
-	transport.TLSClientConfig = &tls.Config{
-		MinVersion:         tls.VersionTLS11,
-		InsecureSkipVerify: skipSSLVerify,
-	}
-
-	//https://github.com/elastic/go-opensearch/blob/master/_examples/security/opensearch-cluster.yml
-	certificateLocation := os.Getenv("SHUFFLE_OPENSEARCH_CERTIFICATE_FILE")
-	if len(certificateLocation) > 0 {
-		cert, err := ioutil.ReadFile(certificateLocation)
-		if err != nil {
-			log.Fatalf("[WARNING] Failed configuring certificates: %s not found", err)
-		} else {
-			config.CACert = cert
-
-			//if transport.TLSClientConfig.RootCAs, err = x509.SystemCertPool(); err != nil {
-			//	log.Fatalf("[ERROR] Problem adding system CA: %s", err)
-			//}
-
-			//// --> Add the custom certificate authority
-			//if ok := transport.TLSClientConfig.RootCAs.AppendCertsFromPEM(cert); !ok {
-			//	log.Fatalf("[ERROR] Problem adding CA from file %q", *cert)
-			//}
-		}
-
-		log.Printf("[INFO] Added certificate %s elastic client.", certificateLocation)
-	}
-
-	config.Transport = transport
-
-	if len(os.Getenv("SHUFFLE_OPENSEARCH_APIKEY")) > 0 {
-
-		config.Username = ""
-		config.Password = ""
-		config.Transport = &customTransport{
-			apiKey: os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
-			rt:     http.DefaultTransport,
-		}
-
-		log.Printf("[DEBUG] Using API Key authentication for Opensearch")
-	} 
-
-	es, err := opensearch.NewClient(config)
-	if err != nil {
-		log.Fatalf("[ERROR] Database client for ELASTICSEARCH error during init (fatal): %s", err)
-	}
-
-	return es
 }
 
 func checkNoInternet() OnpremLicense {

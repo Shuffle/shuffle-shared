@@ -26,6 +26,7 @@ require (
 	github.com/sashabaranov/go-openai v1.40.5
 	github.com/satori/go.uuid v1.2.0
 	github.com/sendgrid/sendgrid-go v3.16.1+incompatible
+	github.com/shuffle/opensearch-go/v4 v4.0.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.40.0
 	golang.org/x/oauth2 v0.30.0
