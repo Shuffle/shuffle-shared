@@ -497,7 +497,7 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 			log.Printf("[DEBUG] Failed deleting key %s", workflow.ID)
 			return err
 		} else {
-			log.Printf("[INFO] Deleted junk workflow with id: %s", workflow.ID)
+			log.Printf("[INFO] Deleted health workflow with id (planned): %s", workflow.ID)
 		}
 	}
 
@@ -550,7 +550,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		// Check which user exists and is admin
 		for _, user := range org.Users {
 			user, err := GetUser(ctx, user.Id)
-			if err != nil {
+			if err != nil || user.Id == "" {
 				log.Printf("[WARNING] Failed getting api key for user in org: %s", err)
 				continue
 			}
@@ -1222,7 +1222,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		if err != nil {
 			log.Printf("[ERROR] Failed reading health check HTTP response body: %s", err)
 		} else {
-			if strings.Contains(string(respBodyErr), "illegal_arugment") {
+			if strings.Contains(string(respBodyErr), "illegal_argument_exception") {
 			} else {
 				log.Printf("[ERROR] Health check running Workflow Response: %s", respBodyErr)
 			}

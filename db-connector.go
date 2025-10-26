@@ -4808,7 +4808,11 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 		})
 
 		if err != nil {
-			log.Printf("[WARNING] Error in DELETE: %s", err)
+			if strings.Contains(err.Error(), "not_found") {
+				return nil 
+			}
+
+			log.Printf("[WARNING] Error in DELETE (2): %s", err)
 			return err
 		}
 
@@ -16257,6 +16261,7 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 			if strings.Contains(err.Error(), "not_found") {
 				return nil 
 			}
+
 			log.Printf("[WARNING] Error in DELETE: %s", err)
 			return err
 		}
