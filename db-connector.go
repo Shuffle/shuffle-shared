@@ -1063,7 +1063,6 @@ func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afte
 		}
 
 		res := resp.Inspect().Response
-
 		defer res.Body.Close()
 		if res.StatusCode != 200 && res.StatusCode != 201 {
 			return liveExecs, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
@@ -2147,18 +2146,21 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	}
 
 	if project.DbType == "opensearch" {
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return workflowApp, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflowApp, errors.New("App doesn't exist")
 		}
 
-		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return workflowApp, err
@@ -2282,18 +2284,21 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 	}
 
 	if project.DbType == "opensearch" {
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return sub, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return sub, errors.New("HistoryId doesn't exist")
 		}
 
-		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return sub, err
@@ -2396,12 +2401,12 @@ func FindSimilarFilename(ctx context.Context, filename, orgId string) ([]File, e
 			return files, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return files, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -2555,12 +2560,12 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 			return files, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return files, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -2717,12 +2722,12 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 			return env, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return env, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -2871,8 +2876,8 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 			return 0, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
-
 		if res.StatusCode == 404 {
 			return 0, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
@@ -2980,12 +2985,12 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 			return orgs, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return orgs, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -3116,18 +3121,21 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 	}
 
 	if project.DbType == "opensearch" {
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return workflow, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflow, errors.New("Workflow doesn't exist")
 		}
 
-		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return workflow, err
@@ -3260,12 +3268,12 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 			return stats, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return stats, errors.New(fmt.Sprintf("Org stats for %s doesn't exist", orgId))
 		}
 
-		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return stats, err
@@ -3414,6 +3422,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			return workflows, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflows, nil
@@ -3488,12 +3497,12 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				return workflows, err
 			}
 
+			res := resp.Inspect().Response
 			defer res.Body.Close()
 			if res.StatusCode == 404 {
 				return workflows, nil
 			}
 
-			defer res.Body.Close()
 			if res.IsError() {
 				var e map[string]interface{}
 				if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -3787,12 +3796,16 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 
 	setOrg := false
 	if project.DbType == "opensearch" {
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error in org get: %s", err)
 			return &Org{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
@@ -3959,6 +3972,7 @@ func GetFirstOrg(ctx context.Context) (*Org, error) {
 			return curOrg, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode != 200 && res.StatusCode != 201 {
 			return curOrg, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
@@ -4036,6 +4050,7 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 		return err
 	}
 
+	res := resp.Inspect().Response
 	defer res.Body.Close()
 	respBody, err := ioutil.ReadAll(res.Body)
 	if err != nil {
@@ -4534,13 +4549,13 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 			return err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			//log.Printf("[WARNING] Couldn't delete %s:%s. Status: %d", entity, value, res.StatusCode)
 			return nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -4688,12 +4703,16 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return *api, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return *api, errors.New("OpenAPI spec doesn't exist")
@@ -4865,8 +4884,8 @@ func FindWorkflowByName(ctx context.Context, name string) ([]Workflow, error) {
 			return workflows, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
-
 		if res.StatusCode == 404 {
 			return workflows, nil
 		}
@@ -4962,12 +4981,12 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 			return apps, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return apps, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -5061,12 +5080,12 @@ func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 			return []User{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return []User{}, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -5156,12 +5175,12 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 			return []User{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return []User{}, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -5248,6 +5267,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 			return curUser, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return curUser, errors.New("User doesn't exist")
@@ -5419,9 +5439,12 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return err
 		}
-		defer res.Body.Close()
 
-		log.Printf("Response from OpenSearch deletion: StatusCode=%d", res.StatusCode)
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if debug { 
+			log.Printf("[DEBUG] Response from OpenSearch deletion: StatusCode=%d", res.StatusCode)
+		}
 
 		if res.StatusCode == 404 {
 			return errors.New("User doesn't exist")
@@ -5749,12 +5772,12 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 			return allworkflowappAuths, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return allworkflowappAuths, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -5912,6 +5935,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			return environments, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 && len(orgId) > 0 {
 			item := Environment{
@@ -5932,7 +5956,6 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			return environments, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -6924,6 +6947,7 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 			return []WorkflowApp{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return []WorkflowApp{}, err
@@ -7125,12 +7149,12 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 			return []WorkflowApp{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return []WorkflowApp{}, err
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -7364,6 +7388,8 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflow queue): %s", err)
 			return ExecutionRequestWrapper{}, err
 		}
+
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 
 		// Here in case of older executions. Should work itself out long-term with
@@ -7389,6 +7415,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 				log.Printf("[ERROR] Error getting response from Opensearch (get workflow queue): %s", err)
 				return ExecutionRequestWrapper{}, err
 			}
+
 			defer res.Body.Close()
 		}
 
@@ -7396,7 +7423,6 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 			return ExecutionRequestWrapper{}, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -7648,8 +7674,9 @@ func GetPlatformHealth(ctx context.Context, beforeTimestamp int, afterTimestamp 
 			log.Printf("[ERROR] Error getting response from Opensearch (get latest platform health): %s", err)
 			return health, err
 		}
-		defer res.Body.Close()
 
+		res := resp.Inspect().Response
+		defer res.Body.Close()
 		if res.StatusCode != 200 && res.StatusCode != 201 {
 			return health, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
@@ -7779,18 +7806,21 @@ func GetOpenseaAsset(ctx context.Context, id string) (*OpenseaAsset, error) {
 
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return workflowExecution, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflowExecution, errors.New("Collection doesn't exist")
 		}
 
-		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return workflowExecution, err
@@ -7860,12 +7890,12 @@ func GetOpenseaAssets(ctx context.Context, collectionName string) ([]OpenseaAsse
 			return executions, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return executions, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -8029,12 +8059,12 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 			return workflows, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflows, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -8222,12 +8252,12 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 			return workflows, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflows, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -8836,18 +8866,21 @@ func GetAppAuthGroup(ctx context.Context, id string) (*AppAuthenticationGroup, e
 	}
 
 	if project.DbType == "opensearch" {
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return authGroup, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return authGroup, errors.New("Workflow doesn't exist")
 		}
 
-		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return authGroup, err
@@ -9098,6 +9131,7 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 			return &ScheduleOld{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return &ScheduleOld{}, errors.New("Schedule doesn't exist")
@@ -9161,12 +9195,12 @@ func GetHooks(ctx context.Context, OrgId string) ([]Hook, error) {
 			return []Hook{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return []Hook{}, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -9252,12 +9286,12 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 			return []Pipeline{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return []Pipeline{}, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -9359,12 +9393,12 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 			return User{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return User{}, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -9469,12 +9503,12 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			return User{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return User{}, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -9591,6 +9625,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 			return &Hook{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return &Hook{}, errors.New("Hook doesn't exist")
@@ -9681,6 +9716,7 @@ func GetPipeline(ctx context.Context, triggerId string) (*Pipeline, error) {
 			return &Pipeline{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return &Pipeline{}, errors.New("pipeline doesn't exist")
@@ -9716,12 +9752,16 @@ func GetNotification(ctx context.Context, id string) (*Notification, error) {
 	curFile := &Notification{}
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &Notification{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return &Notification{}, errors.New("Notification with that ID doesn't exist")
@@ -9791,12 +9831,16 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 	curFile := &File{}
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &File{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return &File{}, errors.New("File doesn't exist")
@@ -9990,6 +10034,7 @@ func GetDisabledRules(ctx context.Context, orgId string) (*DisabledRules, error)
 			return disabledRules, nil
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			// Index empty
@@ -10062,6 +10107,7 @@ func GetSelectedRules(ctx context.Context, TriggerId string) (*SelectedDetection
 			return &SelectedDetectionRules{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return &SelectedDetectionRules{}, errors.New("rules doesn't exist")
@@ -10141,6 +10187,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			return notifications, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return notifications, nil
@@ -10284,12 +10331,12 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 			return notifications, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return notifications, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -10419,12 +10466,12 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 			return files, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return files, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -10575,12 +10622,16 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return appAuth, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return appAuth, errors.New("App auth doesn't exist")
@@ -10685,8 +10736,8 @@ func GetAuthGroups(ctx context.Context, orgId string) ([]AppAuthenticationGroup,
 			return appAuths, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
-
 		if res.StatusCode == 404 {
 			return appAuths, nil
 		}
@@ -10757,12 +10808,12 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 			return schedules, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return schedules, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -10826,6 +10877,7 @@ func GetTriggerAuth(ctx context.Context, id string) (*TriggerAuth, error) {
 			return &TriggerAuth{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return &TriggerAuth{}, errors.New("Trigger auth doesn't exist")
@@ -10942,6 +10994,7 @@ func GetAllWorkflows(ctx context.Context) ([]Workflow, error) {
 			return workflows, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflows, nil
@@ -11013,12 +11066,12 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 			return []User{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return []User{}, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -11221,12 +11274,12 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 			return executions, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return executions, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -11403,12 +11456,12 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			return executions, cursor, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return executions, cursor, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -11777,12 +11830,12 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			return executions, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return executions, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -12046,12 +12099,12 @@ func GetOrgByField(ctx context.Context, fieldName, value string) ([]Org, error) 
 			return orgs, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return orgs, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -12126,12 +12179,12 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 			return []Org{}, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return []Org{}, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -12364,12 +12417,12 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 			return workflows, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflows, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -12502,6 +12555,7 @@ func GetDatastoreCategories(ctx context.Context, orgId string) ([]DatastoreCateg
 			return categories, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.IsError() {
 			if strings.Contains(res.String(), "index_not_found_exception") {
@@ -12599,12 +12653,16 @@ func GetDatastoreCategoryConfig(ctx context.Context, orgId, category string) (*D
 	id := uuid.Must(uuid.FromBytes(uuidBytes)).String()
 
 	if project.DbType == "opensearch" {
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return categoryData, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return categoryData, errors.New("Key doesn't exist")
@@ -13422,12 +13480,16 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return cacheData, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return cacheData, errors.New("Key doesn't exist")
@@ -13964,18 +14026,21 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return usecase, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return usecase, errors.New("Usecase doesn't exist")
 		}
 
-		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return usecase, err
@@ -14270,6 +14335,7 @@ func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, 
 			return count, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
@@ -14410,6 +14476,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			return cacheKeys, "", err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
@@ -14736,6 +14803,7 @@ func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
 			return deals, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
@@ -15555,6 +15623,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 			return executions, "", err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.IsError() {
 			log.Printf("[WARNING] Failed executing query: %s", res.String())
@@ -15939,6 +16008,7 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 			return err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			responseData, err := ioutil.ReadAll(res.Body)
@@ -16402,12 +16472,12 @@ func GetDatastoreNGramItem(ctx context.Context, key string) (*NGramItem, error) 
 			return ngramItem, err
 		}
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return ngramItem, errors.New("Item doesn't exist")
 		}
 
-		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return ngramItem, err
@@ -16562,6 +16632,7 @@ func InitOpensearchIndexes() {
 			project.Es.Indices.Create.WithBody(bytes.NewReader(indexConfig)),
 		)
 
+		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if err != nil {
 			log.Printf("[WARNING] Error creating index %s: %s", index, err)

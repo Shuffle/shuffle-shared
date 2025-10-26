@@ -828,7 +828,10 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		// Get it from opensearch (may be prone to more issues at scale (thousands/second) due to no transactional locking)
 
 		id := strings.ToLower(orgId)
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+    Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+    DocumentID: id,
+})
 		if err != nil {
 			log.Printf("[WARNING] Error in org STATS get: %s", err)
 			return err
