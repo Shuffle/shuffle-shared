@@ -2390,12 +2390,13 @@ func FindSimilarFilename(ctx context.Context, filename, orgId string) ([]File, e
 			return files, nil
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (find file filename): %s", err)
 			return files, err
@@ -2549,12 +2550,13 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 			return files, nil
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (find file md5): %s", err)
 			return files, err
@@ -2711,12 +2713,13 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 			return env, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get environment): %s", err)
 			return env, err
@@ -2864,12 +2867,13 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 			return 0, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflow run count): %s", err)
@@ -2974,12 +2978,14 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 			return orgs, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
+
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
 			return orgs, err
@@ -3411,12 +3417,13 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			return workflows, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflows): %s", err)
 			return workflows, err
@@ -3486,12 +3493,13 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				return workflows, err
 			}
 
-			res, err := project.Es.Search(
-				project.Es.Search.WithContext(ctx),
-				project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-				project.Es.Search.WithBody(&buf),
-				project.Es.Search.WithTrackTotalHits(true),
-			)
+			resp, err := project.Es.Search(ctx, opensearchapi.SearchReq{
+				Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+				Body: &buf,
+				Params: opensearchapi.SearchParams{
+					TrackTotalHits: true,
+				},
+			})
 			if err != nil {
 				log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
 				return workflows, err
@@ -3961,11 +3969,13 @@ func GetFirstOrg(ctx context.Context) (*Org, error) {
 
 	curOrg := &Org{}
 	if project.DbType == "opensearch" {
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: true,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get first org): %s", err)
 			return curOrg, err
@@ -4871,12 +4881,13 @@ func FindWorkflowByName(ctx context.Context, name string) ([]Workflow, error) {
 			return workflows, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix("workflow"))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix("workflow"))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflows named): %s", err)
@@ -4969,12 +4980,13 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 			return apps, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (find app by name): %s", err)
 			return apps, err
@@ -5068,12 +5080,13 @@ func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 			return []User{}, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (find user): %s", err)
 			return []User{}, err
@@ -5163,12 +5176,13 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 			return []User{}, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (find user): %s", err)
 			return []User{}, err
@@ -5760,12 +5774,13 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 			return allworkflowappAuths, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get app auth): %s", err)
 			return allworkflowappAuths, err
@@ -5923,12 +5938,13 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			return environments, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get environments): %s", err)
 			return environments, err
@@ -6934,12 +6950,13 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 			return []WorkflowApp{}, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(indexName))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(false),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(indexName))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get apps): %s", err)
 			return []WorkflowApp{}, err
@@ -7135,12 +7152,13 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 			return []WorkflowApp{}, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get apps): %s", err)
@@ -7376,12 +7394,13 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 			return ExecutionRequestWrapper{}, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get workflow queue): %s", err)
 			return ExecutionRequestWrapper{}, err
@@ -7403,12 +7422,13 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 				return ExecutionRequestWrapper{}, err
 			}
 
-			res, err = project.Es.Search(
-				project.Es.Search.WithContext(ctx),
-				project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-				project.Es.Search.WithBody(&buf),
-				project.Es.Search.WithTrackTotalHits(true),
-			)
+			res, err = project.Es.Search(ctx, &opensearchapi.SearchReq{
+				Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+				Body: &buf,
+				Params: opensearchapi.SearchParams{
+					TrackTotalHits: true,
+				},
+			})
 			if err != nil {
 				log.Printf("[ERROR] Error getting response from Opensearch (get workflow queue): %s", err)
 				return ExecutionRequestWrapper{}, err
@@ -7662,12 +7682,13 @@ func GetPlatformHealth(ctx context.Context, beforeTimestamp int, afterTimestamp 
 			return health, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get latest platform health): %s", err)
 			return health, err
@@ -8047,12 +8068,13 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 			return workflows, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
 			return workflows, err
@@ -8240,12 +8262,13 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 			return workflows, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
 			return workflows, err
@@ -9183,12 +9206,13 @@ func GetHooks(ctx context.Context, OrgId string) ([]Hook, error) {
 			return []Hook{}, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get hooks): %s", err)
 			return []Hook{}, err
@@ -9274,12 +9298,13 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 			return []Pipeline{}, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get pipelines): %s", err)
 			return []Pipeline{}, err
@@ -9381,12 +9406,13 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 			return User{}, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get api keys): %s", err)
 			return User{}, err
@@ -9491,12 +9517,13 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			return User{}, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get api keys): %s", err)
 			return User{}, err
@@ -10174,12 +10201,13 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			return notifications, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get notifications): %s", err)
@@ -10319,12 +10347,13 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 			return notifications, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get user notifications): %s", err)
 			return notifications, err
@@ -10454,12 +10483,13 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 			return files, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get files): %s", err)
 			return files, err
@@ -10724,12 +10754,13 @@ func GetAuthGroups(ctx context.Context, orgId string) ([]AppAuthenticationGroup,
 			return appAuths, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get app auths): %s", err)
 			return appAuths, err
@@ -10796,12 +10827,13 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 		}
 
 		// Perform the search request.
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get schedules): %s", err)
 			return schedules, err
@@ -12092,12 +12124,13 @@ func GetOrgByField(ctx context.Context, fieldName, value string) ([]Org, error) 
 			return orgs, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(nameKey)},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get app exec values): %s", err)
 			return orgs, err
@@ -12411,12 +12444,13 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 			return workflows, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get app exec values): %s", err)
 			return workflows, err
@@ -12548,12 +12582,13 @@ func GetDatastoreCategories(ctx context.Context, orgId string) ([]DatastoreCateg
 			return categories, err
 		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get datastore categories): %s", err)
@@ -14326,12 +14361,13 @@ func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, 
 		}
 
 		// Perform the search request.
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get cache key count): %s", err)
@@ -14467,12 +14503,13 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		}
 
 		// Perform the search request.
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get cachekeys): %s", err)
@@ -14794,12 +14831,13 @@ func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
 		}
 
 		// Perform the search request.
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body: &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
 
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get deals): %s", err)
