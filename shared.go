@@ -26027,24 +26027,6 @@ func executeAuthgroupSubflow(workflowExecution WorkflowExecution, authgroup AppA
 	return nil
 }
 
-func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
-	ret, err := project.Es.Info()
-	if err != nil {
-		log.Printf("[ERROR] Failed connecting to ES: %s", err)
-		resp.WriteHeader(ret.StatusCode)
-		resp.Write([]byte("Bad response from ES (1). Check logs for more details."))
-		return
-	}
-
-	if ret.StatusCode >= 300 {
-		resp.WriteHeader(ret.StatusCode)
-		resp.Write([]byte(fmt.Sprintf("Bad response from ES - Status code %d", ret.StatusCode)))
-		return
-	}
-
-	fmt.Fprint(resp, "OK")
-}
-
 // Extra validation sample to be used for workflow executions based on parent workflow instead of users' auth
 
 // Check if the execution data has correct info in it! Happens based on subflows.
