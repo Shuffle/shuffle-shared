@@ -1,7 +1,7 @@
 # Shuffle-shared
 A repository containing structures and commonly used functions between different deployments on Shuffle. Here to ensure consistency and not re-making the same functions multiple places.
 
-<img width="1766" height="814" alt="Shuffle repositories" src="https://github.com/user-attachments/assets/df117c01-f2fc-4000-8b5e-ffad33f5779e" />
+[![Shuffle repositories](https://github.com/user-attachments/assets/df117c01-f2fc-4000-8b5e-ffad33f5779e)](https://www.figma.com/board/V6Kg7KxbmuhIUyTImb20t1/Shuffle-AI-Agent-system?node-id=0-1&p=f&t=ywpMQJ555sxggEpj-0)
 
 
 ### Sample areas
