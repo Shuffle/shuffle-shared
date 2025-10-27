@@ -4301,7 +4301,7 @@ type DatastoreHealth struct {
 type FileHealth struct {
 	Create	bool	`json:"create"`
 	FileId	string	`json:"fileId"`
-	GetFile	bool	`json:"get_file"`
+	Upload	bool	`json:"get_file"`
 	Delete	bool	`json:"delete"`
 }
 
@@ -4340,7 +4340,9 @@ type HealthCheck struct {
 	Updated    int64          `json:"updated"`
 	Apps       AppHealth      `json:"apps"`
 	Workflows  WorkflowHealth `json:"workflows"`
-	PythonApps AppHealth      `json:"python_apps"`
+	PythonApps AppHealth       `json:"python_apps"`
+	Datastore  DatastoreHealth	`json:"datastore"`
+	FileOps	   FileHealth		`json:"fileops"`
 }
 
 type HealthCheckDB struct {
