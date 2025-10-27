@@ -16272,7 +16272,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	// Find next action
 	allFinishedDecisions := []string{}
 	for decisionId, curDecision := range mappedResult.Decisions {
-		if curDecision.RunDetails.Status == "FINISHED" {
+		if curDecision.RunDetails.Status == "FINISHED" || curDecision.RunDetails.Status == "IGNORED" {
 			allFinishedDecisions = append(allFinishedDecisions, curDecision.RunDetails.Id)
 		} else if curDecision.RunDetails.Status == "FAILURE" {
 			if debug {
@@ -16327,7 +16327,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	log.Printf("[INFO] TOTAL AGENT DECISIONS: %#v, FINISHED DECISIONS: %#v. Missing decision IDs: %#v", len(mappedResult.Decisions), len(allFinishedDecisions), allFinishedDecisions)
+	log.Printf("[INFO] TOTAL AGENT DECISIONS: %#v, FINISHED DECISIONS: %#v. Finished decision IDs: %#v", len(mappedResult.Decisions), len(allFinishedDecisions), allFinishedDecisions)
 
 	// FIXME: How do we handle 3rd party memory sources?
 	// This uses the built-in datastore mechanism so that the user
@@ -23823,6 +23823,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								// The only key we care about in this case
 								if key == "continue" {
 									// Overwrite everything
+									if workflowExecution.Status == "FINISHED" { 
+										workflowExecution.Status = "EXECUTING"
+									}
+
+									unmarshalledDecision.Status = "RUNNING"
+									unmarshalledDecision.Output = ""
 									decision.Fields = []Valuereplace{
 										Valuereplace{ 
 											Key: "continue",
@@ -23834,7 +23840,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									decision.Action = "ask"
 									decision.Tool = "ask"
 									decision.Category = "standalone"
-									decision.Reason = "Continued by adding task details"
+
+									// Make the value max 50 bytes
+									decision.Reason = fmt.Sprintf("User Input: %.50s", value)
+									unmarshalledDecision.Decisions[decisionIndex] = decision
 
 									fieldsChanged = true
 									cleanupFailures = true
@@ -23892,14 +23901,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					// This is a concept to allow for better UX
 					// Only runs if you "continue" running an agent run
 					if cleanupFailures {
-						log.Printf("\n\n\nRunning CLEANUP!!\n\n\n")
 						for decisionIndex, _ := range unmarshalledDecision.Decisions {
 							decision := unmarshalledDecision.Decisions[decisionIndex]
 							if decision.RunDetails.Status != "FAILURE" {
 								continue
 							}
-
-							log.Printf("\n\n\nFOUND FAILURE TO CLEANUP!!\n\n\n")
 
 							decision.RunDetails.Status = "IGNORED"
 							unmarshalledDecision.Decisions[decisionIndex] = decision
@@ -23938,16 +23944,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					oldExecution.Results[resultIndex] = result
 
 					// FIXME: Can we force continue the agent from here? Or do we send another action inbetween?
-					// go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
-
 					result.Status = fmt.Sprintf("%s_%s", "FINISHED", decisionId)
-
 					newExec, _, err := handleAgentDecisionStreamResult(*oldExecution, result)
 					if err != nil {
 						log.Printf("[ERROR][%s] Failed handling agentic decision result: %s", oldExecution.ExecutionId, err)
 					}
 
 					return *newExec, ExecInfo{}, fmt.Sprintf("Agentic question handled (%s)", oldExecution.ExecutionId), errors.New("User Input: Agentic question action handled successfully!")
+
 				} else if result.Status == "WAITING" && !agentic {
 					log.Printf("[INFO][%s] Found relevant User Input result: %s (%s)", result.ExecutionId, result.Action.Label, result.Action.ID)
 
