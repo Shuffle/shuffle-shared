@@ -56,7 +56,8 @@ var pythonReplacements = map[string]string{
 	">": "",
 	"'": "",
 }
-type countingWriter struct{
+
+type countingWriter struct {
 	n *int64
 }
 
@@ -407,7 +408,7 @@ func BuildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 	if err != nil {
 
 		// Keep it in blobs just in case?
-		foundDockerfile := GetBaseDockerfile() 
+		foundDockerfile := GetBaseDockerfile()
 		if len(foundDockerfile) > 0 {
 
 			// Writing it to both
@@ -519,7 +520,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	reservedKeys := []string{"BearerAuth", "ApiKeyAuth", "Oauth2", "BasicAuth", "JWT"}
 
 	// Predefined for auth
-	//invalidQueries := []string{"access_token", "username_basic", "password_basic", "apikey", "api_key"}	
+	//invalidQueries := []string{"access_token", "username_basic", "password_basic", "apikey", "api_key"}
 
 	// FIXME - this might break - need to check if ? or & should be set as query
 	parameterData := ""
@@ -620,7 +621,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 			// Add: client_id and client_secret in body as JSON?
 
-			authType := "basic" 
+			authType := "basic"
 
 			// check x-jwt-auth-type
 			if swagger.Components.SecuritySchemes["x-jwt-auth-type-json"] != nil {
@@ -631,7 +632,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				// ADD: accessToken = field
 				authenticationSetup = fmt.Sprintf("authret = requests.get(f\"{url}%s\", headers=request_headers, auth=(username_basic, password_basic), verify=False)\n        if 'access_token' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['access_token']}\"\n        elif 'jwt' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['jwt']}\"\n        elif 'accessToken' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['accessToken']}\"\n        else:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"Found Bearer auth: {authret.text}\")", api.Authentication.TokenUri)
 			} else {
-				authenticationSetup = fmt.Sprintf("authret = requests.post(f\"{url}%s\", headers=request_headers, json={\"username\": username_basic, \"password\": password_basic}, verify=False)\n        if 'access_token' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['access_token']}\"\n        elif 'jwt' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['jwt']}\"\n        elif 'accessToken' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['accessToken']}\"\n        else:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"Found Bearer auth: {authret.text}\")", api.Authentication.TokenUri)	
+				authenticationSetup = fmt.Sprintf("authret = requests.post(f\"{url}%s\", headers=request_headers, json={\"username\": username_basic, \"password\": password_basic}, verify=False)\n        if 'access_token' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['access_token']}\"\n        elif 'jwt' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['jwt']}\"\n        elif 'accessToken' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['accessToken']}\"\n        else:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"Found Bearer auth: {authret.text}\")", api.Authentication.TokenUri)
 			}
 
 			//log.Printf("[DEBUG] Appending jwt code for authenticationSetup:\n        %s", authenticationSetup)
@@ -667,7 +668,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	}
 
 	// Check for bad {} for python printf.
-	// If it's NOT closed before the next /  
+	// If it's NOT closed before the next /
 	openBrackets := strings.Count(url, "{")
 	closeBrackets := strings.Count(url, "}")
 	if openBrackets != closeBrackets {
@@ -696,8 +697,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		if openBrackets != closeBrackets {
 			log.Printf("[ERROR] Unbalanced brackets in generated URL %s - this might cause issues, so we're skipping the function. App: %s. Autofixing.", url, name)
 
-			// Makes the function not generate 
-			return functionname, "" 
+			// Makes the function not generate
+			return functionname, ""
 		}
 	}
 
@@ -741,7 +742,6 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			}
 		}
 	}
-
 
 	bodyParameter := ""
 	bodyAddin := ""
@@ -865,7 +865,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		verifyParam,
 	)
 
-	// Dedup parameters 
+	// Dedup parameters
 	parsedParametersSplit := strings.Split(parsedParameters, ",")
 	newParameters := []string{}
 	usedParams := []string{}
@@ -882,7 +882,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 		if !ArrayContains(usedParams, param) {
 			usedParams = append(usedParams, param)
-			if len(paramsplit) > 1 { 
+			if len(paramsplit) > 1 {
 				param = strings.Join(paramsplit, "=")
 			}
 
@@ -4032,20 +4032,22 @@ func RemoveJsonValues(input []byte, depth int64) ([]byte, string, error) {
 
 // TIL:
 func splitRef(full string) (host, repo, tag string) {
-    parts := strings.SplitN(full, "/", 2)
-    host = parts[0]
-    remainder := ""
-    if len(parts) > 1 { remainder = parts[1] }
-    tag = "latest"
-    if i := strings.LastIndex(remainder, ":"); i != -1 {
-        repo = remainder[:i]
-        tag = remainder[i+1:]
-    } else {
-        repo = remainder
-    }
+	parts := strings.SplitN(full, "/", 2)
+	host = parts[0]
+	remainder := ""
+	if len(parts) > 1 {
+		remainder = parts[1]
+	}
+	tag = "latest"
+	if i := strings.LastIndex(remainder, ":"); i != -1 {
+		repo = remainder[:i]
+		tag = remainder[i+1:]
+	} else {
+		repo = remainder
+	}
 
 	log.Printf("%s -> %s %s %s", full, host, repo, tag)
-    return
+	return
 }
 
 func hexOf(b []byte) string {
@@ -4076,8 +4078,12 @@ func uploadLayerToRegistry(regBase, repoPath string, layer io.Reader) (string, i
 		defer pw.Close()
 		gzw, _ := gzip.NewWriterLevel(io.MultiWriter(pw, countingWriter{&compBytes}, compHash), gzip.BestSpeed)
 		_, copyErr := io.Copy(gzw, io.TeeReader(layer, diffHash))
-		if cerr := gzw.Close(); copyErr == nil { copyErr = cerr }
-		if copyErr != nil { _ = pw.CloseWithError(copyErr) }
+		if cerr := gzw.Close(); copyErr == nil {
+			copyErr = cerr
+		}
+		if copyErr != nil {
+			_ = pw.CloseWithError(copyErr)
+		}
 	}()
 
 	reqPatch, _ := http.NewRequest("PATCH", loc, pr)
@@ -4160,7 +4166,7 @@ func followLocation(req *http.Request) (string, error) {
 
 func regDo(req *http.Request) (*http.Response, error) {
 	// TODO: inject Authorization for registry if required
-	c := &http.Client{ Timeout: 0 }
+	c := &http.Client{Timeout: 0}
 	resp, err := c.Do(req)
 	if err != nil {
 		return nil, err
@@ -4289,7 +4295,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 
 		imgPath := strings.TrimPrefix(strings.ReplaceAll(imageName, " ", "-"), "/")
 		refStr := fmt.Sprintf("%s/%s", strings.TrimSuffix(localRegistry, "/"), imgPath)
-	
+
 		insecure := os.Getenv("SHUFFLE_STREAM_PRIVATE_REGISTRY_INSECURE") == "true"
 		scheme := "https"
 		if insecure {
@@ -4298,7 +4304,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 
 		regHost, repoPath, tag := splitRef(refStr)
 		regBase := scheme + "://" + regHost
-	
+
 		resp, err := topClient.Do(req.Clone(req.Context()))
 		if err != nil {
 			log.Printf("[ERROR] Bucket request failed")
@@ -4316,7 +4322,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		if peek, _ := br.Peek(2); len(peek) == 2 && peek[0] == 0x1f && peek[1] == 0x8b {
 			gr, err := gzip.NewReader(br)
 			if err != nil {
-				resp.Body.Close();
+				resp.Body.Close()
 				log.Printf("[ERROR] Gzip init failed")
 				return fmt.Errorf("gzip init failed: %w", err)
 			}
@@ -4340,8 +4346,12 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		// walk tar once: upload layers & capture config
 		for {
 			hdr, err := tarR.Next()
-			if err == io.EOF { break }
-			if err != nil { return fmt.Errorf("tar read: %w", err) }
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("tar read: %w", err)
+			}
 			name := hdr.Name
 
 			switch {
@@ -4358,13 +4368,15 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 			case strings.HasSuffix(name, ".json") && name != "manifest.json":
 				if len(configJSON) == 0 {
 					var buf bytes.Buffer
-					if _, err := io.Copy(&buf, tarR); err != nil { 
+					if _, err := io.Copy(&buf, tarR); err != nil {
 						log.Printf("[ERROR] Failed to read config.json")
 						return fmt.Errorf("read config.json: %w", err)
 					}
 
-					var probe struct{
-						RootFS struct{ DiffIDs []string `json:"diff_ids"` } `json:"rootfs"`
+					var probe struct {
+						RootFS struct {
+							DiffIDs []string `json:"diff_ids"`
+						} `json:"rootfs"`
 					}
 
 					if json.Unmarshal(buf.Bytes(), &probe) == nil && len(probe.RootFS.DiffIDs) > 0 {
@@ -4431,7 +4443,6 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		log.Printf("[INFO] Pushed image to private registry as %s", refStr)
 		return nil
 	}
-
 
 	newresp, err := topClient.Do(req)
 	if err != nil {
@@ -4576,7 +4587,7 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 		baseAppname = newstring[0 : len(newstring)-5]
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("%#v - BASEAPPNAME: %#v, %#v", appname, baseAppname, appnameSplit2)
 	}
 
@@ -4596,12 +4607,12 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 	return appname, baseAppname, appVersion, nil
 }
 
-func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType  string) error {
+func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType string) error {
 	var err error
 
-	if runType == "run_workflow" { 
+	if runType == "run_workflow" {
 
-	} else if runType == "webhook" { 
+	} else if runType == "webhook" {
 		webhookUrl := ""
 		for _, option := range automation.Options {
 			if option.Key == "webhook_url" {
@@ -4615,27 +4626,27 @@ func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte
 		}
 
 		parsedBody := WorkflowAppAction{
-			AppID: "HTTP",
-			AppName: "HTTP",
+			AppID:       "HTTP",
+			AppName:     "HTTP",
 			Environment: "cloud",
 			//Name: "custom_command",
-			Name: "POST",
+			Name:     "POST",
 			NodeType: "action",
 			Parameters: []WorkflowAppActionParameter{
 				WorkflowAppActionParameter{
-					Name: "url",
+					Name:  "url",
 					Value: webhookUrl,
 				},
 				WorkflowAppActionParameter{
-					Name: "method",
+					Name:  "method",
 					Value: "POST",
 				},
 				WorkflowAppActionParameter{
-					Name: "body",
+					Name:  "body",
 					Value: string(marshalledBody),
 				},
 				WorkflowAppActionParameter{
-					Name: "headers",
+					Name:  "headers",
 					Value: "Content-Type: application/json\nAccept: application/json",
 				},
 			},
@@ -4661,7 +4672,6 @@ func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte
 			return err
 		}
 	}
-
 
 	// Find a user to use
 	org, err := GetOrg(ctx, cacheData.OrgId)
@@ -4692,7 +4702,7 @@ func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte
 		}
 	}
 
-	// Send request to 
+	// Send request to
 	backendUrl := os.Getenv("BASE_URL")
 	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -4705,8 +4715,8 @@ func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte
 	}
 
 	req, err := http.NewRequest(
-		"POST", 
-		parsedUrl, 
+		"POST",
+		parsedUrl,
 		bytes.NewBuffer(marshalledBody),
 	)
 
@@ -4754,12 +4764,12 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		parsedOutput["value"] = cacheData.Value
 	}
 
-	parsedOutput["shuffle_datastore"] = map[string]interface{}{ 
-		"action": "update",
-		"key": cacheData.Key,
-		"org_id": cacheData.OrgId,
-		"timestamp": cacheData.Edited,
-		"workflow_id": cacheData.WorkflowId,
+	parsedOutput["shuffle_datastore"] = map[string]interface{}{
+		"action":              "update",
+		"key":                 cacheData.Key,
+		"org_id":              cacheData.OrgId,
+		"timestamp":           cacheData.Edited,
+		"workflow_id":         cacheData.WorkflowId,
 		"suborg_distribution": cacheData.SuborgDistribution,
 	}
 
@@ -4770,10 +4780,10 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	}
 
 	if parsedName == "correlate_categories" {
-		if debug { 
+		if debug {
 		}
 
-		// Ensure the standard correlation-workflow exists 
+		// Ensure the standard correlation-workflow exists
 		seedString := fmt.Sprintf("%s_correlate_categories", cacheData.OrgId)
 		hash := sha1.New()
 		hash.Write([]byte(seedString))
@@ -4817,18 +4827,18 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 
 			//func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType  string) error {
 			go handleDatastoreAutomationWebhook(
-				ctx, 
-				marshalledBody, 
-				cacheData, 
-				automation, 
-				fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), 
+				ctx,
+				marshalledBody,
+				cacheData,
+				automation,
+				fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId),
 				"run_workflow",
 			)
 		}
 
 	} else if parsedName == "run_workflow" {
-		if debug { 
-			log.Printf("[DEBUG] Running workflow %s for org %s", automation.Options[0].Value, cacheData.OrgId) 
+		if debug {
+			log.Printf("[DEBUG] Running workflow %s for org %s", automation.Options[0].Value, cacheData.OrgId)
 		}
 
 		for _, option := range automation.Options {
@@ -4858,7 +4868,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		}
 
 	} else if parsedName == "send_webhook" {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Sending webhook for url %s", automation.Options[0].Value)
 		}
 

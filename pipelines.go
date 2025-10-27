@@ -1,14 +1,14 @@
 package shuffle
 
 import (
-	"encoding/json"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"strings"
-	
+
 	"github.com/google/uuid"
 )
 
@@ -58,10 +58,10 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		pipeline.Name = pipeline.Command
 
 		/*
-		log.Printf("[WARNING] Name is required for new pipelines")
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Name is required"}`))
-		return
+			log.Printf("[WARNING] Name is required for new pipelines")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Name is required"}`))
+			return
 		*/
 	}
 
@@ -114,7 +114,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		}
 	}
 
-	if !envFound && pipeline.Type != "delete"{
+	if !envFound && pipeline.Type != "delete" {
 		log.Printf("[WARNING] Environment '%s' is not available", pipeline.Environment)
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Environment '%s' is not available. Please make it, or change the environment you want to deploy to."}`, pipeline.Environment)))
@@ -122,7 +122,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	availableCommands := []string{
-		"create", "start", "stop", "delete", 
+		"create", "start", "stop", "delete",
 	}
 
 	matchingCommand := ""
@@ -165,11 +165,11 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 
 	if len(pipelineInfo.ID) == 0 && len(pipeline.ID) > 0 {
 		pipelineInfo = &Pipeline{
-			ID: pipeline.ID,
-			Name: pipeline.Name,
-			Type: pipeline.Type,
-			OrgId: user.ActiveOrg.Id,
-			Command: pipeline.Command,
+			ID:          pipeline.ID,
+			Name:        pipeline.Name,
+			Type:        pipeline.Type,
+			OrgId:       user.ActiveOrg.Id,
+			Command:     pipeline.Command,
 			Environment: pipeline.Environment,
 
 			PipelineId: pipeline.PipelineId,
@@ -217,7 +217,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 
 		err := deletePipeline(ctx, *pipelineInfo)
 		if err != nil {
-		 	resp.WriteHeader(401)
+			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Failed deleting the pipeline."}`))
 			return
 		}

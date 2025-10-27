@@ -2,7 +2,6 @@ package shuffle
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -15,14 +14,13 @@ import (
 	"math/rand"
 	"net/http"
 
-	"cloud.google.com/go/datastore"
 	gomemcache "github.com/bradfitz/gomemcache/memcache"
 	"github.com/satori/go.uuid"
 )
 
-// FIXME: There is some issue when going past 0x9 (>0xA) with how 
+// FIXME: There is some issue when going past 0x9 (>0xA) with how
 // cache is being counted locally
-//var dbInterval = 0x20
+// var dbInterval = 0x20
 var dbInterval = 0x9
 
 // var dbInterval = 0x4
@@ -378,7 +376,7 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] Should get stats for key %s for the last %d days", statsKey, statDays)
 	}
 
@@ -470,7 +468,7 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		statEntries = append(statEntries, toAppend...)
 	}
 
-	// Append cache for right now as it may not be in the DB yet 
+	// Append cache for right now as it may not be in the DB yet
 	for statEntryIndex, statEntry := range statEntries {
 		if statEntry.Date.Day() == time.Now().Day() && statEntry.Date.Month() == time.Now().Month() && statEntry.Date.Year() == time.Now().Year() {
 			for _, addition := range info.Additions {
@@ -499,13 +497,13 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		return statEntries[i].Date.Before(statEntries[j].Date)
 	})
 
-	// For debugging stats that don't show up by injecting them 
+	// For debugging stats that don't show up by injecting them
 	/*
-	if debug && totalValue == 0 {
-		log.Printf("[DEBUG] Found %d entries for '%s' with 0 in data. Force-adding data to first entry.", len(statEntries), statsKey)
-		chosenIndex := rand.Intn(len(statEntries))
-		statEntries[chosenIndex].Value = int64(rand.Intn(10) + 1)
-	}
+		if debug && totalValue == 0 {
+			log.Printf("[DEBUG] Found %d entries for '%s' with 0 in data. Force-adding data to first entry.", len(statEntries), statsKey)
+			chosenIndex := rand.Intn(len(statEntries))
+			statEntries[chosenIndex].Value = int64(rand.Intn(10) + 1)
+		}
 	*/
 
 	marshalledEntries, err := json.Marshal(statEntries)
@@ -530,8 +528,6 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": %v, "key": "%s", "total": %d, "available_keys": %s, "entries": %s}`, successful, strings.ReplaceAll(statsKey, "\"", ""), totalValue, string(availableStats), string(marshalledEntries))))
 }
-
-
 
 func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -775,210 +771,6 @@ func HandleAppendStatistics(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Cache incremented by %d"}`, inputData.Value)))
 }
 
-func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...int) error {
-
-	nameKey := "org_statistics"
-	orgStatistics := &ExecutionInfo{}
-
-	dbDumpInterval := uint(dbInterval)
-	if len(amount) > 0 {
-		if amount[0] > 0 {
-			dbDumpInterval = uint(amount[0])
-		}
-	}
-
-	// Get the org
-	tmpOrgDetail, err := GetOrg(ctx, orgId)
-	if err != nil {
-		log.Printf("[ERROR] Failed getting org in increment: %s", err)
-		return err
-	}
-
-	// Ensuring we at least have one.
-	if len(tmpOrgDetail.ManagerOrgs) == 0 && len(tmpOrgDetail.CreatorOrg) > 0 {
-		tmpOrgDetail.ManagerOrgs = append(tmpOrgDetail.ManagerOrgs, OrgMini{
-			Id: tmpOrgDetail.CreatorOrg,
-		})
-	}
-
-	// FIXME: Can look for childorg_app_executions here as well which
-	// would make tracking app runs at scale recursively work
-	// The problem is... recursion (:
-
-	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "app_executions") {
-		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
-			if len(managerOrg.Id) == 36 {
-				IncrementCache(ctx, managerOrg.Id, "childorg_app_executions", int(dbDumpInterval))
-			}
-		}
-	}
-
-	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "workflow_executions") {
-		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
-			if len(managerOrg.Id) == 36 {
-				IncrementCache(ctx, managerOrg.Id, "childorg_workflow_executions", int(dbDumpInterval))
-			}
-		}
-	}
-
-	concurrentTxn := false
-	errMsg := ""
-
-	if project.DbType == "opensearch" {
-		// Get it from opensearch (may be prone to more issues at scale (thousands/second) due to no transactional locking)
-
-		id := strings.ToLower(orgId)
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
-		if err != nil {
-			log.Printf("[WARNING] Error in org STATS get: %s", err)
-			return err
-		}
-
-		defer res.Body.Close()
-		respBody, bodyErr := ioutil.ReadAll(res.Body)
-		if err != nil || bodyErr != nil || res.StatusCode >= 300 {
-			log.Printf("[WARNING] Failed getting org STATS body: %s. Resp: %d. Body err: %s", err, res.StatusCode, bodyErr)
-
-			// Init the org stats if it doesn't exist
-			if res.StatusCode == 404 {
-				orgStatistics.OrgId = orgId
-				orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
-				orgStatistics = handleDailyCacheUpdate(orgStatistics)
-
-				marshalledData, err := json.Marshal(orgStatistics)
-				if err != nil {
-					log.Printf("[ERROR] Failed marshalling org STATS body: %s", err)
-				} else {
-					err := indexEs(ctx, nameKey, id, marshalledData)
-					if err != nil {
-						log.Printf("[ERROR] Failed indexing org STATS body: %s", err)
-					} else {
-						log.Printf("[DEBUG] Indexed org STATS body for %s", orgId)
-					}
-				}
-			}
-
-			return err
-		}
-
-		orgStatsWrapper := &ExecutionInfoWrapper{}
-		err = json.Unmarshal(respBody, &orgStatsWrapper)
-		if err != nil {
-			log.Printf("[ERROR] Failed unmarshalling org STATS body: %s", err)
-			return err
-		}
-
-		orgStatistics = &orgStatsWrapper.Source
-		if orgStatistics.OrgName == "" || orgStatistics.OrgName == orgStatistics.OrgId {
-			org, err := GetOrg(ctx, orgId)
-			if err == nil {
-				orgStatistics.OrgName = org.Name
-			}
-
-			orgStatistics.OrgId = orgId
-		}
-
-		orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
-		orgStatistics = handleDailyCacheUpdate(orgStatistics)
-
-		// Set the data back in the database
-		marshalledData, err := json.Marshal(orgStatistics)
-		if err != nil {
-			log.Printf("[ERROR] Failed marshalling org STATS body (2): %s", err)
-			return err
-		}
-
-		err = indexEs(ctx, nameKey, id, marshalledData)
-		if err != nil {
-			log.Printf("[ERROR] Failed indexing org STATS body (2): %s", err)
-		}
-
-		//log.Printf("[DEBUG] Incremented org stats for %s", orgId)
-	} else {
-		maxRetries := 3
-		for i := 0; i < maxRetries; i++ {
-			concurrentTxn = false
-
-			tx, err := project.Dbclient.NewTransaction(ctx)
-			if err != nil {
-				log.Printf("[WARNING] Error in cache dump: %s", err)
-				return err
-			}
-
-			key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
-			if err := tx.Get(key, orgStatistics); err != nil {
-				if strings.Contains(fmt.Sprintf("%s", err), "no such entity") {
-					log.Printf("[DEBUG] Continuing by creating entity for org %s", orgId)
-				} else {
-					if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						log.Printf("[ERROR] Failed getting stats in increment: %s", err)
-						tx.Rollback()
-						return err
-					}
-				}
-			}
-
-			if orgStatistics.OrgName == "" || orgStatistics.OrgName == orgStatistics.OrgId {
-				org, err := GetOrg(ctx, orgId)
-				if err == nil {
-					orgStatistics.OrgName = org.Name
-				}
-
-				orgStatistics.OrgId = orgId
-			}
-
-			orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
-			orgStatistics = handleDailyCacheUpdate(orgStatistics)
-
-			// Transaction control
-			if _, err := tx.Put(key, orgStatistics); err != nil {
-				log.Printf("[WARNING] Failed setting stats: %s", err)
-				tx.Rollback()
-				return err
-			}
-
-			if _, err = tx.Commit(); err != nil {
-				log.Printf("[ERROR] Failed commiting stats: %s", err)
-				if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
-					concurrentTxn = true
-					errMsg = fmt.Sprintf("%s", err)
-					time.Sleep(time.Duration(200*(i+1)) * time.Millisecond)
-					continue
-				}
-				return err
-			}
-
-			break
-		}
-
-		if concurrentTxn {
-			log.Printf("[ERROR] Failed to update stats for org %s after %d retries: concurrent transaction error: %s", orgId, maxRetries, errMsg)
-			return errors.New(errMsg)
-		}
-
-	}
-
-	// Could use cache for everything, really
-	if project.CacheDb {
-		cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
-		data, err := json.Marshal(orgStatistics)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
-			return err
-		}
-
-		err = SetCache(ctx, cacheKey, data, 30)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for org stats '%s': %s", cacheKey, err)
-		}
-	}
-
-	if concurrentTxn {
-		return errors.New(errMsg)
-	}
-
-	return nil
-}
 
 // Rudementary caching system. WILL go wrong at times without sharding.
 // It's only good for the user in cloud, hence wont bother for a while
@@ -1591,7 +1383,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 	}
 
 	if appendCustom {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Appending custom data type %s for org %s. Amount: %d", dataType, orgStatistics.OrgId, increment)
 		}
 
@@ -1617,8 +1409,8 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 
 		if !found {
 			orgStatistics.Additions = append(orgStatistics.Additions, AdditionalUseConfig{
-				Key:        dataType,
-				Value:      int64(increment),
+				Key:   dataType,
+				Value: int64(increment),
 				//DailyValue: int64(increment),
 
 				//Date: 0,
