@@ -389,6 +389,40 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	})
 
 	allStats := []string{}
+
+	getTypedValue := func(d DailyStatistics, key string) int64 {
+		switch key {
+		case "app_executions":
+			return d.AppExecutions
+		case "childorg_app_executions":
+			return d.ChildAppExecutions
+		case "app_executions_failed":
+			return d.AppExecutionsFailed
+		case "subflow_executions":
+			return d.SubflowExecutions
+		case "workflow_executions":
+			return d.WorkflowExecutions
+		case "workflow_executions_finished":
+			return d.WorkflowExecutionsFinished
+		case "workflow_executions_failed":
+			return d.WorkflowExecutionsFailed
+		case "org_sync_actions":
+			return d.OrgSyncActions
+		case "workflow_executions_cloud":
+			return d.CloudExecutions
+		case "workflow_executions_onprem":
+			return d.OnpremExecutions
+		case "api_usage":
+			return d.ApiUsage
+		case "ai_executions":
+			return d.AIUsage
+		default:
+			return -1
+		}
+	}
+
+	isPredictable := ArrayContains(PredictableDataTypes, statsKey)
+
 	for _, daily := range info.DailyStatistics {
 		// Check if the date is more than statDays ago
 		shouldAppend := true
@@ -396,6 +430,30 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 			shouldAppend = false
 		}
 
+		if isPredictable {
+			if shouldAppend {
+				value := getTypedValue(daily, statsKey)
+				if value >= 0 {
+					totalEntires++
+					totalValue += int(value)
+					statEntries = append(statEntries, AdditionalUseConfig{
+						Key:   statsKey,
+						Value: value,
+						Date:  daily.Date,
+					})
+				}
+			}
+
+			// Track available keys too
+			for _, k := range PredictableDataTypes {
+				if !ArrayContains(allStats, k) {
+					allStats = append(allStats, k)
+				}
+			}
+			continue
+		}
+
+		// Custom additions path (original behavior)
 		for _, addition := range daily.Additions {
 			newKey := strings.ToLower(strings.ReplaceAll(addition.Key, " ", "_"))
 			if shouldAppend && newKey == statsKey {
@@ -410,6 +468,49 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 			if !ArrayContains(allStats, newKey) {
 				allStats = append(allStats, newKey)
 			}
+		}
+	}
+
+	// If predictable key, also include today's in-memory daily counters (not yet rolled into DailyStatistics)
+	if isPredictable {
+		today := time.Now()
+		var todayValue int64 = 0
+		switch statsKey {
+		case "app_executions":
+			todayValue = info.DailyAppExecutions
+		case "childorg_app_executions":
+			todayValue = info.DailyChildAppExecutions
+		case "app_executions_failed":
+			todayValue = info.DailyAppExecutionsFailed
+		case "subflow_executions":
+			todayValue = info.DailySubflowExecutions
+		case "workflow_executions":
+			todayValue = info.DailyWorkflowExecutions
+		case "workflow_executions_finished":
+			todayValue = info.DailyWorkflowExecutionsFinished
+		case "workflow_executions_failed":
+			todayValue = info.DailyWorkflowExecutionsFailed
+		case "org_sync_actions":
+			todayValue = info.DailyOrgSyncActions
+		case "workflow_executions_cloud":
+			todayValue = info.DailyCloudExecutions
+		case "workflow_executions_onprem":
+			todayValue = info.DailyOnpremExecutions
+		case "api_usage":
+			todayValue = info.DailyApiUsage
+		case "ai_executions":
+			todayValue = info.DailyAIUsage
+		}
+
+		// Only append if within window
+		if !today.Before(time.Now().AddDate(0, 0, -statDays)) {
+			statEntries = append(statEntries, AdditionalUseConfig{
+				Key:   statsKey,
+				Value: todayValue,
+				Date:  today,
+			})
+			totalEntires++
+			totalValue += int(todayValue)
 		}
 	}
 
