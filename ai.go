@@ -10667,8 +10667,12 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, string, error) {
 
 	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" || assistantId == "" {
-		return "", "", errors.New("OPENAI_API_KEY and ASSISTANT_ID must be set")
+	if apiKey == "" || assistantId == "" || docsVectorStoreID == "" {
+		assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
+		docsVectorStoreID = os.Getenv("OPENAI_DOCS_VS_ID")
+		if apiKey == "" || assistantId == "" || docsVectorStoreID == "" {
+			return "", "", errors.New("OPENAI_API_KEY, OPENAI_ASSISTANT_ID, and OPENAI_DOCS_VS_ID must be set")
+		}
 	}
 
 	config := openai.DefaultConfig(apiKey)
