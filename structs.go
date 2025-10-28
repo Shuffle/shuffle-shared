@@ -1604,16 +1604,18 @@ type SimilarAction struct {
 }
 
 type ActionResult struct {
-	Action           Action          `json:"action" datastore:"action"`
-	ExecutionId      string          `json:"execution_id" datastore:"execution_id"`
-	Authorization    string          `json:"authorization" datastore:"authorization"`
-	Result           string          `json:"result" datastore:"result,noindex"`
-	StartedAt        int64           `json:"started_at" datastore:"started_at"`
-	CompletedAt      int64           `json:"completed_at" datastore:"completed_at"`
-	Status           string          `json:"status" datastore:"status"`
+	Action        Action `json:"action" datastore:"action"`
+	ExecutionId   string `json:"execution_id" datastore:"execution_id"`
+	Authorization string `json:"authorization" datastore:"authorization"`
+	Result        string `json:"result" datastore:"result,noindex"`
+	StartedAt     int64  `json:"started_at" datastore:"started_at"`
+	CompletedAt   int64  `json:"completed_at" datastore:"completed_at"`
+	Status        string `json:"status" datastore:"status"`
+
 	AttackTechniques []string        `json:"attack_techniques" datastore:"attack_techniques"`
 	AttackTactics    []string        `json:"attack_tactics" datastore:"attack_tactics"`
 	SimilarActions   []SimilarAction `json:"similar_actions" datastore:"similar_actions"`
+	Sanitized        bool            `json:"sanitized" datastore:"sanitized"`
 }
 
 type AuthenticationUsage struct {
@@ -1640,9 +1642,9 @@ type Notification struct {
 	Personal          bool     `json:"personal" datastore:"personal"`
 	Read              bool     `json:"read" datastore:"read"`
 
-	ModifiedBy			string `json:"modified_by" datastore:"modified_by"`
-	Ignored				bool   `json:"ignored" datastore:"ignored"`
-	ExecutionId			string `json:"execution_id" datastore:"execution_id"`
+	ModifiedBy  string `json:"modified_by" datastore:"modified_by"`
+	Ignored     bool   `json:"ignored" datastore:"ignored"`
+	ExecutionId string `json:"execution_id" datastore:"execution_id"`
 }
 
 type NotificationCached struct {
@@ -4292,17 +4294,17 @@ type AppHealth struct {
 }
 
 type DatastoreHealth struct {
-	Create	bool	`json:"create"`
-	Read	bool	`json:"read"`
-	Result	string	`json:"result"`
-	Delete	bool	`json:"delete"`
+	Create bool   `json:"create"`
+	Read   bool   `json:"read"`
+	Result string `json:"result"`
+	Delete bool   `json:"delete"`
 }
 
 type FileHealth struct {
-	Create	bool	`json:"create"`
-	FileId	string	`json:"fileId"`
-	Upload	bool	`json:"get_file"`
-	Delete	bool	`json:"delete"`
+	Create bool   `json:"create"`
+	FileId string `json:"fileId"`
+	Upload bool   `json:"get_file"`
+	Delete bool   `json:"delete"`
 }
 
 type WorkflowHealth struct {
@@ -4336,13 +4338,13 @@ type LiveExecutionStatus struct {
 }
 
 type HealthCheck struct {
-	Success    bool           `json:"success"`
-	Updated    int64          `json:"updated"`
-	Apps       AppHealth      `json:"apps"`
-	Workflows  WorkflowHealth `json:"workflows"`
+	Success    bool            `json:"success"`
+	Updated    int64           `json:"updated"`
+	Apps       AppHealth       `json:"apps"`
+	Workflows  WorkflowHealth  `json:"workflows"`
 	PythonApps AppHealth       `json:"python_apps"`
-	Datastore  DatastoreHealth	`json:"datastore"`
-	FileOps	   FileHealth		`json:"fileops"`
+	Datastore  DatastoreHealth `json:"datastore"`
+	FileOps    FileHealth      `json:"fileops"`
 }
 
 type HealthCheckDB struct {

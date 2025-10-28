@@ -16380,12 +16380,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		return &workflowExecution, true, nil
 	}
 
+
 	// 1. CHECK cache if it happened in another?
 	// 2. Set cache
 	// 3. Find executed without a result
 	// 4. Ensure the result is NOT set when running an action)
 
 	actionResult = FixActionResultOutput(actionResult)
+	actionResult.Sanitized = false
 	actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
 
 	// Done elsewhere
@@ -32164,15 +32166,26 @@ func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 		return exec
 	}
 
-	for _, protectedKey := range protectedKeys {
 
-		for resultKey, _ := range exec.Results {
+	for resultKey, _ := range exec.Results {
+		if exec.Results[resultKey].Status != "FINISHED" && exec.Results[resultKey].Status != "SUCCESS" {
+			continue
+		}
+
+		if exec.Results[resultKey].Sanitized {
+			continue
+		}
+
+		for _, protectedKey := range protectedKeys {
+
 			if len(protectedKey.Value) <= 8 {
 				exec.Results[resultKey].Result = strings.ReplaceAll(exec.Results[resultKey].Result, protectedKey.Value, "***")
 			} else {
 				exec.Results[resultKey].Result = SanitizeFuzzySubstring(exec.Results[resultKey].Result, protectedKey.Value, 2)
 			}
 		}
+
+		exec.Results[resultKey].Sanitized = true
 
 	}
 
