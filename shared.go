@@ -30921,7 +30921,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 		cacheKey := fmt.Sprintf("org_sync_features_%s", org.Id)
 		syncFeatures, err := GetCache(ctx, cacheKey)
 		if err != nil {
-			log.Printf("[ERROR] Failed to get cache in HandleCheckLicense: %v", err)
+			//log.Printf("[ERROR] Failed to get cache in HandleCheckLicense: %v", err)
 			org.SyncFeatures.MultiEnv.Active = false
 			org.SyncFeatures.MultiEnv.Limit = 1
 
