@@ -1640,9 +1640,9 @@ type Notification struct {
 	Personal          bool     `json:"personal" datastore:"personal"`
 	Read              bool     `json:"read" datastore:"read"`
 
-	ModifiedBy  string `json:"modified_by" datastore:"modified_by"`
-	Ignored     bool   `json:"ignored" datastore:"ignored"`
-	ExecutionId string `json:"execution_id" datastore:"execution_id"`
+	ModifiedBy			string `json:"modified_by" datastore:"modified_by"`
+	Ignored				bool   `json:"ignored" datastore:"ignored"`
+	ExecutionId			string `json:"execution_id" datastore:"execution_id"`
 }
 
 type NotificationCached struct {
@@ -4291,6 +4291,20 @@ type AppHealth struct {
 	ExecutionID string `json:"execution_id"`
 }
 
+type DatastoreHealth struct {
+	Create	bool	`json:"create"`
+	Read	bool	`json:"read"`
+	Result	string	`json:"result"`
+	Delete	bool	`json:"delete"`
+}
+
+type FileHealth struct {
+	Create	bool	`json:"create"`
+	FileId	string	`json:"fileId"`
+	Upload	bool	`json:"get_file"`
+	Delete	bool	`json:"delete"`
+}
+
 type WorkflowHealth struct {
 	Create         bool   `json:"create"`
 	Run            bool   `json:"run"`
@@ -4326,7 +4340,9 @@ type HealthCheck struct {
 	Updated    int64          `json:"updated"`
 	Apps       AppHealth      `json:"apps"`
 	Workflows  WorkflowHealth `json:"workflows"`
-	PythonApps AppHealth      `json:"python_apps"`
+	PythonApps AppHealth       `json:"python_apps"`
+	Datastore  DatastoreHealth	`json:"datastore"`
+	FileOps	   FileHealth		`json:"fileops"`
 }
 
 type HealthCheckDB struct {

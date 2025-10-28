@@ -481,7 +481,7 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 
 	if len(workflows) == 0 {
 		//log.Printf("[DEBUG] Couldn't find any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
-		return errors.New("Failed finding workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
+		return errors.New("Failed finding workflow named Ops Dashboard Workflow")
 	}
 
 	//log.Printf("[DEBUG] Found %d workflows named SHUFFLE_INTERNAL_OPS_WORKFLOW: ", len(workflows))
@@ -732,6 +732,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[ERROR] Failed running app health check: %s", err)
 			}
 
+			appHealth.Result = ""
 			openapiAppHealthChannel <- appHealth
 			errorChannel <- err
 		}()
@@ -747,9 +748,33 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			errorChannel <- err
 		}()
 
+		datastoreHealthChannel := make(chan DatastoreHealth)
+		go func() {
+			datastoreHealth, err := RunOpsDatastore(apiKey, orgId)
+			if err != nil {
+				log.Printf("[ERROR] Failed running datastore health check: %s", err)
+			}
+
+			datastoreHealthChannel <- datastoreHealth
+			errorChannel <- err
+		}()
+
+		fileHealthChannel := make(chan FileHealth)
+		go func () {
+			fileHealth, err := RunOpsFile(apiKey, orgId)
+			if err != nil {
+				log.Printf("[ERROR] Failed running file health check: %s", err)
+			}
+
+			fileHealthChannel <- fileHealth
+			errorChannel <- err
+		}()
+
 		// Use channel for getting RunOpsWorkflow function results
 		platformHealth.Apps = <-openapiAppHealthChannel
 		platformHealth.PythonApps = <-pythonAppHealthChannel
+		platformHealth.Datastore = <-datastoreHealthChannel
+		platformHealth.FileOps = <-fileHealthChannel
 	}
 
 	platformHealth.Workflows = <-workflowHealthChannel
@@ -1769,6 +1794,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	workflowData.Public = false
 	workflowData.Status = ""
 	workflowData.Name = "Ops Dashboard Workflow"
+	workflowData.ID = "shuffler-doti-ohea-lthc-heckworkflow"
 	workflowData.Hidden = true
 	workflowData.BackgroundProcessing = true
 
@@ -1956,6 +1982,229 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 
 	//log.Printf("[INFO] Ops dashboard workflow saved successfully with ID: %s", workflowData.ID)
 	return workflowData.ID, nil
+}
+
+// Create datastore
+// read it
+// delete it
+func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
+	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	if len(baseUrl) == 0 {
+		baseUrl = "https://shuffler.io"
+	}
+
+	if project.Environment == "onprem" {
+		baseUrl = "http://localhost:5001"
+	}
+
+	datastoreHealth := DatastoreHealth{
+		Create: false,
+		Read: false,
+		Result: "",
+		Delete: false,
+	}
+
+	// create datastore entry
+	PAYLOAD := `{"key": "SHUFFLE_HEALTH_CHECK", "value": "yesy", "category": "SHUFFLE_HEALTH_CHECK"}`
+	url := fmt.Sprintf("%s/api/v1/orgs/%s/set_cache", baseUrl, orgId)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request (%s) for set_cache %s", url, err)
+		return datastoreHealth, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apikey)
+	req.Header.Set("Content-Type", "application/json")
+
+	// Follow proxy and stuff
+	client := GetExternalClient(baseUrl)
+	resp, err := client.Do(req)
+	resp.Body.Close()
+	if err != nil {
+		log.Printf("[ERROR] Failed to send request (%s) for set_cache %s", url, err)
+		return datastoreHealth, err
+	}
+	
+	datastoreHealth.Create = true
+	//read datastore entry
+	PAYLOAD = fmt.Sprintf(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK"}`, orgId)
+	url = fmt.Sprintf("%s/api/v1/orgs/%s/get_cache", baseUrl, orgId)
+	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request (%s) for get_cache: %s", url, err)
+		return datastoreHealth, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apikey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to send request to get_cache: %s", err)
+		return datastoreHealth, err
+	}
+
+	dataStoreValue, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read datastore return value: %s", err)
+	}
+
+	datastoreHealth.Result = string(dataStoreValue)
+	resp.Body.Close()
+	datastoreHealth.Read = true
+
+	// Delete
+	PAYLOAD = fmt.Sprintf(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK"}`, orgId)
+	url = fmt.Sprintf("%s/api/v1/orgs/%s/delete_cache", baseUrl, orgId)
+	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request (%s) for delete_key: %s", url, err)
+		return datastoreHealth, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apikey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err = client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to send request to delete_key: %s", err)
+		return datastoreHealth, err
+	}
+
+	datastoreHealth.Delete = true
+	return datastoreHealth, nil
+}
+
+func RunOpsFile(apikey, orgId string) (FileHealth, error) {
+	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	if len(baseUrl) == 0 {
+		baseUrl = "https://shuffler.io"
+	}
+
+	if project.Environment == "onprem" {
+		baseUrl = "http://localhost:5001"
+	}
+
+	fileHealth := FileHealth{
+		Create: false,
+		FileId: "",
+		Upload: false,
+		Delete: false,
+	}
+
+	PAYLOAD := fmt.Sprintf(`{"filename": "SHUFFLE_HEALTH_TEST_FILE", "org_id": "%s", "workflow_id": "global"}`, orgId)
+	url := fmt.Sprintf("%s/api/v1/files/create", baseUrl)
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
+	if err != nil {
+		log.Printf("[ERROR] Failed to create new request for create file(%s): %s", url, err)
+		return fileHealth, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apikey)
+	req.Header.Set("Content-Type", "application/json")
+
+	var fileRespStruct struct {
+		Success bool	`json:success`
+		Id		string	`json:id`
+	}
+
+	client := GetExternalClient(baseUrl)
+	resp, err := client.Do(req)
+	defer resp.Body.Close()
+	if err != nil {
+		log.Printf("[ERROR] Failed to send request (%s) for set_cache %s", url, err)
+		return fileHealth, err
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read response body")
+		return fileHealth, err
+	}
+
+
+	err = json.Unmarshal(body, &fileRespStruct)
+	if err != nil {
+		log.Printf("[ERROR] Failed to unmarshal response")
+		return fileHealth, err
+	}
+
+	fileHealth.Create = true
+	//Upload file
+	url = fmt.Sprintf("%s/api/v1/files/%s/upload", baseUrl, fileRespStruct.Id)
+	remoteUrl := "https://raw.githubusercontent.com/Shuffle/Shuffle/refs/heads/main/LICENSE"
+
+	resp, err = http.Get(remoteUrl)
+	if err != nil {
+		log.Printf("[ERROR] Failed to fetch remote file: %s", err)
+		return fileHealth, err
+	}
+	
+	defer resp.Body.Close()
+	
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	formFile, err := w.CreateFormFile("shuffle_file", "file.txt")
+	if err != nil {
+		log.Printf("[ERROR] Failed to create form file: %s", err)
+		return fileHealth, err
+	}
+
+	if _, err := io.Copy(formFile, resp.Body); err != nil {
+		log.Printf("[ERROR] Failed to copy remote file to form: %s", err)
+		return fileHealth, err
+	}
+
+	w.Close()
+	req, err = http.NewRequest("POST", url, &buf)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create upload request: %s", err)
+		return fileHealth, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apikey)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	uploadResp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Upload request failed: %s", err)
+		return fileHealth, err
+	}
+	
+	defer uploadResp.Body.Close()
+	if uploadResp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed to upload file, not 200 status code")
+		return fileHealth, fmt.Errorf("upload failed for file")
+	}
+
+	log.Printf("[INFO] Filed uploaded successfully to %s", url)
+	fileHealth.FileId = fileRespStruct.Id
+	fileHealth.Upload = true
+	//Delete file
+	url = fmt.Sprintf("%s/api/v1/files/%s?remove_metadata=true", baseUrl, fileRespStruct.Id)
+	req, err = http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create delete request: %s", err)
+		return fileHealth, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+apikey)
+	resp, err = client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to send delete request: %s", err)
+		return fileHealth, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed to delete file, not 200 status code")
+		return fileHealth, fmt.Errorf("delete failed for file")
+	}
+
+	log.Printf("[INFO] File %s deleted successfully with metadata.", fileRespStruct.Id)
+	fileHealth.Delete = true
+
+	return fileHealth, nil
 }
 
 func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, []string, error) {
