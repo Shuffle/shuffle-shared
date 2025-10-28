@@ -1,25 +1,25 @@
 package shuffle
 
 import (
-	"io"
-	"os"
-	"fmt"
-	"log"
-	"time"
 	"bytes"
-	"errors"
-	"strings"
 	"context"
-	"net/url"
-	"net/http"
-	"io/ioutil"
-	"math/rand"
-	"path/filepath"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/ioutil"
+	"log"
+	"math/rand"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
-	"github.com/frikky/schemaless"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
+	"github.com/frikky/schemaless"
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
 	"github.com/go-git/go-git/v5"
@@ -1372,7 +1372,7 @@ func loadAppConfigFromMain(fileId string) {
 	app, err := GetApp(ctx, fileId, User{}, false)
 	if err == nil && len(app.Name) > 0 && len(app.ID) > 0 {
 		log.Printf("[INFO] Found app %s (%s) for config loading. Running cross-region DOWNLOAD shuffler.io->local if it's generated==false (python). Actions: %d. Generated: %t", app.Name, app.ID, len(app.Actions), app.Generated)
-		//if len(app.Actions) > 0 { 
+		//if len(app.Actions) > 0 {
 		//	return
 		//}
 
@@ -1553,7 +1553,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-
 	// If onprem, it should autobuild the container(s) from here
 	// FIXME: The problem with redirect:
 	// 1. You are in EU
@@ -1615,7 +1614,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				resp.WriteHeader(500)
 				resp.Write([]byte(`{"success": true, "reason": "Failed setting org after activating app"}`))
 				return
-			} 
+			}
 
 			resp.WriteHeader(200)
 			resp.Write([]byte(`{"success": true, "reason": "App activated"}`))
@@ -1837,7 +1836,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] User %s (%s) is activating app %s (%s) for org %s (%s) as a support user", user.Username, user.Id, app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
-
 		} else {
 			foundOrg := &Org{}
 			for _, org := range user.Orgs {
@@ -1847,7 +1845,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 				foundOrg, err = GetOrg(ctx, org)
 				if err != nil {
-					log.Printf("[ERROR] Failed getting org %s: %s", org, err) 
+					log.Printf("[ERROR] Failed getting org %s: %s", org, err)
 				}
 
 				break
@@ -1861,7 +1859,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 						break
 					}
 				}
-			} 
+			}
 
 			if !allowed {
 				log.Printf("[WARNING] User is trying to activate %s which is NOT a public app", app.Name)
@@ -2129,7 +2127,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 			Key:   field.Key,
 			Value: field.Value,
 
-			Answer:      field.Answer,
+			Answer: field.Answer,
 		})
 	}
 
@@ -2141,7 +2139,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 			Key:   field.Key,
 			Value: field.Value,
 
-			Answer:      field.Answer,
+			Answer: field.Answer,
 		})
 	}
 
@@ -2186,7 +2184,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	appId := ""
 	_ = appId
 	for key, value := range resp.Header {
-		log.Printf("\n\n\n\n[DEBUG][%s] HEADER: key: %s, value: %s\n\n\n\n", execution.ExecutionId, key, value)
+		//if debug {
+		//	log.Printf("\n\n\n\n[DEBUG][%s] HEADER: key: %s, value: %s\n\n\n\n", execution.ExecutionId, key, value)
+		//}
+
 		if key == "X-Appname" && len(value) > 0 {
 			appname = value[0]
 			continue
@@ -2200,7 +2201,6 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		if key != "X-Debug-Url" {
 			continue
 		}
-
 
 		/*
 			if !strings.HasPrefix(key, "X-") {
@@ -2230,7 +2230,6 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		*/
 	}
 
-
 	originalBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed reading body from agent decision: %s", execution.ExecutionId, err)
@@ -2240,7 +2239,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	body := originalBody
 	defer resp.Body.Close()
 
-	if debug { 
+	if debug {
 		log.Printf("\n\n\n[DEBUG][%s] Agent decision response: %s\n\n\n", execution.ExecutionId, string(body))
 	}
 
@@ -2335,12 +2334,12 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 	go SetCache(ctx, decisionId, marshalledDecision, 60)
 
-	if decision.Action == "user_input" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" || decision.Category == "standalone" { 
+	if decision.Action == "user_input" || decision.Action == "answer" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" || decision.Category == "standalone" {
 	} else {
 		// Singul handler
 		rawResponse, debugUrl, appname, err := RunAgentDecisionSingulActionHandler(execution, decision)
 
-		if len(appname) > 0 { 
+		if len(appname) > 0 {
 			decision.Tool = appname
 		}
 
@@ -2393,7 +2392,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	//?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 	client := GetExternalClient(url)
 
-	// This is exactly how results for decisions as sent huh 
+	// This is exactly how results for decisions as sent huh
 	// May need to do this for agentic question, answers as well
 	parsedAction := ActionResult{
 		ExecutionId:   execution.ExecutionId,
@@ -2516,7 +2515,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 		// Updates every 60 seconds~
 		if time.Now().Unix() > env.Checkin+60 {
 
-			// Print 1/10 times 
+			// Print 1/10 times
 			if rand.Intn(10) == 0 {
 				log.Printf("[INFO] Updating environment '%s' (%s) from Orborus checkin (60 sec timeout). Previous checkin: %d seconds ago", env.Name, env.Id, timeNow-env.Checkin)
 			}
@@ -2559,7 +2558,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 				log.Printf("[ERROR] Failed updating environment: %s", err)
 			}
 		} else {
-			//if debug { 
+			//if debug {
 			//	log.Printf("[DEBUG] NOT updating env %s yet: %d seconds since checkin", env.Name, timeNow-env.Checkin)
 			//}
 		}

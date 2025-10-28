@@ -497,7 +497,7 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 			log.Printf("[DEBUG] Failed deleting key %s", workflow.ID)
 			return err
 		} else {
-			log.Printf("[INFO] Deleted junk workflow with id: %s", workflow.ID)
+			log.Printf("[INFO] Deleted health workflow with id (planned): %s", workflow.ID)
 		}
 	}
 
@@ -538,7 +538,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	apiKey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
 	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
 	if project.Environment == "onprem" && (len(apiKey) == 0 || len(orgId) == 0) {
-		log.Printf("[DEBUG] Ops dashboard api key or org not set. Getting first org and user that is valid")
+		//log.Printf("[DEBUG] Ops dashboard api key or org not set. Getting first org and user that is valid")
 		org, err := GetFirstOrg(ctx)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting first org: %s", err)
@@ -550,7 +550,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		// Check which user exists and is admin
 		for _, user := range org.Users {
 			user, err := GetUser(ctx, user.Id)
-			if err != nil {
+			if err != nil || user.Id == "" {
 				log.Printf("[WARNING] Failed getting api key for user in org: %s", err)
 				continue
 			}
@@ -573,6 +573,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		orgId = org.Id
 	}
 
+	log.Printf("[INFO] Running ops health check for org %s with api key %s", orgId, apiKey)
 	platformHealth := HealthCheck{}
 	force := request.URL.Query().Get("force")
 	cacheKey := fmt.Sprintf("ops-health-check")
@@ -707,7 +708,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	workflowHealthChannel := make(chan WorkflowHealth)
 	errorChannel := make(chan error)
 	go func() {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Running workflowHealthChannel goroutine")
 		}
 
@@ -1045,30 +1046,12 @@ func fixOpensearch() error {
 		}
 	  }`
 
-	// Get the username and password from environment variables
-	username := os.Getenv("SHUFFLE_OPENSEARCH_USERNAME")
-	if len(username) == 0 {
-		log.Printf("[DEBUG] Opensearch username not set. Setting to default")
-		username = "admin"
-	}
-
-	password := os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD")
-	if len(password) == 0 {
-		log.Printf("[DEBUG] Opensearch password not set. Setting to default")
-		password = "admin"
-	}
-
 	opensearchUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
 	if len(opensearchUrl) == 0 {
-		log.Printf("[DEBUG] Opensearch url not set. Setting to default")
-		opensearchUrl = "http://localhost:9200"
+		opensearchUrl = "https://shuffle-opensearch:9200"
 	}
-
 	opensearchIndex := GetESIndexPrefix("workflowexecution")
-
 	apiUrl := fmt.Sprintf("%s/%s/_mapping", opensearchUrl, opensearchIndex)
-
-	log.Printf("[DEBUG] apiurl for fixing opensearch: %s", apiUrl)
 
 	// Create a new request
 	req, err := http.NewRequest("PUT", apiUrl, bytes.NewBufferString(mapping))
@@ -1077,32 +1060,29 @@ func fixOpensearch() error {
 	}
 
 	// Set the request headers
-	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth(username, password)
-
-	// Create a new HTTP client
-	client := &http.Client{}
+	foundClient := GetEsConfig(false)
 
 	// Send the request in a loop until a 200 status code is received
-	res, err := client.Do(req)
+	//res, err := foundClient.Transport.Do(req)
+	res, err := foundClient.Client.Transport.Perform(req)
 	if err != nil {
-		log.Printf("Error sending the request while fixing execution body: %s", err)
+		log.Printf("[ERROR] Error sending the request while fixing execution body: %s", err)
 		return err
 	}
 
 	// Read the response body
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		log.Printf("Error reading the response body while fixing execution body: %s", err)
+		log.Printf("[ERROR] Error reading the response body while fixing execution body: %s", err)
 		return err
 	}
-	res.Body.Close()
 
+	res.Body.Close()
 	if res.StatusCode == 200 {
 		log.Printf("Index created successfully: %s. Opensearch mappings should be fixed.", body)
 		return nil
 	} else {
-		log.Printf("Failed to create index, retrying: %s", body)
+		log.Printf("[ERROR] Failed to create index, retrying: %s", body)
 		return errors.New("Failed index mapping")
 	}
 
@@ -1235,24 +1215,30 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed running health check workflow: %s. The status code is: %d", id, resp.StatusCode)
+		log.Printf("[ERROR] Failed running health check workflow: %s. The status code is %d", id, resp.StatusCode)
 
 		// print the response body
 		respBodyErr, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			log.Printf("[ERROR] Failed reading health check HTTP response body: %s", err)
 		} else {
-			log.Printf("[ERROR] Health check running Workflow Response: %s", respBodyErr)
-		}
-		if project.Environment == "onprem" {
-			log.Printf("Trying to fix opensearch mappings")
-			err = fixOpensearch()
-			if err != nil {
-				log.Printf("[ERROR] Failed fixing opensearch mappings: %s", err)
+			if strings.Contains(string(respBodyErr), "illegal_argument_exception") {
 			} else {
-				log.Printf("[DEBUG] Fixed opensearch mappings successfully! Maybe try ops dashboard again?")
+				log.Printf("[ERROR] Health check running Workflow Response: %s", respBodyErr)
 			}
 		}
+
+		/*
+		if project.Environment == "onprem" {
+			//log.Printf("Trying to fix opensearch mappings")
+			//err = fixOpensearch()
+			//if err != nil {
+			//	log.Printf("[ERROR] Failed fixing opensearch mappings: %s", err)
+			//} else {
+			//	log.Printf("[DEBUG] Fixed opensearch mappings successfully! Maybe try ops dashboard again?")
+			//}
+		}
+		*/
 		// return workflowHealth, err
 	}
 
@@ -1770,8 +1756,6 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		return "", errors.New("Error unmarshalling JSON data: " + err.Error())
 	}
 
-	log.Printf("[DEBUG] Original workflow has ID: %s", workflowData.ID)
-
 	variables := workflowData.WorkflowVariables
 	for _, variable := range variables {
 		if variable.Name == "apikey" {
@@ -2225,13 +2209,13 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 				if project.Environment == "cloud" {
 					tmpApp, err := GetApp(ctx, action.AppID, user, false)
 					if err == nil {
-							handled = true
-							action.AppID = tmpApp.ID
-							if strings.ToLower(tmpApp.Name) == "http" || strings.ToLower(tmpApp.Name) == "email" || strings.ToLower(tmpApp.Name) == "shuffle tools" {
-							} else {
-								newOrgApps = append(newOrgApps, action.AppID)
-							}
-							workflowapps = append(workflowapps, *tmpApp)
+						handled = true
+						action.AppID = tmpApp.ID
+						if strings.ToLower(tmpApp.Name) == "http" || strings.ToLower(tmpApp.Name) == "email" || strings.ToLower(tmpApp.Name) == "shuffle tools" {
+						} else {
+							newOrgApps = append(newOrgApps, action.AppID)
+						}
+						workflowapps = append(workflowapps, *tmpApp)
 					} else {
 						appid, err := HandleAlgoliaAppSearch(ctx, action.AppName)
 						if err == nil && len(appid.ObjectID) > 0 {
@@ -2241,7 +2225,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 								handled = true
 								action.AppID = tmpApp.ID
 								if strings.ToLower(tmpApp.Name) == "http" || strings.ToLower(tmpApp.Name) == "email" || strings.ToLower(tmpApp.Name) == "shuffle tools" {
-								}else {
+								} else {
 									newOrgApps = append(newOrgApps, action.AppID)
 								}
 								workflowapps = append(workflowapps, *tmpApp)

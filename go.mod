@@ -16,18 +16,17 @@ require (
 	github.com/bradfitz/slice v0.0.0-20180809154707-2b758aa73013
 	github.com/docker/docker v28.3.3+incompatible
 	github.com/frikky/kin-openapi v0.42.0
-	github.com/frikky/schemaless v0.0.22
+	github.com/frikky/schemaless v0.0.23
 	github.com/go-git/go-billy/v5 v5.6.2
 	github.com/go-git/go-git/v5 v5.16.1
 	github.com/google/go-github/v28 v28.1.1
 	github.com/google/go-querystring v1.1.0
 	github.com/google/uuid v1.6.0
-	github.com/opensearch-project/opensearch-go v1.1.0
-	github.com/opensearch-project/opensearch-go/v2 v2.3.0
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/sashabaranov/go-openai v1.40.5
 	github.com/satori/go.uuid v1.2.0
 	github.com/sendgrid/sendgrid-go v3.16.1+incompatible
+	github.com/shuffle/opensearch-go/v4 v4.0.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.40.0
 	golang.org/x/oauth2 v0.30.0

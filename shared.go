@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -18,7 +19,6 @@ import (
 	"reflect"
 	"sort"
 	"sync"
-	"bufio"
 
 	scheduler "cloud.google.com/go/scheduler/apiv1"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
@@ -36,7 +36,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
-	
+
 	"os/exec"
 	"runtime"
 
@@ -3121,7 +3121,6 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 				env.Id = uuid.NewV4().String()
 			}
 
-
 			if env.Default {
 				defaultEnvs = append(defaultEnvs, env)
 			} else {
@@ -4057,7 +4056,7 @@ func GetExecTimeline(fileId string) []WidgetPointData {
 		}
 
 		foundDates = append(foundDates, WidgetPointData{
-			Key: startTimeInt.Format("Jan 2"),
+			Key:  startTimeInt.Format("Jan 2"),
 			Data: int64(execCount),
 
 			MetaData: WidgetMeta{
@@ -4265,7 +4264,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 
 	newReturn := ExecutionReturn{
 		Success:    true,
-		Id:	   		fileId,
+		Id:         fileId,
 		Cursor:     newCursor,
 		Executions: workflowExecutions,
 
@@ -8087,7 +8086,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			// Just making sure
 			if project.Environment == "cloud" {
 				//algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, username)
-				
+
 				// First case : Check if the user's active org is Partner
 				org, err := GetOrg(ctx, user.ActiveOrg.Id)
 				if err != nil {
@@ -8108,13 +8107,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					tmpworkflow.Public = true
 					workflow.Public = true
 
-				// Check if the user is the owns the workflow
-				}else if (len(workflow.Owner) > 0 && workflow.Owner == user.Id) {
+					// Check if the user is the owns the workflow
+				} else if len(workflow.Owner) > 0 && workflow.Owner == user.Id {
 					log.Printf("[INFO] User %s (%s) is saving a public workflow %s", user.Username, user.Id, workflow.ID)
 					correctUser = true
 					tmpworkflow.Public = true
 					workflow.Public = true
-				}else {
+				} else {
 					// Check if the user is allowed to edit the public workflow (Algolia Creator search)
 					algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, user.PublicProfile.GithubUsername)
 					if err != nil {
@@ -8161,7 +8160,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 			}
-
 
 			// FIX: Should check if this workflow has already been saved?
 			if !correctUser {
@@ -8702,10 +8700,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Only happens if the workflow is public and being edited
 	if correctUser {
 		workflow.Public = true
-		
-		if isPartner && (len(workflow.Owner) > 0 && workflow.Owner != user.Id){
+
+		if isPartner && (len(workflow.Owner) > 0 && workflow.Owner != user.Id) {
 			workflow.Owner = user.ActiveOrg.Id
-		}else{
+		} else {
 			workflow.Owner = user.Id
 		}
 
@@ -10416,10 +10414,10 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 			if err == nil {
 				// So the owner is org not user now check if the org is a partner
-				if org.LeadInfo.TechPartner || org.LeadInfo.IntegrationPartner || org.LeadInfo.DistributionPartner || org.LeadInfo.ServicePartner || org.LeadInfo.ChannelPartner{
+				if org.LeadInfo.TechPartner || org.LeadInfo.IntegrationPartner || org.LeadInfo.DistributionPartner || org.LeadInfo.ServicePartner || org.LeadInfo.ChannelPartner {
 					isPartner = true
 				}
-				
+
 				// If the org is a partner, Check if that org owns the workflow (if not then don't show the owner id)
 				if isPartner && workflow.Owner != user.ActiveOrg.Id && user.Role != "admin" {
 					workflow.Owner = ""
@@ -10428,23 +10426,23 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 				if !isPartner {
 					workflow.Owner = ""
 				}
-			}else{
+			} else {
 				// So the owner is user not org
 				log.Printf("[WARNING] Failed getting org for public workflow'%s': %s", workflow.ID, err)
-				
+
 				// Check if the active user is the actual owner of that public workflow
 				if workflow.Owner != user.Id {
 					// If the user doesn't own the workflow, then don't show the owner
 					workflow.Owner = ""
 				}
 			}
-		}else{
+		} else {
 			// Backward compatibility: Previously we did not store owner or orgId when publishing workflows, only the "updated by" field is there which can be used to determine the owner.
-			if user.Username == workflow.UpdatedBy{
+			if user.Username == workflow.UpdatedBy {
 				workflow.Owner = user.Id
 			}
 		}
-		
+
 		workflow.OrgId = ""
 
 		if !isOwner {
@@ -13309,7 +13307,6 @@ func SanitizeWorkflow(workflow Workflow) Workflow {
 		_ = variable
 	}
 
-
 	workflow.Org = []OrgMini{}
 	workflow.OrgId = ""
 	workflow.ExecutingOrg = OrgMini{}
@@ -13826,7 +13823,6 @@ func startWebhookTrigger(ctx context.Context, workflowId, triggerId, triggerName
 	log.Printf("[INFO] Set up a new hook with ID %s and environment %s", triggerId, hook.Environment)
 	return nil
 }
-
 
 // startAllWorkflowTriggers - Start all triggers for a workflow (most useful function)
 func startAllWorkflowTriggers(ctx context.Context, workflowId string, user User, orgId string) error {
@@ -15706,7 +15702,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 				sendRequest = true
 			} else {
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG][%s] Found subflow result. Sending result with input data", foundResult.ExecutionId)
 				}
 
@@ -16059,6 +16055,10 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
 	_, err := GetCache(ctx, cacheKey)
 	if err == nil {
+		if debug {
+			log.Printf("[DEBUG][%s] Agent self-request for Agent Result '%s' with status '%s' has already been sent. Skipping.", workflowExecution.ExecutionId, actionResult.Action.ID, status)
+		}
+
 		return nil
 	} else {
 		SetCache(ctx, cacheKey, []byte("1"), 1)
@@ -16168,7 +16168,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	}
 
 	actionResult.Status = fmt.Sprintf("agent_%s", decisionId)
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG][%s] Got decision ID '%s' for agent '%s'. Ref: %s", workflowExecution.ExecutionId, decisionId, actionResult.Action.ID, actionResult.Status)
 	}
 
@@ -16216,8 +16216,8 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	}
 
 	if strings.Contains(actionResult.Result, decisionId) {
-		if debug { 
-			log.Printf("[DEBUG][%s] Mapping decision result for decision ID '%s': %s", workflowExecution.ExecutionId, decisionId, actionResult.Result)
+		if debug {
+			log.Printf("[DEBUG][%s] Mapping decision result (stream result) for decision ID '%s'", workflowExecution.ExecutionId, decisionId)
 		}
 
 		newDecision := AgentDecision{}
@@ -16226,6 +16226,15 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed unmarshalling agent decision result for decision ID '%s': %s. Data: %s", workflowExecution.ExecutionId, decisionId, err, actionResult.Result)
 		} else {
+			if newDecision.Action == "answer" {
+				if debug {
+					log.Printf("[DEBUG] Auto-finishing 'answer' decision for decision ID '%s'", decisionId)
+				}
+
+				newDecision.RunDetails.Status = "FINISHED"
+				mappedResult.Decisions[decisionIdResultIndex] = newDecision
+			}
+
 			if newDecision.RunDetails.Status != "" && newDecision.RunDetails.Id != "" && (newDecision.RunDetails.Status != mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status || newDecision.RunDetails.StartedAt != mappedResult.Decisions[decisionIdResultIndex].RunDetails.StartedAt || newDecision.RunDetails.CompletedAt != mappedResult.Decisions[decisionIdResultIndex].RunDetails.CompletedAt) {
 
 				log.Printf("[DEBUG][%s] Updating decision ID '%s' with new status '%s' (old: '%s')", workflowExecution.ExecutionId, decisionId, newDecision.RunDetails.Status, mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status)
@@ -16245,14 +16254,17 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		//decisionCache := fmt.Sprintf("%s_%s_decision_%s", workflowExecution.ExecutionId, actionResult.Action.ID, decisionId)
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG][%s] Action '%s' AND decision ID '%s' (%d). Decision Index: %d. Continue decisionmaking!", workflowExecution.ExecutionId, actionResult.Action.ID, decisionId, decisionIdResultIndex, decisionIndex)
 	}
 
 	if mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status == "FAILURE" || mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status == "ABORTED" {
+		if debug {
+			log.Printf("[DEBUG] Auto-failing agent due to decision ID '%s' being in status '%s'", decisionId, mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status)
+		}
 
-		go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
-		return &workflowExecution, false, nil
+		//go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
+		//return &workflowExecution, false, nil
 	}
 
 	//mappedResult.Decisions[decisionIdResultIndex] = actionResult.Result
@@ -16260,7 +16272,13 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	// Find next action
 	allFinishedDecisions := []string{}
 	for decisionId, curDecision := range mappedResult.Decisions {
-		if curDecision.RunDetails.Status == "FINISHED" {
+		if curDecision.RunDetails.Status == "FINISHED" || curDecision.RunDetails.Status == "IGNORED" {
+			allFinishedDecisions = append(allFinishedDecisions, curDecision.RunDetails.Id)
+		} else if curDecision.RunDetails.Status == "FAILURE" {
+			if debug {
+				log.Printf("[DEBUG] Treating decision ID '%s' as finished due to FAILURE status", curDecision.RunDetails.Id)
+			}
+
 			allFinishedDecisions = append(allFinishedDecisions, curDecision.RunDetails.Id)
 		}
 
@@ -16287,7 +16305,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 				continue
 			} else if foundDecision.RunDetails.Status == "FAILED" {
 				failedDecisions = append(failedDecisions, foundDecision.RunDetails.Id)
-			} else if foundDecision.RunDetails.Status == "FINISHED" {
+			} else if foundDecision.RunDetails.Status == "FINISHED" || foundDecision.RunDetails.Status == "IGNORED" {
 				finishedDecisions = append(finishedDecisions, foundDecision.RunDetails.Id)
 			} else {
 				log.Printf("[ERROR][%s] No handler for run status %s", workflowExecution.ExecutionId, foundDecision.RunDetails.Status)
@@ -16298,8 +16316,8 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		if len(failedDecisions) > 0 {
 			log.Printf("[WARNING][%s] Failed decision found. Should exit out agent %s. It should have exited before this point.", workflowExecution.ExecutionId, decisionId)
 
-			go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
-			break
+			//go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
+			//break
 		}
 
 		if len(foundDecisions) == len(finishedDecisions) {
@@ -16309,14 +16327,14 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	log.Printf("[INFO] TOTAL AGENT DECISIONS: %#v, FINISHED DECISIONS: %#v. Missing decision IDs: %#v", len(mappedResult.Decisions), len(allFinishedDecisions), allFinishedDecisions)
+	log.Printf("[INFO] TOTAL AGENT DECISIONS: %#v, FINISHED DECISIONS: %#v. Finished decision IDs: %#v", len(mappedResult.Decisions), len(allFinishedDecisions), allFinishedDecisions)
 
 	// FIXME: How do we handle 3rd party memory sources?
 	// This uses the built-in datastore mechanism so that the user
 	// can see and modify stuff themself as well.
 	if mappedResult.Memory == "shuffle_db" {
 		requestKey := fmt.Sprintf("chat_%s_%s", actionResult.ExecutionId, actionResult.Action.ID)
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
 		}
 
@@ -16337,7 +16355,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		// Handle agent decisionmaking. Use the same
 		log.Printf("[INFO][%s] With the agent being finished, we are asking it whether it would like to do anything else", workflowExecution.ExecutionId)
 
-		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, actionResult.Action, true) 
+		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, actionResult.Action, true)
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed handling agent execution start: %s", workflowExecution.ExecutionId, err)
 		}
@@ -16347,7 +16365,6 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		//go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 		return &workflowExecution, false, nil
 	}
-
 
 	return &workflowExecution, true, nil
 }
@@ -16515,7 +16532,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		//log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
 	} else if actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent" {
 		if strings.HasPrefix(actionResult.Status, "agent_") {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Got AI Agent response - STATUS: %#v, resp: %#v.", actionResult.Status, actionResult.Result)
 			}
 
@@ -16736,7 +16753,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			childNodes = FindChildNodes(workflowExecution.Workflow, actionResult.Action.ID, []string{}, []string{})
 			//log.Printf("[DEBUG][%s] FOUND %d CHILDNODES\n\n", workflowExecution.ExecutionId, len(childNodes))
 			for _, nodeId := range childNodes {
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG][%s] Checking if node %s is already in results", workflowExecution.ExecutionId, nodeId)
 				}
 
@@ -16751,7 +16768,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				for _, action := range workflowExecution.Workflow.Actions {
 					if action.ID == nodeId {
 						curAction = action
-						if debug { 
+						if debug {
 							log.Printf("[DEBUG][%s] Found action %s (%s) for node %s", workflowExecution.ExecutionId, action.Label, action.ID, nodeId)
 						}
 
@@ -16759,7 +16776,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 				}
 
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG][%s] Found action with ID: %s", workflowExecution.ExecutionId, curAction.ID)
 				}
 
@@ -17807,7 +17824,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
 					localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
-					
+
 					// Write file to local filesystem
 					if err := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); err != nil {
 						// Try creating directory if write fails
@@ -17867,7 +17884,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						} else {
 							fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
 							localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
-							
+
 							// Try writing file, create directory if needed
 							if err := ioutil.WriteFile(localPath, []byte(item.Result), 0644); err != nil {
 								// Try creating directory if write fails
@@ -17878,7 +17895,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 									newResults = append(newResults, item)
 									continue
 								}
-								
+
 								// Retry write after creating directory
 								if retryErr := ioutil.WriteFile(localPath, []byte(item.Result), 0644); retryErr != nil {
 									log.Printf("[WARNING][%s] Failed writing new exec file to local storage after creating directory: %s", workflowExecution.ExecutionId, retryErr)
@@ -17887,7 +17904,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 									continue
 								}
 							}
-							
+
 							log.Printf("[DEBUG] Saved action result to local file %s", localPath)
 						}
 
@@ -17910,7 +17927,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				// Handle WorkflowExecution.Result field if too large
 				if len(workflowExecution.Result) > maxSize {
 					log.Printf("[WARNING][%s] Result field is too large (%d bytes), saving to file", workflowExecution.ExecutionId, len(workflowExecution.Result))
-					
+
 					itemSize := len(workflowExecution.Result)
 					actionId := "execution_result"
 					baseResult := fmt.Sprintf(`{
@@ -17923,7 +17940,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
 					localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
-					
+
 					// Write file to local filesystem
 					if err := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); err != nil {
 						// Try creating directory if write fails
@@ -17962,11 +17979,11 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 			jsonString, err := json.Marshal(workflowExecution)
 			if err == nil {
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
 				}
 
-				if len(jsonString)> 1000000 {
+				if len(jsonString) > 1000000 {
 					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
 
 					for resultIndex, result := range workflowExecution.Results {
@@ -18707,7 +18724,7 @@ func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 }
 
 func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
-	//if debug { 
+	//if debug {
 	//	log.Printf("[DEBUG] Passphrase: %s", passphrase)
 	//	log.Printf("Decrypting key: %s", data)
 	//}
@@ -18740,7 +18757,7 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 	nonceSize := gcm.NonceSize()
 	if nonceSize > len(parsedData) {
 		//log.Printf("[ERROR] Nonce size is larger than parsed data in decryption. Returning as if this is valid. This should _never_ happen, but typically only happens IF the source data is invalid (e.g. 1/20 keys)")
-		//if debug { 
+		//if debug {
 		//	log.Printf("Returned: '%s'. Len %d vs %d", string(parsedData), nonceSize, len(parsedData))
 		//}
 
@@ -18829,7 +18846,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Requires being admin 
+	// Requires being admin
 	if strings.ToLower(category) == "protected" {
 		if user.Role != "admin" {
 			resp.WriteHeader(403)
@@ -18837,7 +18854,6 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-
 
 	ctx := GetContext(request)
 	org, err := GetOrg(ctx, orgId)
@@ -18886,7 +18902,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		}
 	} else {
 
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Looking for keys in org %s and category %s", org.Id, category)
 		}
 
@@ -19630,12 +19646,12 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		/*
-		if workflowExecution.Status != "EXECUTING" {
-			log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing (3)"}`))
-			return
-		}
+			if workflowExecution.Status != "EXECUTING" {
+				log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing (3)"}`))
+				return
+			}
 		*/
 
 		executionId = workflowExecution.ExecutionId
@@ -19684,14 +19700,14 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	if len(cacheData.PublicAuthorization) == 0 {
 		cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
-		if len(tmpData.Category) > 0 && tmpData.Category != "default" { 
+		if len(tmpData.Category) > 0 && tmpData.Category != "default" {
 			cacheId = fmt.Sprintf("%s_%s", cacheId, tmpData.Category)
 		}
 
 		cacheId = url.QueryEscape(cacheId)
 		parsedKey := fmt.Sprintf("org_cache_%s", cacheId)
 		DeleteCache(ctx, parsedKey)
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Deleting cache key %s since it had no public auth but auth was required. Probably means cache problem.", parsedKey)
 		}
 	}
@@ -19879,8 +19895,8 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		user.ActiveOrg.Id = foundExec.ExecutionOrg 
-	} 
+		user.ActiveOrg.Id = foundExec.ExecutionOrg
+	}
 
 	mainCategory := ""
 	for itemIndex, _ := range tmpData {
@@ -19909,27 +19925,27 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] Successfully set %d datastore keys (or less) for org '%s' (%s)", len(tmpData), user.ActiveOrg.Name, user.ActiveOrg.Id)
 	type returnStruct struct {
-		Success bool `json:"success"`
+		Success     bool               `json:"success"`
 		KeysExisted []DatastoreKeyMini `json:"keys_existed"`
 	}
 
 	/*
-	// For testing deduplication
-	if debug { 
-		found := []string{}
-		for _, existing := range existingInfo {
-			if ArrayContains(found, existing.Key) {
-				log.Printf("[DEBUG] Key %s already found in existing info", existing.Key)
-				continue
-			}
+		// For testing deduplication
+		if debug {
+			found := []string{}
+			for _, existing := range existingInfo {
+				if ArrayContains(found, existing.Key) {
+					log.Printf("[DEBUG] Key %s already found in existing info", existing.Key)
+					continue
+				}
 
-			found = append(found, existing.Key)
+				found = append(found, existing.Key)
+			}
 		}
-	}
 	*/
 
 	returnData := returnStruct{
-		Success: true,
+		Success:     true,
 		KeysExisted: existingInfo,
 	}
 
@@ -19973,7 +19989,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	// Check if body contains "key": <number> and replace it, as it should be a string 
+	// Check if body contains "key": <number> and replace it, as it should be a string
 	var tmpData CacheKeyData
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
@@ -20161,7 +20177,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	if appId != action.AppID {
 
 		// Used for standalone runs stared on /agents
-		if appId == "agent_starter" { 
+		if appId == "agent_starter" {
 			workflowId := uuid.NewV4().String()
 			action.SourceWorkflow = workflowId
 
@@ -20176,24 +20192,24 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 						action,
 					},
 
-					OrgId: user.ActiveOrg.Id,
-					Owner: user.Username,
+					OrgId:     user.ActiveOrg.Id,
+					Owner:     user.Username,
 					UpdatedBy: user.Username,
-					Start: action.ID,
+					Start:     action.ID,
 				},
-				Type: "AGENT",
-				Start: action.ID,
-				Status: "EXECUTING",
-				WorkflowId: workflowId,
-				ExecutionId: workflowId,
-				ExecutionOrg: user.ActiveOrg.Id,
-				StartedAt: int64(time.Now().Unix()),
+				Type:          "AGENT",
+				Start:         action.ID,
+				Status:        "EXECUTING",
+				WorkflowId:    workflowId,
+				ExecutionId:   workflowId,
+				ExecutionOrg:  user.ActiveOrg.Id,
+				StartedAt:     int64(time.Now().Unix()),
 				Authorization: uuid.NewV4().String(),
 			}
 
 			SetWorkflowExecution(ctx, exec, true)
 
-			action, err := HandleAiAgentExecutionStart(exec, action, false) 
+			action, err := HandleAiAgentExecutionStart(exec, action, false)
 			if err != nil {
 				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
 			}
@@ -20209,7 +20225,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			return exec, nil
 
 		} else if appId == "agent" {
-			// This is used in HandleAiAgentExecutionStart as a way to 
+			// This is used in HandleAiAgentExecutionStart as a way to
 			// run a single action with a specific appId
 
 			// Also used for rerunning a single decision within an existing shuffle_agent execution on the /agents page.
@@ -20367,7 +20383,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	if app.Authentication.Required || len(action.AuthenticationId) > 0 {
 
 		if len(action.AuthenticationId) > 0 {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG][%s] Found auth ID for single action: %s", workflowExecution.ExecutionId, action.AuthenticationId)
 			}
 
@@ -20460,7 +20476,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 		//}
 	}
-
 
 	// Auth is handled in PrepareWorkflowExec, so this may not be needed
 	newParams := []WorkflowAppActionParameter{}
@@ -20639,7 +20654,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		// 1. Find the decision & reset cache
 		// 2. Update the execution itself to not have the relevant data
 		if len(decisionId) > 0 {
-			log.Printf("[DEBUG][%s] Handling Single action rerun for AI Agent decision. DecisionID: %#v", oldExec.ExecutionId, decisionId)
+			log.Printf("[DEBUG][%s] Handling Single action RERUN for AI Agent decision. DecisionID: %#v", oldExec.ExecutionId, decisionId)
 
 			if foundResultIndex == -1 {
 				return workflowExecution, errors.New("Failed to find the action. Please try again or contact support@shuffler.io if this persists.")
@@ -20653,25 +20668,67 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 			availableDecisions := []string{}
 			foundDecisionIndex := -1
+			decisionPosition := -1
+
+			newDecisions := []AgentDecision{}
 			for decisionIndex, decision := range mappedOutput.Decisions {
 				availableDecisions = append(availableDecisions, decision.RunDetails.Id)
 				if decision.RunDetails.Id != decisionId {
+					if decision.Action == "finish" {
+						if debug {
+							log.Printf("[DEBUG] Removing the 'finish' action due to rerun")
+						}
+
+						continue
+					}
+
+					newDecisions = append(newDecisions, decision)
+
 					continue
 				}
 
+				// The position in the hierarchy
+				decisionPosition = mappedOutput.Decisions[decisionIndex].I
 				foundDecisionIndex = decisionIndex
-
 				mappedOutput.CompletedAt = 0
 				mappedOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 				mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = 0
 				mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse = ""
 				mappedOutput.Decisions[decisionIndex].RunDetails.DebugUrl = ""
-				break
+
+				newDecisions = append(newDecisions, mappedOutput.Decisions[decisionIndex])
 			}
 
 			if foundDecisionIndex == -1 {
 				return workflowExecution, errors.New(fmt.Sprintf("Failed to find and rerun decision '%s' out of '%s' in execution %s. Please try again or contact support@shuffler.io if the error persists.", decisionId, strings.Join(availableDecisions, ","), oldExec.ExecutionId))
 			}
+
+			// Removing everything AFTER the one we are currently on
+			// Has to be done in a wonky way due to not having ordered arrays
+			newNewDecisions := []AgentDecision{}
+			for _, newDecision := range newDecisions {
+				if decisionPosition != -1 && newDecision.I > decisionPosition && newDecision.RunDetails.Id != decisionId {
+					if debug {
+						log.Printf("[DEBUG] SKIPPING decision %s as it's after the rerun position", newDecision.RunDetails.Id)
+					}
+
+					continue
+				}
+
+				if newDecision.RunDetails.Status == "" {
+					continue
+				}
+
+				newNewDecisions = append(newNewDecisions, newDecision)
+			}
+
+			for newDecisionIndex, newDecision := range newNewDecisions {
+				if newDecision.RunDetails.Id == decisionId {
+					foundDecisionIndex = newDecisionIndex
+				}
+			}
+
+			mappedOutput.Decisions = newNewDecisions
 
 			mappedOutput.Status = "WAITING"
 			marshalledResult, err := json.Marshal(mappedOutput)
@@ -20781,7 +20838,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	startTime := time.Now().Unix()
 	maxSeconds := 15
 	if project.Environment != "cloud" {
-		maxSeconds = 180 
+		maxSeconds = 180
 	}
 
 	if debug {
@@ -20885,7 +20942,6 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		// Use startTime instead:
 		//if cnt == (maxSeconds * (maxSeconds * 100 / sleeptime)) {
 		if time.Now().Unix()-startTime > int64(maxSeconds) {
-
 
 			returnBody.Success = true
 
@@ -21917,8 +21973,8 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 
 // Function to hash the long sso certificates and use it in queries
 func ssoCertHash(normalized string) string {
-    sum := md5.Sum([]byte(normalized))
-    return hex.EncodeToString(sum[:])
+	sum := md5.Sum([]byte(normalized))
+	return hex.EncodeToString(sum[:])
 }
 
 func fixCertificate(parsedX509Key string) string {
@@ -22817,8 +22873,8 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	matchingOrgs, err := GetOrgByField(ctx, "sso_config.sso_certificate", parsedX509Key)
-	
-	if (err != nil || len(matchingOrgs) == 0) {
+
+	if err != nil || len(matchingOrgs) == 0 {
 		log.Printf("[DEBUG] No org found for normal sso_certificate now check for the long sso certificate through sso_certificate_hash")
 		// Fallback to hash search for long certs are now supported
 		certHash := ssoCertHash(parsedX509Key)
@@ -23537,7 +23593,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			}
 
-
 			// FIXME: Is execution ID missing?
 
 			if allowContinuation == false {
@@ -23723,13 +23778,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				if agentic {
 					log.Printf("[INFO][%s] Should fix the decision by injecting the values and continuing to the next step! :3", oldExecution.ExecutionId)
 
-					// 1. Find the result inside the result.Result -> AgentOutput 
-					unmarshalledDecision := AgentOutput{} 
+					// 1. Find the result inside the result.Result -> AgentOutput
+					unmarshalledDecision := AgentOutput{}
 					err = json.Unmarshal([]byte(result.Result), &unmarshalledDecision)
 					if err != nil {
 						log.Printf("[ERROR][%s] Failed unmarshalling decision inside agentic workflow: %s", oldExecution.ExecutionId, err)
 						return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed handling decision for agentic runs. Please contact support@shuffler.io. Details: %s", err), err
-					} 
+					}
 
 					// Finds the local exec argument sent from User Input UI
 					execArg := request.URL.Query().Get("execution_argument")
@@ -23740,12 +23795,20 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						}
 					}
 
+					cleanupFailures := false
 					fieldsChanged := false
 					for decisionIndex, decision := range unmarshalledDecision.Decisions {
 						if decision.RunDetails.Id != decisionId {
 							continue
 						}
-							
+
+						findContinue := false
+						if decision.Action == "finish" {
+							findContinue = true
+						}
+
+						//log.Printf("[INFO][%s] Found the decision inside the agentic workflow to update: %s", execArg, decisionId)
+
 						mappedArgument := map[string]string{}
 						err = json.Unmarshal([]byte(execArg), &mappedArgument)
 						if err != nil {
@@ -23755,6 +23818,41 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 						handledNumber := []string{}
 						for key, value := range mappedArgument {
+							// Handles special case for Continuing an existing Agent run by modifying the "finish" action
+							if findContinue {
+								// The only key we care about in this case
+								if key == "continue" {
+									// Overwrite everything
+									if workflowExecution.Status == "FINISHED" { 
+										workflowExecution.Status = "EXECUTING"
+									}
+
+									unmarshalledDecision.Status = "RUNNING"
+									unmarshalledDecision.Output = ""
+									decision.Fields = []Valuereplace{
+										Valuereplace{ 
+											Key: "continue",
+											Value: "How do you want to continue?",
+											Answer: value,
+										},
+									}
+
+									decision.Action = "ask"
+									decision.Tool = "ask"
+									decision.Category = "standalone"
+
+									// Make the value max 50 bytes
+									decision.Reason = fmt.Sprintf("User Input: %.50s", value)
+									unmarshalledDecision.Decisions[decisionIndex] = decision
+
+									fieldsChanged = true
+									cleanupFailures = true
+									break
+								} 
+
+								continue
+							}
+
 							if ArrayContains(handledNumber, key) {
 								continue
 							}
@@ -23799,11 +23897,36 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						break
 					}
 
-					if !fieldsChanged {
-						return workflowExecution, ExecInfo{}, fmt.Sprintf("Did not find the decision inside the agentic workflow to update %s", decisionId), errors.New("Did not find the decision to update")
+					// Cleans them up to be "IGNORED" instead
+					// This is a concept to allow for better UX
+					// Only runs if you "continue" running an agent run
+					if cleanupFailures {
+						for decisionIndex, _ := range unmarshalledDecision.Decisions {
+							decision := unmarshalledDecision.Decisions[decisionIndex]
+							if decision.RunDetails.Status != "FAILURE" {
+								continue
+							}
+
+							decision.RunDetails.Status = "IGNORED"
+							unmarshalledDecision.Decisions[decisionIndex] = decision
+
+							decisionId := fmt.Sprintf("agent-%s-%s", oldExecution.ExecutionId, decision.RunDetails.Id)
+							marshalledDecision, err := json.Marshal(decision)
+							if err != nil {
+								log.Printf("[ERROR][%s] Failed marshalling decision during agentic decision handling: %s", oldExecution.ExecutionId, err)
+							} else {
+								SetCache(ctx, decisionId, marshalledDecision, 60)
+							}
+
+							fieldsChanged = true
+						}
 					}
 
-					log.Printf("[INFO][%s] Found the decision inside the agentic workflow to update: %s", execArg, decisionId)
+					if !fieldsChanged {
+						return workflowExecution, ExecInfo{}, fmt.Sprintf("Could not find decision '%s' inside the agentic workflow", decisionId), errors.New(fmt.Sprintf("Could not find decision '%s'", decisionId))
+					}
+
+					//log.Printf("[INFO][%s] Found the decision inside the agentic workflow to update: %s", execArg, decisionId)
 
 					newDecisionBytes, err := json.Marshal(unmarshalledDecision)
 					if err != nil {
@@ -23821,16 +23944,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					oldExecution.Results[resultIndex] = result
 
 					// FIXME: Can we force continue the agent from here? Or do we send another action inbetween?
-					// go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
-
 					result.Status = fmt.Sprintf("%s_%s", "FINISHED", decisionId)
-
-					newExec, _, err := handleAgentDecisionStreamResult(*oldExecution, result) 
+					newExec, _, err := handleAgentDecisionStreamResult(*oldExecution, result)
 					if err != nil {
 						log.Printf("[ERROR][%s] Failed handling agentic decision result: %s", oldExecution.ExecutionId, err)
 					}
 
 					return *newExec, ExecInfo{}, fmt.Sprintf("Agentic question handled (%s)", oldExecution.ExecutionId), errors.New("User Input: Agentic question action handled successfully!")
+
 				} else if result.Status == "WAITING" && !agentic {
 					log.Printf("[INFO][%s] Found relevant User Input result: %s (%s)", result.ExecutionId, result.Action.Label, result.Action.ID)
 
@@ -25396,12 +25517,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	// Special Action cleanup in case authentication etc has gone wrong
-	// FIXME: Focused on URL field primarily 
+	// FIXME: Focused on URL field primarily
 	for actionIndex, _ := range workflowExecution.Workflow.Actions {
 		found := []string{}
 
 		newparams := []WorkflowAppActionParameter{}
-		for paramIndex, _ := range workflowExecution.Workflow.Actions[actionIndex].Parameters { 
+		for paramIndex, _ := range workflowExecution.Workflow.Actions[actionIndex].Parameters {
 			param := workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex]
 
 			if !ArrayContains(found, param.Name) {
@@ -25713,7 +25834,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 			}
 		}
 	} else if strings.ToLower(curAuth.Type) == "oauth2" {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG][%s] Should replace auth parameters (Oauth2)", workflowExecution.ExecutionId)
 		}
 
@@ -25740,7 +25861,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 			}
 
 			if param.Key != "url" && param.Key != "access_token" {
-				//if debug { 
+				//if debug {
 				//	log.Printf("[DEBUG][%s] Skipping key %s in auth %s (%s)", workflowExecution.ExecutionId, param.Key, curAuth.Label, curAuth.Id)
 				//}
 
@@ -25767,7 +25888,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 			if len(refreshUrl) == 0 {
 				log.Printf("[ERROR] No Oauth2 request to run, as no refresh url is set!")
 			} else {
-				if debug { 
+				if debug {
 					log.Printf("[INFO][%s] Running Oauth2 request with URL %s", workflowExecution.ExecutionId, refreshUrl)
 				}
 
@@ -25802,7 +25923,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 					}
 
 					// FIXME: There used to be code here to stop the app, but for now we just continue with the old tokens
-				} 
+				}
 
 				allAuths[authIndex] = newAuth
 
@@ -25815,8 +25936,8 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 					}
 
 					newParams = append(newParams, WorkflowAppActionParameter{
-						Name:  param.Key,
-						Value: param.Value,
+						Name:          param.Key,
+						Value:         param.Value,
 						Configuration: true,
 					})
 				}
@@ -25970,24 +26091,6 @@ func executeAuthgroupSubflow(workflowExecution WorkflowExecution, authgroup AppA
 	}
 
 	return nil
-}
-
-func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
-	ret, err := project.Es.Info()
-	if err != nil {
-		log.Printf("[ERROR] Failed connecting to ES: %s", err)
-		resp.WriteHeader(ret.StatusCode)
-		resp.Write([]byte("Bad response from ES (1). Check logs for more details."))
-		return
-	}
-
-	if ret.StatusCode >= 300 {
-		resp.WriteHeader(ret.StatusCode)
-		resp.Write([]byte(fmt.Sprintf("Bad response from ES - Status code %d", ret.StatusCode)))
-		return
-	}
-
-	fmt.Fprint(resp, "OK")
 }
 
 // Extra validation sample to be used for workflow executions based on parent workflow instead of users' auth
@@ -26926,7 +27029,7 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 		tmpData.Id = uuid.NewV4().String()
 	}
 
-	tmpData.CompanyInfo.Id = user.ActiveOrg.Id 
+	tmpData.CompanyInfo.Id = user.ActiveOrg.Id
 
 	if tmpData.Public {
 		_, err = HandleAlgoliaUsecaseUpload(ctx, tmpData, overwrite)
@@ -27499,7 +27602,6 @@ func findMissingChildren(ctx context.Context, workflowExecution *WorkflowExecuti
 		}
 	}
 
-
 	if !parentRan {
 		//log.Printf("[ERROR] Parent node %s hasn't run yet, skipping children search", inputNode)
 
@@ -27537,13 +27639,13 @@ func findMissingChildren(ctx context.Context, workflowExecution *WorkflowExecuti
 				next := findMissingChildren(ctx, workflowExecution, children, child, checkedNodes)
 
 				if len(next) > 0 {
-					// WARNING: Do NOT break here. 
+					// WARNING: Do NOT break here.
 					// This has caused bugs before in complicated decision trees.
 					nextActions = append(nextActions, next...)
 				}
 			}
 		} else {
-			if debug { 
+			if debug {
 				//log.Printf("[DEBUG] Missing nodes (%s). Found: %d, Expected: %d. NEXT: %#v", inputNode, foundCnt, len(children[inputNode]), nextActions)
 			}
 		}
@@ -27559,7 +27661,7 @@ func findMissingChildren(ctx context.Context, workflowExecution *WorkflowExecuti
 		newList = append(newList, next)
 	}
 
-	return newList 
+	return newList
 }
 
 // Finds next actions that aren't already executed and don't have results
@@ -27624,7 +27726,7 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 		}
 
 		if foundCnt != 2 {
-			if debug { 
+			if debug {
 				log.Printf("[ERROR] Missing branch fullfillment for src + dst! Source: %s, Destination: %s, Branch: %#v", branch.SourceID, branch.DestinationID, branch)
 			}
 		}
@@ -28462,19 +28564,22 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 	return workflowExecution, relevantActions
 }
 
-func isNoProxyHost(noProxy, host string) bool {
+func isNoProxyHost(noProxy, inputHost string) bool {
 	// Normalize the host by removing the port if present
-	host, _, err := net.SplitHostPort(host)
+	host, _, err := net.SplitHostPort(inputHost)
 	if err != nil {
-		log.Printf("[ERROR] Failed to split host and port: %s", err)
+		//log.Printf("[ERROR] Failed to split host and port: %s", err)
+		host = inputHost
 	}
 
 	host = strings.TrimSpace(host) // Fallback to trimming
-
-	for _, noProxyEntry := range strings.Split(noProxy, ",") {
-		noProxyEntry, _, err := net.SplitHostPort(noProxyEntry)
+	noProxies := strings.Split(noProxy, ",")
+	for _, noProxyEntry := range noProxies {
+		newProxyEntry, _, err := net.SplitHostPort(noProxyEntry)
 		if err != nil {
-			log.Printf("[ERROR] Failed to split host and port for NOPROXY: %s", err)
+			//log.Printf("[ERROR] Failed to split host and port for NOPROXY: %s", err)
+		} else {
+			noProxyEntry = newProxyEntry
 		}
 
 		noProxyEntry = strings.TrimSpace(noProxyEntry)
@@ -31004,7 +31109,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 		parsedEula := GetOnpremPaidEula()
 
-		log.Printf("[DEBUG] Org has the Enterprise License Key")
+		if debug {
+			log.Printf("[DEBUG] Org has the Enterprise License Key")
+		}
 
 		var endDate int64
 		var cancellationDate int64
@@ -31061,7 +31168,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 		org.Subscriptions = []PaymentSubscription{subscription}
 
 	} else {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Org %v does not have an enterprise license. Please purchase an enterprise license to unlock production-ready features. Contact support@shuffler.io for more information.", org.Id)
 		}
 
@@ -32006,7 +32113,7 @@ func SanitizeFuzzySubstring(haystack, secret string, maxDistance int) string {
 	hayLower := strings.ToLower(haystack)
 	secLower := strings.ToLower(secret)
 	secLen := len(secLower)
-	
+
 	i := 0
 	for i < len(hayRunes) {
 		bestMatchStart := -1
@@ -32014,7 +32121,7 @@ func SanitizeFuzzySubstring(haystack, secret string, maxDistance int) string {
 		bestDistance := maxDistance + 1
 
 		// Iterate through possible window sizes
-		for windowLen := secLen - maxDistance; windowLen <= secLen + maxDistance && i+windowLen <= len(hayLower); windowLen++ {
+		for windowLen := secLen - maxDistance; windowLen <= secLen+maxDistance && i+windowLen <= len(hayLower); windowLen++ {
 			if windowLen <= 0 {
 				continue
 			}
@@ -32044,11 +32151,9 @@ func SanitizeFuzzySubstring(haystack, secret string, maxDistance int) string {
 	return string(hayRunes)
 }
 
-
-
 // Basic cleanup.
 func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
-	// Basic checks to return 
+	// Basic checks to return
 	if os.Getenv("SHUFFLE_PROTECTED_CLEANUP_DISABLED") == "true" || project.Environment == "worker" {
 		return exec
 	}
@@ -32061,11 +32166,11 @@ func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 
 	for _, protectedKey := range protectedKeys {
 
-		for resultKey, _ := range exec.Results { 
-			if len(protectedKey.Value) <= 8 { 
+		for resultKey, _ := range exec.Results {
+			if len(protectedKey.Value) <= 8 {
 				exec.Results[resultKey].Result = strings.ReplaceAll(exec.Results[resultKey].Result, protectedKey.Value, "***")
 			} else {
-				exec.Results[resultKey].Result = SanitizeFuzzySubstring(exec.Results[resultKey].Result, protectedKey.Value, 2) 
+				exec.Results[resultKey].Result = SanitizeFuzzySubstring(exec.Results[resultKey].Result, protectedKey.Value, 2)
 			}
 		}
 
@@ -32674,7 +32779,7 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 	resp.Write([]byte(`{"success": true}`))
 }
 
-func startSchedule(trigger Trigger, authorization string, workflow Workflow) error { 
+func startSchedule(trigger Trigger, authorization string, workflow Workflow) error {
 	baseUrl := "https://shuffler.io"
 	if os.Getenv("BASE_URL") != "" {
 		baseUrl = os.Getenv("BASE_URL")
@@ -32696,18 +32801,18 @@ func startSchedule(trigger Trigger, authorization string, workflow Workflow) err
 	}
 
 	scheduleRequest := Schedule{
-		Name: "Schedule",
-		Frequency: foundFrequency,
+		Name:              "Schedule",
+		Frequency:         foundFrequency,
 		ExecutionArgument: "Automatically configured by Shuffle",
-		Environment: trigger.Environment,
-		Id: trigger.ID,
-		Start: workflow.Start,
+		Environment:       trigger.Environment,
+		Id:                trigger.ID,
+		Start:             workflow.Start,
 	}
 
 	parsedBody, err := json.Marshal(scheduleRequest)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshalling schedule request: %s", err)
-		return err 
+		return err
 	}
 
 	// Send post request
@@ -32754,31 +32859,30 @@ func startSchedule(trigger Trigger, authorization string, workflow Workflow) err
 // NewAuditLogCollector creates a new audit log collector for the current platform
 func NewAuditLogCollector(config TelemetryConfig) (*AuditLogCollector, error) {
 	platform := runtime.GOOS
-	
+
 	if config.BufferSize == 0 {
 		config.BufferSize = 1000
 	}
-	
+
 	if config.FlushInterval == 0 {
 		config.FlushInterval = 10 * time.Second
 	}
-	
+
 	collector := &AuditLogCollector{
 		Config:     config,
 		Platform:   platform,
 		LogChannel: make(chan AuditLogEntry, config.BufferSize),
 		StopChan:   make(chan bool),
 	}
-	
+
 	return collector, nil
 }
-
 
 func (c *AuditLogCollector) LogCollectorStart(ctx context.Context) error {
 	if !c.Config.Enabled {
 		return nil
 	}
-	
+
 	auditLogEnabled := false
 	for _, mode := range c.Config.Modes {
 		if mode == "audit_log" {
@@ -32786,13 +32890,13 @@ func (c *AuditLogCollector) LogCollectorStart(ctx context.Context) error {
 			break
 		}
 	}
-	
+
 	if !auditLogEnabled {
 		return nil
 	}
-	
+
 	log.Printf("[INFO] Starting audit log collector for platform: %s", c.Platform)
-	
+
 	switch c.Platform {
 	case "linux":
 		go c.collectLinuxAuditLogs(ctx)
@@ -32801,9 +32905,9 @@ func (c *AuditLogCollector) LogCollectorStart(ctx context.Context) error {
 	default:
 		return fmt.Errorf("unsupported platform: %s", c.Platform)
 	}
-	
+
 	go c.processTelemetryLogs(ctx)
-	
+
 	return nil
 }
 
@@ -32819,17 +32923,17 @@ func (c *AuditLogCollector) collectLinuxAuditLogs(ctx context.Context) {
 	auditLogPath := "/var/log/audit/audit.log"
 	syslogPath := "/var/log/syslog"
 	journalAvailable := c.isJournalAvailable()
-	
+
 	// Use journalctl if available
 	if journalAvailable {
 		go c.collectJournalLogs(ctx)
 	}
-	
+
 	// Monitor audit.log if it exists
 	if _, err := os.Stat(auditLogPath); err == nil {
 		go c.tailLogFile(ctx, auditLogPath, "auditd")
 	}
-	
+
 	// Monitor syslog
 	if _, err := os.Stat(syslogPath); err == nil {
 		go c.tailLogFile(ctx, syslogPath, "syslog")
@@ -32843,31 +32947,31 @@ func (c *AuditLogCollector) collectMacOSAuditLogs(ctx context.Context) {
 // collectMacOSSecurityLogs collects all security-relevant logs with one predicate
 func (c *AuditLogCollector) collectMacOSSecurityLogs(ctx context.Context) {
 	log.Printf("[INFO] Starting macOS security log collection")
-	
+
 	predicate := `(subsystem == "com.apple.opendirectoryd" && category == "auth") ||
 		process == "login" ||
 		process == "sshd" ||
 		process == "sudo" ||
 		process == "su"`
-	
-	cmd := exec.Command("log", "stream", 
+
+	cmd := exec.Command("log", "stream",
 		"--predicate", predicate,
 		"--info", "--debug",
 		"--style", "json")
-	
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Printf("[ERROR] Failed to create stdout pipe for security log stream: %v", err)
 		return
 	}
-	
+
 	if err := cmd.Start(); err != nil {
 		log.Printf("[ERROR] Failed to start security log stream: %v", err)
 		return
 	}
-	
+
 	log.Printf("[INFO] Successfully started security log stream")
-	
+
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		select {
@@ -32884,7 +32988,7 @@ func (c *AuditLogCollector) collectMacOSSecurityLogs(ctx context.Context) {
 			}
 		}
 	}
-	
+
 	if err := scanner.Err(); err != nil {
 		log.Printf("[ERROR] Error reading security log stream: %v", err)
 	}
@@ -32893,7 +32997,7 @@ func (c *AuditLogCollector) collectMacOSSecurityLogs(ctx context.Context) {
 func (c *AuditLogCollector) parseMacOSLogEntry(line string) {
 	// First, let's see what we're actually getting
 	log.Printf("[DEBUG] Raw log line: %s", line)
-	
+
 	var logData map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &logData); err != nil {
 		log.Printf("[ERROR] Failed to parse JSON: %v", err)
@@ -32903,36 +33007,36 @@ func (c *AuditLogCollector) parseMacOSLogEntry(line string) {
 	}
 
 	log.Printf("[DEBUG] Parsed JSON log entry: %v", logData)
-	
+
 	entry := AuditLogEntry{
 		Timestamp: time.Now(),
 		Platform:  "darwin",
 		RawData:   line,
 		Metadata:  logData,
 	}
-	
+
 	if eventType, ok := logData["eventType"].(string); ok {
 		entry.EventType = eventType
 	}
-	
+
 	if eventMessage, ok := logData["eventMessage"].(string); ok {
 		entry.Message = eventMessage
 	}
-	
+
 	if processID, ok := logData["processID"].(float64); ok {
 		entry.ProcessInfo = &ProcessInfo{
 			PID: int(processID),
 		}
-		
+
 		if processImagePath, ok := logData["processImagePath"].(string); ok {
 			entry.ProcessInfo.ProcessName = filepath.Base(processImagePath)
 		}
 	}
-	
+
 	if c.shouldFilterLog(&entry) {
 		return
 	}
-	
+
 	select {
 	case c.LogChannel <- entry:
 	default:
@@ -32952,11 +33056,11 @@ func (c *AuditLogCollector) parseSimpleMacOSLogEntry(line string) {
 		strings.Contains(lowerLine, "security") ||
 		strings.Contains(lowerLine, "loginwindow") ||
 		strings.Contains(lowerLine, "securityd")
-	
+
 	if !isSecurityRelevant {
 		return
 	}
-	
+
 	entry := AuditLogEntry{
 		Timestamp: time.Now(),
 		Platform:  "darwin",
@@ -32965,7 +33069,7 @@ func (c *AuditLogCollector) parseSimpleMacOSLogEntry(line string) {
 		RawData:   line,
 		EventType: "security",
 	}
-	
+
 	// Basic process extraction from log format
 	if strings.Contains(line, ": ") {
 		parts := strings.Split(line, ": ")
@@ -32981,11 +33085,11 @@ func (c *AuditLogCollector) parseSimpleMacOSLogEntry(line string) {
 			}
 		}
 	}
-	
+
 	if c.shouldFilterLog(&entry) {
 		return
 	}
-	
+
 	select {
 	case c.LogChannel <- entry:
 	default:
@@ -32996,14 +33100,14 @@ func (c *AuditLogCollector) parseSimpleMacOSLogEntry(line string) {
 // collectMacOSAuthLogs monitors auth.log and system authentication events
 func (c *AuditLogCollector) collectMacOSAuthLogs(ctx context.Context) {
 	log.Printf("[INFO] Starting macOS auth log collection")
-	
+
 	// Just monitor some basic log files that might exist
 	logPaths := []string{
 		"/var/log/auth.log",
 		"/var/log/system.log",
 		"/var/log/secure.log",
 	}
-	
+
 	for _, logPath := range logPaths {
 		if _, err := os.Stat(logPath); err == nil {
 			log.Printf("[INFO] Monitoring log file: %s", logPath)
@@ -33020,14 +33124,14 @@ func (c *AuditLogCollector) collectMacOSBSMaudit(ctx context.Context) {
 		log.Printf("[WARNING] BSM audit not available or not enabled: %v", err)
 		return
 	}
-	
+
 	// Monitor current audit trail
 	auditDir := "/var/audit"
 	if _, err := os.Stat(auditDir); err != nil {
 		log.Printf("[WARNING] Audit directory not accessible: %v", err)
 		return
 	}
-	
+
 	// Use praudit to read audit records in real-time
 	cmd = exec.Command("sudo", "praudit", "-l")
 	stdout, err := cmd.StdoutPipe()
@@ -33035,12 +33139,12 @@ func (c *AuditLogCollector) collectMacOSBSMaudit(ctx context.Context) {
 		log.Printf("[ERROR] Failed to create stdout pipe for praudit: %v", err)
 		return
 	}
-	
+
 	if err := cmd.Start(); err != nil {
 		log.Printf("[ERROR] Failed to start praudit: %v", err)
 		return
 	}
-	
+
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		select {
@@ -33067,7 +33171,7 @@ func (c *AuditLogCollector) parseBSMAuditEntry(line string) {
 		RawData:   line,
 		EventType: "audit",
 	}
-	
+
 	// Extract process info if available (basic parsing)
 	if strings.Contains(line, "process") {
 		// This is a simplified parser - BSM audit format is complex
@@ -33081,11 +33185,11 @@ func (c *AuditLogCollector) parseBSMAuditEntry(line string) {
 			}
 		}
 	}
-	
+
 	if c.shouldFilterLog(&entry) {
 		return
 	}
-	
+
 	select {
 	case c.LogChannel <- entry:
 	default:
@@ -33095,18 +33199,18 @@ func (c *AuditLogCollector) parseBSMAuditEntry(line string) {
 
 func (c *AuditLogCollector) collectJournalLogs(ctx context.Context) {
 	cmd := exec.Command("journalctl", "-f", "-o", "json", "--since", "now")
-	
+
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Printf("[ERROR] Failed to create stdout pipe for journalctl: %v", err)
 		return
 	}
-	
+
 	if err := cmd.Start(); err != nil {
 		log.Printf("[ERROR] Failed to start journalctl: %v", err)
 		return
 	}
-	
+
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		select {
@@ -33121,7 +33225,7 @@ func (c *AuditLogCollector) collectJournalLogs(ctx context.Context) {
 			c.parseJournalEntry(line)
 		}
 	}
-	
+
 	if err := scanner.Err(); err != nil {
 		log.Printf("[ERROR] Error reading journalctl: %v", err)
 	}
@@ -33133,7 +33237,7 @@ func (c *AuditLogCollector) parseJournalEntry(line string) {
 	if err := json.Unmarshal([]byte(line), &journalData); err != nil {
 		return
 	}
-	
+
 	entry := AuditLogEntry{
 		Timestamp: time.Now(),
 		Platform:  "linux",
@@ -33141,48 +33245,48 @@ func (c *AuditLogCollector) parseJournalEntry(line string) {
 		RawData:   line,
 		Metadata:  journalData,
 	}
-	
+
 	// Extract standard journal fields
 	if priority, ok := journalData["PRIORITY"].(string); ok {
 		entry.Level = c.priorityToLevel(priority)
 	}
-	
+
 	if message, ok := journalData["MESSAGE"].(string); ok {
 		entry.Message = message
 	}
-	
+
 	if syslogID, ok := journalData["SYSLOG_IDENTIFIER"].(string); ok {
 		entry.EventType = syslogID
 	}
-	
+
 	// Process information
 	if pid, ok := journalData["_PID"].(string); ok {
 		pidInt, _ := strconv.Atoi(pid)
 		entry.ProcessInfo = &ProcessInfo{
 			PID: pidInt,
 		}
-		
+
 		if comm, ok := journalData["_COMM"].(string); ok {
 			entry.ProcessInfo.ProcessName = comm
 		}
-		
+
 		if cmdline, ok := journalData["_CMDLINE"].(string); ok {
 			entry.ProcessInfo.CommandLine = cmdline
 		}
 	}
-	
+
 	// User information
 	if uid, ok := journalData["_UID"].(string); ok {
 		entry.UserInfo = &UserInfo{
 			UserID: uid,
 		}
 	}
-	
+
 	// Apply filters
 	if c.shouldFilterLog(&entry) {
 		return
 	}
-	
+
 	select {
 	case c.LogChannel <- entry:
 	default:
@@ -33198,10 +33302,10 @@ func (c *AuditLogCollector) tailLogFile(ctx context.Context, filepath string, so
 		return
 	}
 	defer file.Close()
-	
+
 	// Seek to end of file
 	file.Seek(0, 2)
-	
+
 	scanner := bufio.NewScanner(file)
 	for {
 		select {
@@ -33219,12 +33323,12 @@ func (c *AuditLogCollector) tailLogFile(ctx context.Context, filepath string, so
 					Message:   line,
 					RawData:   line,
 				}
-				
+
 				// Apply filters
 				if c.shouldFilterLog(&entry) {
 					continue
 				}
-				
+
 				select {
 				case c.LogChannel <- entry:
 				default:
@@ -33242,7 +33346,7 @@ func (c *AuditLogCollector) processTelemetryLogs(ctx context.Context) {
 	buffer := make([]AuditLogEntry, 0, c.Config.BufferSize)
 	ticker := time.NewTicker(c.Config.FlushInterval)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -33270,10 +33374,10 @@ func (c *AuditLogCollector) processTelemetryLogs(ctx context.Context) {
 func (c *AuditLogCollector) flushLogs(logs []AuditLogEntry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	
+
 	for _, log := range logs {
 		// For now, just print the logs
-		fmt.Printf("[AUDIT] %s | %s | %s | %s\n", 
+		fmt.Printf("[AUDIT] %s | %s | %s | %s\n",
 			log.Timestamp.Format(time.RFC3339),
 			log.Platform,
 			log.EventType,
@@ -33297,7 +33401,7 @@ func (c *AuditLogCollector) shouldFilterLog(entry *AuditLogEntry) bool {
 					return true
 				}
 			}
-			
+
 			for _, exc := range filter.Exclude {
 				if strings.Contains(entry.EventType, exc) {
 					return true
@@ -33316,7 +33420,7 @@ func (c *AuditLogCollector) shouldFilterLog(entry *AuditLogEntry) bool {
 					return true
 				}
 			}
-			
+
 			for _, exc := range filter.Exclude {
 				if strings.Contains(entry.Message, exc) {
 					return true
@@ -33324,7 +33428,7 @@ func (c *AuditLogCollector) shouldFilterLog(entry *AuditLogEntry) bool {
 			}
 		}
 	}
-	
+
 	return false
 }
 
@@ -33349,4 +33453,56 @@ func (c *AuditLogCollector) priorityToLevel(priority string) string {
 	default:
 		return "INFO"
 	}
+}
+
+// getPrioritisedAppActions returns actions for an app, prioritised by most
+// likely to be used.
+// Simple sorting:
+// 1. Categorised & Labeled actions
+// 2. Most used actions across the platform
+// 3. SHOULD BE MORE :))
+func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount int) []WorkflowAppAction {
+	returnActions := []WorkflowAppAction{}
+	appName := inputApp
+	foundApp := &WorkflowApp{}
+	appId := ""
+	var err error
+
+	if strings.Contains(inputApp, ":") || len(inputApp) == 32 {
+		appnamesplit := strings.Split(inputApp, ":")
+		appId = appnamesplit[0]
+		if len(appId) != 32 {
+			appId = ""
+		}
+	}
+
+	if len(appId) == 32 {
+		foundApp, err = GetApp(ctx, appId, User{}, false)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting app %s for prioritised actions: %s", appId, err)
+			return returnActions
+		}
+	}
+
+	if foundApp.ID == "" && len(appName) > 0 {
+		log.Printf("[ERROR] Should find app based on name (not implemented)")
+	}
+
+	for _, action := range foundApp.Actions {
+		if action.Name == "custom_action" {
+			continue
+		}
+
+		if len(action.CategoryLabel) > 0 {
+			log.Printf("ACTION TAG: %#v => %#v", action.Label, action.CategoryLabel)
+			returnActions = append(returnActions, action)
+			continue
+		}
+
+		if len(returnActions) > maxAmount {
+			break
+		}
+	}
+
+	return returnActions
 }

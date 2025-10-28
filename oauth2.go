@@ -3,9 +3,9 @@ package shuffle
 // Shuffle is an automation platform for security and IT. This app and the associated scopes enables us to get information about a user, their mailbox and eventually subscribing them to send pub/sub requests to our platform to handle their emails in real-time, before controlling how to handle the data themselves.
 
 import (
+	"bufio"
 	"bytes"
 	"context"
-	"regexp"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -14,7 +14,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"bufio"
+	"regexp"
 	"strconv"
 
 	//"net/url"
@@ -26,14 +26,13 @@ import (
 	"github.com/satori/go.uuid"
 	"golang.org/x/oauth2"
 
-	"path/filepath"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
+	"path/filepath"
 )
 
 var handledIds []string
@@ -829,7 +828,6 @@ func HandleNewOutlookRegister(resp http.ResponseWriter, request *http.Request) {
 		RefreshToken: accessToken.RefreshToken,
 		Expiry:       accessToken.Expiry,
 	}
-
 
 	//log.Printf("%#v", trigger)
 	log.Println(trigger.WorkflowId)
@@ -2966,10 +2964,10 @@ func MakeGmailWebhookRequest(ctx context.Context, webhookUrl string, mappedData 
 	return nil
 }
 
-func RefreshOutlookClient(ctx context.Context, auth TriggerAuth) (error) {
+func RefreshOutlookClient(ctx context.Context, auth TriggerAuth) error {
 	// Manually recreate the oauthtoken
 	conf := &oauth2.Config{
-		ClientID: os.Getenv("OFFICE365_CLIENT_ID"),
+		ClientID:     os.Getenv("OFFICE365_CLIENT_ID"),
 		ClientSecret: os.Getenv("OFFICE365_CLIENT_SECRET"),
 		Scopes: []string{
 			"Mail.Read",
@@ -3554,7 +3552,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		}
 	}
 
-	if len(tokenUrl) == 0 || len(clientId) == 0 || len(clientSecret) == 0  {
+	if len(tokenUrl) == 0 || len(clientId) == 0 || len(clientSecret) == 0 {
 		return appAuth, fmt.Errorf("Missing oauth2 fields. Required: token_uri, client_id, client_secret, scopes")
 	}
 
@@ -3563,7 +3561,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		refreshData = fmt.Sprintf("grant_type=%s", grantType)
 	}
 
-	if grantType == "password" { 
+	if grantType == "password" {
 		if len(username) > 0 {
 			refreshData += fmt.Sprintf("&username=%s", username)
 		}
@@ -3580,7 +3578,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		refreshData += fmt.Sprintf("&scope=%s", strings.Replace(scope, ",", " ", -1))
 	}
 
-	if strings.Contains(refreshData, "user_impersonation") && strings.Contains (refreshData, "azure") && !strings.Contains(refreshData, "resource="){
+	if strings.Contains(refreshData, "user_impersonation") && strings.Contains(refreshData, "azure") && !strings.Contains(refreshData, "resource=") {
 		// Add "resource" for microsoft hings
 		refreshData += "&resource=https://management.azure.com"
 	}
@@ -3650,7 +3648,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 				log.Printf("[ERROR] Oauth2 application auth (3): Failed to read response body: %s", err)
 				return appAuth, err
 			}
-		} 
+		}
 
 		// Takes care of both old and new request
 		if newresp.StatusCode >= 300 {
@@ -3683,7 +3681,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	}
 
 	appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
-		Key: "access_token",
+		Key:   "access_token",
 		Value: foundToken,
 	})
 
@@ -3698,7 +3696,6 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	transport.ResponseHeaderTimeout = time.Second * 10
 	transport.Proxy = nil
 
-
 	requestData := DataToSend{
 		GrantType: "authorization_code",
 	}
@@ -3707,7 +3704,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	oauthUrl := ""
 	refreshUrl := ""
 	refreshToken := ""
-	
+
 	for _, field := range appAuth.Fields {
 		// Try decryption here as well just in case
 		// In some cases, it's already decrypted at this point, but it doesn't matter much to re-do it in case, as this function is used multiple places
@@ -3742,7 +3739,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		} else if field.Key == "oauth_url" {
 			oauthUrl = field.Value
 		} else {
-			if field.Key == "url" { 
+			if field.Key == "url" {
 			} else {
 			}
 		}
@@ -3811,7 +3808,6 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			}
 		}
 	}
-
 
 	client := GetExternalClient(url)
 	newresp := &http.Response{}
@@ -4007,21 +4003,21 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	}
 
 	/*
-	if len(oauthResp.RefreshToken) > 0 {
-		//log.Printf("[DEBUG] Got NEW refresh token %s", oauthResp.RefreshToken) 
+		if len(oauthResp.RefreshToken) > 0 {
+			//log.Printf("[DEBUG] Got NEW refresh token %s", oauthResp.RefreshToken)
 
-		newauth := []AuthenticationStore{}
-		for _, item := range appAuth.Fields {
-			if item.Key == "refresh_token" {
-				continue
+			newauth := []AuthenticationStore{}
+			for _, item := range appAuth.Fields {
+				if item.Key == "refresh_token" {
+					continue
+				}
+
+				newauth = append(newauth, item)
 			}
 
-			newauth = append(newauth, item)
-		}
-
-		// Tested March 2024. Works to hotswap refresh tokens
-		// 4. M.C515_BL2.0.U.-Cot3MTbxsV8lXPwxLHd8Q1g1p49Mm31MamCfxBEHhXX1tGq2IDFBQ24dcX2RjC*cJW0Qdah9rO*2cEximZVVH0lBgjSEQckYrpv*9h1k1TWQCxmdatJGYjYxMVnflUtEL*dykvv4wEVvV2cdk!vSNih7BATGKrLoqB4ix38ufUjR4ynJxUcJS2hnIntqUPVHOsvXkFHncxDARAIrp7ZnvtXzR9gydhb*FkI!GaF8OIQwJgjqa7p0x8yhyJYLY0k1aAdFg8ehVsK6MzMVLB*dFQTBFzUdnF0tF09xAwsBbL0aWITXIEF*cPC5ghY07n!5H1Q8eOdcc*qOAFMQ!ov0wejM4eddXl*pytEt91IXC3b2
-		*/
+			// Tested March 2024. Works to hotswap refresh tokens
+			// 4. M.C515_BL2.0.U.-Cot3MTbxsV8lXPwxLHd8Q1g1p49Mm31MamCfxBEHhXX1tGq2IDFBQ24dcX2RjC*cJW0Qdah9rO*2cEximZVVH0lBgjSEQckYrpv*9h1k1TWQCxmdatJGYjYxMVnflUtEL*dykvv4wEVvV2cdk!vSNih7BATGKrLoqB4ix38ufUjR4ynJxUcJS2hnIntqUPVHOsvXkFHncxDARAIrp7ZnvtXzR9gydhb*FkI!GaF8OIQwJgjqa7p0x8yhyJYLY0k1aAdFg8ehVsK6MzMVLB*dFQTBFzUdnF0tF09xAwsBbL0aWITXIEF*cPC5ghY07n!5H1Q8eOdcc*qOAFMQ!ov0wejM4eddXl*pytEt91IXC3b2
+	*/
 
 	if len(oauthResp.RefreshToken) > 0 {
 		appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
@@ -4211,13 +4207,11 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 	return IdTokenCheck{}, errors.New("Couldn't verify nonce")
 }
 
-
 func IsRunningInCluster() bool {
 	_, existsHost := os.LookupEnv("KUBERNETES_SERVICE_HOST")
 	_, existsPort := os.LookupEnv("KUBERNETES_SERVICE_PORT")
 	return existsHost && existsPort
 }
-
 
 func GetPodName() string {
 	if len(os.Getenv("MY_POD_NAME")) > 0 {
@@ -4261,29 +4255,29 @@ func GetKubernetesClient() (*kubernetes.Clientset, *rest.Config, error) {
 	var err error
 
 	/*
-	// Not in use for now. This is a in-cluster override from orborus
-	kubeconfigContent := os.Getenv("KUBERNETES_CONFIG")
-	if len(kubeconfigContent) > 0 {
-		log.Printf("[INFO] Using KUBERNETES_CONFIG to set up Kubernetes client: %#v", os.Getenv("KUBERNETES_CONFIG"))
-		config, err := rest.InClusterConfig()
-		if err != nil {
-			log.Printf("[ERROR] Failed to create Kubernetes client from in-cluster config: %s", err)
-		} else {
-			// Replace client configuration with kubeconfig content
-			config, err = clientcmd.RESTConfigFromKubeConfig([]byte(kubeconfigContent))
+		// Not in use for now. This is a in-cluster override from orborus
+		kubeconfigContent := os.Getenv("KUBERNETES_CONFIG")
+		if len(kubeconfigContent) > 0 {
+			log.Printf("[INFO] Using KUBERNETES_CONFIG to set up Kubernetes client: %#v", os.Getenv("KUBERNETES_CONFIG"))
+			config, err := rest.InClusterConfig()
 			if err != nil {
-				log.Printf("[ERROR] Failed to create Kubernetes client from KUBERNETES_CONFIG: %s", err)
+				log.Printf("[ERROR] Failed to create Kubernetes client from in-cluster config: %s", err)
 			} else {
-				// Create Kubernetes client
-				clientset, err := kubernetes.NewForConfig(config)
+				// Replace client configuration with kubeconfig content
+				config, err = clientcmd.RESTConfigFromKubeConfig([]byte(kubeconfigContent))
 				if err != nil {
-					return nil, config, err
-				}
+					log.Printf("[ERROR] Failed to create Kubernetes client from KUBERNETES_CONFIG: %s", err)
+				} else {
+					// Create Kubernetes client
+					clientset, err := kubernetes.NewForConfig(config)
+					if err != nil {
+						return nil, config, err
+					}
 
-				return clientset, config, nil
+					return clientset, config, nil
+				}
 			}
 		}
-	}
 	*/
 
 	// Look for the kubernetes serviceaccount path  /var/run/secrets/kubernetes.io/serviceaccount
@@ -4317,7 +4311,7 @@ func GetKubernetesClient() (*kubernetes.Clientset, *rest.Config, error) {
 		}
 
 		return clientset, config, nil
-	} 
+	}
 
 	home := homedir.HomeDir()
 	kubeconfigPath := filepath.Join(home, ".kube", "config")

@@ -1,18 +1,18 @@
 package shuffle
 
 import (
-	"fmt"
-	"log"
 	"context"
-	"net/http"
-	"io/ioutil"
 	"crypto/sha1"
 	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
 
-	"sort"
-	"time"
 	"errors"
+	"sort"
 	"strings"
+	"time"
 
 	uuid "github.com/satori/go.uuid"
 	"gopkg.in/yaml.v2"
@@ -86,7 +86,7 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 		//	cachedContent, err := GetCache(ctx, detectionContentId)
 		//	if err == nil {
 
-		if len(fileContent) == 0 { 
+		if len(fileContent) == 0 {
 			fileContent, err = GetFileContent(ctx, &file, nil)
 			if err != nil {
 				log.Printf("[ERROR] Failed getting detection file content for %s (%s): %s", file.Filename, file.Id, err)
@@ -120,7 +120,7 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 
 		rule.FileId = file.Id
 		rule.Tags = file.Tags
-		rule.FileName = strings.TrimSuffix(strings.TrimSuffix(file.Filename, ".yaml"),".yml")
+		rule.FileName = strings.TrimSuffix(strings.TrimSuffix(file.Filename, ".yaml"), ".yml")
 		sigmaFileInfo = append(sigmaFileInfo, rule)
 	}
 
@@ -567,7 +567,7 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 	workflow := Workflow{}
 	if detectionType == "siem" || detectionType == "sigma" {
 		categoryAction := CategoryAction{
-			Label: "Ingest Tickets_webhook",
+			Label:    "Ingest Tickets_webhook",
 			Category: "cases",
 		}
 
@@ -622,7 +622,6 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
-
 
 	} else if detectionType == "email" {
 
@@ -689,19 +688,19 @@ func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, 
 
 		// Validates if the environment already has a lake running
 		/*
-		cacheKey := fmt.Sprintf("queueconfig-%s-%s", env.Name, env.OrgId)
-		cache, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			newEnv := OrborusStats{}
-			err = json.Unmarshal(cache.([]uint8), &newEnv)
+			cacheKey := fmt.Sprintf("queueconfig-%s-%s", env.Name, env.OrgId)
+			cache, err := GetCache(ctx, cacheKey)
 			if err == nil {
-				// No point in adding a job if the lake is already running 
-				if env.DataLake.Enabled && execType == "START_TENZIR" {
-					lakeNodes += 1
-					continue
+				newEnv := OrborusStats{}
+				err = json.Unmarshal(cache.([]uint8), &newEnv)
+				if err == nil {
+					// No point in adding a job if the lake is already running
+					if env.DataLake.Enabled && execType == "START_TENZIR" {
+						lakeNodes += 1
+						continue
+					}
 				}
 			}
-		}
 		*/
 
 		selectedEnvironments = append(selectedEnvironments, env)

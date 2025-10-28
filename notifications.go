@@ -3,18 +3,18 @@ package shuffle
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/satori/go.uuid"
-	"crypto/sha256"
-    "encoding/hex"
 	"io/ioutil"
-	"strconv"
 	"log"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -107,7 +107,6 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed to mark it as read"}`))
 		return
 	}
-
 
 	log.Printf("[AUDIT] Marked %s as read by user %s (%s)", notification.Id, user.Username, user.Id)
 
@@ -260,14 +259,14 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 }
 
 // how to make sure that the notification workflow bucket always empties itself:
-// call sendToNotificationWorkflow with the first cached notification 
+// call sendToNotificationWorkflow with the first cached notification
 func sendToNotificationWorkflow(ctx context.Context, notification Notification, userApikey, workflowId string, relieveNotifications bool, authOrg Org) error {
 	/*
-	// FIXME: Was used for disabling it before due to possible issues with infinite loops.
-	if project.Environment != "onprem" {
-		log.Printf("[DEBUG] Skipping notification workflow send for workflow %s as workflows are disabled for cloud for now.", workflowId)
-		return nil
-	}
+		// FIXME: Was used for disabling it before due to possible issues with infinite loops.
+		if project.Environment != "onprem" {
+			log.Printf("[DEBUG] Skipping notification workflow send for workflow %s as workflows are disabled for cloud for now.", workflowId)
+			return nil
+		}
 	*/
 
 	if len(workflowId) < 10 {
@@ -281,18 +280,17 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 	//log.Printf("[DEBUG] Sending notification to workflow with id: %#v", workflowId)
 
-
 	cachedNotifications := NotificationCached{}
 	// caclulate hash of notification title + workflow id
 	unHashed := fmt.Sprintf("%s_%s", notification.Description, workflowId)
 
 	// Calculate SHA-256 hash
-    hasher := sha256.New()
-    hasher.Write([]byte(unHashed))
-    hashBytes := hasher.Sum(nil)
+	hasher := sha256.New()
+	hasher.Write([]byte(unHashed))
+	hashBytes := hasher.Sum(nil)
 
-    // Convert the hash to a hexadecimal string
-    cacheKey := hex.EncodeToString(hashBytes)
+	// Convert the hash to a hexadecimal string
+	cacheKey := hex.EncodeToString(hashBytes)
 
 	cacheData := []byte{}
 
@@ -300,17 +298,16 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	cache, err := GetCache(ctx, cacheKey)
 	if err != nil {
 		/*
-		log.Printf("[ERROR] Failed getting cached notifications %s for notification %s: %s. Assuming no notifications are found!", 
-			cacheKey, 
-			notification.Id, 
-			err,
-		)
+			log.Printf("[ERROR] Failed getting cached notifications %s for notification %s: %s. Assuming no notifications are found!",
+				cacheKey,
+				notification.Id,
+				err,
+			)
 		*/
 		cacheData = []byte{}
 	} else {
 		cacheData = []byte(cache.([]uint8))
 	}
-
 
 	bucketingMinutes := os.Getenv("SHUFFLE_NOTIFICATION_BUCKETING_MINUTES")
 	if len(bucketingMinutes) == 0 {
@@ -332,13 +329,13 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 			timeNow := int64(time.Now().Unix())
 			// save to cache and send notification
 			cachedNotification := NotificationCached{
-				NotificationId: notification.Id,
-				OriginalNotification: notification.Id,
+				NotificationId:            notification.Id,
+				OriginalNotification:      notification.Id,
 				LastNotificationAttempted: notification.Id,
-				WorkflowId: workflowId,
-				LastUpdated: timeNow,
-				FirstUpdated: timeNow,
-				Amount: 1,
+				WorkflowId:                workflowId,
+				LastUpdated:               timeNow,
+				FirstUpdated:              timeNow,
+				Amount:                    1,
 			}
 
 			// marshal cachedNotifications
@@ -350,9 +347,9 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 			err = SetCache(ctx, cacheKey, cacheData, 1440)
 			if err != nil {
-				log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (0)", 
-					cacheKey, 
-					notification.Id, 
+				log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (0)",
+					cacheKey,
+					notification.Id,
 					err,
 				)
 				return err
@@ -372,7 +369,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 				return err
 			}
 
-			// check cachedNotifications.cachedNotifications 
+			// check cachedNotifications.cachedNotifications
 			//log.Printf("[DEBUG] Found %d cached notifications for %s workflow %s",
 			//	cachedNotifications.Amount,
 			//	cachedNotifications.NotificationId,
@@ -390,15 +387,15 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 				return err
 			}
 
-			totalTimeElapsed := int64((cachedNotifications.LastUpdated - cachedNotifications.FirstUpdated)/60)
+			totalTimeElapsed := int64((cachedNotifications.LastUpdated - cachedNotifications.FirstUpdated) / 60)
 
 			//log.Printf("[DEBUG] Time elapsed since first notification: %d for notification %s", totalTimeElapsed, notification.Id)
 
 			err = SetCache(ctx, cacheKey, cacheData, 1440)
 			if err != nil {
-				log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (1)", 
-					cacheKey, 
-					notification.Id, 
+				log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (1)",
+					cacheKey,
+					notification.Id,
 					err,
 				)
 				return err
@@ -441,10 +438,10 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 						log.Printf("[ERROR] Failed unmarshaling cached notifications for notification %s: %s", notification.Id, err)
 						return
 					}
-					notification.BucketDescription = fmt.Sprintf("Accumilated %d notifications in %d minutes. (Bucketing time: %d)", 
-							newCachedNotifications.Amount - 1, 
-							totalTimeElapsed, 
-							bucketingMinutesInt,
+					notification.BucketDescription = fmt.Sprintf("Accumilated %d notifications in %d minutes. (Bucketing time: %d)",
+						newCachedNotifications.Amount-1,
+						totalTimeElapsed,
+						bucketingMinutesInt,
 					)
 					_ = sendToNotificationWorkflow(ctx, notification, userApikey, workflowId, true, authOrg)
 					err = DeleteCache(ctx, cacheKey)
@@ -457,12 +454,12 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 					}
 				})
 				return errors.New(
-					"Notification with id "+ notification.Id + " was the second bucketed notification. " + 
-					"It is responsible for relieving the bucket. " + 
-					"We have its cache stored at: " + cacheKey,
+					"Notification with id " + notification.Id + " was the second bucketed notification. " +
+						"It is responsible for relieving the bucket. " +
+						"We have its cache stored at: " + cacheKey,
 				)
 			}
-			return errors.New("Notification with id"+ notification.Id + " won't be sent and is bucketed. We have its cache stored at: " + cacheKey)
+			return errors.New("Notification with id" + notification.Id + " won't be sent and is bucketed. We have its cache stored at: " + cacheKey)
 		}
 	}
 
@@ -477,7 +474,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		backendUrl = "https://shuffler.io"
 	}
 
-	// Callback to itself onprem. 
+	// Callback to itself onprem.
 	if len(backendUrl) == 0 {
 		backendUrl = "http://localhost:5001"
 	}
@@ -516,7 +513,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		return err
 	}
 
-	_ = respBody 
+	_ = respBody
 
 	//log.Printf("[DEBUG] Finished notification request to %s with status %d. Data: %s", executionUrl, newresp.StatusCode, string(respBody))
 	if newresp.StatusCode != 200 {
@@ -565,10 +562,10 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 	}
 
 	notification := Notification{
-		Title: title,
-		Description: description,
+		Title:        title,
+		Description:  description,
 		ReferenceUrl: referenceUrl,
-		OrgId: orgId,
+		OrgId:        orgId,
 
 		ExecutionId: executionId,
 	}
@@ -622,7 +619,6 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 		return err
 	}
 
-
 	log.Printf("[DEBUG] Finished notification request to %s with status %d. Data: %s", notificationUrl, newresp.StatusCode, string(respBody))
 	return nil
 }
@@ -650,7 +646,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		}
 
 		// Overriding it for Orborus to ensure we have a way to manage
-		project.Environment = "worker" 
+		project.Environment = "worker"
 	}
 
 	//log.Printf("[DEBUG] Creating org notification! %s. Env: %s", orgId, project.Environment)
@@ -660,7 +656,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		// Have a 0-0.5 sec timeout here?
 
 		cacheKey := fmt.Sprintf("notification-%s", referenceUrl)
-		_, err := GetCache(ctx, cacheKey) 
+		_, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			// Avoiding duplicates for the same workflow+execution
 			if project.Environment != "cloud" {
@@ -784,14 +780,13 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			//	continue
 			//}
 
-
 			notification.Amount += 1
 			notification.Read = false
 			notification.ReferenceUrl = referenceUrl
 
 			// Added ignore as someone could want to never see a specific alert again due to e.g. expecting a 404 on purpose
-			if notification.Ignored { 
-				notification.Read = true 
+			if notification.Ignored {
+				notification.Read = true
 
 				mainNotification.Ignored = true
 			}
@@ -805,7 +800,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			}
 		}
 
-		if mainNotification.Ignored { 
+		if mainNotification.Ignored {
 			log.Printf("[INFO] Ignored notification %s for %s", mainNotification.Title, mainNotification.UserId)
 		} else {
 			go func() {
@@ -821,7 +816,6 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		return nil
 	} else {
 		//log.Printf("[INFO] New notification with title %#v is being made for users in org %s", title, orgId)
-
 
 		// Only gonna load this after
 		// All the other personal ones are kind of irrelevant
@@ -987,13 +981,13 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[AUDIT] Invalid authorization header in create notification api for Orborus request")
 				resp.WriteHeader(403)
 				resp.Write([]byte(`{"success": false, "reason": "Invalid authorization config for Environment auth"}`))
-				return 
+				return
 			}
 
 			log.Printf("[AUDIT] Environment auth successful for environment %s", environment)
 
 		} else {
-			// Allows for execution authorization 
+			// Allows for execution authorization
 			if len(notification.ExecutionId) == 0 {
 				log.Printf("[INFO] User tried to create notification without an execution ID present", notification.ExecutionId, orgId, notification.OrgId)
 				resp.WriteHeader(403)
@@ -1007,7 +1001,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 				resp.WriteHeader(400)
 				resp.Write([]byte(`{"success": false}`))
 				return
-			} 
+			}
 
 			// Check if user has access. Parse out authorization header with "Bearer X"
 			authHeader := request.Header.Get("Authorization")
@@ -1046,13 +1040,13 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[WARNING] User tried to create notification for execution %s with org id %s, but notification org id is %s", exec.ExecutionId, exec.OrgId, notification.OrgId)
 			}
 
-			skipUserCheck = true 
+			skipUserCheck = true
 			user.Role = "admin"
 			user.Username = fmt.Sprintf("execution %s", exec.ExecutionId)
 
 			if len(exec.ExecutionOrg) > 0 {
 				orgId = exec.ExecutionOrg
-			} 
+			}
 
 			if len(orgId) == 0 && len(exec.OrgId) > 0 {
 				orgId = exec.OrgId
@@ -1100,7 +1094,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 			found := false
 			for _, user := range org.Users {
 				if user.Id == user.Id {
-					found = true 
+					found = true
 					break
 				}
 			}
@@ -1119,7 +1113,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		ctx,
 		notification.Title,
 		notification.Description,
-		notification.ReferenceUrl, 
+		notification.ReferenceUrl,
 		orgId,
 		false,
 	)
