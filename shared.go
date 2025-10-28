@@ -32086,9 +32086,11 @@ func editDistance(a, b string) int {
 		dp[i] = make([]int, m+1)
 		dp[i][0] = i
 	}
+
 	for j := 0; j <= m; j++ {
 		dp[0][j] = j
 	}
+
 	for i := 1; i <= n; i++ {
 		for j := 1; j <= m; j++ {
 			if a[i-1] == b[j-1] {
@@ -32098,6 +32100,7 @@ func editDistance(a, b string) int {
 			}
 		}
 	}
+
 	return dp[n][m]
 }
 
@@ -32160,6 +32163,10 @@ func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 		return exec
 	}
 
+	if exec.Status == "FINISHED" || exec.Status == "ABORTED" { 
+		return exec
+	}
+
 	protectedKeys, _, err := GetAllCacheKeys(context.Background(), exec.ExecutionOrg, "protected", 100, "")
 	if err != nil {
 		//log.Printf("[ERROR] Failed getting protected keys for org %s: %s", exec.ExecutionOrg, err)
@@ -32179,6 +32186,8 @@ func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 		for _, protectedKey := range protectedKeys {
 
 			if len(protectedKey.Value) <= 8 {
+				exec.Results[resultKey].Result = strings.ReplaceAll(exec.Results[resultKey].Result, protectedKey.Value, "***")
+			} else if len(protectedKey.Value) > 2000000 {
 				exec.Results[resultKey].Result = strings.ReplaceAll(exec.Results[resultKey].Result, protectedKey.Value, "***")
 			} else {
 				exec.Results[resultKey].Result = SanitizeFuzzySubstring(exec.Results[resultKey].Result, protectedKey.Value, 2)
