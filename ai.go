@@ -38,6 +38,7 @@ import (
 var standalone bool
 
 // var model = "gpt-5-mini"
+var maxTokens = 5000
 var model = "gpt-5-mini"
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
@@ -381,8 +382,8 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 		return *httpOutput, []byte{}, err
 	}
 
-	// FIXME: Why 404 excluded? Weird.
-	if httpOutput.Status >= 300 && httpOutput.Status != 404 {
+	//if httpOutput.Status >= 300 && httpOutput.Status != 404 {
+	if httpOutput.Status >= 300 {
 		if debug {
 			log.Printf("[INFO] Translated action failed with status: %d. Rerun Autocorrecting feature!. Body: %s", httpOutput.Status, string(marshalledBody))
 		}
@@ -444,7 +445,7 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig, paramNa
 }
 
 // Used for recursively fixing HTTP outputs that are bad
-func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata, originalAppname string, attempt ...int) (string, Action, error, string) {
+func FindNextApiStep(originalFields []Valuereplace, action Action, stepOutput []byte, additionalInfo, inputdata, originalAppname string, attempt ...int) (string, Action, error, string) {
 	// 1. Find the result field in json
 	// 2. Check the status code if it's a good one (<300). If it is, make the output correct based on it and add context based on output.
 	// 3. If 400-499, check for error message and self-correct. e.g. if body says something is wrong, try to fix it. If status is 415, try to add content-type header.
@@ -597,7 +598,7 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 			}
 
 			// Body = previous requests' body
-			action, additionalInfo, err := RunSelfCorrectingRequest(action, status, additionalInfo, string(body), useApp, inputdata, curAttempt)
+			action, additionalInfo, err := RunSelfCorrectingRequest(originalFields, action, status, additionalInfo, string(body), useApp, inputdata, curAttempt)
 			if err != nil {
 				if !strings.Contains(err.Error(), "missing_fields") {
 					log.Printf("[ERROR] Error running self-correcting request: %s", err)
@@ -612,7 +613,7 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 		} else {
 			log.Printf("[ERROR] Status code is not in the 200s or 400s. Status: %d", status)
 
-			return "", action, errors.New(getBadOutputString(action, action.AppName, inputdata, string(body), status)), additionalInfo
+			return "", action, errors.New(fmt.Sprintf("Field output (5): %s", getBadOutputString(action, action.AppName, inputdata, string(body), status))), additionalInfo
 		}
 	}
 
@@ -631,12 +632,12 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 // 1. The fully filled-in action
 // 2. The additional info from the previous request
 // 3. Any error that may have occurred
-func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputBody, appname, inputdata string, attempt ...int) (Action, string, error) {
+func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, status int, additionalInfo, outputBody, appname, inputdata string, attempt ...int) (Action, string, error) {
 	// Add all fields with value from here
 	additionalInfo = ""
 	inputBody := "{\n"
+
 	for _, param := range action.Parameters {
-		//if param.Name == "headers" || param.Name == "ssl_verify" || param.Name == "to_file" || param.Name == "url" || strings.Contains(param.Name, "username_") || strings.Contains(param.Name, "password_") {
 		if param.Name == "ssl_verify" || param.Name == "to_file" || param.Name == "url" || strings.Contains(param.Name, "username_") || strings.Contains(param.Name, "password_") {
 			continue
 		}
@@ -712,38 +713,61 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		additionalInfo = fmt.Sprintf("How the API works: %s\n", additionalInfo)
 	}
 
-	//systemMessage := fmt.Sprintf("Return all fields from the last paragraph in the same JSON format they came in. Must be valid JSON as an output.")
-	systemMessage := fmt.Sprintf(`Return all key:value pairs from the last paragraph, but with modified values to fix the HTTP error. Output must be valid JSON as an output. Don't add in any comments. Anything starting with $ is a variable and should be replaced with the correct value (Example if $helpful_function.parameter.value is present ANYWHERE in YOUR output -> This HAS to be replaced with the correct value provided by the user IF it exists at all, then make sure that you replace all values starting with $ with the correct output, else don't do anything about this).
+	// Based on original input from input.Fields
+	inputFields := ""
+	for _, field := range originalFields {
+		inputFields += fmt.Sprintf("\n%s=%s", field.Key, field.Value)
+	}
 
-Metadata:
-	Unique Action ID: %s. 
+	systemMessage := fmt.Sprintf(`INTRODUCTION
 
-Strict output rules to follow:
+Return all key:value pairs from the last user message, but with modified values to fix ALL the HTTP errors at once. Don't add any comments. Do not try the same thing twice, and use your existing knowledge of the API name and action to reformat the output until it works. All fields in "Required data" MUST be a part of the output if possible. Output MUST be valid JSON. 
 
-1. Validation Requirements:
-   - Modify ONLY the fields directly related to the HTTP error
-   - Use ONLY values derived from:
-	 a) Error message context
-	 b) Existing JSON structure
-	 c) Minimal necessary changes to resolve the error
+END INTRODUCTION
+---
+INPUTDATA
 
-2. Strict Constraints:
-   - NO invented values
-   - NO external data generation
-   - MUST use keys present in original JSON
-   - MUST maintain original JSON structure
-   - DON'T use older values or examples
+Action ID: %s
+API name: %s
+Action details: %s
+Required data: %s
 
-3. Output Format:
-   - Provide corrected JSON
-   - No comments. Must be valid JSON.
-   - Headers should be separated by newline between each key:value pair
-   - Do NOT make the same output mistake twice. 
+END INPUTDATA 
+---
+VALIDATION RULES:
 
-4. Error Handling:
-   - First try to fix the request based on the error message and the existing content in the body and queries.
-   - You SHOULD add relevant fields to the body that are missing.
-   `, action.ID)
+- Modify ONLY the fields directly related to the HTTP error
+- Use ONLY values derived from:
+ a) Error message context
+ b) Existing JSON structure
+ c) Minimal necessary changes to resolve the error
+
+END VALIDATION RULES
+---
+CONSTRAINTS
+
+- Do NOT invent values 
+- MUST use keys present in original JSON
+- Make sure all "Required data" values are in the output.
+
+END CONSTRAINTS 
+---
+OUTPUT FORMATTING
+
+- Output as JSON for a Rest API
+- Do NOT make the same output mistake twice. 
+- Headers should be separated by newline between each key:value pair
+
+END OUTPUT FORMATTING
+---
+ERROR HANDLING 
+
+- First try to fix the request based on the error message and the existing content in the body and queries.
+- You SHOULD add relevant fields to the body that are missing.
+
+END ERROR HANDLING
+   `, action.ID, action.AppName, action.Description, inputFields)
+
 
 	inputData := ""
 	if len(attempt) > 0 {
@@ -754,6 +778,8 @@ Strict output rules to follow:
 	}
 
 	// We are using a unique Action ID here most of the time, meaning the chat will be continued.
+	inputBody = FixContentOutput(inputBody) 
+
 	inputData += fmt.Sprintf(`Precise JSON Field Correction Instructions:
 Given the HTTP API context for %s with action %s:
 - HTTP Status: %d
@@ -785,7 +811,7 @@ Input JSON Payload (ensure VALID JSON):
 	if err != nil {
 		log.Printf("[ERROR] Failed unmarshalling data '%s'. Failed to unmarshal outputJSON in action fix for app %s with action %s: %s", contentOutput, appname, action.Name, err)
 
-		return action, additionalInfo, errors.New(getBadOutputString(action, appname, inputdata, outputBody, status))
+		return action, additionalInfo, errors.New(fmt.Sprintf("Field output (6): %s", getBadOutputString(action, appname, inputdata, outputBody, status)))
 	}
 
 	if strings.Contains(contentOutput, "missing_fields") {
@@ -998,11 +1024,20 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 		// 3. Save the body as a backup for the action
 
 		ctx := context.Background()
-		app, err := GetApp(ctx, action.AppID, User{}, false)
-		if err != nil {
-			log.Printf("[ERROR] Failed to get app in get action body for find http endpoint (9): %s", err)
-			return contentOutput, nil
-		}
+		app := &WorkflowApp{}
+		if standalone {
+			app, _, err = GetAppSingul("", action.AppID)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get Singul app in get action body for find http endpoint (9): %s", err)
+				return contentOutput, nil
+			}
+		} else {
+			app, err = GetApp(ctx, action.AppID, User{}, false)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get app in get action body for find http endpoint (9): %s", err)
+				return contentOutput, nil
+			}
+		} 
 
 		for actionIndex, foundAction := range app.Actions {
 			if foundAction.Name != action.Name {
@@ -1171,7 +1206,7 @@ func UploadParameterBase(ctx context.Context, orgId, appId, actionName, paramNam
 	file, err := GetFileSingul(ctx, fileId)
 	if err == nil && file.Status == "active" {
 		if debug {
-			log.Printf("[DEBUG] Parameter file '{root}/singul/%s' already exists. NOT re-uploading", fileId)
+			log.Printf("[WARNING] Debug: Parameter file '{root}/singul/%s' already exists. NOT re-uploading", fileId)
 		}
 
 		return nil
@@ -1271,6 +1306,20 @@ func FixContentOutput(contentOutput string) string {
 
 	// Attempts to balance it automatically
 	contentOutput = balanceJSONLikeString(contentOutput)
+
+	// Indent it with marshalling  
+	tmpMap := map[string]interface{}{}
+	err := json.Unmarshal([]byte(contentOutput), &tmpMap)
+	if err == nil {
+		marshalled, err := json.MarshalIndent(tmpMap, "", "  ")
+		if err == nil {
+			contentOutput = string(marshalled)
+		} else {
+			log.Printf("[WARNING] Failed to marshal indent tmpMap in FixContentOutput (1): %s", err)
+		}
+	} else {
+		log.Printf("[WARNING] Failed to unmarshal tmpMap in FixContentOutput (2): %s", err)
+	}
 
 	return contentOutput
 }
@@ -1842,7 +1891,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 	if len(input.AppId) > 0 {
 		// Get app directly
 		if standalone {
-			newApp, err := GetSingulApp("", input.AppId)
+			newApp, _, err := GetAppSingul("", input.AppId)
 			if err == nil {
 				foundApp = *newApp
 			}
@@ -2012,7 +2061,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 					// Get the app
 					discoveredApp := &WorkflowApp{}
 					if standalone {
-						discoveredApp, err = GetSingulApp("", algoliaApp.ObjectID)
+						discoveredApp, _, err = GetAppSingul("", algoliaApp.ObjectID)
 					} else {
 						discoveredApp, err = GetApp(ctx, algoliaApp.ObjectID, user, false)
 					}
@@ -4033,11 +4082,11 @@ func findNextAction(action Action, stepOutput []byte, additionalInfo, inputdata,
 
 			// Try to fix the request based on the body
 		} else {
-			return "", action, errors.New(getBadOutputString(action, action.AppName, inputdata, string(body), status)), additionalInfo
+			return "", action, errors.New(fmt.Sprintf("Field problem (2): %s", getBadOutputString(action, action.AppName, inputdata, string(body), status))), additionalInfo
 		}
 	}
 
-	return "", action, errors.New(getBadOutputString(action, action.AppName, inputdata, string(body), status)), additionalInfo
+	return "", action, errors.New(fmt.Sprintf("Field problem (3): %s", getBadOutputString(action, action.AppName, inputdata, string(body), status))), additionalInfo
 }
 
 func MatchRequiredFieldsWithInputdata(inputdata, appname, inputAction, body string) string {
@@ -4477,7 +4526,7 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	if err != nil {
 		log.Printf("[ERROR] Failed to unmarshal outputJSON in action fix for app %s with action %s: %s", appname, action.Name, err)
 
-		return action, additionalInfo, errors.New(getBadOutputString(action, appname, inputdata, outputBody, status))
+		return action, additionalInfo, errors.New(fmt.Sprintf("Field output (1): %s", getBadOutputString(action, appname, inputdata, outputBody, status)))
 	}
 
 	sendNewRequest := false
@@ -4534,16 +4583,17 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 
 		// Make errorString work in json
 
-		return action, additionalInfo, errors.New(getBadOutputString(action, appname, inputdata, outputBody, status))
+		return action, additionalInfo, errors.New(fmt.Sprintf("Field output (4): %s", getBadOutputString(action, appname, inputdata, outputBody, status)))
 	}
 
 	return action, additionalInfo, nil
 }
 
-func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
+func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, error) {
 	returnApp := &WorkflowApp{}
+	openapiDef := &openapi3.Swagger{}
 	if len(appname) == 0 {
-		return returnApp, errors.New("Appname not set")
+		return returnApp, openapiDef, errors.New("Appname not set")
 	}
 
 	// Failover for handling default Singul setup
@@ -4567,14 +4617,14 @@ func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
 		// File exists, read it
 		file, err := os.Open(appPath)
 		if err != nil {
-			return returnApp, err
+			return returnApp, openapiDef, err
 		}
 
 		defer file.Close()
 		responseBody, err = os.ReadFile(appPath)
 		if err != nil {
 			log.Printf("[ERROR] Error reading file: %s", err)
-			return returnApp, err
+			return returnApp, openapiDef, err
 		}
 	} else {
 
@@ -4590,7 +4640,7 @@ func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
 
 		if appId == "" {
 			log.Printf("[ERROR] App not found in Algolia index: %s", appname)
-			return returnApp, errors.New("App not found")
+			return returnApp, openapiDef, errors.New("App not found")
 		}
 
 		//url := fmt.Sprintf("https://singul.io/apps/%s", appname)
@@ -4604,26 +4654,26 @@ func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
 
 		if err != nil {
 			log.Printf("[ERROR] Error in new request for singul app: %s", err)
-			return returnApp, err
+			return returnApp, openapiDef, err
 		}
 
 		client := &http.Client{}
 		newresp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[ERROR] Error running request for singul app: %s. URL: %s", err, url)
-			return returnApp, err
+			return returnApp, openapiDef, err
 		}
 
 		if newresp.StatusCode != 200 {
 			log.Printf("[ERROR] Bad status code for app: %s. URL: %s", newresp.Status, url)
-			return returnApp, errors.New("Failed getting app details from backend. Please try again. Appnames may be case sensitive.")
+			return returnApp, openapiDef, errors.New("Failed getting app details from backend. Please try again. Appnames may be case sensitive.")
 		}
 
 		defer newresp.Body.Close()
 		responseBody, err = ioutil.ReadAll(newresp.Body)
 		if err != nil {
 			log.Printf("[ERROR] Failed reading body for singul app: %s", err)
-			return returnApp, err
+			return returnApp, openapiDef, err
 		}
 	}
 
@@ -4632,15 +4682,15 @@ func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
 	err = json.Unmarshal(responseBody, &newApp)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshalling body for singul app: %s %+v", err, string(responseBody))
-		return returnApp, err
+		return returnApp, openapiDef, err
 	}
 
 	if !newApp.Success {
-		return returnApp, errors.New("Failed getting app details from backend. Please try again. Appnames may be case sensitive.")
+		return returnApp, openapiDef, errors.New("Failed getting app details from backend. Please try again. Appnames may be case sensitive.")
 	}
 
 	if len(newApp.App) == 0 {
-		return returnApp, errors.New("Failed finding app for this ID")
+		return returnApp, openapiDef, errors.New("Failed finding app for this ID")
 	}
 
 	// Unmarshal the newApp.App into workflowApp
@@ -4648,12 +4698,30 @@ func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
 	err = json.Unmarshal(newApp.App, &parsedApp)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshalling app: %s", err)
-		return &parsedApp, err
+		return &parsedApp, openapiDef, err
+	}
+
+	if len(newApp.OpenAPI) > 0 {
+		openapiWrapper := &ParsedOpenApi{}
+		err = json.Unmarshal(newApp.OpenAPI, &openapiWrapper)
+		if err != nil {
+			log.Printf("[WARNING] Failed unmarshalling openapi: %s", err)
+		}
+
+		if openapiWrapper.Success && len(openapiWrapper.Body) > 0 {
+			swaggerLoader := openapi3.NewSwaggerLoader()
+			swaggerLoader.IsExternalRefsAllowed = true
+			openapiDef, err = swaggerLoader.LoadSwaggerFromData([]byte(openapiWrapper.Body))
+			if err != nil {
+				log.Printf("[ERROR] Failed to load swagger for app %s", parsedApp.Name)
+			}
+		}
+
 	}
 
 	if len(parsedApp.ID) == 0 {
 		log.Printf("[WARNING] Failed finding app for this ID")
-		return &parsedApp, errors.New("Failed finding app for this ID")
+		return &parsedApp, openapiDef, errors.New("Failed finding app for this ID")
 	}
 
 	if statErr != nil {
@@ -4666,13 +4734,13 @@ func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
 		err = os.WriteFile(appPath, responseBody, 0644)
 		if err != nil {
 			log.Printf("[ERROR] Error writing file: %s", err)
-			return &parsedApp, err
+			return &parsedApp, openapiDef, err
 		} else {
 			log.Printf("[DEBUG] Wrote app to file: %s", appPath)
 		}
 	}
 
-	return &parsedApp, nil
+	return &parsedApp, openapiDef, nil
 }
 
 func GetSingulStandaloneFilepath() string {
@@ -7964,7 +8032,6 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 // more versatile in general, and able to run from Onprem -> Local model
 func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
 	cnt := 0
-	maxTokens := 5000
 	maxCharacters := 100000
 
 	apiKey := os.Getenv("AI_API_KEY")
@@ -7987,6 +8054,14 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	if len(orgId) == 0 {
 		orgId = os.Getenv("OPENAI_API_ORG")
 	}
+
+	if len(apiKey) == 0 {
+		return "", errors.New("No AI_API_KEY supplied")
+	}
+
+	//if len(aiRequestUrl) == 0 {
+	//	return "", errors.New("No AI_API_URL supplied")
+	//}
 
 	config := openai.DefaultConfig(apiKey)
 
@@ -8101,6 +8176,10 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		//log.Printf("\n\n\nGot %d messages in chat completion (%s)\n\n\n", len(chatCompletion.Messages), cachedChat)
 	}
 
+	if debug { 
+		log.Printf("\n\n[DEBUG] Chatcompletion messages: %d\n\n", len(chatCompletion.Messages))
+	}
+
 	maxRetries := 3
 	sleepTimer := time.Duration(2)
 	contentOutput := ""
@@ -8134,7 +8213,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 				continue
 			}
 
-			log.Printf("[ERROR] Failed to create AI chat completion. Retrying in 3 seconds (4): %s", err)
+			log.Printf("[ERROR] Failed to create AI chat completion. Retrying in 2 seconds (4): %s", err)
 			time.Sleep(sleepTimer * time.Second)
 			continue
 		}
@@ -8742,7 +8821,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 					discoveredApp := &WorkflowApp{}
 					standalone := os.Getenv("STANDALONE") == "true"
 					if standalone {
-						discoveredApp, err = GetSingulApp("", algoliaApp.ObjectID)
+						discoveredApp, _, err = GetAppSingul("", algoliaApp.ObjectID)
 					} else {
 						discoveredApp, err = GetApp(ctx, algoliaApp.ObjectID, user, false)
 					}
@@ -9915,7 +9994,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 						discoveredApp := &WorkflowApp{}
 						standalone := os.Getenv("STANDALONE") == "true"
 						if standalone {
-							discoveredApp, err = GetSingulApp("", algoliaApp.ObjectID)
+							discoveredApp, _, err = GetAppSingul("", algoliaApp.ObjectID)
 						} else {
 							discoveredApp, err = GetApp(ctx, algoliaApp.ObjectID, user, false)
 						}
