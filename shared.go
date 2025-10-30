@@ -16380,7 +16380,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		return &workflowExecution, true, nil
 	}
 
-
 	// 1. CHECK cache if it happened in another?
 	// 2. Set cache
 	// 3. Find executed without a result
@@ -17630,6 +17629,10 @@ func setExecutionVariable(actionResult ActionResult) bool {
 
 // Finds execution results and parameters that are too large to manage and reduces them / saves data partly
 func compressExecution(ctx context.Context, workflowExecution WorkflowExecution, saveLocationInfo string) (WorkflowExecution, bool) {
+	if project.Environment == "worker" {
+		log.Printf("[DEBUG][%s] No need to make this execution any smaller", workflowExecution.ExecutionId)
+		return workflowExecution, false
+	}
 
 	//GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
 	//return workflowExecution, false
@@ -23825,16 +23828,16 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								// The only key we care about in this case
 								if key == "continue" {
 									// Overwrite everything
-									if workflowExecution.Status == "FINISHED" { 
+									if workflowExecution.Status == "FINISHED" {
 										workflowExecution.Status = "EXECUTING"
 									}
 
 									unmarshalledDecision.Status = "RUNNING"
 									unmarshalledDecision.Output = ""
 									decision.Fields = []Valuereplace{
-										Valuereplace{ 
-											Key: "continue",
-											Value: "How do you want to continue?",
+										Valuereplace{
+											Key:    "continue",
+											Value:  "How do you want to continue?",
 											Answer: value,
 										},
 									}
@@ -23850,7 +23853,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									fieldsChanged = true
 									cleanupFailures = true
 									break
-								} 
+								}
 
 								continue
 							}
@@ -32163,7 +32166,7 @@ func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 		return exec
 	}
 
-	if exec.Status == "FINISHED" || exec.Status == "ABORTED" { 
+	if exec.Status == "FINISHED" || exec.Status == "ABORTED" {
 		return exec
 	}
 
@@ -32172,7 +32175,6 @@ func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 		//log.Printf("[ERROR] Failed getting protected keys for org %s: %s", exec.ExecutionOrg, err)
 		return exec
 	}
-
 
 	for resultKey, _ := range exec.Results {
 		if exec.Results[resultKey].Status != "FINISHED" && exec.Results[resultKey].Status != "SUCCESS" {
