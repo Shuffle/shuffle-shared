@@ -13340,6 +13340,13 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		if err == nil {
 			if debug {
 				log.Printf("[DEBUG] There was no error sending bulk request to Opensearch for cache key")
+				// print body
+				body, err := ioutil.ReadAll(res.Body)
+				if err != nil {
+					log.Printf("[ERROR] Error reading response body: %s", err)
+				} else {
+					log.Printf("[DEBUG] Response body: %s", string(body))
+				}
 			}
 		}
 
