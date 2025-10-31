@@ -13301,7 +13301,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 			meta := map[string]map[string]string{
 				"index": {
-					"_index": nameKey,
+					"_index": GetESIndexPrefix(nameKey),
 					"_id":    cacheId,
 				},
 			}
