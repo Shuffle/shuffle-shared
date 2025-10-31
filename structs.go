@@ -487,7 +487,7 @@ type AdditionalUseConfig struct {
 }
 
 type ParsedOpenApi struct {
-	Body    string `datastore:"body,noindex" json:"body"`
+	Body    string `datastore:"body,noindex" json:"body"` // Maps to swagger/openapi>=3
 	ID      string `datastore:"id" json:"id,omitempty"`
 	Success bool   `datastore:"success,omitempty" json:"success,omitempty"`
 }
@@ -3320,87 +3320,6 @@ type GmailAttachment struct {
 	Size int    `json:"size"`
 	Data string `json:"data"`
 }
-
-type MdmMeta struct {
-	CanonicalId   string `json:"canonical_id"`
-	CreatedAt     string `json:"created_at"`
-	Id            string `json:"id"`
-	SchemaVersion string `json:"schema_version"`
-}
-
-type MdmAttachment struct {
-	ContentTransferEncoding string `json:"content_transfer_encoding"`
-	ContentType             string `json:"content_type"`
-	FileExtension           string `json:"file_extension"`
-	FileName                string `json:"file_name"`
-	Filetype                string `json:"file_type"`
-	Raw                     string `json:"raw"`
-	Size                    int    `json:"size"`
-}
-
-type MdmBody struct {
-	Html  MdmHtml   `json:"html"`
-	IPs   []MdmIP   `json:"ips"`
-	Links []MdmLink `json:"links"`
-	Plain MdmPlain  `json:"_errors"`
-}
-
-type MdmHtml struct {
-	Charset                 string `json:"_errors"`
-	ContentTransferEncoding string `json:"_errors"`
-	Raw                     string `json:"_errors"`
-}
-
-type MdmPlain struct {
-	Charset                 string `json:"_errors"`
-	ContentTransferEncoding string `json:"_errors"`
-	Raw                     string `json:"_errors"`
-}
-
-type MdmExternal struct {
-}
-type MdmHeaders struct {
-}
-type MdmMailbox struct {
-}
-type MdmRecipients struct {
-}
-type MdmSubject struct {
-}
-type MdmSender struct {
-}
-type MdmType struct {
-}
-
-type MdmDisplayUrl struct {
-}
-
-// TBD
-type MdmIP struct {
-	IP string `json:"ip"`
-}
-
-// TBD
-type MdmLink struct {
-	DisplayText string        `json:"ip"`
-	DisplayUrl  MdmDisplayUrl `json:"ip"`
-}
-
-/*
-type MessageDataModel struct {
-	Errors      []string        `json:"_errors"`
-	Meta        MdmMeta         `json:"attachments"`
-	Attachments []MdmAttachment `json:"_meta"`
-	Body        MdmBody         `json:"body"`
-	External    MdmExternal     `json:"external"`
-	Headers     MdmHeaders      `json:"headers"`
-	Mailbox     MdmMailbox      `json:"mailbox"`
-	Recipients  MdmRecipients   `json:"recipients"`
-	Sender      MdmSender       `json:"sender"`
-	Subject     MdmSubject      `json:"subject"`
-	Type        MdmType         `json:"type"`
-}
-*/
 
 type ExecInfo struct {
 	OnpremExecution bool
