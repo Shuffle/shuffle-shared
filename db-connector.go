@@ -13336,7 +13336,16 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 		res := resp.Inspect().Response
 		defer res.Body.Close()
+
+		if err == nil {
+			if debug {
+				log.Printf("[DEBUG] There was no error sending bulk request to Opensearch for cache key %s", cacheId)
+			}
+		}
+
 		if err != nil {
+			log.Printf("[ERROR] Error sending bulk request to Opensearch: %s", err)
+
 			body, err := ioutil.ReadAll(res.Body)
 			if err != nil {
 				if strings.Contains(err.Error(), "index_not_found_exception") {
@@ -13350,6 +13359,11 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			log.Printf("[ERROR] Error getting response from Opensearch (set datastore key bulk): %s. Body: %s", err, body)
 			return existingInfo, err
 		}
+
+		if debug {
+			log.Printf("[DEBUG] Response status: %d", res.StatusCode)
+		}
+
 	} else {
 		if len(newArray) != len(dbKeys) {
 			log.Printf("[ERROR] SetDatastoreKeyBulk: Length of newArray (%d) and allKeys (%d) do not match", len(newArray), len(allKeys))
