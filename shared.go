@@ -31052,7 +31052,29 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.WorkflowExecutions.Active = false
 		}
 
-		// For the subsctiption
+		if len(shuffleLicenseKey) > 0 {
+			license := checkNoInternet()
+			if license.Valid == true {
+				org.Licensed = true
+				if license.Environment.Limit > org.SyncFeatures.MultiEnv.Limit {
+					org.SyncFeatures.MultiEnv.Limit = license.Environment.Limit
+					org.SyncFeatures.MultiEnv.Active = license.Environment.Active
+				}
+
+				if license.Tenant.Limit > org.SyncFeatures.MultiTenant.Limit {
+					org.SyncFeatures.MultiTenant.Limit = license.Tenant.Limit
+					org.SyncFeatures.MultiTenant.Active = license.Tenant.Active
+				}
+
+				if license.WorkflowExecutions.Limit > org.SyncFeatures.WorkflowExecutions.Limit {
+					org.SyncFeatures.WorkflowExecutions.Limit = license.WorkflowExecutions.Limit
+					org.SyncFeatures.WorkflowExecutions.Active = license.WorkflowExecutions.Active
+				}
+
+				org.SyncFeatures.Branding.Active = license.Branding
+			}
+		}
+
 		subscriptionCacheKey := fmt.Sprintf("org_subscriptions_%s", org.Id)
 		cachedData, err := GetCache(ctx, subscriptionCacheKey)
 		if err != nil {
