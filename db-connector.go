@@ -7844,12 +7844,12 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 						timeSinceLastSend := currentTime - lastSendTime
 
 						if timeSinceLastSend < 60 {
-							log.Printf("[INFO] Rate limiting: Org %s exceeded the 10K usage quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
+							//log.Printf("[INFO] Rate limiting (1): Org %s exceeded the 10K workflow run quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
 							//executionRequests.Data = []ExecutionRequest{}
 							executions = []ExecutionRequest{}
 						} else {
 							if len(executions) > 1 {
-								log.Printf("[INFO] Rate limiting: Org %s exceeded the 10K usage quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
+								//log.Printf("[INFO] Rate limiting (2): Org %s exceeded the 10K workflow run quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
 								executions = executions[0:1]
 							}
 
@@ -7863,7 +7863,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 			} else {
 
 				if len(executions) > 1 {
-					log.Printf("[INFO] Rate limiting: Org %s exceeded the 10K usage quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
+					log.Printf("[INFO] Rate limiting (3): Org %s exceeded the 10K workflow run quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
 					executions = executions[0:1]
 				}
 
