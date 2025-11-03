@@ -5952,7 +5952,7 @@ func RunActionAI(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Indicates to output an action, and the input data could be a large blob
-	if len(input.Query) > 300 && !strings.Contains(input.OutputFormat, "action") && !strings.Contains(input.OutputFormat, "formatting") {
+	if len(input.Query) > 4000 && !strings.Contains(input.OutputFormat, "action") && !strings.Contains(input.OutputFormat, "formatting") {
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Max input length exceeded."}`))
 		return
