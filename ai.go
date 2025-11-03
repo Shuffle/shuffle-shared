@@ -749,6 +749,7 @@ CONSTRAINTS
 - Do NOT invent values 
 - MUST use keys present in original JSON
 - Make sure all "Required data" values are in the output.
+- Do not focus on authentication unless necessary
 
 END CONSTRAINTS 
 ---
@@ -1192,8 +1193,23 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 }
 
 // Uploads modifyable parameter data to file storage, as to be used in the future executions of the app
-func UploadParameterBase(ctx context.Context, orgId, appId, actionName, paramName, paramValue string) error {
+func UploadParameterBase(ctx context.Context, fields []Valuereplace, orgId, appId, actionName, paramName, paramValue string) error {
 	timeNow := time.Now().Unix()
+
+	// If NOT JSON:
+	// /rest/api/3/10010/comment -> /rest/api/3/{input.fields[i].key}/comment
+	// Does that mean we should look for the value in the data?
+
+
+	// Moving window to look for field.Value in the paramValue to directly replace
+	for _, field := range fields {
+		// Arbitrary limit (for now)
+		if len(field.Value) > 1024 { 
+			continue
+		}
+
+		paramValue = strings.ReplaceAll(paramValue, field.Value, fmt.Sprintf("{%s}", field.Key))
+	}
 
 	// Check if the file already exists
 	fileId := fmt.Sprintf("file_parameter_%s-%s-%s-%s.json", orgId, strings.ToLower(appId), strings.Replace(strings.ToLower(actionName), " ", "_", -1), strings.ToLower(paramName))
@@ -6595,7 +6611,6 @@ SINGUL ACTIONS:
 
 			log.Printf("PARAM: %s", param.Value)
 			log.Printf("Systemmessage: %s", systemMessage)
-			//os.Exit(3)
 
 			systemMessage += "\n\n"
 		}
@@ -6724,7 +6739,6 @@ SINGUL ACTIONS:
 
 		_ = userMessageChanged
 		//log.Printf("[INFO] INFO NEXT NODE PREDICTIONS")
-		//os.Exit(3)
 	}
 
 	if lastFinishedIndex < -1 {
