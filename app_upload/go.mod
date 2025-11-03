@@ -53,7 +53,7 @@ require (
 	github.com/envoyproxy/protoc-gen-validate v1.2.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/frikky/kin-openapi v0.42.0 // indirect
-	github.com/frikky/schemaless v0.0.20 // indirect
+	github.com/frikky/schemaless v0.0.23 // indirect
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
@@ -88,8 +88,6 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
-	github.com/opensearch-project/opensearch-go v1.1.0 // indirect
-	github.com/opensearch-project/opensearch-go/v2 v2.3.0 // indirect
 	github.com/osteele/liquid v1.7.0 // indirect
 	github.com/osteele/tuesday v1.0.3 // indirect
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
@@ -101,6 +99,7 @@ require (
 	github.com/sendgrid/rest v2.6.9+incompatible // indirect
 	github.com/sendgrid/sendgrid-go v3.16.1+incompatible // indirect
 	github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3 // indirect
+	github.com/shuffle/opensearch-go/v4 v4.0.0 // indirect
 	github.com/skeema/knownhosts v1.3.1 // indirect
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
