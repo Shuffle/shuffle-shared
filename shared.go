@@ -17988,7 +17988,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
 				}
 
-				if len(jsonString) > 1000000 {
+				if len(jsonString) > 10000000 {
 					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
 
 					for resultIndex, result := range workflowExecution.Results {
@@ -17997,9 +17997,9 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							// log.Printf("[DEBUG] Result Size (%s - action: %d). Value size: %d", result.Action.Label, len(actionData), len(result.Result))
 						}
 
-						if len(actionData) > 10000 {
+						if len(actionData) > 1000000 {
 							for paramIndex, param := range result.Action.Parameters {
-								if len(param.Value) > 10000 {
+								if len(param.Value) > 1000000 {
 									// log.Printf("[WARNING][%s] Parameter %s in action %s is too large (%d). Removing value.", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
 									workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
 								}
