@@ -17988,7 +17988,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
 				}
 
-				if len(jsonString) > 10000000 {
+				if len(jsonString) > 5000000 {
 					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
 
 					for resultIndex, result := range workflowExecution.Results {
