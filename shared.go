@@ -17629,7 +17629,7 @@ func setExecutionVariable(actionResult ActionResult) bool {
 
 // Finds execution results and parameters that are too large to manage and reduces them / saves data partly
 func compressExecution(ctx context.Context, workflowExecution WorkflowExecution, saveLocationInfo string) (WorkflowExecution, bool) {
-	if project.Environment != "cloud" {
+	if project.Environment == "worker" {
 		log.Printf("[DEBUG][%s] No need to make this execution any smaller", workflowExecution.ExecutionId)
 		return workflowExecution, false
 	}
@@ -17797,7 +17797,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 		} else {
 			// OpenSearch (on-premise) handling
 			// log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
-			if len(tmpJson) >= 1000000 {
+			if len(tmpJson) >= 10000000 {
 				// Clean up results' actions
 
 				log.Printf("[DEBUG][%s](%s) ExecutionVariables size: %d, Result size: %d, executionArgument size: %d, Results size: %d", workflowExecution.ExecutionId, saveLocationInfo, len(workflowExecution.ExecutionVariables), len(workflowExecution.Result), len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
@@ -17807,7 +17807,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				actionId := "execution_argument"
 
 				// Arbitrary reduction size
-				maxSize := 50000
+				maxSize := 5000000
 				basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
 				if len(basepath) == 0 {
 					basepath = "files"
