@@ -13731,6 +13731,11 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	}
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+
+	if debug {
+		log.Printf("[DEBUG] Getting datastore key for %s", cacheKey)
+	}
+
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {

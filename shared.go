@@ -17833,7 +17833,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 		} else {
 			// OpenSearch (on-premise) handling
 			// log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
-			if len(tmpJson) >= 1000000 {
+			if len(tmpJson) >= 10000000 {
 				// Clean up results' actions
 
 				log.Printf("[DEBUG][%s](%s) ExecutionVariables size: %d, Result size: %d, executionArgument size: %d, Results size: %d", workflowExecution.ExecutionId, saveLocationInfo, len(workflowExecution.ExecutionVariables), len(workflowExecution.Result), len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
@@ -17843,7 +17843,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				actionId := "execution_argument"
 
 				// Arbitrary reduction size
-				maxSize := 50000
+				maxSize := 5000000
 				basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
 				if len(basepath) == 0 {
 					basepath = "files"
@@ -18024,7 +18024,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
 				}
 
-				if len(jsonString) > 1000000 {
+				if len(jsonString) > 5000000 {
 					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
 
 					for resultIndex, result := range workflowExecution.Results {
@@ -18033,9 +18033,9 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							// log.Printf("[DEBUG] Result Size (%s - action: %d). Value size: %d", result.Action.Label, len(actionData), len(result.Result))
 						}
 
-						if len(actionData) > 10000 {
+						if len(actionData) > 1000000 {
 							for paramIndex, param := range result.Action.Parameters {
-								if len(param.Value) > 10000 {
+								if len(param.Value) > 1000000 {
 									// log.Printf("[WARNING][%s] Parameter %s in action %s is too large (%d). Removing value.", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
 									workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
 								}
