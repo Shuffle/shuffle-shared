@@ -11502,6 +11502,42 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Support access pivot
+	if strings.Contains(fileId, "@") && strings.Contains(fileId, ".") && user.SupportAccess && user.Active && user.Verified && project.Environment == "cloud" {
+		foundUsers, err := FindUser(ctx, fileId)
+		if err != nil || len(foundUsers) == 0 {
+			log.Printf("[ERROR] Failed finding user %s for support access: %s", user.Username, err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed finding user for support access"}`))
+			return
+		}
+
+		if len(foundUsers) > 1 {
+			log.Printf("[ERROR] Found multiple users for support access user %s", user.Username)
+		}
+
+		newUsers := []User{}
+		for _, loopUser := range foundUsers {
+			if strings.ToLower(strings.TrimSpace(loopUser.Username)) != fileId {
+				continue
+			}
+				
+			newUsers = append(newUsers, loopUser)
+		}
+
+		if len(newUsers) == 0 {
+			log.Printf("[WARNING] No user found with username '%s' for support access user %s", fileId, user.Username)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No user found with that username"}`))
+			return
+		}
+
+		foundUsers = newUsers
+		log.Printf("[AUDIT] Support access user %s is trying to swap to org for user %s (%s). Found ID: %s", user.Username, fileId, foundUsers[0].Id, foundUsers[0].ActiveOrg.Id)
+		tmpData.OrgId = foundUsers[0].ActiveOrg.Id
+		fileId = foundUsers[0].ActiveOrg.Id
+	}
+
 	// Add instantswap of backend
 	// This could in theory be built out open source as well
 	regionUrl := ""
@@ -11658,7 +11694,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] User %s (%s) successfully changed org to '%s' (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Changed Organization", "region_url": "%s"}`, regionUrl)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Changed Organization", "region_url": "%s", "org_id": "%s"}`, regionUrl, org.Id)))
 
 }
 

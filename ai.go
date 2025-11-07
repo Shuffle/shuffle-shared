@@ -747,6 +747,7 @@ END VALIDATION RULES
 CONSTRAINTS
 
 - Do NOT invent values 
+- Do NOT add irrelevant headers or body fields
 - MUST use keys present in original JSON
 - Make sure all "Required data" values are in the output.
 - Do not focus on authentication unless necessary
