@@ -19,7 +19,6 @@ type CorrelationRequest struct {
 	Type     string `json:"type"`
 	Key      string `json:"key"`
 	Category string `json:"category"`
-	OrgId    string `json:"org_id"`
 }
 
 type LogRequest struct {

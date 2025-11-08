@@ -40,13 +40,6 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Process correlationData as needed
-	if correlationData.OrgId != user.ActiveOrg.Id {
-		log.Printf("[AUDIT] User %s attempted to access correlations for org %d", user.Username, correlationData.OrgId)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Forbidden"}`))
-		return
-	}
 
 	searchKey := fmt.Sprintf("%s|%s", correlationData.Category, correlationData.Key)
 
@@ -61,7 +54,7 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	correlations, err := GetDatastoreNgramItems(ctx, correlationData.OrgId, searchKey, 50)
+	correlations, err := GetDatastoreNgramItems(ctx, user.ActiveOrg.Id, searchKey, 50)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get correlations from DB in GetCorrelations: %s", err)
 		resp.WriteHeader(500)
@@ -71,7 +64,7 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 
 	newCorrelations := []NGramItem{}
 	for _, item := range correlations {
-		if item.OrgId != correlationData.OrgId {
+		if item.OrgId != user.ActiveOrg.Id {
 			continue
 		}
 
