@@ -139,6 +139,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					Name:        actionName,
 					AppID:       "integration",
 					AppName:     "Singul",
+					LargeImage:  getSingulLogo(),
 					ID:          startActionId,
 					AppVersion:  "1.0.0",
 					Environment: actionEnv,
@@ -192,6 +193,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					Name:        "Translate standard",
 					AppID:       "integration",
 					AppName:     "Singul",
+					LargeImage:  getSingulLogo(),
 					ID:          startActionId,
 					AppVersion:  "1.0.0",
 					Environment: actionEnv,
@@ -634,6 +636,10 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 	//workflow.Hidden = true
 
 	return workflow, nil
+}
+
+func getSingulLogo() string {
+	return "/images/singul_green.png"
 }
 
 func GetPublicDetections() []DetectionResponse {
