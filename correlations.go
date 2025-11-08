@@ -31,8 +31,6 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[DEBUG] GetCorrelations request body: %s", string(body))
-
 	correlationData := CorrelationRequest{} 
 	err = json.Unmarshal(body, &correlationData)
 	if err != nil {
@@ -41,8 +39,6 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Invalid JSON format"}`))
 		return
 	}
-
-	log.Printf("Correlation request data: %#v", correlationData)
 
 	// Process correlationData as needed
 	if correlationData.OrgId != user.ActiveOrg.Id {
