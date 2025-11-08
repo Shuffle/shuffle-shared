@@ -16735,7 +16735,179 @@ func SetDatastoreNGramItem(ctx context.Context, key string, ngramItem *NGramItem
 	return nil
 }
 
+func GetDatastoreNgramItems(ctx context.Context, orgId, searchKey string, maxAmount int) ([]NGramItem, error) {
+	var items []NGramItem
+	var err error
+
+	nameKey := "datastore_ngram"
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+
+		query := map[string]interface{}{
+			"size": maxAmount,
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"org_id": orgId,
+							},
+						},
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"ref": searchKey,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return items, err
+		}
+
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return items, nil
+			}
+
+			log.Printf("[ERROR] Error getting response from Opensearch (get ngram items): %s", err)
+			return items, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return items, nil
+		}
+
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return items, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return items, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return items, err
+		}
+
+		wrapped := NGramSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return items, err
+		}
+
+		//log.Printf("Found items: %d", len(wrapped.Hits.Hits))
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.Key == "" {
+				continue
+			}
+
+			if hit.Source.OrgId == orgId {
+				items = append(items, hit.Source)
+			}
+		}
+
+	} else {
+
+		if len(orgId) == 0 {
+			return items, errors.New("No org to find ngrams for found")
+		}
+
+		cursorStr := ""
+		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Filter("Ref =", searchKey).Limit(maxAmount)
+		for {
+			it := project.Dbclient.Run(ctx, query)
+			if len(items) >= maxAmount {
+				break
+			}
+
+			for {
+				innerItem := NGramItem{}
+				_, err = it.Next(&innerItem)
+				if err != nil {
+					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+
+					} else {
+						if !strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
+							log.Printf("[WARNING] NGram iterator issue: %s", err)
+						}
+
+						break
+					}
+				}
+
+				found := false
+				for _, loopedItem := range items {
+					if loopedItem.Key == innerItem.Key {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					items = append(items, innerItem)
+				}
+
+				if len(items) >= maxAmount {
+					break
+				}
+			}
+
+			if err != iterator.Done {
+				log.Printf("[INFO] Failed fetching ngrams: %v", err)
+				break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("[ERROR] Problem with cursor (ngram): %s", err)
+				break
+			} else {
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+			}
+		}
+	}
+
+	if len(items) > maxAmount {
+		items = items[:maxAmount]
+	}
+
+	return items, nil
+}
+
 // Key itself contains the orgId so this should "just work"
+// To get ALL items matching a key, use GetDatastoreNgramItems()
 func GetDatastoreNGramItem(ctx context.Context, key string) (*NGramItem, error) {
 
 	nameKey := "datastore_ngram"
