@@ -16593,7 +16593,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 
 	//for jsonKey, val := range unmarshalled {
 	amountAdded := 0
-	maxAmountToAdd := 3
+	maxAmountToAdd := 5
 	for jsonKey, val := range unmarshalled {
 		if ArrayContains(skippableKeys, jsonKey) {
 			continue
@@ -16612,10 +16612,10 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 
 		parsedValue := val.(string)
 
-		// Arbitrary limit
-		// About ngram: We may want to do additional splitting,
+		// FIXME: Arbitrary limits
+		// About ngram: We will want to do additional splitting,
 		// but to start with, we just do the whole thing
-		if len(parsedValue) > 128 {
+		if len(parsedValue) > 70 || len(parsedValue) < 2 {
 			continue
 		}
 
@@ -16632,7 +16632,6 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 		}
 
 		// Make sure we don't add more than 5 items (for now)
-		amountAdded += 1
 		if amountAdded > maxAmountToAdd {
 			break
 		}
@@ -16645,9 +16644,8 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 			),
 		))
 
-		//parsedKey := strings.ToLower(strings.ReplaceAll(jsonKey, " ", "_"))
 		parsedCategory := strings.ToLower(strings.ReplaceAll(category, " ", "_"))
-		//referenceKey := fmt.Sprintf("%s_%s_%s_%s", orgId, parsedCategory, datastoreKey, parsedKey)
+
 		// Doing it WITHOUT the JSON key & Org, as we only want to partially cross-correlate to find items among each other
 		referenceKey := fmt.Sprintf("%s|%s", parsedCategory, datastoreKey)
 
@@ -16673,6 +16671,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 				log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
 			}
 
+			amountAdded += 1
 			log.Printf("[DEBUG] Created new ngram item for %s with key '%s'", ngramSearchKey, parsedValue)
 			continue
 		}
@@ -16682,6 +16681,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 		}
 
 		// Add the reference to the ngram item
+		amountAdded += 1
 		ngramItem.Ref = append(ngramItem.Ref, referenceKey)
 		ngramItem.Amount = len(ngramItem.Ref)
 
@@ -16691,6 +16691,8 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 		} else {
 			log.Printf("[DEBUG] Updated ngram item for %s with key %s", ngramSearchKey, parsedValue)
 		}
+
+		log.Println()
 	}
 
 	return nil
@@ -16700,7 +16702,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 func SetDatastoreNGramItem(ctx context.Context, key string, ngramItem *NGramItem) error {
 	// OrgId (uuid) + key
 	if len(key) < 38 {
-		return errors.New("Invalid key for ngram item. Must be at least 38 characters long")
+		return errors.New(fmt.Sprintf("Invalid key for ngram item. Must be at least 38 characters long. Got '%s'", key))
 	}
 
 	nameKey := "datastore_ngram"
@@ -16738,8 +16740,20 @@ func SetDatastoreNGramItem(ctx context.Context, key string, ngramItem *NGramItem
 func GetDatastoreNgramItems(ctx context.Context, orgId, searchKey string, maxAmount int) ([]NGramItem, error) {
 	var items []NGramItem
 	var err error
-
 	nameKey := "datastore_ngram"
+
+	cacheKey := fmt.Sprintf("%s_%s_%s_%d", nameKey, orgId, searchKey, maxAmount)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &items)
+			if err == nil {
+				return items, nil
+			}
+		}
+	}
+
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 
@@ -16901,6 +16915,20 @@ func GetDatastoreNgramItems(ctx context.Context, orgId, searchKey string, maxAmo
 
 	if len(items) > maxAmount {
 		items = items[:maxAmount]
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(items)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in GetDatastoreNgramItems: %s", err)
+			return items, nil
+		}
+
+		// Short caching due to possible rapid updates
+		err = SetCache(ctx, cacheKey, data, 2)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for GetDatastoreNgramItems '%s': %s", cacheKey, err)
+		}
 	}
 
 	return items, nil
