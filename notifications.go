@@ -624,16 +624,22 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 	return nil
 }
 
-func CreateOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool) error {
+func CreateOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool, authenticatedUser ...*User) error {
 	if len(orgId) == 0 {
 		log.Printf("[ERROR] No org ID provided to create notification '%s'", title)
-		return errors.New("No org ID provided")
+		return errors.New("no org ID provided")
+	}
+
+	// Extract authenticated user if provided
+	var requestingUser *User
+	if len(authenticatedUser) > 0 && authenticatedUser[0] != nil {
+		requestingUser = authenticatedUser[0]
 	}
 
 	// Since we use a static workflow name, this should be effective.
 	if strings.Contains(title, "Ops Dashboard Workflow") {
 		log.Printf("[INFO] Skipping create notification for health check workflow")
-		return errors.New("Health check workflow detected")
+		return errors.New("health check workflow detected")
 	}
 
 	if project.Environment == "" {
@@ -745,14 +751,14 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		}
 	}
 
+	// Look for admin with API key
 	for _, user := range authOrg.Users {
 		if user.Role == "admin" && len(user.Id) > 0 && len(selectedApikey) == 0 {
-			// Checking if it's the right active org
-			// FIXME: Should it need to be in the active org? Shouldn't matter? :thinking:
 			foundUser, err := GetUser(ctx, user.Id)
 			if err == nil {
 				if len(foundUser.ApiKey) > 0 {
 					selectedApikey = foundUser.ApiKey
+					log.Printf("[DEBUG] Using admin's API key for notification workflow")
 					break
 				} else {
 					// Admin exists but has no API key - auto-generate one
@@ -768,6 +774,12 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 				}
 			}
 		}
+	}
+
+	// If no admin key found, use requesting user's key
+	if len(selectedApikey) == 0 && requestingUser != nil && len(requestingUser.ApiKey) > 0 {
+		selectedApikey = requestingUser.ApiKey
+		log.Printf("[INFO] No admin API key available. Using requesting user's (%s) API key for notification workflow", requestingUser.Username)
 	}
 
 	if len(matchingNotifications) > 0 {
@@ -856,12 +868,14 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		}
 
 		selectedApikey := ""
+		// Look for admin with API key
 		for _, user := range filteredUsers {
 			if user.Role == "admin" && len(selectedApikey) == 0 {
 				foundUser, err := GetUser(ctx, user.Id)
 				if err == nil {
 					if len(foundUser.ApiKey) > 0 {
 						selectedApikey = foundUser.ApiKey
+						log.Printf("[DEBUG] Using admin's API key for notification workflow")
 						break
 					} else {
 						// Admin exists but has no API key - auto-generate one
@@ -879,9 +893,15 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			}
 		}
 
+		// If no admin key found, use requesting user's key
+		if len(selectedApikey) == 0 && requestingUser != nil && len(requestingUser.ApiKey) > 0 {
+			selectedApikey = requestingUser.ApiKey
+			log.Printf("[INFO] No admin API key available. Using requesting user's (%s) API key for notification workflow", requestingUser.Username)
+		}
+
 		if len(org.Defaults.NotificationWorkflow) > 0 {
 			if len(selectedApikey) == 0 {
-				log.Printf("[ERROR] Didn't find an apikey to use when sending notifications for org %s to workflow %s", org.Id, org.Defaults.NotificationWorkflow)
+				log.Printf("[ERROR] No API key available to trigger notification workflow for org %s to workflow %s", org.Id, org.Defaults.NotificationWorkflow)
 				if debug {
 					log.Printf("\n\n\n")
 				}
@@ -1152,6 +1172,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		notification.ReferenceUrl,
 		orgId,
 		false,
+		&user, // Pass authenticated user for API key fallback
 	)
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", user.ActiveOrg.Id))
