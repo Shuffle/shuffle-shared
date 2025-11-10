@@ -6321,7 +6321,7 @@ func getWorkflowSuggestionAIResponse(ctx context.Context, resp http.ResponseWrit
 func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) {
 	log.Printf("[INFO] Getting support suggestion for query: %s for org: %s", input.Query, org.Id)
 	// reply := runSupportRequest(ctx, input)
-	reply, threadId, err := runSupportLLMAssistant(ctx, input)
+	reply, threadId, err := runSupportLLMAssistant(ctx, input, user)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run support LLM assistant: %s", err)
 		resp.WriteHeader(501)
@@ -10743,7 +10743,7 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 	resp.Write(workflowJson)
 }
 
-func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, string, error) {
+func runSupportLLMAssistant(ctx context.Context, input QueryInput, user User) (string, string, error) {
 
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" || assistantId == "" || docsVectorStoreID == "" {
@@ -10793,7 +10793,15 @@ func runSupportLLMAssistant(ctx context.Context, input QueryInput) (string, stri
 
 	if isValidThread {
 		log.Printf("[DEBUG] Adding new message to existing thread %s", threadID)
-		_, err := client.CreateMessage(
+
+		// Validate that the user can send messages to this thread (org context check)
+		err := validateChatContext(ctx, threadID, user)
+		if err != nil {
+			log.Printf("[WARNING] User %s cannot send message to thread %s: %s", user.Username, threadID, err)
+			return "", "", err
+		}
+
+		_, err = client.CreateMessage(
 			ctx,
 			threadID,
 			openai.MessageRequest{
@@ -10947,3 +10955,288 @@ Based on these rules and the provided documents, please answer the question:`
 		}
 	}
 }
+
+// validateThreadAccess checks if a user has access to a specific thread
+func validateThreadAccess(ctx context.Context, threadID string, user User) error {
+	// Support users bypass organization checks
+	if user.SupportAccess {
+		log.Printf("[DEBUG] Support user %s accessing thread %s - bypassing org check", user.Username, threadID)
+		return nil
+	}
+
+	// Get organization from cache
+	cacheKey := fmt.Sprintf("support_assistant_thread_%s", threadID)
+	cachedData, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		log.Printf("[WARNING] Failed to get cache for thread %s: %s", threadID, err)
+		return errors.New("thread not found or access denied")
+	}
+
+	if cachedData == nil {
+		log.Printf("[WARNING] No cache data found for thread %s", threadID)
+		return errors.New("thread not found or access denied")
+	}
+
+	// Extract organization ID from cache
+	var orgID string
+	if byteSlice, ok := cachedData.([]byte); ok {
+		orgID = string(byteSlice)
+	} else {
+		log.Printf("[ERROR] Invalid cache data format for thread %s", threadID)
+		return errors.New("thread not found or access denied")
+	}
+
+	// Validate organization membership
+	if !isUserInOrganization(user, orgID) {
+		log.Printf("[WARNING] User %s not authorized for thread %s (org: %s)", user.Username, threadID, orgID)
+		return errors.New("unauthorized: user not member of thread organization")
+	}
+
+	log.Printf("[DEBUG] User %s authorized for thread %s (org: %s)", user.Username, threadID, orgID)
+	return nil
+}
+
+// isUserInOrganization checks if a user belongs to a specific organization
+func isUserInOrganization(user User, orgID string) bool {
+	// Check if user's active org matches
+	if user.ActiveOrg.Id == orgID {
+		return true
+	}
+
+	// Check if user is member of the organization
+	for _, userOrgID := range user.Orgs {
+		if userOrgID == orgID {
+			return true
+		}
+	}
+
+	return false
+}
+
+// determineCanContinueChat determines if a user can continue chatting in a thread
+func determineCanContinueChat(user User, threadOrgID string) bool {
+	// Support users can always continue chatting
+	if user.SupportAccess {
+		return true
+	}
+
+	// Regular users can only continue chatting if the thread belongs to their active org
+	// This prevents cross-org contamination and maintains clear boundaries
+	return user.ActiveOrg.Id == threadOrgID
+}
+
+// getSupportThreadConversation retrieves chat conversation history for a given thread ID
+func getSupportThreadConversation(ctx context.Context, threadID string, user User) (ThreadConversationResponse, error) {
+	response := ThreadConversationResponse{
+		Success:         false,
+		ThreadID:        threadID,
+		Messages:        []ConversationMessage{},
+		UserActiveOrgID: user.ActiveOrg.Id,
+		IsSupportUser:   user.SupportAccess,
+	}
+
+	// Get thread's organization ID from cache for context
+	cacheKey := fmt.Sprintf("support_assistant_thread_%s", threadID)
+	cachedData, err := GetCache(ctx, cacheKey)
+	if err == nil && cachedData != nil {
+		if byteSlice, ok := cachedData.([]byte); ok {
+			response.ThreadOrgID = string(byteSlice)
+			response.IsCrossOrg = response.ThreadOrgID != user.ActiveOrg.Id
+		}
+	}
+
+	// Validate thread access
+	if err := validateThreadAccess(ctx, threadID, user); err != nil {
+		response.ErrorMessage = err.Error()
+		return response, err
+	}
+
+	// Determine if user can continue chatting in this thread
+	response.CanContinueChat = determineCanContinueChat(user, response.ThreadOrgID)
+
+	// Get OpenAI configuration
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		err := errors.New("OPENAI_API_KEY must be set")
+		response.ErrorMessage = err.Error()
+		return response, err
+	}
+
+	config := openai.DefaultConfig(apiKey)
+	config.AssistantVersion = "v2"
+	client := openai.NewClientWithConfig(config)
+
+	// Retrieve thread messages
+	limit := 100
+	order := "asc" // Get messages in chronological order
+	after := ""
+	before := ""
+	messages, err := client.ListMessage(ctx, threadID, &limit, &order, &after, &before, nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get messages for thread %s: %s", threadID, err)
+		err = fmt.Errorf("failed to retrieve thread messages: %w", err)
+		response.ErrorMessage = err.Error()
+		return response, err
+	}
+
+	// Convert OpenAI messages to our format
+	conversationMessages := make([]ConversationMessage, 0, len(messages.Messages))
+	for _, message := range messages.Messages {
+		if len(message.Content) > 0 && message.Content[0].Type == "text" && message.Content[0].Text != nil {
+			// Clean the message content (remove citations like runSupportLLMAssistant does)
+			cleanContent := message.Content[0].Text.Value
+			re := regexp.MustCompile(`【.*?】`)
+			cleanContent = re.ReplaceAllString(cleanContent, "")
+
+			conversationMessage := ConversationMessage{
+				Role:      string(message.Role),
+				Content:   cleanContent,
+				Timestamp: time.Unix(int64(message.CreatedAt), 0),
+			}
+			conversationMessages = append(conversationMessages, conversationMessage)
+		}
+	}
+
+	response.Success = true
+	response.Messages = conversationMessages
+
+	log.Printf("[INFO] Retrieved %d messages for thread %s for user %s", len(conversationMessages), threadID, user.Username)
+	return response, nil
+}
+
+// Example handler function showing how to use getSupportThreadConversation
+// HandleGetSupportThreadConversation handles requests to retrieve chat conversation history for a thread
+func HandleGetSupportThreadConversation(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in get support thread conversation: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "message": "Authentication failed"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed to read request body in get support thread conversation: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "message": "Failed to read request body"}`))
+		return
+	}
+
+	var threadRequest ThreadAccessRequest
+	err = json.Unmarshal(body, &threadRequest)
+	if err != nil {
+		log.Printf("[WARNING] Failed to unmarshal thread request in get support thread conversation: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "message": "Invalid request format"}`))
+		return
+	}
+
+	if strings.TrimSpace(threadRequest.ThreadID) == "" {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "message": "Thread ID is required"}`))
+		return
+	}
+
+	log.Printf("[INFO] Getting thread conversation for thread %s by user %s (%s)", threadRequest.ThreadID, user.Username, user.Id)
+
+	// Get thread conversation
+	response, err := getSupportThreadConversation(ctx, threadRequest.ThreadID, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed to get thread conversation for thread %s by user %s: %s", threadRequest.ThreadID, user.Username, err)
+
+		// Return the response structure even on error (it contains error details)
+		output, marshalErr := json.Marshal(response)
+		if marshalErr != nil {
+			log.Printf("[ERROR] Failed to marshal error response: %s", marshalErr)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "message": "Internal server error"}`))
+			return
+		}
+
+		// Determine appropriate HTTP status code based on error type
+		if strings.Contains(err.Error(), "unauthorized") || strings.Contains(err.Error(), "access denied") {
+			resp.WriteHeader(403)
+		} else if strings.Contains(err.Error(), "not found") {
+			resp.WriteHeader(404)
+		} else {
+			resp.WriteHeader(500)
+		}
+
+		resp.Write(output)
+		return
+	}
+
+	// Return successful response
+	output, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal response for thread %s: %s", threadRequest.ThreadID, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "message": "Failed to marshal response"}`))
+		return
+	}
+
+	log.Printf("[INFO] Successfully retrieved %d messages for thread %s for user %s", len(response.Messages), threadRequest.ThreadID, user.Username)
+	resp.WriteHeader(200)
+	resp.Write(output)
+}
+
+// validateChatContext validates if a user can send a new message to a thread
+// This prevents cross-org contamination by ensuring users can only send messages
+// to threads that belong to their current active organization (unless they're support users)
+func validateChatContext(ctx context.Context, threadID string, user User) error {
+	// Support users can always chat
+	if user.SupportAccess {
+		return nil
+	}
+
+	// For regular users, ensure they're in the correct org context
+	cacheKey := fmt.Sprintf("support_assistant_thread_%s", threadID)
+	cachedData, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		return errors.New("thread not found")
+	}
+
+	if cachedData != nil {
+		if byteSlice, ok := cachedData.([]byte); ok {
+			threadOrgID := string(byteSlice)
+			if threadOrgID != user.ActiveOrg.Id {
+				return fmt.Errorf("cannot send message: thread belongs to different organization. Please switch to the correct organization first")
+			}
+		}
+	}
+
+	return nil
+}
+
+// Frontend Usage Examples:
+//
+// 1. Same Org Thread:
+//    - is_cross_org: false
+//    - can_continue_chat: true
+//    - UI: Normal chat interface
+//
+// 2. Cross-Org Thread (Support User):
+//    - is_cross_org: true
+//    - is_support_user: true
+//    - can_continue_chat: true
+//    - UI: Show warning "You're viewing a thread from [OrgName]. Your responses will be in that org's context."
+//
+// 3. Cross-Org Thread (Regular User):
+//    - is_cross_org: true
+//    - is_support_user: false
+//    - can_continue_chat: false
+//    - UI: Show "This thread is from [OrgName]. Switch to that organization to continue chatting."
+//         Provide "Switch Organization" button or disable chat input.
+//
+// 4. Multi-Org User Accessing Different Org Thread:
+//    - is_cross_org: true
+//    - can_continue_chat: false
+//    - UI: "This conversation is from [OrgName]. Would you like to switch to that organization?"
+//         Options: [Switch Organization] [Read Only Mode]
