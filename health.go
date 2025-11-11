@@ -20,6 +20,7 @@ import (
 	"github.com/Masterminds/semver"
 	"github.com/frikky/kin-openapi/openapi3"
 	uuid "github.com/satori/go.uuid"
+	"github.com/shuffle/opensearch-go/v4/opensearchapi"
 )
 
 type appConfig struct {
@@ -722,6 +723,21 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		workflowHealthChannel <- workflowHealth
 		errorChannel <- err
 	}()
+
+	if project.Environment != "cloud" {
+		opensearchHealthChannel := make(chan opensearchapi.ClusterHealthResp)
+		go func() {
+			opensearchHealth, err := RunOpensearchOps(ctx)
+			if err != nil {
+				log.Printf("[ERROR] Failed running opensearch health check: %s", err)
+			}
+
+			opensearchHealthChannel <- *opensearchHealth
+			errorChannel <- err
+		}()
+
+		platformHealth.OpensearchOps = <-opensearchHealthChannel
+	}
 
 	// TODO: More testing for onprem health checks
 	if project.Environment == "cloud" {
@@ -3429,6 +3445,20 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("[DEBUG] RERAN %d execution(s) in total for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully RERAN %d executions"}`, total)))
+}
+
+func RunOpensearchOps(ctx context.Context) (*opensearchapi.ClusterHealthResp, error) {
+	if project.Environment == "cloud" {
+		return nil, errors.New("Not running opensearch health check")
+	}
+	req := opensearchapi.ClusterHealthReq{}
+	resp, err := project.Es.Cluster.Health(ctx, &req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to query cluster health: %s", err)
+		return nil, err
+	}
+
+	return resp, nil
 }
 
 // Send in deleteall=true to delete ALL executions for the environment ID
