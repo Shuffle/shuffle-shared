@@ -4751,17 +4751,11 @@ type ThreadAccessRequest struct {
 }
 
 type ThreadConversationResponse struct {
-	Success      bool                  `json:"success"`
-	ThreadID     string                `json:"thread_id"`
-	Messages     []ConversationMessage `json:"messages"`
-	ErrorMessage string                `json:"error_message,omitempty"`
-
-	// Org context information
-	ThreadOrgID     string `json:"thread_org_id,omitempty"`      // Which org this thread belongs to
-	UserActiveOrgID string `json:"user_active_org_id,omitempty"` // User's current active org
-	IsCrossOrg      bool   `json:"is_cross_org"`                 // Whether user is accessing cross-org thread
-	IsSupportUser   bool   `json:"is_support_user"`              // Whether user has support access
-	CanContinueChat bool   `json:"can_continue_chat"`            // Whether user can continue chatting in this thread
+	Success     bool                  `json:"success"`
+	ThreadID    string                `json:"thread_id"`
+	ThreadOrgID string                `json:"thread_org_id"` // Org where thread lives (for switching orgs)
+	Messages    []ConversationMessage `json:"messages"`
+	IsActiveOrg bool                  `json:"is_active_org"` // Whether this is user's active org
 }
 
 type ConversationMessage struct {
