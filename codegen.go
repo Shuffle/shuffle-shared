@@ -8,7 +8,6 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/md5"
-	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -30,7 +29,6 @@ import (
 	"cloud.google.com/go/storage"
 	docker "github.com/docker/docker/client"
 	"github.com/frikky/kin-openapi/openapi3"
-	uuid "github.com/satori/go.uuid"
 	"gopkg.in/yaml.v2"
 )
 
@@ -4774,61 +4772,29 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	}
 
 	if parsedName == "correlate_categories" {
-		if debug {
-		}
+		// Correlations don't matter anymore as ngrams are automatic. Cleaned up
+		// november 2025 after adding graphic system to datastore
+	} else if parsedName == "enrich" {
+		log.Printf("Should enrich the following data: %s", string(marshalledBody))
 
-		// Ensure the standard correlation-workflow exists
-		seedString := fmt.Sprintf("%s_correlate_categories", cacheData.OrgId)
-		hash := sha1.New()
-		hash.Write([]byte(seedString))
-		hashBytes := hash.Sum(nil)
+		// Use key "enrichments" =>
+		// [{"name": "answers.ip", "value": "92.24.47.250", "type": "location", "data": {"city": "Socotra", "continent": "Asia", "coordinates": [-25.4153, 17.0743], "country": "YE", "desc": "Yemen"}}]
 
-		uuidBytes := make([]byte, 16)
-		copy(uuidBytes, hashBytes)
-		workflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+		// Send the data into shuffle_tools => parse_ioc?
+		// Or generate a subflow that runs for it? :thinking:
 
-		workflow, err := GetWorkflow(ctx, workflowId)
-		if err != nil || workflow.ID == "" || workflow.Name == "" {
-			log.Printf("[ERROR] Failed to get correlation workflow by ID %s: %s", workflowId, err)
+		// Example process:
+		// 1. Ingest IOC (hash/IP/domain/alert) => inject into datastore category
+		// 2. Query reputation + passive DNS + WHOIS + SSL CT.
+		// 3. Run lookup in historic sightings (SIEM, MISP).
+		// 4. If file hash: submit to sandbox + static YARA.
+		// 5. Map results to ATT&CK techniques and assign a risk score.
+		// 6. Push enriched alert to SIEM/EDR/SOAR for automated playbook or analyst triage.
+		// 7. If high confidence, add to blocklists / trigger containment / share via STIX/TAXII or MISP.
 
-			categoryAction := CategoryAction{
-				Label: "correlate_categories",
-			}
 
-			workflow.ID = workflowId
-			newWorkflow, err := GetDefaultWorkflowByType(*workflow, cacheData.OrgId, categoryAction)
-			if err != nil || newWorkflow.ID == "" || newWorkflow.Name == "" {
-				log.Printf("[ERROR] Failed to get default workflow by type %s: %s", categoryAction.Label, err)
-				return errors.New(fmt.Sprintf("Failed to get default workflow by type %s: %s", categoryAction, err))
-			}
-
-			workflow = &newWorkflow
-			workflow.ID = workflowId
-
-			SetWorkflow(ctx, *workflow, workflowId)
-		}
-
-		for _, option := range automation.Options {
-			if option.Key != "datastore_categories" {
-				continue
-			}
-
-			if len(option.Value) == 0 {
-				continue
-			}
-
-			log.Printf("[DEBUG] Found datastore categories to correlate: %s. Workflow to run: %s", option.Value, workflow.ID)
-
-			//func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType  string) error {
-			go handleDatastoreAutomationWebhook(
-				ctx,
-				marshalledBody,
-				cacheData,
-				automation,
-				fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId),
-				"run_workflow",
-			)
-		}
+		// Getting started:
+		// 1. Check for enrichments key. Stop if it exists.
 
 	} else if parsedName == "run_workflow" {
 		if debug {
