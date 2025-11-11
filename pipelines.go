@@ -259,6 +259,25 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		log.Printf("[INFO] Set up pipeline '%s' with trigger ID '%s' and environment '%s'", pipeline.Command, pipeline.TriggerId, pipeline.Environment)
 	}
 
+	if matchingCommand == "create" {
+		parsedEnv := strings.ToLower(strings.ReplaceAll(pipeline.Environment, " ", "_"))
+		parsedKey := fmt.Sprintf("%s_%s", parsedEnv, pipeline.Command)
+		parsedPipeline, err := json.Marshal(pipeline)
+		if err == nil {
+			newKey := CacheKeyData{
+				Key:      parsedKey,
+				Value:    string(parsedPipeline),
+				Category: "shuffle_pipelines",
+				OrgId:    user.ActiveOrg.Id,
+			}
+
+			_, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{newKey})
+			if err != nil {
+				log.Printf("[WARNING] Failed saving pipeline definition cache key: %s", err)
+			}
+		}
+	}
+
 	err = SetWorkflowQueue(ctx, execRequest, parsedEnv)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)

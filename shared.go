@@ -11502,6 +11502,42 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Support access pivot
+	if strings.Contains(fileId, "@") && strings.Contains(fileId, ".") && user.SupportAccess && user.Active && user.Verified && project.Environment == "cloud" {
+		foundUsers, err := FindUser(ctx, fileId)
+		if err != nil || len(foundUsers) == 0 {
+			log.Printf("[ERROR] Failed finding user %s for support access: %s", user.Username, err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed finding user for support access"}`))
+			return
+		}
+
+		if len(foundUsers) > 1 {
+			log.Printf("[ERROR] Found multiple users for support access user %s", user.Username)
+		}
+
+		newUsers := []User{}
+		for _, loopUser := range foundUsers {
+			if strings.ToLower(strings.TrimSpace(loopUser.Username)) != fileId {
+				continue
+			}
+				
+			newUsers = append(newUsers, loopUser)
+		}
+
+		if len(newUsers) == 0 {
+			log.Printf("[WARNING] No user found with username '%s' for support access user %s", fileId, user.Username)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No user found with that username"}`))
+			return
+		}
+
+		foundUsers = newUsers
+		log.Printf("[AUDIT] Support access user %s is trying to swap to org for user %s (%s). Found ID: %s", user.Username, fileId, foundUsers[0].Id, foundUsers[0].ActiveOrg.Id)
+		tmpData.OrgId = foundUsers[0].ActiveOrg.Id
+		fileId = foundUsers[0].ActiveOrg.Id
+	}
+
 	// Add instantswap of backend
 	// This could in theory be built out open source as well
 	regionUrl := ""
@@ -11658,7 +11694,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] User %s (%s) successfully changed org to '%s' (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Changed Organization", "region_url": "%s"}`, regionUrl)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Changed Organization", "region_url": "%s", "org_id": "%s"}`, regionUrl, org.Id)))
 
 }
 
@@ -17797,7 +17833,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 		} else {
 			// OpenSearch (on-premise) handling
 			// log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
-			if len(tmpJson) >= 1000000 {
+			if len(tmpJson) >= 10000000 {
 				// Clean up results' actions
 
 				log.Printf("[DEBUG][%s](%s) ExecutionVariables size: %d, Result size: %d, executionArgument size: %d, Results size: %d", workflowExecution.ExecutionId, saveLocationInfo, len(workflowExecution.ExecutionVariables), len(workflowExecution.Result), len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
@@ -17807,7 +17843,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				actionId := "execution_argument"
 
 				// Arbitrary reduction size
-				maxSize := 50000
+				maxSize := 5000000
 				basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
 				if len(basepath) == 0 {
 					basepath = "files"
@@ -17988,7 +18024,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
 				}
 
-				if len(jsonString) > 1000000 {
+				if len(jsonString) > 5000000 {
 					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
 
 					for resultIndex, result := range workflowExecution.Results {
@@ -17997,9 +18033,9 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							// log.Printf("[DEBUG] Result Size (%s - action: %d). Value size: %d", result.Action.Label, len(actionData), len(result.Result))
 						}
 
-						if len(actionData) > 10000 {
+						if len(actionData) > 1000000 {
 							for paramIndex, param := range result.Action.Parameters {
-								if len(param.Value) > 10000 {
+								if len(param.Value) > 1000000 {
 									// log.Printf("[WARNING][%s] Parameter %s in action %s is too large (%d). Removing value.", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
 									workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
 								}
@@ -31052,7 +31088,29 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.WorkflowExecutions.Active = false
 		}
 
-		// For the subsctiption
+		if len(shuffleLicenseKey) > 0 {
+			license := checkNoInternet()
+			if license.Valid == true {
+				org.Licensed = true
+				if license.Environment.Limit > org.SyncFeatures.MultiEnv.Limit {
+					org.SyncFeatures.MultiEnv.Limit = license.Environment.Limit
+					org.SyncFeatures.MultiEnv.Active = license.Environment.Active
+				}
+
+				if license.Tenant.Limit > org.SyncFeatures.MultiTenant.Limit {
+					org.SyncFeatures.MultiTenant.Limit = license.Tenant.Limit
+					org.SyncFeatures.MultiTenant.Active = license.Tenant.Active
+				}
+
+				if license.WorkflowExecutions.Limit > org.SyncFeatures.WorkflowExecutions.Limit {
+					org.SyncFeatures.WorkflowExecutions.Limit = license.WorkflowExecutions.Limit
+					org.SyncFeatures.WorkflowExecutions.Active = license.WorkflowExecutions.Active
+				}
+
+				org.SyncFeatures.Branding.Active = license.Branding
+			}
+		}
+
 		subscriptionCacheKey := fmt.Sprintf("org_subscriptions_%s", org.Id)
 		cachedData, err := GetCache(ctx, subscriptionCacheKey)
 		if err != nil {

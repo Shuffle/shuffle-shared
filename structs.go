@@ -15,6 +15,12 @@ type AppContext struct {
 	Example         string `json:"example,omitempty" datastore:"example,noindex"`
 }
 
+type CorrelationRequest struct {
+	Type     string `json:"type"`
+	Key      string `json:"key"`
+	Category string `json:"category"`
+}
+
 type LogRequest struct {
 	Timestamp int64 `json:"timestamp"`
 
@@ -2432,6 +2438,31 @@ type FileSearchWrapper struct {
 	} `json:"hits"`
 }
 
+type NGramSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string   `json:"_index"`
+			Type   string   `json:"_type"`
+			ID     string   `json:"_id"`
+			Score  float64  `json:"_score"`
+			Source NGramItem `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
 type WorkflowSearchWrapper struct {
 	Took     int  `json:"took"`
 	TimedOut bool `json:"timed_out"`
@@ -4651,7 +4682,7 @@ type MinimalWorkflow struct {
 
 type NGramItem struct {
 	Key   string `json:"key"`
-	OrgId string `json:"org_id"`
+	OrgId string `json:"org_id,omitempty"`
 
 	Amount int      `json:"amount"`
 	Ref    []string `json:"ref"` // Reference to other items

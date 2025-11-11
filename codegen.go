@@ -1178,34 +1178,28 @@ func GetCustomActionCode(swagger *openapi3.Swagger, api WorkflowApp) string {
 
         return parsed_headers
 
-
     def parse_queries(self, queries):
         parsed_queries = {}
-
         if not queries:
             return parsed_queries
 
         cleaned_queries = queries.strip()
-
         if not cleaned_queries:
             return parsed_queries
 
         cleaned_queries = " ".join(cleaned_queries.split())
         splitted_queries = cleaned_queries.split("&")
-        self.logger.info(splitted_queries)
         for query in splitted_queries:
-
-            if "=" not in query:
-                self.logger.info("Skipping as there is no = in the query")
+            if not query:
                 continue
-            key, value = query.split("=")
-            if not key.strip() or not value.strip():
-                self.logger.info(
-                    "Skipping because either key or value is not present in query"
-                )
-                continue
-            parsed_queries[key.strip()] = value.strip()
-
+        
+            querysplit = query.split("=")
+            if len(querysplit) == 0:
+                parsed_queries[query.strip()] = ""
+            else:
+                queryvalue = "=".join(querysplit[1:])
+                parsed_queries[querysplit[0].strip()] = queryvalue.strip()
+        
         return parsed_queries
 	
     def prepare_response(self, request):

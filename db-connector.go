@@ -5436,8 +5436,10 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 		query := map[string]interface{}{
 			"size": 1000,
 			"query": map[string]interface{}{
-				"match": map[string]interface{}{
-					"username": username,
+				"must": map[string]interface{}{
+					"match": map[string]interface{}{
+						"username": username,
+					},
 				},
 			},
 		}
@@ -7844,12 +7846,12 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 						timeSinceLastSend := currentTime - lastSendTime
 
 						if timeSinceLastSend < 60 {
-							log.Printf("[INFO] Rate limiting: Org %s exceeded the 10K usage quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
+							//log.Printf("[INFO] Rate limiting (1): Org %s exceeded the 10K workflow run quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
 							//executionRequests.Data = []ExecutionRequest{}
 							executions = []ExecutionRequest{}
 						} else {
 							if len(executions) > 1 {
-								log.Printf("[INFO] Rate limiting: Org %s exceeded the 10K usage quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
+								//log.Printf("[INFO] Rate limiting (2): Org %s exceeded the 10K workflow run quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
 								executions = executions[0:1]
 							}
 
@@ -7863,7 +7865,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 			} else {
 
 				if len(executions) > 1 {
-					log.Printf("[INFO] Rate limiting: Org %s exceeded the 10K usage quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
+					log.Printf("[INFO] Rate limiting (3): Org %s exceeded the 10K workflow run quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
 					executions = executions[0:1]
 				}
 
@@ -13729,6 +13731,11 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	}
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+
+	if debug {
+		log.Printf("[DEBUG] Getting datastore key for %s", cacheKey)
+	}
+
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -16586,7 +16593,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 
 	//for jsonKey, val := range unmarshalled {
 	amountAdded := 0
-	maxAmountToAdd := 3
+	maxAmountToAdd := 5
 	for jsonKey, val := range unmarshalled {
 		if ArrayContains(skippableKeys, jsonKey) {
 			continue
@@ -16605,10 +16612,10 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 
 		parsedValue := val.(string)
 
-		// Arbitrary limit
-		// About ngram: We may want to do additional splitting,
+		// FIXME: Arbitrary limits
+		// About ngram: We will want to do additional splitting,
 		// but to start with, we just do the whole thing
-		if len(parsedValue) > 128 {
+		if len(parsedValue) > 70 || len(parsedValue) < 2 {
 			continue
 		}
 
@@ -16625,7 +16632,6 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 		}
 
 		// Make sure we don't add more than 5 items (for now)
-		amountAdded += 1
 		if amountAdded > maxAmountToAdd {
 			break
 		}
@@ -16638,9 +16644,8 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 			),
 		))
 
-		//parsedKey := strings.ToLower(strings.ReplaceAll(jsonKey, " ", "_"))
 		parsedCategory := strings.ToLower(strings.ReplaceAll(category, " ", "_"))
-		//referenceKey := fmt.Sprintf("%s_%s_%s_%s", orgId, parsedCategory, datastoreKey, parsedKey)
+
 		// Doing it WITHOUT the JSON key & Org, as we only want to partially cross-correlate to find items among each other
 		referenceKey := fmt.Sprintf("%s|%s", parsedCategory, datastoreKey)
 
@@ -16666,6 +16671,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 				log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
 			}
 
+			amountAdded += 1
 			log.Printf("[DEBUG] Created new ngram item for %s with key '%s'", ngramSearchKey, parsedValue)
 			continue
 		}
@@ -16675,6 +16681,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 		}
 
 		// Add the reference to the ngram item
+		amountAdded += 1
 		ngramItem.Ref = append(ngramItem.Ref, referenceKey)
 		ngramItem.Amount = len(ngramItem.Ref)
 
@@ -16684,6 +16691,8 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 		} else {
 			log.Printf("[DEBUG] Updated ngram item for %s with key %s", ngramSearchKey, parsedValue)
 		}
+
+		log.Println()
 	}
 
 	return nil
@@ -16693,7 +16702,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 func SetDatastoreNGramItem(ctx context.Context, key string, ngramItem *NGramItem) error {
 	// OrgId (uuid) + key
 	if len(key) < 38 {
-		return errors.New("Invalid key for ngram item. Must be at least 38 characters long")
+		return errors.New(fmt.Sprintf("Invalid key for ngram item. Must be at least 38 characters long. Got '%s'", key))
 	}
 
 	nameKey := "datastore_ngram"
@@ -16728,7 +16737,205 @@ func SetDatastoreNGramItem(ctx context.Context, key string, ngramItem *NGramItem
 	return nil
 }
 
+func GetDatastoreNgramItems(ctx context.Context, orgId, searchKey string, maxAmount int) ([]NGramItem, error) {
+	var items []NGramItem
+	var err error
+	nameKey := "datastore_ngram"
+
+	cacheKey := fmt.Sprintf("%s_%s_%s_%d", nameKey, orgId, searchKey, maxAmount)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &items)
+			if err == nil {
+				return items, nil
+			}
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+
+		query := map[string]interface{}{
+			"size": maxAmount,
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"org_id": orgId,
+							},
+						},
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"ref": searchKey,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return items, err
+		}
+
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return items, nil
+			}
+
+			log.Printf("[ERROR] Error getting response from Opensearch (get ngram items): %s", err)
+			return items, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return items, nil
+		}
+
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return items, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return items, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return items, err
+		}
+
+		wrapped := NGramSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return items, err
+		}
+
+		//log.Printf("Found items: %d", len(wrapped.Hits.Hits))
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.Key == "" {
+				continue
+			}
+
+			if hit.Source.OrgId == orgId {
+				items = append(items, hit.Source)
+			}
+		}
+
+	} else {
+
+		if len(orgId) == 0 {
+			return items, errors.New("No org to find ngrams for found")
+		}
+
+		cursorStr := ""
+		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Filter("Ref =", searchKey).Limit(maxAmount)
+		for {
+			it := project.Dbclient.Run(ctx, query)
+			if len(items) >= maxAmount {
+				break
+			}
+
+			for {
+				innerItem := NGramItem{}
+				_, err = it.Next(&innerItem)
+				if err != nil {
+					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+
+					} else {
+						if !strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
+							log.Printf("[WARNING] NGram iterator issue: %s", err)
+						}
+
+						break
+					}
+				}
+
+				found := false
+				for _, loopedItem := range items {
+					if loopedItem.Key == innerItem.Key {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					items = append(items, innerItem)
+				}
+
+				if len(items) >= maxAmount {
+					break
+				}
+			}
+
+			if err != iterator.Done {
+				log.Printf("[INFO] Failed fetching ngrams: %v", err)
+				break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("[ERROR] Problem with cursor (ngram): %s", err)
+				break
+			} else {
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+			}
+		}
+	}
+
+	if len(items) > maxAmount {
+		items = items[:maxAmount]
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(items)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in GetDatastoreNgramItems: %s", err)
+			return items, nil
+		}
+
+		// Short caching due to possible rapid updates
+		err = SetCache(ctx, cacheKey, data, 2)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for GetDatastoreNgramItems '%s': %s", cacheKey, err)
+		}
+	}
+
+	return items, nil
+}
+
 // Key itself contains the orgId so this should "just work"
+// To get ALL items matching a key, use GetDatastoreNgramItems()
 func GetDatastoreNGramItem(ctx context.Context, key string) (*NGramItem, error) {
 
 	nameKey := "datastore_ngram"
