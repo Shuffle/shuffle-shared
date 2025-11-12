@@ -1100,7 +1100,8 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
-
+	
+	log.Printf("[DEBUG] User '%s' (%s) in org '%s' (%s) is creating notification '%s'", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id, notification.Title)
 	err = CreateOrgNotification(
 		ctx,
 		notification.Title,
