@@ -5436,9 +5436,11 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 		query := map[string]interface{}{
 			"size": 1000,
 			"query": map[string]interface{}{
-				"must": map[string]interface{}{
-					"match": map[string]interface{}{
-						"username": username,
+				"bool": map[string]interface{} {
+					"must": map[string]interface{}{
+						"match": map[string]interface{}{
+							"username": username,
+						},
 					},
 				},
 			},
