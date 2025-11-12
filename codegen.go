@@ -4792,19 +4792,19 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		}
 
 		// Set cache key for 1 hour to avoid re-running enrich too often
-		SetCache(ctx, cacheKey, []byte("1"), 5)
+		SetCache(ctx, cacheKey, []byte("1"), 15)
 
 		// Use key "enrichments" =>
 		// [{"name": "answers.ip", "value": "92.24.47.250", "type": "location", "data": {"city": "Socotra", "continent": "Asia", "coordinates": [-25.4153, 17.0743], "country": "YE", "desc": "Yemen"}}]
 
 		parsedData := map[string]interface{}{}
 		if err := json.Unmarshal(marshalledBody, &parsedData); err != nil {
-			log.Printf("[WARNING] Failed to unmarshal marshalledBody for enrich for key %s in category %s: %s", cacheData.Key, cacheData.Category, err)
+			//log.Printf("[WARNING] Failed to unmarshal marshalledBody for enrich for key %s in category %s: %s", cacheData.Key, cacheData.Category, err)
 			return err
 		}
 
 		if _, ok := parsedData["enrichments"]; ok {
-			log.Printf("[DEBUG] Enrichments key already exists - skipping enrichment automation for key %s in category %s", cacheData.Key, cacheData.Category)
+			//log.Printf("[DEBUG] Enrichments key already exists - skipping enrichment automation for key %s in category %s", cacheData.Key, cacheData.Category)
 			return nil
 		}
 
@@ -4836,7 +4836,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		}
 
 		// Send the data into shuffle_tools => parse_ioc?
-		// Or generate a subflow that runs for it? :thinking:
+		// Or generate a workflow that runs for it? :thinking:
 
 		// Example process:
 		// 1. Ingest IOC (hash/IP/domain/alert) => inject into datastore category
