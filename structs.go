@@ -4747,3 +4747,22 @@ type AuditLogCollector struct {
 	StopChan   chan bool
 	mu         sync.Mutex
 }
+
+// Thread conversation access control structs
+type ThreadAccessRequest struct {
+	ThreadID string `json:"thread_id"`
+}
+
+type ThreadConversationResponse struct {
+	Success     bool                  `json:"success"`
+	ThreadID    string                `json:"thread_id"`
+	ThreadOrgID string                `json:"thread_org_id"` // Org where thread lives (for switching orgs)
+	Messages    []ConversationMessage `json:"messages"`
+	IsActiveOrg bool                  `json:"is_active_org"` // Whether this is user's active org
+}
+
+type ConversationMessage struct {
+	Role      string    `json:"role"` // "user" or "assistant"
+	Content   string    `json:"content"`
+	Timestamp time.Time `json:"timestamp"`
+}
