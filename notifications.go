@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/satori/go.uuid"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -17,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	uuid "github.com/satori/go.uuid"
 )
 
 // Standalone to make it work many places
@@ -626,13 +627,13 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 func CreateOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool) error {
 	if len(orgId) == 0 {
 		log.Printf("[ERROR] No org ID provided to create notification '%s'", title)
-		return errors.New("No org ID provided")
+		return errors.New("no org ID provided")
 	}
 
 	// Since we use a static workflow name, this should be effective.
 	if strings.Contains(title, "Ops Dashboard Workflow") {
 		log.Printf("[INFO] Skipping create notification for health check workflow")
-		return errors.New("Health check workflow detected")
+		return errors.New("health check workflow detected")
 	}
 
 	if project.Environment == "" {
@@ -733,29 +734,43 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 	authOrg := org
 	if org.Defaults.NotificationWorkflow == "parent" && org.CreatorOrg != "" {
-		//log.Printf("[DEBUG] Sending notification to parent org %s' notification workflow", org.CreatorOrg)
-
 		parentOrg, err := GetOrg(ctx, org.CreatorOrg)
 		if err != nil {
-			log.Printf("[WARNING] Error getting parent org %s in createOrgNotification: %s. This is usually a region problem, and may cause issues with notification workflows..", orgId, err)
-			//return err
+			log.Printf("[ERROR] Failed to get required parent org %s: %s", org.CreatorOrg, err)
+			return err
 		}
-
-		// Overwriting to make sure access rights are correct
+		if parentOrg == nil {
+			log.Printf("[ERROR] Required parent org %s not found", org.CreatorOrg)
+			return errors.New("parent org not found")
+		}
 		authOrg = parentOrg
 		org.Defaults.NotificationWorkflow = parentOrg.Defaults.NotificationWorkflow
 	}
 
 	for _, user := range authOrg.Users {
-		if user.Role == "admin" && len(user.Id) > 0 && len(selectedApikey) == 0 {
-			// Checking if it's the right active org
-			// FIXME: Should it need to be in the active org? Shouldn't matter? :thinking:
-			foundUser, err := GetUser(ctx, user.Id)
-			if err == nil && len(foundUser.ApiKey) > 0 {
-				selectedApikey = foundUser.ApiKey
-				break
-			}
+		if user.Role == "org-reader" || user.Id == "" {
+			continue
 		}
+
+		foundUser, err := GetUser(ctx, user.Id)
+		if err != nil {
+			continue
+		}
+
+		apiKey := foundUser.ApiKey
+
+		// if user has no API key, generate one
+		if apiKey == "" {
+			generatedUser, genErr := GenerateApikey(ctx, *foundUser)
+			if genErr != nil {
+				log.Printf("[ERROR] Failed to auto-generate API key for user %s: %s", foundUser.Username, genErr)
+				continue
+			}
+			apiKey = generatedUser.ApiKey
+		}
+
+		selectedApikey = apiKey
+		break
 	}
 
 	if len(matchingNotifications) > 0 {
@@ -803,8 +818,9 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		if mainNotification.Ignored {
 			log.Printf("[INFO] Ignored notification %s for %s", mainNotification.Title, mainNotification.UserId)
 		} else {
+			authOrgValue := *authOrg
 			go func() {
-				err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, *authOrg)
+				err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, authOrgValue)
 				if err != nil {
 					if !strings.Contains(err.Error(), "cache stored") && !strings.Contains(err.Error(), "Same workflow") {
 						log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
@@ -831,34 +847,10 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 		//NotificationWorkflow   string `json:"notification_workflow" datastore:"notification_workflow"`
 
-		filteredUsers := []User{}
-		if adminsOnly == false {
-			filteredUsers = org.Users
-		} else {
-			for _, user := range org.Users {
-				if user.Role == "admin" {
-					filteredUsers = append(filteredUsers, user)
-				}
-			}
-		}
-
-		selectedApikey := ""
-		for _, user := range filteredUsers {
-			if user.Role == "admin" && len(selectedApikey) == 0 {
-				foundUser, err := GetUser(ctx, user.Id)
-				if err == nil && len(foundUser.ApiKey) > 0 {
-					selectedApikey = foundUser.ApiKey
-					break
-				}
-			}
-		}
-
 		if len(org.Defaults.NotificationWorkflow) > 0 {
 			if len(selectedApikey) == 0 {
-				log.Printf("[ERROR] Didn't find an apikey to use when sending notifications for org %s to workflow %s", org.Id, org.Defaults.NotificationWorkflow)
-				if debug {
-					log.Printf("\n\n\n")
-				}
+				log.Printf("[ERROR] No API key available to trigger notification workflow for org %s to workflow %s", org.Id, org.Defaults.NotificationWorkflow)
+				return errors.New("no API key available for notification workflow")
 			}
 
 			workflow, err := GetWorkflow(ctx, org.Defaults.NotificationWorkflow)
@@ -888,8 +880,9 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 				}
 			}
 
+			authOrgValue := *authOrg
 			go func() {
-				err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, *authOrg)
+				err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, authOrgValue)
 				if err != nil {
 					log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s: %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
 				}
@@ -1092,8 +1085,8 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			found := false
-			for _, user := range org.Users {
-				if user.Id == user.Id {
+			for _, orgUser := range org.Users {
+				if orgUser.Id == user.Id {
 					found = true
 					break
 				}
@@ -1107,7 +1100,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
-
+	
 	log.Printf("[DEBUG] User '%s' (%s) in org '%s' (%s) is creating notification '%s'", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id, notification.Title)
 	err = CreateOrgNotification(
 		ctx,
