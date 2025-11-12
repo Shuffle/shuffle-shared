@@ -4,6 +4,8 @@ import (
 	"encoding/xml"
 	"sync"
 	"time"
+
+	"github.com/shuffle/opensearch-go/v4/opensearchapi"
 )
 
 type AppContext struct {
@@ -4288,13 +4290,14 @@ type LiveExecutionStatus struct {
 }
 
 type HealthCheck struct {
-	Success    bool            `json:"success"`
-	Updated    int64           `json:"updated"`
-	Apps       AppHealth       `json:"apps"`
-	Workflows  WorkflowHealth  `json:"workflows"`
-	PythonApps AppHealth       `json:"python_apps"`
-	Datastore  DatastoreHealth `json:"datastore"`
-	FileOps    FileHealth      `json:"fileops"`
+	Success			bool            `json:"success"`
+	Updated			int64           `json:"updated"`
+	Apps			AppHealth       `json:"apps"`
+	Workflows		WorkflowHealth  `json:"workflows"`
+	PythonApps		AppHealth       `json:"python_apps"`
+	Datastore		DatastoreHealth `json:"datastore"`
+	FileOps			FileHealth      `json:"fileops"`
+	OpensearchOps	opensearchapi.ClusterHealthResp `json:"opensearch"`
 }
 
 type HealthCheckDB struct {
