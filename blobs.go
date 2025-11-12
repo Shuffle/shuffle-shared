@@ -134,6 +134,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			Description: "List tickets from different systems and ingest them",
 			OrgId:       orgId,
 			Start:       startActionId,
+			UsecaseIds: []string{"SIEM to ticket"},
+			Tags: []string{"ingest", "automatic"},
 			Actions: []Action{
 				Action{
 					Name:        actionName,
@@ -184,10 +186,12 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 	} else if parsedActiontype == "ingest_tickets_webhook" {
 
 		defaultWorkflow := Workflow{
-			Name:        actionType,
+			Name:        "Ingestion Webhook",
 			Description: "Ingest tickets through a webhook",
 			OrgId:       orgId,
 			Start:       startActionId,
+			UsecaseIds: []string{"SIEM to ticket"},
+			Tags: []string{"ingest", "webhook", "automatic"},
 			Actions: []Action{
 				Action{
 					Name:        "Translate standard",
@@ -326,6 +330,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			Description: "Monitor threatlists and ingest regularly",
 			OrgId:       orgId,
 			Start:       startActionId,
+			UsecaseIds: []string{"External Enrichment"},
+			Tags: []string{"ingest", "feeds", "automatic"},
 			Actions: []Action{
 				Action{
 					Name:        "GET",
@@ -1679,7 +1685,7 @@ func GetUsecaseData() string {
                 }
             },
             {
-                "name": "External historical Enrichment",
+                "name": "External Enrichment",
 				"priority": 90,
 				"type": "intel",
                 "items": {
