@@ -624,16 +624,10 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 	return nil
 }
 
-func CreateOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool, authenticatedUser ...*User) error {
+func CreateOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool) error {
 	if len(orgId) == 0 {
 		log.Printf("[ERROR] No org ID provided to create notification '%s'", title)
 		return errors.New("no org ID provided")
-	}
-
-	// Extract authenticated user if provided
-	var requestingUser *User
-	if len(authenticatedUser) > 0 && authenticatedUser[0] != nil {
-		requestingUser = authenticatedUser[0]
 	}
 
 	// Since we use a static workflow name, this should be effective.
@@ -742,44 +736,41 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 	if org.Defaults.NotificationWorkflow == "parent" && org.CreatorOrg != "" {
 		parentOrg, err := GetOrg(ctx, org.CreatorOrg)
 		if err != nil {
-			log.Printf("[WARNING] Error getting parent org %s in createOrgNotification: %s. Keeping authOrg as current org.", org.CreatorOrg, err)
-		} else if parentOrg == nil {
-			log.Printf("[WARNING] Parent org %s returned nil. Keeping authOrg as current org.", org.CreatorOrg)
-		} else {
-			authOrg = parentOrg
-			org.Defaults.NotificationWorkflow = parentOrg.Defaults.NotificationWorkflow
+			log.Printf("[ERROR] Failed to get required parent org %s: %s", org.CreatorOrg, err)
+			return err
 		}
+		if parentOrg == nil {
+			log.Printf("[ERROR] Required parent org %s not found", org.CreatorOrg)
+			return errors.New("parent org not found")
+		}
+		authOrg = parentOrg
+		org.Defaults.NotificationWorkflow = parentOrg.Defaults.NotificationWorkflow
 	}
 
-	// Look for admin with API key
 	for _, user := range authOrg.Users {
-		if user.Role == "admin" && len(user.Id) > 0 && len(selectedApikey) == 0 {
-			foundUser, err := GetUser(ctx, user.Id)
-			if err == nil {
-				if len(foundUser.ApiKey) > 0 {
-					selectedApikey = foundUser.ApiKey
-					log.Printf("[DEBUG] Using admin's API key for notification workflow")
-					break
-				} else {
-					// Admin exists but has no API key - auto-generate one
-					log.Printf("[INFO] Admin user %s (%s) has no API key. Auto-generating one.", foundUser.Username, foundUser.Id)
-					generatedUser, genErr := GenerateApikey(ctx, *foundUser)
-					if genErr != nil {
-						log.Printf("[ERROR] Failed to auto-generate API key for user %s: %s", foundUser.Username, genErr)
-						continue // Try next admin
-					}
-					selectedApikey = generatedUser.ApiKey
-					log.Printf("[INFO] Successfully auto-generated API key for admin %s", foundUser.Username)
-					break
-				}
-			}
+		if user.Role == "org-reader" || user.Id == "" {
+			continue
 		}
-	}
 
-	// If no admin key found, use requesting user's key
-	if len(selectedApikey) == 0 && requestingUser != nil && len(requestingUser.ApiKey) > 0 {
-		selectedApikey = requestingUser.ApiKey
-		log.Printf("[INFO] No admin API key available. Using requesting user's (%s) API key for notification workflow", requestingUser.Username)
+		foundUser, err := GetUser(ctx, user.Id)
+		if err != nil {
+			continue
+		}
+
+		apiKey := foundUser.ApiKey
+
+		// if user has no API key, generate one
+		if apiKey == "" {
+			generatedUser, genErr := GenerateApikey(ctx, *foundUser)
+			if genErr != nil {
+				log.Printf("[ERROR] Failed to auto-generate API key for user %s: %s", foundUser.Username, genErr)
+				continue
+			}
+			apiKey = generatedUser.ApiKey
+		}
+
+		selectedApikey = apiKey
+		break
 	}
 
 	if len(matchingNotifications) > 0 {
@@ -856,55 +847,10 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 		//NotificationWorkflow   string `json:"notification_workflow" datastore:"notification_workflow"`
 
-		filteredUsers := []User{}
-		if adminsOnly == false {
-			filteredUsers = org.Users
-		} else {
-			for _, user := range org.Users {
-				if user.Role == "admin" {
-					filteredUsers = append(filteredUsers, user)
-				}
-			}
-		}
-
-		selectedApikey := ""
-		// Look for admin with API key
-		for _, user := range filteredUsers {
-			if user.Role == "admin" && len(selectedApikey) == 0 {
-				foundUser, err := GetUser(ctx, user.Id)
-				if err == nil {
-					if len(foundUser.ApiKey) > 0 {
-						selectedApikey = foundUser.ApiKey
-						log.Printf("[DEBUG] Using admin's API key for notification workflow")
-						break
-					} else {
-						// Admin exists but has no API key - auto-generate one
-						log.Printf("[INFO] Admin user %s (%s) has no API key. Auto-generating one.", foundUser.Username, foundUser.Id)
-						generatedUser, genErr := GenerateApikey(ctx, *foundUser)
-						if genErr != nil {
-							log.Printf("[ERROR] Failed to auto-generate API key for user %s: %s", foundUser.Username, genErr)
-							continue // Try next admin
-						}
-						selectedApikey = generatedUser.ApiKey
-						log.Printf("[INFO] Successfully auto-generated API key for admin %s", foundUser.Username)
-						break
-					}
-				}
-			}
-		}
-
-		// If no admin key found, use requesting user's key
-		if len(selectedApikey) == 0 && requestingUser != nil && len(requestingUser.ApiKey) > 0 {
-			selectedApikey = requestingUser.ApiKey
-			log.Printf("[INFO] No admin API key available. Using requesting user's (%s) API key for notification workflow", requestingUser.Username)
-		}
-
 		if len(org.Defaults.NotificationWorkflow) > 0 {
 			if len(selectedApikey) == 0 {
 				log.Printf("[ERROR] No API key available to trigger notification workflow for org %s to workflow %s", org.Id, org.Defaults.NotificationWorkflow)
-				if debug {
-					log.Printf("\n\n\n")
-				}
+				return errors.New("no API key available for notification workflow")
 			}
 
 			workflow, err := GetWorkflow(ctx, org.Defaults.NotificationWorkflow)
@@ -951,15 +897,6 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
-	}
-
-	if project.Environment == "cloud" {
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting notification request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
 	}
 
 	// Unmarshal body to the Notification struct
@@ -1164,7 +1101,6 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[DEBUG] User '%s' (%s) from org '%s' (%s) is creating notification '%s' for org %s", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id, notification.Title, orgId)
 	err = CreateOrgNotification(
 		ctx,
 		notification.Title,
@@ -1172,7 +1108,6 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		notification.ReferenceUrl,
 		orgId,
 		false,
-		&user, // Pass authenticated user for API key fallback
 	)
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", user.ActiveOrg.Id))
