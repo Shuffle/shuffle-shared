@@ -4466,7 +4466,6 @@ type PipelineInfo struct {
 	Hidden       bool   `json:"hidden"`
 	Definition   string `json:"definition"`
 	Configured   bool   `json:"configured"`
-	Package      any    `json:"package"`
 	Unstoppable  bool   `json:"unstoppable"`
 	CreatedAt    int64  `json:"created_at"`
 	LastModified int64  `json:"last_modified"`
@@ -4474,8 +4473,6 @@ type PipelineInfo struct {
 	TotalRuns    int    `json:"total_runs"`
 	State        string `json:"state"`
 	Error        string `json:"error"`
-	Diagnostics  []any  `json:"diagnostics"`
-	Labels       []any  `json:"labels"`
 	RetryDelay   string `json:"retry_delay"`
 	Autostart    struct {
 		Created   bool `json:"created"`
@@ -4487,8 +4484,12 @@ type PipelineInfo struct {
 		Failed    bool `json:"failed"`
 		Stopped   bool `json:"stopped"`
 	} `json:"autodelete"`
-	TTL          any `json:"ttl"`
-	RemainingTTL any `json:"remaining_ttl"`
+
+	//Package      any    `json:"package"`
+	//Diagnostics  []any  `json:"diagnostics"`
+	//Labels       []any  `json:"labels"`
+	//TTL          any `json:"ttl"`
+	//RemainingTTL any `json:"remaining_ttl"`
 
 	// Shuffle ref
 	Environment string `json:"environment"`

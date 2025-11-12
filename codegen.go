@@ -28,8 +28,10 @@ import (
 
 	"cloud.google.com/go/storage"
 	docker "github.com/docker/docker/client"
-	"github.com/frikky/kin-openapi/openapi3"
 	"gopkg.in/yaml.v2"
+
+	"github.com/frikky/kin-openapi/openapi3"
+	//iocParser "github.com/Shuffle/indicator-parser/go/ioc"
 )
 
 var downloadedImages = []string{}
@@ -4746,6 +4748,10 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		return errors.New("CacheKeyData.OrgId is required for handleRunAutomation")
 	}
 
+	if len(cacheData.Category) == 0 {
+		return errors.New("CacheKeyData.Category is required for handleRunAutomation")
+	}
+
 	ctx := context.Background()
 	parsedName := strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_")
 
@@ -4759,6 +4765,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	parsedOutput["shuffle_datastore"] = map[string]interface{}{
 		"action":              "update",
 		"key":                 cacheData.Key,
+		"category":            cacheData.Category,
 		"org_id":              cacheData.OrgId,
 		"timestamp":           cacheData.Edited,
 		"workflow_id":         cacheData.WorkflowId,
@@ -4774,11 +4781,59 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	if parsedName == "correlate_categories" {
 		// Correlations don't matter anymore as ngrams are automatic. Cleaned up
 		// november 2025 after adding graphic system to datastore
+
 	} else if parsedName == "enrich" {
-		log.Printf("Should enrich the following data: %s", string(marshalledBody))
+		// Prevent recursion
+		cacheKey := fmt.Sprintf("enrich_wait_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
+		data, err := GetCache(ctx, cacheKey)
+		if err == nil && data != nil {
+			//log.Printf("[DEBUG] Enrich automation recently run for key %s in category %s - skipping.", cacheData.Key, cacheData.Category)
+			return nil
+		}
+
+		// Set cache key for 1 hour to avoid re-running enrich too often
+		SetCache(ctx, cacheKey, []byte("1"), 5)
 
 		// Use key "enrichments" =>
 		// [{"name": "answers.ip", "value": "92.24.47.250", "type": "location", "data": {"city": "Socotra", "continent": "Asia", "coordinates": [-25.4153, 17.0743], "country": "YE", "desc": "Yemen"}}]
+
+		parsedData := map[string]interface{}{}
+		if err := json.Unmarshal(marshalledBody, &parsedData); err != nil {
+			log.Printf("[WARNING] Failed to unmarshal marshalledBody for enrich for key %s in category %s: %s", cacheData.Key, cacheData.Category, err)
+			return err
+		}
+
+		if _, ok := parsedData["enrichments"]; ok {
+			log.Printf("[DEBUG] Enrichments key already exists - skipping enrichment automation for key %s in category %s", cacheData.Key, cacheData.Category)
+			return nil
+		}
+
+		org, err := GetOrg(ctx, cacheData.OrgId)
+		if err != nil {
+			return err
+		}
+
+		foundApikey := ""
+		for _, user := range org.Users {
+			foundUser, err := GetUser(ctx, user.Id)
+			if err != nil {
+				continue
+			}
+
+			if len(foundUser.Role) == 0 || foundUser.Role == "org-reader" {
+				continue
+			}
+
+			if len(foundUser.ApiKey) > 0 {
+				foundApikey = foundUser.ApiKey
+				break
+			}
+		}
+
+		if len(foundApikey) == 0 {
+			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
+			return errors.New("No admin user with API key found")
+		}
 
 		// Send the data into shuffle_tools => parse_ioc?
 		// Or generate a subflow that runs for it? :thinking:
@@ -4792,9 +4847,80 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		// 6. Push enriched alert to SIEM/EDR/SOAR for automated playbook or analyst triage.
 		// 7. If high confidence, add to blocklists / trigger containment / share via STIX/TAXII or MISP.
 
-
 		// Getting started:
 		// 1. Check for enrichments key. Stop if it exists.
+		/*
+			types := []iocParser.IndicatorType{
+				iocParser.IPV4,
+				iocParser.URL_LINK,
+				iocParser.Domain,
+				iocParser.Email,
+			}
+			foundIocs := iocParser.Parse(string(marshalledBody), types)
+			log.Printf("RESP: %#v", foundIocs)
+			if len(foundIocs) == 0 {
+				log.Printf("[DEBUG] No IOCs found to enrich.")
+				return nil
+			}
+
+			log.Printf("[DEBUG] Found %d IOCs to enrich.", len(foundIocs))
+			for _, foundIoc := range foundIocs {
+				log.Printf("[DEBUG] Found IOC: %#v", foundIoc)
+			}
+		*/
+
+		backendUrl := "https://shuffler.io"
+		if len(os.Getenv("BASE_URL")) > 0 {
+			backendUrl = os.Getenv("BASE_URL")
+		}
+
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
+			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		}
+
+		relevantWorkflowId := "fd44510b-dab7-4e77-8882-e205cb844c84"
+		fullUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", backendUrl, relevantWorkflowId)
+
+		executionRequest := ExecutionRequest{
+			ExecutionArgument: string(marshalledBody),
+			ExecutionSource:   fmt.Sprintf("datastore|%s|%s", cacheData.Category, cacheData.Key),
+		}
+
+		newParsedBody, err := json.Marshal(executionRequest)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal body for enrichment workflow execution: %s", err)
+			return err
+		}
+
+		client := GetExternalClient(fullUrl)
+		req, err := http.NewRequest(
+			"POST",
+			fullUrl,
+			bytes.NewBuffer(newParsedBody),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Failed to create request for enrichment workflow execution: %s", err)
+			return err
+		}
+
+		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
+		req.Header.Add("Org-Id", cacheData.OrgId)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[ERROR] Failed to send enrichment workflow execution request: %s", err)
+			return err
+		}
+
+		defer resp.Body.Close()
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed to read response body from enrichment workflow execution request: %s", err)
+			return err
+		}
+
+		log.Printf("RESP FOR RUNNING ENRICHMENT (%d): %s", resp.StatusCode, string(body))
 
 	} else if parsedName == "run_workflow" {
 		if debug {

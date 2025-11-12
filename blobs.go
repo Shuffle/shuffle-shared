@@ -2109,7 +2109,7 @@ for k, v in all_items.items():
         del subval["urls"]
         new_list.append({
             "key": subkey,
-            "category": "%s_indicators" % k,
+            "category": "ioc_%s" % k,
             "value": json.dumps(subval),
         })
 

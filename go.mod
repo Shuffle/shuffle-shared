@@ -10,6 +10,7 @@ require (
 	cloud.google.com/go/scheduler v1.11.7
 	cloud.google.com/go/storage v1.55.0
 	github.com/Masterminds/semver v1.5.0
+	github.com/Shuffle/indicator-parser v0.0.4
 	github.com/adrg/strutil v0.3.1
 	github.com/algolia/algoliasearch-client-go/v3 v3.31.4
 	github.com/bradfitz/gomemcache v0.0.0-20250403215159-8d39553ac7cf
