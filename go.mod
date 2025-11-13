@@ -10,14 +10,13 @@ require (
 	cloud.google.com/go/scheduler v1.11.7
 	cloud.google.com/go/storage v1.55.0
 	github.com/Masterminds/semver v1.5.0
-	github.com/Shuffle/indicator-parser v0.0.4
 	github.com/adrg/strutil v0.3.1
 	github.com/algolia/algoliasearch-client-go/v3 v3.31.4
 	github.com/bradfitz/gomemcache v0.0.0-20250403215159-8d39553ac7cf
 	github.com/bradfitz/slice v0.0.0-20180809154707-2b758aa73013
 	github.com/docker/docker v28.3.3+incompatible
 	github.com/frikky/kin-openapi v0.42.0
-	github.com/frikky/schemaless v0.0.24
+	github.com/frikky/schemaless v0.0.25
 	github.com/go-git/go-billy/v5 v5.6.2
 	github.com/go-git/go-git/v5 v5.16.1
 	github.com/google/go-github/v28 v28.1.1
