@@ -21140,12 +21140,16 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 
 	cacheKey = fmt.Sprintf("%s_%s", cacheKey, path)
 
-	cache, err := GetCache(ctx, cacheKey)
-	if err == nil {
-		cacheData := []byte(cache.([]uint8))
-		resp.WriteHeader(200)
-		resp.Write(cacheData)
-		return
+	resetCache := request.URL.Query().Get("resetCache") == "true"
+
+	if !resetCache {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			resp.WriteHeader(200)
+			resp.Write(cacheData)
+			return
+		}
 	}
 
 	owner := "shuffle"
@@ -21312,13 +21316,18 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	cacheKey := fmt.Sprintf("docs_list_%s", path)
-	cache, err := GetCache(ctx, cacheKey)
 	result := FileList{}
-	if err == nil {
-		cacheData := []byte(cache.([]uint8))
-		resp.WriteHeader(200)
-		resp.Write(cacheData)
-		return
+
+	resetCache := request.URL.Query().Get("resetCache") == "true"
+
+	if !resetCache {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			resp.WriteHeader(200)
+			resp.Write(cacheData)
+			return
+		}
 	}
 
 	client := github.NewClient(nil)
@@ -21345,6 +21354,25 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		publishedDate := time.Now().Unix()
+		if path == "articles" {
+
+			commits, resp, err := client.Repositories.ListCommits(ctx, owner, repo, &github.CommitsListOptions{
+				Path: fmt.Sprintf("%s/%s", path, *item.Name),
+			})
+
+			if err != nil {
+				log.Printf("[WARNING] Failed getting commits for %s: %s", *item.Name, err)
+				if resp != nil {
+					log.Printf("[DEBUG] Response status: %d", resp.StatusCode)
+				}
+			} else {
+				if len(commits) > 0 {
+					publishedDate = commits[len(commits)-1].Commit.Author.Date.Unix()
+				}
+			}
+		}
+
 		// FIXME: Scuffed readtime calc
 		// Average word length = 5. Space = 1. 5+1 = 6 avg.
 		// Words = *item.Size/6/250
@@ -21353,12 +21381,20 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		githubResp := GithubResp{
 			Name:         (*item.Name)[0 : len(*item.Name)-3],
 			Contributors: []GithubAuthor{},
+			PublishedDate: publishedDate,
 			Edited:       "",
 			ReadTime:     *item.Size / 6 / 250,
 			Link:         fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
 		}
 
 		names = append(names, githubResp)
+	}
+
+	if path == "articles" {
+		// Sort articles by published date (newest first)
+		sort.Slice(names, func(i, j int) bool {
+			return names[i].PublishedDate > names[j].PublishedDate
+		})
 	}
 
 	//log.Printf(names)
