@@ -1015,10 +1015,21 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !userFound && !sanitizeOrg {
-			log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, org.Id)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
-			return
+			found := false
+			for _, orgId := range user.Orgs {
+				if orgId == org.Id {
+					found = true
+					admin = false
+					break
+				}
+			}
+
+			if !found { 
+				log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, org.Id)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
+				return
+			}
 
 		}
 	}
@@ -1182,7 +1193,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	org.Users = []User{}
 	org.SyncConfig.Apikey = ""
 	org.SyncConfig.Source = ""
 
@@ -1215,6 +1225,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 		}
+	} else {
+		org.Users = []User{}
 	}
 
 	// This is for sending branding information
@@ -9292,6 +9304,32 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		newUsers = append(newUsers, item)
 	}
 
+	if project.Environment == "cloud" {
+		orgUsers, err := GetUsersByOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting org users for support access: %s", err)
+		} else {
+			for _, orgUser := range orgUsers {
+				found := false 
+				for _, existingUser := range newUsers {
+					if existingUser.Id == orgUser.Id {
+						found = true
+						break
+					}
+				}
+
+				if found { 
+					continue
+				}
+
+				//orgUser.Deleted = true
+				orgUser.LoginType = "DELETED"
+				orgUser.Role = "user"
+				newUsers = append(newUsers, orgUser)
+			}
+		}
+	}
+
 	deduplicatedUsers := []User{}
 	for _, item := range newUsers {
 		found := false
@@ -10703,7 +10741,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
-func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
+func HandleDeleteUsersAccountPermanent(resp http.ResponseWriter, request *http.Request) {
 
 	cors := HandleCors(resp, request)
 	if cors {
@@ -10758,8 +10796,15 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if !userInfo.SupportAccess && userInfo.Id != foundUser.Id {
-		log.Printf("Unauthorized user (%s) attempted to delete an account. Must be a user or have support access.", userInfo.Username)
+	if !userInfo.SupportAccess {
+		log.Printf("[INFO] Unauthorized user (%s) attempted to delete an account. Must be a user or have support access.", userInfo.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorize User. Must be a regular user or have support access"}`))
+		return
+	}
+
+	if userInfo.Id != foundUser.Id {
+		log.Printf("[INFO] Unauthorized user (%s) attempted to delete an account. Must be a user or have support access.", userInfo.Username)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Unauthorize User. Must be a regular user or have support access"}`))
 		return
@@ -11646,10 +11691,24 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !userFound && !user.SupportAccess {
-		log.Printf("[ERROR] User %s (%s) can't change to org %s (%s) (2)", user.Username, user.Id, org.Name, org.Id)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org (2). Please contact support@shuffler.io if this is unexpected."}`))
-		return
+
+		// FIXME: This changes the source of truth from JUST org.Users to user.Orgs  
+		// May be a problem in worst case scenarios, but only works for orgids 
+		// you know, so chance of causing an issue is **VERY** low.
+		found := false 
+		for _, orgId := range user.Orgs {
+			if orgId == org.Id {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			log.Printf("[ERROR] User %s (%s) can't change to org %s (%s) (2)", user.Username, user.Id, org.Name, org.Id)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org (2). Please contact support@shuffler.io if this is unexpected."}`))
+			return
+		}
 	}
 
 	if user.SupportAccess {

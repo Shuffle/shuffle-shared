@@ -4619,6 +4619,18 @@ func GetUsersByOrg(ctx context.Context, orgId string) ([]User, error) {
 	nameKey := "Users"
 
 	users := []User{}
+	cacheKey := fmt.Sprintf("%s_orgusers_%s", nameKey, orgId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &users)
+			if err == nil {
+				return users, nil
+			}
+		}
+	}
+
 	if project.DbType == "opensearch" {
 		return users, errors.New("Not implemented")
 	} else {
@@ -4632,6 +4644,19 @@ func GetUsersByOrg(ctx context.Context, orgId string) ([]User, error) {
 
 			log.Printf("[ERROR] Problem in user loading for org %s: %s", orgId, err)
 			return users, err
+		}
+	}
+
+	if project.CacheDb {
+		marshaled, err := json.Marshal(users)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling users for cache: %s", err)
+			return users, nil
+		}
+
+		err = SetCache(ctx, cacheKey, marshaled, 1)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for users by org '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -6904,7 +6929,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 						}
 
 						orgFound = true
-						log.Printf("[DEBUG] Found matching org %s in parent org %s", newApp.ReferenceOrg, parentOrg.Id)
+						//log.Printf("[DEBUG] Found matching org %s in parent org %s", newApp.ReferenceOrg, parentOrg.Id)
 						break
 					}
 
