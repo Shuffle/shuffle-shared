@@ -9322,6 +9322,24 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 					continue
 				}
 
+				orgUser.ApiKey = ""
+				orgUser.Password = ""
+				orgUser.Session = ""
+				orgUser.UsersLastSession = ""
+				orgUser.VerificationToken = ""
+				orgUser.ValidatedSessionOrgs = []string{}
+				orgUser.Orgs = []string{}
+				orgUser.Authentication = []UserAuth{}
+				orgUser.PrivateApps = []WorkflowApp{}
+				orgUser.MFA = MFAInfo{
+					Active: orgUser.MFA.Active,
+				}
+
+				orgUser.ActiveOrg = OrgMini{}
+				if !orgUser.SupportAccess {
+					orgUser.LoginInfo = []LoginInfo{}
+				}
+
 				//orgUser.Deleted = true
 				orgUser.LoginType = "DELETED"
 				orgUser.Role = "user"
@@ -9341,7 +9359,6 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !found {
-			//log.Printf("[DEBUG] Adding user %s (%s) to list", item.Username, item.Id)
 			deduplicatedUsers = append(deduplicatedUsers, item)
 		}
 	}
@@ -11698,6 +11715,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		found := false 
 		for _, orgId := range user.Orgs {
 			if orgId == org.Id {
+				usr.Role = "user"
 				found = true
 				break
 			}
@@ -15741,7 +15759,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			newCacheKey := fmt.Sprintf("%s_%s_sinkholed_result", executionParent, parentNode)
 			cacheData, err := GetCache(ctx, newCacheKey)
 			if err != nil {
-				log.Printf("[ERROR] Failed Getting sinkholed cache for subflow action result %s (4): %s", subflowExecutionId, err)
+				log.Printf("[ERROR][%s] Failed Getting sinkholed cache for subflow action result (4): %s", subflowExecutionId, err)
 			} else {
 
 				mappedData, ok := cacheData.([]byte)
@@ -15750,6 +15768,9 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 					err = json.Unmarshal(mappedData, &actionValue)
 					if err != nil {
 						log.Printf("[ERROR] Failed unmarshalling cache for subflow action result %s (4): %s", subflowExecutionId, err)
+						if debug {
+							log.Printf("\n\nSinkholed result DATA: %s\n\n", string(mappedData))
+						}
 					}
 				} else {
 					log.Printf("[ERROR] Failed type assertion for subflow action result %s (4): %s", subflowExecutionId, err)
@@ -17562,9 +17583,13 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				var subflowDataList []SubflowData
 				err = json.Unmarshal([]byte(actionResult.Result), &subflowDataList)
 
+				//if debug { 
+				//	log.Printf("\n\n\n\n\nSUBFLOW RESULT DATA: %#v\n\n\n\n\n", subflowData)
+				//}
+
 				// This is in case the list is not an actual list
 				if err != nil || len(subflowDataList) == 0 {
-					log.Printf("NOT sinkholed from subflow result: %s", err)
+					log.Printf("[WARNING][%s] NOT sinkholed from subflow result: %s", workflowExecution.ExecutionId, err)
 					for resultIndex, result := range workflowExecution.Results {
 						if result.Action.ID == actionResult.Action.ID {
 							workflowExecution.Results[resultIndex] = actionResult
@@ -21779,7 +21804,12 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 	if err != nil {
 		log.Printf("[WARNING] Failed execution unmarshaling: %s", err)
 		if strings.Contains(fmt.Sprintf("%s", err), "array into") {
-			log.Printf("Array unmarshal error: %s", string(body))
+			parsedBody := string(body)
+			if len(parsedBody) > 500 {
+				parsedBody = parsedBody[0:500] + "..."
+			}
+
+			log.Printf("[ERROR] Array unmarshal error in validate new worker execution: %s", parsedBody)
 		}
 
 		return err
@@ -26236,7 +26266,7 @@ func executeAuthgroupSubflow(workflowExecution WorkflowExecution, authgroup AppA
 // 2. Parent workflow's owner is same org?
 // 3. Parent execution auth is correct
 func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool, string) {
-	if debug == true {
+	if debug {
 		log.Printf("[DEBUG] Inside execute validation for workflow %s (%s)! Request method: %s. Queries: %#v", workflow.Name, workflow.ID, request.Method, request.URL.Query())
 	}
 

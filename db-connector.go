@@ -1739,10 +1739,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				result = innerresult
 				break
 
-			} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
+			//} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
+			} else if (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") && (innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent") {
 				// Auto fixing decision data based on cache for better decisionmaking
-				//log.Printf("[DEBUG] Found action result %s with WAITING status", action.AppName)
-
 				// Map the result into AgentOutput to check decisions
 				mappedOutput := AgentOutput{}
 				err = json.Unmarshal([]byte(innerresult.Result), &mappedOutput)
