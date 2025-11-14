@@ -13183,7 +13183,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed getting execution (abort): %s", executionId, err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting execution ID %s because it doesn't exist (abort)."}`, executionId)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting execution ID '%s' because it doesn't exist (abort)."}`, executionId)))
 		return
 	}
 
@@ -23877,7 +23877,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
 			if err != nil {
 				log.Printf("[INFO][%s] Failed getting execution (execution) %s", referenceId[0], err)
-				return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed getting execution ID '%s' because it doesn't exist (answer).", referenceId[0]), err
 			}
 
 			if oldExecution.Workflow.ID != workflow.ID {
@@ -24416,7 +24416,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
 			if err != nil {
 				log.Printf("[ERROR][%s] Failed getting execution (execution): %s", referenceId[0], err)
-				return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed getting execution ID '%s' because it doesn't exist (prepare exec).", referenceId[0]), err
 			}
 
 			if oldExecution.Status != "WAITING" {
