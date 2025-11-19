@@ -8053,6 +8053,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// This fix the region issues with public workflow but can it create problem?
+	if len(tmpworkflow.ID) == 0 || workflow.Public == true {
+		log.Printf("[WARNING] Failed to find public workflow in region, using user provided workflow data")
+		tmp := workflow
+		tmpworkflow = &tmp
+	}
+
 	if project.Environment == "cloud" && tmpworkflow.Validated == false {
 		if workflow.Validated == true {
 
