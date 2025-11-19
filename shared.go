@@ -33728,8 +33728,8 @@ func GetDockerClient() (*dockerclient.Client, string, error) {
 		return cli, dockerApiVersion,nil
 	}
 
-	if strings.Contains(err.Error(), "Minimum supported API version is") {
-		re := regexp.MustCompile(`Minimum supported API version is ([0-9\.]+)`)
+	if strings.Contains(strings.ToLower(err.Error()), strings.ToLower("Minimum supported API version is")) {
+		re := regexp.MustCompile(`(?i)minimum supported api version is ([0-9\.]+)`)
 		match := re.FindStringSubmatch(err.Error())
 		if len(match) == 2 {
 			required := match[1]
@@ -33743,8 +33743,8 @@ func GetDockerClient() (*dockerclient.Client, string, error) {
 		}
 	}
 
-	if strings.Contains(err.Error(), "Maximum supported API version is") {
-		re := regexp.MustCompile(`Maximum supported API version is ([0-9\.]+)`)
+	if strings.Contains(strings.ToLower(err.Error()), strings.ToLower("Maximum supported API version is")) {
+		re := regexp.MustCompile(`(?i)maximum supported api version is ([0-9\.]+)`)
 		match := re.FindStringSubmatch(err.Error())
 		if len(match) == 2 {
 			required := match[1]
