@@ -61,6 +61,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Masterminds/semver"
+	dockerclient "github.com/docker/docker/client"
 )
 
 var project ShuffleStorage
@@ -33712,4 +33713,50 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 	}
 
 	return returnActions
+}
+
+func GetDockerClient() (*dockerclient.Client, string, error) {
+	ctx := context.Background()
+	dockerApiVersion := os.Getenv("DOCKER_API_VERSION")
+	cli, err := dockerclient.NewEnvClient()
+	if err != nil {
+		return nil, dockerApiVersion,err
+	}
+
+	_, err = cli.Info(ctx)
+	if err == nil {
+		return cli, dockerApiVersion,nil
+	}
+
+	if strings.Contains(err.Error(), "Minimum supported API version is") {
+		re := regexp.MustCompile(`Minimum supported API version is ([0-9\.]+)`)
+		match := re.FindStringSubmatch(err.Error())
+		if len(match) == 2 {
+			required := match[1]
+			os.Setenv("DOCKER_API_VERSION", required)
+			cli, err = dockerclient.NewEnvClient()
+			if err == nil {
+				dockerApiVersion = required
+				_, err = cli.Info(ctx)
+				return cli, dockerApiVersion, err
+			}
+		}
+	}
+
+	if strings.Contains(err.Error(), "Maximum supported API version is") {
+		re := regexp.MustCompile(`Maximum supported API version is ([0-9\.]+)`)
+		match := re.FindStringSubmatch(err.Error())
+		if len(match) == 2 {
+			required := match[1]
+			os.Setenv("DOCKER_API_VERSION", required)
+			cli, err = dockerclient.NewEnvClient()
+			if err == nil {
+				dockerApiVersion = required
+				_, err = cli.Info(ctx)
+				return cli, dockerApiVersion, err
+			}
+		}
+	}
+
+	return cli, dockerApiVersion, err
 }
