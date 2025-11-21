@@ -11200,7 +11200,7 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 	oaiClient := oai.NewClient(aioption.WithAPIKey(apiKey))
 
 	params := responses.ResponseNewParams{
-		Model:        oai.ChatModelGPT5Mini,
+		Model:        oai.ChatModelGPT4_1,
 		Temperature:  oai.Float(0.4),
 		Instructions: oai.String(instructions),
 		Input: responses.ResponseNewParamsInputUnion{
