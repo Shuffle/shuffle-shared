@@ -10952,8 +10952,12 @@ Based on these rules and the provided documents, please answer the question:`
 				return cleanAnswerText, threadID, nil
 			}
 
-			if runStatus.Status == openai.RunStatusFailed || runStatus.Status == openai.RunStatusCancelled || runStatus.Status == openai.RunStatusExpired {
-				return "", "", fmt.Errorf("run ended with status '%s'", runStatus.Status)
+			if runStatus.Status == openai.RunStatusFailed {
+				errMsg := fmt.Sprintf("run ended with status '%s'", runStatus.Status)
+				if runStatus.LastError != nil {
+					errMsg += fmt.Sprintf(". Code: %s, Message: %s", runStatus.LastError.Code, runStatus.LastError.Message)
+				}
+				return "", "", errors.New(errMsg)
 			}
 		}
 	}
