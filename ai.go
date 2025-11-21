@@ -10864,7 +10864,7 @@ Based on these rules and the provided documents, please answer the question:`
 		Instructions:        instructions,
 		Temperature:         &temperature,
 		MaxCompletionTokens: 2048,
-		ToolChoice:          "required",
+		ToolChoice:          "auto",
 	})
 
 	if err != nil {
