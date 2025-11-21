@@ -61,6 +61,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Masterminds/semver"
+	dockerclient "github.com/docker/docker/client"
 )
 
 var project ShuffleStorage
@@ -8050,6 +8051,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
+	}
+
+	// This fix the region issues with public workflow but can it create problem?
+	if len(tmpworkflow.ID) == 0 || workflow.Public == true {
+		log.Printf("[WARNING] Failed to find public workflow in region, using user provided workflow data")
+		tmp := workflow
+		tmpworkflow = &tmp
 	}
 
 	if project.Environment == "cloud" && tmpworkflow.Validated == false {
@@ -33712,4 +33720,50 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 	}
 
 	return returnActions
+}
+
+func GetDockerClient() (*dockerclient.Client, string, error) {
+	ctx := context.Background()
+	dockerApiVersion := os.Getenv("DOCKER_API_VERSION")
+	cli, err := dockerclient.NewEnvClient()
+	if err != nil {
+		return nil, dockerApiVersion,err
+	}
+
+	_, err = cli.Info(ctx)
+	if err == nil {
+		return cli, dockerApiVersion,nil
+	}
+
+	if strings.Contains(strings.ToLower(err.Error()), strings.ToLower("Minimum supported API version is")) {
+		re := regexp.MustCompile(`(?i)minimum supported api version is ([0-9\.]+)`)
+		match := re.FindStringSubmatch(err.Error())
+		if len(match) == 2 {
+			required := match[1]
+			os.Setenv("DOCKER_API_VERSION", required)
+			cli, err = dockerclient.NewEnvClient()
+			if err == nil {
+				dockerApiVersion = required
+				_, err = cli.Info(ctx)
+				return cli, dockerApiVersion, err
+			}
+		}
+	}
+
+	if strings.Contains(strings.ToLower(err.Error()), strings.ToLower("Maximum supported API version is")) {
+		re := regexp.MustCompile(`(?i)maximum supported api version is ([0-9\.]+)`)
+		match := re.FindStringSubmatch(err.Error())
+		if len(match) == 2 {
+			required := match[1]
+			os.Setenv("DOCKER_API_VERSION", required)
+			cli, err = dockerclient.NewEnvClient()
+			if err == nil {
+				dockerApiVersion = required
+				_, err = cli.Info(ctx)
+				return cli, dockerApiVersion, err
+			}
+		}
+	}
+
+	return cli, dockerApiVersion, err
 }
