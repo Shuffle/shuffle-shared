@@ -4736,6 +4736,13 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	data.Users = newUsers
+
+	// Fix users that are in org.Users but not in user.Orgs
+	// Only run in main region to avoid conflicts
+	if gceProject == "shuffler" {
+		data = *fixUsersForOrg(ctx, &data)
+	}
+
 	if len(data.Tutorials) == 0 {
 		data = *GetTutorials(ctx, data, false)
 	}
@@ -6046,6 +6053,48 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 	}
 
 	return user
+}
+
+func fixUsersForOrg(ctx context.Context, org *Org) *Org {
+	// Made it background due to potential timeouts if this is
+	// used in API calls
+	ctx = context.Background()
+
+	// For each user in org.Users
+	for _, orgUser := range org.Users {
+		if len(orgUser.Id) == 0 {
+			continue
+		}
+
+		go func(userId string, orgId string) {
+			user, err := GetUser(ctx, userId)
+			if err != nil {
+				log.Printf("[WARNING] Error getting user %s in fixUsersForOrg: %s", userId, err)
+				return
+			}
+
+			found := false
+			for _, userOrgId := range user.Orgs {
+				if userOrgId == orgId {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				user.Orgs = append(user.Orgs, orgId)
+
+				err = SetUser(ctx, user, false) // false to avoid recursive call
+				if err != nil {
+					log.Printf("[WARNING] Failed setting user %s in fixUsersForOrg: %s", userId, err)
+				} else {
+					log.Printf("[INFO] Added org %s to user %s's Orgs list", orgId, userId)
+				}
+			}
+		}(orgUser.Id, org.Id)
+	}
+
+	return org
 }
 
 func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticationStorage, error) {
