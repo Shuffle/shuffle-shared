@@ -11157,7 +11157,7 @@ func validateChatContext(ctx context.Context, threadID string, user User) error 
 	return nil
 }
 
-func runSupportLLMAssistantv2(ctx context.Context, input QueryInput, user User) (string, string, error) {
+func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, string, error) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	docsVectorStoreID := os.Getenv("OPENAI_DOCS_VS_ID")
 
