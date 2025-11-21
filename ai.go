@@ -30,6 +30,10 @@ import (
 
 	"github.com/frikky/kin-openapi/openapi3"
 	"github.com/frikky/schemaless"
+
+	oai "github.com/openai/openai-go/v3"
+	aioption "github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
 )
 
 // var model = "gpt-4-turbo-preview"
@@ -6338,7 +6342,9 @@ func getWorkflowSuggestionAIResponse(ctx context.Context, resp http.ResponseWrit
 func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) {
 	log.Printf("[INFO] Getting support suggestion for query: %s for org: %s", input.Query, org.Id)
 	// reply := runSupportRequest(ctx, input)
-	reply, threadId, err := runSupportLLMAssistant(ctx, input, user)
+	// reply, threadId, err := runSupportLLMAssistant(ctx, input, user)
+	reply, threadId, err := runSupportAgent(ctx, input, user)
+	
 	if err != nil {
 		log.Printf("[ERROR] Failed to run support LLM assistant: %s", err)
 		resp.WriteHeader(501)
@@ -10860,7 +10866,7 @@ Based on these rules and the provided documents, please answer the question:`
 		Instructions:        instructions,
 		Temperature:         &temperature,
 		MaxCompletionTokens: 2048,
-		ToolChoice:          "required",
+		ToolChoice:          "auto",
 	})
 
 	if err != nil {
@@ -10948,8 +10954,12 @@ Based on these rules and the provided documents, please answer the question:`
 				return cleanAnswerText, threadID, nil
 			}
 
-			if runStatus.Status == openai.RunStatusFailed || runStatus.Status == openai.RunStatusCancelled || runStatus.Status == openai.RunStatusExpired {
-				return "", "", fmt.Errorf("run ended with status '%s'", runStatus.Status)
+			if runStatus.Status == openai.RunStatusFailed {
+				errMsg := fmt.Sprintf("run ended with status '%s'", runStatus.Status)
+				if runStatus.LastError != nil {
+					errMsg += fmt.Sprintf(". Code: %s, Message: %s", runStatus.LastError.Code, runStatus.LastError.Message)
+				}
+				return "", "", errors.New(errMsg)
 			}
 		}
 	}
@@ -11147,4 +11157,251 @@ func validateChatContext(ctx context.Context, threadID string, user User) error 
 	}
 
 	return nil
+}
+
+func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, string, error) {
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	docsVectorStoreID := os.Getenv("OPENAI_DOCS_VS_ID")
+
+	if apiKey == "" || docsVectorStoreID == "" {
+		return "", "", errors.New("OPENAI_API_KEY and OPENAI_DOCS_VS_ID must be set")
+	}
+
+	newThread := true
+
+	if strings.TrimSpace(input.ResponseId) != "" {
+		cacheKey := fmt.Sprintf("support_assistant_thread_%s", input.ResponseId)
+		cachedData, _ := GetCache(ctx, cacheKey)
+
+		if cachedData != nil {
+			orgId := ""
+			if byteSlice, ok := cachedData.([]byte); ok {
+				orgId = string(byteSlice)
+			}
+
+			if orgId != "" {
+				if orgId != input.OrgId {
+					return "", "", errors.New("thread belongs to different organization")
+				}
+				newThread = false
+			}
+		}
+	}
+
+	instructions := `You are an expert support assistant named "Shuffler AI" built by shuffle. Your entire knowledge base is a set of provided documents. Your goal is to answer the user's question accurately and based ONLY on the information within these documents.
+
+**Rules:**
+1. Ground Your Answer: Find the relevant information in the documents before answering. Do not use any outside knowledge.
+2. Be Honest: If you cannot find a clear answer in the documents, do not make one up.
+3. Be Professional: Maintain a helpful and professional tone.
+4. Be Helpful: Provide as much relevant information as possible.
+5. Proper Formatting: Make sure you don't include characters in your response that might break our json parsing. Do not include any citations to the files used in the response text.`
+
+	oaiClient := oai.NewClient(aioption.WithAPIKey(apiKey))
+
+	params := responses.ResponseNewParams{
+		Model:        oai.ChatModelGPT4_1,
+		Temperature:  oai.Float(0.4),
+		Instructions: oai.String(instructions),
+		Input: responses.ResponseNewParamsInputUnion{
+			OfString: oai.String(input.Query),
+		},
+		Tools: []responses.ToolUnionParam{
+			{
+				OfFileSearch: &responses.FileSearchToolParam{
+					VectorStoreIDs: []string{docsVectorStoreID},
+				},
+			},
+		},
+	}
+
+	if strings.TrimSpace(input.ResponseId) != "" {
+		params.PreviousResponseID = oai.String(input.ResponseId)
+	}
+
+	resp, err := oaiClient.Responses.New(ctx, params)
+	if err != nil {
+		log.Printf("[ERROR] Failed to generate response: %v", err)
+		return "", "", err
+	}
+
+	finalText := resp.OutputText()
+	finalResponseId := resp.ID
+
+	if newThread && finalResponseId != "" {
+		cacheKey := fmt.Sprintf("support_assistant_thread_%s", finalResponseId)
+		value := []byte(input.OrgId)
+		err := SetCache(ctx, cacheKey, value, 86400)
+		if err != nil {
+			// retry once
+			if retryErr := SetCache(ctx, cacheKey, value, 86400); retryErr != nil {
+				log.Printf("[ERROR] Failed to set cache for new thread %s: %s", finalResponseId, retryErr)
+			}
+		}
+		log.Printf("[INFO] Thread created successfully for org: %s, response Id: %s", input.OrgId, finalResponseId)
+
+	}
+
+	return finalText, finalResponseId, nil
+}
+
+func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, input QueryInput, user User) {
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	docsVectorStoreID := os.Getenv("OPENAI_DOCS_VS_ID")
+
+	if apiKey == "" || docsVectorStoreID == "" {
+		return
+	}
+
+	newThread := true
+
+	if strings.TrimSpace(input.ResponseId) != "" {
+		cacheKey := fmt.Sprintf("support_assistant_thread_%s", input.ResponseId)
+		cachedData, _ := GetCache(ctx, cacheKey)
+
+		if cachedData != nil {
+			orgId := ""
+			if byteSlice, ok := cachedData.([]byte); ok {
+				orgId = string(byteSlice)
+			}
+
+			if orgId != "" {
+				if orgId != input.OrgId {
+					log.Printf("[ERROR] Access denied. Thread %s does not belong to org %s. Owner org: %s", input.ResponseId, input.OrgId, orgId)
+					return
+				}
+				newThread = false
+			}
+		}
+	}
+
+	resp.Header().Set("Content-Type", "text/event-stream")
+	resp.Header().Set("Cache-Control", "no-cache")
+	resp.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := resp.(http.Flusher)
+	if !ok {
+		http.Error(resp, "Streaming not supported", http.StatusInternalServerError)
+		log.Printf("[ERROR] Streaming not supported for support llm response")
+		return
+	}
+
+	instructions := `You are an expert support assistant named "Shuffler AI" built by shuffle. Your entire knowledge base is a set of provided documents. Your goal is to answer the user's question accurately and based ONLY on the information within these documents.
+
+**Rules:**
+1. Ground Your Answer: Find the relevant information in the documents before answering. Do not use any outside knowledge.
+2. Be Honest: If you cannot find a clear answer in the documents, do not make one up.
+3. Be Professional: Maintain a helpful and professional tone.
+4. Be Helpful: Provide as much relevant information as possible.
+5. Proper Formatting: Make sure you don't include characters in your response that might break our json parsing. Do not include any citations to the files used in the response text.`
+
+	oaiClient := oai.NewClient(aioption.WithAPIKey(apiKey))
+
+	params := responses.ResponseNewParams{
+		Model:        oai.ChatModelGPT5Mini,
+		Temperature:  oai.Float(0.4),
+		Instructions: oai.String(instructions),
+		Input: responses.ResponseNewParamsInputUnion{
+			OfString: oai.String(input.Query),
+		},
+		Tools: []responses.ToolUnionParam{
+			{
+				OfFileSearch: &responses.FileSearchToolParam{
+					VectorStoreIDs: []string{docsVectorStoreID},
+				},
+			},
+		},
+	}
+
+	if strings.TrimSpace(input.ResponseId) != "" {
+		params.PreviousResponseID = oai.String(input.ResponseId)
+	}
+
+	stream := oaiClient.Responses.NewStreaming(ctx, params)
+	defer stream.Close()
+
+	if err := stream.Err(); err != nil {
+		log.Printf("[ERROR] Failed to start chat stream: %v for org: %s", err, input.OrgId)
+
+		errMsg, _ := json.Marshal(StreamData{Type: "error", Data: "Failed to initiate AI request"})
+		fmt.Fprintf(resp, "data: %s\n\n", errMsg)
+		flusher.Flush()
+
+		return
+	}
+
+	var finalResponseId string
+
+	for stream.Next() {
+		event := stream.Current()
+		var dataToSend []byte
+		var msg StreamData
+
+		switch event.Type {
+		case "response.created":
+			if event.Response.ID != "" {
+				finalResponseId = event.Response.ID
+			}
+			msg = StreamData{
+				Type: "created",
+				Data: event.Response.ID,
+			}
+
+		case "response.output_text.delta":
+			msg = StreamData{
+				Type:  "chunk",
+				Chunk: event.Delta,
+			}
+
+		case "response.completed":
+			finalResponseId = event.Response.ID
+			msg = StreamData{
+				Type: "done",
+				Data: event.Response.ID,
+			}
+
+		case "response.failed":
+			if event.Response.Error.Message != "" {
+				log.Printf("Response API failed: %s, response id: %s, org: %s", event.Response.Error.Message, finalResponseId, input.OrgId)
+			}
+
+		case "error":
+			msg = StreamData{
+				Type: "error",
+				Data: event.Message,
+			}
+			log.Printf("[ERROR] Error event in chat stream: %s for response ID %s for org ID %s", event.Message, event.Response.ID, input.OrgId)
+
+		default:
+			continue
+		}
+
+		dataToSend, _ = json.Marshal(msg)
+
+		if _, err := fmt.Fprintf(resp, "data: %s\n\n", dataToSend); err != nil {
+			log.Printf("Error writing to response: %v for response id", err, finalResponseId)
+			return
+		}
+
+		flusher.Flush()
+	}
+
+	if newThread && finalResponseId != "" {
+		cacheKey := fmt.Sprintf("support_assistant_thread_%s", finalResponseId)
+		value := []byte(input.OrgId)
+		err := SetCache(ctx, cacheKey, value, 86400)
+		if err != nil {
+			// retry once
+			if retryErr := SetCache(ctx, cacheKey, value, 86400); retryErr != nil {
+				log.Printf("[ERROR] Failed to set cache for new thread %s: %s", finalResponseId, retryErr)
+			}
+		}
+		log.Printf("[INFO] Thread created successfully for org: %s, response Id: %s", input.OrgId, finalResponseId)
+
+	}
+
+	if err := stream.Err(); err != nil {
+		log.Printf("[ERROR] Stream finished with error: %v, for the org: %s", err, input.OrgId)
+
+	}
 }

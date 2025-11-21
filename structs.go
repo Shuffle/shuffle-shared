@@ -118,6 +118,9 @@ type QueryInput struct {
 	// For OpenAI assistant with Shuffle labels
 	ThreadId string `json:"thread_id,omitempty"`
 	RunId    string `json:"run_id,omitempty"`
+
+	// For responses API
+	ResponseId string `json:"response_id,omitempty"`
 }
 
 type AtomicOutput struct {
@@ -4766,4 +4769,10 @@ type ConversationMessage struct {
 	Role      string    `json:"role"` // "user" or "assistant"
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
+}
+
+type StreamData struct {
+    Type  string `json:"type"`  // "chunk", "done", "error"
+    Chunk string `json:"chunk,omitempty"`
+    Data  string `json:"data,omitempty"` // For the final ID or error
 }
