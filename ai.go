@@ -11296,7 +11296,7 @@ func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, inp
 	oaiClient := oai.NewClient(aioption.WithAPIKey(apiKey))
 
 	params := responses.ResponseNewParams{
-		Model:        oai.ChatModelGPT4o,
+		Model:        oai.ChatModelGPT5Mini,
 		Temperature:  oai.Float(0.4),
 		Instructions: oai.String(instructions),
 		Input: responses.ResponseNewParamsInputUnion{
