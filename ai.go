@@ -11319,13 +11319,13 @@ func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, inp
 	defer stream.Close()
 
 	if err := stream.Err(); err != nil {
-		log.Printf("[ERROR] Failed to start stream: %v", err)
+		log.Printf("[ERROR] Failed to start chat stream: %v for org: %s", err, input.OrgId)
 
 		errMsg, _ := json.Marshal(StreamData{Type: "error", Data: "Failed to initiate AI request"})
 		fmt.Fprintf(resp, "data: %s\n\n", errMsg)
 		flusher.Flush()
 
-		return "", "", err
+		return
 	}
 
 	var finalResponseId string
@@ -11360,7 +11360,7 @@ func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, inp
 
 		case "response.failed":
 			if event.Response.Error.Message != "" {
-				log.Printf("Response failed: %s", event.Response.Error.Message)
+				log.Printf("Response API failed: %s, response id: %s, org: %s", event.Response.Error.Message, finalResponseId, input.OrgId)
 			}
 
 		case "error":
@@ -11377,8 +11377,8 @@ func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, inp
 		dataToSend, _ = json.Marshal(msg)
 
 		if _, err := fmt.Fprintf(resp, "data: %s\n\n", dataToSend); err != nil {
-			log.Printf("Error writing to response: %v", err)
-			return finalResponseId, input.OrgId, nil
+			log.Printf("Error writing to response: %v for response id", err, finalResponseId)
+			return
 		}
 
 		flusher.Flush()
@@ -11389,13 +11389,17 @@ func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, inp
 		value := []byte(input.OrgId)
 		err := SetCache(ctx, cacheKey, value, 86400)
 		if err != nil {
-			log.Printf("[ERROR] Failed to set cache for new thread %s: %s", finalResponseId, err)
+			// retry once
+			if retryErr := SetCache(ctx, cacheKey, value, 86400); retryErr != nil {
+				log.Printf("[ERROR] Failed to set cache for new thread %s: %s", finalResponseId, retryErr)
+			}
 		}
+		log.Printf("[INFO] Thread created successfully for org: %s, response Id: %s", input.OrgId, finalResponseId)
+
 	}
 
 	if err := stream.Err(); err != nil {
-		log.Printf("[ERROR] Stream finished with error: %v", err)
-	}
+		log.Printf("[ERROR] Stream finished with error: %v, for the org: %s", err, input.OrgId)
 
-	return finalResponseId, input.OrgId, nil
+	}
 }
