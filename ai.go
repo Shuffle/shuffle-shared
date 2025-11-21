@@ -6342,7 +6342,9 @@ func getWorkflowSuggestionAIResponse(ctx context.Context, resp http.ResponseWrit
 func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) {
 	log.Printf("[INFO] Getting support suggestion for query: %s for org: %s", input.Query, org.Id)
 	// reply := runSupportRequest(ctx, input)
-	reply, threadId, err := runSupportLLMAssistant(ctx, input, user)
+	// reply, threadId, err := runSupportLLMAssistant(ctx, input, user)
+	reply, threadId, err := runSupportAgent(ctx, input, user)
+	
 	if err != nil {
 		log.Printf("[ERROR] Failed to run support LLM assistant: %s", err)
 		resp.WriteHeader(501)
