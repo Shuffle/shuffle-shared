@@ -11280,7 +11280,8 @@ func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, inp
 	flusher, ok := resp.(http.Flusher)
 	if !ok {
 		http.Error(resp, "Streaming not supported", http.StatusInternalServerError)
-		return "", "", errors.New("streaming not supported")
+		log.Printf("[ERROR] Streaming not supported for support llm response")
+		return
 	}
 
 	instructions := `You are an expert support assistant named "Shuffler AI" built by shuffle. Your entire knowledge base is a set of provided documents. Your goal is to answer the user's question accurately and based ONLY on the information within these documents.
