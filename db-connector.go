@@ -4737,12 +4737,6 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 
 	data.Users = newUsers
 
-	// Fix users that are in org.Users but not in user.Orgs
-	// Only run in main region to avoid conflicts
-	if gceProject == "shuffler" {
-		data = *fixUsersForOrg(ctx, &data)
-	}
-
 	if len(data.Tutorials) == 0 {
 		data = *GetTutorials(ctx, data, false)
 	}
@@ -6055,6 +6049,10 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 	return user
 }
 
+// fixUsersForOrg syncs user.Orgs with org.Users
+// For each user in org.Users, ensures the org is in user.Orgs
+// This is a standalone function to fix data sync issues manually
+// Only call this when you need to fix broken org/user relationships
 func fixUsersForOrg(ctx context.Context, org *Org) *Org {
 	// Made it background due to potential timeouts if this is
 	// used in API calls
