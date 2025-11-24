@@ -6343,7 +6343,7 @@ func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWrite
 	log.Printf("[INFO] Getting support suggestion for query: %s for org: %s", input.Query, org.Id)
 	// reply := runSupportRequest(ctx, input)
 	// reply, threadId, err := runSupportLLMAssistant(ctx, input, user)
-	reply, threadId, err := runSupportAgent(ctx, input, user)
+	reply, responseId, err := runSupportAgent(ctx, input, user)
 	
 	if err != nil {
 		log.Printf("[ERROR] Failed to run support LLM assistant: %s", err)
@@ -6362,7 +6362,7 @@ func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWrite
 	newResponse := AtomicOutput{
 		Success:  true,
 		Reason:   reply,
-		ThreadId: threadId,
+		ResponseId: responseId,
 	}
 
 	// Marshal it
