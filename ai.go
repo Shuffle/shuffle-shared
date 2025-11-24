@@ -3236,6 +3236,8 @@ func expandShuffleApps(authHeader string, foundApp WorkflowApp, apps []WorkflowA
 		fmt.Sprintf("/apps"),
 		user.ActiveOrg.Id,
 		true,
+		"LOW",
+		"ai",
 	)
 
 	if err != nil {

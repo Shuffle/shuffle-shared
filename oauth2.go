@@ -3926,6 +3926,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			fmt.Sprintf("/admin?admin_tab=notifications"),
 			appAuth.OrgId,
 			true,
+			"HIGH",
+			"oauth",
 		)
 
 		if newresp.StatusCode >= 300 {

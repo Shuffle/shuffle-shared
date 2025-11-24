@@ -3336,7 +3336,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		// Get the user based on APIkey here
 		userdata, err := GetApikey(ctx, apikeyCheck[1])
 		if err != nil {
-			//log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
+			log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
 			return User{}, err
 		}
 
@@ -8900,6 +8900,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				fmt.Sprintf("/workflows/%s", workflow.ID),
 				user.ActiveOrg.Id,
 				true,
+				"MEDIUM",
+				"git",
 			)
 
 			if err != nil {
@@ -16769,6 +16771,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 				workflowExecution.ExecutionOrg,
 				true,
+				"CRITICAL",
+				"workflow_execution",
 			)
 
 			workflowExecution.NotificationsCreated++
@@ -16806,6 +16810,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 				workflowExecution.ExecutionOrg,
 				true,
+				"CRITICAL",
+				"liquid_syntax",
 			)
 
 			workflowExecution.NotificationsCreated++
@@ -16848,6 +16854,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 					workflowExecution.ExecutionOrg,
 					true,
+					"CRITICAL",
+					"action_failure",
 				)
 
 				workflowExecution.NotificationsCreated++
@@ -17269,6 +17277,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 					workflowExecution.ExecutionOrg,
 					true,
+					"HIGH",
+					"workflow_silent_failure",
 				)
 
 				workflowExecution.NotificationsCreated++
@@ -17295,6 +17305,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				fmt.Sprintf("/workflows/%s?execution_id=%s&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 				workflowExecution.ExecutionOrg,
 				true,
+				"CRITICAL",
+				"app_error",
 			)
 		}
 	}
@@ -25646,6 +25658,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 									workflowExecution.ExecutionOrg,
 									true,
+									"MEDIUM",
+									"KMS_DECRYPT_FAILURE",
 								)
 							}
 						}
@@ -25825,6 +25839,8 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 			fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 			workflowExecution.ExecutionOrg,
 			true,
+			"HIGH",
+			"AUTH_ID_MISSING",
 		)
 
 		//return workflowExecution, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id))
@@ -25977,6 +25993,8 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 					fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 					workflowExecution.ExecutionOrg,
 					true,
+					"HIGH",
+					"OAUTH2_REFRESH_FAILURE",
 				)
 
 				// Abort the workflow due to auth being bad
@@ -26077,6 +26095,8 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 						fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 						workflowExecution.ExecutionOrg,
 						true,
+						"HIGH",
+						"OAUTH2_REFRESH_FAILURE",
 					)
 
 					// Adding so it can be used to fail the auth naturally with Outlook

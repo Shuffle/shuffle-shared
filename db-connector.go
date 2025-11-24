@@ -13514,6 +13514,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 								fmt.Sprintf("/admin?tab=datastore&category=%s", cacheData.Category),
 								cacheData.OrgId,
 								true,
+								"MEDIUM",
+								"Datastore_Automation_Error",
 							)
 						}
 					}(cacheData, automation)
@@ -13728,6 +13730,8 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 							fmt.Sprintf("/admin?tab=datastore&category=%s", cacheData.Category),
 							cacheData.OrgId,
 							true,
+							"MEDIUM",
+							"Datastore_Automation_Error",
 						)
 					}
 				}(cacheData, automation)
@@ -15564,6 +15568,8 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 					workflowExecution.ExecutionOrg,
 					true,
+					"MEDIUM",
+					"workflow_long_execution",
 				)
 
 				if err != nil {
