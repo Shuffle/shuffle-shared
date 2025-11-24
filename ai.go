@@ -6360,8 +6360,8 @@ func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWrite
 	}
 
 	newResponse := AtomicOutput{
-		Success:  true,
-		Reason:   reply,
+		Success:    true,
+		Reason:     reply,
 		ResponseId: responseId,
 	}
 
@@ -11245,6 +11245,51 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 	return finalText, finalResponseId, nil
 }
 
+func HandleStreamSupportLLM(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in stream support LLM: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read request body in stream support LLM: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
+		return
+	}
+
+	var input QueryInput
+	err = json.Unmarshal(body, &input)
+	if err != nil {
+		log.Printf("[ERROR] Failed to unmarshal request body in stream support LLM: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid request format"}`))
+		return
+	}
+
+	// Validate required fields
+	if strings.TrimSpace(input.Query) == "" {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Query is required"}`))
+		return
+	}
+
+	input.OrgId = user.ActiveOrg.Id
+
+	StreamSupportLLMResponse(ctx, resp, input, user)
+}
+
 func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, input QueryInput, user User) {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	docsVectorStoreID := os.Getenv("OPENAI_DOCS_VS_ID")
@@ -11298,7 +11343,7 @@ func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, inp
 	oaiClient := oai.NewClient(aioption.WithAPIKey(apiKey))
 
 	params := responses.ResponseNewParams{
-		Model:        oai.ChatModelGPT5Mini,
+		Model:        oai.ChatModelGPT4_1,
 		Temperature:  oai.Float(0.4),
 		Instructions: oai.String(instructions),
 		Input: responses.ResponseNewParamsInputUnion{
