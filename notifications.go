@@ -624,7 +624,7 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 	return nil
 }
 
-func CreateOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool) error {
+func CreateOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool, severity string, origin string) error {
 	if len(orgId) == 0 {
 		log.Printf("[ERROR] No org ID provided to create notification '%s'", title)
 		return errors.New("no org ID provided")
@@ -728,6 +728,8 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		Read:              false,
 		CreatedAt:         int64(time.Now().Unix()),
 		UpdatedAt:         int64(time.Now().Unix()),
+		Severity:			severity,
+		Origin:				origin,
 	}
 
 	selectedApikey := ""
@@ -1109,6 +1111,8 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		notification.ReferenceUrl,
 		orgId,
 		false,
+		notification.Severity,
+		notification.Origin,
 	)
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", user.ActiveOrg.Id))
