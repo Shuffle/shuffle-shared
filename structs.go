@@ -130,6 +130,8 @@ type AtomicOutput struct {
 	ThreadId   string `json:"thread_id"`              // Thread the assistant ran
 	RunId      string `json:"run_id"`                 // Run ID for the thread
 	ToolCallID string `json:"tool_call_id,omitempty"` // Result inside the run
+	
+	ResponseId string `json:"response_id,omitempty"`  // Response ID 
 }
 
 type ExecutionRequestWrapper struct {
