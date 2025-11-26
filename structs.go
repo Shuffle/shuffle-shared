@@ -4781,6 +4781,7 @@ type ConversationResponse struct {
 }
 
 type ConversationMessage struct {
+	UserId    string    `json:"user_id"`
 	Role      string    `json:"role"` // "user" or "assistant"
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
