@@ -11225,26 +11225,44 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 		return "", "", errors.New("OPENAI_API_KEY and OPENAI_DOCS_VS_ID must be set")
 	}
 
-	newThread := true
+	var conversationId string
+	var history []ConversationMessage
+	var conversationMetadata *Conversation
+	newConversation := false
 
-	if strings.TrimSpace(input.ResponseId) != "" {
-		cacheKey := fmt.Sprintf("support_assistant_thread_%s", input.ResponseId)
-		cachedData, _ := GetCache(ctx, cacheKey)
+	// Check if conversation exists
+	if strings.TrimSpace(input.ConversationId) != "" {
+		conversationId = input.ConversationId
 
-		if cachedData != nil {
-			orgId := ""
-			if byteSlice, ok := cachedData.([]byte); ok {
-				orgId = string(byteSlice)
-			}
-
-			if orgId != "" {
-				if orgId != input.OrgId {
-					return "", "", errors.New("thread belongs to different organization")
-				}
-				newThread = false
-			}
+		// Get conversation metadata to check access
+		metadata, err := GetConversationMetadata(ctx, conversationId)
+		if err != nil {
+			log.Printf("[WARNING] Conversation %s not found: %s", conversationId, err)
+			return "", "", errors.New("conversation not found")
 		}
+		conversationMetadata = metadata
+
+		// Check if user has access to this conversation
+		if conversationMetadata.OrgId != input.OrgId {
+			log.Printf("[WARNING] User from org %s trying to access conversation from org %s", input.OrgId, conversationMetadata.OrgId)
+			return "", "", errors.New("conversation belongs to different organization")
+		}
+
+		// Load conversation history
+		history, err = GetConversationHistory(ctx, conversationId, 50)
+		if err != nil {
+			log.Printf("[WARNING] Failed to load conversation history for %s: %s", conversationId, err)
+			history = []ConversationMessage{} // Continue with empty history
+		}
+	} else {
+		// New conversation - generate ID
+		conversationId = uuid.NewV4().String()
+		newConversation = true
+		history = []ConversationMessage{}
 	}
+
+	// Build input with conversation history
+	rawInput := buildManualInputList(history, input.Query)
 
 	instructions := `You are an expert support assistant named "Shuffler AI" built by shuffle. Your entire knowledge base is a set of provided documents. Your goal is to answer the user's question accurately and based ONLY on the information within these documents.
 
@@ -11261,9 +11279,6 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 		Model:        oai.ChatModelGPT4_1,
 		Temperature:  oai.Float(0.4),
 		Instructions: oai.String(instructions),
-		Input: responses.ResponseNewParamsInputUnion{
-			OfString: oai.String(input.Query),
-		},
 		Tools: []responses.ToolUnionParam{
 			{
 				OfFileSearch: &responses.FileSearchToolParam{
@@ -11271,36 +11286,83 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 				},
 			},
 		},
+		Store: oai.Bool(false),
 	}
 
-	if strings.TrimSpace(input.ResponseId) != "" {
-		params.PreviousResponseID = oai.String(input.ResponseId)
-	}
-
-	resp, err := oaiClient.Responses.New(ctx, params)
+	resp, err := oaiClient.Responses.New(ctx, params, aioption.WithJSONSet("input", rawInput))
 	if err != nil {
 		log.Printf("[ERROR] Failed to generate response: %v", err)
 		return "", "", err
 	}
 
-	finalText := resp.OutputText()
-	finalResponseId := resp.ID
+	aiResponse := resp.OutputText()
 
-	if newThread && finalResponseId != "" {
-		cacheKey := fmt.Sprintf("support_assistant_thread_%s", finalResponseId)
-		value := []byte(input.OrgId)
-		err := SetCache(ctx, cacheKey, value, 86400)
-		if err != nil {
-			// retry once
-			if retryErr := SetCache(ctx, cacheKey, value, 86400); retryErr != nil {
-				log.Printf("[ERROR] Failed to set cache for new thread %s: %s", finalResponseId, retryErr)
-			}
-		}
-		log.Printf("[INFO] Thread created successfully for org: %s, response Id: %s", input.OrgId, finalResponseId)
-
+	// Save user message to DB
+	userMessage := QueryInput{
+		Id:             uuid.NewV4().String(),
+		ConversationId: conversationId,
+		OrgId:          input.OrgId,
+		UserId:         input.UserId,
+		Role:           "user",
+		Query:          input.Query,
+		TimeStarted:    time.Now().Unix(),
+	}
+	err = SetConversation(ctx, userMessage)
+	if err != nil {
+		log.Printf("[WARNING] Failed to save user message: %s", err)
 	}
 
-	return finalText, finalResponseId, nil
+	// Save AI response to DB
+	assistantMessage := QueryInput{
+		Id:             uuid.NewV4().String(),
+		ConversationId: conversationId,
+		OrgId:          input.OrgId,
+		UserId:         input.UserId,
+		Role:           "assistant",
+		Response:       aiResponse,
+		TimeStarted:    time.Now().Unix(),
+	}
+	err = SetConversation(ctx, assistantMessage)
+	if err != nil {
+		log.Printf("[WARNING] Failed to save assistant message: %s", err)
+	}
+
+	// Create or update conversation metadata
+	if newConversation {
+		// Generate title from first message (simple version for now)
+		title := input.Query
+		if len(title) > 50 {
+			title = title[:50] + "..."
+		}
+
+		newMetadata := Conversation{
+			Id:           conversationId,
+			Title:        title,
+			OrgId:        input.OrgId,
+			UserId:       input.UserId,
+			CreatedAt:    time.Now().Unix(),
+			UpdatedAt:    time.Now().Unix(),
+			MessageCount: 2, // user + assistant
+		}
+		err = SetConversationMetadata(ctx, newMetadata)
+		if err != nil {
+			log.Printf("[WARNING] Failed to save conversation metadata: %s", err)
+		}
+
+		log.Printf("[INFO] New conversation created for org %s: %s", input.OrgId, conversationId)
+	} else {
+		// Update existing conversation metadata (reuse the one we already fetched)
+		if conversationMetadata != nil {
+			conversationMetadata.UpdatedAt = time.Now().Unix()
+			conversationMetadata.MessageCount += 2 // user + assistant
+			err = SetConversationMetadata(ctx, *conversationMetadata)
+			if err != nil {
+				log.Printf("[WARNING] Failed to update conversation metadata: %s", err)
+			}
+		}
+	}
+
+	return aiResponse, conversationId, nil
 }
 
 func HandleStreamSupportLLM(resp http.ResponseWriter, request *http.Request) {
