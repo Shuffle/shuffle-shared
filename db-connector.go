@@ -6416,6 +6416,13 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 	hideEnvs := false
 	multiEnvLimit := 0
 	if project.Environment == "onprem" {
+		if orgId == "" {
+			if debug {
+				log.Printf("[DEBUG] No orgId provided, skipping multi-env license check")
+			}
+			return environments, nil
+		}
+
 		currentOrg, err := GetOrg(ctx, orgId)
 		if err != nil {
 			log.Printf("[WARNING] Failed to get current org %s: %v", orgId, err)
@@ -17089,7 +17096,7 @@ func InitOpensearchIndexes() {
 		GetESIndexPrefix("notifications"),
 		GetESIndexPrefix("shuffle_logs"),
 		GetESIndexPrefix("environments"),
-		GetESIndexPrefix("notifications"),
+		GetESIndexPrefix("org_statistics")
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")
