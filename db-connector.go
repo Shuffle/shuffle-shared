@@ -17096,7 +17096,7 @@ func InitOpensearchIndexes() {
 		GetESIndexPrefix("notifications"),
 		GetESIndexPrefix("shuffle_logs"),
 		GetESIndexPrefix("environments"),
-		GetESIndexPrefix("org_statistics")
+		GetESIndexPrefix("org_statistics"),
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")
