@@ -11570,3 +11570,27 @@ func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, inp
 
 	}
 }
+
+// Helper: Builds a raw list of maps of conversation history
+func buildManualInputList(history []ConversationMessage, newPrompt string) []map[string]interface{} {
+	var items []map[string]interface{}
+
+	// 1. Add History
+	for _, msg := range history {
+		item := map[string]interface{}{
+			"role":    msg.Role, // "user" or "assistant"
+			"content": msg.Content,
+			"type":    "message",
+		}
+		items = append(items, item)
+	}
+
+	// 2. Add New User Prompt
+	items = append(items, map[string]interface{}{
+		"role":    "user",
+		"content": newPrompt,
+		"type":    "message",
+	})
+
+	return items
+}
