@@ -4787,6 +4787,17 @@ type ConversationMessage struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// Conversation metadata
+type Conversation struct {
+	Id           string `json:"id" datastore:"id"`
+	Title        string `json:"title" datastore:"title"`
+	OrgId        string `json:"org_id" datastore:"org_id"`
+	UserId       string `json:"user_id" datastore:"user_id"`
+	CreatedAt    int64  `json:"created_at" datastore:"created_at"`
+	UpdatedAt    int64  `json:"updated_at" datastore:"updated_at"`
+	MessageCount int    `json:"message_count" datastore:"message_count"`
+}
+
 type StreamData struct {
     Type  string `json:"type"`  // "chunk", "done", "error"
     Chunk string `json:"chunk,omitempty"`
