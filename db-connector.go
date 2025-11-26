@@ -4023,7 +4023,11 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 // Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {
 	if id == "public" {
-		return &Org{}, errors.New("'public' org is used for Singul action without being logged in. Not relevant.")
+		//return &Org{}, errors.New("'public' org is used for Singul action without being logged in. Not relevant.")
+		return &Org{
+			Id:	 "public",
+			Name: "Public",
+		}, nil
 	}
 
 	nameKey := "Organizations"
