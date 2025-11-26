@@ -4799,7 +4799,7 @@ type Conversation struct {
 }
 
 type StreamData struct {
-    Type  string `json:"type"`  // "chunk", "done", "error"
-    Chunk string `json:"chunk,omitempty"`
-    Data  string `json:"data,omitempty"` // For the final ID or error
+	Type  string `json:"type"` // "chunk", "done", "error"
+	Chunk string `json:"chunk,omitempty"`
+	Data  string `json:"data,omitempty"` // For the final ID or error
 }
