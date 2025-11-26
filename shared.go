@@ -20379,6 +20379,8 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		if len(decision) > 0 {
 			decisionId = decision[0]
 		}
+	} else if strings.ToLower(appId) == "integration" || strings.ToLower(appId) == "singul" {
+		log.Printf("[INFO] Running single action for 'integration' app => Singul")
 	} else if strings.ToLower(appId) == "http" {
 
 		// Find the app and the ID for it
@@ -20474,6 +20476,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 	} else {
+		// Integration handler as it has no name
+		//action.AppName = "Shuffle-AI"
+		//action.Name = "run_schemaless"
+
 		newApp, err := GetApp(ctx, appId, user, false)
 		if err != nil || len(newApp.ID) == 0 {
 			log.Printf("[WARNING] Error getting app (execute SINGLE app action): %s", appId)
@@ -20767,6 +20773,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		workflowExecution.WorkflowId = action.SourceWorkflow
 		workflowExecution.Workflow.ID = action.SourceWorkflow
 
+		workflowExecution.ExecutionArgument = oldExec.ExecutionArgument
 		workflowExecution.ExecutionSource = action.SourceWorkflow
 		workflowExecution.ExecutionParent = action.SourceExecution
 
@@ -21093,7 +21100,7 @@ func runAppRebuildFromSingleAction(appId string) {
 	ctx := context.Background()
 	app, err := GetApp(ctx, appId, User{}, false)
 	if err != nil {
-		log.Printf("[WARNING] Error getting app (execute SINGLE app action): %s", appId)
+		log.Printf("[WARNING] Error getting app (execute SINGLE app action - 2): %s", appId)
 		return
 	}
 

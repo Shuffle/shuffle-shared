@@ -2456,10 +2456,10 @@ type NGramSearchWrapper struct {
 		} `json:"total"`
 		MaxScore float64 `json:"max_score"`
 		Hits     []struct {
-			Index  string   `json:"_index"`
-			Type   string   `json:"_type"`
-			ID     string   `json:"_id"`
-			Score  float64  `json:"_score"`
+			Index  string    `json:"_index"`
+			Type   string    `json:"_type"`
+			ID     string    `json:"_id"`
+			Score  float64   `json:"_score"`
 			Source NGramItem `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
@@ -4290,14 +4290,14 @@ type LiveExecutionStatus struct {
 }
 
 type HealthCheck struct {
-	Success			bool            `json:"success"`
-	Updated			int64           `json:"updated"`
-	Apps			AppHealth       `json:"apps"`
-	Workflows		WorkflowHealth  `json:"workflows"`
-	PythonApps		AppHealth       `json:"python_apps"`
-	Datastore		DatastoreHealth `json:"datastore"`
-	FileOps			FileHealth      `json:"fileops"`
-	OpensearchOps	opensearchapi.ClusterHealthResp `json:"opensearch"`
+	Success       bool                            `json:"success"`
+	Updated       int64                           `json:"updated"`
+	Apps          AppHealth                       `json:"apps"`
+	Workflows     WorkflowHealth                  `json:"workflows"`
+	PythonApps    AppHealth                       `json:"python_apps"`
+	Datastore     DatastoreHealth                 `json:"datastore"`
+	FileOps       FileHealth                      `json:"fileops"`
+	OpensearchOps opensearchapi.ClusterHealthResp `json:"opensearch"`
 }
 
 type HealthCheckDB struct {
@@ -4396,6 +4396,7 @@ type UserRequest struct {
 type HTTPOutput struct {
 	Success   bool   `json:"success"`
 	Reason    string `json:"reason,omitempty"`
+	Result    string `jjson:"result,omitempty"`
 	Exception string `json:"exception,omitempty"`
 	Details   string `json:"details,omitempty"`
 

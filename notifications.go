@@ -625,6 +625,10 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 }
 
 func CreateOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool) error {
+	if standalone {
+		return nil
+	}
+
 	if len(orgId) == 0 {
 		log.Printf("[ERROR] No org ID provided to create notification '%s'", title)
 		return errors.New("no org ID provided")
