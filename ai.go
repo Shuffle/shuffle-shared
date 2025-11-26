@@ -30,6 +30,10 @@ import (
 
 	"github.com/frikky/kin-openapi/openapi3"
 	"github.com/frikky/schemaless"
+
+	oai "github.com/openai/openai-go/v3"
+	aioption "github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
 )
 
 // var model = "gpt-4-turbo-preview"
@@ -6327,9 +6331,13 @@ func RunActionAI(resp http.ResponseWriter, request *http.Request) {
 	input.OrgId = org.Id
 	input.TimeStarted = time.Now().Unix()
 
-	err = SetConversation(ctx, input)
-	if err != nil {
-		log.Printf("[WARNING] Failed to set conversation for query %s (1): %s", input.Query, err)
+	// Only save if this is NOT a chat conversation, since the input includes a conversationId and that interferes with the ongoing chat.
+	// Chat conversations are saved separately in runSupportAgent with proper Role field
+	if input.ConversationId == "" {
+		err = SetConversation(ctx, input)
+		if err != nil {
+			log.Printf("[WARNING] Failed to set conversation for query %s (1): %s", input.Query, err)
+		}
 	}
 
 	if outputFormat == "formatting" {
@@ -6349,9 +6357,14 @@ func RunActionAI(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	input.TimeEnded = time.Now().Unix()
-	err = SetConversation(ctx, input)
-	if err != nil {
-		log.Printf("[WARNING] Failed to set conversation for query %s (2): %s", input.Query, err)
+
+	// Only save if this is NOT a chat conversation, since the input includes a conversationId and that interferes with the ongoing chat.
+	// Chat conversations are saved separately in runSupportAgent with proper Role fieldld
+	if input.ConversationId == "" {
+		err = SetConversation(ctx, input)
+		if err != nil {
+			log.Printf("[WARNING] Failed to set conversation for query %s (2): %s", input.Query, err)
+		}
 	}
 }
 
@@ -6405,7 +6418,9 @@ func getWorkflowSuggestionAIResponse(ctx context.Context, resp http.ResponseWrit
 func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) {
 	log.Printf("[INFO] Getting support suggestion for query: %s for org: %s", input.Query, org.Id)
 	// reply := runSupportRequest(ctx, input)
-	reply, threadId, err := runSupportLLMAssistant(ctx, input, user)
+	// reply, threadId, err := runSupportLLMAssistant(ctx, input, user)
+	reply, conversationId, err := runSupportAgent(ctx, input, user)
+
 	if err != nil {
 		log.Printf("[ERROR] Failed to run support LLM assistant: %s", err)
 		resp.WriteHeader(501)
@@ -6421,9 +6436,9 @@ func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWrite
 	}
 
 	newResponse := AtomicOutput{
-		Success:  true,
-		Reason:   reply,
-		ThreadId: threadId,
+		Success:        true,
+		Reason:         reply,
+		ConversationId: conversationId,
 	}
 
 	// Marshal it
@@ -10927,7 +10942,7 @@ Based on these rules and the provided documents, please answer the question:`
 		Instructions:        instructions,
 		Temperature:         &temperature,
 		MaxCompletionTokens: 2048,
-		ToolChoice:          "required",
+		ToolChoice:          "auto",
 	})
 
 	if err != nil {
@@ -11015,108 +11030,246 @@ Based on these rules and the provided documents, please answer the question:`
 				return cleanAnswerText, threadID, nil
 			}
 
-			if runStatus.Status == openai.RunStatusFailed || runStatus.Status == openai.RunStatusCancelled || runStatus.Status == openai.RunStatusExpired {
-				return "", "", fmt.Errorf("run ended with status '%s'", runStatus.Status)
+			if runStatus.Status == openai.RunStatusFailed {
+				errMsg := fmt.Sprintf("run ended with status '%s'", runStatus.Status)
+				if runStatus.LastError != nil {
+					errMsg += fmt.Sprintf(". Code: %s, Message: %s", runStatus.LastError.Code, runStatus.LastError.Message)
+				}
+				return "", "", errors.New(errMsg)
 			}
 		}
 	}
 }
 
-func getSupportThreadConversation(ctx context.Context, threadID string, user User) (ThreadConversationResponse, error) {
-	response := ThreadConversationResponse{
-		Success:  false,
-		ThreadID: threadID,
-		Messages: []ConversationMessage{},
+// func getSupportThreadConversation(ctx context.Context, threadID string, user User) (ThreadConversationResponse, error) {
+// 	response := ThreadConversationResponse{
+// 		Success:  false,
+// 		ThreadID: threadID,
+// 		Messages: []ConversationMessage{},
+// 	}
+
+// 	threadOrgID := ""
+// 	cacheKey := fmt.Sprintf("support_assistant_thread_%s", threadID)
+
+// 	if user.SupportAccess {
+// 		cachedData, err := GetCache(ctx, cacheKey)
+// 		if err == nil && cachedData != nil {
+// 			if byteSlice, ok := cachedData.([]byte); ok {
+// 				threadOrgID = string(byteSlice)
+// 			}
+// 		}
+// 		response.ThreadOrgID = threadOrgID
+// 		if user.ActiveOrg.Id == threadOrgID {
+// 			response.IsActiveOrg = true
+// 		}
+// 	} else {
+// 		cachedData, err := GetCache(ctx, cacheKey)
+// 		if err != nil || cachedData == nil {
+// 			log.Printf("[WARNING] Thread %s not found for user %s", threadID, user.Username)
+// 			return response, errors.New("thread not found or access denied")
+// 		}
+
+// 		byteSlice, ok := cachedData.([]byte)
+// 		if !ok {
+// 			log.Printf("[ERROR] Invalid cache data for thread %s", threadID)
+// 			return response, errors.New("thread not found or access denied")
+// 		}
+// 		threadOrgID = string(byteSlice)
+
+// 		userInOrg := false
+// 		for _, orgID := range user.Orgs {
+// 			if orgID == threadOrgID {
+// 				userInOrg = true
+// 				break
+// 			}
+// 		}
+
+// 		if !userInOrg {
+// 			log.Printf("[WARNING] User %s unauthorized for thread %s (org: %s)", user.Username, threadID, threadOrgID)
+// 			return response, errors.New("unauthorized: user not member of thread organization")
+// 		}
+
+// 		response.ThreadOrgID = threadOrgID
+// 		if user.ActiveOrg.Id == threadOrgID {
+// 			response.IsActiveOrg = true
+// 		}
+// 	}
+
+// 	apiKey := os.Getenv("AI_API_KEY")
+// 	if apiKey == "" {
+// 		apiKey = os.Getenv("OPENAI_API_KEY")
+// 	}
+// 	if apiKey == "" {
+// 		return response, errors.New("OPENAI_API_KEY must be set")
+// 	}
+
+// 	config := openai.DefaultConfig(apiKey)
+// 	config.AssistantVersion = "v2"
+// 	client := openai.NewClientWithConfig(config)
+
+// 	limit := 100
+// 	order := "asc"
+// 	messages, err := client.ListMessage(ctx, threadID, &limit, &order, nil, nil, nil)
+// 	if err != nil {
+// 		log.Printf("[ERROR] Failed to get messages for thread %s: %s", threadID, err)
+// 		return response, fmt.Errorf("failed to retrieve thread messages: %w", err)
+// 	}
+
+// 	conversationMessages := make([]ConversationMessage, 0, len(messages.Messages))
+// 	for _, message := range messages.Messages {
+// 		if len(message.Content) > 0 && message.Content[0].Type == "text" && message.Content[0].Text != nil {
+// 			cleanContent := message.Content[0].Text.Value
+// 			re := regexp.MustCompile(`【.*?】`)
+// 			cleanContent = re.ReplaceAllString(cleanContent, "")
+
+// 			conversationMessages = append(conversationMessages, ConversationMessage{
+// 				Role:      string(message.Role),
+// 				Content:   cleanContent,
+// 				Timestamp: time.Unix(int64(message.CreatedAt), 0),
+// 			})
+// 		}
+// 	}
+
+// 	response.Success = true
+// 	response.Messages = conversationMessages
+// 	return response, nil
+// }
+
+// func HandleGetSupportThreadConversation(resp http.ResponseWriter, request *http.Request) {
+// 	cors := HandleCors(resp, request)
+// 	if cors {
+// 		return
+// 	}
+
+// 	ctx := GetContext(request)
+// 	user, err := HandleApiAuthentication(resp, request)
+// 	if err != nil {
+// 		log.Printf("[AUDIT] Api authentication failed in get support thread conversation: %s", err)
+// 		resp.WriteHeader(401)
+// 		resp.Write([]byte(`{"success": false, "message": "Authentication failed"}`))
+// 		return
+// 	}
+
+// 	body, err := ioutil.ReadAll(request.Body)
+// 	if err != nil {
+// 		log.Printf("[WARNING] Failed to read request body in get support thread conversation: %s", err)
+// 		resp.WriteHeader(400)
+// 		resp.Write([]byte(`{"success": false, "message": "Failed to read request body"}`))
+// 		return
+// 	}
+
+// 	var threadRequest ThreadAccessRequest
+// 	err = json.Unmarshal(body, &threadRequest)
+// 	if err != nil {
+// 		log.Printf("[WARNING] Failed to unmarshal thread request in get support thread conversation: %s", err)
+// 		resp.WriteHeader(400)
+// 		resp.Write([]byte(`{"success": false, "message": "Invalid request format"}`))
+// 		return
+// 	}
+
+// 	if strings.TrimSpace(threadRequest.ThreadID) == "" {
+// 		resp.WriteHeader(400)
+// 		resp.Write([]byte(`{"success": false, "message": "Thread ID is required"}`))
+// 		return
+// 	}
+
+// 	log.Printf("[INFO] Getting thread conversation for thread %s by user %s (%s)", threadRequest.ThreadID, user.Username, user.Id)
+
+// 	response, err := getSupportThreadConversation(ctx, threadRequest.ThreadID, user)
+// 	if err != nil {
+// 		log.Printf("[WARNING] Failed to get thread conversation for thread %s by user %s: %s", threadRequest.ThreadID, user.Username, err)
+
+// 		output, marshalErr := json.Marshal(response)
+// 		if marshalErr != nil {
+// 			log.Printf("[ERROR] Failed to marshal error response: %s", marshalErr)
+// 			resp.WriteHeader(500)
+// 			resp.Write([]byte(`{"success": false, "message": "Internal server error"}`))
+// 			return
+// 		}
+
+// 		if strings.Contains(err.Error(), "unauthorized") || strings.Contains(err.Error(), "access denied") {
+// 			resp.WriteHeader(403)
+// 		} else if strings.Contains(err.Error(), "not found") {
+// 			resp.WriteHeader(404)
+// 		} else {
+// 			resp.WriteHeader(500)
+// 		}
+
+// 		resp.Write(output)
+// 		return
+// 	}
+
+// 	output, err := json.Marshal(response)
+// 	if err != nil {
+// 		log.Printf("[ERROR] Failed to marshal response for thread %s: %s", threadRequest.ThreadID, err)
+// 		resp.WriteHeader(500)
+// 		resp.Write([]byte(`{"success": false, "message": "Failed to marshal response"}`))
+// 		return
+// 	}
+
+// 	log.Printf("[INFO] Successfully retrieved %d messages for thread %s for user %s", len(response.Messages), threadRequest.ThreadID, user.Username)
+// 	resp.WriteHeader(200)
+// 	resp.Write(output)
+// }
+
+func getConversationHistoryWithAccess(ctx context.Context, conversationId string, user User) (ConversationResponse, error) {
+	response := ConversationResponse{
+		Success:        false,
+		ConversationID: conversationId,
+		Messages:       []ConversationMessage{},
 	}
 
-	threadOrgID := ""
-	cacheKey := fmt.Sprintf("support_assistant_thread_%s", threadID)
+	conversationOrgID := ""
 
 	if user.SupportAccess {
-		cachedData, err := GetCache(ctx, cacheKey)
-		if err == nil && cachedData != nil {
-			if byteSlice, ok := cachedData.([]byte); ok {
-				threadOrgID = string(byteSlice)
-			}
+		conversationMetadata, err := GetConversationMetadata(ctx, conversationId)
+		if err == nil && conversationMetadata != nil {
+			conversationOrgID = conversationMetadata.OrgId
 		}
-		response.ThreadOrgID = threadOrgID
-		if user.ActiveOrg.Id == threadOrgID {
+		response.OrgID = conversationOrgID
+		if user.ActiveOrg.Id == conversationOrgID {
 			response.IsActiveOrg = true
 		}
 	} else {
-		cachedData, err := GetCache(ctx, cacheKey)
-		if err != nil || cachedData == nil {
-			log.Printf("[WARNING] Thread %s not found for user %s", threadID, user.Username)
-			return response, errors.New("thread not found or access denied")
+		conversationMetadata, err := GetConversationMetadata(ctx, conversationId)
+		if err != nil || conversationMetadata == nil {
+			log.Printf("[WARNING] Conversation %s not found for user %s", conversationId, user.Username)
+			return response, errors.New("conversation not found or access denied")
 		}
 
-		byteSlice, ok := cachedData.([]byte)
-		if !ok {
-			log.Printf("[ERROR] Invalid cache data for thread %s", threadID)
-			return response, errors.New("thread not found or access denied")
-		}
-		threadOrgID = string(byteSlice)
+		conversationOrgID = conversationMetadata.OrgId
 
 		userInOrg := false
 		for _, orgID := range user.Orgs {
-			if orgID == threadOrgID {
+			if orgID == conversationOrgID {
 				userInOrg = true
 				break
 			}
 		}
 
 		if !userInOrg {
-			log.Printf("[WARNING] User %s unauthorized for thread %s (org: %s)", user.Username, threadID, threadOrgID)
-			return response, errors.New("unauthorized: user not member of thread organization")
+			log.Printf("[WARNING] User %s unauthorized for conversation %s (org: %s)", user.Username, conversationId, conversationOrgID)
+			return response, errors.New("unauthorized: user not member of conversation organization")
 		}
 
-		response.ThreadOrgID = threadOrgID
-		if user.ActiveOrg.Id == threadOrgID {
+		response.OrgID = conversationOrgID
+		if user.ActiveOrg.Id == conversationOrgID {
 			response.IsActiveOrg = true
 		}
 	}
 
-	apiKey := os.Getenv("AI_API_KEY")
-	if apiKey == "" {
-		apiKey = os.Getenv("OPENAI_API_KEY")
-	}
-	if apiKey == "" {
-		return response, errors.New("OPENAI_API_KEY must be set")
-	}
-
-	config := openai.DefaultConfig(apiKey)
-	config.AssistantVersion = "v2"
-	client := openai.NewClientWithConfig(config)
-
-	limit := 100
-	order := "asc"
-	messages, err := client.ListMessage(ctx, threadID, &limit, &order, nil, nil, nil)
+	messages, err := GetConversationHistory(ctx, conversationId, 100)
 	if err != nil {
-		log.Printf("[ERROR] Failed to get messages for thread %s: %s", threadID, err)
-		return response, fmt.Errorf("failed to retrieve thread messages: %w", err)
-	}
-
-	conversationMessages := make([]ConversationMessage, 0, len(messages.Messages))
-	for _, message := range messages.Messages {
-		if len(message.Content) > 0 && message.Content[0].Type == "text" && message.Content[0].Text != nil {
-			cleanContent := message.Content[0].Text.Value
-			re := regexp.MustCompile(`【.*?】`)
-			cleanContent = re.ReplaceAllString(cleanContent, "")
-
-			conversationMessages = append(conversationMessages, ConversationMessage{
-				Role:      string(message.Role),
-				Content:   cleanContent,
-				Timestamp: time.Unix(int64(message.CreatedAt), 0),
-			})
-		}
+		log.Printf("[ERROR] Failed to get messages for conversation %s: %s", conversationId, err)
+		return response, fmt.Errorf("failed to retrieve conversation messages: %w", err)
 	}
 
 	response.Success = true
-	response.Messages = conversationMessages
+	response.Messages = messages
 	return response, nil
 }
 
-func HandleGetSupportThreadConversation(resp http.ResponseWriter, request *http.Request) {
+func HandleGetConversationHistory(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -11125,7 +11278,7 @@ func HandleGetSupportThreadConversation(resp http.ResponseWriter, request *http.
 	ctx := GetContext(request)
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] Api authentication failed in get support thread conversation: %s", err)
+		log.Printf("[AUDIT] Api authentication failed in get conversation history: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "message": "Authentication failed"}`))
 		return
@@ -11133,32 +11286,32 @@ func HandleGetSupportThreadConversation(resp http.ResponseWriter, request *http.
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		log.Printf("[WARNING] Failed to read request body in get support thread conversation: %s", err)
+		log.Printf("[WARNING] Failed to read request body in get conversation history: %s", err)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "message": "Failed to read request body"}`))
 		return
 	}
 
-	var threadRequest ThreadAccessRequest
-	err = json.Unmarshal(body, &threadRequest)
+	var conversationRequest ConversationAccessRequest
+	err = json.Unmarshal(body, &conversationRequest)
 	if err != nil {
-		log.Printf("[WARNING] Failed to unmarshal thread request in get support thread conversation: %s", err)
+		log.Printf("[WARNING] Failed to unmarshal conversation request in get conversation history: %s", err)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "message": "Invalid request format"}`))
 		return
 	}
 
-	if strings.TrimSpace(threadRequest.ThreadID) == "" {
+	if strings.TrimSpace(conversationRequest.ConversationID) == "" {
 		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "message": "Thread ID is required"}`))
+		resp.Write([]byte(`{"success": false, "message": "Conversation ID is required"}`))
 		return
 	}
 
-	log.Printf("[INFO] Getting thread conversation for thread %s by user %s (%s)", threadRequest.ThreadID, user.Username, user.Id)
+	log.Printf("[INFO] Getting conversation history for conversation %s by user %s (%s)", conversationRequest.ConversationID, user.Username, user.Id)
 
-	response, err := getSupportThreadConversation(ctx, threadRequest.ThreadID, user)
+	response, err := getConversationHistoryWithAccess(ctx, conversationRequest.ConversationID, user)
 	if err != nil {
-		log.Printf("[WARNING] Failed to get thread conversation for thread %s by user %s: %s", threadRequest.ThreadID, user.Username, err)
+		log.Printf("[WARNING] Failed to get conversation history for conversation %s by user %s: %s", conversationRequest.ConversationID, user.Username, err)
 
 		output, marshalErr := json.Marshal(response)
 		if marshalErr != nil {
@@ -11182,13 +11335,69 @@ func HandleGetSupportThreadConversation(resp http.ResponseWriter, request *http.
 
 	output, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("[ERROR] Failed to marshal response for thread %s: %s", threadRequest.ThreadID, err)
+		log.Printf("[ERROR] Failed to marshal response for conversation %s: %s", conversationRequest.ConversationID, err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "message": "Failed to marshal response"}`))
 		return
 	}
 
-	log.Printf("[INFO] Successfully retrieved %d messages for thread %s for user %s", len(response.Messages), threadRequest.ThreadID, user.Username)
+	log.Printf("[INFO] Successfully retrieved %d messages for conversation %s for user %s", len(response.Messages), conversationRequest.ConversationID, user.Username)
+	resp.WriteHeader(200)
+	resp.Write(output)
+}
+
+func HandleGetOrgConversations(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in get org conversations: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "message": "Authentication failed"}`))
+		return
+	}
+
+	orgId := user.ActiveOrg.Id
+	if orgId == "" {
+		log.Printf("[WARNING] User %s has no active org", user.Username)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "message": "No active organization"}`))
+		return
+	}
+
+	log.Printf("[INFO] Getting conversations for org %s by user %s (%s)", orgId, user.Username, user.Id)
+
+	conversations, err := GetOrgConversations(ctx, orgId, 50)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get conversations for org %s: %s", orgId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "message": "Failed to retrieve conversations"}`))
+		return
+	}
+
+	type OrgConversationsResponse struct {
+		Success       bool           `json:"success"`
+		Conversations []Conversation `json:"conversations"`
+	}
+
+	response := OrgConversationsResponse{
+		Success:       true,
+		Conversations: conversations,
+	}
+
+	output, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal conversations response for org %s: %s", orgId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "message": "Failed to marshal response"}`))
+		return
+	}
+
+	log.Printf("[INFO] Successfully retrieved %d conversations for org %s for user %s", len(conversations), orgId, user.Username)
 	resp.WriteHeader(200)
 	resp.Write(output)
 }
@@ -11214,4 +11423,380 @@ func validateChatContext(ctx context.Context, threadID string, user User) error 
 	}
 
 	return nil
+}
+
+func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, string, error) {
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	docsVectorStoreID := os.Getenv("OPENAI_DOCS_VS_ID")
+
+	if apiKey == "" || docsVectorStoreID == "" {
+		return "", "", errors.New("OPENAI_API_KEY and OPENAI_DOCS_VS_ID must be set")
+	}
+
+	var conversationId string
+	var history []ConversationMessage
+	var conversationMetadata *Conversation
+	newConversation := false
+
+	if strings.TrimSpace(input.ConversationId) != "" {
+		conversationId = input.ConversationId
+
+		// Get conversation metadata to check access
+		metadata, err := GetConversationMetadata(ctx, conversationId)
+		if err != nil {
+			log.Printf("[WARNING] Conversation %s not found: %s", conversationId, err)
+			return "", "", errors.New("conversation not found")
+		}
+		conversationMetadata = metadata
+
+		// Check if user has access to this conversation
+		if conversationMetadata.OrgId != input.OrgId {
+			log.Printf("[WARNING] User from org %s trying to access conversation from org %s", input.OrgId, conversationMetadata.OrgId)
+			return "", "", errors.New("conversation belongs to different organization")
+		}
+
+		history, err = GetConversationHistory(ctx, conversationId, 50)
+		if err != nil {
+			log.Printf("[WARNING] Failed to load conversation history for %s: %s", conversationId, err)
+			history = []ConversationMessage{} // Continue with empty history
+		}
+	} else {
+		// New conversation - generate ID
+		conversationId = uuid.NewV4().String()
+		newConversation = true
+		history = []ConversationMessage{}
+	}
+
+	rawInput := buildManualInputList(history, input.Query)
+
+	instructions := `You are an expert support assistant named "Shuffler AI" built by shuffle. Your entire knowledge base is a set of provided documents. Your goal is to answer the user's question accurately and based ONLY on the information within these documents.
+
+**Rules:**
+1. Ground Your Answer: Find the relevant information in the documents before answering. Do not use any outside knowledge.
+2. Be Honest: If you cannot find a clear answer in the documents, do not make one up.
+3. Be Professional: Maintain a helpful and professional tone.
+4. Be Helpful: Provide as much relevant information as possible.
+5. Proper Formatting: Make sure you don't include characters in your response that might break our json parsing. Do not include any citations to the files used in the response text.`
+
+	oaiClient := oai.NewClient(aioption.WithAPIKey(apiKey))
+
+	params := responses.ResponseNewParams{
+		Model:        oai.ChatModelGPT4_1,
+		Temperature:  oai.Float(0.4),
+		Instructions: oai.String(instructions),
+		Tools: []responses.ToolUnionParam{
+			{
+				OfFileSearch: &responses.FileSearchToolParam{
+					VectorStoreIDs: []string{docsVectorStoreID},
+				},
+			},
+		},
+		Store: oai.Bool(false),
+	}
+
+	resp, err := oaiClient.Responses.New(ctx, params, aioption.WithJSONSet("input", rawInput))
+	if err != nil {
+		log.Printf("[ERROR] Failed to generate response: %v", err)
+		return "", "", err
+	}
+
+	aiResponse := resp.OutputText()
+
+	// Save user message to DB
+	userMessage := QueryInput{
+		Id:             uuid.NewV4().String(),
+		ConversationId: conversationId,
+		OrgId:          input.OrgId,
+		UserId:         input.UserId,
+		Role:           "user",
+		Query:          input.Query,
+		TimeStarted:    time.Now().Unix(),
+	}
+	err = SetConversation(ctx, userMessage)
+	if err != nil {
+		log.Printf("[WARNING] Failed to save user message: %s", err)
+	}
+
+	// Save AI response to DB
+	assistantMessage := QueryInput{
+		Id:             uuid.NewV4().String(),
+		ConversationId: conversationId,
+		OrgId:          input.OrgId,
+		UserId:         input.UserId,
+		Role:           "assistant",
+		Response:       aiResponse,
+		TimeStarted:    time.Now().Unix(),
+	}
+	err = SetConversation(ctx, assistantMessage)
+	if err != nil {
+		log.Printf("[WARNING] Failed to save assistant message: %s", err)
+	}
+
+	// Invalidate conversation history cache so next request gets fresh data
+	historyCacheKey := fmt.Sprintf("conversations_history_%s", conversationId)
+	DeleteCache(ctx, historyCacheKey)
+
+	if newConversation {
+		title := input.Query
+		if len(title) > 50 {
+			title = title[:50] + "..."
+		}
+
+		newMetadata := Conversation{
+			Id:           conversationId,
+			Title:        title,
+			OrgId:        input.OrgId,
+			UserId:       input.UserId,
+			CreatedAt:    time.Now().Unix(),
+			UpdatedAt:    time.Now().Unix(),
+			MessageCount: 2, // user + assistant
+		}
+		err = SetConversationMetadata(ctx, newMetadata)
+		if err != nil {
+			log.Printf("[WARNING] Failed to save conversation metadata: %s", err)
+		}
+
+		log.Printf("[INFO] New conversation created for org %s: %s", input.OrgId, conversationId)
+	} else {
+		if conversationMetadata != nil {
+			conversationMetadata.UpdatedAt = time.Now().Unix()
+			conversationMetadata.MessageCount += 2 
+			err = SetConversationMetadata(ctx, *conversationMetadata)
+			if err != nil {
+				log.Printf("[WARNING] Failed to update conversation metadata: %s", err)
+			}
+		}
+	}
+
+	return aiResponse, conversationId, nil
+}
+
+func HandleStreamSupportLLM(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in stream support LLM: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read request body in stream support LLM: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
+		return
+	}
+
+	var input QueryInput
+	err = json.Unmarshal(body, &input)
+	if err != nil {
+		log.Printf("[ERROR] Failed to unmarshal request body in stream support LLM: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid request format"}`))
+		return
+	}
+
+	// Validate required fields
+	if strings.TrimSpace(input.Query) == "" {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Query is required"}`))
+		return
+	}
+
+	input.OrgId = user.ActiveOrg.Id
+
+	StreamSupportLLMResponse(ctx, resp, input, user)
+}
+
+func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, input QueryInput, user User) {
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	docsVectorStoreID := os.Getenv("OPENAI_DOCS_VS_ID")
+
+	if apiKey == "" || docsVectorStoreID == "" {
+		return
+	}
+
+	newThread := true
+
+	if strings.TrimSpace(input.ResponseId) != "" {
+		cacheKey := fmt.Sprintf("support_assistant_thread_%s", input.ResponseId)
+		cachedData, _ := GetCache(ctx, cacheKey)
+
+		if cachedData != nil {
+			orgId := ""
+			if byteSlice, ok := cachedData.([]byte); ok {
+				orgId = string(byteSlice)
+			}
+
+			if orgId != "" {
+				if orgId != input.OrgId {
+					log.Printf("[ERROR] Access denied. Thread %s does not belong to org %s. Owner org: %s", input.ResponseId, input.OrgId, orgId)
+					return
+				}
+				newThread = false
+			}
+		}
+	}
+
+	resp.Header().Set("Content-Type", "text/event-stream")
+	resp.Header().Set("Cache-Control", "no-cache")
+	resp.Header().Set("Connection", "keep-alive")
+
+	flusher, ok := resp.(http.Flusher)
+	if !ok {
+		http.Error(resp, "Streaming not supported", http.StatusInternalServerError)
+		log.Printf("[ERROR] Streaming not supported for support llm response")
+		return
+	}
+
+	instructions := `You are an expert support assistant named "Shuffler AI" built by shuffle. Your entire knowledge base is a set of provided documents. Your goal is to answer the user's question accurately and based ONLY on the information within these documents.
+
+**Rules:**
+1. Ground Your Answer: Find the relevant information in the documents before answering. Do not use any outside knowledge.
+2. Be Honest: If you cannot find a clear answer in the documents, do not make one up.
+3. Be Professional: Maintain a helpful and professional tone.
+4. Be Helpful: Provide as much relevant information as possible.
+5. Proper Formatting: Make sure you don't include characters in your response that might break our json parsing. Do not include any citations to the files used in the response text.`
+
+	oaiClient := oai.NewClient(aioption.WithAPIKey(apiKey))
+
+	params := responses.ResponseNewParams{
+		Model:        oai.ChatModelGPT4_1,
+		Temperature:  oai.Float(0.4),
+		Instructions: oai.String(instructions),
+		Input: responses.ResponseNewParamsInputUnion{
+			OfString: oai.String(input.Query),
+		},
+		Tools: []responses.ToolUnionParam{
+			{
+				OfFileSearch: &responses.FileSearchToolParam{
+					VectorStoreIDs: []string{docsVectorStoreID},
+				},
+			},
+		},
+	}
+
+	if strings.TrimSpace(input.ResponseId) != "" {
+		params.PreviousResponseID = oai.String(input.ResponseId)
+	}
+
+	stream := oaiClient.Responses.NewStreaming(ctx, params)
+	defer stream.Close()
+
+	if err := stream.Err(); err != nil {
+		log.Printf("[ERROR] Failed to start chat stream: %v for org: %s", err, input.OrgId)
+
+		errMsg, _ := json.Marshal(StreamData{Type: "error", Data: "Failed to initiate AI request"})
+		fmt.Fprintf(resp, "data: %s\n\n", errMsg)
+		flusher.Flush()
+
+		return
+	}
+
+	var finalResponseId string
+
+	for stream.Next() {
+		event := stream.Current()
+		var dataToSend []byte
+		var msg StreamData
+
+		switch event.Type {
+		case "response.created":
+			if event.Response.ID != "" {
+				finalResponseId = event.Response.ID
+			}
+			msg = StreamData{
+				Type: "created",
+				Data: event.Response.ID,
+			}
+
+		case "response.output_text.delta":
+			msg = StreamData{
+				Type:  "chunk",
+				Chunk: event.Delta,
+			}
+
+		case "response.completed":
+			finalResponseId = event.Response.ID
+			msg = StreamData{
+				Type: "done",
+				Data: event.Response.ID,
+			}
+
+		case "response.failed":
+			if event.Response.Error.Message != "" {
+				log.Printf("Response API failed: %s, response id: %s, org: %s", event.Response.Error.Message, finalResponseId, input.OrgId)
+			}
+
+		case "error":
+			msg = StreamData{
+				Type: "error",
+				Data: event.Message,
+			}
+			log.Printf("[ERROR] Error event in chat stream: %s for response ID %s for org ID %s", event.Message, event.Response.ID, input.OrgId)
+
+		default:
+			continue
+		}
+
+		dataToSend, _ = json.Marshal(msg)
+
+		if _, err := fmt.Fprintf(resp, "data: %s\n\n", dataToSend); err != nil {
+			log.Printf("Error writing to response: %v for response id", err, finalResponseId)
+			return
+		}
+
+		flusher.Flush()
+	}
+
+	if newThread && finalResponseId != "" {
+		cacheKey := fmt.Sprintf("support_assistant_thread_%s", finalResponseId)
+		value := []byte(input.OrgId)
+		err := SetCache(ctx, cacheKey, value, 86400)
+		if err != nil {
+			// retry once
+			if retryErr := SetCache(ctx, cacheKey, value, 86400); retryErr != nil {
+				log.Printf("[ERROR] Failed to set cache for new thread %s: %s", finalResponseId, retryErr)
+			}
+		}
+		log.Printf("[INFO] Thread created successfully for org: %s, response Id: %s", input.OrgId, finalResponseId)
+
+	}
+
+	if err := stream.Err(); err != nil {
+		log.Printf("[ERROR] Stream finished with error: %v, for the org: %s", err, input.OrgId)
+
+	}
+}
+
+// Helper: Builds a raw list of maps of conversation history
+func buildManualInputList(history []ConversationMessage, newPrompt string) []map[string]interface{} {
+	var items []map[string]interface{}
+
+	// 1. Add History
+	for _, msg := range history {
+		item := map[string]interface{}{
+			"role":    msg.Role, // "user" or "assistant"
+			"content": msg.Content,
+			"type":    "message",
+		}
+		items = append(items, item)
+	}
+
+	// 2. Add New User Prompt
+	items = append(items, map[string]interface{}{
+		"role":    "user",
+		"content": newPrompt,
+		"type":    "message",
+	})
+
+	return items
 }
