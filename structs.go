@@ -137,7 +137,8 @@ type AtomicOutput struct {
 	RunId      string `json:"run_id"`                 // Run ID for the thread
 	ToolCallID string `json:"tool_call_id,omitempty"` // Result inside the run
 	
-	ResponseId string `json:"response_id,omitempty"`  // Response ID 
+	ResponseId string `json:"response_id,omitempty"`  // Response ID
+	ConversationId string `json:"conversation_id,omitempty"`  // Conversation ID 
 }
 
 type ExecutionRequestWrapper struct {
