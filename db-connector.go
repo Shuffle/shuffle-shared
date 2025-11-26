@@ -6432,6 +6432,13 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 	hideEnvs := false
 	multiEnvLimit := 0
 	if project.Environment == "onprem" {
+		if orgId == "" {
+			if debug {
+				log.Printf("[DEBUG] No orgId provided, skipping multi-env license check")
+			}
+			return environments, nil
+		}
+
 		currentOrg, err := GetOrg(ctx, orgId)
 		if err != nil {
 			log.Printf("[WARNING] Failed to get current org %s: %v", orgId, err)
@@ -13530,6 +13537,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 								fmt.Sprintf("/admin?tab=datastore&category=%s", cacheData.Category),
 								cacheData.OrgId,
 								true,
+								"MEDIUM",
+								"Datastore_Automation_Error",
 							)
 						}
 					}(cacheData, automation)
@@ -13744,6 +13753,8 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 							fmt.Sprintf("/admin?tab=datastore&category=%s", cacheData.Category),
 							cacheData.OrgId,
 							true,
+							"MEDIUM",
+							"Datastore_Automation_Error",
 						)
 					}
 				}(cacheData, automation)
@@ -15580,6 +15591,8 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 					workflowExecution.ExecutionOrg,
 					true,
+					"MEDIUM",
+					"workflow_long_execution",
 				)
 
 				if err != nil {
@@ -17099,7 +17112,7 @@ func InitOpensearchIndexes() {
 		GetESIndexPrefix("notifications"),
 		GetESIndexPrefix("shuffle_logs"),
 		GetESIndexPrefix("environments"),
-		GetESIndexPrefix("notifications"),
+		GetESIndexPrefix("org_statistics"),
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")
