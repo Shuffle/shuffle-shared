@@ -15849,17 +15849,26 @@ func GetConversationHistory(ctx context.Context, conversationId string, limit in
 			queryInputs = append(queryInputs, hit.Source)
 		}
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("conversation_id =", conversationId).Order("time_started").Limit(limit)
+		q := datastore.NewQuery(nameKey).Filter("conversation_id =", conversationId).Limit(limit)
 		_, err := project.Dbclient.GetAll(ctx, q, &queryInputs)
 		if err != nil && len(queryInputs) == 0 {
 			if !strings.Contains(err.Error(), `cannot load field`) {
 				return conversationMessages, err
 			}
 		}
+
+		sort.Slice(queryInputs, func(i, j int) bool {
+			return queryInputs[i].TimeStarted < queryInputs[j].TimeStarted
+		})
 	}
 
-	// Convert QueryInput to ConversationMessage
 	for _, queryInput := range queryInputs {
+		// Skip messages with invalid or empty role
+		if queryInput.Role != "user" && queryInput.Role != "assistant" {
+			log.Printf("[WARNING] Skipping message with invalid role: '%s'", queryInput.Role)
+			continue
+		}
+
 		message := ConversationMessage{
 			UserId:    queryInput.UserId,
 			Role:      queryInput.Role,
@@ -15872,10 +15881,15 @@ func GetConversationHistory(ctx context.Context, conversationId string, limit in
 			message.Content = queryInput.Response
 		}
 
+		// Skip messages with empty content
+		if message.Content == "" {
+			log.Printf("[WARNING] Skipping message with empty content for role: %s", queryInput.Role)
+			continue
+		}
+
 		conversationMessages = append(conversationMessages, message)
 	}
 
-	// Cache the result
 	if project.CacheDb && len(conversationMessages) > 0 {
 		data, err := json.Marshal(conversationMessages)
 		if err == nil {
