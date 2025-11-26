@@ -121,6 +121,12 @@ type QueryInput struct {
 
 	// For responses API
 	ResponseId string `json:"response_id,omitempty"`
+
+	// For chat history storage (extending the conversations index)
+	Role           string `json:"role,omitempty" datastore:"role"`                       // "user", "assistant", or "system"
+	Response       string `json:"response,omitempty" datastore:"response,noindex"`       // AI's response content
+	ConversationId string `json:"conversation_id,omitempty" datastore:"conversation_id"` // Groups all messages in one chat together
+
 }
 
 type AtomicOutput struct {
