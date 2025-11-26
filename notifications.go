@@ -624,6 +624,9 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 	return nil
 }
 
+// New fields:
+// Severities = LOW/MEDIUM/HIGH/CRITICAL
+// Origin = the source location
 func CreateOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool, severity string, origin string) error {
 	if standalone {
 		return nil
