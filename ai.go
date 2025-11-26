@@ -11133,7 +11133,63 @@ func HandleGetSupportThreadConversation(resp http.ResponseWriter, request *http.
 		return
 	}
 
-	log.Printf("[INFO] Successfully retrieved %d messages for thread %s for user %s", len(response.Messages), threadRequest.ThreadID, user.Username)
+	log.Printf("[INFO] Successfully retrieved %d messages for conversation %s for user %s", len(response.Messages), conversationRequest.ConversationID, user.Username)
+	resp.WriteHeader(200)
+	resp.Write(output)
+}
+
+func HandleGetOrgConversations(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in get org conversations: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "message": "Authentication failed"}`))
+		return
+	}
+
+	orgId := user.ActiveOrg.Id
+	if orgId == "" {
+		log.Printf("[WARNING] User %s has no active org", user.Username)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "message": "No active organization"}`))
+		return
+	}
+
+	log.Printf("[INFO] Getting conversations for org %s by user %s (%s)", orgId, user.Username, user.Id)
+
+	conversations, err := GetOrgConversations(ctx, orgId, 50)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get conversations for org %s: %s", orgId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "message": "Failed to retrieve conversations"}`))
+		return
+	}
+
+	type OrgConversationsResponse struct {
+		Success       bool           `json:"success"`
+		Conversations []Conversation `json:"conversations"`
+	}
+
+	response := OrgConversationsResponse{
+		Success:       true,
+		Conversations: conversations,
+	}
+
+	output, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal conversations response for org %s: %s", orgId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "message": "Failed to marshal response"}`))
+		return
+	}
+
+	log.Printf("[INFO] Successfully retrieved %d conversations for org %s for user %s", len(conversations), orgId, user.Username)
 	resp.WriteHeader(200)
 	resp.Write(output)
 }
