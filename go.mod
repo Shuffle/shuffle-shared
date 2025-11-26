@@ -22,6 +22,7 @@ require (
 	github.com/google/go-github/v28 v28.1.1
 	github.com/google/go-querystring v1.1.0
 	github.com/google/uuid v1.6.0
+	github.com/openai/openai-go/v3 v3.8.1
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/sashabaranov/go-openai v1.40.5
 	github.com/satori/go.uuid v1.2.0
