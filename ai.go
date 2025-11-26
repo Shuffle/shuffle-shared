@@ -6266,9 +6266,13 @@ func RunActionAI(resp http.ResponseWriter, request *http.Request) {
 	input.OrgId = org.Id
 	input.TimeStarted = time.Now().Unix()
 
-	err = SetConversation(ctx, input)
-	if err != nil {
-		log.Printf("[WARNING] Failed to set conversation for query %s (1): %s", input.Query, err)
+	// Only save if this is NOT a chat conversation, since the input includes a conversationId and that interferes with the ongoing chat.
+	// Chat conversations are saved separately in runSupportAgent with proper Role field
+	if input.ConversationId == "" {
+		err = SetConversation(ctx, input)
+		if err != nil {
+			log.Printf("[WARNING] Failed to set conversation for query %s (1): %s", input.Query, err)
+		}
 	}
 
 	if outputFormat == "formatting" {
@@ -6288,9 +6292,14 @@ func RunActionAI(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	input.TimeEnded = time.Now().Unix()
-	err = SetConversation(ctx, input)
-	if err != nil {
-		log.Printf("[WARNING] Failed to set conversation for query %s (2): %s", input.Query, err)
+
+	// Only save if this is NOT a chat conversation, since the input includes a conversationId and that interferes with the ongoing chat.
+	// Chat conversations are saved separately in runSupportAgent with proper Role fieldld
+	if input.ConversationId == "" {
+		err = SetConversation(ctx, input)
+		if err != nil {
+			log.Printf("[WARNING] Failed to set conversation for query %s (2): %s", input.Query, err)
+		}
 	}
 }
 
@@ -6345,8 +6354,8 @@ func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWrite
 	log.Printf("[INFO] Getting support suggestion for query: %s for org: %s", input.Query, org.Id)
 	// reply := runSupportRequest(ctx, input)
 	// reply, threadId, err := runSupportLLMAssistant(ctx, input, user)
-	reply, responseId, err := runSupportAgent(ctx, input, user)
-	
+	reply, conversationId, err := runSupportAgent(ctx, input, user)
+
 	if err != nil {
 		log.Printf("[ERROR] Failed to run support LLM assistant: %s", err)
 		resp.WriteHeader(501)
@@ -6362,9 +6371,9 @@ func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWrite
 	}
 
 	newResponse := AtomicOutput{
-		Success:    true,
-		Reason:     reply,
-		ResponseId: responseId,
+		Success:        true,
+		Reason:         reply,
+		ConversationId: conversationId,
 	}
 
 	// Marshal it
@@ -11364,7 +11373,6 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 	var conversationMetadata *Conversation
 	newConversation := false
 
-	// Check if conversation exists
 	if strings.TrimSpace(input.ConversationId) != "" {
 		conversationId = input.ConversationId
 
@@ -11382,7 +11390,6 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 			return "", "", errors.New("conversation belongs to different organization")
 		}
 
-		// Load conversation history
 		history, err = GetConversationHistory(ctx, conversationId, 50)
 		if err != nil {
 			log.Printf("[WARNING] Failed to load conversation history for %s: %s", conversationId, err)
@@ -11395,7 +11402,6 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 		history = []ConversationMessage{}
 	}
 
-	// Build input with conversation history
 	rawInput := buildManualInputList(history, input.Query)
 
 	instructions := `You are an expert support assistant named "Shuffler AI" built by shuffle. Your entire knowledge base is a set of provided documents. Your goal is to answer the user's question accurately and based ONLY on the information within these documents.
@@ -11461,9 +11467,11 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 		log.Printf("[WARNING] Failed to save assistant message: %s", err)
 	}
 
-	// Create or update conversation metadata
+	// Invalidate conversation history cache so next request gets fresh data
+	historyCacheKey := fmt.Sprintf("conversations_history_%s", conversationId)
+	DeleteCache(ctx, historyCacheKey)
+
 	if newConversation {
-		// Generate title from first message (simple version for now)
 		title := input.Query
 		if len(title) > 50 {
 			title = title[:50] + "..."
@@ -11485,10 +11493,9 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 
 		log.Printf("[INFO] New conversation created for org %s: %s", input.OrgId, conversationId)
 	} else {
-		// Update existing conversation metadata (reuse the one we already fetched)
 		if conversationMetadata != nil {
 			conversationMetadata.UpdatedAt = time.Now().Unix()
-			conversationMetadata.MessageCount += 2 // user + assistant
+			conversationMetadata.MessageCount += 2 
 			err = SetConversationMetadata(ctx, *conversationMetadata)
 			if err != nil {
 				log.Printf("[WARNING] Failed to update conversation metadata: %s", err)
