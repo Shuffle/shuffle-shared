@@ -2317,7 +2317,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	}
 
 	if id == "integration" {
-		return workflowApp, errors.New("App ID 'integration' is for the integration framework. Uses the Shuffle-ai app.")
+		return workflowApp, errors.New("App ID 'integration' is for Singul. Uses the Shuffle-AI app. This error is from GetApp(integration) which does not work. Contact support@shuffler.io if this persists.")
 	}
 
 	nameKey := "workflowapp"
@@ -4023,7 +4023,11 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 // Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {
 	if id == "public" {
-		return &Org{}, errors.New("'public' org is used for Singul action without being logged in. Not relevant.")
+		//return &Org{}, errors.New("'public' org is used for Singul action without being logged in. Not relevant.")
+		return &Org{
+			Id:	 "public",
+			Name: "Public",
+		}, nil
 	}
 
 	nameKey := "Organizations"
@@ -4035,7 +4039,11 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &curOrg)
 			if err == nil {
-				return curOrg, nil
+				if curOrg.Id == "" {
+					return curOrg, errors.New("Org doesn't exist")
+				} else {
+					return curOrg, nil
+				}
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
@@ -4082,6 +4090,18 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				err = nil
 			} else {
 				log.Printf("[ERROR] Problem in org loading (2) for %s: %s", key, err)
+				if strings.Contains(err.Error(), `no such entity`) && project.CacheDb {
+					neworg, err := json.Marshal(curOrg)
+					if err != nil {
+						return &Org{}, err
+					}
+
+					// Set cache for it
+					err = SetCache(ctx, cacheKey, neworg, 30)
+					if err != nil {
+						log.Printf("[ERROR] Failed updating org cache (3): %s", err)
+					}
+				}
 				//orgErr = err
 				return &Org{}, err
 			}

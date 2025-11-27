@@ -388,9 +388,9 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 
 	//if httpOutput.Status >= 300 && httpOutput.Status != 404 {
 	if httpOutput.Status >= 300 {
-		if debug {
-			log.Printf("[INFO] Translated action failed with status: %d. Rerun Autocorrecting feature!. Body: %s", httpOutput.Status, string(marshalledBody))
-		}
+		//if debug {
+		//	log.Printf("[DEBUG] Translated action failed with status: %d. Rerun Autocorrecting feature!. Body: %s", httpOutput.Status, string(marshalledBody))
+		//}
 
 		return *httpOutput, []byte{}, errors.New(fmt.Sprintf("Status: %d", httpOutput.Status))
 	}
@@ -532,6 +532,14 @@ func FindNextApiStep(originalFields []Valuereplace, action Action, stepOutput []
 		return "", action, fmt.Errorf("Ran action towards App %s with Action %s, but it failed. Try to re-authenticate the app with the correct URL", action.AppName, actionName), additionalInfo
 	}
 
+	fullUrl := ""
+	url1, urlOk := resultMap["url"]
+	if urlOk {
+		if val, ok := url1.(string); ok {
+			fullUrl = val
+		}
+	}
+
 	body := []byte{}
 	body1, bodyOk := resultMap["body"]
 	if !bodyOk {
@@ -572,9 +580,9 @@ func FindNextApiStep(originalFields []Valuereplace, action Action, stepOutput []
 			body = []byte(val)
 		}
 
-		if debug {
-			log.Printf("[DEBUG] Inside body handler: %s", string(body))
-		}
+		//if debug {
+		//	log.Printf("[DEBUG] Inside body handler: %s", string(body))
+		//}
 
 		// Should turn body into a string and check OpenAPI for problems if status is bad
 		if status >= 0 && status < 300 {
@@ -589,7 +597,7 @@ func FindNextApiStep(originalFields []Valuereplace, action Action, stepOutput []
 		} else if status >= 400 {
 			// Auto-correct
 			// Auto-fix etc
-			log.Printf("[INFO] Trying autocorrect. See body: %s", string(body))
+			//log.Printf("[INFO] Trying autocorrect. See body: %s", string(body))
 
 			useApp := action.AppName
 			if len(originalAppname) > 0 {
@@ -602,7 +610,7 @@ func FindNextApiStep(originalFields []Valuereplace, action Action, stepOutput []
 			}
 
 			// Body = previous requests' body
-			action, additionalInfo, err := RunSelfCorrectingRequest(originalFields, action, status, additionalInfo, string(body), useApp, inputdata, curAttempt)
+			action, additionalInfo, err := RunSelfCorrectingRequest(originalFields, action, status, additionalInfo, fullUrl, string(body), useApp, inputdata, curAttempt)
 			if err != nil {
 				if !strings.Contains(err.Error(), "missing_fields") {
 					log.Printf("[ERROR] Error running self-correcting request: %s", err)
@@ -636,7 +644,7 @@ func FindNextApiStep(originalFields []Valuereplace, action Action, stepOutput []
 // 1. The fully filled-in action
 // 2. The additional info from the previous request
 // 3. Any error that may have occurred
-func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, status int, additionalInfo, outputBody, appname, inputdata string, attempt ...int) (Action, string, error) {
+func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, status int, additionalInfo, fullUrl, outputBody, appname, inputdata string, attempt ...int) (Action, string, error) {
 	// Add all fields with value from here
 	additionalInfo = ""
 	inputBody := "{\n"
@@ -696,9 +704,9 @@ func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, stat
 
 	// Check if the amount of {} in inputBody is the same
 	if strings.Count(inputBody, "{") != strings.Count(inputBody, "}") {
-		if debug {
-			log.Printf("[ERROR] Debug: Input body has mismatched curly braces ({*%d vs }*%d). Fixing it. InputBody pre-fix: %s", strings.Count(inputBody, "{"), strings.Count(inputBody, "}"), inputBody)
-		}
+		//if debug {
+		//	log.Printf("[ERROR] Debug: Input body has mismatched curly braces ({*%d vs }*%d). Fixing it. InputBody pre-fix: %s", strings.Count(inputBody, "{"), strings.Count(inputBody, "}"), inputBody)
+		//}
 
 		// FIXME: Doesn't take into account key vs value, as it shouldn't change the value.
 		if strings.Count(inputBody, "{") > strings.Count(inputBody, "}") {
@@ -723,6 +731,10 @@ func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, stat
 		inputFields += fmt.Sprintf("\n%s=%s", field.Key, field.Value)
 	}
 
+	if len(fullUrl) > 0 && strings.Contains(fullUrl, "http") {
+		fullUrl = fmt.Sprintf("- API URL: %s", fullUrl)
+	}
+
 	systemMessage := fmt.Sprintf(`INTRODUCTION
 
 Return all key:value pairs from the last user message, but with modified values to fix ALL the HTTP errors at once. Don't add any comments. Do not try the same thing twice, and use your existing knowledge of the API name and action to reformat the output until it works. All fields in "Required data" MUST be a part of the output if possible. Output MUST be valid JSON. 
@@ -731,9 +743,7 @@ END INTRODUCTION
 ---
 INPUTDATA
 
-Action ID: %s
 API name: %s
-Action details: %s
 Required data: %s
 
 END INPUTDATA 
@@ -742,18 +752,18 @@ VALIDATION RULES:
 
 - Modify ONLY the fields directly related to the HTTP error
 - Use ONLY values derived from:
- a) Error message context
- b) Existing JSON structure
- c) Minimal necessary changes to resolve the error
+ a) INPUTDATA 
+ b) Error message context
+ c) Known documentation about the API
 
 END VALIDATION RULES
 ---
 CONSTRAINTS
 
-- Do NOT invent values 
+- If the path is wrong, change it to be relevant to the input data. It may be /api paths or entirely different
 - Do NOT add irrelevant headers or body fields
 - MUST use keys present in original JSON
-- Make sure all "Required data" values are in the output.
+- Make sure all "Required data" values are in the output
 - Do not focus on authentication unless necessary
 
 END CONSTRAINTS 
@@ -768,18 +778,20 @@ END OUTPUT FORMATTING
 ---
 ERROR HANDLING 
 
-- First try to fix the request based on the error message and the existing content in the body and queries.
-- You SHOULD add relevant fields to the body that are missing.
+- Fix the request based on the API context and the existing content in the path, body and queries
+- You SHOULD add relevant fields to the body that are missing
+- Modify the "path" field according to what seems wrong with the API URL. Do NOT remove this field.
+- Do NOT error-handle authentication issues unless it seems possible
 
 END ERROR HANDLING
-   `, action.ID, action.AppName, action.Description, inputFields)
+   `, action.AppName, /*action.Description, */ inputFields)
 
 
 	inputData := ""
-	if len(attempt) > 0 {
+	if len(attempt) > 1 {
 		currentAttempt := attempt[0]
 		if currentAttempt > 4 {
-			inputData += fmt.Sprintf(`IF we are missing a value from the user, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. Do NOT do this unless it is absolutely necessary, make SURE the fields are missing. Before doing this, ensure the body and query fields are in the right format.\n\n`)
+			inputData += fmt.Sprintf(`IF we are missing a value from the user, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. If the "path" is wrong, rewrite it. Do not use it for authentication fields such as "apikey". Do NOT do this unless it is absolutely necessary, make SURE the fields are missing. Before returning missing fields, ALWAYS ensure and retry the path, body and query fields to ensure they are correct according to the input data.\n\n`)
 		}
 	}
 
@@ -787,16 +799,19 @@ END ERROR HANDLING
 	inputBody = FixContentOutput(inputBody) 
 
 	inputData += fmt.Sprintf(`Precise JSON Field Correction Instructions:
-Given the HTTP API context for %s with action %s:
+API context for %s with action %s:
+%s
 - HTTP Status: %d
-- Detailed Errors: %s
+- API Body Output: '''
+%s
+'''
 
 Input JSON Payload (ensure VALID JSON):
-%s`, appname, action.Name, status, outputBody, inputBody)
+%s`, appname, action.Name, fullUrl, status, outputBody, inputBody)
 
 	// Use this for debugging
 	if debug {
-		log.Printf("[DEBUG] SYSTEM MESSAGE: %#v\n\nINPUTDATA:\n\n\n%s\n\n\n\n", systemMessage, inputData)
+		log.Printf("\n\n[DEBUG] SYSTEM MESSAGE: %#v\n\nINPUTDATA:\n\n\n%s\n\n\n\n", systemMessage, inputData)
 	}
 
 	contentOutput, err := RunAiQuery(systemMessage, inputData)
@@ -1325,6 +1340,9 @@ func FixContentOutput(contentOutput string) string {
 	contentOutput = strings.Trim(contentOutput, "\n")
 	contentOutput = strings.Trim(contentOutput, "\t")
 
+	// Fix issues with newlines in keys. Replace with raw newlines
+	contentOutput = strings.ReplaceAll(contentOutput, "\\n", "\n")
+
 	// Attempts to balance it automatically
 	contentOutput = balanceJSONLikeString(contentOutput)
 
@@ -1339,7 +1357,7 @@ func FixContentOutput(contentOutput string) string {
 			log.Printf("[WARNING] Failed to marshal indent tmpMap in FixContentOutput (1): %s", err)
 		}
 	} else {
-		log.Printf("[WARNING] Failed to unmarshal tmpMap in FixContentOutput (2): %s", err)
+		log.Printf("[WARNING] Failed to unmarshal tmpMap in FixContentOutput (2): %s => %s", string(contentOutput), err)
 	}
 
 	return contentOutput
@@ -1598,10 +1616,17 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
 
 		//changedNames := map[string]string{}
+		parsedLabel := strings.ToLower(strings.ReplaceAll(label, " ", "_"))
 		for _, action := range app.Actions {
 			if action.Name == "custom_action" {
 				continue
 			}
+
+			parsedActionName := strings.ToLower(strings.ReplaceAll(action.Name, " ", "_"))
+			if parsedActionName == parsedLabel {
+				return app, action
+			}
+
 
 			//userMessage += fmt.Sprintf("%s\n", action.Name)
 			/*
@@ -3583,7 +3608,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 			} else {
 				// Since we are trying to fill them in anyway :)
 				if len(sampleBody) == 0 {
-					log.Printf("[INFO] No matching body found for app %s. Err: %s", appname, err)
+					log.Printf("[INFO] No matching body found for app %s with action %s. Err: %s", appname, selectedAction.Name, err)
 					sampleBody = formattedFields
 				}
 			}
@@ -4320,6 +4345,8 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 		actionName = strings.ReplaceAll(actionName, "get ", "")
 	} else if strings.HasPrefix(actionName, "delete ") {
 		actionName = strings.ReplaceAll(actionName, "delete ", "")
+	} else {
+		log.Printf("[DEBUG] Action name %s does not have standard HTTP verb prefix", actionName)
 	}
 
 	if strings.HasPrefix(inputdata, "//") {
@@ -4613,8 +4640,47 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 }
 
 func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, error) {
+	var err error
 	returnApp := &WorkflowApp{}
 	openapiDef := &openapi3.Swagger{}
+	if !standalone { 
+		log.Printf("[DEBUG] In GetAppSingul from non-standalone mode, using GetApp for '%s'", appname)
+		ctx := context.Background()
+
+		foundApp, err := HandleAlgoliaAppSearch(ctx, appname)
+		if err != nil {
+			return returnApp, openapiDef, err
+		}
+
+		if debug { 
+			log.Printf("[DEBUG] Found app ID %s in algolia for name %s", foundApp.ObjectID, appname)
+		}
+
+		returnApp, err = GetApp(ctx, foundApp.ObjectID, User{}, false)
+		if err != nil {
+			return returnApp, openapiDef, err
+		} else {
+			parsedOpenapi, err := GetOpenApiDatastore(ctx, foundApp.ObjectID)
+			if err != nil {
+				log.Printf("[DEBUG] Failed getting OpenAPI from datastore for app %s: %s", appname, err)
+			}
+
+			if parsedOpenapi.Success && len(parsedOpenapi.Body) > 0 {
+				swaggerLoader := openapi3.NewSwaggerLoader()
+				swaggerLoader.IsExternalRefsAllowed = true
+				openapiDef, err = swaggerLoader.LoadSwaggerFromData([]byte(parsedOpenapi.Body))
+				if err != nil {
+					log.Printf("[ERROR] Failed to load swagger for app %s: %s", appname, err)
+				}
+			} else {
+				log.Printf("[ERROR] Bad OpenAPI found in datastore for app %s", appname)
+			}
+
+			return returnApp, openapiDef, nil
+		}
+	}
+
+
 	if len(appname) == 0 {
 		return returnApp, openapiDef, errors.New("Appname not set")
 	}
@@ -4632,7 +4698,6 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 	searchname := strings.ReplaceAll(strings.ToLower(appname), " ", "_")
 	appPath := fmt.Sprintf("%s/apps/%s.json", sourcepath, searchname)
 
-	var err error
 	responseBody := []byte{}
 
 	_, statErr := os.Stat(appPath)
@@ -4759,7 +4824,7 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 			log.Printf("[ERROR] Error writing file: %s", err)
 			return &parsedApp, openapiDef, err
 		} else {
-			log.Printf("[DEBUG] Wrote app to file: %s", appPath)
+			log.Printf("[INFO] Wrote app to file: %s", appPath)
 		}
 	}
 
