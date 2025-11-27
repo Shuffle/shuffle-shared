@@ -11390,7 +11390,7 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 			return "", "", errors.New("conversation belongs to different organization")
 		}
 
-		history, err = GetConversationHistory(ctx, conversationId, 50)
+		history, err = GetConversationHistory(ctx, conversationId, 100)
 		if err != nil {
 			log.Printf("[WARNING] Failed to load conversation history for %s: %s", conversationId, err)
 			history = []ConversationMessage{} // Continue with empty history
@@ -11445,7 +11445,7 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 		UserId:         input.UserId,
 		Role:           "user",
 		Query:          input.Query,
-		TimeStarted:    time.Now().Unix(),
+		TimeStarted:    time.Now().UnixMicro(),
 	}
 	err = SetConversation(ctx, userMessage)
 	if err != nil {
@@ -11460,7 +11460,7 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 		UserId:         input.UserId,
 		Role:           "assistant",
 		Response:       aiResponse,
-		TimeStarted:    time.Now().Unix(),
+		TimeStarted:    time.Now().UnixMicro(),
 	}
 	err = SetConversation(ctx, assistantMessage)
 	if err != nil {
@@ -11482,8 +11482,8 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 			Title:        title,
 			OrgId:        input.OrgId,
 			UserId:       input.UserId,
-			CreatedAt:    time.Now().Unix(),
-			UpdatedAt:    time.Now().Unix(),
+			CreatedAt:    time.Now().UnixMicro(),
+			UpdatedAt:    time.Now().UnixMicro(),
 			MessageCount: 2, // user + assistant
 		}
 		err = SetConversationMetadata(ctx, newMetadata)
@@ -11494,8 +11494,8 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 		log.Printf("[INFO] New conversation created for org %s: %s", input.OrgId, conversationId)
 	} else {
 		if conversationMetadata != nil {
-			conversationMetadata.UpdatedAt = time.Now().Unix()
-			conversationMetadata.MessageCount += 2 
+			conversationMetadata.UpdatedAt = time.Now().UnixMicro()
+			conversationMetadata.MessageCount += 2
 			err = SetConversationMetadata(ctx, *conversationMetadata)
 			if err != nil {
 				log.Printf("[WARNING] Failed to update conversation metadata: %s", err)

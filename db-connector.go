@@ -15879,7 +15879,7 @@ func GetConversationHistory(ctx context.Context, conversationId string, limit in
 		message := ConversationMessage{
 			UserId:    queryInput.UserId,
 			Role:      queryInput.Role,
-			Timestamp: time.Unix(queryInput.TimeStarted, 0),
+			Timestamp: time.UnixMicro(queryInput.TimeStarted),
 		}
 
 		if queryInput.Role == "user" {
