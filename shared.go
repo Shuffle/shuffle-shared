@@ -1085,6 +1085,14 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
+
+		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
+
+		if org.SyncUsage.MultiTenant.Counter != int64(len(org.ChildOrgs)+1) {
+			org.SyncUsage.MultiTenant.Counter = int64(len(org.ChildOrgs) + 1)
+			orgChanged = true
+		}
+
 		if orgChanged {
 			log.Printf("[DEBUG] Org features for %s (%s) changed. Updating.", org.Name, org.Id)
 			err = SetOrg(ctx, *org, org.Id)
@@ -1098,7 +1106,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		}
 
-		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
 		envs, err := GetEnvironments(ctx, fileId)
 		if err == nil {
 			//log.Printf("Envs: %s", len(envs))
@@ -30370,7 +30377,7 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if !isAdmin {
+	if !isAdmin && !user.SupportAccess {
 		log.Printf("[WARNING] User %s is not an admin in org '%s'. Not deleting.", user.Username, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "User is not an admin in the parent org"}`))
@@ -30421,6 +30428,16 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	parentOrg.ChildOrgs = newChildOrg
+	allChildOrgs, err := GetAllChildOrgs(ctx, parentOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting all child orgs for parent org '%s': %s", parentOrg.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting all child orgs"}`))
+		return
+	}
+
+	parentOrg.SyncUsage.MultiTenant.Counter = int64(len(allChildOrgs)) + 1
+	parentOrg.SyncFeatures.MultiTenant.Usage = int64(len(allChildOrgs)) + 1
 
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
 	if err != nil {
