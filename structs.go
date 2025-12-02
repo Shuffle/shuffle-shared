@@ -4658,9 +4658,11 @@ type WorkflowIntentResponse struct {
 }
 
 type WorkflowIntentTask struct {
-	Intent     string  `json:"intent"`
-	TargetNode *string `json:"target_node"` // Pointer to allow null values
-	SourceText string  `json:"source_text"`
+	Intent       string  `json:"intent"`
+	TargetNode   *string `json:"target_node"` // Which node to target (for MODIFY/REMOVE)
+	SourceText   string  `json:"source_text"`
+	InsertAfter  *string `json:"insert_after"`  // For ADD_NODE: insert after this node label
+	InsertBefore *string `json:"insert_before"` // For ADD_NODE: insert before this node label
 }
 
 type AppCategoryItem struct {
