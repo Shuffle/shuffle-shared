@@ -10807,7 +10807,7 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	output, err := 	editWorkflowWithLLMV2(ctx, workflow, user, editRequest)
+	output, err := editWorkflowWithLLMV2(ctx, workflow, user, editRequest)
 
 	if err != nil {
 		reason := err.Error()
@@ -11297,13 +11297,23 @@ func fixBranchesAfterRemoval(workflow *Workflow, removedID string) {
 	}
 }
 
-	return workflow, nil
-}
+func handleAddConditionTask(workflow *Workflow, task WorkflowIntentTask) (*Workflow, error) {
+	// Silent fail: no target node specified
+	if task.TargetNode == nil || *task.TargetNode == "" {
+		log.Printf("[WARN] ADD_CONDITION: no target_node (source node) specified, skipping")
+		return workflow, nil
+	}
 
-func handleRemoveNodeTask(ctx context.Context, workflow *Workflow, task WorkflowIntentTask, environment string, user User) (*Workflow, error) {
-	// Implement logic to remove a node from the workflow based on the task details
-	return workflow, nil
-}
+	// target_node = source node (where condition checks from)
+	// insert_before = destination node (where flow goes if condition passes)
+	sourceLabel := strings.ToLower(*task.TargetNode)
+
+	// Find source node ID
+	sourceID := findNodeIDByLabel(workflow, sourceLabel)
+	if sourceID == "" {
+		log.Printf("[WARN] ADD_CONDITION: source node '%s' not found, skipping", sourceLabel)
+		return workflow, nil
+	}
 
 	// Find destination node ID if specified
 	var destID string
