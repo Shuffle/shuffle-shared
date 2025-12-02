@@ -118,6 +118,15 @@ type QueryInput struct {
 	// For OpenAI assistant with Shuffle labels
 	ThreadId string `json:"thread_id,omitempty"`
 	RunId    string `json:"run_id,omitempty"`
+
+	// For responses API
+	ResponseId string `json:"response_id,omitempty"`
+
+	// For chat history storage (extending the conversations index)
+	Role           string `json:"role,omitempty" datastore:"role"`                       // "user", "assistant", or "system"
+	Response       string `json:"response,omitempty" datastore:"response,noindex"`       // AI's response content
+	ConversationId string `json:"conversation_id,omitempty" datastore:"conversation_id"` // Groups all messages in one chat together
+
 }
 
 type AtomicOutput struct {
@@ -127,6 +136,9 @@ type AtomicOutput struct {
 	ThreadId   string `json:"thread_id"`              // Thread the assistant ran
 	RunId      string `json:"run_id"`                 // Run ID for the thread
 	ToolCallID string `json:"tool_call_id,omitempty"` // Result inside the run
+	
+	ResponseId string `json:"response_id,omitempty"`  // Response ID
+	ConversationId string `json:"conversation_id,omitempty"`  // Conversation ID 
 }
 
 type ExecutionRequestWrapper struct {
@@ -1653,6 +1665,9 @@ type Notification struct {
 	ModifiedBy  string `json:"modified_by" datastore:"modified_by"`
 	Ignored     bool   `json:"ignored" datastore:"ignored"`
 	ExecutionId string `json:"execution_id" datastore:"execution_id"`
+
+	Severity	string	`json:"severity" datastore:"severity"`
+	Origin		string	`json:"origin" datastore:"origin"`
 }
 
 type NotificationCached struct {
@@ -2456,10 +2471,10 @@ type NGramSearchWrapper struct {
 		} `json:"total"`
 		MaxScore float64 `json:"max_score"`
 		Hits     []struct {
-			Index  string   `json:"_index"`
-			Type   string   `json:"_type"`
-			ID     string   `json:"_id"`
-			Score  float64  `json:"_score"`
+			Index  string    `json:"_index"`
+			Type   string    `json:"_type"`
+			ID     string    `json:"_id"`
+			Score  float64   `json:"_score"`
 			Source NGramItem `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
@@ -4290,14 +4305,14 @@ type LiveExecutionStatus struct {
 }
 
 type HealthCheck struct {
-	Success			bool            `json:"success"`
-	Updated			int64           `json:"updated"`
-	Apps			AppHealth       `json:"apps"`
-	Workflows		WorkflowHealth  `json:"workflows"`
-	PythonApps		AppHealth       `json:"python_apps"`
-	Datastore		DatastoreHealth `json:"datastore"`
-	FileOps			FileHealth      `json:"fileops"`
-	OpensearchOps	opensearchapi.ClusterHealthResp `json:"opensearch"`
+	Success       bool                            `json:"success"`
+	Updated       int64                           `json:"updated"`
+	Apps          AppHealth                       `json:"apps"`
+	Workflows     WorkflowHealth                  `json:"workflows"`
+	PythonApps    AppHealth                       `json:"python_apps"`
+	Datastore     DatastoreHealth                 `json:"datastore"`
+	FileOps       FileHealth                      `json:"fileops"`
+	OpensearchOps opensearchapi.ClusterHealthResp `json:"opensearch"`
 }
 
 type HealthCheckDB struct {
@@ -4396,6 +4411,7 @@ type UserRequest struct {
 type HTTPOutput struct {
 	Success   bool   `json:"success"`
 	Reason    string `json:"reason,omitempty"`
+	Result    string `jjson:"result,omitempty"`
 	Exception string `json:"exception,omitempty"`
 	Details   string `json:"details,omitempty"`
 
@@ -4754,16 +4770,38 @@ type ThreadAccessRequest struct {
 	ThreadID string `json:"thread_id"`
 }
 
-type ThreadConversationResponse struct {
-	Success     bool                  `json:"success"`
-	ThreadID    string                `json:"thread_id"`
-	ThreadOrgID string                `json:"thread_org_id"` // Org where thread lives (for switching orgs)
-	Messages    []ConversationMessage `json:"messages"`
-	IsActiveOrg bool                  `json:"is_active_org"` // Whether this is user's active org
+type ConversationAccessRequest struct {
+	ConversationID string `json:"conversation_id"`
+}
+
+type ConversationResponse struct {
+	Success        bool                  `json:"success"`
+	ConversationID string                `json:"conversation_id"`
+	OrgID          string                `json:"org_id"` // Org where thread lives (for switching orgs)
+	Messages       []ConversationMessage `json:"messages"`
+	IsActiveOrg    bool                  `json:"is_active_org"` // Whether this is user's active org
 }
 
 type ConversationMessage struct {
+	UserId    string    `json:"user_id"`
 	Role      string    `json:"role"` // "user" or "assistant"
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
+}
+
+// Conversation metadata
+type Conversation struct {
+	Id           string `json:"id" datastore:"id"`
+	Title        string `json:"title" datastore:"title"`
+	OrgId        string `json:"org_id" datastore:"org_id"`
+	UserId       string `json:"user_id" datastore:"user_id"`
+	CreatedAt    int64  `json:"created_at" datastore:"created_at"`
+	UpdatedAt    int64  `json:"updated_at" datastore:"updated_at"`
+	MessageCount int    `json:"message_count" datastore:"message_count"`
+}
+
+type StreamData struct {
+	Type  string `json:"type"` // "chunk", "done", "error"
+	Chunk string `json:"chunk,omitempty"`
+	Data  string `json:"data,omitempty"` // For the final ID or error
 }

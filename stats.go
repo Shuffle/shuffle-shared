@@ -659,34 +659,42 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		orgId = user.ActiveOrg.Id
 	}
 
+	org := &Org{}
 	ctx := GetContext(request)
-	org, err := GetOrg(ctx, orgId)
-	if err != nil {
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting org stats"}`))
-		return
-	}
-
-	userFound := false
-	for _, inneruser := range org.Users {
-		if inneruser.Id == user.Id {
-			userFound = true
-
-			break
+	if orgId == "public" { 
+		if user.SupportAccess {
+			log.Printf("[AUDIT] User %s (%s) is getting org stats for PUBLIC org %s with support access", user.Username, user.Id, orgId)
 		}
-	}
 
-	if user.SupportAccess {
-		log.Printf("[AUDIT] User %s (%s) is getting org stats for %s (%s) with support access", user.Username, user.Id, org.Name, orgId)
-		userFound = true
-	}
+	} else {
+		org, err = GetOrg(ctx, orgId)
+		if err != nil {
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting org stats"}`))
+			return
+		}
 
-	if !userFound {
-		log.Printf("[WARNING] User %s isn't a part of org %s (get)", user.Id, org.Id)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
-		return
+		userFound := false
+		for _, inneruser := range org.Users {
+			if inneruser.Id == user.Id {
+				userFound = true
 
+				break
+			}
+		}
+
+		if user.SupportAccess {
+			log.Printf("[AUDIT] User %s (%s) is getting org stats for %s (%s) with support access", user.Username, user.Id, org.Name, orgId)
+			userFound = true
+		}
+
+		if !userFound {
+			log.Printf("[WARNING] User %s isn't a part of org %s (get)", user.Id, org.Id)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
+			return
+
+		}
 	}
 
 	// FIXME: Removed the current stats grabber as it made no sense

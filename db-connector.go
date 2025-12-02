@@ -2317,7 +2317,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	}
 
 	if id == "integration" {
-		return workflowApp, errors.New("App ID 'integration' is for the integration framework. Uses the Shuffle-ai app.")
+		return workflowApp, errors.New("App ID 'integration' is for Singul. Uses the Shuffle-AI app. This error is from GetApp(integration) which does not work. Contact support@shuffler.io if this persists.")
 	}
 
 	nameKey := "workflowapp"
@@ -4023,7 +4023,11 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 // Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {
 	if id == "public" {
-		return &Org{}, errors.New("'public' org is used for Singul action without being logged in. Not relevant.")
+		//return &Org{}, errors.New("'public' org is used for Singul action without being logged in. Not relevant.")
+		return &Org{
+			Id:	 "public",
+			Name: "Public",
+		}, nil
 	}
 
 	nameKey := "Organizations"
@@ -4035,7 +4039,11 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &curOrg)
 			if err == nil {
-				return curOrg, nil
+				if curOrg.Id == "" {
+					return curOrg, errors.New("Org doesn't exist")
+				} else {
+					return curOrg, nil
+				}
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
@@ -4082,6 +4090,18 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				err = nil
 			} else {
 				log.Printf("[ERROR] Problem in org loading (2) for %s: %s", key, err)
+				if strings.Contains(err.Error(), `no such entity`) && project.CacheDb {
+					neworg, err := json.Marshal(curOrg)
+					if err != nil {
+						return &Org{}, err
+					}
+
+					// Set cache for it
+					err = SetCache(ctx, cacheKey, neworg, 30)
+					if err != nil {
+						log.Printf("[ERROR] Failed updating org cache (3): %s", err)
+					}
+				}
 				//orgErr = err
 				return &Org{}, err
 			}
@@ -6416,6 +6436,13 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 	hideEnvs := false
 	multiEnvLimit := 0
 	if project.Environment == "onprem" {
+		if orgId == "" {
+			if debug {
+				log.Printf("[DEBUG] No orgId provided, skipping multi-env license check")
+			}
+			return environments, nil
+		}
+
 		currentOrg, err := GetOrg(ctx, orgId)
 		if err != nil {
 			log.Printf("[WARNING] Failed to get current org %s: %v", orgId, err)
@@ -13514,6 +13541,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 								fmt.Sprintf("/admin?tab=datastore&category=%s", cacheData.Category),
 								cacheData.OrgId,
 								true,
+								"MEDIUM",
+								"Datastore_Automation_Error",
 							)
 						}
 					}(cacheData, automation)
@@ -13728,6 +13757,8 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 							fmt.Sprintf("/admin?tab=datastore&category=%s", cacheData.Category),
 							cacheData.OrgId,
 							true,
+							"MEDIUM",
+							"Datastore_Automation_Error",
 						)
 					}
 				}(cacheData, automation)
@@ -15564,6 +15595,8 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 					workflowExecution.ExecutionOrg,
 					true,
+					"MEDIUM",
+					"workflow_long_execution",
 				)
 
 				if err != nil {
@@ -15730,6 +15763,429 @@ func SetConversation(ctx context.Context, input QueryInput) error {
 	}
 
 	return nil
+}
+
+func GetConversationHistory(ctx context.Context, conversationId string, limit int) ([]ConversationMessage, error) {
+	nameKey := "conversations"
+
+	if conversationId == "" {
+		return []ConversationMessage{}, errors.New("conversationId is empty")
+	}
+
+	if limit == 0 {
+		limit = 100
+	}
+
+	cacheKey := fmt.Sprintf("%s_history_%s", nameKey, conversationId)
+	conversationMessages := []ConversationMessage{}
+
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &conversationMessages)
+			if err == nil {
+				return conversationMessages, nil
+			}
+		}
+	}
+
+	queryInputs := []QueryInput{}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": limit,
+			"query": map[string]interface{}{
+				"term": map[string]interface{}{
+					"conversation_id": conversationId,
+				},
+			},
+			"sort": []map[string]interface{}{
+				{
+					"time_started": map[string]interface{}{
+						"order": "asc",
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding conversation history query: %s", err)
+			return conversationMessages, err
+		}
+
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
+
+		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return conversationMessages, nil
+			}
+
+			log.Printf("[ERROR] Error getting response from Opensearch (get conversation history): %s", err)
+			return conversationMessages, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return conversationMessages, err
+			} else {
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return conversationMessages, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return conversationMessages, err
+		}
+
+		type ConversationSearchWrapper struct {
+			Hits struct {
+				Hits []struct {
+					Source QueryInput `json:"_source"`
+				} `json:"hits"`
+			} `json:"hits"`
+		}
+
+		wrapped := ConversationSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return conversationMessages, err
+		}
+
+		for _, hit := range wrapped.Hits.Hits {
+			queryInputs = append(queryInputs, hit.Source)
+		}
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("conversation_id =", conversationId).Limit(limit)
+		_, err := project.Dbclient.GetAll(ctx, q, &queryInputs)
+		if err != nil && len(queryInputs) == 0 {
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return conversationMessages, err
+			}
+		}
+
+		sort.Slice(queryInputs, func(i, j int) bool {
+			return queryInputs[i].TimeStarted < queryInputs[j].TimeStarted
+		})
+	}
+
+	for _, queryInput := range queryInputs {
+		// Skip messages with invalid or empty role
+		if queryInput.Role != "user" && queryInput.Role != "assistant" {
+			log.Printf("[WARNING] Skipping message with invalid role: '%s'", queryInput.Role)
+			continue
+		}
+
+		message := ConversationMessage{
+			UserId:    queryInput.UserId,
+			Role:      queryInput.Role,
+			Timestamp: time.UnixMicro(queryInput.TimeStarted),
+		}
+
+		if queryInput.Role == "user" {
+			message.Content = queryInput.Query
+		} else if queryInput.Role == "assistant" {
+			message.Content = queryInput.Response
+		}
+
+		// Skip messages with empty content
+		if message.Content == "" {
+			log.Printf("[WARNING] Skipping message with empty content for role: %s", queryInput.Role)
+			continue
+		}
+
+		conversationMessages = append(conversationMessages, message)
+	}
+
+	if project.CacheDb && len(conversationMessages) > 0 {
+		data, err := json.Marshal(conversationMessages)
+		if err == nil {
+			err = SetCache(ctx, cacheKey, data, 5)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting cache for conversation history '%s': %s", cacheKey, err)
+			}
+		}
+	}
+
+	return conversationMessages, nil
+}
+
+func SetConversationMetadata(ctx context.Context, conversation Conversation) error {
+	nameKey := "conversation_metadata"
+
+	if len(conversation.Id) == 0 {
+		conversation.Id = uuid.NewV4().String()
+	}
+
+	if conversation.CreatedAt == 0 {
+		conversation.CreatedAt = time.Now().Unix()
+	}
+
+	conversation.UpdatedAt = time.Now().Unix()
+
+	data, err := json.Marshal(conversation)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling conversation metadata: %s", err)
+		return err
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, conversation.Id, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, conversation.Id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &conversation); err != nil {
+			log.Printf("[WARNING] Error adding conversation metadata: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, conversation.Id)
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for conversation metadata '%s': %s", cacheKey, err)
+		}
+
+		// Invalidate org conversations cache
+		orgCacheKey := fmt.Sprintf("%s_org_%s", nameKey, conversation.OrgId)
+		DeleteCache(ctx, orgCacheKey)
+	}
+
+	return nil
+}
+
+func GetOrgConversations(ctx context.Context, orgId string, limit int) ([]Conversation, error) {
+	nameKey := "conversation_metadata"
+
+	if orgId == "" {
+		return []Conversation{}, errors.New("orgId is empty")
+	}
+
+	if limit == 0 {
+		limit = 50
+	}
+
+	cacheKey := fmt.Sprintf("%s_org_%s", nameKey, orgId)
+	conversations := []Conversation{}
+
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &conversations)
+			if err == nil {
+				return conversations, nil
+			}
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": limit,
+			"query": map[string]interface{}{
+				"term": map[string]interface{}{
+					"org_id": orgId,
+				},
+			},
+			"sort": []map[string]interface{}{
+				{
+					"updated_at": map[string]interface{}{
+						"order": "desc",
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding org conversations query: %s", err)
+			return conversations, err
+		}
+
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
+
+		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return conversations, nil
+			}
+
+			log.Printf("[ERROR] Error getting response from Opensearch (get org conversations): %s", err)
+			return conversations, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return conversations, err
+			} else {
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return conversations, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return conversations, err
+		}
+
+		type ConversationMetadataSearchWrapper struct {
+			Hits struct {
+				Hits []struct {
+					Source Conversation `json:"_source"`
+				} `json:"hits"`
+			} `json:"hits"`
+		}
+
+		wrapped := ConversationMetadataSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return conversations, err
+		}
+
+		for _, hit := range wrapped.Hits.Hits {
+			conversations = append(conversations, hit.Source)
+		}
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-updated_at").Limit(limit)
+		_, err := project.Dbclient.GetAll(ctx, q, &conversations)
+		if err != nil && len(conversations) == 0 {
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return conversations, err
+			}
+		}
+	}
+
+	// Cache the result
+	if project.CacheDb && len(conversations) > 0 {
+		data, err := json.Marshal(conversations)
+		if err == nil {
+			err = SetCache(ctx, cacheKey, data, 5)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting cache for org conversations '%s': %s", cacheKey, err)
+			}
+		}
+	}
+
+	return conversations, nil
+}
+
+func GetConversationMetadata(ctx context.Context, conversationId string) (*Conversation, error) {
+	nameKey := "conversation_metadata"
+	conversation := &Conversation{}
+
+	if conversationId == "" {
+		return conversation, errors.New("conversationId is empty")
+	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, conversationId)
+
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, conversation)
+			if err == nil {
+				return conversation, nil
+			}
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: conversationId,
+		})
+
+		if err != nil {
+			log.Printf("[WARNING] Error getting conversation metadata %s: %s", conversationId, err)
+			return conversation, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+
+		if res.StatusCode == 404 {
+			return conversation, errors.New("conversation not found")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return conversation, err
+		}
+
+		type ConversationWrapper struct {
+			Source Conversation `json:"_source"`
+		}
+
+		wrapped := ConversationWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return conversation, err
+		}
+
+		conversation = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, conversationId, nil)
+		if err := project.Dbclient.Get(ctx, key, conversation); err != nil {
+			if strings.Contains(err.Error(), `cannot load field`) {
+				err = nil
+			} else {
+				return conversation, err
+			}
+		}
+	}
+
+	if project.CacheDb && len(conversation.Id) > 0 {
+		data, err := json.Marshal(conversation)
+		if err == nil {
+			err = SetCache(ctx, cacheKey, data, 30)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting cache for conversation metadata '%s': %s", cacheKey, err)
+			}
+		}
+	}
+
+	return conversation, nil
 }
 
 func SetenvStats(ctx context.Context, input OrborusStats) error {
@@ -17083,7 +17539,7 @@ func InitOpensearchIndexes() {
 		GetESIndexPrefix("notifications"),
 		GetESIndexPrefix("shuffle_logs"),
 		GetESIndexPrefix("environments"),
-		GetESIndexPrefix("notifications"),
+		GetESIndexPrefix("org_statistics"),
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")

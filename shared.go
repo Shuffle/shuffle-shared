@@ -116,8 +116,10 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"https://br.shuffler.io",
 			"https://in.shuffler.io",
 
+			"https://*.singul.io",
 			"https://singul.io",
 			"http://localhost:3002",
+			"http://localhost:3000",
 		}
 
 		if len(origin) > 0 {
@@ -1083,6 +1085,14 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
+
+		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
+
+		if org.SyncUsage.MultiTenant.Counter != int64(len(org.ChildOrgs)+1) {
+			org.SyncUsage.MultiTenant.Counter = int64(len(org.ChildOrgs) + 1)
+			orgChanged = true
+		}
+
 		if orgChanged {
 			log.Printf("[DEBUG] Org features for %s (%s) changed. Updating.", org.Name, org.Id)
 			err = SetOrg(ctx, *org, org.Id)
@@ -1096,7 +1106,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		}
 
-		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
 		envs, err := GetEnvironments(ctx, fileId)
 		if err == nil {
 			//log.Printf("Envs: %s", len(envs))
@@ -3336,7 +3345,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		// Get the user based on APIkey here
 		userdata, err := GetApikey(ctx, apikeyCheck[1])
 		if err != nil {
-			//log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
+			log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
 			return User{}, err
 		}
 
@@ -8900,6 +8909,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				fmt.Sprintf("/workflows/%s", workflow.ID),
 				user.ActiveOrg.Id,
 				true,
+				"MEDIUM",
+				"git",
 			)
 
 			if err != nil {
@@ -16798,6 +16809,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 				workflowExecution.ExecutionOrg,
 				true,
+				"CRITICAL",
+				"workflow_execution",
 			)
 
 			workflowExecution.NotificationsCreated++
@@ -16835,6 +16848,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 				workflowExecution.ExecutionOrg,
 				true,
+				"CRITICAL",
+				"liquid_syntax",
 			)
 
 			workflowExecution.NotificationsCreated++
@@ -16877,6 +16892,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 					workflowExecution.ExecutionOrg,
 					true,
+					"CRITICAL",
+					"action_failure",
 				)
 
 				workflowExecution.NotificationsCreated++
@@ -17298,6 +17315,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 					workflowExecution.ExecutionOrg,
 					true,
+					"HIGH",
+					"workflow_silent_failure",
 				)
 
 				workflowExecution.NotificationsCreated++
@@ -17324,6 +17343,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				fmt.Sprintf("/workflows/%s?execution_id=%s&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 				workflowExecution.ExecutionOrg,
 				true,
+				"CRITICAL",
+				"app_error",
 			)
 		}
 	}
@@ -20416,6 +20437,8 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		if len(decision) > 0 {
 			decisionId = decision[0]
 		}
+	} else if strings.ToLower(appId) == "integration" || strings.ToLower(appId) == "singul" {
+		log.Printf("[INFO] Running single action for 'integration' app => Singul")
 	} else if strings.ToLower(appId) == "http" {
 
 		// Find the app and the ID for it
@@ -20511,6 +20534,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 	} else {
+		// Integration handler as it has no name
+		//action.AppName = "Shuffle-AI"
+		//action.Name = "run_schemaless"
+
 		newApp, err := GetApp(ctx, appId, user, false)
 		if err != nil || len(newApp.ID) == 0 {
 			log.Printf("[WARNING] Error getting app (execute SINGLE app action): %s", appId)
@@ -20804,6 +20831,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		workflowExecution.WorkflowId = action.SourceWorkflow
 		workflowExecution.Workflow.ID = action.SourceWorkflow
 
+		workflowExecution.ExecutionArgument = oldExec.ExecutionArgument
 		workflowExecution.ExecutionSource = action.SourceWorkflow
 		workflowExecution.ExecutionParent = action.SourceExecution
 
@@ -21130,7 +21158,7 @@ func runAppRebuildFromSingleAction(appId string) {
 	ctx := context.Background()
 	app, err := GetApp(ctx, appId, User{}, false)
 	if err != nil {
-		log.Printf("[WARNING] Error getting app (execute SINGLE app action): %s", appId)
+		log.Printf("[WARNING] Error getting app (execute SINGLE app action - 2): %s", appId)
 		return
 	}
 
@@ -25675,6 +25703,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 									workflowExecution.ExecutionOrg,
 									true,
+									"MEDIUM",
+									"KMS_DECRYPT_FAILURE",
 								)
 							}
 						}
@@ -25854,6 +25884,8 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 			fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 			workflowExecution.ExecutionOrg,
 			true,
+			"HIGH",
+			"AUTH_ID_MISSING",
 		)
 
 		//return workflowExecution, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id))
@@ -26006,6 +26038,8 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 					fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 					workflowExecution.ExecutionOrg,
 					true,
+					"HIGH",
+					"OAUTH2_REFRESH_FAILURE",
 				)
 
 				// Abort the workflow due to auth being bad
@@ -26106,6 +26140,8 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 						fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 						workflowExecution.ExecutionOrg,
 						true,
+						"HIGH",
+						"OAUTH2_REFRESH_FAILURE",
 					)
 
 					// Adding so it can be used to fail the auth naturally with Outlook
@@ -30370,7 +30406,7 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if !isAdmin {
+	if !isAdmin && !user.SupportAccess {
 		log.Printf("[WARNING] User %s is not an admin in org '%s'. Not deleting.", user.Username, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "User is not an admin in the parent org"}`))
@@ -30421,6 +30457,16 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	parentOrg.ChildOrgs = newChildOrg
+	allChildOrgs, err := GetAllChildOrgs(ctx, parentOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting all child orgs for parent org '%s': %s", parentOrg.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting all child orgs"}`))
+		return
+	}
+
+	parentOrg.SyncUsage.MultiTenant.Counter = int64(len(allChildOrgs)) + 1
+	parentOrg.SyncFeatures.MultiTenant.Usage = int64(len(allChildOrgs)) + 1
 
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
 	if err != nil {

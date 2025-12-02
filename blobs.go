@@ -475,6 +475,9 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 	// Appends actions in the workflow
 	// This is done specifically for Singul ingests
 	positionAddition := float64(250)
+
+	log.Printf("ACTIONS: %d, TRIGGERS: %d, APPNAMES: %d, FIRSTACTION: %s, TRIGGER: %s", len(workflow.Actions), len(workflow.Triggers), len(appNames), workflow.Actions[0].AppName, workflow.Triggers[0].TriggerType)
+	os.Exit(3)
 	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && len(appNames) > 0 && len(workflow.Triggers) == 1 && workflow.Triggers[0].TriggerType == "SCHEDULE" {
 
 		actionTemplate := workflow.Actions[0]
@@ -540,7 +543,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				}
 			}
 
-			newAction.Label += " " + appName
+			//newAction.Label += " " + appName
+			newAction.Label = appName
 			if appNameIndex >= 0 {
 				newAction.Parameters[appNameIndex].Value = appName
 			} else {
