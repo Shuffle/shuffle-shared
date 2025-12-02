@@ -1085,7 +1085,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
-
 		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
 
 		if org.SyncUsage.MultiTenant.Counter != int64(len(org.ChildOrgs)+1) {
@@ -9277,7 +9276,6 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			// Overrides to ensure the user we are returning
 			// is accurate and not an org copy. Keeping roles from
 			// org, as that controls the actual roles.
-			foundUser = CleanCreds(foundUser)
 			newItem := *foundUser
 			newItem.Role = item.Role
 			newItem.Roles = []string{item.Role}
@@ -9409,6 +9407,12 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		if !found {
 			deduplicatedUsers = append(deduplicatedUsers, item)
 		}
+	}
+
+	// deduplicatedUsers = *CleanCreds(&deduplicatedUsers)
+	for userIndex, user := range deduplicatedUsers {
+		user = *CleanCreds(&user)
+		deduplicatedUsers[userIndex] = user
 	}
 
 	newjson, err := json.Marshal(deduplicatedUsers)
