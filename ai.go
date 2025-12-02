@@ -10865,29 +10865,18 @@ func editWorkflowWithLLMV2(ctx context.Context, workflow *Workflow, user User, i
 
 	// we are going to split this into multiple stages where
 	// stage 1 is going to be a intent classifier
-
 	// at this stage it breaks down what should be done to full the user request
-
-	// 1. Identify the intent
-	// intent := classifyIntent(input)
-
-	// // 2. Extract relevant entities
-	// entities := extractEntities(input)
-
-	// // 3. Determine the required actions
-	// actions := determineActions(intent, entities)
-
 	// lets start by identifying the multiple intents
 
-	intents, err := classifyMultipleIntents(input.Query)
+	intents, err := classifyMultipleIntents(input.Query, workflow)
 
 	if err != nil {
 		return nil, err
 	}
 
 	for _, task := range intents.Tasks {
-		log.Printf("[DEBUG] Detected intent: %s on target node: %s from source text: %s", task.Intent, task.TargetNode, task.SourceText)
-		// for now lets imagine there are seperate fucntions to handle each intent so lets focus for now on ADD_NODE intent
+		log.Printf("[DEBUG] Detected intent: %s on target node: %v from source text: %s", task.Intent, task.TargetNode, task.SourceText)
+
 		switch task.Intent {
 		case "ADD_NODE":
 			workflow, err = handleAddNodeTask(ctx, workflow, task, input.Environment, user)
@@ -10895,10 +10884,29 @@ func editWorkflowWithLLMV2(ctx context.Context, workflow *Workflow, user User, i
 				return workflow, err
 			}
 		case "REMOVE_NODE":
-			// workflow, err = handleRemoveNodeTask(ctx, workflow, task, input.Environment, user)
-			// if err != nil {
-			// 	return workflow, err
-			// }
+			workflow, err = handleRemoveNodeTask(workflow, task)
+			if err != nil {
+				log.Printf("[WARN] REMOVE_NODE failed for workflow %s: %s", workflow.ID, err)
+			}
+		case "ADD_CONDITION":
+			workflow, err = handleAddConditionTask(workflow, task)
+			if err != nil {
+				log.Printf("[WARN] ADD_CONDITION failed for workflow %s: %s", workflow.ID, err)
+			}
+		case "REMOVE_CONDITION":
+			workflow, err = handleRemoveConditionTask(workflow, task)
+			if err != nil {
+				log.Printf("[WARN] REMOVE_CONDITION failed for workflow %s: %s", workflow.ID, err)
+			}
+		case "MODIFY_ACTION_PARAMETER":
+			workflow, err = handleModifyParameterTask(workflow, task)
+			if err != nil {
+				log.Printf("[WARN] MODIFY_ACTION_PARAMETER failed for workflow %s: %s", workflow.ID, err)
+			}
+		case "NO_ACTION_NEEDED":
+			log.Printf("[DEBUG] No action needed for workflow %s", workflow.ID)
+		default:
+			log.Printf("[WARN] Unknown intent '%s' for workflow %s", task.Intent, workflow.ID)
 		}
 	}
 
