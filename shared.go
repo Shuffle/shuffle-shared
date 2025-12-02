@@ -1025,7 +1025,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			if !found { 
+			if !found {
 				log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, org.Id)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
@@ -9185,6 +9185,33 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+func CleanCreds(user *User) *User {
+	user.Password = ""
+	user.ApiKey = ""
+	user.Session = ""
+	user.UsersLastSession = ""
+	user.VerificationToken = ""
+	user.ValidatedSessionOrgs = []string{}
+	user.Orgs = []string{}
+	user.Authentication = []UserAuth{}
+	user.PrivateApps = []WorkflowApp{}
+
+	// let's come back to this
+	user.MFA = MFAInfo{
+		Active: user.MFA.Active,
+	}
+	user.ActiveOrg = OrgMini{}
+	if !user.SupportAccess {
+		user.LoginInfo = []LoginInfo{}
+	}
+
+	user.LoginInfo = []LoginInfo{}
+	user.LoginType = "DELETED"
+	user.Role = "user"
+
+	return user
+}
+
 func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -9239,6 +9266,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			// Overrides to ensure the user we are returning
 			// is accurate and not an org copy. Keeping roles from
 			// org, as that controls the actual roles.
+			foundUser = CleanCreds(foundUser)
 			newItem := *foundUser
 			newItem.Role = item.Role
 			newItem.Roles = []string{item.Role}
@@ -9318,7 +9346,8 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[WARNING] Failed getting org users for support access: %s", err)
 		} else {
 			for _, orgUser := range orgUsers {
-				found := false 
+				orgUser = *CleanCreds(&orgUser)
+				found := false
 				for _, existingUser := range newUsers {
 					if existingUser.Id == orgUser.Id {
 						found = true
@@ -9326,7 +9355,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
-				if found { 
+				if found {
 					continue
 				}
 
@@ -11591,7 +11620,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			if strings.ToLower(strings.TrimSpace(loopUser.Username)) != fileId {
 				continue
 			}
-				
+
 			newUsers = append(newUsers, loopUser)
 		}
 
@@ -11717,10 +11746,10 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if !userFound && !user.SupportAccess {
 
-		// FIXME: This changes the source of truth from JUST org.Users to user.Orgs  
-		// May be a problem in worst case scenarios, but only works for orgids 
+		// FIXME: This changes the source of truth from JUST org.Users to user.Orgs
+		// May be a problem in worst case scenarios, but only works for orgids
 		// you know, so chance of causing an issue is **VERY** low.
-		found := false 
+		found := false
 		for _, orgId := range user.Orgs {
 			if orgId == org.Id {
 				usr.Role = "user"
@@ -17591,7 +17620,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				var subflowDataList []SubflowData
 				err = json.Unmarshal([]byte(actionResult.Result), &subflowDataList)
 
-				//if debug { 
+				//if debug {
 				//	log.Printf("\n\n\n\n\nSUBFLOW RESULT DATA: %#v\n\n\n\n\n", subflowData)
 				//}
 
@@ -21471,12 +21500,12 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		//250 = average read time / minute
 		// Doubling this for bloat removal in Markdown~
 		githubResp := GithubResp{
-			Name:         (*item.Name)[0 : len(*item.Name)-3],
-			Contributors: []GithubAuthor{},
+			Name:          (*item.Name)[0 : len(*item.Name)-3],
+			Contributors:  []GithubAuthor{},
 			PublishedDate: publishedDate,
-			Edited:       "",
-			ReadTime:     *item.Size / 6 / 250,
-			Link:         fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
+			Edited:        "",
+			ReadTime:      *item.Size / 6 / 250,
+			Link:          fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
 		}
 
 		names = append(names, githubResp)
@@ -33727,12 +33756,12 @@ func GetDockerClient() (*dockerclient.Client, string, error) {
 	dockerApiVersion := os.Getenv("DOCKER_API_VERSION")
 	cli, err := dockerclient.NewEnvClient()
 	if err != nil {
-		return nil, dockerApiVersion,err
+		return nil, dockerApiVersion, err
 	}
 
 	_, err = cli.Info(ctx)
 	if err == nil {
-		return cli, dockerApiVersion,nil
+		return cli, dockerApiVersion, nil
 	}
 
 	if strings.Contains(strings.ToLower(err.Error()), strings.ToLower("Minimum supported API version is")) {
