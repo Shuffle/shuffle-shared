@@ -9216,7 +9216,14 @@ func CleanCreds(user *User) *User {
 	}
 
 	user.LoginInfo = []LoginInfo{}
-	user.LoginType = "DELETED"
+	// user.LoginType = "DELETED"
+	// login type options is either: SSO, OPENID or empty.
+	// we add deleted in other cleanups.
+	// there's some frontend logic supporting this at weird places
+	// let's just cleanup LoginType here for now.
+	if user.LoginType != "DELETED" {
+		user.LoginType = ""
+	}
 	user.Role = "user"
 
 	return user
@@ -9355,7 +9362,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[WARNING] Failed getting org users for support access: %s", err)
 		} else {
 			for _, orgUser := range orgUsers {
-				orgUser = *CleanCreds(&orgUser)
+				// orgUser = *CleanCreds(&orgUser)
 				found := false
 				for _, existingUser := range newUsers {
 					if existingUser.Id == orgUser.Id {
