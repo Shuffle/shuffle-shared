@@ -1027,7 +1027,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			if !found { 
+			if !found {
 				log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, org.Id)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
@@ -1085,6 +1085,13 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
+		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
+
+		if org.SyncUsage.MultiTenant.Counter != int64(len(org.ChildOrgs)+1) {
+			org.SyncUsage.MultiTenant.Counter = int64(len(org.ChildOrgs) + 1)
+			orgChanged = true
+		}
+
 		if orgChanged {
 			log.Printf("[DEBUG] Org features for %s (%s) changed. Updating.", org.Name, org.Id)
 			err = SetOrg(ctx, *org, org.Id)
@@ -1098,7 +1105,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		}
 
-		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
 		envs, err := GetEnvironments(ctx, fileId)
 		if err == nil {
 			//log.Printf("Envs: %s", len(envs))
@@ -9189,6 +9195,33 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+func CleanCreds(user *User) *User {
+	user.Password = ""
+	user.ApiKey = ""
+	user.Session = ""
+	user.UsersLastSession = ""
+	user.VerificationToken = ""
+	user.ValidatedSessionOrgs = []string{}
+	user.Orgs = []string{}
+	user.Authentication = []UserAuth{}
+	user.PrivateApps = []WorkflowApp{}
+
+	// let's come back to this
+	user.MFA = MFAInfo{
+		Active: user.MFA.Active,
+	}
+	user.ActiveOrg = OrgMini{}
+	if !user.SupportAccess {
+		user.LoginInfo = []LoginInfo{}
+	}
+
+	user.LoginInfo = []LoginInfo{}
+	user.LoginType = "DELETED"
+	user.Role = "user"
+
+	return user
+}
+
 func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -9322,7 +9355,8 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[WARNING] Failed getting org users for support access: %s", err)
 		} else {
 			for _, orgUser := range orgUsers {
-				found := false 
+				orgUser = *CleanCreds(&orgUser)
+				found := false
 				for _, existingUser := range newUsers {
 					if existingUser.Id == orgUser.Id {
 						found = true
@@ -9330,7 +9364,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
-				if found { 
+				if found {
 					continue
 				}
 
@@ -9373,6 +9407,12 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		if !found {
 			deduplicatedUsers = append(deduplicatedUsers, item)
 		}
+	}
+
+	// deduplicatedUsers = *CleanCreds(&deduplicatedUsers)
+	for userIndex, user := range deduplicatedUsers {
+		user = *CleanCreds(&user)
+		deduplicatedUsers[userIndex] = user
 	}
 
 	newjson, err := json.Marshal(deduplicatedUsers)
@@ -11595,7 +11635,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			if strings.ToLower(strings.TrimSpace(loopUser.Username)) != fileId {
 				continue
 			}
-				
+
 			newUsers = append(newUsers, loopUser)
 		}
 
@@ -11721,10 +11761,10 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if !userFound && !user.SupportAccess {
 
-		// FIXME: This changes the source of truth from JUST org.Users to user.Orgs  
-		// May be a problem in worst case scenarios, but only works for orgids 
+		// FIXME: This changes the source of truth from JUST org.Users to user.Orgs
+		// May be a problem in worst case scenarios, but only works for orgids
 		// you know, so chance of causing an issue is **VERY** low.
-		found := false 
+		found := false
 		for _, orgId := range user.Orgs {
 			if orgId == org.Id {
 				usr.Role = "user"
@@ -17619,7 +17659,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				var subflowDataList []SubflowData
 				err = json.Unmarshal([]byte(actionResult.Result), &subflowDataList)
 
-				//if debug { 
+				//if debug {
 				//	log.Printf("\n\n\n\n\nSUBFLOW RESULT DATA: %#v\n\n\n\n\n", subflowData)
 				//}
 
@@ -21506,12 +21546,12 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		//250 = average read time / minute
 		// Doubling this for bloat removal in Markdown~
 		githubResp := GithubResp{
-			Name:         (*item.Name)[0 : len(*item.Name)-3],
-			Contributors: []GithubAuthor{},
+			Name:          (*item.Name)[0 : len(*item.Name)-3],
+			Contributors:  []GithubAuthor{},
 			PublishedDate: publishedDate,
-			Edited:       "",
-			ReadTime:     *item.Size / 6 / 250,
-			Link:         fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
+			Edited:        "",
+			ReadTime:      *item.Size / 6 / 250,
+			Link:          fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
 		}
 
 		names = append(names, githubResp)
@@ -30388,7 +30428,7 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if !isAdmin {
+	if !isAdmin && !user.SupportAccess {
 		log.Printf("[WARNING] User %s is not an admin in org '%s'. Not deleting.", user.Username, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "User is not an admin in the parent org"}`))
@@ -30439,6 +30479,16 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	parentOrg.ChildOrgs = newChildOrg
+	allChildOrgs, err := GetAllChildOrgs(ctx, parentOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting all child orgs for parent org '%s': %s", parentOrg.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting all child orgs"}`))
+		return
+	}
+
+	parentOrg.SyncUsage.MultiTenant.Counter = int64(len(allChildOrgs)) + 1
+	parentOrg.SyncFeatures.MultiTenant.Usage = int64(len(allChildOrgs)) + 1
 
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
 	if err != nil {
@@ -33774,12 +33824,12 @@ func GetDockerClient() (*dockerclient.Client, string, error) {
 	dockerApiVersion := os.Getenv("DOCKER_API_VERSION")
 	cli, err := dockerclient.NewEnvClient()
 	if err != nil {
-		return nil, dockerApiVersion,err
+		return nil, dockerApiVersion, err
 	}
 
 	_, err = cli.Info(ctx)
 	if err == nil {
-		return cli, dockerApiVersion,nil
+		return cli, dockerApiVersion, nil
 	}
 
 	if strings.Contains(strings.ToLower(err.Error()), strings.ToLower("Minimum supported API version is")) {
