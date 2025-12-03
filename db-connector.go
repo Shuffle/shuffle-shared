@@ -17540,6 +17540,9 @@ func InitOpensearchIndexes() {
 		GetESIndexPrefix("shuffle_logs"),
 		GetESIndexPrefix("environments"),
 		GetESIndexPrefix("org_statistics"),
+		GetESIndexPrefix("workflowapp"),
+		GetESIndexPrefix("workflow"),
+		GetESIndexPrefix("workflow_revisions"),
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")
