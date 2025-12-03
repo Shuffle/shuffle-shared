@@ -891,7 +891,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 		return
 	}
 
-	if len(orgId) != 36 {
+	if len(orgId) != 36 && orgId != "public" {
 		log.Printf("[ERROR] Increment Stats with bad OrgId '%s' for type '%s'", orgId, dataType)
 		return
 	}

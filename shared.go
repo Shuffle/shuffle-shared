@@ -15128,6 +15128,13 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			Expiration: expiration.Unix(),
 		})
 
+		// Singul handler
+		if project.Environment == "cloud" {
+			newCookie.Name = "__session"
+			newCookie.Domain = ".singul.io"
+			http.SetCookie(resp, newCookie)
+		}
+
 		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, userdata.Session, expiration.Unix(), regionUrl)
 		newData, err := json.Marshal(returnValue)
 		if err == nil {
@@ -15184,6 +15191,13 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			Value:      sessionToken,
 			Expiration: expiration.Unix(),
 		})
+
+		// Singul handler
+		if project.Environment == "cloud" {
+			newCookie.Name = "__session"
+			newCookie.Domain = ".singul.io"
+			http.SetCookie(resp, newCookie)
+		}
 
 		err = SetUser(ctx, &userdata, true)
 		if err != nil {
@@ -24785,6 +24799,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 				}
+
+				// Special weird mistake cases in apps without newlines
+				param.Value = strings.ReplaceAll(param.Value, "application/jsonContent-Type", "application/json\nContent-Type")
+				param.Value = strings.ReplaceAll(param.Value, "application/jsonAccept", "application/json\nAccept")
 			}
 
 			if param.Name == "queries" {

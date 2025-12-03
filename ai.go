@@ -1341,7 +1341,7 @@ func FixContentOutput(contentOutput string) string {
 	contentOutput = strings.Trim(contentOutput, "\t")
 
 	// Fix issues with newlines in keys. Replace with raw newlines
-	contentOutput = strings.ReplaceAll(contentOutput, "\\n", "\n")
+	//contentOutput = strings.ReplaceAll(contentOutput, "\\n", "\n")
 
 	// Attempts to balance it automatically
 	contentOutput = balanceJSONLikeString(contentOutput)

@@ -136,9 +136,9 @@ type AtomicOutput struct {
 	ThreadId   string `json:"thread_id"`              // Thread the assistant ran
 	RunId      string `json:"run_id"`                 // Run ID for the thread
 	ToolCallID string `json:"tool_call_id,omitempty"` // Result inside the run
-	
-	ResponseId string `json:"response_id,omitempty"`  // Response ID
-	ConversationId string `json:"conversation_id,omitempty"`  // Conversation ID 
+
+	ResponseId     string `json:"response_id,omitempty"`     // Response ID
+	ConversationId string `json:"conversation_id,omitempty"` // Conversation ID
 }
 
 type ExecutionRequestWrapper struct {
@@ -1666,8 +1666,8 @@ type Notification struct {
 	Ignored     bool   `json:"ignored" datastore:"ignored"`
 	ExecutionId string `json:"execution_id" datastore:"execution_id"`
 
-	Severity	string	`json:"severity" datastore:"severity"`
-	Origin		string	`json:"origin" datastore:"origin"`
+	Severity string `json:"severity" datastore:"severity"`
+	Origin   string `json:"origin" datastore:"origin"`
 }
 
 type NotificationCached struct {
@@ -3999,12 +3999,12 @@ type SchemalessOutput struct {
 	Status  int    `json:"status,omitempty"`
 	URL     string `json:"url,omitempty"`
 
-	// Optional
-	RawResponse interface{} `json:"raw_response,omitempty"`
+	// JSON output. Or not? What if it's a list?
+	Output interface{} `json:"output,omitempty"`
 
-	// JSON output. What if it's a list?
-	//Output map[string]interface{} `json:"output"`
-	Output interface{} `json:"output"`
+	// Optional. Used for error handling.
+	RawResponse interface{} `json:"raw_response,omitempty"`
+	Retries int    `json:"retries,omitempty"`
 }
 
 type CategoryActionFieldOverride struct {
