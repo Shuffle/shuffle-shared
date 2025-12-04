@@ -683,6 +683,18 @@ type User struct {
 
 	// Old web3 integration
 	EthInfo EthInfo `datastore:"eth_info" json:"eth_info"`
+
+	// 0x0elliot: THIS IS CRUCIAL. Take care of this.
+	SSOInfo SSOInfo `datastore:"sso_info" json:"sso_info"`
+}
+
+type SSOInfo struct {
+	// active info for 1 org at a time.
+	Sub             string    `json:"sub"`
+	OrgID           string    `json:"org_id"`
+	ClientID        string    `json:"client_id"`
+	CodeChallenge   string    `json:"code_challenge"` // must become empty post use OR after challenge expiry
+	ChallengeExpiry time.Time `json:"challenge_expiry"`
 }
 
 type EthInfo struct {
@@ -3010,9 +3022,11 @@ type Oauth2Resp struct {
 }
 
 type OpenidUserinfo struct {
-	Sub   string   `json:"sub"`
-	Email string   `json:"email"`
-	Roles []string `json:"roles"`
+	Sub           string   `json:"sub"`
+	Email         string   `json:"email"`
+	Roles         []string `json:"roles"`
+	EmailVerified bool     `json:"email_verified"`
+	CodeChallenge string   `json:"code_challenge"`
 }
 
 type OpenidResp struct {
@@ -4004,7 +4018,7 @@ type SchemalessOutput struct {
 
 	// Optional. Used for error handling.
 	RawResponse interface{} `json:"raw_response,omitempty"`
-	Retries int    `json:"retries,omitempty"`
+	Retries     int         `json:"retries,omitempty"`
 }
 
 type CategoryActionFieldOverride struct {

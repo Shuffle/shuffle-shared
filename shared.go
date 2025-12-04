@@ -9224,7 +9224,11 @@ func CleanCreds(user *User) *User {
 	if user.LoginType != "DELETED" {
 		user.LoginType = ""
 	}
-	user.Role = "user"
+	// user.Role = "user"
+
+	user.SSOInfo = SSOInfo{
+		// OrgID: user.SSOInfo.OrgID,
+	}
 
 	return user
 }
@@ -11717,7 +11721,13 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[INFO] OpenID login for %s", org.Id)
 				redirectKey = "SSO_REDIRECT"
 
-				baseSSOUrl = GetOpenIdUrl(request, *org)
+				baseSSOUrl, err = GetOpenIdUrl(request, *org, user)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting OpenID URL: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "Failed getting OpenID URL"}`))
+					return
+				}
 			}
 
 			if !strings.HasPrefix(baseSSOUrl, "http") {
@@ -14368,7 +14378,7 @@ func verifier() (*CodeVerifier, error) {
 	return CreateCodeVerifierFromBytes(b)
 }
 
-func GetOpenIdUrl(request *http.Request, org Org) string {
+func GetOpenIdUrl(request *http.Request, org Org, user User) (string, error) {
 	baseSSOUrl := org.SSOConfig.OpenIdAuthorization
 
 	codeChallenge := uuid.NewV4().String()
@@ -14377,6 +14387,30 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 	if verifiererr == nil {
 		codeChallenge = verifier.Value
 	}
+
+	// user.SSOInfo.Sub = user.ID
+	user.SSOInfo.OrgID = org.Id
+	user.SSOInfo.ClientID = org.SSOConfig.OpenIdClientId
+	// This implies that user MUST have given consent for
+	// said SSO account to be linked with it
+	user.SSOInfo.CodeChallenge = codeChallenge
+	user.SSOInfo.ChallengeExpiry = time.Now().Add(5 * time.Minute)
+
+	ctx := context.Background()
+	err := SetUser(ctx, &user, false)
+	if err != nil {
+		return "", err
+	}
+
+	// We might need to do a check for existing users
+	// to make sure that they are verified first, to force verification.
+	// For new, for whom we are creating an account in this whole flow,
+	// Let's allow them some time before we warn them and lock them?
+
+	// if (project.Environment == "cloud") && !user.Verified {
+	// 	log.Printf("[ERROR] user %s (%s) not verified. This is unsafe.", user.Username, user.Id)
+	// 	return "", errors.New("user not verified")
+	// }
 
 	//log.Printf("[DEBUG] Got challenge value %s (pre state)", codeChallenge)
 
@@ -14406,6 +14440,8 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("SSO_REDIRECT_URL")))
 	}
 
+	// this is where the skipValidation case later gets it's value from
+	// in the handle SSO login functions.
 	state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
 
 	// has to happen after initial value is stored
@@ -14429,7 +14465,7 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid email&redirect_uri=%s&state=%s&code_challenge_method=S256&code_challenge=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, codeChallenge)
 	}
 
-	return baseSSOUrl
+	return baseSSOUrl, nil
 }
 
 func GetRequestIp(r *http.Request) string {
@@ -14734,7 +14770,13 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[INFO] OpenID login for %s", org.Id)
 					redirectKey = "SSO_REDIRECT"
 
-					baseSSOUrl = GetOpenIdUrl(request, *org)
+					baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata)
+					if err != nil {
+						log.Printf("[ERROR] Failed to get OpenID URL: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get OpenID URL: %s"}`, err)))
+						return
+					}
 				}
 
 				log.Printf("[DEBUG] Login: Should redirect user %s in org %s(%s) to SSO login at %s", userdata.Username, userdata.ActiveOrg.Name, userdata.ActiveOrg.Id, baseSSOUrl)
@@ -15409,7 +15451,13 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 		baseSSOUrl := org.SSOConfig.SSOEntrypoint
 		redirectKey := "SSO_REDIRECT"
 		if len(org.SSOConfig.OpenIdAuthorization) > 0 {
-			baseSSOUrl = GetOpenIdUrl(request, *org)
+			baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get OpenID URL: %v", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
 		}
 
 		log.Printf("[DEBUG] SSO Redirecting user %s (%s) in org %s (%s) to SSO login at %s", userdata.Username, userdata.Id, userdata.ActiveOrg.Name, userdata.ActiveOrg.Id, baseSSOUrl)
@@ -22255,6 +22303,8 @@ func fixCertificate(parsedX509Key string) string {
 
 // Example implementation of SSO, including a redirect for the user etc
 // Should make this stuff only possible after login
+// 0x0elliot: post authentication, user comes here
+// "code_challenge" is the MVP for this implementation. Keep it near and dear.
 func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -22267,12 +22317,15 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	//code -> Token
 	ctx := GetContext(request)
 
+	codeChallenge := ""
+
 	skipValidation := false
 	openidUser := OpenidUserinfo{}
 	org := &Org{}
 	code := request.URL.Query().Get("code")
 	if len(code) == 0 {
 		// Check id_token grant info
+		// This is where we get redirect back from the SSO service.
 		if request.Method == "POST" {
 			body, err := ioutil.ReadAll(request.Body)
 			if err != nil {
@@ -22291,7 +22344,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				if itemsplit[0] == "id_token" {
-					token, err := VerifyIdToken(ctx, itemsplit[1])
+					token, challenge, err := VerifyIdToken(ctx, itemsplit[1])
 					if err != nil {
 						log.Printf("[ERROR] Bad ID token provided: %s", err)
 						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad ID token provided"}`)))
@@ -22299,12 +22352,18 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 						return
 					}
 
+					codeChallenge = challenge
+
+					// sub can be slightly more trusted.
+					// however, for that we must know that email_verified is true.
+					// A. Do we ever even get that?
+					// B. We can't trust all providers. We need to whitelist some at
+					// this point.
 					openidUser.Sub = token.Sub
 					openidUser.Email = token.Email
 					openidUser.Roles = token.Roles
 					org = &token.Org
 					skipValidation = true
-
 					break
 				}
 			}
@@ -22393,6 +22452,9 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+
+		// RunOpenidLogin does some validation
+		codeChallenge = foundChallenge
 
 		openid := OpenidResp{}
 		err = json.Unmarshal(body, &openid)
@@ -22488,7 +22550,16 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(codeChallenge) == 0 {
+		log.Printf("[ERROR] Code challenge (%v) is empty in OpenID login for org: %v", codeChallenge, org.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Code challenge is empty"}`))
+		return
+	}
+
 	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
+	// this means user with the same email
+	// has exists in the db
 	if err == nil && len(users) > 0 {
 		for _, user := range users {
 			log.Printf("%s - %s", user.GeneratedUsername, userName)
@@ -22529,7 +22600,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				// check whether role is required for org
-
 				if org.SSOConfig.RoleRequired {
 					foundRole := false
 					for _, role := range openidUser.Roles {
@@ -22580,6 +22650,51 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Id:   org.Id,
 					Role: role,
 				}
+
+				// before we do any setting,
+				// verify that challenge was valid
+				ssoErrors := []string{}
+				if user.SSOInfo.OrgID != org.Id {
+					ssoErrors = append(ssoErrors, "org mismatch")
+				}
+				if user.SSOInfo.ClientID != org.SSOConfig.OpenIdClientId {
+					ssoErrors = append(ssoErrors, "client mismatch")
+				}
+				if user.SSOInfo.CodeChallenge != codeChallenge {
+					ssoErrors = append(ssoErrors, "challenge mismatch")
+				}
+				if time.Now().After(user.SSOInfo.ChallengeExpiry) {
+					ssoErrors = append(ssoErrors, "challenge expired")
+				}
+
+				if len(ssoErrors) > 0 {
+					log.Printf("[WARNING] SSO validation failed for user %s: %s", user.Id, strings.Join(ssoErrors,
+						", "))
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "SSO validation failed"}`))
+					return
+				}
+
+				// Clear challenge and update SSO info
+				user.SSOInfo.CodeChallenge = ""
+				user.SSOInfo.ChallengeExpiry = time.Time{}
+
+				// Update/set the sub claim
+				if user.SSOInfo.Sub == "" {
+					// First time SSO binding
+					user.SSOInfo.Sub = openidUser.Sub
+					log.Printf("[INFO] Initial SSO binding for user %s to sub %s", user.Id, openidUser.Sub)
+				} else if user.SSOInfo.Sub != openidUser.Sub {
+					// This shouldn't happen if validation passed, but log it
+					log.Printf("[WARNING] Sub changed for user %s: %s -> %s", user.Id, user.SSOInfo.Sub,
+						openidUser.Sub)
+				}
+
+				// Update other SSO info
+				user.SSOInfo.OrgID = org.Id
+				user.SSOInfo.ClientID = org.SSOConfig.OpenIdClientId
+
+				log.Printf("[INFO] SSO info updated for user %s", user.Id)
 
 				expiration := time.Now().Add(8 * time.Hour)
 				if len(user.Session) == 0 {
@@ -22800,6 +22915,45 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 				//Store users last session as new session so user don't have to go through sso again while changing org.
 				user.UsersLastSession = user.Session
+
+				// before we do any setting,
+				// verify that challenge was valid
+				ssoErrors := []string{}
+				if user.SSOInfo.OrgID != org.Id {
+					ssoErrors = append(ssoErrors, "org mismatch")
+				}
+				if user.SSOInfo.ClientID != org.SSOConfig.OpenIdClientId {
+					ssoErrors = append(ssoErrors, "client mismatch")
+				}
+				if user.SSOInfo.CodeChallenge != codeChallenge {
+					ssoErrors = append(ssoErrors, "challenge mismatch")
+				}
+				if time.Now().After(user.SSOInfo.ChallengeExpiry) {
+					ssoErrors = append(ssoErrors, "challenge expired")
+				}
+
+				if len(ssoErrors) > 0 {
+					log.Printf("[WARNING] SSO validation failed for user %s: %s", user.Id, strings.Join(ssoErrors,
+						", "))
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "SSO validation failed"}`))
+					return
+				}
+
+				// Clear challenge and update SSO info
+				user.SSOInfo.CodeChallenge = ""
+				user.SSOInfo.ChallengeExpiry = time.Time{}
+
+				// Update/set the sub claim
+				if user.SSOInfo.Sub == "" {
+					// First time SSO binding
+					user.SSOInfo.Sub = openidUser.Sub
+					log.Printf("[INFO] Initial SSO binding for user %s to sub %s", user.Id, openidUser.Sub)
+				} else if user.SSOInfo.Sub != openidUser.Sub {
+					// This shouldn't happen if validation passed, but log it
+					log.Printf("[WARNING] Sub changed for user %s: %s -> %s", user.Id, user.SSOInfo.Sub,
+						openidUser.Sub)
+				}
 
 				err = SetUser(ctx, &user, false)
 				if err != nil {
