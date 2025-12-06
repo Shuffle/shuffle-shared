@@ -23285,7 +23285,7 @@ func HandleDisconnectSSO(resp http.ResponseWriter, request *http.Request) {
 	user.SSOInfos = newSSOInfos
 
 	// Save the updated user
-	err = SetUser(ctx, &user, false)
+	err = SetUser(ctx, &user, true)
 	if err != nil {
 		log.Printf("[ERROR] Failed to update user after SSO disconnection: %s", err)
 		resp.WriteHeader(500)
