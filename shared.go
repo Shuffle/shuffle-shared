@@ -14382,15 +14382,88 @@ func verifier() (*CodeVerifier, error) {
 	return CreateCodeVerifierFromBytes(b)
 }
 
+// HTTP endpoint for generating simple SSO login links for org admins
+func HandleGetSimpleSSOLoginUrl(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get simple SSO login URL: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[WARNING] User %s tried to generate SSO login URL but is not admin", user.Username)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Only org admins can generate SSO login links"}`))
+		return
+	}
+
+	// Get the user's active org
+	if user.ActiveOrg.Id == "" {
+		log.Printf("[WARNING] User %s has no active org", user.Username)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No active organization"}`))
+		return
+	}
+
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed to get org %s: %s", user.ActiveOrg.Id, err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get organization"}`))
+		return
+	}
+
+	// Check if org has SSO configured
+	if org.SSOConfig.OpenIdClientId == "" || org.SSOConfig.OpenIdAuthorization == "" {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "SSO not configured for this organization"}`))
+		return
+	}
+
+	// Build redirect URL
+	redirectUrl := url.QueryEscape(fmt.Sprintf("http://%s/api/v1/login_openid", request.Host))
+	if project.Environment == "cloud" {
+		baseUrl := "https://shuffler.io"
+		if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+			baseUrl = os.Getenv("SSO_REDIRECT_URL")
+		}
+		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", baseUrl))
+	}
+
+	// Create state with org ID and login mode flag
+	stateData := fmt.Sprintf("org=%s&redirect=%s&mode=login", org.Id, redirectUrl)
+	state := base64.StdEncoding.EncodeToString([]byte(stateData))
+
+	// Build SSO URL without PKCE
+	ssoUrl := fmt.Sprintf("%s?client_id=%s&response_type=code&scope=openid email&redirect_uri=%s&state=%s",
+		org.SSOConfig.OpenIdAuthorization,
+		org.SSOConfig.OpenIdClientId,
+		redirectUrl,
+		state)
+
+	log.Printf("[INFO] Generated SSO login URL for org %s by admin %s", org.Id, user.Username)
+	
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "sso_url": "%s"}`, ssoUrl)))
+}
+
 func GetOpenIdUrl(request *http.Request, org Org, user User) (string, error) {
 	baseSSOUrl := org.SSOConfig.OpenIdAuthorization
 
-	codeChallenge := uuid.NewV4().String()
-	//h.Write([]byte(v.Value))
 	verifier, verifiererr := verifier()
-	if verifiererr == nil {
-		codeChallenge = verifier.Value
+	if verifiererr != nil {
+		return "", verifiererr
 	}
+	
+	codeChallenge := verifier.CodeChallengeS256()
 
 	// Initialize slice if needed
 	user.InitSSOInfos()
@@ -14400,7 +14473,7 @@ func GetOpenIdUrl(request *http.Request, org Org, user User) (string, error) {
 	user.SetSSOInfo(org.Id, SSOInfo{
 		Sub:             existingSSOInfo.Sub, // Keep existing Sub for this org
 		ClientID:        org.SSOConfig.OpenIdClientId,
-		CodeChallenge:   codeChallenge,
+		CodeVerifier:    verifier.Value,
 		ChallengeExpiry: time.Now().Add(2 * time.Minute),
 	})
 
@@ -14455,11 +14528,6 @@ func GetOpenIdUrl(request *http.Request, org Org, user User) (string, error) {
 	// this is where the skipValidation case later gets it's value from
 	// in the handle SSO login functions.
 	state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
-
-	// has to happen after initial value is stored
-	if verifiererr == nil {
-		codeChallenge = verifier.CodeChallengeS256()
-	}
 
 	//log.Printf("[DEBUG] Got challenge value %s (POST state)", codeChallenge)
 
@@ -22330,6 +22398,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 
 	codeChallenge := ""
+	foundMode := ""
 
 	skipValidation := false
 	openidUser := OpenidUserinfo{}
@@ -22428,9 +22497,14 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			if itemsplit[0] == "challenge" {
 				foundChallenge = strings.TrimSpace(itemsplit[1])
 			}
+			
+			if itemsplit[0] == "mode" {
+				foundMode = strings.TrimSpace(itemsplit[1])
+			}
 		}
 
-		//log.Printf("Challenge len2: %d", len(foundChallenge))
+		log.Printf("challenge: %s", foundChallenge)
+		log.Printf("code sent: %s", code)
 
 		if len(foundOrg) == 0 {
 			log.Printf("[ERROR] No org specified in state")
@@ -22456,8 +22530,45 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		// Handle login mode (no PKCE) vs registration mode (with PKCE)
+		var foundVerifier string
+		if foundMode == "login" {
+			// Login mode: skip PKCE verification, will match user by SSO Sub later
+			log.Printf("[INFO] Login mode detected, skipping PKCE verification")
+			foundVerifier = "login_mode" // placeholder to skip PKCE
+		} else {
+			// Registration/connection mode: require PKCE
+			for _, userInOrg := range org.Users {
+				fullUser, err := GetUser(ctx, userInOrg.Id)
+				if err != nil {
+					continue
+				}
+				ssoInfo, exists := fullUser.GetSSOInfo(org.Id)
+				if exists && ssoInfo.CodeVerifier != "" {
+					verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
+					if verifierObj.CodeChallengeS256() == foundChallenge {
+						foundVerifier = ssoInfo.CodeVerifier
+						break
+					}
+				}
+			}
+			
+			if foundVerifier == "" {
+				log.Printf("[ERROR] No verifier found for challenge %s in org %s", foundChallenge, org.Id)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Invalid PKCE challenge"}`))
+				return
+			}
+		}
+
 		//log.Printf("Challenge: %s", foundChallenge)
-		body, err := RunOpenidLogin(ctx, clientId, tokenUrl, foundRedir, code, foundChallenge, org.SSOConfig.OpenIdClientSecret)
+		// Use unified function - pass empty string for login mode (no PKCE)
+		verifierToUse := foundVerifier
+		if foundMode == "login" {
+			verifierToUse = "" // No PKCE in login mode
+		}
+		
+		body, err := RunOpenidLogin(ctx, clientId, tokenUrl, foundRedir, code, verifierToUse, org.SSOConfig.OpenIdClientSecret)
 		if err != nil {
 			log.Printf("[WARNING] Error with body read of OpenID Connect: %s", err)
 			resp.WriteHeader(401)
@@ -22572,14 +22683,50 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if len(codeChallenge) == 0 {
+	// Login mode: skip code challenge validation
+	if foundMode != "login" && len(codeChallenge) == 0 {
 		log.Printf("[ERROR] Code challenge (%v) is empty in OpenID login for org: %v", codeChallenge, org.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Code challenge is empty"}`))
 		return
 	}
 
-	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
+	var users []User
+	var err error
+	
+	if foundMode == "login" {
+		// Login mode: find user by exact match of Sub + ClientID + OrgID + Email
+		foundUser, err := FindUserBySSOIdentity(ctx, openidUser.Sub, org.SSOConfig.OpenIdClientId, org.Id, openidUser.Email)
+		if err != nil {
+			log.Printf("[ERROR] Failed to find user by SSO identity: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "SSO account not found or identity mismatch with this organization"}`))
+			return
+		}
+		
+		// Verify user is actually in the org
+		userInOrg := false
+		for _, userInOrgList := range org.Users {
+			if userInOrgList.Id == foundUser.Id {
+				userInOrg = true
+				break
+			}
+		}
+		
+		if !userInOrg {
+			log.Printf("[ERROR] User %s found by SSO but not in org %s", foundUser.Id, org.Id)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "User not authorized for this organization"}`))
+			return
+		}
+		
+		users = append(users, foundUser)
+		log.Printf("[INFO] Login mode: Found user %s (%s) by complete SSO identity Sub=%s, ClientID=%s, OrgID=%s, Email=%s", 
+			foundUser.Username, foundUser.Id, openidUser.Sub, org.SSOConfig.OpenIdClientId, org.Id, openidUser.Email)
+	} else {
+		// Registration mode: find user by email as before
+		users, err = FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
+	}
 	// this means user with the same email
 	// has exists in the db
 	if err == nil && len(users) > 0 {
@@ -22673,69 +22820,142 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Role: role,
 				}
 
-				// before we do any setting,
-				// verify that challenge was valid
+				// Skip PKCE validation in login mode
 				ssoErrors := []string{}
+				
+				if foundMode != "login" {
+					// before we do any setting,
+					// verify that challenge was valid
 
-				// Initialize slice if needed for safety
-				user.InitSSOInfos()
+					// Initialize slice if needed for safety
+					user.InitSSOInfos()
 
-				// Get the specific org's SSO info for validation
-				ssoInfo, exists := user.GetSSOInfo(org.Id)
-				if !exists {
-					ssoErrors = append(ssoErrors, "no_sso_info_for_org")
+					// Get the specific org's SSO info for validation
+					ssoInfo, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						ssoErrors = append(ssoErrors, "no_sso_info_for_org")
+					} else {
+						if ssoInfo.ClientID != org.SSOConfig.OpenIdClientId {
+							ssoErrors = append(ssoErrors, "client mismatch")
+						}
+						
+						// Validate challenge by computing S256 hash from stored verifier
+						if ssoInfo.CodeVerifier == "" {
+							ssoErrors = append(ssoErrors, "no code verifier stored")
+						} else {
+							verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
+							expectedChallenge := verifierObj.CodeChallengeS256()
+							if expectedChallenge != codeChallenge {
+								log.Printf("[WARNING] Challenge mismatch for user %s. Expected: %s, Got: %s", user.Id, expectedChallenge, codeChallenge)
+								ssoErrors = append(ssoErrors, "challenge mismatch")
+							} else {
+								log.Printf("[INFO] Challenge verified for user %s. %s == %s", user.Id, expectedChallenge, codeChallenge)
+							}
+						}
+
+						if time.Now().After(ssoInfo.ChallengeExpiry) {
+							ssoErrors = append(ssoErrors, "challenge expired")
+						}
+					}
+
+					if len(ssoErrors) > 0 {
+						log.Printf("[WARNING] SSO validation failed for user %s: %s", user.Id, strings.Join(ssoErrors,
+							", "))
+
+						// Clear verifier on validation failure for security
+						if exists {
+							ssoInfo.CodeVerifier = ""
+							ssoInfo.ChallengeExpiry = time.Time{}
+							user.SetSSOInfo(org.Id, ssoInfo)
+							SetUser(ctx, &user, false)
+						}
+
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO validation failed"}`))
+						return
+					}
 				} else {
+					// Login mode: validate complete SSO identity match
+					user.InitSSOInfos()
+					ssoInfo, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						log.Printf("[ERROR] No SSO info found for user %s in org %s", user.Id, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO info not found"}`))
+						return
+					}
+					
+					// Triple validation: Sub + ClientID + OrgID
+					if ssoInfo.Sub != openidUser.Sub {
+						log.Printf("[ERROR] Sub mismatch in login mode for user %s. Expected: %s, Got: %s", user.Id, ssoInfo.Sub, openidUser.Sub)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity mismatch"}`))
+						return
+					}
+					
 					if ssoInfo.ClientID != org.SSOConfig.OpenIdClientId {
-						ssoErrors = append(ssoErrors, "client mismatch")
+						log.Printf("[ERROR] ClientID mismatch in login mode for user %s. Expected: %s, Got: %s", user.Id, ssoInfo.ClientID, org.SSOConfig.OpenIdClientId)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO client mismatch"}`))
+						return
 					}
-					if ssoInfo.CodeChallenge != codeChallenge {
-						log.Printf("[WARNING] Challenge mismatch for user %s. %s vs %s", user.Id, ssoInfo.CodeChallenge, codeChallenge)
-						ssoErrors = append(ssoErrors, "challenge mismatch")
+					
+					if ssoInfo.OrgID != org.Id {
+						log.Printf("[ERROR] OrgID mismatch in login mode for user %s. Expected: %s, Got: %s", user.Id, ssoInfo.OrgID, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "Organization mismatch"}`))
+						return
 					}
-					if time.Now().After(ssoInfo.ChallengeExpiry) {
-						ssoErrors = append(ssoErrors, "challenge expired")
-					}
+					
+					log.Printf("[INFO] Login mode: Complete SSO identity validated for user %s (Sub=%s, ClientID=%s, OrgID=%s)", 
+						user.Id, ssoInfo.Sub, ssoInfo.ClientID, ssoInfo.OrgID)
 				}
 
-				if len(ssoErrors) > 0 {
-					log.Printf("[WARNING] SSO validation failed for user %s: %s", user.Id, strings.Join(ssoErrors,
-						", "))
+				// Only update SSO info in registration mode, not login mode
+				if foundMode != "login" {
+					// Clear verifier and update SSO info for this org
+					orgSSOInfo, _ := user.GetSSOInfo(org.Id)
+					orgSSOInfo.CodeVerifier = ""
+					orgSSOInfo.ChallengeExpiry = time.Time{}
 
-					// Clear challenge on validation failure for security
-					if exists {
-						ssoInfo.CodeChallenge = ""
-						ssoInfo.ChallengeExpiry = time.Time{}
-						user.SetSSOInfo(org.Id, ssoInfo)
-						SetUser(ctx, &user, false)
+					// Check if user has used this client ID with a different Sub in other orgs
+					currentClientID := org.SSOConfig.OpenIdClientId
+					var existingSubForClient string
+					
+					for _, ssoInfo := range user.SSOInfos {
+						if ssoInfo.ClientID == currentClientID && ssoInfo.Sub != "" && ssoInfo.OrgID != org.Id {
+							existingSubForClient = ssoInfo.Sub
+							break
+						}
+					}
+					
+					if existingSubForClient != "" && existingSubForClient != openidUser.Sub {
+						log.Printf("[ERROR] User %s attempted to use Sub %s with client ID %s, but already has Sub %s for this client ID", user.Id, openidUser.Sub, currentClientID, existingSubForClient)
+						resp.WriteHeader(409)
+						resp.Write([]byte(`{"success": false, "reason": "You must use the same SSO account that you first registered with for this SSO provider"}`))
+						return
 					}
 
-					resp.WriteHeader(401)
-					resp.Write([]byte(`{"success": false, "reason": "SSO validation failed"}`))
-					return
+					// Update/set the sub claim for this specific org
+					if orgSSOInfo.Sub == "" {
+						// First time SSO binding for this org
+						orgSSOInfo.Sub = openidUser.Sub
+						log.Printf("[INFO] Initial SSO binding for user %s to sub %s in org %s with client ID %s", user.Id, openidUser.Sub, org.Id, currentClientID)
+					} else if orgSSOInfo.Sub != openidUser.Sub {
+						// This shouldn't happen if validation passed, but log it
+						log.Printf("[WARNING] Sub changed for user %s in org %s: %s -> %s", user.Id, org.Id, orgSSOInfo.Sub, openidUser.Sub)
+					}
+
+					// Update other SSO info for this org
+					orgSSOInfo.ClientID = org.SSOConfig.OpenIdClientId
+
+					// Store back to slice
+					user.SetSSOInfo(org.Id, orgSSOInfo)
+
+					log.Printf("[INFO] SSO info updated for user %s", user.Id)
+				} else {
+					log.Printf("[INFO] Login mode: skipping SSO info update for user %s", user.Id)
 				}
-
-				// Clear challenge and update SSO info for this org
-				orgSSOInfo, _ := user.GetSSOInfo(org.Id)
-				orgSSOInfo.CodeChallenge = ""
-				orgSSOInfo.ChallengeExpiry = time.Time{}
-
-				// Update/set the sub claim for this specific org
-				if orgSSOInfo.Sub == "" {
-					// First time SSO binding for this org
-					orgSSOInfo.Sub = openidUser.Sub
-					log.Printf("[INFO] Initial SSO binding for user %s to sub %s in org %s", user.Id, openidUser.Sub, org.Id)
-				} else if orgSSOInfo.Sub != openidUser.Sub {
-					// This shouldn't happen if validation passed, but log it
-					log.Printf("[WARNING] Sub changed for user %s in org %s: %s -> %s", user.Id, org.Id, orgSSOInfo.Sub, openidUser.Sub)
-				}
-
-				// Update other SSO info for this org
-				orgSSOInfo.ClientID = org.SSOConfig.OpenIdClientId
-
-				// Store back to slice
-				user.SetSSOInfo(org.Id, orgSSOInfo)
-
-				log.Printf("[INFO] SSO info updated for user %s", user.Id)
 
 				expiration := time.Now().Add(8 * time.Hour)
 				if len(user.Session) == 0 {
@@ -22972,9 +23192,16 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					if ssoInfo.ClientID != org.SSOConfig.OpenIdClientId {
 						ssoErrors = append(ssoErrors, "client mismatch")
 					}
-					if ssoInfo.CodeChallenge != codeChallenge {
-						log.Printf("[DEBUG] Challenge mismatch for user %s: %s != %s", user.Id, codeChallenge, ssoInfo.CodeChallenge)
-						ssoErrors = append(ssoErrors, "challenge mismatch")
+					// Validate challenge by computing S256 hash from stored verifier
+					if ssoInfo.CodeVerifier == "" {
+						ssoErrors = append(ssoErrors, "no code verifier stored")
+					} else {
+						verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
+						expectedChallenge := verifierObj.CodeChallengeS256()
+						if expectedChallenge != codeChallenge {
+							log.Printf("[DEBUG] Challenge mismatch for user %s: expected %s, got %s", user.Id, expectedChallenge, codeChallenge)
+							ssoErrors = append(ssoErrors, "challenge mismatch")
+						}
 					}
 					if time.Now().After(ssoInfo.ChallengeExpiry) {
 						ssoErrors = append(ssoErrors, "challenge expired")
@@ -22985,9 +23212,9 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[WARNING] SSO validation failed for user %s: %s", user.Id, strings.Join(ssoErrors,
 						", "))
 
-					// Clear challenge on validation failure for security
+					// Clear verifier on validation failure for security
 					if exists {
-						ssoInfo.CodeChallenge = ""
+						ssoInfo.CodeVerifier = ""
 						ssoInfo.ChallengeExpiry = time.Time{}
 						user.SetSSOInfo(org.Id, ssoInfo)
 						SetUser(ctx, &user, false)
@@ -22998,10 +23225,28 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 
-				// Clear challenge and update SSO info for this org
+				// Clear verifier and update SSO info for this org
 				orgSSOInfo, _ := user.GetSSOInfo(org.Id)
-				orgSSOInfo.CodeChallenge = ""
+				orgSSOInfo.CodeVerifier = ""
 				orgSSOInfo.ChallengeExpiry = time.Time{}
+
+				// Check if user has used this client ID with a different Sub in other orgs
+				currentClientID := org.SSOConfig.OpenIdClientId
+				var existingSubForClient string
+				
+				for _, ssoInfo := range user.SSOInfos {
+					if ssoInfo.ClientID == currentClientID && ssoInfo.Sub != "" && ssoInfo.OrgID != org.Id {
+						existingSubForClient = ssoInfo.Sub
+						break
+					}
+				}
+				
+				if existingSubForClient != "" && existingSubForClient != openidUser.Sub {
+					log.Printf("[ERROR] User %s attempted to use Sub %s with client ID %s, but already has Sub %s for this client ID", user.Id, openidUser.Sub, currentClientID, existingSubForClient)
+					resp.WriteHeader(409)
+					resp.Write([]byte(`{"success": false, "reason": "You must use the same SSO account that you first registered with for this SSO provider"}`))
+					return
+				}
 
 				// Update/set the sub claim for this specific org
 				if orgSSOInfo.Sub == "" {

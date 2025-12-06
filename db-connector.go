@@ -5372,6 +5372,69 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 	return apps, nil
 }
 
+// FindUserBySSOIdentity safely finds a user by exact SSO identity match
+// Validates Sub + ClientID + OrgID + Email for maximum security
+// Returns error if no user found or multiple users found (should never happen)
+func FindUserBySSOIdentity(ctx context.Context, sub, clientID, orgID, email string) (User, error) {
+	var emptyUser User
+	
+	if sub == "" || clientID == "" || orgID == "" || email == "" {
+		return emptyUser, errors.New("sub, clientID, orgID, and email are all required")
+	}
+	
+	// Normalize email for comparison
+	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
+	
+	// Get all users and search through their SSO info
+	users, err := GetAllUsers(ctx)
+	if err != nil {
+		return emptyUser, fmt.Errorf("failed to get users: %w", err)
+	}
+	
+	var matchingUsers []User
+	for _, user := range users {
+		if len(user.SSOInfos) == 0 {
+			continue
+		}
+		
+		// Check if user's email matches (primary validation)
+		userEmail := strings.ToLower(strings.TrimSpace(user.Username))
+		if userEmail != normalizedEmail {
+			continue // Skip if email doesn't match
+		}
+		
+		// Now check SSO info for this user
+		for _, ssoInfo := range user.SSOInfos {
+			if ssoInfo.Sub == sub && 
+			   ssoInfo.ClientID == clientID && 
+			   ssoInfo.OrgID == orgID {
+				matchingUsers = append(matchingUsers, user)
+				log.Printf("[INFO] Found user match: ID=%s, Email=%s, Sub=%s, ClientID=%s, OrgID=%s", 
+					user.Id, userEmail, sub, clientID, orgID)
+				break // Found match for this user, move to next user
+			}
+		}
+	}
+	
+	if len(matchingUsers) == 0 {
+		return emptyUser, fmt.Errorf("no user found with Sub=%s, ClientID=%s, OrgID=%s, Email=%s", sub, clientID, orgID, normalizedEmail)
+	}
+	
+	if len(matchingUsers) > 1 {
+		log.Printf("[CRITICAL] Multiple users found with same SSO identity: Sub=%s, ClientID=%s, OrgID=%s, Email=%s. Users: %v", 
+			sub, clientID, orgID, normalizedEmail, func() []string {
+				var ids []string
+				for _, u := range matchingUsers {
+					ids = append(ids, fmt.Sprintf("%s(%s)", u.Id, u.Username))
+				}
+				return ids
+			}())
+		return emptyUser, fmt.Errorf("multiple users found with same SSO identity - data integrity issue")
+	}
+	
+	return matchingUsers[0], nil
+}
+
 func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 	var users []User
 

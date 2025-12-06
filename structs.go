@@ -692,7 +692,7 @@ type SSOInfo struct {
 	Sub             string    `json:"sub"`
 	OrgID           string    `json:"org_id"`
 	ClientID        string    `json:"client_id"`
-	CodeChallenge   string    `json:"code_challenge"` // must become empty post use OR after challenge expiry
+	CodeVerifier    string    `json:"code_verifier"`    // PKCE code verifier
 	ChallengeExpiry time.Time `json:"challenge_expiry"`
 }
 
