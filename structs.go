@@ -684,8 +684,7 @@ type User struct {
 	// Old web3 integration
 	EthInfo EthInfo `datastore:"eth_info" json:"eth_info"`
 
-	// 0x0elliot: THIS IS CRUCIAL. Take care of this.
-	SSOInfo SSOInfo `datastore:"sso_info" json:"sso_info"`
+	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
 }
 
 type SSOInfo struct {

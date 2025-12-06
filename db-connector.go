@@ -25,11 +25,12 @@ import (
 	"sync"
 	"time"
 
+	runtimeDebug "runtime/debug"
+
 	"cloud.google.com/go/datastore"
 	"github.com/Masterminds/semver"
 	"github.com/bradfitz/slice"
 	uuid "github.com/satori/go.uuid"
-	runtimeDebug "runtime/debug"
 
 	//"github.com/frikky/kin-openapi/openapi3"
 	"github.com/patrickmn/go-cache"
@@ -1739,7 +1740,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				result = innerresult
 				break
 
-			//} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
+				//} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
 			} else if (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") && (innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent") {
 				// Auto fixing decision data based on cache for better decisionmaking
 				// Map the result into AgentOutput to check decisions
@@ -4025,7 +4026,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	if id == "public" {
 		//return &Org{}, errors.New("'public' org is used for Singul action without being logged in. Not relevant.")
 		return &Org{
-			Id:	 "public",
+			Id:   "public",
 			Name: "Public",
 		}, nil
 	}
@@ -5480,7 +5481,7 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 		query := map[string]interface{}{
 			"size": 1000,
 			"query": map[string]interface{}{
-				"bool": map[string]interface{} {
+				"bool": map[string]interface{}{
 					"must": map[string]interface{}{
 						"match": map[string]interface{}{
 							"username": username,
@@ -5662,6 +5663,32 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 	}
 
 	return curUser, nil
+}
+
+func (u *User) GetSSOInfo(orgID string) (SSOInfo, bool) {
+	for _, sso := range u.SSOInfos {
+		if sso.OrgID == orgID {
+			return sso, true
+		}
+	}
+	return SSOInfo{}, false
+}
+
+func (u *User) SetSSOInfo(orgID string, ssoInfo SSOInfo) {
+	ssoInfo.OrgID = orgID
+	for i, sso := range u.SSOInfos {
+		if sso.OrgID == orgID {
+			u.SSOInfos[i] = ssoInfo
+			return
+		}
+	}
+	u.SSOInfos = append(u.SSOInfos, ssoInfo)
+}
+
+func (u *User) InitSSOInfos() {
+	if u.SSOInfos == nil {
+		u.SSOInfos = []SSOInfo{}
+	}
 }
 
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
