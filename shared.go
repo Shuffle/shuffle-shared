@@ -22434,7 +22434,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					break
 				}
 			}
-			
+
 			// Second pass - process id_token
 			for _, innerstate := range stateSplit {
 				itemsplit := strings.Split(innerstate, "=")
@@ -22613,7 +22613,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false, "reason": "Invalid SSO configuration"}`))
 			return
 		}
-		
+
 		issuer := authUrlParts[0]
 		userInfo, err := fetchUserInfoFromToken(ctx, openid.AccessToken, issuer)
 		if err != nil {
@@ -22622,7 +22622,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false, "reason": "Failed to fetch user information"}`))
 			return
 		}
-		
+
 		// Convert map to JSON for compatibility with existing code
 		body, err = json.Marshal(userInfo)
 		if err != nil {

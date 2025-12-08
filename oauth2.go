@@ -4174,7 +4174,7 @@ func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdT
 		if len(token.Aud) == 0 {
 			return emptyToken, "", fmt.Errorf("missing audience in token")
 		}
-		
+
 		// Check token expiration
 		if token.Exp > 0 {
 			now := time.Now().Unix()
@@ -4390,13 +4390,6 @@ func fetchWellKnownConfig(ctx context.Context, issuer string) (map[string]interf
 	var config map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
 		return nil, fmt.Errorf("failed to decode well-known config: %w", err)
-	}
-
-	// Handle Microsoft Azure AD special case - override userinfo endpoint
-	if strings.Contains(issuer, "login.microsoftonline.com") || strings.Contains(issuer, "sts.windows.net") {
-		// Use Microsoft Graph API instead of the broken Azure AD userinfo endpoint
-		config["userinfo_endpoint"] = "https://graph.microsoft.com/v1.0/me"
-		log.Printf("[DEBUG] Overriding Azure AD userinfo endpoint with Graph API")
 	}
 
 	return config, nil
