@@ -23988,7 +23988,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			if len(start) == 0 && request != nil {
 				decisionIds, decisionIdOk := request.URL.Query()["decision_id"]
 				if decisionIdOk {
-					log.Printf("[INFO][%s] Got decisionId %s inside Agentic decision", oldExecution.ExecutionId, decisionIds[0])
+					log.Printf("[INFO][%s] Got decisionId '%s' to find inside Agentic action", oldExecution.ExecutionId, decisionIds[0])
 					decisionId = decisionIds[0]
 
 					agentic = true
@@ -24024,6 +24024,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 				}
 
+				// Handles agentic run continues
+				// This is if shuffler.io/agents  => questions are answered 
 				if agentic {
 					log.Printf("[INFO][%s] Should fix the decision by injecting the values and continuing to the next step! :3", oldExecution.ExecutionId)
 
@@ -24056,7 +24058,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							findContinue = true
 						}
 
-						//log.Printf("[INFO][%s] Found the decision inside the agentic workflow to update: %s", execArg, decisionId)
+						if debug { 
+							log.Printf("[DEBUG][%s] Found decision '%s' inside the agentic workflow to update. Exec arg: %#v", workflowExecution.ExecutionId, decisionId, execArg)
+						}
 
 						mappedArgument := map[string]string{}
 						err = json.Unmarshal([]byte(execArg), &mappedArgument)
@@ -24068,6 +24072,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						handledNumber := []string{}
 						for key, value := range mappedArgument {
 							// Handles special case for Continuing an existing Agent run by modifying the "finish" action
+							log.Printf("[DEBUG][%s] Handling key '%s' with value '%s' during agentic decision handling. findContinue: %#v", oldExecution.ExecutionId, key, value, findContinue)
+
 							if findContinue {
 								// The only key we care about in this case
 								if key == "continue" {
@@ -24122,7 +24128,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								continue
 							}
 
-							log.Printf("Mapping field %d to value %s", fieldNumber, value)
+							if debug { 
+								log.Printf("[DEBUG] Mapping field %d to value %s", fieldNumber, value)
+							}
+
 							decision.Fields[fieldNumber].Answer = value
 							fieldsChanged = true
 						}
@@ -24171,11 +24180,15 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						}
 					}
 
-					if !fieldsChanged {
-						return workflowExecution, ExecInfo{}, fmt.Sprintf("Could not find decision '%s' inside the agentic workflow", decisionId), errors.New(fmt.Sprintf("Could not find decision '%s'", decisionId))
-					}
+					// This is a weird if statement, due to it being used for 
+					// multiple purposes around field change & decision id finding
 
-					//log.Printf("[INFO][%s] Found the decision inside the agentic workflow to update: %s", execArg, decisionId)
+					// FIXME: Not sure if this is correct to catch bad decision IDs
+					//if !fieldsChanged && cleanupFailures {
+					if !fieldsChanged {
+					//if cleanupFailures {
+						return workflowExecution, ExecInfo{}, fmt.Sprintf("Could not find fields for decision '%s'. Did you fill them in?", decisionId), errors.New(fmt.Sprintf("Could not find fields decision '%s'. Did you fill them in?", decisionId))
+					}
 
 					newDecisionBytes, err := json.Marshal(unmarshalledDecision)
 					if err != nil {

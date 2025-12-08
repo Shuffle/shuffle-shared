@@ -1762,7 +1762,10 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		actionName := GetCorrectActionName(app.Actions[updatedIndex].Name)
 		changed := false
 		_ = openapi
-		log.Printf("OPENAPI, ACTIONNAME: %s", actionName)
+		if debug { 
+			log.Printf("[DEBUG] OPENAPI, ACTIONNAME: %s", actionName)
+		}
+
 		for pathIndex, path := range openapi.Paths {
 			_ = pathIndex
 
