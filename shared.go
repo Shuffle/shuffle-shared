@@ -22425,6 +22425,17 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			stateSplit := strings.Split(string(body), "&")
+			accessToken := ""
+			// First pass - look for access_token
+			for _, innerstate := range stateSplit {
+				itemsplit := strings.Split(innerstate, "=")
+				if len(itemsplit) > 1 && itemsplit[0] == "access_token" {
+					accessToken = itemsplit[1]
+					break
+				}
+			}
+			
+			// Second pass - process id_token
 			for _, innerstate := range stateSplit {
 				itemsplit := strings.Split(innerstate, "=")
 
@@ -22434,7 +22445,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				if itemsplit[0] == "id_token" {
-					token, challenge, err := VerifyIdToken(ctx, itemsplit[1])
+					token, challenge, err := VerifyIdToken(ctx, itemsplit[1], accessToken)
 					if err != nil {
 						log.Printf("[ERROR] Bad ID token provided: %s", err)
 						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad ID token provided"}`)))
@@ -22445,10 +22456,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					codeChallenge = challenge
 
 					// sub can be slightly more trusted.
-					// however, for that we must know that email_verified is true.
-					// A. Do we ever even get that?
-					// B. We can't trust all providers. We need to whitelist some at
-					// this point.
 					openidUser.Sub = token.Sub
 					openidUser.Email = token.Email
 					openidUser.Roles = token.Roles
@@ -22598,37 +22605,34 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		// Automated replacement
-		userInfoUrlSplit := strings.Split(org.SSOConfig.OpenIdAuthorization, "/")
-		userinfoEndpoint := strings.Join(userInfoUrlSplit[0:len(userInfoUrlSplit)-1], "/") + "/userinfo"
-		//userinfoEndpoint := strings.Replace(org.SSOConfig.OpenIdAuthorization, "/authorize", "/userinfo", -1)
-		log.Printf("Userinfo endpoint: %s", userinfoEndpoint)
-		client := &http.Client{}
-		req, err := http.NewRequest(
-			"GET",
-			userinfoEndpoint,
-			nil,
-		)
-
-		//req.Header.Add("accept", "application/json")
-		//req.Header.Add("cache-control", "no-cache")
-		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", openid.AccessToken))
-		res, err := client.Do(req)
+		// Fetch userinfo using the new helper function
+		authUrlParts := strings.Split(org.SSOConfig.OpenIdAuthorization, "/oauth2")
+		if len(authUrlParts) == 0 {
+			log.Printf("[ERROR] Invalid OpenIdAuthorization URL format")
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Invalid SSO configuration"}`))
+			return
+		}
+		
+		issuer := authUrlParts[0]
+		userInfo, err := fetchUserInfoFromToken(ctx, openid.AccessToken, issuer)
 		if err != nil {
-			log.Printf("[WARNING] OpenID client DO (2): %s", err)
+			log.Printf("[ERROR] Failed to fetch userinfo: %s", err)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed userinfo request"}`))
+			resp.Write([]byte(`{"success": false, "reason": "Failed to fetch user information"}`))
+			return
+		}
+		
+		// Convert map to JSON for compatibility with existing code
+		body, err = json.Marshal(userInfo)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal userinfo: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to process user information"}`))
 			return
 		}
 
-		defer res.Body.Close()
-		body, err = ioutil.ReadAll(res.Body)
-		if err != nil {
-			log.Printf("[WARNING] OpenID client Body (2): %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed userinfo body parsing"}`))
-			return
-		}
+		log.Printf("[DEBUG] OpenID userinfo response: %s", string(body))
 
 		err = json.Unmarshal(body, &openidUser)
 		if err != nil {
