@@ -4174,6 +4174,15 @@ func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdT
 		if len(token.Aud) == 0 {
 			return emptyToken, "", fmt.Errorf("missing audience in token")
 		}
+		
+		// Check token expiration
+		if token.Exp > 0 {
+			now := time.Now().Unix()
+			if now >= int64(token.Exp) {
+				log.Printf("[ERROR] JWT token expired: exp=%d, now=%d", token.Exp, now)
+				return emptyToken, "", fmt.Errorf("JWT token expired")
+			}
+		}
 
 		// Verify JWT signature if we have an issuer
 		if len(token.Iss) > 0 {
@@ -4191,7 +4200,7 @@ func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdT
 						Alg string `json:"alg"`
 					}
 					json.Unmarshal(headerBytes, &header)
-					
+
 					if len(header.Kid) > 0 {
 						// Get public key and verify
 						publicKey, err := getPublicKeyFromJWKS(ctx, jwksURI, header.Kid)
@@ -4201,13 +4210,13 @@ func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdT
 							// Verify the signature
 							signatureBytes, _ := base64.RawURLEncoding.DecodeString(outerSplit[2])
 							message := outerSplit[0] + "." + outerSplit[1]
-							
+
 							// Create hash of the message
 							hash := crypto.SHA256
 							h := hash.New()
 							h.Write([]byte(message))
 							hashed := h.Sum(nil)
-							
+
 							// Verify signature
 							err = rsa.VerifyPKCS1v15(publicKey, hash, hashed, signatureBytes)
 							if err != nil {
@@ -4304,6 +4313,8 @@ func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdT
 }
 
 func getPublicKeyFromJWKS(ctx context.Context, jwksURL, kid string) (*rsa.PublicKey, error) {
+	log.Printf("[DEBUG] Fetching public key from JWKS URL: %s", jwksURL)
+
 	// Fetch JWKS
 	resp, err := http.Get(jwksURL)
 	if err != nil {
@@ -4379,6 +4390,13 @@ func fetchWellKnownConfig(ctx context.Context, issuer string) (map[string]interf
 	var config map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
 		return nil, fmt.Errorf("failed to decode well-known config: %w", err)
+	}
+
+	// Handle Microsoft Azure AD special case - override userinfo endpoint
+	if strings.Contains(issuer, "login.microsoftonline.com") || strings.Contains(issuer, "sts.windows.net") {
+		// Use Microsoft Graph API instead of the broken Azure AD userinfo endpoint
+		config["userinfo_endpoint"] = "https://graph.microsoft.com/v1.0/me"
+		log.Printf("[DEBUG] Overriding Azure AD userinfo endpoint with Graph API")
 	}
 
 	return config, nil
