@@ -5372,67 +5372,155 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 	return apps, nil
 }
 
-// FindUserBySSOIdentity safely finds a user by exact SSO identity match
-// Validates Sub + ClientID + OrgID + Email for maximum security
-// Returns error if no user found or multiple users found (should never happen)
+// FindUserBySSOIdentity finds a user by their SSO identity using efficient database queries
+// Also validates that the clientID matches the org's configured SSO
 func FindUserBySSOIdentity(ctx context.Context, sub, clientID, orgID, email string) (User, error) {
 	var emptyUser User
 	
-	if sub == "" || clientID == "" || orgID == "" || email == "" {
-		return emptyUser, errors.New("sub, clientID, orgID, and email are all required")
+	// Check if Sub is empty - user hasn't connected SSO yet
+	if sub == "" {
+		return emptyUser, errors.New("connect user account with SSO first")
+	}
+	
+	if clientID == "" || orgID == "" || email == "" {
+		return emptyUser, errors.New("clientID, orgID, and email are all required")
+	}
+	
+	// Verify the clientID actually matches the org's SSO configuration
+	org, err := GetOrg(ctx, orgID)
+	if err != nil {
+		return emptyUser, fmt.Errorf("failed to get org %s: %w", orgID, err)
+	}
+	
+	if org.SSOConfig.OpenIdClientId != clientID {
+		return emptyUser, fmt.Errorf("clientID %s does not match org's configured SSO client ID %s", clientID, org.SSOConfig.OpenIdClientId)
 	}
 	
 	// Normalize email for comparison
 	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
 	
-	// Get all users and search through their SSO info
-	users, err := GetAllUsers(ctx)
-	if err != nil {
-		return emptyUser, fmt.Errorf("failed to get users: %w", err)
-	}
+	nameKey := "Users"
+	var users []User
 	
-	var matchingUsers []User
-	for _, user := range users {
-		if len(user.SSOInfos) == 0 {
-			continue
+	if project.DbType == "opensearch" {
+		// OpenSearch query to find users with matching SSO info
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 10,
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						{
+							"term": map[string]interface{}{
+								"username.keyword": normalizedEmail,
+							},
+						},
+						{
+							"nested": map[string]interface{}{
+								"path": "sso_infos",
+								"query": map[string]interface{}{
+									"bool": map[string]interface{}{
+										"must": []map[string]interface{}{
+											{
+												"term": map[string]interface{}{
+													"sso_infos.sub.keyword": sub,
+												},
+											},
+											{
+												"term": map[string]interface{}{
+													"sso_infos.client_id.keyword": clientID,
+												},
+											},
+											{
+												"term": map[string]interface{}{
+													"sso_infos.org_id.keyword": orgID,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
 		}
 		
-		// Check if user's email matches (primary validation)
-		userEmail := strings.ToLower(strings.TrimSpace(user.Username))
-		if userEmail != normalizedEmail {
-			continue // Skip if email doesn't match
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			return emptyUser, fmt.Errorf("failed to encode opensearch query: %w", err)
 		}
 		
-		// Now check SSO info for this user
-		for _, ssoInfo := range user.SSOInfos {
-			if ssoInfo.Sub == sub && 
-			   ssoInfo.ClientID == clientID && 
-			   ssoInfo.OrgID == orgID {
-				matchingUsers = append(matchingUsers, user)
-				log.Printf("[INFO] Found user match: ID=%s, Email=%s, Sub=%s, ClientID=%s, OrgID=%s", 
-					user.Id, userEmail, sub, clientID, orgID)
-				break // Found match for this user, move to next user
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
+		if err != nil {
+			return emptyUser, fmt.Errorf("opensearch query failed: %w", err)
+		}
+		
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return emptyUser, fmt.Errorf("opensearch error response: %d", res.StatusCode)
+		}
+		
+		var r map[string]interface{}
+		if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+			return emptyUser, fmt.Errorf("failed to parse opensearch response: %w", err)
+		}
+		
+		hits, ok := r["hits"].(map[string]interface{})["hits"].([]interface{})
+		if !ok {
+			return emptyUser, errors.New("no matching user found")
+		}
+		
+		for _, hit := range hits {
+			if source, ok := hit.(map[string]interface{})["_source"]; ok {
+				data, _ := json.Marshal(source)
+				var user User
+				if err := json.Unmarshal(data, &user); err == nil {
+					users = append(users, user)
+				}
 			}
 		}
+	} else {
+		// Datastore query - need to get by email first then validate SSO info
+		// (Datastore doesn't support nested queries efficiently)
+		q := datastore.NewQuery(nameKey).Filter("Username =", normalizedEmail).Limit(10)
+		_, err := project.Dbclient.GetAll(ctx, q, &users)
+		if err != nil {
+			return emptyUser, fmt.Errorf("datastore query failed: %w", err)
+		}
+		
+		// Filter users to find exact SSO match
+		var matchingUsers []User
+		for _, user := range users {
+			for _, ssoInfo := range user.SSOInfos {
+				if ssoInfo.Sub == sub && 
+				   ssoInfo.ClientID == clientID && 
+				   ssoInfo.OrgID == orgID {
+					matchingUsers = append(matchingUsers, user)
+					break
+				}
+			}
+		}
+		users = matchingUsers
 	}
 	
-	if len(matchingUsers) == 0 {
+	if len(users) == 0 {
 		return emptyUser, fmt.Errorf("no user found with Sub=%s, ClientID=%s, OrgID=%s, Email=%s", sub, clientID, orgID, normalizedEmail)
 	}
 	
-	if len(matchingUsers) > 1 {
-		log.Printf("[CRITICAL] Multiple users found with same SSO identity: Sub=%s, ClientID=%s, OrgID=%s, Email=%s. Users: %v", 
-			sub, clientID, orgID, normalizedEmail, func() []string {
-				var ids []string
-				for _, u := range matchingUsers {
-					ids = append(ids, fmt.Sprintf("%s(%s)", u.Id, u.Username))
-				}
-				return ids
-			}())
-		return emptyUser, fmt.Errorf("multiple users found with same SSO identity - data integrity issue")
+	if len(users) > 1 {
+		log.Printf("[CRITICAL] Multiple users found with same SSO identity: Sub=%s, ClientID=%s, OrgID=%s, Email=%s", 
+			sub, clientID, orgID, normalizedEmail)
+		return emptyUser, errors.New("multiple users found with same SSO identity - data integrity issue")
 	}
 	
-	return matchingUsers[0], nil
+	return users[0], nil
 }
 
 func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
