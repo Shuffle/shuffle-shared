@@ -25,11 +25,12 @@ import (
 	"sync"
 	"time"
 
+	runtimeDebug "runtime/debug"
+
 	"cloud.google.com/go/datastore"
 	"github.com/Masterminds/semver"
 	"github.com/bradfitz/slice"
 	uuid "github.com/satori/go.uuid"
-	runtimeDebug "runtime/debug"
 
 	//"github.com/frikky/kin-openapi/openapi3"
 	"github.com/patrickmn/go-cache"
@@ -1739,7 +1740,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				result = innerresult
 				break
 
-			//} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
+				//} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
 			} else if (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") && (innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent") {
 				// Auto fixing decision data based on cache for better decisionmaking
 				// Map the result into AgentOutput to check decisions
@@ -4025,7 +4026,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	if id == "public" {
 		//return &Org{}, errors.New("'public' org is used for Singul action without being logged in. Not relevant.")
 		return &Org{
-			Id:	 "public",
+			Id:   "public",
 			Name: "Public",
 		}, nil
 	}
@@ -5371,6 +5372,157 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 	return apps, nil
 }
 
+// FindUserBySSOIdentity finds a user by their SSO identity using efficient database queries
+// Also validates that the clientID matches the org's configured SSO
+func FindUserBySSOIdentity(ctx context.Context, sub, clientID, orgID, email string) (User, error) {
+	var emptyUser User
+	
+	// Check if Sub is empty - user hasn't connected SSO yet
+	if sub == "" {
+		return emptyUser, errors.New("connect user account with SSO first")
+	}
+	
+	if clientID == "" || orgID == "" || email == "" {
+		return emptyUser, errors.New("clientID, orgID, and email are all required")
+	}
+	
+	// Verify the clientID actually matches the org's SSO configuration
+	org, err := GetOrg(ctx, orgID)
+	if err != nil {
+		return emptyUser, fmt.Errorf("failed to get org %s: %w", orgID, err)
+	}
+	
+	if org.SSOConfig.OpenIdClientId != clientID {
+		return emptyUser, fmt.Errorf("clientID %s does not match org's configured SSO client ID %s", clientID, org.SSOConfig.OpenIdClientId)
+	}
+	
+	// Normalize email for comparison
+	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
+	
+	nameKey := "Users"
+	var users []User
+	
+	if project.DbType == "opensearch" {
+		// OpenSearch query to find users with matching SSO info
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 10,
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						{
+							"term": map[string]interface{}{
+								"username.keyword": normalizedEmail,
+							},
+						},
+						{
+							"nested": map[string]interface{}{
+								"path": "sso_infos",
+								"query": map[string]interface{}{
+									"bool": map[string]interface{}{
+										"must": []map[string]interface{}{
+											{
+												"term": map[string]interface{}{
+													"sso_infos.sub.keyword": sub,
+												},
+											},
+											{
+												"term": map[string]interface{}{
+													"sso_infos.client_id.keyword": clientID,
+												},
+											},
+											{
+												"term": map[string]interface{}{
+													"sso_infos.org_id.keyword": orgID,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			return emptyUser, fmt.Errorf("failed to encode opensearch query: %w", err)
+		}
+		
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
+		if err != nil {
+			return emptyUser, fmt.Errorf("opensearch query failed: %w", err)
+		}
+		
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return emptyUser, fmt.Errorf("opensearch error response: %d", res.StatusCode)
+		}
+		
+		var r map[string]interface{}
+		if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+			return emptyUser, fmt.Errorf("failed to parse opensearch response: %w", err)
+		}
+		
+		hits, ok := r["hits"].(map[string]interface{})["hits"].([]interface{})
+		if !ok {
+			return emptyUser, errors.New("no matching user found")
+		}
+		
+		for _, hit := range hits {
+			if source, ok := hit.(map[string]interface{})["_source"]; ok {
+				data, _ := json.Marshal(source)
+				var user User
+				if err := json.Unmarshal(data, &user); err == nil {
+					users = append(users, user)
+				}
+			}
+		}
+	} else {
+		// Datastore query - need to get by email first then validate SSO info
+		// (Datastore doesn't support nested queries efficiently)
+		q := datastore.NewQuery(nameKey).Filter("Username =", normalizedEmail).Limit(10)
+		_, err := project.Dbclient.GetAll(ctx, q, &users)
+		if err != nil {
+			return emptyUser, fmt.Errorf("datastore query failed: %w", err)
+		}
+		
+		// Filter users to find exact SSO match
+		var matchingUsers []User
+		for _, user := range users {
+			for _, ssoInfo := range user.SSOInfos {
+				if ssoInfo.Sub == sub && 
+				   ssoInfo.ClientID == clientID && 
+				   ssoInfo.OrgID == orgID {
+					matchingUsers = append(matchingUsers, user)
+					break
+				}
+			}
+		}
+		users = matchingUsers
+	}
+	
+	if len(users) == 0 {
+		return emptyUser, fmt.Errorf("no user found with Sub=%s, ClientID=%s, OrgID=%s, Email=%s", sub, clientID, orgID, normalizedEmail)
+	}
+	
+	if len(users) > 1 {
+		log.Printf("[CRITICAL] Multiple users found with same SSO identity: Sub=%s, ClientID=%s, OrgID=%s, Email=%s", 
+			sub, clientID, orgID, normalizedEmail)
+		return emptyUser, errors.New("multiple users found with same SSO identity - data integrity issue")
+	}
+	
+	return users[0], nil
+}
+
 func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 	var users []User
 
@@ -5480,7 +5632,7 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 		query := map[string]interface{}{
 			"size": 1000,
 			"query": map[string]interface{}{
-				"bool": map[string]interface{} {
+				"bool": map[string]interface{}{
 					"must": map[string]interface{}{
 						"match": map[string]interface{}{
 							"username": username,
@@ -5662,6 +5814,32 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 	}
 
 	return curUser, nil
+}
+
+func (u *User) GetSSOInfo(orgID string) (SSOInfo, bool) {
+	for _, sso := range u.SSOInfos {
+		if sso.OrgID == orgID {
+			return sso, true
+		}
+	}
+	return SSOInfo{}, false
+}
+
+func (u *User) SetSSOInfo(orgID string, ssoInfo SSOInfo) {
+	ssoInfo.OrgID = orgID
+	for i, sso := range u.SSOInfos {
+		if sso.OrgID == orgID {
+			u.SSOInfos[i] = ssoInfo
+			return
+		}
+	}
+	u.SSOInfos = append(u.SSOInfos, ssoInfo)
+}
+
+func (u *User) InitSSOInfos() {
+	if u.SSOInfos == nil {
+		u.SSOInfos = []SSOInfo{}
+	}
 }
 
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
