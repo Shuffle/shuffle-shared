@@ -6638,7 +6638,6 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 
 		licenseOrg := HandleCheckLicense(ctx, *parentOrg)
 		multiEnvLimit = int(licenseOrg.SyncFeatures.MultiEnv.Limit)
-		log.Printf("multiEnvLimit is: %d", multiEnvLimit)
 		if !licenseOrg.SyncFeatures.MultiEnv.Active && int64(len(environments)) > int64(multiEnvLimit) {
 			hideEnvs = true
 		}
@@ -17799,7 +17798,7 @@ func InitOpensearchIndexes() {
 
 		}
 
-		index = strings.ToLower(GetESIndexPrefix(index))
+		index = strings.ToLower(index)
 		// Directly try to force create it. Opensearch throws a 400 if it fails.
 
 		initialIndexName := fmt.Sprintf("%s-000001", index)
