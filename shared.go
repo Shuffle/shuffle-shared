@@ -14468,22 +14468,25 @@ func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (strin
 
 	codeChallenge := verifier.CodeChallengeS256()
 
-	// Initialize slice if needed
-	user.InitSSOInfos()
+	if !signIn {
 
-	// Store SSO info per org (preserving existing Sub if present)
-	existingSSOInfo, _ := user.GetSSOInfo(org.Id)
-	user.SetSSOInfo(org.Id, SSOInfo{
-		Sub:             existingSSOInfo.Sub, // Keep existing Sub for this org
-		ClientID:        org.SSOConfig.OpenIdClientId,
-		CodeVerifier:    verifier.Value,
-		ChallengeExpiry: time.Now().Add(2 * time.Minute),
-	})
+		// Initialize slice if needed
+		user.InitSSOInfos()
 
-	ctx := context.Background()
-	err := SetUser(ctx, &user, false)
-	if err != nil {
-		return "", err
+		// Store SSO info per org (preserving existing Sub if present)
+		existingSSOInfo, _ := user.GetSSOInfo(org.Id)
+		user.SetSSOInfo(org.Id, SSOInfo{
+			Sub:             existingSSOInfo.Sub, // Keep existing Sub for this org
+			ClientID:        org.SSOConfig.OpenIdClientId,
+			CodeVerifier:    verifier.Value,
+			ChallengeExpiry: time.Now().Add(2 * time.Minute),
+		})
+
+		ctx := context.Background()
+		err := SetUser(ctx, &user, false)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	// We might need to do a check for existing users
