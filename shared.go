@@ -22432,61 +22432,66 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	if len(code) == 0 {
 		// Check id_token grant info
 		// This is where we get redirect back from the SSO service.
-		if request.Method == "POST" {
-			body, err := ioutil.ReadAll(request.Body)
-			if err != nil {
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No code or id_token specified - body read error in POST"}`)))
-				resp.WriteHeader(401)
-				return
-			}
 
-			stateSplit := strings.Split(string(body), "&")
-			accessToken := ""
-			// First pass - look for access_token
-			for _, innerstate := range stateSplit {
-				itemsplit := strings.Split(innerstate, "=")
-				if len(itemsplit) > 1 && itemsplit[0] == "access_token" {
-					accessToken = itemsplit[1]
-					break
-				}
-			}
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must enable PKCE to use shuffle SSO"}`)))
+		resp.WriteHeader(401)
+		return
 
-			// Second pass - process id_token
-			for _, innerstate := range stateSplit {
-				itemsplit := strings.Split(innerstate, "=")
+		// if request.Method == "POST" {
+		// 	body, err := ioutil.ReadAll(request.Body)
+		// 	if err != nil {
+		// 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No code or id_token specified - body read error in POST"}`)))
+		// 		resp.WriteHeader(401)
+		// 		return
+		// 	}
 
-				if len(itemsplit) <= 1 {
-					log.Printf("[WARNING] No key:value: %s", innerstate)
-					continue
-				}
+		// 	stateSplit := strings.Split(string(body), "&")
+		// 	accessToken := ""
+		// 	// First pass - look for access_token
+		// 	for _, innerstate := range stateSplit {
+		// 		itemsplit := strings.Split(innerstate, "=")
+		// 		if len(itemsplit) > 1 && itemsplit[0] == "access_token" {
+		// 			accessToken = itemsplit[1]
+		// 			break
+		// 		}
+		// 	}
 
-				if itemsplit[0] == "id_token" {
-					token, challenge, err := VerifyIdToken(ctx, itemsplit[1], accessToken)
-					if err != nil {
-						log.Printf("[ERROR] Bad ID token provided: %s", err)
-						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad ID token provided"}`)))
-						resp.WriteHeader(401)
-						return
-					}
+		// 	// Second pass - process id_token
+		// 	for _, innerstate := range stateSplit {
+		// 		itemsplit := strings.Split(innerstate, "=")
 
-					codeChallenge = challenge
+		// 		if len(itemsplit) <= 1 {
+		// 			log.Printf("[WARNING] No key:value: %s", innerstate)
+		// 			continue
+		// 		}
 
-					// sub can be slightly more trusted.
-					openidUser.Sub = token.Sub
-					openidUser.Email = token.Email
-					openidUser.Roles = token.Roles
-					org = &token.Org
-					skipValidation = true
-					break
-				}
-			}
-		}
+		// 		if itemsplit[0] == "id_token" {
+		// 			token, challenge, err := VerifyIdToken(ctx, itemsplit[1], accessToken)
+		// 			if err != nil {
+		// 				log.Printf("[ERROR] Bad ID token provided: %s", err)
+		// 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad ID token provided"}`)))
+		// 				resp.WriteHeader(401)
+		// 				return
+		// 			}
 
-		if !skipValidation {
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No code specified"}`)))
-			resp.WriteHeader(401)
-			return
-		}
+		// 			codeChallenge = challenge
+
+		// 			// sub can be slightly more trusted.
+		// 			openidUser.Sub = token.Sub
+		// 			openidUser.Email = token.Email
+		// 			openidUser.Roles = token.Roles
+		// 			org = &token.Org
+		// 			skipValidation = true
+		// 			break
+		// 		}
+		// 	}
+		// }
+
+		// if !skipValidation {
+		// 	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No code specified"}`)))
+		// 	resp.WriteHeader(401)
+		// 	return
+		// }
 	}
 
 	if !skipValidation {
