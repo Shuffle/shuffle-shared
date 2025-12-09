@@ -11592,6 +11592,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		OrgId     string `json:"org_id" datastore:"org_id"`
 		RegionUrl string `json:"region_url" datastore:"region_url"`
 		SSOTest   bool   `json:"sso_test"`
+		Mode      string `json:"mode"`
 	}
 
 	var tmpData ReturnData
@@ -11725,7 +11726,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[INFO] OpenID login for %s", org.Id)
 				redirectKey = "SSO_REDIRECT"
 
-				baseSSOUrl, err = GetOpenIdUrl(request, *org, user)
+				baseSSOUrl, err = GetOpenIdUrl(request, *org, user, tmpData.Mode)
 				if err != nil {
 					log.Printf("[ERROR] Failed getting OpenID URL: %s", err)
 					resp.WriteHeader(401)
@@ -14455,8 +14456,10 @@ func HandleGetSimpleSSOLoginUrl(resp http.ResponseWriter, request *http.Request)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "sso_url": "%s"}`, ssoUrl)))
 }
 
-func GetOpenIdUrl(request *http.Request, org Org, user User) (string, error) {
+func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (string, error) {
 	baseSSOUrl := org.SSOConfig.OpenIdAuthorization
+
+	signIn := mode == "signin"
 
 	verifier, verifiererr := verifier()
 	if verifiererr != nil {
@@ -14525,9 +14528,15 @@ func GetOpenIdUrl(request *http.Request, org Org, user User) (string, error) {
 		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("SSO_REDIRECT_URL")))
 	}
 
+	state := ""
+
 	// this is where the skipValidation case later gets it's value from
 	// in the handle SSO login functions.
-	state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
+	if !(signIn) {
+		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
+	} else {
+		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&redirect=%s", org.Id, redirectUrl)))
+	}
 
 	//log.Printf("[DEBUG] Got challenge value %s (POST state)", codeChallenge)
 
@@ -14850,7 +14859,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[INFO] OpenID login for %s", org.Id)
 					redirectKey = "SSO_REDIRECT"
 
-					baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata)
+					baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata, "signin")
 					if err != nil {
 						log.Printf("[ERROR] Failed to get OpenID URL: %s", err)
 						resp.WriteHeader(401)
@@ -15531,7 +15540,7 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 		baseSSOUrl := org.SSOConfig.SSOEntrypoint
 		redirectKey := "SSO_REDIRECT"
 		if len(org.SSOConfig.OpenIdAuthorization) > 0 {
-			baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata)
+			baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata, "")
 			if err != nil {
 				log.Printf("[ERROR] Failed to get OpenID URL: %v", err)
 				resp.WriteHeader(500)
