@@ -14459,7 +14459,7 @@ func HandleGetSimpleSSOLoginUrl(resp http.ResponseWriter, request *http.Request)
 func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (string, error) {
 	baseSSOUrl := org.SSOConfig.OpenIdAuthorization
 
-	signIn := mode == "signin"
+	signIn := mode == "signin" || mode == "login"
 
 	verifier, verifiererr := verifier()
 	if verifiererr != nil {
@@ -14486,6 +14486,8 @@ func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (strin
 		if err != nil {
 			return "", err
 		}
+	} else {
+		log.Printf("[DEBUG] Generating SSO login link for all non-logged in users using the org")
 	}
 
 	// We might need to do a check for existing users
@@ -14535,7 +14537,7 @@ func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (strin
 	if !(signIn) {
 		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
 	} else {
-		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&redirect=%s", org.Id, redirectUrl)))
+		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&mode=login&redirect=%s", org.Id, redirectUrl)))
 	}
 
 	isMicrosoft := strings.Contains(org.SSOConfig.OpenIdAuthorization, "login.microsoftonline.com")
@@ -22425,6 +22427,8 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	codeChallenge := ""
 	foundMode := ""
 
+	// skipValidation is always false now
+	// temp at least
 	skipValidation := false
 	openidUser := OpenidUserinfo{}
 	org := &Org{}
