@@ -14538,7 +14538,7 @@ func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (strin
 		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&redirect=%s", org.Id, redirectUrl)))
 	}
 
-	isMicrosoft := strings.Contains(org.SSOConfig.SSOEntrypoint, "login.microsoftonline.com")
+	isMicrosoft := strings.Contains(org.SSOConfig.OpenIdAuthorization, "login.microsoftonline.com")
 
 	scopes := []string{"openid", "email"}
 
