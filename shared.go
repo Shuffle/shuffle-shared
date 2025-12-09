@@ -14469,7 +14469,6 @@ func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (strin
 	codeChallenge := verifier.CodeChallengeS256()
 
 	if !signIn {
-
 		// Initialize slice if needed
 		user.InitSSOInfos()
 
@@ -14533,33 +14532,28 @@ func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (strin
 
 	state := ""
 
-	// this is where the skipValidation case later gets it's value from
-	// in the handle SSO login functions.
-	if !(signIn) {
-		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
-	} else {
-		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&redirect=%s", org.Id, redirectUrl)))
+	isMicrosoft := strings.Contains(org.SSOConfig.SSOEntrypoint, "login.microsoftonline.com")
+
+	scopes := []string{"openid", "email"}
+
+	if isMicrosoft {
+		scopes = append(scopes, "User.Read")
 	}
 
-	//log.Printf("[DEBUG] Got challenge value %s (POST state)", codeChallenge)
+	usePKCE := !signIn
 
-	// if len(org.SSOConfig.OpenIdClientSecret) > 0 {
+	params := url.Values{}
+	params.Set("client_id", org.SSOConfig.OpenIdClientId)
+	params.Set("response_type", "code")
+	params.Set("scope", strings.Join(scopes, " "))
+	params.Set("state", state)
 
-	// 	//baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid&redirect_uri=%s&state=%s&client_secret=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, org.SSOConfig.OpenIdClientSecret)
-	// 	state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&redirect=%s&challenge=%s", org.Id, redirectUrl, org.SSOConfig.OpenIdClientSecret)))
-	// 	//log.Printf("[INFO] URL: %s", redirectUrl)
-
-	// 	baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=id_token&scope=openid email&redirect_uri=%s&state=%s&response_mode=form_post&nonce=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, state)
-	// 	//baseSSOUrl += fmt.Sprintf("&client_secret=%s", org.SSOConfig.OpenIdClientSecret)
-	// 	//log.Printf("[DEBUG] Found OpenID url (client secret). Extra redirect check: %s - %s", request.URL.String(), baseSSOUrl)
-	// } else {
-	//log.Printf("[DEBUG] Found OpenID url (PKCE!!). Extra redirect check: %s", request.URL.String())
-	if !signIn {
-		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid email&redirect_uri=%s&state=%s&code_challenge_method=S256&code_challenge=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, codeChallenge)
-	} else {
-		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid email&redirect_uri=%s&state=%s&", org.SSOConfig.OpenIdClientId, redirectUrl, state)
+	if usePKCE {
+		params.Set("code_challenge_method", "S256")
+		params.Set("code_challenge", codeChallenge)
 	}
-	// }
+
+	baseSSOUrl = baseSSOUrl + "?" + params.Encode() + "&redirect_uri=" + redirectUrl
 
 	return baseSSOUrl, nil
 }
