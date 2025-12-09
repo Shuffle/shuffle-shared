@@ -11591,7 +11591,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	type ReturnData struct {
 		OrgId     string `json:"org_id" datastore:"org_id"`
 		RegionUrl string `json:"region_url" datastore:"region_url"`
-		SSOTest   bool   `json:"sso_test"`
+		SSO       bool   `json:"sso"`
 		Mode      string `json:"mode"`
 	}
 
@@ -11625,7 +11625,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if user.ActiveOrg.Id == fileId && tmpData.SSOTest == false {
+	if user.ActiveOrg.Id == fileId && tmpData.SSO == false {
 		log.Printf("[WARNING] User swap to the org \"%s\" - already in the org", tmpData.OrgId)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "You are already in that organisation"}`))
@@ -11691,7 +11691,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if (org.SSOConfig.SSORequired == true && user.UsersLastSession != user.Session && user.SupportAccess == false) || tmpData.SSOTest {
+	if (org.SSOConfig.SSORequired == true && user.UsersLastSession != user.Session && user.SupportAccess == false) || tmpData.SSO {
 
 		// Check if the org is the suborg or not?
 		skipSSO := false
@@ -14557,17 +14557,22 @@ func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (strin
 	params.Set("state", state)
 	params.Set("redirect_uri", redirectUrl)
 
-	paramString := ""
-	for key, value := range params {
-		paramString += fmt.Sprintf("%s=%s&", key, value[0])
-	}
-
 	if usePKCE {
 		params.Set("code_challenge_method", "S256")
 		params.Set("code_challenge", codeChallenge)
 	}
 
+	paramString := ""
+	for key, value := range params {
+		paramString += fmt.Sprintf("%s=%s&", key, value[0])
+	}
+
+	// remove last &
+	paramString = strings.TrimSuffix(paramString, "&")
+
 	baseSSOUrl = baseSSOUrl + "?" + paramString
+
+	log.Printf("[DEBUG] Generated SSO URL: %s", baseSSOUrl)
 
 	return baseSSOUrl, nil
 }
