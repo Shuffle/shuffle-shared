@@ -14555,13 +14555,19 @@ func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (strin
 	params.Set("response_type", "code")
 	params.Set("scope", strings.Join(scopes, " "))
 	params.Set("state", state)
+	params.Set("redirect_uri", redirectUrl)
+
+	paramString := ""
+	for key, value := range params {
+		paramString += fmt.Sprintf("%s=%s&", key, value[0])
+	}
 
 	if usePKCE {
 		params.Set("code_challenge_method", "S256")
 		params.Set("code_challenge", codeChallenge)
 	}
 
-	baseSSOUrl = baseSSOUrl + "?" + params.Encode() + "&redirect_uri=" + redirectUrl
+	baseSSOUrl = baseSSOUrl + "?" + paramString
 
 	return baseSSOUrl, nil
 }
