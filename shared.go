@@ -23851,7 +23851,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			// FIXME: Is execution ID missing?
 
-			if allowContinuation == false {
+			if allowContinuation == false && len(workflowExecution.ExecutionId) > 0 {
 				newExecId := fmt.Sprintf("%s_%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionId, workflowExecution.ExecutionSourceNode)
 				cache, err := GetCache(ctx, newExecId)
 				if err == nil {
