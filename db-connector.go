@@ -7442,11 +7442,6 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": 1000,
-			"sort": map[string]interface{}{
-				"edited": map[string]interface{}{
-					"order": "desc",
-				},
-			},
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
 					"should": []map[string]interface{}{
@@ -7511,6 +7506,12 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 		for _, hit := range wrapped.Hits.Hits {
 			innerApp := hit.Source
 			userApps = append(userApps, innerApp)
+		}
+
+		if len(userApps) > 0 {
+			slice.Sort(userApps[:], func(i, j int) bool {
+				return userApps[i].Edited > userApps[j].Edited
+			})
 		}
 	} else {
 
@@ -7665,11 +7666,6 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 
 		query := map[string]interface{}{
 			"size": 1000,
-			"sort": map[string]interface{}{
-				"edited": map[string]interface{}{
-					"order": "desc",
-				},
-			},
 		}
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
@@ -7762,6 +7758,12 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 			}
 
 			allApps, innerApp = fixAppAppend(allApps, innerApp)
+		}
+
+		if len(allApps) > 0 {
+			slice.Sort(allApps[:], func(i, j int) bool {
+				return allApps[i].Edited > allApps[j].Edited
+			})
 		}
 
 		/*
