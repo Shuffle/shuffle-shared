@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -13,6 +15,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math/big"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -23,8 +26,10 @@ import (
 	"time"
 
 	"github.com/google/go-querystring/query"
-	"github.com/satori/go.uuid"
+	uuid "github.com/satori/go.uuid"
 	"golang.org/x/oauth2"
+
+	"path/filepath"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,7 +37,6 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
-	"path/filepath"
 )
 
 var handledIds []string
@@ -3068,7 +3072,13 @@ func (v *CodeVerifier) CodeChallengeS256() string {
 // https://dev-18062.okta.com/oauth2/default/v1/authorize?client_id=0oa3&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
 func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, codeChallenge, clientSecret string) ([]byte, error) {
 	client := &http.Client{}
-	data := fmt.Sprintf("client_id=%s&grant_type=authorization_code&redirect_uri=%s&code=%s&code_verifier=%s", clientId, redirectUri, code, codeChallenge)
+	data := fmt.Sprintf("client_id=%s&grant_type=authorization_code&redirect_uri=%s&code=%s", clientId, redirectUri, code)
+
+	// Only add code_verifier if we have one (PKCE flow)
+	if len(codeChallenge) > 0 {
+		data += fmt.Sprintf("&code_verifier=%s", codeChallenge)
+	}
+
 	if len(clientSecret) > 0 {
 		data += fmt.Sprintf("&client_secret=%s", clientSecret)
 	}
@@ -4110,103 +4120,339 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	return appAuth, nil
 }
 
-func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
-	// Check org in nonce -> check if ID points back to an org
-	outerSplit := strings.Split(string(idToken), ".")
-	for _, innerstate := range outerSplit {
-		log.Printf("[DEBUG] OpenID STATE (temporary): %s", innerstate)
-		decoded, err := base64.StdEncoding.DecodeString(innerstate)
+func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdTokenCheck, string, error) {
+	var emptyToken IdTokenCheck
+	var foundOrg string
+	var foundChallenge string
+
+	// Parse JWT properly with all three parts
+	outerSplit := strings.Split(idToken, ".")
+	if len(outerSplit) != 3 {
+		return emptyToken, "", fmt.Errorf("invalid JWT format")
+	}
+
+	// Try to decode the payload (middle part)
+	for idx, innerstate := range outerSplit {
+		// Skip header (0) and signature (2), focus on payload (1)
+		if idx != 1 {
+			continue
+		}
+
+		// Use RawURLEncoding for JWT (no padding)
+		decoded, err := base64.RawURLEncoding.DecodeString(innerstate)
 		if err != nil {
-			log.Printf("[DEBUG] Failed base64 decode of state (1): %s", err)
-
-			// Random padding problems
-			innerstate += "="
-			decoded, err = base64.StdEncoding.DecodeString(innerstate)
+			log.Printf("[DEBUG] RawURLEncoding failed, trying with padding: %s", err)
+			// Try URL encoding with padding
+			decoded, err = base64.URLEncoding.DecodeString(innerstate)
 			if err != nil {
-				log.Printf("[DEBUG] Failed base64 decode of state (2): %s", err)
-
-				// Double padding problem fix lol (this actually works)
+				// Try with extra padding
 				innerstate += "="
-				decoded, err = base64.StdEncoding.DecodeString(innerstate)
+				decoded, err = base64.URLEncoding.DecodeString(innerstate)
 				if err != nil {
-					log.Printf("[ERROR] Failed base64 decode of state (3): %s", err)
-					continue
+					innerstate += "="
+					decoded, err = base64.URLEncoding.DecodeString(innerstate)
+					if err != nil {
+						preview := innerstate
+						if len(preview) > 50 {
+							preview = preview[:50] + "..."
+						}
+						log.Printf("[ERROR] Failed to decode JWT payload: %s (innerstate preview: %s)", err, preview)
+						return emptyToken, "", fmt.Errorf("failed to decode JWT payload")
+					}
 				}
 			}
 		}
 
 		var token IdTokenCheck
-		err = json.Unmarshal([]byte(decoded), &token)
+		err = json.Unmarshal(decoded, &token)
 		if err != nil {
-			log.Printf("[INFO] IDToken unmarshal error: %s", err)
-			continue
+			log.Printf("[ERROR] Failed to unmarshal JWT payload: %s", err)
+			return emptyToken, "", fmt.Errorf("failed to unmarshal JWT payload")
 		}
 
-		// Aud = client secret
-		// Nonce = contains all the info
-		if len(token.Aud) <= 0 {
-			log.Printf("[WARNING] Couldn't find AUD in JSON (required) - continuing to check. Current: %s", string(decoded))
-			continue
+		// Validate required fields
+		if len(token.Aud) == 0 {
+			return emptyToken, "", fmt.Errorf("missing audience in token")
 		}
 
+		// Check token expiration
+		if token.Exp > 0 {
+			now := time.Now().Unix()
+			if now >= int64(token.Exp) {
+				log.Printf("[ERROR] JWT token expired: exp=%d, now=%d", token.Exp, now)
+				return emptyToken, "", fmt.Errorf("JWT token expired")
+			}
+		}
+
+		// Verify JWT signature if we have an issuer
+		if len(token.Iss) > 0 {
+			// Get JWKS to verify signature
+			config, err := fetchWellKnownConfig(ctx, token.Iss)
+			if err != nil {
+				log.Printf("[WARNING] Failed to fetch well-known config for JWT validation: %s", err)
+				// Continue anyway - userinfo call will validate the token
+			} else {
+				if jwksURI, ok := config["jwks_uri"].(string); ok {
+					// Extract kid from JWT header
+					headerBytes, _ := base64.RawURLEncoding.DecodeString(outerSplit[0])
+					var header struct {
+						Kid string `json:"kid"`
+						Alg string `json:"alg"`
+					}
+					json.Unmarshal(headerBytes, &header)
+
+					if len(header.Kid) > 0 {
+						// Get public key and verify
+						publicKey, err := getPublicKeyFromJWKS(ctx, jwksURI, header.Kid)
+						if err != nil {
+							log.Printf("[WARNING] Failed to get public key for JWT validation: %s", err)
+						} else {
+							// Verify the signature
+							signatureBytes, _ := base64.RawURLEncoding.DecodeString(outerSplit[2])
+							message := outerSplit[0] + "." + outerSplit[1]
+
+							// Create hash of the message
+							hash := crypto.SHA256
+							h := hash.New()
+							h.Write([]byte(message))
+							hashed := h.Sum(nil)
+
+							// Verify signature
+							err = rsa.VerifyPKCS1v15(publicKey, hash, hashed, signatureBytes)
+							if err != nil {
+								log.Printf("[ERROR] JWT signature validation failed: %s", err)
+								return emptyToken, "", fmt.Errorf("JWT signature validation failed")
+							}
+							log.Printf("[DEBUG] JWT signature validated successfully")
+						}
+					}
+				}
+			}
+		}
+
+		// If we have an access token, enhance with userinfo data
+		if len(accessToken) > 0 && len(token.Iss) > 0 {
+			userInfo, err := fetchUserInfoFromToken(ctx, accessToken, token.Iss)
+			if err != nil {
+				log.Printf("[WARNING] Failed to fetch userinfo (continuing anyway): %s", err)
+			} else {
+				// Populate additional fields from userinfo
+				if email, ok := userInfo["email"].(string); ok && len(token.Email) == 0 {
+					token.Email = email
+				}
+				if sub, ok := userInfo["sub"].(string); ok && len(token.Sub) == 0 {
+					token.Sub = sub
+				}
+			}
+		}
+
+		// Process nonce to extract org and challenge
 		if len(token.Nonce) > 0 {
 			parsedState, err := base64.StdEncoding.DecodeString(token.Nonce)
 			if err != nil {
-				log.Printf("[ERROR] Failed state split: %s", err)
+				log.Printf("[ERROR] Failed to decode nonce: %s", err)
+				return emptyToken, "", fmt.Errorf("failed to decode nonce")
 			}
 
-			foundOrg := ""
-			foundChallenge := ""
 			stateSplit := strings.Split(string(parsedState), "&")
 			regexPattern := `EXTRA string=([A-Za-z0-9~.]+)`
 			re := regexp.MustCompile(regexPattern)
+
 			for _, innerstate := range stateSplit {
 				itemsplit := strings.SplitN(innerstate, "=", 2)
 				if len(itemsplit) <= 1 {
-					log.Printf("[WARNING] No key:value: %s", innerstate)
 					continue
 				}
 
 				key := strings.TrimSpace(itemsplit[0])
 				value := strings.TrimSpace(itemsplit[1])
-				if itemsplit[0] == "org" {
+
+				if key == "org" {
 					foundOrg = value
 				}
 
 				if key == "challenge" {
-					// Extract the "extra string" value from the challenge value
 					matches := re.FindStringSubmatch(value)
 					if len(matches) > 1 {
-						extractedString := matches[1]
-						foundChallenge = extractedString
-						log.Printf("Extracted 'extra string' value is: %s", extractedString)
+						foundChallenge = matches[1]
+						log.Printf("[DEBUG] Extracted challenge: %s", foundChallenge)
 					} else {
-						foundChallenge = strings.TrimSpace(itemsplit[1])
-						log.Printf("No 'extra string' value found in challenge: %s", value)
+						foundChallenge = strings.TrimSpace(value)
 					}
 				}
 			}
 
 			if len(foundOrg) == 0 {
-				log.Printf("[ERROR] No org specified in state (2)")
-				return IdTokenCheck{}, err
+				log.Printf("[ERROR] No org specified in nonce")
+				return emptyToken, "", fmt.Errorf("no org specified in nonce")
 			}
+
 			org, err := GetOrg(ctx, foundOrg)
 			if err != nil {
-				log.Printf("[WARNING] Error getting org in OpenID (2): %s", err)
-				return IdTokenCheck{}, err
+				log.Printf("[ERROR] Failed to get org: %s", err)
+				return emptyToken, "", err
 			}
-			// Validating the user itself
-			if token.Aud == org.SSOConfig.OpenIdClientId || foundChallenge == org.SSOConfig.OpenIdClientSecret {
-				log.Printf("[DEBUG] Correct token aud & challenge - successful login!")
+
+			// Validate audience matches client ID
+			if token.Aud == org.SSOConfig.OpenIdClientId {
+				log.Printf("[DEBUG] Token validated successfully - aud matches client ID")
 				token.Org = *org
-				return token, nil
+				return token, foundChallenge, nil
 			} else {
+				log.Printf("[ERROR] Token aud (%s) doesn't match client ID (%s)", token.Aud, org.SSOConfig.OpenIdClientId)
+				return emptyToken, "", fmt.Errorf("audience mismatch")
 			}
+		}
+
+		// If no nonce but token is otherwise valid, return it
+		// This handles cases where nonce isn't used
+		return token, "", nil
+	}
+
+	return emptyToken, "", fmt.Errorf("couldn't verify token")
+}
+
+func getPublicKeyFromJWKS(ctx context.Context, jwksURL, kid string) (*rsa.PublicKey, error) {
+	log.Printf("[DEBUG] Fetching public key from JWKS URL: %s", jwksURL)
+
+	// Fetch JWKS
+	resp, err := http.Get(jwksURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("JWKS endpoint returned status %d", resp.StatusCode)
+	}
+
+	// Parse JWKS response
+	var jwks struct {
+		Keys []struct {
+			Kty string `json:"kty"`
+			Kid string `json:"kid"`
+			Use string `json:"use"`
+			N   string `json:"n"`
+			E   string `json:"e"`
+		} `json:"keys"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		return nil, fmt.Errorf("failed to decode JWKS: %w", err)
+	}
+
+	// Find the key with matching kid
+	for _, key := range jwks.Keys {
+		if key.Kid == kid && key.Kty == "RSA" {
+			// Decode base64url encoded n and e values
+			nBytes, err := base64.RawURLEncoding.DecodeString(key.N)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode n: %w", err)
+			}
+
+			eBytes, err := base64.RawURLEncoding.DecodeString(key.E)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode e: %w", err)
+			}
+
+			// Convert to big integers
+			n := new(big.Int).SetBytes(nBytes)
+			e := new(big.Int).SetBytes(eBytes)
+
+			// Create RSA public key
+			pubKey := &rsa.PublicKey{
+				N: n,
+				E: int(e.Int64()),
+			}
+
+			return pubKey, nil
 		}
 	}
 
-	return IdTokenCheck{}, errors.New("Couldn't verify nonce")
+	return nil, fmt.Errorf("key with kid %s not found in JWKS", kid)
+}
+
+func fetchWellKnownConfig(ctx context.Context, issuer string) (map[string]interface{}, error) {
+	// Clean issuer URL and construct well-known endpoint
+	issuer = strings.TrimSuffix(issuer, "/")
+	wellKnownURL := issuer + "/.well-known/openid-configuration"
+
+	resp, err := http.Get(wellKnownURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch well-known config from %s: %w", wellKnownURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("well-known endpoint returned status %d", resp.StatusCode)
+	}
+
+	var config map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
+		return nil, fmt.Errorf("failed to decode well-known config: %w", err)
+	}
+
+	return config, nil
+}
+
+func fetchUserInfoFromToken(ctx context.Context, accessToken string, issuer string) (map[string]interface{}, error) {
+	// Get well-known config to find userinfo endpoint
+	config, err := fetchWellKnownConfig(ctx, issuer)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get OIDC config: %w", err)
+	}
+
+	// Get userinfo endpoint
+	userinfoEndpoint, ok := config["userinfo_endpoint"].(string)
+	if !ok {
+		return nil, fmt.Errorf("no userinfo_endpoint in OIDC config")
+	}
+
+	// Handle Microsoft Azure AD userinfo endpoint issues
+	if strings.Contains(userinfoEndpoint, "login.microsoftonline.com") {
+		userinfoEndpoint = "https://graph.microsoft.com/v1.0/me"
+		log.Printf("Using Microsoft Graph /me endpoint instead of: %s", userinfoEndpoint)
+	}
+
+	// Call userinfo/me endpoint with access token
+	req, err := http.NewRequest("GET", userinfoEndpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create userinfo request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call userinfo endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return nil, fmt.Errorf("userinfo endpoint returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse userinfo response
+	var userInfo map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&userInfo); err != nil {
+		return nil, fmt.Errorf("failed to decode userinfo response: %w", err)
+	}
+
+	// Normalize Microsoft Graph fields to standard OIDC fields
+	if mail, ok := userInfo["mail"].(string); ok && userInfo["email"] == nil {
+		userInfo["email"] = mail
+	}
+	if displayName, ok := userInfo["displayName"].(string); ok && userInfo["name"] == nil {
+		userInfo["name"] = displayName
+	}
+	if id, ok := userInfo["id"].(string); ok && userInfo["sub"] == nil {
+		userInfo["sub"] = id
+	}
+
+	return userInfo, nil
 }
 
 func IsRunningInCluster() bool {
