@@ -849,6 +849,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(200)
 	resp.Write(platformData)
 }
@@ -1299,7 +1300,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	}
 
 	updateOpsCache(workflowHealth)
-	timeout := time.After(5 * time.Minute)
+	timeout := time.After(10 * time.Minute)
 
 	// 3. Check if workflow ran successfully
 	// ping /api/v1/streams/results/<execution_id> while workflowHealth.RunFinished is false
