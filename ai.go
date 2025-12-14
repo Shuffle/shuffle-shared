@@ -1357,7 +1357,16 @@ func FixContentOutput(contentOutput string) string {
 			log.Printf("[WARNING] Failed to marshal indent tmpMap in FixContentOutput (1): %s", err)
 		}
 	} else {
-		log.Printf("[WARNING] Failed to unmarshal tmpMap in FixContentOutput (2): %s => %s", string(contentOutput), err)
+		arrayMap := []interface{}{}
+		newErr := json.Unmarshal([]byte(contentOutput), &arrayMap)
+		if newErr != nil {
+			log.Printf("[WARNING] Failed to unmarshal tmpMap in FixContentOutput (2) - both map & interface list: %s => %s => %s", string(contentOutput), err, newErr)
+		} else {
+			marshalled, err := json.MarshalIndent(arrayMap, "", "  ")
+			if err == nil {
+				contentOutput = string(marshalled)
+			}
+		}
 	}
 
 	return contentOutput
@@ -6629,7 +6638,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	ctx := context.Background()
 
 	// Create the OpenAI body struct
-	systemMessage := `INTRODUCTION: 
+	systemMessage := `INTRODUCTION 
 You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%, is not the last action AND it can't be done with an API. These actions are a last resort. Use Markdown with focus on human readability. Do NOT ask about networking or authentication unless explicitly specified. 
 
 END INTRODUCTION
@@ -6642,6 +6651,7 @@ SINGUL ACTIONS:
 	openaiAllowedApps := []string{"openai"}
 	runOpenaiRequest := false
 	appname := ""
+	inputActionString := ""
 
 	decidedApps := []string{}
 
@@ -6663,14 +6673,18 @@ SINGUL ACTIONS:
 		}
 
 		if param.Name == "action" {
+			inputActionString = param.Value
 			for _, actionStr := range strings.Split(param.Value, ",") {
 				actionStr = strings.ToLower(strings.TrimSpace(actionStr))
-				log.Printf("STR: '%s'", actionStr)
 				if actionStr == "" || actionStr == "nothing" {
 					continue
 				}
 
-				log.Printf("ACTIONSTR: '%s'", actionStr)
+
+				if debug { 
+					log.Printf("ACTIONSTR: '%s'", actionStr)
+				}
+
 				if strings.HasPrefix(actionStr, "app:") {
 
 					trimmedActionStr := strings.TrimPrefix(actionStr, "app:")
@@ -6695,8 +6709,10 @@ SINGUL ACTIONS:
 				}
 			}
 
-			log.Printf("PARAM: %s", param.Value)
-			log.Printf("Systemmessage: %s", systemMessage)
+			if debug { 
+				log.Printf("PARAM: %s", param.Value)
+				log.Printf("Systemmessage: %s", systemMessage)
+			}
 
 			systemMessage += "\n\n"
 		}
@@ -7013,7 +7029,7 @@ END STANDALONE ACTIONS
 ---
 DECISION FORMATTING 
 
-Available categories: %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "<tool name>", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
+Available categories: %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "tool name", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
 
 END DECISION FORMATTING
 ---
@@ -7030,7 +7046,7 @@ RULES:
 * Fields is an array based on key: value pairs. Don't add unnecessary fields. If using 'ask', the key is 'question' and the value is the question to ask. If using 'answer', the key is 'output' and the value is what to answer.
 * NEVER skip executing an action, even if some details are unclear. Fill missing fields only with safe defaults, but still execute.
 * NEVER ask the user for clarification, confirmations, or extra details unless it is absolutely unavoidable.
-* If realtime data is required, ALWAYS use an Singul APIs to get it.
+* If realtime data is required, ALWAYS use APIs to get it.
 * ALWAYS output the same language as the original question. 
 * ALWAYS format questions using Markdown formatting, with a focus on human readability. 
 
@@ -7041,9 +7057,9 @@ RULES:
 * NEVER ask for usernames, API keys, passwords, or authentication information.
 * NEVER ask for confirmation before performing an action.
 * NEVER skip execution because of minor missing details—fill them with reasonable defaults (e.g., default units or formats) and proceed.
+* If API action, ALWAYS include the url, method, headers and body when using an API action
 * Do NOT add unnecessary fields; only include fields required for the action.
-* Fields can reference previous action outputs using {{action_name}}. Example: {"body": "{{previous_action.field}}"}.
-* If questions are absolutely required, combine all into one "ask" action with multiple "question" fields. Do NOT create multiple separate decisions.
+* If questions are absolutely required, combine all into one "ask" action with multiple "question" fields. Do NOT create multiple separate ones.
 * Retry actions if the result was irrelevant. After three retries of a failed decision, add the finish decision. 
 * If any decision has failed, add the finish decision with details about the failure.
 * If a formatting is specified for the output, use it exactly how explained for the finish decision.
@@ -7471,6 +7487,8 @@ FINALISING:
 			StartedAt:   time.Now().Unix(),
 
 			Memory: memorizationEngine,
+
+			AllowedActions: strings.Split(inputActionString, ","),
 		}
 
 		if len(errorMessage) > 0 {
