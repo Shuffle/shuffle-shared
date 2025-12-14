@@ -6767,6 +6767,21 @@ SINGUL ACTIONS:
 			previousAnswers := ""
 			relevantDecisions := []AgentDecision{}
 
+			// Check for existing RUNNING ask decisions - if found, return existing state without creating new decisions
+			hasRunningAsk := false
+			for _, mappedDecision := range mappedResult.Decisions {
+				if mappedDecision.RunDetails.Status == "RUNNING" && (mappedDecision.Action == "ask" || mappedDecision.Action == "question") {
+					log.Printf("[DEBUG][%s] Found existing RUNNING ask decision at index %d - returning existing state", execution.ExecutionId, mappedDecision.I)
+					hasRunningAsk = true
+					break
+				}
+			}
+
+			// If there's a running ask decision, return the existing agent output without modification
+			if hasRunningAsk {
+				return startNode, nil
+			}
+
 			hasFailure := false
 			for _, mappedDecision := range mappedResult.Decisions {
 				if mappedDecision.RunDetails.Status == "FAILURE" {
