@@ -1097,6 +1097,7 @@ type Org struct {
 	CreatorOrg   string      `json:"creator_org" datastore:"creator_org"`
 	Branding     OrgBranding `json:"branding" datastore:"branding"`
 	Licensed     bool        `json:"licensed" datastore:"licensed"` //Track onprem license
+	OldOrg       bool        `json:"old_org" datastore:"old_org"`   // This is true for org older then 30 days
 }
 
 type Billing struct {

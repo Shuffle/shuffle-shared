@@ -1149,6 +1149,16 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if project.Environment == "onprem" && org.Created > 0 {
+
+		nowUnix := time.Now().Unix()
+
+		thirtyDays := int64(30 * 24 * 60 * 60)
+		isAfter30Days := nowUnix >= org.Created+thirtyDays
+
+		org.OldOrg = isAfter30Days
+	}
+
 	// Make sure to add all orgs that are childs IF you have access
 	org.ChildOrgs = []OrgMini{}
 
