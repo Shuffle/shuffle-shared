@@ -22086,6 +22086,11 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 		return errors.New(fmt.Sprintf("Bad length of trigger: %d (probably normal app)", len(execution.Workflow.Triggers)))
 	}
 
+	if baseExecution.Status == "FINISHED" || baseExecution.Status == "ABORTED" || baseExecution.Status == "FAILURE" {
+		log.Printf("[INFO][%s] Execution is already finished, not overriding", execution.ExecutionId)
+		return errors.New("Execution is already finished, not overriding")
+	}
+
 	if len(baseExecution.Results) > len(execution.Results) {
 		if shouldReset == true {
 			// Letting it pass and override. This is to ensure worker can override
