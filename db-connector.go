@@ -14160,6 +14160,9 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 
 			log.Printf("[DEBUG] Multiple memcached servers detected. Split into %#v", newMemcached)
 			mc = gomemcache.New(newMemcached...)
+		} else {
+			log.Printf("[DEBUG] Initializing single memcached client with memcached url: %s", memcached)
+			mc = gomemcache.New(memcached)
 		}
 
 		mc.Timeout = 10 * time.Second
