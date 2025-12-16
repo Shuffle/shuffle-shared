@@ -14469,10 +14469,8 @@ func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (strin
 	codeChallenge := verifier.CodeChallengeS256()
 
 	if !signIn {
-		// Initialize slice if needed
 		user.InitSSOInfos()
 
-		// Store SSO info per org (preserving existing Sub if present)
 		existingSSOInfo, _ := user.GetSSOInfo(org.Id)
 		user.SetSSOInfo(org.Id, SSOInfo{
 			Sub:             existingSSOInfo.Sub, // Keep existing Sub for this org
@@ -14482,7 +14480,7 @@ func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (strin
 		})
 
 		ctx := context.Background()
-		err := SetUser(ctx, &user, false)
+		err := SetUser(ctx, &user, true)
 		if err != nil {
 			return "", err
 		}
@@ -22597,6 +22595,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					continue
 				}
 				ssoInfo, exists := fullUser.GetSSOInfo(org.Id)
+				log.Printf("[DEBUG] SSOInfo exists: %t", exists)
 				if exists && ssoInfo.CodeVerifier != "" {
 					verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
 					if verifierObj.CodeChallengeS256() == foundChallenge {
@@ -22766,6 +22765,8 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
+				// don't be confused. "AutoProvision" acts like "DisableAutoProvision"
+				// it's super stupid.
 				if (!foundOrgInUser || !foundUserInOrg) && org.SSOConfig.AutoProvision {
 					log.Printf("[WARNING] User %s (%s) is not in org %s (%s). Please contact the administrator - (1)", user.Username, user.Id, org.Name, org.Id)
 					resp.WriteHeader(401)
@@ -24623,7 +24624,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 
 				// Handles agentic run continues
-				// This is if shuffler.io/agents  => questions are answered 
+				// This is if shuffler.io/agents  => questions are answered
 				if agentic {
 					log.Printf("[INFO][%s] Should fix the decision by injecting the values and continuing to the next step! :3", oldExecution.ExecutionId)
 
@@ -24656,7 +24657,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							findContinue = true
 						}
 
-						if debug { 
+						if debug {
 							log.Printf("[DEBUG][%s] Found decision '%s' inside the agentic workflow to update. Exec arg: %#v", workflowExecution.ExecutionId, decisionId, execArg)
 						}
 
@@ -24726,7 +24727,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								continue
 							}
 
-							if debug { 
+							if debug {
 								log.Printf("[DEBUG] Mapping field %d to value %s", fieldNumber, value)
 							}
 
@@ -24778,13 +24779,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						}
 					}
 
-					// This is a weird if statement, due to it being used for 
+					// This is a weird if statement, due to it being used for
 					// multiple purposes around field change & decision id finding
 
 					// FIXME: Not sure if this is correct to catch bad decision IDs
 					//if !fieldsChanged && cleanupFailures {
 					if !fieldsChanged {
-					//if cleanupFailures {
+						//if cleanupFailures {
 						return workflowExecution, ExecInfo{}, fmt.Sprintf("Could not find fields for decision '%s'. Did you fill them in?", decisionId), errors.New(fmt.Sprintf("Could not find fields decision '%s'. Did you fill them in?", decisionId))
 					}
 
