@@ -692,7 +692,7 @@ type SSOInfo struct {
 	Sub             string    `json:"sub"`
 	OrgID           string    `json:"org_id"`
 	ClientID        string    `json:"client_id"`
-	CodeVerifier    string    `json:"code_verifier"`    // PKCE code verifier
+	CodeVerifier    string    `json:"code_verifier"` // PKCE code verifier
 	ChallengeExpiry time.Time `json:"challenge_expiry"`
 }
 
@@ -3091,9 +3091,11 @@ type SSOConfig struct {
 	OpenIdAuthorization string `json:"openid_authorization" datastore:"openid_authorization"`
 	OpenIdToken         string `json:"openid_token" datastore:"openid_token"`
 	SSORequired         bool   `json:"SSORequired" datastore:"SSORequired"`
-	AutoProvision       bool   `json:"auto_provision" datastore:"auto_provision"`
-	RoleRequired        bool   `json:"role_required" datastore:"role_required"`
-	SkipSSOForAdmins    bool   `json:"skip_sso_for_admins" datastore:"skip_sso_for_admins"`
+	// i have a distinct hatered for this name.
+	// says "auto_provision" but all logic treats it as disable_auto_provision.
+	AutoProvision    bool `json:"auto_provision" datastore:"auto_provision"`
+	RoleRequired     bool `json:"role_required" datastore:"role_required"`
+	SkipSSOForAdmins bool `json:"skip_sso_for_admins" datastore:"skip_sso_for_admins"`
 }
 
 type SamlRequest struct {
@@ -4579,15 +4581,15 @@ type AgentOutput struct {
 	// For easy testing
 	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
 	// For tracking of details parent<->child
-	StartedAt     int64  `json:"started_at,omitempty" datastore:"started_at"`
-	CompletedAt   int64  `json:"completed_at,omitempty" datastore:"completed_at"`
-	ExecutionId   string `json:"execution_id,omitempty" datastore:"execution_id"`
-	NodeId        string `json:"node_id,omitempty" datastore:"node_id"`
-	Memory        string `json:"memory,omitempty" datastore:"memory"`
-	Input         string `json:"input" datastore:"input"`
-	OriginalInput string `json:"original_input,omitempty" datastore:"original_input"`
+	StartedAt      int64    `json:"started_at,omitempty" datastore:"started_at"`
+	CompletedAt    int64    `json:"completed_at,omitempty" datastore:"completed_at"`
+	ExecutionId    string   `json:"execution_id,omitempty" datastore:"execution_id"`
+	NodeId         string   `json:"node_id,omitempty" datastore:"node_id"`
+	Memory         string   `json:"memory,omitempty" datastore:"memory"`
+	Input          string   `json:"input" datastore:"input"`
+	OriginalInput  string   `json:"original_input,omitempty" datastore:"original_input"`
 	AllowedActions []string `json:"allowed_actions,omitempty" datastore:"allowed_actions"`
-	Output        string `json:"output,omitempty" datastore:"output"`
+	Output         string   `json:"output,omitempty" datastore:"output"`
 }
 
 type HTTPWrapper struct {
