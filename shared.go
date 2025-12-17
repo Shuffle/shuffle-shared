@@ -958,6 +958,9 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// clean getOrg invites
+	org.Invites = []string{}
+
 	if org.OrgAuth.Token == "" {
 		org.OrgAuth.Token = uuid.NewV4().String()
 		org.OrgAuth.Expires = time.Now().AddDate(0, 0, 1)
