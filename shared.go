@@ -1152,6 +1152,16 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if project.Environment == "onprem" && org.Created > 0 {
+
+		nowUnix := time.Now().Unix()
+
+		thirtyDays := int64(30 * 24 * 60 * 60)
+		isAfter30Days := nowUnix >= org.Created+thirtyDays
+
+		org.OldOrg = isAfter30Days
+	}
+
 	// Make sure to add all orgs that are childs IF you have access
 	org.ChildOrgs = []OrgMini{}
 
@@ -20029,7 +20039,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err != nil {
-
+		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (get)", tmpData.Key, tmpData.OrgId)
 		// Doing a last resort search, e.g. to handle spaces and the like
 		allkeys, _, err := GetAllCacheKeys(ctx, org.Id, "", 150, "")
 		if err == nil {
@@ -20064,7 +20074,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(cacheData.PublicAuthorization) == 0 {
+	if len(cacheData.PublicAuthorization) == 0 && cacheData.Category != "protected" {
 		cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 		if len(tmpData.Category) > 0 && tmpData.Category != "default" {
 			cacheId = fmt.Sprintf("%s_%s", cacheId, tmpData.Category)
@@ -22085,6 +22095,11 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 
 	if len(baseExecution.Workflow.Triggers) != len(execution.Workflow.Triggers) {
 		return errors.New(fmt.Sprintf("Bad length of trigger: %d (probably normal app)", len(execution.Workflow.Triggers)))
+	}
+
+	if baseExecution.Status == "FINISHED" || baseExecution.Status == "ABORTED" || baseExecution.Status == "FAILURE" {
+		log.Printf("[INFO][%s] Execution is already finished, not overriding", execution.ExecutionId)
+		return errors.New("Execution is already finished, not overriding")
 	}
 
 	if len(baseExecution.Results) > len(execution.Results) {
@@ -33069,9 +33084,11 @@ func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 		return exec
 	}
 
-	if exec.Status == "FINISHED" || exec.Status == "ABORTED" {
-		return exec
-	}
+	// This doesn't matter as we are checking for 'sanitized' anyway
+	// This also makes it stop too early
+	//if exec.Status == "FINISHED" || exec.Status == "ABORTED" {
+	//	return exec
+	//}
 
 	protectedKeys, _, err := GetAllCacheKeys(context.Background(), exec.ExecutionOrg, "protected", 100, "")
 	if err != nil {
@@ -33080,11 +33097,11 @@ func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 	}
 
 	for resultKey, _ := range exec.Results {
-		if exec.Results[resultKey].Status != "FINISHED" && exec.Results[resultKey].Status != "SUCCESS" {
+		if exec.Results[resultKey].Sanitized {
 			continue
 		}
 
-		if exec.Results[resultKey].Sanitized {
+		if exec.Results[resultKey].Status != "FINISHED" && exec.Results[resultKey].Status != "SUCCESS" {
 			continue
 		}
 
@@ -33095,7 +33112,11 @@ func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 			} else if len(protectedKey.Value) > 2000000 {
 				exec.Results[resultKey].Result = strings.ReplaceAll(exec.Results[resultKey].Result, protectedKey.Value, "***")
 			} else {
-				exec.Results[resultKey].Result = SanitizeFuzzySubstring(exec.Results[resultKey].Result, protectedKey.Value, 2)
+				exec.Results[resultKey].Result = strings.ReplaceAll(exec.Results[resultKey].Result, protectedKey.Value, "***")
+
+				// FIXME: Should do more fuzzy sanitizing, but there are too
+				// many edgecases for it
+				//exec.Results[resultKey].Result = SanitizeFuzzySubstring(exec.Results[resultKey].Result, protectedKey.Value, 2)
 			}
 		}
 

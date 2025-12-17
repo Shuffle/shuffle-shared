@@ -13346,7 +13346,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 			// URL encode
 			datastoreId = url.QueryEscape(datastoreId)
-			if len(cacheData.PublicAuthorization) == 0 {
+			if len(cacheData.PublicAuthorization) == 0 && cacheData.Category != "protected" {
 				cacheData.PublicAuthorization = uuid.NewV4().String()
 			}
 
@@ -13764,7 +13764,7 @@ func SetDatastoreKeyRevision(ctx context.Context, cacheData CacheKeyData) error 
 	}
 
 	cacheData.Authorization = ""
-	if len(cacheData.PublicAuthorization) == 0 {
+	if len(cacheData.PublicAuthorization) == 0 && cacheData.Category != "protected" {
 		cacheData.PublicAuthorization = uuid.NewV4().String()
 	}
 
@@ -13830,7 +13830,7 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 	}
 
 	cacheData.Authorization = ""
-	if len(cacheData.PublicAuthorization) == 0 {
+	if len(cacheData.PublicAuthorization) == 0 && cacheData.Category != "protected" {
 		cacheData.PublicAuthorization = uuid.NewV4().String()
 	}
 
@@ -13957,7 +13957,9 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 
 	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
 	if len(category) > 0 && category != "default" {
-		if !strings.HasSuffix(id, category) {
+		// FIXME: If they key itself is 'test_protected' and category 
+		// is 'protected' this breaks... Keeping it for now.
+		if !strings.HasSuffix(id, fmt.Sprintf("_%s", category)) {
 			id = fmt.Sprintf("%s_%s", id, category)
 		}
 	}
@@ -14017,9 +14019,8 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 		cacheData = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
-
 		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
-			//log.Printf("ERROR: Failed getting cache key %s: %s", id, err)
+			//log.Printf("[WARNING]: Failed getting cache key %s: %s", id, err)
 
 			if strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[ERROR] Error in cache key loading. Migrating org cache to new handler (3): %s", err)
@@ -14090,7 +14091,9 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 		newValue, err := HandleKeyDecryption([]byte(cacheData.Value), encryptionKey)
 		if err == nil {
 			cacheData.Value = string(newValue)
-			cacheData.Encrypted = false
+
+			// Not removing this as it just causes confusion
+			//cacheData.Encrypted = false
 		}
 	}
 
@@ -14161,6 +14164,9 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 
 			log.Printf("[DEBUG] Multiple memcached servers detected. Split into %#v", newMemcached)
 			mc = gomemcache.New(newMemcached...)
+		} else {
+			log.Printf("[DEBUG] Initializing single memcached client with memcached url: %s", memcached)
+			mc = gomemcache.New(memcached)
 		}
 
 		mc.Timeout = 10 * time.Second
