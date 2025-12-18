@@ -5440,7 +5440,9 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			}
 		*/
 
-		log.Printf("[DEBUG] Found github username '%s'. User ID to look for: %s", foundUser.PublicProfile.GithubUsername, t.UserId)
+		if len(foundUser.PublicProfile.GithubUsername) > 0 {
+			log.Printf("[DEBUG] Found github username '%s'. User ID to look for: %s", foundUser.PublicProfile.GithubUsername, t.UserId)
+		}
 
 		username := foundUser.PublicProfile.GithubUsername
 		creator, err := HandleAlgoliaCreatorSearch(ctx, username)
@@ -5515,6 +5517,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		// 3. Make sure it's ONLY changing orgs based on parent org
 
 		// Check which ones the current user has access to
+		if debug { 
+			log.Printf("[DEBUG] PRE PRE orgs for %s (%s) is len(%d). Input length: %d", foundUser.Username, foundUser.Id, len(foundUser.Orgs), len(t.Suborgs))
+		}
+
 		parentOrgId := userInfo.ActiveOrg.Id
 		newSuborgs := []string{}
 		for _, suborg := range t.Suborgs {
@@ -5530,6 +5536,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if org.CreatorOrg != parentOrgId {
+				if debug { 
+					log.Printf("[ERROR] Skipping org %s as it is not a suborg of parent org %s for user %s (%s).", suborg, parentOrgId, userInfo.Username, userInfo.Id)
+				}
+
 				continue
 			}
 
@@ -5540,8 +5550,16 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
+			if userInfo.SupportAccess && strings.HasSuffix(userInfo.Username, "@shuffler.io") {
+				found = true
+			}
+
 			if found {
 				newSuborgs = append(newSuborgs, suborg)
+			} else {
+				if debug { 
+					log.Printf("[ERROR] Skipping adding to org %s as user %s (%s) can't edit this one.", suborg, userInfo.Username, userInfo.Id)
+				}
 			}
 		}
 
@@ -5554,18 +5572,20 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if ArrayContains(foundUser.Orgs, suborg) {
-				log.Printf("[DEBUG] Skipping %s as it already exists", suborg)
 				continue
 			}
 
-			if !ArrayContains(userInfo.Orgs, suborg) {
+			if !ArrayContains(userInfo.Orgs, suborg) && !userInfo.SupportAccess {
 				log.Printf("[ERROR] Skipping org %s as user %s (%s) can't edit this one. Should never happen unless direct API usage.", suborg, userInfo.Username, userInfo.Id)
 				continue
 			}
 
 			foundOrg, err := GetOrg(ctx, suborg)
 			if err != nil {
-				log.Printf("[WARNING] Failed to get suborg in user edit for %s (%s): %s", foundUser.Username, foundUser.Id, err)
+				if !strings.Contains(err.Error(), "no such entity") {
+					log.Printf("[WARNING] Failed to get suborg in user edit for %s (%s): %s", foundUser.Username, foundUser.Id, err)
+				}
+
 				continue
 			}
 
@@ -5589,6 +5609,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		//log.Printf("[DEBUG] Orgs to be added: %s. Existing: %s.", addedOrgs, foundUser.Orgs)
 
 		// Removed for now due to multi-org chain deleting you from other org chains
+		if debug { 
+			log.Printf("[DEBUG] Pre orgs for %s (%s) is len(%d)", foundUser.Username, foundUser.Id, len(foundUser.Orgs))
+		}
+
 		newUserOrgs := []string{}
 		for _, suborg := range foundUser.Orgs {
 			if suborg == userInfo.ActiveOrg.Id {
@@ -5598,7 +5622,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 			foundOrg, err := GetOrg(ctx, suborg)
 			if err != nil {
-				log.Printf("[WARNING] Failed to get suborg in user edit (2) for %s (%s): %s", foundUser.Username, foundUser.Id, err)
+				if !strings.Contains(err.Error(), "no such entity") && !strings.Contains(err.Error(), "Org doesn't exist") {
+					log.Printf("[WARNING] Failed to get suborg in user edit (2) for %s (%s): %s", foundUser.Username, foundUser.Id, err)
+				}
+
 				newUserOrgs = append(newUserOrgs, suborg)
 				continue
 			}
@@ -5612,9 +5639,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			for _, item := range foundOrg.ChildOrgs {
 				orgRelevancies = append(orgRelevancies, item.Id)
 			}
+
 			if !ArrayContains(orgRelevancies, userInfo.ActiveOrg.Id) {
 				newUserOrgs = append(newUserOrgs, suborg)
-				log.Printf("[DEBUG] Org %s (%s) is not relevant to parent org %s (%s). Skipping.", foundOrg.Name, foundOrg.Id, userInfo.ActiveOrg.Name, userInfo.ActiveOrg.Id)
+				log.Printf("[DEBUG] Org '%s' (%s) is not relevant to parent org %s (%s). Skipping.", foundOrg.Name, foundOrg.Id, userInfo.ActiveOrg.Name, userInfo.ActiveOrg.Id)
 				continue
 			}
 
@@ -5630,7 +5658,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 					//log.Printf("[DEBUG] Reappending org %s", suborg)
 					newUserOrgs = append(newUserOrgs, suborg)
 				} else {
-					log.Printf("[DEBUG] Skipping org %s", suborg)
+					log.Printf("[DEBUG] Skipping org '%s'", suborg)
 				}
 
 				continue
@@ -9220,6 +9248,18 @@ func CleanCreds(user *User) *User {
 	user.VerificationToken = ""
 	user.ValidatedSessionOrgs = []string{}
 	//user.Orgs = []string{}
+	handledOrgs := []string{}
+
+	// Quick deduplication. 
+	for _, org := range user.Orgs {
+		if ArrayContains(handledOrgs, org) {
+			continue
+		}
+
+		handledOrgs = append(handledOrgs, org)
+	}
+	user.Orgs = handledOrgs
+
 	user.Authentication = []UserAuth{}
 	user.PrivateApps = []WorkflowApp{}
 
@@ -9340,8 +9380,14 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			// Only add IF the admin querying it has access, meaning only show what you yourself have access toMFAInfo
 			allOrgs := []string{}
+			handledOrgs := []string{}
 			for _, orgname := range foundUser.Orgs {
 				found := false
+				if ArrayContains(handledOrgs, orgname) {
+					continue
+				}
+
+				handledOrgs = append(handledOrgs, orgname)
 
 				for _, userOrg := range user.Orgs {
 					if userOrg == orgname {
@@ -9367,6 +9413,9 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			item.Orgs = append(item.Orgs, user.ActiveOrg.Id)
 		}
 
+		if user.SupportAccess {
+			item.Orgs = foundUser.Orgs
+		}
 		newUsers = append(newUsers, item)
 	}
 
@@ -9421,8 +9470,15 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 					foundUser, err := GetUser(ctx, orgUser.Id)
 					if err == nil {
 						allOrgs := []string{}
+						handledOrgs := []string{}
 						for _, orgname := range foundUser.Orgs {
 							found := false
+
+							if ArrayContains(handledOrgs, orgname) {
+								continue
+							}
+
+							handledOrgs = append(handledOrgs, orgname)
 
 							for _, userOrg := range user.Orgs {
 								if userOrg == orgname {
@@ -9443,11 +9499,16 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 						orgUser.Active = foundUser.Active
 						orgUser.Orgs = allOrgs
 					}
+
+					if user.SupportAccess {
+						orgUser.Orgs = foundUser.Orgs
+					}
 				}
 
 				if len(orgUser.Orgs) == 0 {
 					orgUser.Orgs = append(orgUser.Orgs, user.ActiveOrg.Id)
 				}
+
 
 				newUsers = append(newUsers, orgUser)
 			}

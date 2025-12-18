@@ -4089,7 +4089,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
 			} else {
-				log.Printf("[ERROR] Problem in org loading (2) for %s: %s", key, err)
 				if strings.Contains(err.Error(), `no such entity`) && project.CacheDb {
 					neworg, err := json.Marshal(curOrg)
 					if err != nil {
@@ -4101,7 +4100,10 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 					if err != nil {
 						log.Printf("[ERROR] Failed updating org cache (3): %s", err)
 					}
+				} else {
+					log.Printf("[ERROR] Problem in org loading (2) for %s: %s", key, err)
 				}
+
 				//orgErr = err
 				return &Org{}, err
 			}
@@ -6216,7 +6218,10 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 		go func(orgId string) {
 			org, err := GetOrg(ctx, orgId)
 			if err != nil {
-				log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
+				if !strings.Contains(err.Error(), "doesn't exist") {
+					log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
+				}
+					
 				return
 			}
 
