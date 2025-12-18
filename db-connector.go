@@ -4461,7 +4461,7 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 		}
 	}
 
-	if org.SSOConfig.SSOEntrypoint != "" && org.Defaults.NotificationWorkflow != "" {
+	if org.SSOConfig.SSORequired {
 		allSteps[3].Done = true
 	} else {
 		allSteps[3].Link = "/admin?admin_tab=organization"
@@ -12681,7 +12681,7 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 
 		return orgs, nil
 	} else {
-		q := datastore.NewQuery(nameKey).Limit(100)
+		q := datastore.NewQuery(nameKey).Limit(400)
 
 		_, err := project.Dbclient.GetAll(ctx, q, &orgs)
 		if err != nil {
@@ -14219,6 +14219,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 			return project, errors.New(fmt.Sprintf("Bad status code from ES: %d", res.StatusCode))
 		} else {
 			//log.Printf("\n\n[INFO] Should check for SSO during setup - finding main org\n\n")
+			/*
 			orgs, err := GetAllOrgs(ctx)
 			if err == nil {
 				for _, org := range orgs {
@@ -14231,6 +14232,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 			} else {
 				log.Printf("[WARNING] Error loading orgs: %s", err)
 			}
+			*/
 		}
 	} else {
 		// Fix potential cloud init problems here

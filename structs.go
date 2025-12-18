@@ -3097,10 +3097,12 @@ type SSOConfig struct {
 	SSOCertificate      string `json:"sso_certificate" datastore:"sso_certificate"`
 	SSOLongCertificate  string `json:"sso_long_certificate" datastore:"sso_long_certificate,noindex"`
 	SSOCertificateHash  string `json:"sso_certificate_hash" datastore:"sso_certificate_hash"`
+
 	OpenIdClientId      string `json:"client_id" datastore:"client_id"`
 	OpenIdClientSecret  string `json:"client_secret" datastore:"client_secret"`
 	OpenIdAuthorization string `json:"openid_authorization" datastore:"openid_authorization"`
 	OpenIdToken         string `json:"openid_token" datastore:"openid_token"`
+
 	SSORequired         bool   `json:"SSORequired" datastore:"SSORequired"`
 	// i have a distinct hatered for this name.
 	// says "auto_provision" but all logic treats it as disable_auto_provision.
