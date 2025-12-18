@@ -683,7 +683,6 @@ type User struct {
 
 	// Old web3 integration
 	EthInfo EthInfo `datastore:"eth_info" json:"eth_info"`
-
 	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
 }
 
@@ -3035,11 +3034,9 @@ type Oauth2Resp struct {
 }
 
 type OpenidUserinfo struct {
-	Sub           string   `json:"sub"`
-	Email         string   `json:"email"`
-	Roles         []string `json:"roles"`
-	EmailVerified bool     `json:"email_verified"`
-	CodeChallenge string   `json:"code_challenge"`
+	Sub   string   `json:"sub"`
+	Email string   `json:"email"`
+	Roles []string `json:"roles"`
 }
 
 type OpenidResp struct {
@@ -4033,7 +4030,7 @@ type SchemalessOutput struct {
 
 	// Optional. Used for error handling.
 	RawResponse interface{} `json:"raw_response,omitempty"`
-	Retries     int         `json:"retries,omitempty"`
+	Retries int    `json:"retries,omitempty"`
 }
 
 type CategoryActionFieldOverride struct {
