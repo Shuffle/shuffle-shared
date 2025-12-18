@@ -1184,6 +1184,18 @@ type DatastoreKeyMini struct {
 	Existed bool   `json:"existed" datastore:"existed"` // If the key existed before the update
 }
 
+type CacheKeyDataMini struct {
+	Category      string `json:"category" datastore:"category"`
+	Key           string `json:"key" datastore:"Key"`
+	Value         string `json:"value" datastore:"Value,noindex"`
+
+	OrgId         string `json:"org_id,omitempty" datastore:"OrgId"`
+	ExecutionId   string `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	Authorization string `json:"authorization,omitempty" datastore:"Authorization"`
+	SuborgDistribution  []string `json:"suborg_distribution" datastore:"suborg_distribution"`
+	Tags []string `json:"tags,omitempty" datastore:"tags"`
+}
+
 type CacheKeyData struct {
 	Success       bool   `json:"success" datastore:"Success"`
 	WorkflowId    string `json:"workflow_id," datastore:"WorkflowId"`
@@ -1193,6 +1205,7 @@ type CacheKeyData struct {
 	Key           string `json:"key" datastore:"Key"`
 	Value         string `json:"value" datastore:"Value,noindex"`
 	Category      string `json:"category" datastore:"category"`
+	Tags		 []string `json:"tags,omitempty" datastore:"tags"`
 
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`

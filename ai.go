@@ -4707,7 +4707,7 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 	}
 
 	// Look for the file sourcepath/apps/appname.json
-	searchname := strings.ReplaceAll(strings.ToLower(appname), " ", "_")
+	searchname := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(appname, "-", "_"), " ", "_"))
 	appPath := fmt.Sprintf("%s/apps/%s.json", sourcepath, searchname)
 
 	responseBody := []byte{}
@@ -4744,8 +4744,21 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 		}
 
 		//url := fmt.Sprintf("https://singul.io/apps/%s", appname)
-		baseUrl := "https://shuffler.io/api/v1"
+		//baseUrl := "https://us.shuffler.io/api/v1"
+		baseUrl := "https://shuffler.io"
+		if len(os.Getenv("BASE_URL")) > 0 {
+			baseUrl = os.Getenv("BASE_URL")
+		}
+
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		}
+
+		baseUrl = fmt.Sprintf("%s/api/v1", baseUrl)
 		url := fmt.Sprintf("%s/apps/%s/config", baseUrl, appId)
+		if debug { 
+			log.Printf("[DEBUG] Loading app %s (%s) from url '%s'", appname, appId, url)
+		}
 		req, err := http.NewRequest(
 			"GET",
 			url,
@@ -4816,7 +4829,48 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 				log.Printf("[ERROR] Failed to load swagger for app %s", parsedApp.Name)
 			}
 		}
+	} else {
+		log.Printf("[DEBUG] Should load in the python script IF POSSIBLE\n\n\n")
 
+		// Associated 99% of the time with github.com/shuffle/python-apps
+		rawPath := fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/refs/heads/master/%s/%s/src/app.py", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(parsedApp.Name, "_", "-"), " ", "-")), parsedApp.AppVersion)
+		log.Printf("LOADING APP SCRIPT FROM %s INTO FILE %s", rawPath, parsedApp.ID)
+		
+		os.MkdirAll(fmt.Sprintf("%s/scripts", sourcepath), os.ModePerm)
+
+		// What a mess :)
+		// What it does is to download the file. That's it.
+		scriptPath := fmt.Sprintf("%s/scripts/%s.py", sourcepath, searchname)
+		_, statErr := os.Stat(scriptPath)
+		if statErr != nil {
+			req, err := http.NewRequest(
+				"GET",
+				rawPath,
+				nil,
+			)
+
+			if err != nil {
+				log.Printf("[ERROR] Error in new request for singul app script: %s", err)
+			} else {
+				client := &http.Client{}
+
+				newresp, err := client.Do(req)
+				if err != nil || newresp.StatusCode != 200 {
+					log.Printf("[ERROR] Error running request for singul app script: %s. URL: %s. Status: %d", err, rawPath, newresp.StatusCode)
+				} else {
+					defer newresp.Body.Close()
+					scriptBody, err := ioutil.ReadAll(newresp.Body)
+					if err != nil {
+						log.Printf("[ERROR] Failed reading body for singul app script: %s", err)
+					} else {
+						err = os.WriteFile(scriptPath, scriptBody, 0644)
+						if err != nil {
+							log.Printf("[ERROR] Error writing file: %s", err)
+						}
+					}
+				}
+			}
+		}
 	}
 
 	if len(parsedApp.ID) == 0 {

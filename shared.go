@@ -19300,12 +19300,16 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		allCategories, err := GetDatastoreCategories(ctx, org.Id)
 		if err == nil {
 			for _, cat := range allCategories {
+				if len(cat.Category) <= 1 || cat.Category == "default" {
+					continue
+				}
+
 				foundCategories = append(foundCategories, cat.Category)
 			}
 		}
 
 		for _, key := range keys {
-			if len(key.Category) == 0 || key.Category == "default" {
+			if len(key.Category) <= 1 || key.Category == "default" {
 				continue
 			}
 
@@ -19334,6 +19338,11 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			keys[keyIndex].SuborgDistribution = []string{}
 		}
 	}
+
+	// Sort categories
+	sort.SliceStable(foundCategories, func(i, j int) bool {
+		return foundCategories[i] < foundCategories[j]
+	})
 
 	newReturn := CacheReturn{
 		Success:     isSuccess,
@@ -20363,7 +20372,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Check if body contains "key": <number> and replace it, as it should be a string
-	var tmpData CacheKeyData
+	var tmpData CacheKeyDataMini
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshalling in setvalue (2): %s", err)
@@ -20457,7 +20466,18 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		tmpData.SuborgDistribution = cacheData.SuborgDistribution
 	}
 
-	existed, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{tmpData})
+	// This is just to ensure that input data doesn't get directly set in the database
+	parsedKey := CacheKeyData{
+		Category:           tmpData.Category,
+		Key:                tmpData.Key,
+		Value:              tmpData.Value,
+		OrgId:              tmpData.OrgId,
+		ExecutionId:        tmpData.ExecutionId,
+		Authorization:      tmpData.Authorization,
+		SuborgDistribution: tmpData.SuborgDistribution,
+		Tags:               tmpData.Tags,
+	}
+	existed, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{parsedKey})
 	if err != nil {
 		log.Printf("[ERROR] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
 		resp.WriteHeader(500)

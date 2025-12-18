@@ -3265,8 +3265,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		}
 	} else {
 		// Cloud database
-		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(200)
-
+		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(400)
 		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
 		if err != nil {
 			if !strings.Contains(err.Error(), `cannot load field`) {
@@ -13308,6 +13307,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				cacheData.Authorization = config.Authorization
 				cacheData.SuborgDistribution = config.SuborgDistribution
 				cacheData.PublicAuthorization = config.PublicAuthorization
+
+				if len(cacheData.Tags) == 0 {
+					cacheData.Tags = config.Tags
+				}
 
 				cacheData.Existed = true
 			}
