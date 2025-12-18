@@ -1152,14 +1152,17 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if project.Environment == "onprem" && org.Created > 0 {
+	if project.Environment == "onprem" {
 
-		nowUnix := time.Now().Unix()
-
-		thirtyDays := int64(30 * 24 * 60 * 60)
-		isAfter30Days := nowUnix >= org.Created+thirtyDays
-
-		org.OldOrg = isAfter30Days
+		statistics, err := GetOrgStatistics(ctx, org.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting org statistics for %s: %s", org.Id, err)
+		} else {
+			totalWorkflowExecutions := statistics.TotalWorkflowExecutions + statistics.TotalChildWorkflowExecutions
+			if totalWorkflowExecutions > int64(5000) {
+				org.OldOrg = true
+			}
+		}
 	}
 
 	// Make sure to add all orgs that are childs IF you have access
