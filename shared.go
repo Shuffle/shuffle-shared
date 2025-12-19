@@ -22428,6 +22428,13 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if strings.Contains(strings.ToLower(userName), "shuffler.io") {
+		log.Printf("[ERROR] Username (%v) contains invalid domain in OpenID login for org: %v", userName, org.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid username"}"`))
+		return
+	}
+
 	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
 	if err == nil && len(users) > 0 {
 		for _, user := range users {
