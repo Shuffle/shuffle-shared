@@ -1030,7 +1030,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if !found {
-				log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, org.Id)
+				log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (%s) (get org)", user.Username, user.Id, org.Name, org.Id)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
 				return
@@ -1379,7 +1379,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !userFound && !parentUser && !user.SupportAccess {
-		log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, orgId)
+		log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (%s) (get suborgs from parent)", user.Username, user.Id, parentOrg.Name, parentOrg.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
 		return
@@ -11734,7 +11734,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Support access pivot
-	if strings.Contains(fileId, "@") && strings.Contains(fileId, ".") && user.SupportAccess && user.Active && user.Verified && project.Environment == "cloud" {
+	if strings.HasSuffix(user.Username, "@shuffler.io") && user.SupportAccess && user.Active && user.Verified && project.Environment == "cloud" {
 		foundUsers, err := FindUser(ctx, fileId)
 		if err != nil || len(foundUsers) == 0 {
 			log.Printf("[ERROR] Failed finding user %s for support access: %s", user.Username, err)
@@ -11777,13 +11777,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		foundOrg = true
 	}
 
-	if !foundOrg || tmpData.OrgId != fileId {
-		log.Printf("[WARNING] User swap to the org \"%s\" - access denied", tmpData.OrgId)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org. Please contact support@shuffler.io if this is unexpected."}`))
-		return
-	}
-
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
 		log.Printf("[WARNING] Organization %s doesn't exist: %s", tmpData.OrgId, err)
@@ -11791,6 +11784,28 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	if !foundOrg || tmpData.OrgId != fileId {
+		found := false
+		if !foundOrg {
+			for _, user := range org.Users {
+				if user.Id == user.Id {
+					log.Printf("[ERROR] User %s (%s) lost org %s (%s) in their user list, but has it in their org list. Fixing.", user.Username, user.Id, org.Name, org.Id)
+					user.Orgs = append(user.Orgs, org.Id)
+					found = true
+					break
+				}
+			}
+		}
+
+		if !found { 
+			log.Printf("[WARNING] User swap to the org \"%s\" - access denied", tmpData.OrgId)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org. Please contact support@shuffler.io if this is unexpected."}`))
+			return
+		}
+	}
+
 
 	if (org.SSOConfig.SSORequired == true && user.UsersLastSession != user.Session && user.SupportAccess == false) || tmpData.SSO {
 
