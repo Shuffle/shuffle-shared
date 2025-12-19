@@ -14841,7 +14841,9 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 			return
 		}
 
-		existingUser = &users[0]
+		if len(users) == 1 {
+			existingUser = &users[0]
+		}
 	}
 
 	if existingUser.Id != "" {
