@@ -5520,7 +5520,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		// 3. Make sure it's ONLY changing orgs based on parent org
 
 		// Check which ones the current user has access to
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] PRE PRE orgs for %s (%s) is len(%d). Input length: %d", foundUser.Username, foundUser.Id, len(foundUser.Orgs), len(t.Suborgs))
 		}
 
@@ -5539,7 +5539,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if org.CreatorOrg != parentOrgId {
-				if debug { 
+				if debug {
 					log.Printf("[ERROR] Skipping org %s as it is not a suborg of parent org %s for user %s (%s).", suborg, parentOrgId, userInfo.Username, userInfo.Id)
 				}
 
@@ -5560,7 +5560,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			if found {
 				newSuborgs = append(newSuborgs, suborg)
 			} else {
-				if debug { 
+				if debug {
 					log.Printf("[ERROR] Skipping adding to org %s as user %s (%s) can't edit this one.", suborg, userInfo.Username, userInfo.Id)
 				}
 			}
@@ -5612,7 +5612,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		//log.Printf("[DEBUG] Orgs to be added: %s. Existing: %s.", addedOrgs, foundUser.Orgs)
 
 		// Removed for now due to multi-org chain deleting you from other org chains
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Pre orgs for %s (%s) is len(%d)", foundUser.Username, foundUser.Id, len(foundUser.Orgs))
 		}
 
@@ -9253,7 +9253,7 @@ func CleanCreds(user *User) *User {
 	//user.Orgs = []string{}
 	handledOrgs := []string{}
 
-	// Quick deduplication. 
+	// Quick deduplication.
 	for _, org := range user.Orgs {
 		if ArrayContains(handledOrgs, org) {
 			continue
@@ -9511,7 +9511,6 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 				if len(orgUser.Orgs) == 0 {
 					orgUser.Orgs = append(orgUser.Orgs, user.ActiveOrg.Id)
 				}
-
 
 				newUsers = append(newUsers, orgUser)
 			}
@@ -11695,8 +11694,9 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	type ReturnData struct {
 		OrgId     string `json:"org_id" datastore:"org_id"`
 		RegionUrl string `json:"region_url" datastore:"region_url"`
-		SSO       bool   `json:"sso"`
-		Mode      string `json:"mode"`
+		// SSO       bool   `json:"sso"`
+		SSO  bool   `json:"sso_test"`
+		Mode string `json:"mode"`
 	}
 
 	var tmpData ReturnData
@@ -11802,14 +11802,13 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		if !found { 
+		if !found {
 			log.Printf("[WARNING] User swap to the org \"%s\" - access denied", tmpData.OrgId)
 			resp.WriteHeader(403)
 			resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org. Please contact support@shuffler.io if this is unexpected."}`))
 			return
 		}
 	}
-
 
 	if (org.SSOConfig.SSORequired == true && user.UsersLastSession != user.Session && user.SupportAccess == false) || tmpData.SSO {
 
@@ -14553,7 +14552,6 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid email&redirect_uri=%s&state=%s&code_challenge_method=S256&code_challenge=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, codeChallenge)
 	}
 
-
 	return baseSSOUrl
 }
 
@@ -15348,7 +15346,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 // FIXME: Do NOT use this yet (May 24th, 2024). It is not ready for production due to being a potential cross-tenant attack vector.
 func HandleSAML(resp http.ResponseWriter, request *http.Request) {
-	resp.Write([]byte("SAML SSO is deprecated. Please use OpenID Connect instead. Contact support@shuffler.io if you need help migrating, or are having trouble logging in to your account.")) 
+	resp.Write([]byte("SAML SSO is deprecated. Please use OpenID Connect instead. Contact support@shuffler.io if you need help migrating, or are having trouble logging in to your account."))
 	return
 }
 
@@ -22187,7 +22185,6 @@ func fixCertificate(parsedX509Key string) string {
 	//log.Printf("%s", parsedX509Key)
 	return parsedX509Key
 }
-
 
 // Example implementation of SSO, including a redirect for the user etc
 // Should make this stuff only possible after login
