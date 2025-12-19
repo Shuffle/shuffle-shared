@@ -14506,7 +14506,7 @@ func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (strin
 			Sub:             existingSSOInfo.Sub, // Keep existing Sub for this org
 			ClientID:        org.SSOConfig.OpenIdClientId,
 			CodeVerifier:    verifier.Value,
-			ChallengeExpiry: time.Now().Add(2 * time.Minute),
+			ChallengeExpiry: time.Now().Add(60 * time.Minute),
 		})
 
 		ctx := context.Background()
