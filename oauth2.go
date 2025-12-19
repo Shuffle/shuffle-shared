@@ -3131,10 +3131,6 @@ func (v *CodeVerifier) CodeChallengeS256() string {
 
 // https://dev-18062.okta.com/oauth2/default/v1/authorize?client_id=0oa3&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
 func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, codeChallenge, clientSecret string) ([]byte, error) {
-	if len(codeChallenge) == 0 {
-		return []byte{}, errors.New("code challenge is required")
-	}
-
 	client := &http.Client{}
 	data := fmt.Sprintf("client_id=%s&grant_type=authorization_code&redirect_uri=%s&code=%s&code_verifier=%s", clientId, redirectUri, code, codeChallenge)
 	if len(clientSecret) > 0 {
