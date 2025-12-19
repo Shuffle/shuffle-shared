@@ -14768,8 +14768,39 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	if !(org.LeadInfo.DistributionPartner || org.LeadInfo.IntegrationPartner || org.LeadInfo.ServicePartner || org.LeadInfo.TechPartner || org.LeadInfo.ChannelPartner) {
-		log.Printf("[WARNING] User %s attempted to provision user without having partner access in %s", user.Username, org.Id)
+	// Determine which org to validate against
+	validationOrg := org
+	if len(org.CreatorOrg) > 0 {
+		// This is a child org, validate against parent
+		parentOrg, err := GetOrg(ctx, org.CreatorOrg)
+		if err != nil {
+			log.Printf("[WARNING] Failed to get parent org %s for user %s: %s", org.CreatorOrg, user.Username, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to get parent organization"}`))
+			return
+		}
+		validationOrg = parentOrg
+	}
+
+	// Check if user is admin in the validation org
+	isAdmin := false
+	for _, orgUser := range validationOrg.Users {
+		if orgUser.Id == user.Id && orgUser.Role == "admin" {
+			isAdmin = true
+			break
+		}
+	}
+
+	if !isAdmin {
+		log.Printf("[WARNING] User %s attempted to provision user without admin access in validation org %s", user.Username, validationOrg.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Admin access required in the relevant org"}`))
+		return
+	}
+
+	// Check if validation org is a partner
+	if !(validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.ServicePartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.ChannelPartner) {
+		log.Printf("[WARNING] User %s attempted to provision user without partner access in validation org %s", user.Username, validationOrg.Id)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Provisioning not allowed. We need a partner org for this."}`))
 		return
