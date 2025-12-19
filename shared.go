@@ -22396,6 +22396,12 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[ERROR] Bad username, but allowing due to OpenID: %s. Full Subject: %#v", userName, openidUser)
 	}
 
+	if strings.Contains(userName, "@shuffler.io") {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Disabled for support users"}`))
+		return
+	}
+
 	redirectUrl := "https://shuffler.io/workflows"
 
 	if project.Environment != "cloud" {
