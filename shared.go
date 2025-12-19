@@ -14810,7 +14810,6 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	// Skip @shuffler.io emails
 	if strings.Contains(provisionRequest.Email, "@shuffler.io") {
 		log.Printf("[WARNING] Attempted to provision @shuffler.io email: %s", provisionRequest.Email)
 		resp.WriteHeader(400)
@@ -14826,7 +14825,26 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 	}
 
 	existingUser, err := GetUser(ctx, provisionRequest.Email)
-	if err == nil && existingUser.Id != "" {
+	if err != nil {
+		users, err := FindGeneratedUser(ctx, provisionRequest.Email)
+		if err != nil {
+			log.Printf("[ERROR] Failed to find generated user for email %s: %s", provisionRequest.Email, err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to find user"}`))
+			return
+		}
+
+		if len(users) > 1 {
+			log.Printf("[ERROR] (suspicious) Found multiple generated users for email %s", provisionRequest.Email)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to find user"}`))
+			return
+		}
+
+		existingUser = &users[0]
+	}
+
+	if existingUser.Id != "" {
 		if existingUser.ProvisionedByOrg == org.Id {
 			existingUser.InitSSOInfos()
 			ssoInfo, exists := existingUser.GetSSOInfo(org.Id)
