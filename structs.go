@@ -684,6 +684,9 @@ type User struct {
 	// Old web3 integration
 	EthInfo EthInfo `datastore:"eth_info" json:"eth_info"`
 	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
+	
+	// Track which org provisioned this user (for SSO provisioning)
+	ProvisionedByOrg string `datastore:"provisioned_by_org" json:"provisioned_by_org"`
 }
 
 type SSOInfo struct {

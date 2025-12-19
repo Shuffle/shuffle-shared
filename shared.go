@@ -14737,6 +14737,203 @@ func GetUserLocation(ctx context.Context, ip string) (UserGeoInfo, error) {
 	return userLocationData, nil
 }
 
+func HandleUserCreationProvision(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Failed authentication in user provision: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication required"}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[WARNING] Non-admin user %s attempted to provision user", user.Username)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Admin access required"}`))
+		return
+	}
+
+	// check if user is in a partner org
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed to get org for user %s: %s", user.Username, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get organization"}`))
+		return
+	}
+
+	if !(org.LeadInfo.DistributionPartner || org.LeadInfo.IntegrationPartner || org.LeadInfo.ServicePartner || org.LeadInfo.TechPartner || org.LeadInfo.ChannelPartner) {
+		log.Printf("[WARNING] User %s attempted to provision user without having partner access in %s", user.Username, org.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Provisioning not allowed. We need a partner org for this."}`))
+		return
+	}
+
+	// check if auto provision is true (since this stupid variable is flipped)
+	if org.SSOConfig.AutoProvision {
+		log.Printf("[WARNING] User %s attempted to provision user with auto provision disabled", user.Username)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Provisioning not allowed. Auto provision is disabled."}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed to read body in user provision: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
+		return
+	}
+
+	var provisionRequest struct {
+		Email string `json:"email"`
+	}
+
+	err = json.Unmarshal(body, &provisionRequest)
+	if err != nil {
+		log.Printf("[WARNING] Failed to parse provision request: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid request format"}`))
+		return
+	}
+
+	provisionRequest.Email = strings.ToLower(strings.TrimSpace(provisionRequest.Email))
+	if !strings.Contains(provisionRequest.Email, "@") {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid email address"}`))
+		return
+	}
+
+	// Skip @shuffler.io emails
+	if strings.Contains(provisionRequest.Email, "@shuffler.io") {
+		log.Printf("[WARNING] Attempted to provision @shuffler.io email: %s", provisionRequest.Email)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Cannot provision @shuffler.io email addresses"}`))
+		return
+	}
+
+	if len(org.SSOConfig.OpenIdClientId) == 0 || len(org.SSOConfig.OpenIdToken) == 0 {
+		log.Printf("[WARNING] SSO not configured for org %s", org.Id)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "SSO not configured for this organization"}`))
+		return
+	}
+
+	existingUser, err := GetUser(ctx, provisionRequest.Email)
+	if err == nil && existingUser.Id != "" {
+		// User exists - check if they were provisioned by this org
+		if existingUser.ProvisionedByOrg == org.Id {
+			// Check if SSO is completed
+			existingUser.InitSSOInfos()
+			ssoInfo, exists := existingUser.GetSSOInfo(org.Id)
+
+			// If SSO not completed (no Sub), just generate a new link
+			if !exists || ssoInfo.Sub == "" {
+				log.Printf("[INFO] User %s was provisioned by org %s but SSO not completed, generating new SSO URL", provisionRequest.Email, org.Id)
+
+				// Generate new SSO URL for existing user
+				ssoUrl, err := GetOpenIdUrl(request, *org, *existingUser, "")
+				if err != nil {
+					log.Printf("[ERROR] Failed to generate SSO URL for existing user %s: %s", existingUser.Id, err)
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false, "reason": "Failed to generate SSO URL"}`))
+					return
+				}
+
+				log.Printf("[AUDIT] Admin %s regenerated SSO URL for provisioned user %s in org %s", user.Username, provisionRequest.Email, org.Id)
+
+				resp.WriteHeader(200)
+				resp.Write([]byte(fmt.Sprintf(`{
+					"success": true,
+					"sso_url": "%s",
+					"user_id": "%s",
+					"message": "SSO URL regenerated for existing provisioned user.",
+					"existing_user": true
+				}`, ssoUrl, existingUser.Id)))
+				return
+			}
+		}
+
+		// User exists but wasn't provisioned by this org
+		log.Printf("[WARNING] User %s already exists but wasn't provisioned by org %s", provisionRequest.Email, org.Id)
+		resp.WriteHeader(409)
+		resp.Write([]byte(`{"success": false, "reason": "User already exists"}`))
+		return
+	}
+
+	// 4. Create new user
+	newUser := new(User)
+	newUser.Username = provisionRequest.Email
+	newUser.GeneratedUsername = provisionRequest.Email
+	newUser.Password = uuid.NewV4().String() // Random password, SSO only
+	newUser.Verified = true
+	newUser.Active = true
+	newUser.CreationTime = time.Now().Unix()
+	newUser.Orgs = []string{org.Id}
+	newUser.Role = "user" // Default, will be overridden by SSO claims
+	newUser.Id = uuid.NewV4().String()
+	newUser.ProvisionedByOrg = org.Id // Track which org provisioned this user
+	newUser.ActiveOrg = OrgMini{
+		Name: org.Name,
+		Id:   org.Id,
+		Role: "user", // Default, will be overridden by SSO claims
+	}
+
+	if project.Environment == "cloud" {
+		newUser.Regions = []string{"https://shuffler.io"}
+		if org.RegionUrl != "https://shuffler.io" {
+			newUser.Regions = append(newUser.Regions, org.RegionUrl)
+		}
+	}
+
+	err = SetUser(ctx, newUser, true)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create user %s: %s", provisionRequest.Email, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to create user"}`))
+		return
+	}
+
+	// Add user to org
+	org.Users = append(org.Users, User{
+		Id:       newUser.Id,
+		Username: newUser.Username,
+		Role:     "user",
+	})
+
+	err = SetOrg(ctx, *org, org.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed to update org %s after adding user: %s", org.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to add user to organization"}`))
+		return
+	}
+
+	ssoUrl, err := GetOpenIdUrl(request, *org, *newUser, "")
+	if err != nil {
+		log.Printf("[ERROR] Failed to generate SSO URL for provisioned user %s: %s", newUser.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to generate SSO URL"}`))
+		return
+	}
+
+	log.Printf("[AUDIT] Admin %s (%s) provisioned user %s in org %s (%s)", user.Username, user.Id, provisionRequest.Email, org.Name, org.Id)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{
+		"success": true,
+		"sso_url": "%s",
+		"user_id": "%s",
+		"message": "User created successfully. Share the SSO URL for first-time login."
+	}`, ssoUrl, newUser.Id)))
+}
+
 func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
