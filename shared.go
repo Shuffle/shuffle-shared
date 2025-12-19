@@ -11736,8 +11736,9 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Support access pivot
-	if strings.HasSuffix(user.Username, "@shuffler.io") && user.SupportAccess && user.Active && user.Verified && project.Environment == "cloud" {
+	// Support access pivot to an org BY EMAIL (not org id)
+	if strings.Contains(fileId, "@") && strings.Contains(fileId, ".") && user.SupportAccess && user.Active && user.Verified && project.Environment == "cloud" {
+		//foundUsers, err := FindUser(ctx, fileId)
 		foundUsers, err := FindUser(ctx, fileId)
 		if err != nil || len(foundUsers) == 0 {
 			log.Printf("[ERROR] Failed finding user %s for support access: %s", user.Username, err)
