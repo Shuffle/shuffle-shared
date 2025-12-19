@@ -14737,7 +14737,7 @@ func GetUserLocation(ctx context.Context, ip string) (UserGeoInfo, error) {
 	return userLocationData, nil
 }
 
-func HandleUserCreationProvision(resp http.ResponseWriter, request *http.Request) {
+func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
