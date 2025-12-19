@@ -242,6 +242,7 @@ func ConstructSessionCookie(value string, expires time.Time) *http.Cookie {
 	if project.Environment == "cloud" {
 		c.Domain = ".shuffler.io"
 		c.Secure = true
+		c.SameSite = http.SameSiteLaxMode
 	}
 
 	return &c
