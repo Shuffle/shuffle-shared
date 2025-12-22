@@ -2144,8 +2144,9 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	}
 
 	parsedAction := CategoryAction{
-		AppName: decision.Tool,
-		Label:   decision.Action,
+		AppName:  decision.Tool,
+		Label:    decision.Action,
+		Query:    decision.Reason,   // Add the reason field for LLM context
 
 		Fields: oldFields,
 
