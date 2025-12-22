@@ -119,7 +119,7 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 
 	algClient := search.NewClient(algoliaClient, algoliaSecret)
 	algoliaIndex := algClient.InitIndex("appsearch")
-	appname = strings.TrimSpace(strings.ToLower(strings.Replace(appname, "_", " ", -1)))
+	appname = strings.TrimSpace(strings.ToLower(strings.Replace(strings.Replace(appname, "_", " ", -1), "-", " ", -1)))
 	res, err := algoliaIndex.Search(appname)
 	if err != nil {
 		log.Printf("[ERROR] Failed searching Algolia (%s): %s", appname, err)
@@ -148,8 +148,12 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 		return returnApp, err
 	}
 
+	if debug {
+		log.Printf("[DEBUG] Got %d hits matching appname '%s'", len(newRecords), appname)
+	}
+
 	for _, newRecord := range newRecords {
-		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
+		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(strings.Replace(newRecord.Name, "_", " ", -1), "-", " ", -1)))
 		if newApp == appname || newRecord.ObjectID == appname {
 			//return newRecord.ObjectID, nil
 			appData, err := json.Marshal(newRecord)
