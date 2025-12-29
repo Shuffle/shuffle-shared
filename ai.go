@@ -14,7 +14,9 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -11973,4 +11975,501 @@ func buildManualInputList(history []ConversationMessage, newPrompt string) []map
 	})
 
 	return items
+}
+
+// RunAgentTests runs automated tests for AI agents using test data from agent_test_data/
+func RunAgentTests(resp http.ResponseWriter, request *http.Request) {
+	ctx := GetContext(request)
+
+	log.Printf("[INFO] Starting automated agent tests")
+
+	// Try multiple possible paths (same as mock handler)
+	possiblePaths := []string{}
+
+	if envPath := os.Getenv("AGENT_TEST_DATA_PATH"); envPath != "" {
+		possiblePaths = append(possiblePaths, envPath)
+	}
+	possiblePaths = append(possiblePaths, "agent_test_data")
+	possiblePaths = append(possiblePaths, "../shuffle-shared/agent_test_data")
+	possiblePaths = append(possiblePaths, "C:/Users/hari krishna/Documents/shuffle-shared/agent_test_data")
+	possiblePaths = append(possiblePaths, "/home/shuffle-shared/agent_test_data")
+
+	// Find the first valid path
+	testDataPath := ""
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			testDataPath = path
+			log.Printf("[INFO] Found test data directory: %s", path)
+			break
+		}
+	}
+
+	if testDataPath == "" {
+		log.Printf("[ERROR] Could not find test data directory in any of: %v", possiblePaths)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Test data directory not found. Tried: %v"}`, possiblePaths)))
+		return
+	}
+
+	// Read all JSON files from test data directory
+	files, err := ioutil.ReadDir(testDataPath)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read test data directory: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to read test data: %s"}`, err)))
+		return
+	}
+
+	totalTests := 0
+	passedTests := 0
+	failedTests := 0
+
+	type TestResult struct {
+		TestCase string `json:"test_case"`
+		Status   string `json:"status"`
+		Error    string `json:"error,omitempty"`
+	}
+	results := []TestResult{}
+
+	// Run tests for each JSON file
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
+			continue
+		}
+
+		totalTests++
+		useCaseName := strings.TrimSuffix(file.Name(), ".json")
+
+		log.Printf("[INFO] ========== Test %d: %s ==========", totalTests, useCaseName)
+
+		// Load test case
+		testFilePath := filepath.Join(testDataPath, file.Name())
+		testData, err := ioutil.ReadFile(testFilePath)
+		if err != nil {
+			log.Printf("[ERROR] Failed to read test file %s: %s", file.Name(), err)
+			failedTests++
+			results = append(results, TestResult{
+				TestCase: file.Name(),
+				Status:   "FAIL",
+				Error:    fmt.Sprintf("Failed to read file: %s", err),
+			})
+			continue
+		}
+
+		var testCase MockUseCaseData
+		err = json.Unmarshal(testData, &testCase)
+		if err != nil {
+			log.Printf("[ERROR] Failed to parse test file %s: %s", file.Name(), err)
+			failedTests++
+			results = append(results, TestResult{
+				TestCase: file.Name(),
+				Status:   "FAIL",
+				Error:    fmt.Sprintf("Failed to parse JSON: %s", err),
+			})
+			continue
+		}
+
+		// Set environment for this test case
+		os.Setenv("AGENT_TEST_USE_CASE", useCaseName)
+
+		// Run the test
+		passed, testErr := runSingleAgentTest(ctx, request, testCase, useCaseName)
+		if passed {
+			passedTests++
+			log.Printf("[INFO] ✅ Test %d PASSED: %s", totalTests, useCaseName)
+			results = append(results, TestResult{
+				TestCase: file.Name(),
+				Status:   "PASS",
+			})
+		} else {
+			failedTests++
+			log.Printf("[ERROR] ❌ Test %d FAILED: %s", totalTests, useCaseName)
+			results = append(results, TestResult{
+				TestCase: file.Name(),
+				Status:   "FAIL",
+				Error:    testErr,
+			})
+		}
+	}
+
+	log.Printf("[INFO] ========== Test Summary ==========")
+	log.Printf("[INFO] Total: %d, Passed: %d, Failed: %d", totalTests, passedTests, failedTests)
+
+	// Build response
+	type TestResponse struct {
+		Success bool         `json:"success"`
+		Total   int          `json:"total"`
+		Passed  int          `json:"passed"`
+		Failed  int          `json:"failed"`
+		Results []TestResult `json:"results"`
+	}
+
+	response := TestResponse{
+		Success: failedTests == 0,
+		Total:   totalTests,
+		Passed:  passedTests,
+		Failed:  failedTests,
+		Results: results,
+	}
+
+	responseBytes, _ := json.Marshal(response)
+	resp.WriteHeader(200)
+	resp.Write(responseBytes)
+}
+
+// runSingleAgentTest runs a single test case
+func runSingleAgentTest(ctx context.Context, request *http.Request, testCase MockUseCaseData, useCaseName string) (bool, string) {
+	// Get user prompt from test case
+	userPrompt := ""
+	if data, ok := testCase.ToolCalls[0].Response["user_prompt"].(string); ok {
+		userPrompt = data
+	}
+
+	// Try to get from top level
+	type TestCaseWithPrompt struct {
+		UserPrompt string `json:"user_prompt"`
+	}
+	var tempData TestCaseWithPrompt
+	testBytes, _ := json.Marshal(testCase)
+	json.Unmarshal(testBytes, &tempData)
+	if tempData.UserPrompt != "" {
+		userPrompt = tempData.UserPrompt
+	}
+
+	if userPrompt == "" {
+		log.Printf("[ERROR] No user_prompt found in test case")
+		return false, "No user_prompt found in test case"
+	}
+
+	// Build request body for agent_starter
+	requestBody := map[string]interface{}{
+		"id":          uuid.NewV4().String(),
+		"name":        "agent",
+		"app_name":    "AI Agent",
+		"app_id":      "shuffle_agent",
+		"app_version": "1.0.0",
+		"environment": "cloud",
+		"parameters": []map[string]string{
+			{"name": "app_name", "value": "openai"},
+			{"name": "input", "value": userPrompt},
+			{"name": "action", "value": "API"},
+		},
+	}
+
+	requestBodyBytes, err := json.Marshal(requestBody)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal request body: %s", err)
+		return false, fmt.Sprintf("Failed to marshal request body: %s", err)
+	}
+
+	// Call agent_starter endpoint
+	baseUrl := "http://localhost:5002"
+	if os.Getenv("BASE_URL") != "" {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
+	startUrl := fmt.Sprintf("%s/api/v1/apps/agent_starter/run", baseUrl)
+	req, err := http.NewRequest("POST", startUrl, bytes.NewBuffer(requestBodyBytes))
+	if err != nil {
+		log.Printf("[ERROR] Failed to create start request: %s", err)
+		return false, fmt.Sprintf("Failed to create start request: %s", err)
+	}
+
+	// Copy headers from original request
+	for key, values := range request.Header {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to start agent: %s", err)
+		return false, fmt.Sprintf("Failed to start agent: %s", err)
+	}
+	defer resp.Body.Close()
+
+	startBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read start response: %s", err)
+		return false, fmt.Sprintf("Failed to read start response: %s", err)
+	}
+
+	var startResponse struct {
+		Success       bool   `json:"success"`
+		ExecutionId   string `json:"execution_id"`
+		Authorization string `json:"authorization"`
+	}
+	err = json.Unmarshal(startBody, &startResponse)
+	if err != nil {
+		log.Printf("[ERROR] Failed to parse start response: %s", err)
+		return false, fmt.Sprintf("Failed to parse start response: %s", err)
+	}
+
+	if !startResponse.Success {
+		log.Printf("[ERROR] Failed to start agent: %s", string(startBody))
+		return false, fmt.Sprintf("Failed to start agent: %s", string(startBody))
+	}
+
+	log.Printf("[INFO] ✅ Started agent (execution_id: %s)", startResponse.ExecutionId)
+
+	// Poll for results
+	maxRetries := 20
+	retryDelay := 5 * time.Second
+
+	var finalResult map[string]interface{}
+	agentFinished := false
+
+	for i := 0; i < maxRetries; i++ {
+		time.Sleep(retryDelay)
+
+		// Call streams/results endpoint
+		resultsUrl := fmt.Sprintf("%s/api/v1/streams/results", baseUrl)
+		resultsBody := map[string]string{
+			"execution_id":  startResponse.ExecutionId,
+			"authorization": startResponse.Authorization,
+		}
+		resultsBodyBytes, _ := json.Marshal(resultsBody)
+
+		resultsReq, err := http.NewRequest("POST", resultsUrl, bytes.NewBuffer(resultsBodyBytes))
+		if err != nil {
+			continue
+		}
+
+		// Copy headers
+		for key, values := range request.Header {
+			for _, value := range values {
+				resultsReq.Header.Add(key, value)
+			}
+		}
+		resultsReq.Header.Set("Content-Type", "application/json")
+
+		resultsResp, err := client.Do(resultsReq)
+		if err != nil {
+			continue
+		}
+
+		resultsRespBody, err := ioutil.ReadAll(resultsResp.Body)
+		resultsResp.Body.Close()
+		if err != nil {
+			continue
+		}
+
+		var resultsData map[string]interface{}
+		err = json.Unmarshal(resultsRespBody, &resultsData)
+		if err != nil {
+			continue
+		}
+
+		// Extract result field (which is a JSON string)
+		resultStr, ok := resultsData["result"].(string)
+		if !ok {
+			continue
+		}
+
+		// Parse the result string as JSON
+		var parsedResult map[string]interface{}
+		err = json.Unmarshal([]byte(resultStr), &parsedResult)
+		if err != nil {
+			continue
+		}
+
+		// Check if finished
+		status, ok := parsedResult["status"].(string)
+		if ok && status == "FINISHED" {
+			finalResult = parsedResult
+			agentFinished = true
+			break
+		}
+	}
+
+	if !agentFinished {
+		log.Printf("[ERROR] Agent did not finish within timeout (%d retries)", maxRetries)
+		return false, fmt.Sprintf("Agent did not finish within timeout (%d retries)", maxRetries)
+	}
+
+	log.Printf("[INFO] ✅ Agent finished")
+
+	// Compare decisions
+	actualDecisions, ok := finalResult["decisions"].([]interface{})
+	if !ok {
+		log.Printf("[ERROR] No decisions found in result")
+		return false, "No decisions found in result"
+	}
+
+	// Get expected decisions from test case
+	expectedDecisionsRaw, ok := testCase.ToolCalls[0].Response["expected_decisions"]
+	if !ok {
+		// Try to get from parsed test case
+		type TestCaseWithDecisions struct {
+			ExpectedDecisions []map[string]interface{} `json:"expected_decisions"`
+		}
+		var tempData TestCaseWithDecisions
+		testBytes, _ := json.Marshal(testCase)
+		json.Unmarshal(testBytes, &tempData)
+
+		if len(tempData.ExpectedDecisions) == 0 {
+			log.Printf("[ERROR] No expected_decisions found in test case")
+			return false, "No expected_decisions found in test case"
+		}
+
+		// Compare decisions
+		passed, errMsg := compareDecisions(actualDecisions, tempData.ExpectedDecisions)
+		return passed, errMsg
+	}
+
+	expectedDecisions, ok := expectedDecisionsRaw.([]interface{})
+	if !ok {
+		log.Printf("[ERROR] expected_decisions is not an array")
+		return false, "expected_decisions is not an array"
+	}
+
+	// Convert to comparable format
+	expectedMaps := make([]map[string]interface{}, len(expectedDecisions))
+	for i, ed := range expectedDecisions {
+		if edMap, ok := ed.(map[string]interface{}); ok {
+			expectedMaps[i] = edMap
+		}
+	}
+
+	return compareDecisions(actualDecisions, expectedMaps)
+}
+
+// compareDecisions compares actual vs expected decisions
+func compareDecisions(actual []interface{}, expected []map[string]interface{}) (bool, string) {
+	if len(actual) != len(expected) {
+		errMsg := fmt.Sprintf("Decision count mismatch: expected %d, got %d", len(expected), len(actual))
+		log.Printf("[ERROR] %s", errMsg)
+		return false, errMsg
+	}
+
+	for i := 0; i < len(actual); i++ {
+		actualDecision, ok := actual[i].(map[string]interface{})
+		if !ok {
+			errMsg := fmt.Sprintf("Decision %d: invalid format", i)
+			log.Printf("[ERROR] %s", errMsg)
+			return false, errMsg
+		}
+
+		expectedDecision := expected[i]
+
+		// Compare action
+		actualAction, _ := actualDecision["action"].(string)
+		expectedAction, _ := expectedDecision["action"].(string)
+
+		// Skip comparison for "answer" actions - they're just progress updates
+		if actualAction == "answer" || expectedAction == "answer" {
+			log.Printf("[DEBUG] Decision %d: Skipping comparison for 'answer' action (progress update)", i)
+			continue
+		}
+
+		if actualAction != expectedAction {
+			errMsg := fmt.Sprintf("Decision %d: action mismatch (expected: %s, got: %s)", i, expectedAction, actualAction)
+			log.Printf("[ERROR] %s", errMsg)
+			return false, errMsg
+		}
+
+		// Compare tool
+		actualTool, _ := actualDecision["tool"].(string)
+		expectedTool, _ := expectedDecision["tool"].(string)
+		if actualTool != expectedTool {
+			errMsg := fmt.Sprintf("Decision %d: tool mismatch (expected: %s, got: %s)", i, expectedTool, actualTool)
+			log.Printf("[ERROR] %s", errMsg)
+			return false, errMsg
+		}
+
+		// Compare fields
+		actualFields, _ := actualDecision["fields"].([]interface{})
+		expectedFields, _ := expectedDecision["fields"].([]interface{})
+
+		if !compareFields(actualFields, expectedFields, i) {
+			errMsg := fmt.Sprintf("Decision %d: field mismatch", i)
+			return false, errMsg
+		}
+
+		log.Printf("[INFO] ✅ Decision %d: action=%s, tool=%s, fields match", i, actualAction, actualTool)
+	}
+
+	return true, ""
+}
+
+// compareFields compares field arrays
+func compareFields(actual []interface{}, expected []interface{}, decisionIndex int) bool {
+	// Get the action type from the parent decision context
+	// We need to know if this is "answer" or "finish" to skip field comparison
+
+	// Convert to maps for easier comparison
+	actualMap := make(map[string]string)
+	for _, f := range actual {
+		if fieldMap, ok := f.(map[string]interface{}); ok {
+			key, _ := fieldMap["key"].(string)
+			value, _ := fieldMap["value"].(string)
+			actualMap[key] = value
+		}
+	}
+
+	expectedMap := make(map[string]string)
+	for _, f := range expected {
+		if fieldMap, ok := f.(map[string]interface{}); ok {
+			key, _ := fieldMap["key"].(string)
+			value, _ := fieldMap["value"].(string)
+			expectedMap[key] = value
+		}
+	}
+
+	// Compare all expected fields
+	for key, expectedValue := range expectedMap {
+		actualValue, exists := actualMap[key]
+		if !exists {
+			log.Printf("[ERROR] Decision %d: missing field '%s'", decisionIndex, key)
+			return false
+		}
+
+		// Normalize whitespace for comparison
+		expectedValue = strings.TrimSpace(expectedValue)
+		actualValue = strings.TrimSpace(actualValue)
+
+		// Empty values are OK
+		if expectedValue == "" && actualValue == "" {
+			continue
+		}
+
+		// Skip comparison for LLM-generated content fields
+		if key == "output" || key == "body" {
+			// These contain LLM responses which will vary
+			// Just check they're not empty
+			if actualValue != "" {
+				log.Printf("[DEBUG] Decision %d: Skipping exact comparison for field '%s' (LLM-generated content)", decisionIndex, key)
+				continue
+			}
+		}
+
+		// For URL fields, use fuzzy matching (same as mock)
+		if key == "url" {
+			expectedURL, err1 := url.Parse(expectedValue)
+			actualURL, err2 := url.Parse(actualValue)
+
+			if err1 == nil && err2 == nil {
+				// Use the same fuzzy matching logic as the mock
+				score := calculateURLSimilarity(actualURL, expectedURL)
+				if score >= 0.80 {
+					log.Printf("[DEBUG] Decision %d: URL fuzzy match (%.1f%% similarity)", decisionIndex, score*100)
+					continue
+				} else {
+					log.Printf("[ERROR] Decision %d: URL mismatch (%.1f%% similarity). Expected: %s, Got: %s", decisionIndex, score*100, expectedValue, actualValue)
+					return false
+				}
+			}
+		}
+
+		// Exact match for other fields
+		if expectedValue != actualValue {
+			log.Printf("[ERROR] Decision %d: field '%s' mismatch (expected: %s, got: %s)", decisionIndex, key, expectedValue, actualValue)
+			return false
+		}
+	}
+
+	return true
 }
