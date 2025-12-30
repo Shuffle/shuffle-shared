@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // MockToolCall represents a single tool call with its request and response
@@ -44,14 +45,12 @@ type MockUseCaseData struct {
 func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, error) {
 	log.Printf("[DEBUG][%s] Mock handler called for tool=%s, action=%s", execution.ExecutionId, decision.Tool, decision.Action)
 
-	// Get the use case name from environment variable
 	useCase := os.Getenv("AGENT_TEST_USE_CASE")
 	if useCase == "" {
 		log.Printf("[ERROR][%s] AGENT_TEST_USE_CASE not set - cannot determine which test data to load", execution.ExecutionId)
 		return nil, "", decision.Tool, errors.New("AGENT_TEST_USE_CASE environment variable not set")
 	}
 
-	// Get mock response from the hypothetical function
 	response, err := GetMockSingulResponse(useCase, decision.Fields)
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed to get mock response: %s", execution.ExecutionId, err)
@@ -66,7 +65,7 @@ func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDeci
 		return response, "", decision.Tool, err
 	}
 
-	// Extract the raw_response field (same logic as RunAgentDecisionSingulActionHandler)
+	// Extract the raw_response field
 	body := response
 	if val, ok := outputMapped.RawResponse.(string); ok {
 		body = []byte(val)
@@ -88,24 +87,22 @@ func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDeci
 	return body, "", decision.Tool, nil
 }
 
-// GetMockSingulResponse is the hypothetical function that returns mock Singul responses
+// GetMockSingulResponse is the function that returns mock Singul responses
 // It loads the use case data and matches based on URL and fields
 //
 // Parameters:
-//   - useCase: The use case name (e.g., "get_weather_kakinada")
+//   - useCase: The use case name
 //   - fields: The request fields containing url, method, headers, body
 //
 // Returns:
 //   - response: The mock Singul response as bytes (in Singul format)
 //   - error: Any error that occurred
 func GetMockSingulResponse(useCase string, fields []Valuereplace) ([]byte, error) {
-	// Load the use case data from file
 	useCaseData, err := loadUseCaseData(useCase)
 	if err != nil {
 		return nil, err
 	}
 
-	// Extract URL from fields
 	requestURL := extractFieldValue(fields, "url")
 	if requestURL == "" {
 		return nil, errors.New("no URL found in request fields")
@@ -113,7 +110,6 @@ func GetMockSingulResponse(useCase string, fields []Valuereplace) ([]byte, error
 
 	log.Printf("[DEBUG] Looking for mock data with URL: %s", requestURL)
 
-	// Find matching tool calls by URL (order‑independent)
 	var candidates []MockToolCall
 	reqURLParsed, err := url.Parse(requestURL)
 	if err != nil {
@@ -165,18 +161,16 @@ func urlsEqual(req *url.URL, stored string) bool {
 		log.Printf("[WARN] Invalid stored URL %s: %v", stored, err)
 		return false
 	}
-	// Compare scheme, host, and path exactly
 	if req.Scheme != storedURL.Scheme || req.Host != storedURL.Host || req.Path != storedURL.Path {
 		return false
 	}
-	// Parse query parameters into maps
 	reqQuery := req.Query()
 	storedQuery := storedURL.Query()
 	// If the number of parameters differs, not a match
 	if len(reqQuery) != len(storedQuery) {
 		return false
 	}
-	// Ensure each key/value pair matches (order‑independent)
+
 	for key, reqVals := range reqQuery {
 		storedVals, ok := storedQuery[key]
 		if !ok {
@@ -196,28 +190,23 @@ func urlsEqual(req *url.URL, stored string) bool {
 
 // loadUseCaseData loads the test data for a given use case from JSON file
 func loadUseCaseData(useCase string) (*MockUseCaseData, error) {
-	// Try multiple possible paths
 	possiblePaths := []string{}
 
-	// 1. Environment variable (highest priority)
 	if envPath := os.Getenv("AGENT_TEST_DATA_PATH"); envPath != "" {
 		possiblePaths = append(possiblePaths, envPath)
 	}
 
-	// 2. Current directory
 	possiblePaths = append(possiblePaths, "agent_test_data")
-
-	// 3. Parent directory (if running from backend)
 	possiblePaths = append(possiblePaths, "../shuffle-shared/agent_test_data")
+	possiblePaths = append(possiblePaths, "../../shuffle-shared/agent_test_data")
 
-	// 4. Common absolute paths
-	possiblePaths = append(possiblePaths, "C:/Users/hari krishna/Documents/shuffle-shared/agent_test_data")
-	possiblePaths = append(possiblePaths, "/home/shuffle-shared/agent_test_data")
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		possiblePaths = append(possiblePaths, filepath.Join(homeDir, "Documents", "shuffle-shared", "agent_test_data"))
+	}
 
 	var filePath string
 	var foundPath string
 
-	// Try each path
 	for _, basePath := range possiblePaths {
 		testPath := filepath.Join(basePath, fmt.Sprintf("%s.json", useCase))
 		if _, err := os.Stat(testPath); err == nil {
@@ -233,13 +222,11 @@ func loadUseCaseData(useCase string) (*MockUseCaseData, error) {
 
 	log.Printf("[DEBUG] Loading use case data from: %s", filePath)
 
-	// Read the file
 	data, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read use case file %s: %s", filePath, err)
 	}
 
-	// Parse JSON
 	var useCaseData MockUseCaseData
 	err = json.Unmarshal(data, &useCaseData)
 	if err != nil {
@@ -261,7 +248,6 @@ func extractFieldValue(fields []Valuereplace, key string) string {
 	return ""
 }
 
-// fieldsMatch checks if the request fields match the stored fields
 func fieldsMatch(requestFields []Valuereplace, storedFields map[string]string) bool {
 	// Convert request fields to map for easier comparison
 	requestMap := make(map[string]string)
@@ -269,7 +255,6 @@ func fieldsMatch(requestFields []Valuereplace, storedFields map[string]string) b
 		requestMap[field.Key] = field.Value
 	}
 
-	// Compare all stored fields
 	for key, storedValue := range storedFields {
 		requestValue, exists := requestMap[key]
 		if !exists || requestValue != storedValue {
@@ -280,11 +265,221 @@ func fieldsMatch(requestFields []Valuereplace, storedFields map[string]string) b
 	return true
 }
 
-// marshalResponse marshals the response map to JSON bytes
 func marshalResponse(response map[string]interface{}) ([]byte, error) {
 	data, err := json.Marshal(response)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal response: %s", err)
 	}
 	return data, nil
+}
+
+// analyzeTestFailureWithLLM uses LLM to provide detailed analysis of why a test failed
+func analyzeTestFailureWithLLM(actualDecisions []interface{}, expectedDecisions []map[string]interface{}, isTimeout bool) string {
+	cleanActual := stripRawResponses(actualDecisions)
+	cleanExpected := stripRawResponsesFromMaps(expectedDecisions)
+
+	actualJSON, err := json.MarshalIndent(cleanActual, "", "  ")
+	if err != nil {
+		return "Failed to analyze: could not marshal actual decisions"
+	}
+
+	expectedJSON, err := json.MarshalIndent(cleanExpected, "", "  ")
+	if err != nil {
+		return "Failed to analyze: could not marshal expected decisions"
+	}
+
+	systemMessage := `You are analyzing agent test failures.
+Focus on what the agent ACTUALLY did and where it got stuck.
+
+Output rules:
+- Start with what the agent successfully completed
+- Identify the SPECIFIC action and tool where it failed or got stuck
+- Compare only that failure point with what was expected
+- Ignore answer and finish actions - focus only on API calls and tool usage
+- Be concise (max 2-3 sentences)
+- Use plain language without special characters like quotes, backticks, or brackets
+- Name the specific API or tool that failed
+
+Example output format:
+Agent completed geocoding API call successfully. Got stuck on weather API call - agent used URL with different parameters than expected (missing daily forecast params and using timezone=auto instead of Asia/Kolkata).`
+
+	var userMessage string
+	if isTimeout {
+		userMessage = fmt.Sprintf(`The agent test timed out.
+
+What the agent ACTUALLY did:
+%s
+
+What was EXPECTED (full test plan):
+%s
+
+Analyze from the agent's perspective:
+1. Which API calls or tools did the agent successfully complete?
+2. Where exactly did it get stuck or fail?
+3. What was different about that specific action compared to what was expected?
+4. Ignore any answer or finish actions - focus only on the actual work (API calls, tools).`, string(actualJSON), string(expectedJSON))
+	} else {
+		userMessage = fmt.Sprintf(`The agent test failed.
+
+What the agent ACTUALLY did:
+%s
+
+What was EXPECTED:
+%s
+
+Analyze from the agent's perspective:
+1. Which actions did the agent complete successfully?
+2. Which specific action/tool failed and why?
+3. What was the difference between what the agent did vs what was expected?
+4. Ignore any answer or finish actions.`, string(actualJSON), string(expectedJSON))
+	}
+
+	responseBody, err := RunAiQuery(systemMessage, userMessage)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get LLM analysis: %s", err)
+		return "Failed to analyze with LLM"
+	}
+
+	failureReason := strings.TrimSpace(responseBody)
+	if after, ok := strings.CutPrefix(failureReason, "```"); ok {
+		failureReason = after
+	}
+	if after, ok := strings.CutSuffix(failureReason, "```"); ok {
+		failureReason = after
+	}
+	failureReason = strings.TrimSpace(failureReason)
+
+	log.Printf("[INFO] LLM Analysis: %s", failureReason)
+	return failureReason
+}
+
+// Hmmm, let's see if this helps with token usage, stripRawResponses removes raw_response fields from decisions to save LLM tokens
+func stripRawResponses(decisions []interface{}) []interface{} {
+	cleaned := make([]interface{}, len(decisions))
+	for i, d := range decisions {
+		if decisionMap, ok := d.(map[string]interface{}); ok {
+			cleanedDecision := make(map[string]interface{})
+			for k, v := range decisionMap {
+				// Skip raw_response and other verbose fields
+				if k != "raw_response" && k != "RawResponse" && k != "debug_url" && k != "DebugUrl" {
+					cleanedDecision[k] = v
+				}
+			}
+			cleaned[i] = cleanedDecision
+		} else {
+			cleaned[i] = d
+		}
+	}
+	return cleaned
+}
+
+// stripRawResponsesFromMaps removes raw_response fields from expected decisions
+func stripRawResponsesFromMaps(decisions []map[string]interface{}) []map[string]interface{} {
+	cleaned := make([]map[string]interface{}, len(decisions))
+	for i, decisionMap := range decisions {
+		cleanedDecision := make(map[string]interface{})
+		for k, v := range decisionMap {
+			if k != "raw_response" && k != "RawResponse" && k != "debug_url" && k != "DebugUrl" {
+				cleanedDecision[k] = v
+			}
+		}
+		cleaned[i] = cleanedDecision
+	}
+	return cleaned
+}
+
+// findBestFuzzyMatch finds the most similar URL from stored tool calls
+// Returns the best match and its similarity score (0.0 to 1.0)
+func findBestFuzzyMatch(reqURL *url.URL, toolCalls []MockToolCall) (MockToolCall, float64) {
+	var bestMatch MockToolCall
+	bestScore := 0.0
+
+	for _, tc := range toolCalls {
+		storedURL, err := url.Parse(tc.URL)
+		if err != nil {
+			continue
+		}
+
+		score := calculateURLSimilarity(reqURL, storedURL)
+		if score > bestScore {
+			bestScore = score
+			bestMatch = tc
+		}
+	}
+
+	return bestMatch, bestScore
+}
+
+// calculateURLSimilarity returns a score from 0.0 to 1.0 indicating how similar two URLs are
+func calculateURLSimilarity(url1, url2 *url.URL) float64 {
+	score := 0.0
+	totalWeight := 0.0
+
+	// Scheme (10% weight)
+	if url1.Scheme == url2.Scheme {
+		score += 0.10
+	}
+	totalWeight += 0.10
+
+	// Host (20% weight)
+	if url1.Host == url2.Host {
+		score += 0.20
+	}
+	totalWeight += 0.20
+
+	// Path (20% weight)
+	if url1.Path == url2.Path {
+		score += 0.20
+	}
+	totalWeight += 0.20
+
+	// Query parameters (50% weight)
+	query1 := url1.Query()
+	query2 := url2.Query()
+
+	if len(query1) == 0 && len(query2) == 0 {
+		score += 0.50
+	} else if len(query1) > 0 || len(query2) > 0 {
+		matchingParams := 0
+		totalParams := 0
+
+		allKeys := make(map[string]bool)
+		for k := range query1 {
+			allKeys[k] = true
+		}
+		for k := range query2 {
+			allKeys[k] = true
+		}
+		totalParams = len(allKeys)
+
+		// Count how many match
+		for key := range allKeys {
+			val1, ok1 := query1[key]
+			val2, ok2 := query2[key]
+
+			if ok1 && ok2 {
+				// Both have this key - check if values match
+				if len(val1) == len(val2) {
+					allMatch := true
+					for i := range val1 {
+						if val1[i] != val2[i] {
+							allMatch = false
+							break
+						}
+					}
+					if allMatch {
+						matchingParams++
+					}
+				}
+			}
+		}
+
+		if totalParams > 0 {
+			paramScore := float64(matchingParams) / float64(totalParams)
+			score += paramScore * 0.50
+		}
+	}
+	totalWeight += 0.50
+
+	return score / totalWeight
 }
