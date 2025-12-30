@@ -11991,8 +11991,12 @@ func RunAgentTests(resp http.ResponseWriter, request *http.Request) {
 	}
 	possiblePaths = append(possiblePaths, "agent_test_data")
 	possiblePaths = append(possiblePaths, "../shuffle-shared/agent_test_data")
-	possiblePaths = append(possiblePaths, "C:/Users/hari krishna/Documents/shuffle-shared/agent_test_data")
-	possiblePaths = append(possiblePaths, "/home/shuffle-shared/agent_test_data")
+	possiblePaths = append(possiblePaths, "../../shuffle-shared/agent_test_data")
+
+	// Add cross-platform paths using home directory
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		possiblePaths = append(possiblePaths, filepath.Join(homeDir, "Documents", "shuffle-shared", "agent_test_data"))
+	}
 
 	// Find the first valid path
 	testDataPath := ""
@@ -12070,6 +12074,7 @@ func RunAgentTests(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Set environment for this test case
+		os.Setenv("AGENT_TEST_MODE", "true")
 		os.Setenv("AGENT_TEST_USE_CASE", useCaseName)
 
 		// Run the test
@@ -12094,6 +12099,11 @@ func RunAgentTests(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] ========== Test Summary ==========")
 	log.Printf("[INFO] Total: %d, Passed: %d, Failed: %d", totalTests, passedTests, failedTests)
+
+	// Clean up: Disable test mode after tests complete
+	os.Setenv("AGENT_TEST_MODE", "false")
+	os.Setenv("AGENT_TEST_USE_CASE", "")
+	log.Printf("[INFO] Test mode disabled")
 
 	// Build response
 	type TestResponse struct {
@@ -12220,6 +12230,7 @@ func runSingleAgentTest(ctx context.Context, request *http.Request, testCase Moc
 	retryDelay := 5 * time.Second
 
 	var finalResult map[string]interface{}
+	var lastPolledResult map[string]interface{} // Keep track of last result even if not finished
 	agentFinished := false
 
 	for i := 0; i < maxRetries; i++ {
@@ -12276,6 +12287,9 @@ func runSingleAgentTest(ctx context.Context, request *http.Request, testCase Moc
 			continue
 		}
 
+		// Store this as last polled result (even if not finished)
+		lastPolledResult = parsedResult
+
 		// Check if finished
 		status, ok := parsedResult["status"].(string)
 		if ok && status == "FINISHED" {
@@ -12287,7 +12301,18 @@ func runSingleAgentTest(ctx context.Context, request *http.Request, testCase Moc
 
 	if !agentFinished {
 		log.Printf("[ERROR] Agent did not finish within timeout (%d retries)", maxRetries)
-		return false, fmt.Sprintf("Agent did not finish within timeout (%d retries)", maxRetries)
+
+		// Get ALL decisions from last polled result (not just finished ones!)
+		var allDecisions []interface{}
+		if lastPolledResult != nil {
+			if decisions, ok := lastPolledResult["decisions"].([]interface{}); ok {
+				allDecisions = decisions
+			}
+		}
+
+		// Use LLM to analyze timeout failure with COMPLETE picture
+		llmReason := analyzeTestFailureWithLLM(allDecisions, testCase.ExpectedDecisions, true)
+		return false, fmt.Sprintf("Timeout after %d retries. %s", maxRetries, llmReason)
 	}
 
 	log.Printf("[INFO] ✅ Agent finished")
@@ -12317,6 +12342,11 @@ func runSingleAgentTest(ctx context.Context, request *http.Request, testCase Moc
 
 		// Compare decisions
 		passed, errMsg := compareDecisions(actualDecisions, tempData.ExpectedDecisions)
+		if !passed {
+			// Use LLM to provide detailed analysis
+			llmReason := analyzeTestFailureWithLLM(actualDecisions, tempData.ExpectedDecisions, false)
+			return false, llmReason
+		}
 		return passed, errMsg
 	}
 
