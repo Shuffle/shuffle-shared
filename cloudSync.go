@@ -2109,6 +2109,32 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	debugUrl := ""
 	log.Printf("[INFO][%s] Running agent decision action '%s' with app '%s'. This is ran with Singul.", execution.ExecutionId, decision.Action, decision.Tool)
 
+	// Check if running in test mode
+	if os.Getenv("AGENT_TEST_MODE") == "true" {
+		log.Printf("[DEBUG][%s] AGENT_TEST_MODE enabled - using mock tool execution", execution.ExecutionId)
+
+		// Call mock function instead of real Singul
+		// Mock function signature:
+		// func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, error)
+		//
+		// Inputs needed:
+		// - execution: Full execution context (ExecutionId, Authorization, Workflow, etc)
+		// - decision: The decision to execute (Tool, Action, Fields, etc)
+		//
+		// Returns: (rawResponse []byte, debugUrl string, appname string, error)
+		// - rawResponse: The mock tool result (what Singul would return)
+		// - debugUrl: Debug URL (can be empty in tests)
+		// - appname: The app name (decision.Tool)
+		// - error: Any error that occurred
+		//
+		// The mock function should:
+		// 1. Load stored result based on decision.Tool + decision.Action
+		// 2. Return it in the same format as real Singul
+		// 3. The caller (RunAgentDecisionAction) will handle posting to /streams
+
+		return RunAgentDecisionMockHandler(execution, decision)
+	}
+
 	baseUrl := "https://shuffler.io"
 	if os.Getenv("BASE_URL") != "" {
 		baseUrl = os.Getenv("BASE_URL")

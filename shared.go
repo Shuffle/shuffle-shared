@@ -16278,8 +16278,28 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	}
 
 	if foundActionResultIndex < 0 {
-		log.Printf("[ERROR][%s] Action '%s' was NOT found with any result in the execution (yet)", workflowExecution.ExecutionId, actionResult.Action.ID)
-		return &workflowExecution, false, errors.New(fmt.Sprintf("ActionResultIndex: Agent node ID for decision ID %s not found", decisionId))
+		// In test mode, Singul doesn't create sub-executions, so we need to handle this gracefully
+		if os.Getenv("AGENT_TEST_MODE") == "true" {
+			log.Printf("[DEBUG][%s] AGENT_TEST_MODE: Action '%s' not found in results, creating placeholder", workflowExecution.ExecutionId, actionResult.Action.ID)
+
+			// Create a placeholder result for the agent action
+			placeholderResult := ActionResult{
+				Action:      actionResult.Action,
+				ExecutionId: workflowExecution.ExecutionId,
+				Result:      `{"status":"RUNNING","decisions":[]}`,
+				StartedAt:   time.Now().Unix(),
+				CompletedAt: 0,
+				Status:      "EXECUTING",
+			}
+
+			workflowExecution.Results = append(workflowExecution.Results, placeholderResult)
+			foundActionResultIndex = len(workflowExecution.Results) - 1
+
+			log.Printf("[DEBUG][%s] Created placeholder result at index %d", workflowExecution.ExecutionId, foundActionResultIndex)
+		} else {
+			log.Printf("[ERROR][%s] Action '%s' was NOT found with any result in the execution (yet)", workflowExecution.ExecutionId, actionResult.Action.ID)
+			return &workflowExecution, false, errors.New(fmt.Sprintf("ActionResultIndex: Agent node ID for decision ID %s not found", decisionId))
+		}
 	}
 
 	mappedResult := AgentOutput{}
@@ -16289,6 +16309,28 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed unmarshalling agent result: %s. Data: %s", workflowExecution.ExecutionId, err, actionResult.Result)
 		return &workflowExecution, false, err
+	}
+
+	// In test mode, if the placeholder has no decisions, we need to add the incoming decision
+	if os.Getenv("AGENT_TEST_MODE") == "true" && len(mappedResult.Decisions) == 0 {
+		log.Printf("[DEBUG][%s] AGENT_TEST_MODE: Placeholder has no decisions, parsing incoming decision", workflowExecution.ExecutionId)
+
+		// Parse the incoming decision from actionResult
+		incomingDecision := AgentDecision{}
+		err = json.Unmarshal([]byte(actionResult.Result), &incomingDecision)
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed unmarshalling incoming decision: %s", workflowExecution.ExecutionId, err)
+		} else {
+			// Add the decision to the mapped result
+			mappedResult.Decisions = append(mappedResult.Decisions, incomingDecision)
+			mappedResult.Status = "RUNNING"
+
+			// Update the workflow execution result with the new decision
+			updatedResult, _ := json.Marshal(mappedResult)
+			workflowExecution.Results[foundActionResultIndex].Result = string(updatedResult)
+
+			log.Printf("[DEBUG][%s] Added decision %s to placeholder (total decisions: %d)", workflowExecution.ExecutionId, incomingDecision.RunDetails.Id, len(mappedResult.Decisions))
+		}
 	}
 
 	// FIXME: Need to check the current value from the workflowexecution here, instead of using the currently sent in decision
