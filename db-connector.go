@@ -3265,8 +3265,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		}
 	} else {
 		// Cloud database
-		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(200)
-
+		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(400)
 		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
 		if err != nil {
 			if !strings.Contains(err.Error(), `cannot load field`) {
@@ -4090,7 +4089,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
 			} else {
-				log.Printf("[ERROR] Problem in org loading (2) for %s: %s", key, err)
 				if strings.Contains(err.Error(), `no such entity`) && project.CacheDb {
 					neworg, err := json.Marshal(curOrg)
 					if err != nil {
@@ -4102,7 +4100,10 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 					if err != nil {
 						log.Printf("[ERROR] Failed updating org cache (3): %s", err)
 					}
+				} else {
+					log.Printf("[ERROR] Problem in org loading (2) for %s: %s", key, err)
 				}
+
 				//orgErr = err
 				return &Org{}, err
 			}
@@ -4462,7 +4463,7 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 		}
 	}
 
-	if org.SSOConfig.SSOEntrypoint != "" && org.Defaults.NotificationWorkflow != "" {
+	if org.SSOConfig.SSORequired {
 		allSteps[3].Done = true
 	} else {
 		allSteps[3].Link = "/admin?admin_tab=organization"
@@ -5376,32 +5377,32 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 // Also validates that the clientID matches the org's configured SSO
 func FindUserBySSOIdentity(ctx context.Context, sub, clientID, orgID, email string) (User, error) {
 	var emptyUser User
-	
+
 	// Check if Sub is empty - user hasn't connected SSO yet
 	if sub == "" {
 		return emptyUser, errors.New("connect user account with SSO first")
 	}
-	
+
 	if clientID == "" || orgID == "" || email == "" {
 		return emptyUser, errors.New("clientID, orgID, and email are all required")
 	}
-	
+
 	// Verify the clientID actually matches the org's SSO configuration
 	org, err := GetOrg(ctx, orgID)
 	if err != nil {
 		return emptyUser, fmt.Errorf("failed to get org %s: %w", orgID, err)
 	}
-	
+
 	if org.SSOConfig.OpenIdClientId != clientID {
 		return emptyUser, fmt.Errorf("clientID %s does not match org's configured SSO client ID %s", clientID, org.SSOConfig.OpenIdClientId)
 	}
-	
+
 	// Normalize email for comparison
 	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
-	
+
 	nameKey := "Users"
 	var users []User
-	
+
 	if project.DbType == "opensearch" {
 		// OpenSearch query to find users with matching SSO info
 		var buf bytes.Buffer
@@ -5445,11 +5446,11 @@ func FindUserBySSOIdentity(ctx context.Context, sub, clientID, orgID, email stri
 				},
 			},
 		}
-		
+
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			return emptyUser, fmt.Errorf("failed to encode opensearch query: %w", err)
 		}
-		
+
 		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
 			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
 			Body:    &buf,
@@ -5460,23 +5461,23 @@ func FindUserBySSOIdentity(ctx context.Context, sub, clientID, orgID, email stri
 		if err != nil {
 			return emptyUser, fmt.Errorf("opensearch query failed: %w", err)
 		}
-		
+
 		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode != 200 && res.StatusCode != 201 {
 			return emptyUser, fmt.Errorf("opensearch error response: %d", res.StatusCode)
 		}
-		
+
 		var r map[string]interface{}
 		if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 			return emptyUser, fmt.Errorf("failed to parse opensearch response: %w", err)
 		}
-		
+
 		hits, ok := r["hits"].(map[string]interface{})["hits"].([]interface{})
 		if !ok {
 			return emptyUser, errors.New("no matching user found")
 		}
-		
+
 		for _, hit := range hits {
 			if source, ok := hit.(map[string]interface{})["_source"]; ok {
 				data, _ := json.Marshal(source)
@@ -5494,14 +5495,14 @@ func FindUserBySSOIdentity(ctx context.Context, sub, clientID, orgID, email stri
 		if err != nil {
 			return emptyUser, fmt.Errorf("datastore query failed: %w", err)
 		}
-		
+
 		// Filter users to find exact SSO match
 		var matchingUsers []User
 		for _, user := range users {
 			for _, ssoInfo := range user.SSOInfos {
-				if ssoInfo.Sub == sub && 
-				   ssoInfo.ClientID == clientID && 
-				   ssoInfo.OrgID == orgID {
+				if ssoInfo.Sub == sub &&
+					ssoInfo.ClientID == clientID &&
+					ssoInfo.OrgID == orgID {
 					matchingUsers = append(matchingUsers, user)
 					break
 				}
@@ -5509,17 +5510,17 @@ func FindUserBySSOIdentity(ctx context.Context, sub, clientID, orgID, email stri
 		}
 		users = matchingUsers
 	}
-	
+
 	if len(users) == 0 {
 		return emptyUser, fmt.Errorf("no user found with Sub=%s, ClientID=%s, OrgID=%s, Email=%s", sub, clientID, orgID, normalizedEmail)
 	}
-	
+
 	if len(users) > 1 {
-		log.Printf("[CRITICAL] Multiple users found with same SSO identity: Sub=%s, ClientID=%s, OrgID=%s, Email=%s", 
+		log.Printf("[CRITICAL] Multiple users found with same SSO identity: Sub=%s, ClientID=%s, OrgID=%s, Email=%s",
 			sub, clientID, orgID, normalizedEmail)
 		return emptyUser, errors.New("multiple users found with same SSO identity - data integrity issue")
 	}
-	
+
 	return users[0], nil
 }
 
@@ -5817,6 +5818,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 }
 
 func (u *User) GetSSOInfo(orgID string) (SSOInfo, bool) {
+	log.Printf("[DEBUG] Getting SSOInfo for user %s and org %s", u.Id, orgID)
 	for _, sso := range u.SSOInfos {
 		if sso.OrgID == orgID {
 			return sso, true
@@ -6216,7 +6218,10 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 		go func(orgId string) {
 			org, err := GetOrg(ctx, orgId)
 			if err != nil {
-				log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
+				if !strings.Contains(err.Error(), "doesn't exist") {
+					log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
+				}
+					
 				return
 			}
 
@@ -12681,7 +12686,7 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 
 		return orgs, nil
 	} else {
-		q := datastore.NewQuery(nameKey).Limit(100)
+		q := datastore.NewQuery(nameKey).Limit(400)
 
 		_, err := project.Dbclient.GetAll(ctx, q, &orgs)
 		if err != nil {
@@ -13309,6 +13314,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				cacheData.SuborgDistribution = config.SuborgDistribution
 				cacheData.PublicAuthorization = config.PublicAuthorization
 
+				if len(cacheData.Tags) == 0 {
+					cacheData.Tags = config.Tags
+				}
+
 				cacheData.Existed = true
 			}
 
@@ -13345,7 +13354,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 			// URL encode
 			datastoreId = url.QueryEscape(datastoreId)
-			if len(cacheData.PublicAuthorization) == 0 {
+			if len(cacheData.PublicAuthorization) == 0 && cacheData.Category != "protected" {
 				cacheData.PublicAuthorization = uuid.NewV4().String()
 			}
 
@@ -13763,7 +13772,7 @@ func SetDatastoreKeyRevision(ctx context.Context, cacheData CacheKeyData) error 
 	}
 
 	cacheData.Authorization = ""
-	if len(cacheData.PublicAuthorization) == 0 {
+	if len(cacheData.PublicAuthorization) == 0 && cacheData.Category != "protected" {
 		cacheData.PublicAuthorization = uuid.NewV4().String()
 	}
 
@@ -13829,7 +13838,7 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 	}
 
 	cacheData.Authorization = ""
-	if len(cacheData.PublicAuthorization) == 0 {
+	if len(cacheData.PublicAuthorization) == 0 && cacheData.Category != "protected" {
 		cacheData.PublicAuthorization = uuid.NewV4().String()
 	}
 
@@ -13956,7 +13965,9 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 
 	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
 	if len(category) > 0 && category != "default" {
-		if !strings.HasSuffix(id, category) {
+		// FIXME: If they key itself is 'test_protected' and category 
+		// is 'protected' this breaks... Keeping it for now.
+		if !strings.HasSuffix(id, fmt.Sprintf("_%s", category)) {
 			id = fmt.Sprintf("%s_%s", id, category)
 		}
 	}
@@ -14016,9 +14027,8 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 		cacheData = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
-
 		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
-			//log.Printf("ERROR: Failed getting cache key %s: %s", id, err)
+			//log.Printf("[WARNING]: Failed getting cache key %s: %s", id, err)
 
 			if strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[ERROR] Error in cache key loading. Migrating org cache to new handler (3): %s", err)
@@ -14089,7 +14099,9 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 		newValue, err := HandleKeyDecryption([]byte(cacheData.Value), encryptionKey)
 		if err == nil {
 			cacheData.Value = string(newValue)
-			cacheData.Encrypted = false
+
+			// Not removing this as it just causes confusion
+			//cacheData.Encrypted = false
 		}
 	}
 
@@ -14160,6 +14172,9 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 
 			log.Printf("[DEBUG] Multiple memcached servers detected. Split into %#v", newMemcached)
 			mc = gomemcache.New(newMemcached...)
+		} else {
+			log.Printf("[DEBUG] Initializing single memcached client with memcached url: %s", memcached)
+			mc = gomemcache.New(memcached)
 		}
 
 		mc.Timeout = 10 * time.Second
@@ -14209,6 +14224,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 			return project, errors.New(fmt.Sprintf("Bad status code from ES: %d", res.StatusCode))
 		} else {
 			//log.Printf("\n\n[INFO] Should check for SSO during setup - finding main org\n\n")
+			/*
 			orgs, err := GetAllOrgs(ctx)
 			if err == nil {
 				for _, org := range orgs {
@@ -14221,6 +14237,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 			} else {
 				log.Printf("[WARNING] Error loading orgs: %s", err)
 			}
+			*/
 		}
 	} else {
 		// Fix potential cloud init problems here

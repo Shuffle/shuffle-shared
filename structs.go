@@ -683,7 +683,6 @@ type User struct {
 
 	// Old web3 integration
 	EthInfo EthInfo `datastore:"eth_info" json:"eth_info"`
-
 	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
 }
 
@@ -1097,6 +1096,7 @@ type Org struct {
 	CreatorOrg   string      `json:"creator_org" datastore:"creator_org"`
 	Branding     OrgBranding `json:"branding" datastore:"branding"`
 	Licensed     bool        `json:"licensed" datastore:"licensed"` //Track onprem license
+	OldOrg       bool        `json:"old_org" datastore:"old_org"`   // This is true for org older then 30 days
 }
 
 type Billing struct {
@@ -1183,6 +1183,18 @@ type DatastoreKeyMini struct {
 	Existed bool   `json:"existed" datastore:"existed"` // If the key existed before the update
 }
 
+type CacheKeyDataMini struct {
+	Category      string `json:"category" datastore:"category"`
+	Key           string `json:"key" datastore:"Key"`
+	Value         string `json:"value" datastore:"Value,noindex"`
+
+	OrgId         string `json:"org_id,omitempty" datastore:"OrgId"`
+	ExecutionId   string `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	Authorization string `json:"authorization,omitempty" datastore:"Authorization"`
+	SuborgDistribution  []string `json:"suborg_distribution" datastore:"suborg_distribution"`
+	Tags []string `json:"tags,omitempty" datastore:"tags"`
+}
+
 type CacheKeyData struct {
 	Success       bool   `json:"success" datastore:"Success"`
 	WorkflowId    string `json:"workflow_id," datastore:"WorkflowId"`
@@ -1192,6 +1204,7 @@ type CacheKeyData struct {
 	Key           string `json:"key" datastore:"Key"`
 	Value         string `json:"value" datastore:"Value,noindex"`
 	Category      string `json:"category" datastore:"category"`
+	Tags		 []string `json:"tags,omitempty" datastore:"tags"`
 
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
@@ -3021,11 +3034,9 @@ type Oauth2Resp struct {
 }
 
 type OpenidUserinfo struct {
-	Sub           string   `json:"sub"`
-	Email         string   `json:"email"`
-	Roles         []string `json:"roles"`
-	EmailVerified bool     `json:"email_verified"`
-	CodeChallenge string   `json:"code_challenge"`
+	Sub   string   `json:"sub"`
+	Email string   `json:"email"`
+	Roles []string `json:"roles"`
 }
 
 type OpenidResp struct {
@@ -3086,10 +3097,12 @@ type SSOConfig struct {
 	SSOCertificate      string `json:"sso_certificate" datastore:"sso_certificate"`
 	SSOLongCertificate  string `json:"sso_long_certificate" datastore:"sso_long_certificate,noindex"`
 	SSOCertificateHash  string `json:"sso_certificate_hash" datastore:"sso_certificate_hash"`
+
 	OpenIdClientId      string `json:"client_id" datastore:"client_id"`
 	OpenIdClientSecret  string `json:"client_secret" datastore:"client_secret"`
 	OpenIdAuthorization string `json:"openid_authorization" datastore:"openid_authorization"`
 	OpenIdToken         string `json:"openid_token" datastore:"openid_token"`
+
 	SSORequired         bool   `json:"SSORequired" datastore:"SSORequired"`
 	// i have a distinct hatered for this name.
 	// says "auto_provision" but all logic treats it as disable_auto_provision.
@@ -4019,7 +4032,7 @@ type SchemalessOutput struct {
 
 	// Optional. Used for error handling.
 	RawResponse interface{} `json:"raw_response,omitempty"`
-	Retries     int         `json:"retries,omitempty"`
+	Retries int    `json:"retries,omitempty"`
 }
 
 type CategoryActionFieldOverride struct {
