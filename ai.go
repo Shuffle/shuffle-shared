@@ -11977,13 +11977,12 @@ func buildManualInputList(history []ConversationMessage, newPrompt string) []map
 	return items
 }
 
-// RunAgentTests runs automated tests for AI agents using test data from agent_test_data/
+// RunAgentTests runs automated tests for AI agent using test data from agent_test_data/
 func RunAgentTests(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 
 	log.Printf("[INFO] Starting automated agent tests")
 
-	// Try multiple possible paths (same as mock handler)
 	possiblePaths := []string{}
 
 	if envPath := os.Getenv("AGENT_TEST_DATA_PATH"); envPath != "" {
@@ -11993,12 +11992,10 @@ func RunAgentTests(resp http.ResponseWriter, request *http.Request) {
 	possiblePaths = append(possiblePaths, "../shuffle-shared/agent_test_data")
 	possiblePaths = append(possiblePaths, "../../shuffle-shared/agent_test_data")
 
-	// Add cross-platform paths using home directory
 	if homeDir, err := os.UserHomeDir(); err == nil {
 		possiblePaths = append(possiblePaths, filepath.Join(homeDir, "Documents", "shuffle-shared", "agent_test_data"))
 	}
 
-	// Find the first valid path
 	testDataPath := ""
 	for _, path := range possiblePaths {
 		if _, err := os.Stat(path); err == nil {
@@ -12028,11 +12025,6 @@ func RunAgentTests(resp http.ResponseWriter, request *http.Request) {
 	passedTests := 0
 	failedTests := 0
 
-	type TestResult struct {
-		TestCase string `json:"test_case"`
-		Status   string `json:"status"`
-		Error    string `json:"error,omitempty"`
-	}
 	results := []TestResult{}
 
 	// Run tests for each JSON file
@@ -12046,7 +12038,6 @@ func RunAgentTests(resp http.ResponseWriter, request *http.Request) {
 
 		log.Printf("[INFO] ========== Test %d: %s ==========", totalTests, useCaseName)
 
-		// Load test case
 		testFilePath := filepath.Join(testDataPath, file.Name())
 		testData, err := ioutil.ReadFile(testFilePath)
 		if err != nil {
@@ -12073,22 +12064,20 @@ func RunAgentTests(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		// Set environment for this test case
 		os.Setenv("AGENT_TEST_MODE", "true")
 		os.Setenv("AGENT_TEST_USE_CASE", useCaseName)
 
-		// Run the test
 		passed, testErr := runSingleAgentTest(ctx, request, testCase, useCaseName)
 		if passed {
 			passedTests++
-			log.Printf("[INFO] ✅ Test %d PASSED: %s", totalTests, useCaseName)
+			log.Printf("[INFO] Test %d PASSED: %s", totalTests, useCaseName)
 			results = append(results, TestResult{
 				TestCase: file.Name(),
 				Status:   "PASS",
 			})
 		} else {
 			failedTests++
-			log.Printf("[ERROR] ❌ Test %d FAILED: %s", totalTests, useCaseName)
+			log.Printf("[ERROR] Test %d FAILED: %s", totalTests, useCaseName)
 			results = append(results, TestResult{
 				TestCase: file.Name(),
 				Status:   "FAIL",
@@ -12105,15 +12094,6 @@ func RunAgentTests(resp http.ResponseWriter, request *http.Request) {
 	os.Setenv("AGENT_TEST_USE_CASE", "")
 	log.Printf("[INFO] Test mode disabled")
 
-	// Build response
-	type TestResponse struct {
-		Success bool         `json:"success"`
-		Total   int          `json:"total"`
-		Passed  int          `json:"passed"`
-		Failed  int          `json:"failed"`
-		Results []TestResult `json:"results"`
-	}
-
 	response := TestResponse{
 		Success: failedTests == 0,
 		Total:   totalTests,
@@ -12129,50 +12109,34 @@ func RunAgentTests(resp http.ResponseWriter, request *http.Request) {
 
 // runSingleAgentTest runs a single test case
 func runSingleAgentTest(ctx context.Context, request *http.Request, testCase MockUseCaseData, useCaseName string) (bool, string) {
-	// Get user prompt from test case
-	userPrompt := ""
-	if data, ok := testCase.ToolCalls[0].Response["user_prompt"].(string); ok {
-		userPrompt = data
-	}
-
-	// Try to get from top level
-	type TestCaseWithPrompt struct {
-		UserPrompt string `json:"user_prompt"`
-	}
-	var tempData TestCaseWithPrompt
-	testBytes, _ := json.Marshal(testCase)
-	json.Unmarshal(testBytes, &tempData)
-	if tempData.UserPrompt != "" {
-		userPrompt = tempData.UserPrompt
-	}
+	// Get user prompt from test case - check UserPrompt field directly
+	userPrompt := testCase.UserPrompt
 
 	if userPrompt == "" {
 		log.Printf("[ERROR] No user_prompt found in test case")
 		return false, "No user_prompt found in test case"
 	}
 
-	// Build request body for agent_starter
-	requestBody := map[string]interface{}{
-		"id":          uuid.NewV4().String(),
-		"name":        "agent",
-		"app_name":    "AI Agent",
-		"app_id":      "shuffle_agent",
-		"app_version": "1.0.0",
-		"environment": "cloud",
-		"parameters": []map[string]string{
+	startRequest := AgentStartRequest{
+		ID:          uuid.NewV4().String(),
+		Name:        "agent",
+		AppName:     "AI Agent",
+		AppID:       "shuffle_agent",
+		AppVersion:  "1.0.0",
+		Environment: "cloud",
+		Parameters: []map[string]string{
 			{"name": "app_name", "value": "openai"},
 			{"name": "input", "value": userPrompt},
 			{"name": "action", "value": "API"},
 		},
 	}
 
-	requestBodyBytes, err := json.Marshal(requestBody)
+	requestBodyBytes, err := json.Marshal(startRequest)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal request body: %s", err)
 		return false, fmt.Sprintf("Failed to marshal request body: %s", err)
 	}
 
-	// Call agent_starter endpoint
 	baseUrl := "http://localhost:5002"
 	if os.Getenv("BASE_URL") != "" {
 		baseUrl = os.Getenv("BASE_URL")
@@ -12185,7 +12149,6 @@ func runSingleAgentTest(ctx context.Context, request *http.Request, testCase Moc
 		return false, fmt.Sprintf("Failed to create start request: %s", err)
 	}
 
-	// Copy headers from original request
 	for key, values := range request.Header {
 		for _, value := range values {
 			req.Header.Add(key, value)
@@ -12207,11 +12170,7 @@ func runSingleAgentTest(ctx context.Context, request *http.Request, testCase Moc
 		return false, fmt.Sprintf("Failed to read start response: %s", err)
 	}
 
-	var startResponse struct {
-		Success       bool   `json:"success"`
-		ExecutionId   string `json:"execution_id"`
-		Authorization string `json:"authorization"`
-	}
+	var startResponse AgentStartResponse
 	err = json.Unmarshal(startBody, &startResponse)
 	if err != nil {
 		log.Printf("[ERROR] Failed to parse start response: %s", err)
@@ -12223,33 +12182,34 @@ func runSingleAgentTest(ctx context.Context, request *http.Request, testCase Moc
 		return false, fmt.Sprintf("Failed to start agent: %s", string(startBody))
 	}
 
-	log.Printf("[INFO] ✅ Started agent (execution_id: %s)", startResponse.ExecutionId)
+	// Log the agent UI URL for easy debugging
+	agentUrl := fmt.Sprintf("http://localhost:3002/agents?execution_id=%s&authorization=%s",
+		startResponse.ExecutionId, startResponse.Authorization)
+	log.Printf("[INFO] Started agent (execution_id: %s)", startResponse.ExecutionId)
+	log.Printf("[INFO] View agent execution: %s", agentUrl)
 
-	// Poll for results
 	maxRetries := 20
 	retryDelay := 5 * time.Second
 
-	var finalResult map[string]interface{}
-	var lastPolledResult map[string]interface{} // Keep track of last result even if not finished
+	var finalAgentOutput AgentOutput
+	var lastPolledOutput AgentOutput
 	agentFinished := false
 
 	for i := 0; i < maxRetries; i++ {
 		time.Sleep(retryDelay)
 
-		// Call streams/results endpoint
 		resultsUrl := fmt.Sprintf("%s/api/v1/streams/results", baseUrl)
-		resultsBody := map[string]string{
-			"execution_id":  startResponse.ExecutionId,
-			"authorization": startResponse.Authorization,
+		resultsRequest := StreamsResultRequest{
+			ExecutionID:   startResponse.ExecutionId,
+			Authorization: startResponse.Authorization,
 		}
-		resultsBodyBytes, _ := json.Marshal(resultsBody)
+		resultsBodyBytes, _ := json.Marshal(resultsRequest)
 
 		resultsReq, err := http.NewRequest("POST", resultsUrl, bytes.NewBuffer(resultsBodyBytes))
 		if err != nil {
 			continue
 		}
 
-		// Copy headers
 		for key, values := range request.Header {
 			for _, value := range values {
 				resultsReq.Header.Add(key, value)
@@ -12268,238 +12228,237 @@ func runSingleAgentTest(ctx context.Context, request *http.Request, testCase Moc
 			continue
 		}
 
-		var resultsData map[string]interface{}
+		var resultsData StreamsResultResponse
 		err = json.Unmarshal(resultsRespBody, &resultsData)
 		if err != nil {
 			continue
 		}
 
-		// Extract result field (which is a JSON string)
-		resultStr, ok := resultsData["result"].(string)
-		if !ok {
+		var agentOutput AgentOutput
+		var resultStr string
+
+		if len(resultsData.Results) > 0 {
+			for _, actionResult := range resultsData.Results {
+				if actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent" {
+					resultStr = actionResult.Result
+					break
+				}
+			}
+		}
+
+		if resultStr == "" {
+			resultStr = resultsData.Result
+		}
+
+		if resultStr == "" {
 			continue
 		}
 
-		// Parse the result string as JSON
-		var parsedResult map[string]interface{}
-		err = json.Unmarshal([]byte(resultStr), &parsedResult)
+		err = json.Unmarshal([]byte(resultStr), &agentOutput)
 		if err != nil {
 			continue
 		}
 
-		// Store this as last polled result (even if not finished)
-		lastPolledResult = parsedResult
+		lastPolledOutput = agentOutput
 
 		// Check if finished
-		status, ok := parsedResult["status"].(string)
-		if ok && status == "FINISHED" {
-			finalResult = parsedResult
+		if agentOutput.Status == "FINISHED" {
+			finalAgentOutput = agentOutput
 			agentFinished = true
 			break
 		}
 	}
 
-	if !agentFinished {
-		log.Printf("[ERROR] Agent did not finish within timeout (%d retries)", maxRetries)
+	log.Printf("[INFO] Agent execution completed (finished=%v)", agentFinished)
 
-		// Get ALL decisions from last polled result (not just finished ones!)
-		var allDecisions []interface{}
-		if lastPolledResult != nil {
-			if decisions, ok := lastPolledResult["decisions"].([]interface{}); ok {
-				allDecisions = decisions
-			}
-		}
-
-		// Use LLM to analyze timeout failure with COMPLETE picture
-		llmReason := analyzeTestFailureWithLLM(allDecisions, testCase.ExpectedDecisions, true)
-		return false, fmt.Sprintf("Timeout after %d retries. %s", maxRetries, llmReason)
+	// Use the last polled output (has the most recent decisions)
+	decisionsToCompare := finalAgentOutput.Decisions
+	if !agentFinished && len(lastPolledOutput.Decisions) > 0 {
+		decisionsToCompare = lastPolledOutput.Decisions
+		log.Printf("[WARN] Agent timed out - comparing partial results")
 	}
 
-	log.Printf("[INFO] ✅ Agent finished")
+	actualToolCalls := filterToolCallDecisions(decisionsToCompare)
+	expectedToolCalls := filterToolCallDecisions(testCase.ExpectedDecisions)
+
+	log.Printf("[INFO] Comparing decisions:")
+	log.Printf("[INFO]   Actual tool calls: %d", len(actualToolCalls))
+	log.Printf("[INFO]   Expected tool calls: %d", len(expectedToolCalls))
 
 	// Compare decisions
-	actualDecisions, ok := finalResult["decisions"].([]interface{})
-	if !ok {
-		log.Printf("[ERROR] No decisions found in result")
-		return false, "No decisions found in result"
+	passed, errMsg := compareDecisionsClean(actualToolCalls, expectedToolCalls, startResponse.ExecutionId, startResponse.Authorization)
+
+	if passed {
+		log.Printf("[INFO] ✓ Test PASSED: All decisions match expected")
+	} else {
+		log.Printf("[ERROR] ✗ Test FAILED:")
+		log.Printf("[ERROR] %s", errMsg)
 	}
 
-	// Get expected decisions from test case
-	expectedDecisionsRaw, ok := testCase.ToolCalls[0].Response["expected_decisions"]
-	if !ok {
-		// Try to get from parsed test case
-		type TestCaseWithDecisions struct {
-			ExpectedDecisions []map[string]interface{} `json:"expected_decisions"`
-		}
-		var tempData TestCaseWithDecisions
-		testBytes, _ := json.Marshal(testCase)
-		json.Unmarshal(testBytes, &tempData)
-
-		if len(tempData.ExpectedDecisions) == 0 {
-			log.Printf("[ERROR] No expected_decisions found in test case")
-			return false, "No expected_decisions found in test case"
-		}
-
-		// Compare decisions
-		passed, errMsg := compareDecisions(actualDecisions, tempData.ExpectedDecisions)
-		if !passed {
-			// Use LLM to provide detailed analysis
-			llmReason := analyzeTestFailureWithLLM(actualDecisions, tempData.ExpectedDecisions, false)
-			return false, llmReason
-		}
-		return passed, errMsg
-	}
-
-	expectedDecisions, ok := expectedDecisionsRaw.([]interface{})
-	if !ok {
-		log.Printf("[ERROR] expected_decisions is not an array")
-		return false, "expected_decisions is not an array"
-	}
-
-	// Convert to comparable format
-	expectedMaps := make([]map[string]interface{}, len(expectedDecisions))
-	for i, ed := range expectedDecisions {
-		if edMap, ok := ed.(map[string]interface{}); ok {
-			expectedMaps[i] = edMap
-		}
-	}
-
-	return compareDecisions(actualDecisions, expectedMaps)
+	return passed, errMsg
 }
 
-// compareDecisions compares actual vs expected decisions
-func compareDecisions(actual []interface{}, expected []map[string]interface{}) (bool, string) {
+func filterToolCallDecisions(decisions []AgentDecision) []AgentDecision {
+	var filtered []AgentDecision
+	for _, d := range decisions {
+		if d.Action == "answer" || d.Action == "ask" || d.Action == "finish" || d.Category == "standalone" {
+			continue
+		}
+		filtered = append(filtered, d)
+	}
+	return filtered
+}
+
+func compareDecisionsClean(actual []AgentDecision, expected []AgentDecision, execId, auth string) (bool, string) {
 	if len(actual) != len(expected) {
-		errMsg := fmt.Sprintf("Decision count mismatch: expected %d, got %d", len(expected), len(actual))
-		log.Printf("[ERROR] %s", errMsg)
-		return false, errMsg
+		return false, analyzeCountMismatch(actual, expected, execId)
 	}
 
 	for i := 0; i < len(actual); i++ {
-		actualDecision, ok := actual[i].(map[string]interface{})
-		if !ok {
-			errMsg := fmt.Sprintf("Decision %d: invalid format", i)
-			log.Printf("[ERROR] %s", errMsg)
-			return false, errMsg
-		}
-
+		actualDecision := actual[i]
 		expectedDecision := expected[i]
 
-		// Compare action
-		actualAction, _ := actualDecision["action"].(string)
-		expectedAction, _ := expectedDecision["action"].(string)
-
-		// Skip comparison for "answer" actions - they're just progress updates
-		if actualAction == "answer" || expectedAction == "answer" {
-			log.Printf("[DEBUG] Decision %d: Skipping comparison for 'answer' action (progress update)", i)
+		if actualDecision.Action == "answer" || expectedDecision.Action == "answer" {
+			log.Printf("[DEBUG] Decision %d: Skipping comparison for 'answer' action", i)
 			continue
 		}
 
-		if actualAction != expectedAction {
-			errMsg := fmt.Sprintf("Decision %d: action mismatch (expected: %s, got: %s)", i, expectedAction, actualAction)
-			log.Printf("[ERROR] %s", errMsg)
-			return false, errMsg
+		if actualDecision.Tool != expectedDecision.Tool {
+			return false, fmt.Sprintf(
+				"[%s] Decision %d: Wrong tool\n"+
+					"Expected: %s.%s\n"+
+					"Got:      %s.%s\n"+
+					"→ Agent chose wrong tool (should use %s, not %s)",
+				execId, i,
+				expectedDecision.Tool, expectedDecision.Action,
+				actualDecision.Tool, actualDecision.Action,
+				expectedDecision.Tool, actualDecision.Tool)
 		}
 
-		// Compare tool
-		actualTool, _ := actualDecision["tool"].(string)
-		expectedTool, _ := expectedDecision["tool"].(string)
-		if actualTool != expectedTool {
-			errMsg := fmt.Sprintf("Decision %d: tool mismatch (expected: %s, got: %s)", i, expectedTool, actualTool)
-			log.Printf("[ERROR] %s", errMsg)
-			return false, errMsg
+		if actualDecision.Action != expectedDecision.Action {
+			return false, fmt.Sprintf(
+				"[%s] Decision %d: Tool '%s' ✓, but wrong action\n"+
+					"Expected action: %s\n"+
+					"Got action:      %s\n"+
+					"→ Agent used correct tool but wrong action",
+				execId, i, actualDecision.Tool,
+				expectedDecision.Action, actualDecision.Action)
 		}
 
-		// Compare fields
-		actualFields, _ := actualDecision["fields"].([]interface{})
-		expectedFields, _ := expectedDecision["fields"].([]interface{})
-
-		if !compareFields(actualFields, expectedFields, i) {
-			errMsg := fmt.Sprintf("Decision %d: field mismatch", i)
-			return false, errMsg
+		if err := compareFieldsWithContext(actualDecision, expectedDecision, i, execId); err != "" {
+			return false, err
 		}
 
-		log.Printf("[INFO] ✅ Decision %d: action=%s, tool=%s, fields match", i, actualAction, actualTool)
+		log.Printf("[INFO] Decision %d: Tool '%s' ✓, Action '%s' ✓, Fields ✓", i, actualDecision.Tool, actualDecision.Action)
 	}
 
 	return true, ""
 }
 
-// compareFields compares field arrays
-func compareFields(actual []interface{}, expected []interface{}, decisionIndex int) bool {
-	// Get the action type from the parent decision context
-	// We need to know if this is "answer" or "finish" to skip field comparison
+func analyzeCountMismatch(actual []AgentDecision, expected []AgentDecision, execId string) string {
+	var report []string
+	report = append(report, fmt.Sprintf("[%s] Test Failed: Agent made different decisions than expected\n", execId))
 
-	// Convert to maps for easier comparison
-	actualMap := make(map[string]string)
-	for _, f := range actual {
-		if fieldMap, ok := f.(map[string]interface{}); ok {
-			key, _ := fieldMap["key"].(string)
-			value, _ := fieldMap["value"].(string)
-			actualMap[key] = value
+	// Show what the agent actually did
+	report = append(report, "What the agent did:")
+	for i, d := range actual {
+		url := extractURLFromFields(d.Fields)
+		if url != "" {
+			report = append(report, fmt.Sprintf("  %d. %s.%s → %s", i, d.Tool, d.Action, url))
+		} else {
+			report = append(report, fmt.Sprintf("  %d. %s.%s", i, d.Tool, d.Action))
 		}
 	}
 
-	expectedMap := make(map[string]string)
-	for _, f := range expected {
-		if fieldMap, ok := f.(map[string]interface{}); ok {
-			key, _ := fieldMap["key"].(string)
-			value, _ := fieldMap["value"].(string)
-			expectedMap[key] = value
+	report = append(report, "\nWhat was expected:")
+	for i, d := range expected {
+		url := extractURLFromFields(d.Fields)
+		if url != "" {
+			report = append(report, fmt.Sprintf("  %d. %s.%s → %s", i, d.Tool, d.Action, url))
+		} else {
+			report = append(report, fmt.Sprintf("  %d. %s.%s", i, d.Tool, d.Action))
 		}
 	}
 
-	// Compare all expected fields
-	for key, expectedValue := range expectedMap {
-		actualValue, exists := actualMap[key]
-		if !exists {
-			log.Printf("[ERROR] Decision %d: missing field '%s'", decisionIndex, key)
-			return false
+	if len(actual) < len(expected) {
+		report = append(report, fmt.Sprintf("\n→ Agent stopped after %d decisions (expected %d)", len(actual), len(expected)))
+
+		if len(actual) > 0 {
+			lastActual := actual[len(actual)-1]
+			lastURL := extractURLFromFields(lastActual.Fields)
+			report = append(report, fmt.Sprintf("   Last decision: %s.%s → %s", lastActual.Tool, lastActual.Action, lastURL))
 		}
 
-		// Normalize whitespace for comparison
-		expectedValue = strings.TrimSpace(expectedValue)
-		actualValue = strings.TrimSpace(actualValue)
+		if len(actual) < len(expected) {
+			nextExpected := expected[len(actual)]
+			nextURL := extractURLFromFields(nextExpected.Fields)
+			report = append(report, fmt.Sprintf("   Next expected: %s.%s → %s", nextExpected.Tool, nextExpected.Action, nextURL))
+			report = append(report, "   Agent never attempted this decision")
+		}
+	} else {
+		report = append(report, fmt.Sprintf("\n→ Agent made %d extra decisions (expected %d)", len(actual)-len(expected), len(expected)))
+	}
 
-		// Empty values are OK
-		if expectedValue == "" && actualValue == "" {
+	return strings.Join(report, "\n")
+}
+
+func extractURLFromFields(fields []Valuereplace) string {
+	for _, f := range fields {
+		if f.Key == "url" {
+			return f.Value
+		}
+	}
+	return ""
+}
+
+// compareDecisions compares actual vs expected decisions
+func compareDecisions(actual []interface{}, expected []AgentDecision) (bool, string) {
+	actualDecisions := convertToAgentDecisions(actual)
+
+	if len(actualDecisions) != len(expected) {
+		errMsg := fmt.Sprintf("Decision count mismatch: expected %d, got %d", len(expected), len(actualDecisions))
+		log.Printf("[ERROR] %s", errMsg)
+		return false, errMsg
+	}
+
+	for i := 0; i < len(actualDecisions); i++ {
+		actualDecision := actualDecisions[i]
+		expectedDecision := expected[i]
+
+		if actualDecision.Action == "answer" || expectedDecision.Action == "answer" {
+			log.Printf("[DEBUG] Decision %d: Skipping comparison for 'answer' action", i)
 			continue
 		}
 
-		// Skip comparison for LLM-generated content fields
-		if key == "output" || key == "body" {
-			// These contain LLM responses which will vary
-			// Just check they're not empty
-			if actualValue != "" {
-				log.Printf("[DEBUG] Decision %d: Skipping exact comparison for field '%s' (LLM-generated content)", decisionIndex, key)
-				continue
-			}
+		if actualDecision.Action != expectedDecision.Action {
+			reason := fmt.Sprintf("Action mismatch")
+			expected := fmt.Sprintf("%s with %s", expectedDecision.Action, expectedDecision.Tool)
+			actual := fmt.Sprintf("%s with %s", actualDecision.Action, actualDecision.Tool)
+
+			errMsg := BuildComparisonErrorFromDecision(i, actualDecision, reason, expected, actual)
+			log.Printf("[ERROR] %s", errMsg)
+			return false, errMsg
 		}
 
-		// For URL fields, use fuzzy matching (same as mock)
-		if key == "url" {
-			expectedURL, err1 := url.Parse(expectedValue)
-			actualURL, err2 := url.Parse(actualValue)
+		// Compare tool
+		if actualDecision.Tool != expectedDecision.Tool {
+			reason := fmt.Sprintf("Tool mismatch")
+			expected := expectedDecision.Tool
+			actual := actualDecision.Tool
 
-			if err1 == nil && err2 == nil {
-				// Use the same fuzzy matching logic as the mock
-				score := calculateURLSimilarity(actualURL, expectedURL)
-				if score >= 0.80 {
-					log.Printf("[DEBUG] Decision %d: URL fuzzy match (%.1f%% similarity)", decisionIndex, score*100)
-					continue
-				} else {
-					log.Printf("[ERROR] Decision %d: URL mismatch (%.1f%% similarity). Expected: %s, Got: %s", decisionIndex, score*100, expectedValue, actualValue)
-					return false
-				}
-			}
+			errMsg := BuildComparisonErrorFromDecision(i, actualDecision, reason, expected, actual)
+			log.Printf("[ERROR] %s", errMsg)
+			return false, errMsg
 		}
 
-		// Exact match for other fields
-		if expectedValue != actualValue {
-			log.Printf("[ERROR] Decision %d: field '%s' mismatch (expected: %s, got: %s)", decisionIndex, key, expectedValue, actualValue)
-			return false
+		// Compare fields
+		fieldErr := compareFieldsFromDecisions(actualDecision.Fields, expectedDecision.Fields, i, actualDecision)
+		if fieldErr != "" {
+			return false, fieldErr
 		}
+
+		log.Printf("[INFO] Decision %d: action=%s, tool=%s, fields match", i, actualDecision.Action, actualDecision.Tool)
 	}
 
-	return true
+	return true, ""
 }
