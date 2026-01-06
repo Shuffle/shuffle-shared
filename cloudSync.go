@@ -2114,24 +2114,8 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		log.Printf("[DEBUG][%s] AGENT_TEST_MODE enabled - using mock tool execution", execution.ExecutionId)
 
 		// Call mock function instead of real Singul
-		// Mock function signature:
-		// func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, error)
-		//
-		// Inputs needed:
-		// - execution: Full execution context (ExecutionId, Authorization, Workflow, etc)
-		// - decision: The decision to execute (Tool, Action, Fields, etc)
-		//
-		// Returns: (rawResponse []byte, debugUrl string, appname string, error)
-		// - rawResponse: The mock tool result (what Singul would return)
-		// - debugUrl: Debug URL (can be empty in tests)
-		// - appname: The app name (decision.Tool)
-		// - error: Any error that occurred
-		//
-		// The mock function should:
 		// 1. Load stored result based on decision.Tool + decision.Action
 		// 2. Return it in the same format as real Singul
-		// 3. The caller (RunAgentDecisionAction) will handle posting to /streams
-
 		return RunAgentDecisionMockHandler(execution, decision)
 	}
 
