@@ -12,36 +12,8 @@ import (
 	"strings"
 )
 
-// MockToolCall represents a single tool call with its request and response
-type MockToolCall struct {
-	URL      string                 `json:"url"`
-	Method   string                 `json:"method"`
-	Fields   map[string]string      `json:"fields"`
-	Response map[string]interface{} `json:"response"`
-}
-
-// MockUseCaseData represents the test data for a single use case
-type MockUseCaseData struct {
-	UseCase           string                   `json:"use_case"`
-	UserPrompt        string                   `json:"user_prompt"`
-	ToolCalls         []MockToolCall           `json:"tool_calls"`
-	ExpectedDecisions []map[string]interface{} `json:"expected_decisions"`
-}
-
 // RunAgentDecisionMockHandler handles agent decision execution in test mode
 // This function is called instead of the real Singul endpoint when AGENT_TEST_MODE=true
-//
-// # It loads mock data based on use case and matches tool calls by URL and fields
-//
-// Parameters:
-//   - execution: The full workflow execution context
-//   - decision: The agent decision to execute containing Tool, Action, Fields, etc.
-//
-// Returns:
-//   - rawResponse: The mock tool result as bytes (in Singul format)
-//   - debugUrl: Debug URL (empty in test mode)
-//   - appname: The app name (same as decision.Tool)
-//   - error: Any error that occurred
 func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, error) {
 	log.Printf("[DEBUG][%s] Mock handler called for tool=%s, action=%s", execution.ExecutionId, decision.Tool, decision.Action)
 
@@ -89,14 +61,6 @@ func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDeci
 
 // GetMockSingulResponse is the function that returns mock Singul responses
 // It loads the use case data and matches based on URL and fields
-//
-// Parameters:
-//   - useCase: The use case name
-//   - fields: The request fields containing url, method, headers, body
-//
-// Returns:
-//   - response: The mock Singul response as bytes (in Singul format)
-//   - error: Any error that occurred
 func GetMockSingulResponse(useCase string, fields []Valuereplace) ([]byte, error) {
 	useCaseData, err := loadUseCaseData(useCase)
 	if err != nil {
@@ -388,7 +352,6 @@ func stripRawResponsesFromMaps(decisions []map[string]interface{}) []map[string]
 	return cleaned
 }
 
-// findBestFuzzyMatch finds the most similar URL from stored tool calls
 // Returns the best match and its similarity score (0.0 to 1.0)
 func findBestFuzzyMatch(reqURL *url.URL, toolCalls []MockToolCall) (MockToolCall, float64) {
 	var bestMatch MockToolCall
@@ -482,4 +445,190 @@ func calculateURLSimilarity(url1, url2 *url.URL) float64 {
 	totalWeight += 0.50
 
 	return score / totalWeight
+}
+
+// convertToAgentDecisions converts []interface{} to []AgentDecision
+func convertToAgentDecisions(decisions []interface{}) []AgentDecision {
+	result := make([]AgentDecision, 0, len(decisions))
+
+	for _, d := range decisions {
+		decisionBytes, err := json.Marshal(d)
+		if err != nil {
+			continue
+		}
+
+		var decision AgentDecision
+		err = json.Unmarshal(decisionBytes, &decision)
+		if err != nil {
+			continue
+		}
+
+		result = append(result, decision)
+	}
+
+	return result
+}
+
+func compareFieldsWithContext(actualDecision AgentDecision, expectedDecision AgentDecision, decisionIndex int, execId string) string {
+	actualMap := make(map[string]string)
+	for _, field := range actualDecision.Fields {
+		actualMap[field.Key] = field.Value
+	}
+
+	expectedMap := make(map[string]string)
+	for _, field := range expectedDecision.Fields {
+		expectedMap[field.Key] = field.Value
+	}
+
+	// Build context header showing what matched
+	contextHeader := fmt.Sprintf("[%s] Decision %d: Tool '%s' ✓, Action '%s' ✓",
+		execId, decisionIndex, actualDecision.Tool, actualDecision.Action)
+
+	// Check for missing fields
+	for key, expectedValue := range expectedMap {
+		actualValue, exists := actualMap[key]
+		if !exists {
+			return fmt.Sprintf("%s\n"+
+				" └─ Missing field '%s'\n"+
+				"    Expected value: %s\n"+
+				"    → Agent didn't provide required field",
+				contextHeader, key, expectedValue)
+		}
+
+		// Normalize whitespace
+		expectedValue = strings.TrimSpace(expectedValue)
+		actualValue = strings.TrimSpace(actualValue)
+
+		// Empty values are OK
+		if expectedValue == "" && actualValue == "" {
+			continue
+		}
+
+		// Skip comparison for LLM-generated content
+		if key == "output" || key == "body" {
+			if actualValue != "" {
+				log.Printf("[DEBUG] Decision %d: Skipping exact comparison for field '%s' (LLM-generated content)", decisionIndex, key)
+				continue
+			}
+		}
+
+		// For URL fields, use fuzzy matching with detailed error
+		if key == "url" {
+			if err := compareURLField(expectedValue, actualValue, contextHeader, decisionIndex); err != "" {
+				return err
+			}
+			continue
+		}
+
+		// Exact match for other fields
+		if expectedValue != actualValue {
+			return fmt.Sprintf("%s\n"+
+				" └─ Field '%s' mismatch\n"+
+				"    Expected: %s\n"+
+				"    Got:      %s\n"+
+				"    → Agent used wrong value for this field",
+				contextHeader, key, expectedValue, actualValue)
+		}
+	}
+
+	// Check for unexpected extra fields
+	for key := range actualMap {
+		if _, expected := expectedMap[key]; !expected {
+			// Only warn about extra fields, don't fail
+			log.Printf("[DEBUG] Decision %d: Unexpected extra field '%s' (ignoring)", decisionIndex, key)
+		}
+	}
+
+	return ""
+}
+
+// compareURLField provides detailed URL comparison with breakdown
+func compareURLField(expectedValue, actualValue, contextHeader string, decisionIndex int) string {
+	expectedURL, err1 := url.Parse(expectedValue)
+	actualURL, err2 := url.Parse(actualValue)
+
+	if err1 != nil || err2 != nil {
+		return fmt.Sprintf("%s\n"+
+			" └─ URL parsing error\n"+
+			"    Expected: %s\n"+
+			"    Got:      %s",
+			contextHeader, expectedValue, actualValue)
+	}
+
+	score := calculateURLSimilarity(actualURL, expectedURL)
+	if score >= 0.80 {
+		log.Printf("[DEBUG] Decision %d: URL fuzzy match (%.1f%% similarity)", decisionIndex, score*100)
+		return ""
+	}
+
+	// Provide detailed breakdown of URL differences
+	var differences []string
+
+	if expectedURL.Scheme != actualURL.Scheme {
+		differences = append(differences, fmt.Sprintf("Scheme: expected '%s', got '%s'", expectedURL.Scheme, actualURL.Scheme))
+	}
+
+	if expectedURL.Host != actualURL.Host {
+		differences = append(differences, fmt.Sprintf("Host: expected '%s', got '%s'", expectedURL.Host, actualURL.Host))
+	}
+
+	if expectedURL.Path != actualURL.Path {
+		differences = append(differences, fmt.Sprintf("Path: expected '%s', got '%s'", expectedURL.Path, actualURL.Path))
+	}
+
+	// Compare query parameters
+	expectedQuery := expectedURL.Query()
+	actualQuery := actualURL.Query()
+
+	for key := range expectedQuery {
+		if actualQuery.Get(key) != expectedQuery.Get(key) {
+			differences = append(differences, fmt.Sprintf("Query param '%s': expected '%s', got '%s'",
+				key, expectedQuery.Get(key), actualQuery.Get(key)))
+		}
+	}
+
+	for key := range actualQuery {
+		if expectedQuery.Get(key) == "" {
+			differences = append(differences, fmt.Sprintf("Unexpected query param '%s': '%s'", key, actualQuery.Get(key)))
+		}
+	}
+
+	diffStr := strings.Join(differences, "\n    ")
+	return fmt.Sprintf("%s\n"+
+		" └─ URL mismatch (%.1f%% similarity)\n"+
+		"    Expected: %s\n"+
+		"    Got:      %s\n"+
+		"    Differences:\n"+
+		"    %s\n"+
+		"    → Agent used different URL parameters",
+		contextHeader, score*100, expectedValue, actualValue, diffStr)
+}
+
+// compareFieldsFromDecisions - legacy function for backward compatibility
+func compareFieldsFromDecisions(actualFields []Valuereplace, expectedFields []Valuereplace, decisionIndex int, actualDecision AgentDecision) string {
+	// Create a dummy expected decision for context
+	expectedDecision := AgentDecision{
+		Tool:   actualDecision.Tool,
+		Action: actualDecision.Action,
+		Fields: expectedFields,
+	}
+	return compareFieldsWithContext(actualDecision, expectedDecision, decisionIndex, "test")
+}
+
+func BuildComparisonErrorFromDecision(decisionIndex int, actualDecision AgentDecision, reason, expected, actual string) string {
+	var parts []string
+
+	// Add failure info
+	parts = append(parts, fmt.Sprintf("Failed: Decision %d: %s with %s", decisionIndex, actualDecision.Action, actualDecision.Tool))
+	parts = append(parts, fmt.Sprintf("Reason: %s", reason))
+
+	// Add expected vs actual if provided
+	if expected != "" && actual != "" {
+		parts = append(parts, fmt.Sprintf("Expected: %s", expected))
+		parts = append(parts, fmt.Sprintf("Got: %s", actual))
+	} else if expected != "" {
+		parts = append(parts, fmt.Sprintf("Expected: %s", expected))
+	}
+
+	return strings.Join(parts, "\n")
 }
