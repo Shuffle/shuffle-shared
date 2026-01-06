@@ -4834,3 +4834,58 @@ type StreamData struct {
 	Chunk string `json:"chunk,omitempty"`
 	Data  string `json:"data,omitempty"` // For the final ID or error
 }
+
+type MockToolCall struct {
+	URL      string                 `json:"url"`
+	Method   string                 `json:"method"`
+	Fields   map[string]string      `json:"fields"`
+	Response map[string]interface{} `json:"response"`
+}
+
+type MockUseCaseData struct {
+	UseCase           string          `json:"use_case"`
+	UserPrompt        string          `json:"user_prompt"`
+	ToolCalls         []MockToolCall  `json:"tool_calls"`
+	ExpectedDecisions []AgentDecision `json:"expected_decisions"`
+}
+
+type AgentStartResponse struct {
+	Success       bool   `json:"success"`
+	ExecutionId   string `json:"execution_id"`
+	Authorization string `json:"authorization"`
+}
+
+type StreamsResultResponse struct {
+	Result  string         `json:"result"`
+	Results []ActionResult `json:"results"`
+	Status  string         `json:"status"`
+}
+
+type AgentStartRequest struct {
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	AppName     string              `json:"app_name"`
+	AppID       string              `json:"app_id"`
+	AppVersion  string              `json:"app_version"`
+	Environment string              `json:"environment"`
+	Parameters  []map[string]string `json:"parameters"`
+}
+
+type StreamsResultRequest struct {
+	ExecutionID   string `json:"execution_id"`
+	Authorization string `json:"authorization"`
+}
+
+type TestResponse struct {
+	Success bool         `json:"success"`
+	Total   int          `json:"total"`
+	Passed  int          `json:"passed"`
+	Failed  int          `json:"failed"`
+	Results []TestResult `json:"results"`
+}
+
+type TestResult struct {
+	TestCase string `json:"test_case"`
+	Status   string `json:"status"`
+	Error    string `json:"error,omitempty"`
+}
