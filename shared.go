@@ -16282,17 +16282,32 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		if os.Getenv("AGENT_TEST_MODE") == "true" {
 			log.Printf("[DEBUG][%s] AGENT_TEST_MODE: Action '%s' not found in results, creating placeholder", workflowExecution.ExecutionId, actionResult.Action.ID)
 
+			// Try to get the initial agent output from cache
+			ctx := context.Background()
+			actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+			placeholderResult := `{"status":"RUNNING","decisions":[]}`
+
+			cache, err := GetCache(ctx, actionCacheId)
+			if err == nil {
+				// Found cached agent output - use it!
+				cacheData := []byte(cache.([]uint8))
+				log.Printf("[DEBUG][%s] Found cached agent output for placeholder (size: %d bytes)", workflowExecution.ExecutionId, len(cacheData))
+				placeholderResult = string(cacheData)
+			} else {
+				log.Printf("[DEBUG][%s] No cached agent output found, using empty placeholder", workflowExecution.ExecutionId)
+			}
+
 			// Create a placeholder result for the agent action
-			placeholderResult := ActionResult{
+			placeholder := ActionResult{
 				Action:      actionResult.Action,
 				ExecutionId: workflowExecution.ExecutionId,
-				Result:      `{"status":"RUNNING","decisions":[]}`,
+				Result:      placeholderResult,
 				StartedAt:   time.Now().Unix(),
 				CompletedAt: 0,
 				Status:      "EXECUTING",
 			}
 
-			workflowExecution.Results = append(workflowExecution.Results, placeholderResult)
+			workflowExecution.Results = append(workflowExecution.Results, placeholder)
 			foundActionResultIndex = len(workflowExecution.Results) - 1
 
 			log.Printf("[DEBUG][%s] Created placeholder result at index %d", workflowExecution.ExecutionId, foundActionResultIndex)
