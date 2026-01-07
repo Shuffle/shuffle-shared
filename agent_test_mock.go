@@ -12,8 +12,6 @@ import (
 	"strings"
 )
 
-// RunAgentDecisionMockHandler handles agent decision execution in test mode
-// This function is called instead of the real Singul endpoint when AGENT_TEST_MODE=true
 func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, error) {
 	log.Printf("[DEBUG][%s] Mock handler called for tool=%s, action=%s", execution.ExecutionId, decision.Tool, decision.Action)
 
@@ -29,7 +27,7 @@ func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDeci
 		return nil, "", decision.Tool, err
 	}
 
-	// Parse the response to extract raw_response (same as real Singul handler does)
+	// Parse the response to extract raw_response
 	var outputMapped SchemalessOutput
 	err = json.Unmarshal(response, &outputMapped)
 	if err != nil {
@@ -55,12 +53,9 @@ func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDeci
 	log.Printf("[DEBUG][%s] Returning mock response for %s (success=%v, response_size=%d bytes)",
 		execution.ExecutionId, decision.Tool, outputMapped.Success, len(body))
 
-	// Return in same format as real Singul handler: (body, debugUrl, appname, error)
 	return body, "", decision.Tool, nil
 }
 
-// GetMockSingulResponse is the function that returns mock Singul responses
-// It loads the use case data and matches based on URL and fields
 func GetMockSingulResponse(useCase string, fields []Valuereplace) ([]byte, error) {
 	useCaseData, err := loadUseCaseData(useCase)
 	if err != nil {
@@ -118,7 +113,6 @@ func GetMockSingulResponse(useCase string, fields []Valuereplace) ([]byte, error
 	return marshalResponse(candidates[0].Response)
 }
 
-// urlsEqual compares two URLs ignoring query‑parameter order and allowing fuzzy matching when the sets are equal.
 func urlsEqual(req *url.URL, stored string) bool {
 	storedURL, err := url.Parse(stored)
 	if err != nil {
@@ -152,7 +146,6 @@ func urlsEqual(req *url.URL, stored string) bool {
 	return true
 }
 
-// loadUseCaseData loads the test data for a given use case from JSON file
 func loadUseCaseData(useCase string) (*MockUseCaseData, error) {
 	possiblePaths := []string{}
 
@@ -202,7 +195,6 @@ func loadUseCaseData(useCase string) (*MockUseCaseData, error) {
 	return &useCaseData, nil
 }
 
-// extractFieldValue extracts a field value by key from the fields array
 func extractFieldValue(fields []Valuereplace, key string) string {
 	for _, field := range fields {
 		if field.Key == key {
@@ -237,122 +229,6 @@ func marshalResponse(response map[string]interface{}) ([]byte, error) {
 	return data, nil
 }
 
-// analyzeTestFailureWithLLM uses LLM to provide detailed analysis of why a test failed
-func analyzeTestFailureWithLLM(actualDecisions []interface{}, expectedDecisions []map[string]interface{}, isTimeout bool) string {
-	cleanActual := stripRawResponses(actualDecisions)
-	cleanExpected := stripRawResponsesFromMaps(expectedDecisions)
-
-	actualJSON, err := json.MarshalIndent(cleanActual, "", "  ")
-	if err != nil {
-		return "Failed to analyze: could not marshal actual decisions"
-	}
-
-	expectedJSON, err := json.MarshalIndent(cleanExpected, "", "  ")
-	if err != nil {
-		return "Failed to analyze: could not marshal expected decisions"
-	}
-
-	systemMessage := `You are analyzing agent test failures.
-Focus on what the agent ACTUALLY did and where it got stuck.
-
-Output rules:
-- Start with what the agent successfully completed
-- Identify the SPECIFIC action and tool where it failed or got stuck
-- Compare only that failure point with what was expected
-- Ignore answer and finish actions - focus only on API calls and tool usage
-- Be concise (max 2-3 sentences)
-- Use plain language without special characters like quotes, backticks, or brackets
-- Name the specific API or tool that failed
-
-Example output format:
-Agent completed geocoding API call successfully. Got stuck on weather API call - agent used URL with different parameters than expected (missing daily forecast params and using timezone=auto instead of Asia/Kolkata).`
-
-	var userMessage string
-	if isTimeout {
-		userMessage = fmt.Sprintf(`The agent test timed out.
-
-What the agent ACTUALLY did:
-%s
-
-What was EXPECTED (full test plan):
-%s
-
-Analyze from the agent's perspective:
-1. Which API calls or tools did the agent successfully complete?
-2. Where exactly did it get stuck or fail?
-3. What was different about that specific action compared to what was expected?
-4. Ignore any answer or finish actions - focus only on the actual work (API calls, tools).`, string(actualJSON), string(expectedJSON))
-	} else {
-		userMessage = fmt.Sprintf(`The agent test failed.
-
-What the agent ACTUALLY did:
-%s
-
-What was EXPECTED:
-%s
-
-Analyze from the agent's perspective:
-1. Which actions did the agent complete successfully?
-2. Which specific action/tool failed and why?
-3. What was the difference between what the agent did vs what was expected?
-4. Ignore any answer or finish actions.`, string(actualJSON), string(expectedJSON))
-	}
-
-	responseBody, err := RunAiQuery(systemMessage, userMessage)
-	if err != nil {
-		log.Printf("[ERROR] Failed to get LLM analysis: %s", err)
-		return "Failed to analyze with LLM"
-	}
-
-	failureReason := strings.TrimSpace(responseBody)
-	if after, ok := strings.CutPrefix(failureReason, "```"); ok {
-		failureReason = after
-	}
-	if after, ok := strings.CutSuffix(failureReason, "```"); ok {
-		failureReason = after
-	}
-	failureReason = strings.TrimSpace(failureReason)
-
-	log.Printf("[INFO] LLM Analysis: %s", failureReason)
-	return failureReason
-}
-
-// Hmmm, let's see if this helps with token usage, stripRawResponses removes raw_response fields from decisions to save LLM tokens
-func stripRawResponses(decisions []interface{}) []interface{} {
-	cleaned := make([]interface{}, len(decisions))
-	for i, d := range decisions {
-		if decisionMap, ok := d.(map[string]interface{}); ok {
-			cleanedDecision := make(map[string]interface{})
-			for k, v := range decisionMap {
-				// Skip raw_response and other verbose fields
-				if k != "raw_response" && k != "RawResponse" && k != "debug_url" && k != "DebugUrl" {
-					cleanedDecision[k] = v
-				}
-			}
-			cleaned[i] = cleanedDecision
-		} else {
-			cleaned[i] = d
-		}
-	}
-	return cleaned
-}
-
-// stripRawResponsesFromMaps removes raw_response fields from expected decisions
-func stripRawResponsesFromMaps(decisions []map[string]interface{}) []map[string]interface{} {
-	cleaned := make([]map[string]interface{}, len(decisions))
-	for i, decisionMap := range decisions {
-		cleanedDecision := make(map[string]interface{})
-		for k, v := range decisionMap {
-			if k != "raw_response" && k != "RawResponse" && k != "debug_url" && k != "DebugUrl" {
-				cleanedDecision[k] = v
-			}
-		}
-		cleaned[i] = cleanedDecision
-	}
-	return cleaned
-}
-
-// Returns the best match and its similarity score (0.0 to 1.0)
 func findBestFuzzyMatch(reqURL *url.URL, toolCalls []MockToolCall) (MockToolCall, float64) {
 	var bestMatch MockToolCall
 	bestScore := 0.0
@@ -373,7 +249,6 @@ func findBestFuzzyMatch(reqURL *url.URL, toolCalls []MockToolCall) (MockToolCall
 	return bestMatch, bestScore
 }
 
-// calculateURLSimilarity returns a score from 0.0 to 1.0 indicating how similar two URLs are
 func calculateURLSimilarity(url1, url2 *url.URL) float64 {
 	score := 0.0
 	totalWeight := 0.0
@@ -447,7 +322,6 @@ func calculateURLSimilarity(url1, url2 *url.URL) float64 {
 	return score / totalWeight
 }
 
-// convertToAgentDecisions converts []interface{} to []AgentDecision
 func convertToAgentDecisions(decisions []interface{}) []AgentDecision {
 	result := make([]AgentDecision, 0, len(decisions))
 
@@ -480,7 +354,6 @@ func compareFieldsWithContext(actualDecision AgentDecision, expectedDecision Age
 		expectedMap[field.Key] = field.Value
 	}
 
-	// Build context header showing what matched
 	contextHeader := fmt.Sprintf("[%s] Decision %d: Tool '%s' ✓, Action '%s' ✓",
 		execId, decisionIndex, actualDecision.Tool, actualDecision.Action)
 
@@ -495,16 +368,13 @@ func compareFieldsWithContext(actualDecision AgentDecision, expectedDecision Age
 				contextHeader, key, expectedValue)
 		}
 
-		// Normalize whitespace
 		expectedValue = strings.TrimSpace(expectedValue)
 		actualValue = strings.TrimSpace(actualValue)
 
-		// Empty values are OK
 		if expectedValue == "" && actualValue == "" {
 			continue
 		}
 
-		// Skip comparison for LLM-generated content
 		if key == "output" || key == "body" {
 			if actualValue != "" {
 				log.Printf("[DEBUG] Decision %d: Skipping exact comparison for field '%s' (LLM-generated content)", decisionIndex, key)
@@ -520,7 +390,6 @@ func compareFieldsWithContext(actualDecision AgentDecision, expectedDecision Age
 			continue
 		}
 
-		// Exact match for other fields
 		if expectedValue != actualValue {
 			return fmt.Sprintf("%s\n"+
 				" └─ Field '%s' mismatch\n"+
@@ -534,7 +403,6 @@ func compareFieldsWithContext(actualDecision AgentDecision, expectedDecision Age
 	// Check for unexpected extra fields
 	for key := range actualMap {
 		if _, expected := expectedMap[key]; !expected {
-			// Only warn about extra fields, don't fail
 			log.Printf("[DEBUG] Decision %d: Unexpected extra field '%s' (ignoring)", decisionIndex, key)
 		}
 	}
@@ -542,7 +410,6 @@ func compareFieldsWithContext(actualDecision AgentDecision, expectedDecision Age
 	return ""
 }
 
-// compareURLField provides detailed URL comparison with breakdown
 func compareURLField(expectedValue, actualValue, contextHeader string, decisionIndex int) string {
 	expectedURL, err1 := url.Parse(expectedValue)
 	actualURL, err2 := url.Parse(actualValue)
@@ -576,7 +443,6 @@ func compareURLField(expectedValue, actualValue, contextHeader string, decisionI
 		differences = append(differences, fmt.Sprintf("Path: expected '%s', got '%s'", expectedURL.Path, actualURL.Path))
 	}
 
-	// Compare query parameters
 	expectedQuery := expectedURL.Query()
 	actualQuery := actualURL.Query()
 
@@ -604,9 +470,7 @@ func compareURLField(expectedValue, actualValue, contextHeader string, decisionI
 		contextHeader, score*100, expectedValue, actualValue, diffStr)
 }
 
-// compareFieldsFromDecisions - legacy function for backward compatibility
 func compareFieldsFromDecisions(actualFields []Valuereplace, expectedFields []Valuereplace, decisionIndex int, actualDecision AgentDecision) string {
-	// Create a dummy expected decision for context
 	expectedDecision := AgentDecision{
 		Tool:   actualDecision.Tool,
 		Action: actualDecision.Action,
@@ -618,11 +482,9 @@ func compareFieldsFromDecisions(actualFields []Valuereplace, expectedFields []Va
 func BuildComparisonErrorFromDecision(decisionIndex int, actualDecision AgentDecision, reason, expected, actual string) string {
 	var parts []string
 
-	// Add failure info
 	parts = append(parts, fmt.Sprintf("Failed: Decision %d: %s with %s", decisionIndex, actualDecision.Action, actualDecision.Tool))
 	parts = append(parts, fmt.Sprintf("Reason: %s", reason))
 
-	// Add expected vs actual if provided
 	if expected != "" && actual != "" {
 		parts = append(parts, fmt.Sprintf("Expected: %s", expected))
 		parts = append(parts, fmt.Sprintf("Got: %s", actual))
@@ -632,3 +494,116 @@ func BuildComparisonErrorFromDecision(decisionIndex int, actualDecision AgentDec
 
 	return strings.Join(parts, "\n")
 }
+
+// func analyzeTestFailureWithLLM(actualDecisions []interface{}, expectedDecisions []map[string]interface{}, isTimeout bool) string {
+// 	cleanActual := stripRawResponses(actualDecisions)
+// 	cleanExpected := stripRawResponsesFromMaps(expectedDecisions)
+
+// 	actualJSON, err := json.MarshalIndent(cleanActual, "", "  ")
+// 	if err != nil {
+// 		return "Failed to analyze: could not marshal actual decisions"
+// 	}
+
+// 	expectedJSON, err := json.MarshalIndent(cleanExpected, "", "  ")
+// 	if err != nil {
+// 		return "Failed to analyze: could not marshal expected decisions"
+// 	}
+
+// 	systemMessage := `You are analyzing agent test failures.
+// Focus on what the agent ACTUALLY did and where it got stuck.
+
+// Output rules:
+// - Start with what the agent successfully completed
+// - Identify the SPECIFIC action and tool where it failed or got stuck
+// - Compare only that failure point with what was expected
+// - Ignore answer and finish actions - focus only on API calls and tool usage
+// - Be concise (max 2-3 sentences)
+// - Use plain language without special characters like quotes, backticks, or brackets
+// - Name the specific API or tool that failed
+
+// Example output format:
+// Agent completed geocoding API call successfully. Got stuck on weather API call - agent used URL with different parameters than expected (missing daily forecast params and using timezone=auto instead of Asia/Kolkata).`
+
+// 	var userMessage string
+// 	if isTimeout {
+// 		userMessage = fmt.Sprintf(`The agent test timed out.
+
+// What the agent ACTUALLY did:
+// %s
+
+// What was EXPECTED (full test plan):
+// %s
+
+// Analyze from the agent's perspective:
+// 1. Which API calls or tools did the agent successfully complete?
+// 2. Where exactly did it get stuck or fail?
+// 3. What was different about that specific action compared to what was expected?
+// 4. Ignore any answer or finish actions - focus only on the actual work (API calls, tools).`, string(actualJSON), string(expectedJSON))
+// 	} else {
+// 		userMessage = fmt.Sprintf(`The agent test failed.
+
+// What the agent ACTUALLY did:
+// %s
+
+// What was EXPECTED:
+// %s
+
+// Analyze from the agent's perspective:
+// 1. Which actions did the agent complete successfully?
+// 2. Which specific action/tool failed and why?
+// 3. What was the difference between what the agent did vs what was expected?
+// 4. Ignore any answer or finish actions.`, string(actualJSON), string(expectedJSON))
+// 	}
+
+// 	responseBody, err := RunAiQuery(systemMessage, userMessage)
+// 	if err != nil {
+// 		log.Printf("[ERROR] Failed to get LLM analysis: %s", err)
+// 		return "Failed to analyze with LLM"
+// 	}
+
+// 	failureReason := strings.TrimSpace(responseBody)
+// 	if after, ok := strings.CutPrefix(failureReason, "```"); ok {
+// 		failureReason = after
+// 	}
+// 	if after, ok := strings.CutSuffix(failureReason, "```"); ok {
+// 		failureReason = after
+// 	}
+// 	failureReason = strings.TrimSpace(failureReason)
+
+// 	log.Printf("[INFO] LLM Analysis: %s", failureReason)
+// 	return failureReason
+// }
+
+// Hmmm, let's see if this helps with token usage, stripRawResponses removes raw_response fields from decisions to save LLM tokens
+// func stripRawResponses(decisions []interface{}) []interface{} {
+// 	cleaned := make([]interface{}, len(decisions))
+// 	for i, d := range decisions {
+// 		if decisionMap, ok := d.(map[string]interface{}); ok {
+// 			cleanedDecision := make(map[string]interface{})
+// 			for k, v := range decisionMap {
+// 				// Skip raw_response and other verbose fields
+// 				if k != "raw_response" && k != "RawResponse" && k != "debug_url" && k != "DebugUrl" {
+// 					cleanedDecision[k] = v
+// 				}
+// 			}
+// 			cleaned[i] = cleanedDecision
+// 		} else {
+// 			cleaned[i] = d
+// 		}
+// 	}
+// 	return cleaned
+// }
+
+// func stripRawResponsesFromMaps(decisions []map[string]interface{}) []map[string]interface{} {
+// 	cleaned := make([]map[string]interface{}, len(decisions))
+// 	for i, decisionMap := range decisions {
+// 		cleanedDecision := make(map[string]interface{})
+// 		for k, v := range decisionMap {
+// 			if k != "raw_response" && k != "RawResponse" && k != "debug_url" && k != "DebugUrl" {
+// 				cleanedDecision[k] = v
+// 			}
+// 		}
+// 		cleaned[i] = cleanedDecision
+// 	}
+// 	return cleaned
+// }
