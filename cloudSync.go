@@ -2113,9 +2113,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	if os.Getenv("AGENT_TEST_MODE") == "true" {
 		log.Printf("[DEBUG][%s] AGENT_TEST_MODE enabled - using mock tool execution", execution.ExecutionId)
 
-		// Call mock function instead of real Singul
-		// 1. Load stored result based on decision.Tool + decision.Action
-		// 2. Return it in the same format as real Singul
+		// Call mock handler
 		return RunAgentDecisionMockHandler(execution, decision)
 	}
 

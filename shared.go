@@ -20402,6 +20402,23 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 			SetWorkflowExecution(ctx, exec, true)
 
+			if os.Getenv("AGENT_TEST_MODE") == "true" {
+				var bodyMap map[string]interface{}
+				if err := json.Unmarshal(body, &bodyMap); err == nil {
+					if mockToolCalls, ok := bodyMap["mock_tool_calls"]; ok {
+						mockCacheKey := fmt.Sprintf("agent_mock_%s", exec.ExecutionId)
+						mockData, _ := json.Marshal(mockToolCalls)
+						err := SetCache(ctx, mockCacheKey, mockData, 30)
+						if err != nil {
+							log.Printf("[ERROR] Failed to set cache the mock_tool_calls data for the exection %s", exec.ExecutionId)
+						}
+						log.Printf("[DEBUG] Cached mock tool calls for execution %s", exec.ExecutionId)
+					} else {
+						log.Printf("[WARNING] No mock_tool_calls found in the request body")
+					}
+				}
+			}
+
 			action, err := HandleAiAgentExecutionStart(exec, action, false)
 			if err != nil {
 				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
