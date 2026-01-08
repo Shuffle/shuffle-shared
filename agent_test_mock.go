@@ -52,7 +52,6 @@ func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDeci
 }
 
 func GetMockSingulResponse(executionId string, fields []Valuereplace) ([]byte, error) {
-	// Try to get from cache
 	ctx := context.Background()
 	mockCacheKey := fmt.Sprintf("agent_mock_%s", executionId)
 	cache, err := GetCache(ctx, mockCacheKey)
@@ -68,17 +67,19 @@ func GetMockSingulResponse(executionId string, fields []Valuereplace) ([]byte, e
 			return nil, fmt.Errorf("failed to unmarshal cached mock data: %w", err)
 		}
 
-		// Find matching response from cached tool calls
 		return GetMockResponseFromToolCalls(toolCalls, fields)
 	}
 
-	// If Cache miss - fall back to file-based mocks
-	log.Printf("[DEBUG][%s] No cached data, using file-based mocks", executionId)
+	testDataPath := os.Getenv("AGENT_TEST_DATA_PATH")
+	if testDataPath == "" {
+		return nil, fmt.Errorf("no mock data in cache for execution %s and AGENT_TEST_DATA_PATH not set", executionId)
+	}
+
+	log.Printf("[DEBUG][%s] Cache miss, using file-based mocks from: %s", executionId, testDataPath)
 
 	useCase := os.Getenv("AGENT_TEST_USE_CASE")
 	if useCase == "" {
-		log.Printf("[ERROR][%s] AGENT_TEST_USE_CASE not set - cannot determine which test data to load", executionId)
-		return nil, errors.New("AGENT_TEST_USE_CASE environment variable not set")
+		return nil, errors.New("AGENT_TEST_USE_CASE not set")
 	}
 
 	useCaseData, err := loadUseCaseData(useCase)
