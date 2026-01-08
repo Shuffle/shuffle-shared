@@ -20408,7 +20408,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 					if mockToolCalls, ok := bodyMap["mock_tool_calls"]; ok {
 						mockCacheKey := fmt.Sprintf("agent_mock_%s", exec.ExecutionId)
 						mockData, _ := json.Marshal(mockToolCalls)
-						err := SetCache(ctx, mockCacheKey, mockData, 30)
+						err := SetCache(ctx, mockCacheKey, mockData, 10)
 						if err != nil {
 							log.Printf("[ERROR] Failed to set cache the mock_tool_calls data for the exection %s", exec.ExecutionId)
 						}
