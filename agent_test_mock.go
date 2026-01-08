@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,19 +10,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, error) {
 	log.Printf("[DEBUG][%s] Mock handler called for tool=%s, action=%s", execution.ExecutionId, decision.Tool, decision.Action)
 
-	useCase := os.Getenv("AGENT_TEST_USE_CASE")
-	if useCase == "" {
-		log.Printf("[ERROR][%s] AGENT_TEST_USE_CASE not set - cannot determine which test data to load", execution.ExecutionId)
-		return nil, "", decision.Tool, errors.New("AGENT_TEST_USE_CASE environment variable not set")
-	}
-
-	response, err := GetMockSingulResponse(useCase, decision.Fields)
+	// Get mock response
+	response, err := GetMockSingulResponse(execution.ExecutionId, decision.Fields)
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed to get mock response: %s", execution.ExecutionId, err)
 		return nil, "", decision.Tool, err
@@ -56,12 +51,46 @@ func RunAgentDecisionMockHandler(execution WorkflowExecution, decision AgentDeci
 	return body, "", decision.Tool, nil
 }
 
-func GetMockSingulResponse(useCase string, fields []Valuereplace) ([]byte, error) {
+func GetMockSingulResponse(executionId string, fields []Valuereplace) ([]byte, error) {
+	// Try to get from cache
+	ctx := context.Background()
+	mockCacheKey := fmt.Sprintf("agent_mock_%s", executionId)
+	cache, err := GetCache(ctx, mockCacheKey)
+
+	if err == nil {
+		cacheData := cache.([]uint8)
+		log.Printf("[DEBUG][%s] Using cached mock data (%d bytes)", executionId, len(cacheData))
+
+		var toolCalls []MockToolCall
+		err = json.Unmarshal(cacheData, &toolCalls)
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed to unmarshal cached mock data: %s", executionId, err)
+			return nil, fmt.Errorf("failed to unmarshal cached mock data: %w", err)
+		}
+
+		// Find matching response from cached tool calls
+		return GetMockResponseFromToolCalls(toolCalls, fields)
+	}
+
+	// If Cache miss - fall back to file-based mocks
+	log.Printf("[DEBUG][%s] No cached data, using file-based mocks", executionId)
+
+	useCase := os.Getenv("AGENT_TEST_USE_CASE")
+	if useCase == "" {
+		log.Printf("[ERROR][%s] AGENT_TEST_USE_CASE not set - cannot determine which test data to load", executionId)
+		return nil, errors.New("AGENT_TEST_USE_CASE environment variable not set")
+	}
+
 	useCaseData, err := loadUseCaseData(useCase)
 	if err != nil {
 		return nil, err
 	}
 
+	return GetMockResponseFromToolCalls(useCaseData.ToolCalls, fields)
+}
+
+// GetMockResponseFromToolCalls finds and returns the matching mock response from tool calls
+func GetMockResponseFromToolCalls(toolCalls []MockToolCall, fields []Valuereplace) ([]byte, error) {
 	requestURL := extractFieldValue(fields, "url")
 	if requestURL == "" {
 		return nil, errors.New("no URL found in request fields")
@@ -75,7 +104,7 @@ func GetMockSingulResponse(useCase string, fields []Valuereplace) ([]byte, error
 		log.Printf("[ERROR] Invalid request URL %s: %v", requestURL, err)
 		return nil, fmt.Errorf("invalid request URL: %w", err)
 	}
-	for _, tc := range useCaseData.ToolCalls {
+	for _, tc := range toolCalls {
 		if urlsEqual(reqURLParsed, tc.URL) {
 			candidates = append(candidates, tc)
 		}
@@ -84,12 +113,12 @@ func GetMockSingulResponse(useCase string, fields []Valuereplace) ([]byte, error
 	// If no exact matches, try fuzzy matching
 	if len(candidates) == 0 {
 		log.Printf("[DEBUG] No exact match, trying fuzzy matching...")
-		bestMatch, score := findBestFuzzyMatch(reqURLParsed, useCaseData.ToolCalls)
+		bestMatch, score := findBestFuzzyMatch(reqURLParsed, toolCalls)
 		if score >= 0.80 {
 			log.Printf("[INFO] Found fuzzy match with %.1f%% similarity: %s", score*100, bestMatch.URL)
 			candidates = append(candidates, bestMatch)
 		} else {
-			return nil, fmt.Errorf("no mock data found for URL: %s in use case: %s (best match: %.1f%%)", requestURL, useCase, score*100)
+			return nil, fmt.Errorf("no mock data found for URL: %s (best match: %.1f%%)", requestURL, score*100)
 		}
 	}
 
@@ -321,289 +350,3 @@ func calculateURLSimilarity(url1, url2 *url.URL) float64 {
 
 	return score / totalWeight
 }
-
-func convertToAgentDecisions(decisions []interface{}) []AgentDecision {
-	result := make([]AgentDecision, 0, len(decisions))
-
-	for _, d := range decisions {
-		decisionBytes, err := json.Marshal(d)
-		if err != nil {
-			continue
-		}
-
-		var decision AgentDecision
-		err = json.Unmarshal(decisionBytes, &decision)
-		if err != nil {
-			continue
-		}
-
-		result = append(result, decision)
-	}
-
-	return result
-}
-
-func compareFieldsWithContext(actualDecision AgentDecision, expectedDecision AgentDecision, decisionIndex int, execId string) string {
-	actualMap := make(map[string]string)
-	for _, field := range actualDecision.Fields {
-		actualMap[field.Key] = field.Value
-	}
-
-	expectedMap := make(map[string]string)
-	for _, field := range expectedDecision.Fields {
-		expectedMap[field.Key] = field.Value
-	}
-
-	contextHeader := fmt.Sprintf("[%s] Decision %d: Tool '%s' ✓, Action '%s' ✓",
-		execId, decisionIndex, actualDecision.Tool, actualDecision.Action)
-
-	// Check for missing fields
-	for key, expectedValue := range expectedMap {
-		actualValue, exists := actualMap[key]
-		if !exists {
-			return fmt.Sprintf("%s\n"+
-				" └─ Missing field '%s'\n"+
-				"    Expected value: %s\n"+
-				"    → Agent didn't provide required field",
-				contextHeader, key, expectedValue)
-		}
-
-		expectedValue = strings.TrimSpace(expectedValue)
-		actualValue = strings.TrimSpace(actualValue)
-
-		if expectedValue == "" && actualValue == "" {
-			continue
-		}
-
-		if key == "output" || key == "body" {
-			if actualValue != "" {
-				log.Printf("[DEBUG] Decision %d: Skipping exact comparison for field '%s' (LLM-generated content)", decisionIndex, key)
-				continue
-			}
-		}
-
-		// For URL fields, use fuzzy matching with detailed error
-		if key == "url" {
-			if err := compareURLField(expectedValue, actualValue, contextHeader, decisionIndex); err != "" {
-				return err
-			}
-			continue
-		}
-
-		if expectedValue != actualValue {
-			return fmt.Sprintf("%s\n"+
-				" └─ Field '%s' mismatch\n"+
-				"    Expected: %s\n"+
-				"    Got:      %s\n"+
-				"    → Agent used wrong value for this field",
-				contextHeader, key, expectedValue, actualValue)
-		}
-	}
-
-	// Check for unexpected extra fields
-	for key := range actualMap {
-		if _, expected := expectedMap[key]; !expected {
-			log.Printf("[DEBUG] Decision %d: Unexpected extra field '%s' (ignoring)", decisionIndex, key)
-		}
-	}
-
-	return ""
-}
-
-func compareURLField(expectedValue, actualValue, contextHeader string, decisionIndex int) string {
-	expectedURL, err1 := url.Parse(expectedValue)
-	actualURL, err2 := url.Parse(actualValue)
-
-	if err1 != nil || err2 != nil {
-		return fmt.Sprintf("%s\n"+
-			" └─ URL parsing error\n"+
-			"    Expected: %s\n"+
-			"    Got:      %s",
-			contextHeader, expectedValue, actualValue)
-	}
-
-	score := calculateURLSimilarity(actualURL, expectedURL)
-	if score >= 0.80 {
-		log.Printf("[DEBUG] Decision %d: URL fuzzy match (%.1f%% similarity)", decisionIndex, score*100)
-		return ""
-	}
-
-	// Provide detailed breakdown of URL differences
-	var differences []string
-
-	if expectedURL.Scheme != actualURL.Scheme {
-		differences = append(differences, fmt.Sprintf("Scheme: expected '%s', got '%s'", expectedURL.Scheme, actualURL.Scheme))
-	}
-
-	if expectedURL.Host != actualURL.Host {
-		differences = append(differences, fmt.Sprintf("Host: expected '%s', got '%s'", expectedURL.Host, actualURL.Host))
-	}
-
-	if expectedURL.Path != actualURL.Path {
-		differences = append(differences, fmt.Sprintf("Path: expected '%s', got '%s'", expectedURL.Path, actualURL.Path))
-	}
-
-	expectedQuery := expectedURL.Query()
-	actualQuery := actualURL.Query()
-
-	for key := range expectedQuery {
-		if actualQuery.Get(key) != expectedQuery.Get(key) {
-			differences = append(differences, fmt.Sprintf("Query param '%s': expected '%s', got '%s'",
-				key, expectedQuery.Get(key), actualQuery.Get(key)))
-		}
-	}
-
-	for key := range actualQuery {
-		if expectedQuery.Get(key) == "" {
-			differences = append(differences, fmt.Sprintf("Unexpected query param '%s': '%s'", key, actualQuery.Get(key)))
-		}
-	}
-
-	diffStr := strings.Join(differences, "\n    ")
-	return fmt.Sprintf("%s\n"+
-		" └─ URL mismatch (%.1f%% similarity)\n"+
-		"    Expected: %s\n"+
-		"    Got:      %s\n"+
-		"    Differences:\n"+
-		"    %s\n"+
-		"    → Agent used different URL parameters",
-		contextHeader, score*100, expectedValue, actualValue, diffStr)
-}
-
-func compareFieldsFromDecisions(actualFields []Valuereplace, expectedFields []Valuereplace, decisionIndex int, actualDecision AgentDecision) string {
-	expectedDecision := AgentDecision{
-		Tool:   actualDecision.Tool,
-		Action: actualDecision.Action,
-		Fields: expectedFields,
-	}
-	return compareFieldsWithContext(actualDecision, expectedDecision, decisionIndex, "test")
-}
-
-func BuildComparisonErrorFromDecision(decisionIndex int, actualDecision AgentDecision, reason, expected, actual string) string {
-	var parts []string
-
-	parts = append(parts, fmt.Sprintf("Failed: Decision %d: %s with %s", decisionIndex, actualDecision.Action, actualDecision.Tool))
-	parts = append(parts, fmt.Sprintf("Reason: %s", reason))
-
-	if expected != "" && actual != "" {
-		parts = append(parts, fmt.Sprintf("Expected: %s", expected))
-		parts = append(parts, fmt.Sprintf("Got: %s", actual))
-	} else if expected != "" {
-		parts = append(parts, fmt.Sprintf("Expected: %s", expected))
-	}
-
-	return strings.Join(parts, "\n")
-}
-
-// func analyzeTestFailureWithLLM(actualDecisions []interface{}, expectedDecisions []map[string]interface{}, isTimeout bool) string {
-// 	cleanActual := stripRawResponses(actualDecisions)
-// 	cleanExpected := stripRawResponsesFromMaps(expectedDecisions)
-
-// 	actualJSON, err := json.MarshalIndent(cleanActual, "", "  ")
-// 	if err != nil {
-// 		return "Failed to analyze: could not marshal actual decisions"
-// 	}
-
-// 	expectedJSON, err := json.MarshalIndent(cleanExpected, "", "  ")
-// 	if err != nil {
-// 		return "Failed to analyze: could not marshal expected decisions"
-// 	}
-
-// 	systemMessage := `You are analyzing agent test failures.
-// Focus on what the agent ACTUALLY did and where it got stuck.
-
-// Output rules:
-// - Start with what the agent successfully completed
-// - Identify the SPECIFIC action and tool where it failed or got stuck
-// - Compare only that failure point with what was expected
-// - Ignore answer and finish actions - focus only on API calls and tool usage
-// - Be concise (max 2-3 sentences)
-// - Use plain language without special characters like quotes, backticks, or brackets
-// - Name the specific API or tool that failed
-
-// Example output format:
-// Agent completed geocoding API call successfully. Got stuck on weather API call - agent used URL with different parameters than expected (missing daily forecast params and using timezone=auto instead of Asia/Kolkata).`
-
-// 	var userMessage string
-// 	if isTimeout {
-// 		userMessage = fmt.Sprintf(`The agent test timed out.
-
-// What the agent ACTUALLY did:
-// %s
-
-// What was EXPECTED (full test plan):
-// %s
-
-// Analyze from the agent's perspective:
-// 1. Which API calls or tools did the agent successfully complete?
-// 2. Where exactly did it get stuck or fail?
-// 3. What was different about that specific action compared to what was expected?
-// 4. Ignore any answer or finish actions - focus only on the actual work (API calls, tools).`, string(actualJSON), string(expectedJSON))
-// 	} else {
-// 		userMessage = fmt.Sprintf(`The agent test failed.
-
-// What the agent ACTUALLY did:
-// %s
-
-// What was EXPECTED:
-// %s
-
-// Analyze from the agent's perspective:
-// 1. Which actions did the agent complete successfully?
-// 2. Which specific action/tool failed and why?
-// 3. What was the difference between what the agent did vs what was expected?
-// 4. Ignore any answer or finish actions.`, string(actualJSON), string(expectedJSON))
-// 	}
-
-// 	responseBody, err := RunAiQuery(systemMessage, userMessage)
-// 	if err != nil {
-// 		log.Printf("[ERROR] Failed to get LLM analysis: %s", err)
-// 		return "Failed to analyze with LLM"
-// 	}
-
-// 	failureReason := strings.TrimSpace(responseBody)
-// 	if after, ok := strings.CutPrefix(failureReason, "```"); ok {
-// 		failureReason = after
-// 	}
-// 	if after, ok := strings.CutSuffix(failureReason, "```"); ok {
-// 		failureReason = after
-// 	}
-// 	failureReason = strings.TrimSpace(failureReason)
-
-// 	log.Printf("[INFO] LLM Analysis: %s", failureReason)
-// 	return failureReason
-// }
-
-// Hmmm, let's see if this helps with token usage, stripRawResponses removes raw_response fields from decisions to save LLM tokens
-// func stripRawResponses(decisions []interface{}) []interface{} {
-// 	cleaned := make([]interface{}, len(decisions))
-// 	for i, d := range decisions {
-// 		if decisionMap, ok := d.(map[string]interface{}); ok {
-// 			cleanedDecision := make(map[string]interface{})
-// 			for k, v := range decisionMap {
-// 				// Skip raw_response and other verbose fields
-// 				if k != "raw_response" && k != "RawResponse" && k != "debug_url" && k != "DebugUrl" {
-// 					cleanedDecision[k] = v
-// 				}
-// 			}
-// 			cleaned[i] = cleanedDecision
-// 		} else {
-// 			cleaned[i] = d
-// 		}
-// 	}
-// 	return cleaned
-// }
-
-// func stripRawResponsesFromMaps(decisions []map[string]interface{}) []map[string]interface{} {
-// 	cleaned := make([]map[string]interface{}, len(decisions))
-// 	for i, decisionMap := range decisions {
-// 		cleanedDecision := make(map[string]interface{})
-// 		for k, v := range decisionMap {
-// 			if k != "raw_response" && k != "RawResponse" && k != "debug_url" && k != "DebugUrl" {
-// 				cleanedDecision[k] = v
-// 			}
-// 		}
-// 		cleaned[i] = cleanedDecision
-// 	}
-// 	return cleaned
-// }
