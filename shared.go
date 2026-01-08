@@ -124,6 +124,8 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			// For a new test project
 			"https://cases.shuffler.io",
 			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
+			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
+			"https://preview--shuffle-cases.lovable.app",
 		}
 
 		if len(origin) > 0 {
