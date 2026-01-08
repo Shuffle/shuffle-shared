@@ -111,6 +111,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 
 			"https://au.shuffler.io",
 
+
 			"https://jp.shuffler.io",
 			"https://br.shuffler.io",
 			"https://in.shuffler.io",
@@ -119,6 +120,10 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"https://singul.io",
 			"http://localhost:3002",
 			"http://localhost:3000",
+
+			// For a new test project
+			"https://cases.shuffler.io",
+			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
 		}
 
 		if len(origin) > 0 {
