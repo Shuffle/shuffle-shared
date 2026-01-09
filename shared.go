@@ -16286,8 +16286,43 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	}
 
 	if foundActionResultIndex < 0 {
-		log.Printf("[ERROR][%s] Action '%s' was NOT found with any result in the execution (yet)", workflowExecution.ExecutionId, actionResult.Action.ID)
-		return &workflowExecution, false, errors.New(fmt.Sprintf("ActionResultIndex: Agent node ID for decision ID %s not found", decisionId))
+		// In test mode, Singul doesn't create sub-executions, so we need to handle this gracefully
+		if os.Getenv("AGENT_TEST_MODE") == "true" {
+			log.Printf("[DEBUG][%s] AGENT_TEST_MODE: Action '%s' not found in results, creating placeholder", workflowExecution.ExecutionId, actionResult.Action.ID)
+
+			// Try to get the initial agent output from cache
+			ctx := context.Background()
+			actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+			placeholderResult := `{"status":"RUNNING","decisions":[]}`
+
+			cache, err := GetCache(ctx, actionCacheId)
+			if err == nil {
+				// Found cached agent output - use it!
+				cacheData := []byte(cache.([]uint8))
+				log.Printf("[DEBUG][%s] Found cached agent output for placeholder (size: %d bytes)", workflowExecution.ExecutionId, len(cacheData))
+				placeholderResult = string(cacheData)
+			} else {
+				log.Printf("[DEBUG][%s] No cached agent output found, using empty placeholder", workflowExecution.ExecutionId)
+			}
+
+			// Create a placeholder result for the agent action
+			placeholder := ActionResult{
+				Action:      actionResult.Action,
+				ExecutionId: workflowExecution.ExecutionId,
+				Result:      placeholderResult,
+				StartedAt:   time.Now().Unix(),
+				CompletedAt: 0,
+				Status:      "EXECUTING",
+			}
+
+			workflowExecution.Results = append(workflowExecution.Results, placeholder)
+			foundActionResultIndex = len(workflowExecution.Results) - 1
+
+			log.Printf("[DEBUG][%s] Created placeholder result at index %d", workflowExecution.ExecutionId, foundActionResultIndex)
+		} else {
+			log.Printf("[ERROR][%s] Action '%s' was NOT found with any result in the execution (yet)", workflowExecution.ExecutionId, actionResult.Action.ID)
+			return &workflowExecution, false, errors.New(fmt.Sprintf("ActionResultIndex: Agent node ID for decision ID %s not found", decisionId))
+		}
 	}
 
 	mappedResult := AgentOutput{}
@@ -16297,6 +16332,28 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed unmarshalling agent result: %s. Data: %s", workflowExecution.ExecutionId, err, actionResult.Result)
 		return &workflowExecution, false, err
+	}
+
+	// In test mode, if the placeholder has no decisions, we need to add the incoming decision
+	if os.Getenv("AGENT_TEST_MODE") == "true" && len(mappedResult.Decisions) == 0 {
+		log.Printf("[DEBUG][%s] AGENT_TEST_MODE: Placeholder has no decisions, parsing incoming decision", workflowExecution.ExecutionId)
+
+		// Parse the incoming decision from actionResult
+		incomingDecision := AgentDecision{}
+		err = json.Unmarshal([]byte(actionResult.Result), &incomingDecision)
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed unmarshalling incoming decision: %s", workflowExecution.ExecutionId, err)
+		} else {
+			// Add the decision to the mapped result
+			mappedResult.Decisions = append(mappedResult.Decisions, incomingDecision)
+			mappedResult.Status = "RUNNING"
+
+			// Update the workflow execution result with the new decision
+			updatedResult, _ := json.Marshal(mappedResult)
+			workflowExecution.Results[foundActionResultIndex].Result = string(updatedResult)
+
+			log.Printf("[DEBUG][%s] Added decision %s to placeholder (total decisions: %d)", workflowExecution.ExecutionId, incomingDecision.RunDetails.Id, len(mappedResult.Decisions))
+		}
 	}
 
 	// FIXME: Need to check the current value from the workflowexecution here, instead of using the currently sent in decision
@@ -20352,6 +20409,23 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			}
 
 			SetWorkflowExecution(ctx, exec, true)
+
+			if os.Getenv("AGENT_TEST_MODE") == "true" {
+				var bodyMap map[string]interface{}
+				if err := json.Unmarshal(body, &bodyMap); err == nil {
+					if mockToolCalls, ok := bodyMap["mock_tool_calls"]; ok {
+						mockCacheKey := fmt.Sprintf("agent_mock_%s", exec.ExecutionId)
+						mockData, _ := json.Marshal(mockToolCalls)
+						err := SetCache(ctx, mockCacheKey, mockData, 10)
+						if err != nil {
+							log.Printf("[ERROR] Failed to set cache the mock_tool_calls data for the exection %s", exec.ExecutionId)
+						}
+						log.Printf("[DEBUG] Cached mock tool calls for execution %s", exec.ExecutionId)
+					} else {
+						log.Printf("[WARNING] No mock_tool_calls found in the request body")
+					}
+				}
+			}
 
 			action, err := HandleAiAgentExecutionStart(exec, action, false)
 			if err != nil {

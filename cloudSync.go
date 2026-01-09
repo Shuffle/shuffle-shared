@@ -2109,6 +2109,14 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	debugUrl := ""
 	log.Printf("[INFO][%s] Running agent decision action '%s' with app '%s'. This is ran with Singul.", execution.ExecutionId, decision.Action, decision.Tool)
 
+	// Check if running in test mode
+	if os.Getenv("AGENT_TEST_MODE") == "true" {
+		log.Printf("[DEBUG][%s] AGENT_TEST_MODE enabled - using mock tool execution", execution.ExecutionId)
+
+		// Call mock handler
+		return RunAgentDecisionMockHandler(execution, decision)
+	}
+
 	baseUrl := "https://shuffler.io"
 	if os.Getenv("BASE_URL") != "" {
 		baseUrl = os.Getenv("BASE_URL")
