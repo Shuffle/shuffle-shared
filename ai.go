@@ -979,7 +979,6 @@ Input JSON Payload (ensure VALID JSON):
 
 	urlValue, pathValue, queriesValue = normalize(urlValue, pathValue, queriesValue)
 
-	log.Printf("[HEYOO] Here is the urlValue: %s, pathValue: %s, queriesValue: %s", urlValue, pathValue, queriesValue)
 	for i := range action.Parameters {
 		switch action.Parameters[i].Name {
 		case "url":
@@ -994,8 +993,6 @@ Input JSON Payload (ensure VALID JSON):
 	if debug {
 		log.Printf("[DEBUG] De-duplicated URL components: url=%s, path=%s, queries=%s", urlValue, pathValue, queriesValue)
 	}
-
-	log.Printf("[HEYOO] Here is the action values: %v", action)
 
 	return action, additionalInfo, nil
 }
@@ -7212,7 +7209,7 @@ FINALISING:
 	}
 
 	completionRequest := openai.ChatCompletionRequest{
-		Model: "gpt-5-mini",
+		Model: "gpt-5.2-2025-12-11",
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
