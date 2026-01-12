@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"net/url"
 
 	openai "github.com/sashabaranov/go-openai"
 	uuid "github.com/satori/go.uuid"
@@ -778,6 +779,7 @@ END OUTPUT FORMATTING
 ---
 ERROR HANDLING 
 
+- Use common knowledge to identify why the HTTP request failed (wrong path, incorrect query parameters, body sent with GET request, missing required body fields, wrong Content-Type header, method mismatch for the operation, etc.) and fix ONLY the specific issue causing the error
 - Fix the request based on the API context and the existing content in the path, body and queries
 - You SHOULD add relevant fields to the body that are missing
 - Modify the "path" field according to what seems wrong with the API URL. Do NOT remove this field.
@@ -950,7 +952,82 @@ Input JSON Payload (ensure VALID JSON):
 		return action, additionalInfo, errors.New(getBadOutputString(action, appname, inputdata, outputBody, status))
 	}
 
+	// De-duplicate url/path/queries to prevent duplication errors
+	urlValue := ""
+	pathValue := ""
+	queriesValue := ""
+
+	// Collect current values from action parameters
+	for _, param := range action.Parameters {
+		if param.Name == "url" {
+			urlValue = param.Value
+		} else if param.Name == "path" {
+			pathValue = param.Value
+		} else if param.Name == "queries" {
+			queriesValue = param.Value
+		}
+	}
+
+	if strings.Contains(pathValue, "://") {
+		if u, err := url.Parse(pathValue); err == nil {
+			pathValue = u.Path
+			if queriesValue == "" {
+				queriesValue = u.RawQuery
+			}
+		}
+	}
+
+	urlValue, pathValue, queriesValue = normalize(urlValue, pathValue, queriesValue)
+
+	log.Printf("[HEYOO] Here is the urlValue: %s, pathValue: %s, queriesValue: %s", urlValue, pathValue, queriesValue)
+	for i := range action.Parameters {
+		switch action.Parameters[i].Name {
+		case "url":
+			action.Parameters[i].Value = urlValue
+		case "path":
+			action.Parameters[i].Value = pathValue
+		case "queries":
+			action.Parameters[i].Value = queriesValue
+		}
+	}
+
+	if debug {
+		log.Printf("[DEBUG] De-duplicated URL components: url=%s, path=%s, queries=%s", urlValue, pathValue, queriesValue)
+	}
+
+	log.Printf("[HEYOO] Here is the action values: %v", action)
+
 	return action, additionalInfo, nil
+}
+
+func normalize(urlValue, pathValue, queriesValue string) (string, string, string) {
+	parsed, err := url.Parse(urlValue)
+	if err != nil {
+		return urlValue, pathValue, queriesValue
+	}
+
+	// If BOTH path and queries are empty, keep the full URL as-is
+	// This means LLM didn't fill them, so we shouldn't split
+	if pathValue == "" && queriesValue == "" {
+		return urlValue, pathValue, queriesValue
+	}
+
+	baseURL := ""
+	if parsed.Scheme != "" && parsed.Host != "" {
+		baseURL = parsed.Scheme + "://" + parsed.Host
+	}
+
+	// Extract path from URL if path is still empty
+	if pathValue == "" {
+		pathValue = parsed.Path
+	}
+
+	// Extract queries from URL if queries is still empty
+	if queriesValue == "" {
+		queriesValue = parsed.RawQuery
+	}
+
+	return baseURL, pathValue, queriesValue
 }
 
 func getBadOutputString(action Action, appname, inputdata, outputBody string, status int) string {
