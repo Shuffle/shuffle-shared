@@ -7209,7 +7209,7 @@ FINALISING:
 	}
 
 	completionRequest := openai.ChatCompletionRequest{
-		Model: "gpt-5.2-2025-12-11",
+		Model: "gpt-5-mini",
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
