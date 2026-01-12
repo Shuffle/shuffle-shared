@@ -779,9 +779,9 @@ END OUTPUT FORMATTING
 ---
 ERROR HANDLING 
 
-- Use common knowledge to identify why the HTTP request failed (wrong path, incorrect query parameters, body sent with GET request, missing required body fields, wrong Content-Type header, method mismatch for the operation, etc.) and fix ONLY the specific issue causing the error
+- Use common knowledge and the error response to identify the single most likely cause of the HTTP request failure.
 - Fix the request based on the API context and the existing content in the path, body and queries
-- You SHOULD add relevant fields to the body that are missing
+- You SHOULD add relevant fields to the body ONLY if the HTTP method allows a body and the error explicitly indicates missing required fields.
 - Modify the "path" field according to what seems wrong with the API URL. Do NOT remove this field.
 - Do NOT error-handle authentication issues unless it seems possible
 
