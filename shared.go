@@ -11694,8 +11694,9 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	type ReturnData struct {
 		OrgId     string `json:"org_id" datastore:"org_id"`
 		RegionUrl string `json:"region_url" datastore:"region_url"`
-		SSO       bool   `json:"sso"`
-		Mode      string `json:"mode"`
+		// SSO       bool   `json:"sso"`
+		SSO  bool   `json:"sso_test"`
+		Mode string `json:"mode"`
 	}
 
 	var tmpData ReturnData
@@ -22889,16 +22890,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			} else {
 				redirectUrl = baseUrl
 			}
-		}
-	} else if project.Environment == "cloud" && len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
-		// Cloud environment with custom SSO redirect URL
-		baseUrl := os.Getenv("SSO_REDIRECT_URL")
-		if strings.Contains(baseUrl, "/api/v1/login_openid") {
-			redirectUrl = strings.Replace(baseUrl, "/api/v1/login_openid", "/workflows", 1)
-		} else if !strings.HasSuffix(baseUrl, "/workflows") {
-			redirectUrl = fmt.Sprintf("%s/workflows", baseUrl)
-		} else {
-			redirectUrl = baseUrl
 		}
 	}
 
