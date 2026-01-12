@@ -2145,8 +2145,24 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	parsedFields := schemaless.TranslateBadFieldFormats(newFields)
 
+	// Check if this is a GET request and strip the body field if present
+	// GET requests should not have a body and can cause 400 errors
+	methodValue := ""
+	for _, field := range parsedFields {
+		if strings.ToLower(field.Key) == "method" {
+			methodValue = strings.ToUpper(field.Value)
+			break
+		}
+	}
+
 	oldFields := []Valuereplace{}
 	for _, field := range parsedFields {
+		// Skip body field for GET requests
+		if methodValue == "GET" && strings.ToLower(field.Key) == "body" {
+			log.Printf("[INFO][%s] Stripping 'body' field from GET request to %s", execution.ExecutionId, decision.Tool)
+			continue
+		}
+
 		oldFields = append(oldFields, Valuereplace{
 			Key:   field.Key,
 			Value: field.Value,
