@@ -167,6 +167,7 @@ type RetStruct struct {
 	IntervalSeconds int64                 `json:"interval_seconds"`
 	Subscriptions   []PaymentSubscription `json:"subscriptions,omitempty"`
 	Licensed        bool                  `json:"licensed"`
+	CloudSyncUrl    string                `json:"cloud_sync_url,omitempty"`
 }
 
 type AppMini struct {
