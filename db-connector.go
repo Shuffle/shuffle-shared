@@ -1017,7 +1017,9 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		})
 
 		if err != nil {
-			log.Printf("[WARNING] Error in org STATS get: %s", err)
+			if debug {
+				log.Printf("[WARNING] Error in org STATS get: %s", err)
+			}
 			return err
 		}
 
@@ -14957,6 +14959,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			"sort": map[string]interface{}{
 				"edited": map[string]interface{}{
 					"order": "desc",
+					"unmapped_type": "date",
 				},
 			},
 			"query": map[string]interface{}{
@@ -17829,8 +17832,39 @@ func InitOpensearchIndexes() {
 		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if err != nil {
-			if !strings.Contains(fmt.Sprintf("%s", err), "serverless mode") {
+			if !strings.Contains(fmt.Sprintf("%s", err), "serverless mode") && !strings.Contains(fmt.Sprintf("%s", err), "resource_already_exists_exception") {
 				log.Printf("[WARNING] Error creating index %s: %s", index, err)
+			}
+
+			// Make sure if the resource exist it is part of correct alias
+			if strings.Contains(fmt.Sprintf("%s", err), "resource_already_exists_exception") {
+				body := fmt.Sprintf(`{
+				  "actions": [
+				    {
+				      "add": {
+				        "index": "%s",
+				        "alias": "%s",
+				        "is_write_index": true
+				      }
+				    }
+				  ]
+				}`, initialIndexName, index)
+
+				aliasResp, aerr := project.Es.Aliases(ctx, opensearchapi.AliasesReq{
+					Body: strings.NewReader(body),
+				})
+				if aerr != nil {
+					log.Printf("[WARNING] Failed to ensure alias %s for index %s: %s", index, initialIndexName, aerr)
+					return
+				}
+
+				res := aliasResp.Inspect().Response
+				defer res.Body.Close()
+
+				if res.StatusCode >= 300 {
+					log.Printf("[WARNING] Alias enforcement failed: %s", res.String())
+					return
+				}
 			}
 		} else {
 			if res.IsError() {
@@ -17857,7 +17891,7 @@ func InitOpensearchIndexes() {
 		}
 
 		rolloverResp, err := project.Es.Indices.Rollover(ctx, opensearchapi.IndicesRolloverReq{
-			Index: index,
+			Alias: index,
 			Body:  bytes.NewReader(rolloverConfig),
 		})
 
