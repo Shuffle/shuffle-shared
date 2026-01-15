@@ -3562,10 +3562,22 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		uuidRegex := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-		// Encrypt API key if it's plain UUID
-		if uuidRegex.MatchString(user.ApiKey) {
-			log.Printf("[AUDIT] API key is a UUID: %s", user.ApiKey)
+		// since GetSessionNew returns encrypted values
+		plainApiKey := user.ApiKey
+		if len(plainApiKey) > 0 && !uuidRegex.MatchString(plainApiKey) {
+			if decrypted, err := HandleKeyDecryption([]byte(plainApiKey), "apikey"); err == nil {
+				plainApiKey = string(decrypted)
+			}
+		}
+		plainSession := user.Session
+		if len(plainSession) > 0 && !uuidRegex.MatchString(plainSession) {
+			if decrypted, err := HandleKeyDecryption([]byte(plainSession), "session"); err == nil {
+				plainSession = string(decrypted)
+			}
+		}
 
+		// save encrypted to just db
+		if uuidRegex.MatchString(user.ApiKey) {
 			encryptedKey, err := HandleKeyEncryption([]byte(user.ApiKey), "apikey", true)
 			if err == nil {
 				user.ApiKey = string(encryptedKey)
@@ -3574,19 +3586,19 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			}
 		}
 
-		// Encrypt session if matched on plain
 		if user.Session == sessionToken && uuidRegex.MatchString(sessionToken) {
-			log.Printf("[AUDIT] Encrypting session")
 			encryptedSession, err := HandleKeyEncryption([]byte(sessionToken), "session", true)
 			if err == nil {
 				user.Session = string(encryptedSession)
 				SetSession(ctx, user, user.Session)
-			} else {
-				log.Printf("[ERROR] Failed to encrypt session: %v", err)
 			}
 		}
 
-		// Means session exists, but
+		// we use user.Apikey throughout the codebase
+		// from the returned function value. Trying to keep the usage consistent.
+		user.ApiKey = plainApiKey
+		user.Session = plainSession
+
 		return user, nil
 	}
 

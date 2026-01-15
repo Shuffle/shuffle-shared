@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 
 	"crypto/sha256"
@@ -5728,8 +5729,9 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 	return newUsers, nil
 }
 
-func GetUser(ctx context.Context, username string) (*User, error) {
+func GetUser(ctx context.Context, username string, returnEncrypted ...bool) (*User, error) {
 	curUser := &User{}
+	uuidRegex := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 	parsedKey := strings.ToLower(username)
 	cacheKey := fmt.Sprintf("user_%s", parsedKey)
@@ -5739,6 +5741,21 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &curUser)
 			if err == nil {
+				// uuid or not
+				if len(returnEncrypted) == 0 || !returnEncrypted[0] {
+					if len(curUser.ApiKey) > 0 && !uuidRegex.MatchString(curUser.ApiKey) {
+						decryptedApiKey, decErr := HandleKeyDecryption([]byte(curUser.ApiKey), "apikey")
+						if decErr == nil {
+							curUser.ApiKey = string(decryptedApiKey)
+						}
+					}
+					if len(curUser.Session) > 0 && !uuidRegex.MatchString(curUser.Session) {
+						decryptedSession, decErr := HandleKeyDecryption([]byte(curUser.Session), "session")
+						if decErr == nil {
+							curUser.Session = string(decryptedSession)
+						}
+					}
+				}
 				return curUser, nil
 			}
 		} else {
@@ -5805,12 +5822,40 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 		data, err := json.Marshal(curUser)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling user: %s", err)
+			// uuid check
+			if len(returnEncrypted) == 0 || !returnEncrypted[0] {
+				if len(curUser.ApiKey) > 0 && !uuidRegex.MatchString(curUser.ApiKey) {
+					if decrypted, decErr := HandleKeyDecryption([]byte(curUser.ApiKey), "apikey"); decErr == nil {
+						curUser.ApiKey = string(decrypted)
+					}
+				}
+				if len(curUser.Session) > 0 && !uuidRegex.MatchString(curUser.Session) {
+					if decrypted, decErr := HandleKeyDecryption([]byte(curUser.Session), "session"); decErr == nil {
+						curUser.Session = string(decrypted)
+					}
+				}
+			}
 			return curUser, nil
 		}
 
 		err = SetCache(ctx, cacheKey, data, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating cache: %s", err)
+		}
+	}
+
+	if len(returnEncrypted) == 0 || !returnEncrypted[0] {
+		if len(curUser.ApiKey) > 0 && !uuidRegex.MatchString(curUser.ApiKey) {
+			decryptedApiKey, err := HandleKeyDecryption([]byte(curUser.ApiKey), "apikey")
+			if err == nil {
+				curUser.ApiKey = string(decryptedApiKey)
+			}
+		}
+		if len(curUser.Session) > 0 && !uuidRegex.MatchString(curUser.Session) {
+			decryptedSession, err := HandleKeyDecryption([]byte(curUser.Session), "session")
+			if err == nil {
+				curUser.Session = string(decryptedSession)
+			}
 		}
 	}
 
