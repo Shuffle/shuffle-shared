@@ -20375,6 +20375,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		return workflowExecution, err
 	}
 
+	if debug { 
+		log.Printf("[DEBUG] Action: %#v (%s)", action.Name, action.AppID)
+	}
+
 	if appId != action.AppID {
 
 		// Used for standalone runs stared on /agents

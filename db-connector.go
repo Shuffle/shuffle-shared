@@ -411,9 +411,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 }
 
 func GetDatastoreClient(ctx context.Context, projectID string) (datastore.Client, error) {
-	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile(test"))
 	client, err := datastore.NewClient(ctx, projectID)
-	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile("test"))
 	if err != nil {
 		return datastore.Client{}, err
 	}

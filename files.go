@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/storage"
 	"github.com/google/go-github/v28/github"
 	uuid "github.com/satori/go.uuid"
 )
@@ -2310,4 +2311,13 @@ func HandleSetFileConfig(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "File updated successfully!"}`)))
 
+}
+
+func GetStorageClient(ctx context.Context, projectID string) (storage.Client, error) {
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		return storage.Client{}, fmt.Errorf("failed to create storage client: %v", err)
+	}
+
+	return *client, nil
 }

@@ -793,7 +793,7 @@ END ERROR HANDLING
 	if len(attempt) > 1 {
 		currentAttempt := attempt[0]
 		if currentAttempt > 4 {
-			inputData += fmt.Sprintf(`IF we are missing a value from the user, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. If the "path" is wrong, rewrite it. Do not use it for authentication fields such as "apikey". Do NOT do this unless it is absolutely necessary, make SURE the fields are missing. Before returning missing fields, ALWAYS ensure and retry the path, body and query fields to ensure they are correct according to the input data.\n\n`)
+			inputData += fmt.Sprintf(`IF we are missing a value from the user, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. If the "path" is wrong, rewrite it. For GET requests, REMOVE the body field. Do not use it for authentication fields such as "apikey". Do NOT do this unless it is absolutely necessary, make SURE the fields are missing. Before returning missing fields, ALWAYS ensure and retry the path, body and query fields to ensure they are correct according to the input data.\n\n`)
 		}
 	}
 
@@ -1424,6 +1424,18 @@ func FixContentOutput(contentOutput string) string {
 	tmpMap := map[string]interface{}{}
 	err := json.Unmarshal([]byte(contentOutput), &tmpMap)
 	if err == nil {
+		// Check if "method" exists and remove "body" if it's GET 
+		// Too many edgecases have occurred here.
+		if methodFound, ok := tmpMap["method"]; ok {
+			if methodString, ok := methodFound.(string); ok {
+				if ok && methodString == "GET" { 
+					if _, ok := tmpMap["body"]; ok {
+						delete(tmpMap, "body")
+					}
+				}
+			}
+		}
+
 		marshalled, err := json.MarshalIndent(tmpMap, "", "  ")
 		if err == nil {
 			contentOutput = string(marshalled)
@@ -1581,6 +1593,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		}
 	}
 
+
 	updatedIndex := -1
 	if len(foundCategory.ActionLabels) == 0 {
 		for _, category := range availableCategories {
@@ -1695,43 +1708,86 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	//userMessage := "The available actions are as follows:\n"
 
 	if cacheGeterr != nil {
-		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: case = alert = ticket = issue = task, or message = chat = communication. Be extra careful of not confusing LIST and GET operations, based on the user query, respond with the most likely action. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as JSON."`
+		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: case = alert = ticket = issue = task, or message = chat = communication. Be extra careful of not confusing LIST and GET operations, based on the user query, respond with the most likely action name. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as JSON."`
 		userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
 
 		//changedNames := map[string]string{}
 		parsedLabel := strings.ToLower(strings.ReplaceAll(label, " ", "_"))
-		for _, action := range app.Actions {
+		for actionIndex, action := range app.Actions {
 			if action.Name == "custom_action" {
 				continue
 			}
 
 			parsedActionName := strings.ToLower(strings.ReplaceAll(action.Name, " ", "_"))
+			//log.Printf("[DEBUG] Comparing: '%s' with '%s' (%s)\n", parsedLabel, parsedActionName, action.CategoryLabel)
 			if parsedActionName == parsedLabel {
 				return app, action
 			}
 
+			for _, actionLabel := range action.CategoryLabel {
+				parsedActionlabel := strings.ToLower(strings.ReplaceAll(actionLabel, " ", "_"))
+				if parsedActionlabel == parsedLabel {
+					return app, action
+				}
+			}
+
 
 			//userMessage += fmt.Sprintf("%s\n", action.Name)
-			/*
-				newName := action.Name
-				if strings.HasPrefix(newName, "get_list") {
-					newName = strings.Replace(newName, "get_list", "list", 1)
-				}
+			method := "GET"
+			if strings.HasPrefix(action.Name, "post_") {
+				method = "POST"
+			} else if strings.HasPrefix(action.Name, "put_") {
+				method = "PUT"
+			} else if strings.HasPrefix(action.Name, "patch_") {
+				method = "PATCH"
+			} else if strings.HasPrefix(action.Name, "delete_") {
+				method = "DELETE"
+			} 
 
-				if strings.HasPrefix(newName, "post_") {
-					newName = strings.Replace(newName, "post_", "", 1)
-				} else if strings.HasPrefix(newName, "patch_") {
-					newName = strings.Replace(newName, "patch_", "", 1)
-				} else if strings.HasPrefix(newName, "put_") {
-					newName = strings.Replace(newName, "put_", "", 1)
-				}
+			// We need to parse out the url from description to help
+			parsedDescriptionUrlPath := ""
+			for _, line := range strings.Split(action.Description, "\n") {
+				// Examples it needs to parse on a line: 
+				// - https://graph.microsoft.com/v1.0/users/{user_id}/people
+				// - /v1.0/users/{user_id}/people
+				if strings.Contains(line, "http") {
+					// Parse out the url -> return path only
+					parsedUrl, err := url.Parse(strings.TrimSpace(line))
+					if err != nil {
+						if debug { 
+							log.Printf("[DEBUG] Failed to parse URL from action description line '%s': %s", line, err)
+						}
 
-				if newName != action.Name {
-					changedNames[action.Name] = newName
-				}
-			*/
+						continue
+					}
 
-			userMessage += fmt.Sprintf("%s\n", action.Name)
+					parsedDescriptionUrlPath = parsedUrl.Path
+					break
+				}
+			}
+
+			// Find the last line and just use it if it has / in it 
+			// This is a failover
+			if len(parsedDescriptionUrlPath) == 0 {
+				descSplit := strings.Split(action.Description, "\n")
+				for lineIndex, line := range descSplit {
+					if lineIndex != len(descSplit)-1 {
+						continue
+					}
+
+					if strings.HasPrefix(strings.TrimSpace(line), "/") {
+						parsedDescriptionUrlPath = strings.TrimSpace(line)
+						break
+					}
+				}
+			}
+
+			parsedEnding := fmt.Sprintf("(%s %s)", method, parsedDescriptionUrlPath)
+			if actionIndex > 100 || parsedDescriptionUrlPath == "" { 
+				parsedEnding = ""
+			}
+
+			userMessage += fmt.Sprintf("%s %s\n", action.Name, parsedEnding)
 		}
 
 		if len(keys) > 0 {
@@ -1865,13 +1921,24 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 				log.Printf("[INFO] Found method %s for action %s (OPENAPI) during label mapping for '%s' in app '%s'", method, app.Actions[updatedIndex].Name, label, app.Name)
 				if len(operation.Extensions) == 0 {
-					operation.Extensions["x-label"] = label
+					operation.Extensions["x-label"] = []string{label}
 				} else {
 					if _, found := operation.Extensions["x-label"]; !found {
-						operation.Extensions["x-label"] = label
+						operation.Extensions["x-label"] = []string{label}
 					} else {
 						// add to it with comma?
-						operation.Extensions["x-label"] = fmt.Sprintf("%s,%s", operation.Extensions["x-label"], label)
+						//operation.Extensions["x-label"] = fmt.Sprintf("%s,%s", operation.Extensions["x-label"], label)
+
+						if val, ok := operation.Extensions["x-label"].(string); ok {
+							existingLabel := strings.Split(val, ",")
+							operation.Extensions["x-label"] = existingLabel
+						}
+
+						existingLabels, ok := operation.Extensions["x-label"].([]string)
+						if ok && !ArrayContains(existingLabels, label) {
+							existingLabels = append(existingLabels, label)
+							operation.Extensions["x-label"] = existingLabels
+						}
 					}
 				}
 
@@ -2910,7 +2977,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 			break
 		}
 
-		log.Printf("[INFO] Running attempt %d for app %s with action %s", cnt, appname, selectedAction.Name)
+		log.Printf("[INFO] Running Singul attempt %d for app %s with action %s", cnt, appname, selectedAction.Name)
 
 		newAction := Action{
 			Name:              selectedAction.Name,
@@ -2932,6 +2999,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 			resp.Write(respBody)
 			return respBody, err
 		}
+
 
 		// Gut auth from request auth header and forward with the same one
 		parsedUrl := fmt.Sprintf("%s/api/v1/apps/%s/run", baseUrl, foundApp.ID)
@@ -4751,7 +4819,8 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 				log.Printf("[DEBUG] Failed getting OpenAPI from datastore for app %s: %s", appname, err)
 			}
 
-			if parsedOpenapi.Success && len(parsedOpenapi.Body) > 0 {
+			//if parsedOpenapi.Success && len(parsedOpenapi.Body) > 0 {
+			if len(parsedOpenapi.Body) > 0 {
 				swaggerLoader := openapi3.NewSwaggerLoader()
 				swaggerLoader.IsExternalRefsAllowed = true
 				openapiDef, err = swaggerLoader.LoadSwaggerFromData([]byte(parsedOpenapi.Body))
@@ -4759,7 +4828,7 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 					log.Printf("[ERROR] Failed to load swagger for app %s: %s", appname, err)
 				}
 			} else {
-				log.Printf("[ERROR] Bad OpenAPI found in datastore for app %s", appname)
+				log.Printf("[ERROR] Bad OpenAPI found in datastore for app %s (%s). Success: %#v, Body len: %d", appname, foundApp.ObjectID, parsedOpenapi.Success, len(parsedOpenapi.Body))
 			}
 
 			return returnApp, openapiDef, nil

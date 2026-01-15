@@ -2377,11 +2377,17 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 	}
 
 	if val, ok := path.Connect.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -2581,11 +2587,17 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	}
 
 	if val, ok := path.Get.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -2797,11 +2809,17 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	}
 
 	if val, ok := path.Head.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -2998,11 +3016,17 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	}
 
 	if val, ok := path.Delete.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -3219,11 +3243,17 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	}
 
 	if val, ok := path.Post.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -3468,11 +3498,17 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 	}
 
 	if val, ok := path.Patch.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -3693,11 +3729,17 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	}
 
 	if val, ok := path.Put.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
