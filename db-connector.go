@@ -9845,7 +9845,6 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 		}
 
 	} else {
-		// Datastore: try encrypted first, then plain (no IN filter support)
 		for _, sess := range sessionsToSearch {
 			q := datastore.NewQuery(nameKey).Filter("session =", sess).Limit(1)
 			_, err := project.Dbclient.GetAll(ctx, q, &users)
