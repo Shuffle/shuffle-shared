@@ -4220,10 +4220,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 }
 
 func init() {
-	// Skip import path check in test mode
-	if os.Getenv("SHUFFLE_TEST_MODE") == "true" {
-		return
-	}
 
 	isValid := checkImportPath()
 	if !isValid {
@@ -4905,13 +4901,14 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 
 // Index = Username
 func SetApikey(ctx context.Context, Userdata User) error {
-	log.Printf("[AUDIT] Setting API key %s", Userdata.ApiKey)
 
+	// Non indexed User data
 	newapiUser := new(Userapi)
-	newapiUser.Username = strings.ToLower(Userdata.Username)
 	newapiUser.ApiKey = Userdata.ApiKey
+	newapiUser.Username = strings.ToLower(Userdata.Username)
 	nameKey := "apikey"
 
+	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		data, err := json.Marshal(Userdata)
 		if err != nil {
@@ -5110,7 +5107,10 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 	return *api, nil
 }
 
+// Index = Username
 func SetSession(ctx context.Context, user User, value string) error {
+	//parsedKey := strings.ToLower(user.Username)
+	// Non indexed User data
 	parsedKey := user.Id
 	user.Session = value
 
@@ -6223,7 +6223,7 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 				if !strings.Contains(err.Error(), "doesn't exist") {
 					log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
 				}
-
+					
 				return
 			}
 
@@ -9740,177 +9740,17 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 		}
 	}
 
-	sessionsToSearch := []string{sessionId}
-	encryptedSession, encErr := HandleKeyEncryption([]byte(sessionId), "session", true)
-	if encErr == nil {
-		sessionsToSearch = append([]string{string(encryptedSession)}, sessionsToSearch...)
-	} else {
-		log.Printf("[WARNING] Failed encrypting session: %s", encErr)
-	}
-
+	// Query for the specific API-key in users
 	nameKey := "Users"
 	var users []User
 	if project.DbType == "opensearch" {
-		shouldClauses := make([]map[string]interface{}, len(sessionsToSearch))
-		for i, sess := range sessionsToSearch {
-			shouldClauses[i] = map[string]interface{}{
-				"match": map[string]interface{}{
-					"session": sess,
-				},
-			}
-		}
-
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
 			"size": 1000,
 			"query": map[string]interface{}{
-				"bool": map[string]interface{}{
-					"should":               shouldClauses,
-					"minimum_should_match": 1,
-				},
-			},
-		}
-
-		if err := json.NewEncoder(&buf).Encode(query); err != nil {
-			log.Printf("[WARNING] Error encoding find user query: %s", err)
-			return User{}, err
-		}
-
-		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
-			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
-			Body:    &buf,
-			Params: opensearchapi.SearchParams{
-				TrackTotalHits: true,
-			},
-		})
-		if err != nil {
-			if strings.Contains(err.Error(), "index_not_found_exception") {
-				return User{}, nil
-			}
-
-			log.Printf("[ERROR] Error getting response from Opensearch (get session): %s", err)
-			return User{}, err
-		}
-
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return User{}, nil
-		}
-
-		if res.IsError() {
-			var e map[string]interface{}
-			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
-				log.Printf("[WARNING] Error parsing the response body: %s", err)
-				return User{}, nil
-			} else {
-				// Print the response status and error information.
-				log.Printf("[%s] %s: %s",
-					res.Status(),
-					e["error"].(map[string]interface{})["type"],
-					e["error"].(map[string]interface{})["reason"],
-				)
-			}
-		}
-
-		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return User{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
-
-		}
-
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return User{}, err
-		}
-
-		wrapped := UserSearchWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return User{}, err
-		}
-
-		users = []User{}
-		for _, hit := range wrapped.Hits.Hits {
-			// Check if session matches any of our search keys
-			matched := false
-			for _, sess := range sessionsToSearch {
-				if hit.Source.Session == sess {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				continue
-			}
-			users = append(users, hit.Source)
-		}
-
-	} else {
-		// Datastore: try encrypted first, then plain (no IN filter support)
-		for _, sess := range sessionsToSearch {
-			q := datastore.NewQuery(nameKey).Filter("session =", sess).Limit(1)
-			_, err := project.Dbclient.GetAll(ctx, q, &users)
-			if err != nil && len(users) == 0 {
-				if !strings.Contains(err.Error(), `cannot load field`) {
-					continue
-				}
-			}
-			if len(users) > 0 {
-				break
-			}
-		}
-	}
-
-	if len(users) == 0 {
-		return User{}, errors.New("No users found for this session")
-	}
-
-	if project.CacheDb {
-		data, err := json.Marshal(users[0])
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in getSession: %s", err)
-			return User{}, err
-		}
-
-		err = SetCache(ctx, cacheKey, data, 30)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting session cache for user %s: %s", sessionId, err)
-		}
-	}
-
-	return users[0], nil
-}
-
-func GetApikey(ctx context.Context, apikey string) (User, error) {
-	// Build list of keys to search: encrypted (new) + plain (backwards compat)
-	keysToSearch := []string{apikey}
-	encryptedKey, encErr := HandleKeyEncryption([]byte(apikey), "apikey", true)
-	if encErr == nil {
-		keysToSearch = append([]string{string(encryptedKey)}, keysToSearch...)
-	}
-
-	nameKey := "Users"
-	var users []User
-	if project.DbType == "opensearch" {
-		// Build OR query for both encrypted and plain apikey
-		shouldClauses := make([]map[string]interface{}, len(keysToSearch))
-		for i, key := range keysToSearch {
-			shouldClauses[i] = map[string]interface{}{
 				"match": map[string]interface{}{
-					"apikey": key,
-				},
-			}
-		}
-
-		var buf bytes.Buffer
-		query := map[string]interface{}{
-			"from": 0,
-			"size": 1000,
-			"query": map[string]interface{}{
-				"bool": map[string]interface{}{
-					"should":               shouldClauses,
-					"minimum_should_match": 1,
+					"session": sessionId,
 				},
 			},
 		}
@@ -9975,32 +9815,135 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 		users = []User{}
 		for _, hit := range wrapped.Hits.Hits {
-			// Check if apikey matches any of our search keys
-			matched := false
-			for _, key := range keysToSearch {
-				if hit.Source.ApiKey == key {
-					matched = true
-					break
-				}
-			}
-			if !matched {
+			if hit.Source.Session != sessionId {
 				continue
 			}
+
 			users = append(users, hit.Source)
 		}
 
 	} else {
-		// Datastore: try encrypted first, then plain (no IN filter support)
-		for _, key := range keysToSearch {
-			q := datastore.NewQuery(nameKey).Filter("apikey =", key).Limit(1)
-			_, err := project.Dbclient.GetAll(ctx, q, &users)
-			if err != nil && len(users) == 0 {
-				if !strings.Contains(err.Error(), `cannot load field`) {
-					continue
-				}
+		//log.Printf("[DEBUG] Searching for session %s", sessionId)
+		q := datastore.NewQuery(nameKey).Filter("session =", sessionId).Limit(1)
+		_, err := project.Dbclient.GetAll(ctx, q, &users)
+		if err != nil && len(users) == 0 {
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Error getting session: %s", err)
+				return User{}, err
 			}
-			if len(users) > 0 {
-				break
+		}
+	}
+
+	if len(users) == 0 {
+		return User{}, errors.New("No users found for this apikey (1)")
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(users[0])
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getSession: %s", err)
+			return User{}, err
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting session cache for user %s: %s", sessionId, err)
+		}
+	}
+
+	return users[0], nil
+}
+
+func GetApikey(ctx context.Context, apikey string) (User, error) {
+	// Query for the specific API-key in users
+	nameKey := "Users"
+	var users []User
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"apikey": apikey,
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return User{}, err
+		}
+
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return User{}, nil
+			}
+
+			log.Printf("[ERROR] Error getting response from Opensearch (get api keys): %s", err)
+			return User{}, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return User{}, nil
+		}
+
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return User{}, nil
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return User{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return User{}, err
+		}
+
+		wrapped := UserSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return User{}, err
+		}
+
+		users = []User{}
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.ApiKey != apikey {
+				continue
+			}
+
+			users = append(users, hit.Source)
+		}
+
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("apikey =", apikey).Limit(1)
+		_, err := project.Dbclient.GetAll(ctx, q, &users)
+		if err != nil && len(users) == 0 {
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Error getting apikey: %s", err)
+				return User{}, err
 			}
 		}
 	}
@@ -14024,7 +13967,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 
 	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
 	if len(category) > 0 && category != "default" {
-		// FIXME: If they key itself is 'test_protected' and category
+		// FIXME: If they key itself is 'test_protected' and category 
 		// is 'protected' this breaks... Keeping it for now.
 		if !strings.HasSuffix(id, fmt.Sprintf("_%s", category)) {
 			id = fmt.Sprintf("%s_%s", id, category)
@@ -14284,18 +14227,18 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		} else {
 			//log.Printf("\n\n[INFO] Should check for SSO during setup - finding main org\n\n")
 			/*
-				orgs, err := GetAllOrgs(ctx)
-				if err == nil {
-					for _, org := range orgs {
-						if len(org.ManagerOrgs) == 0 && len(org.SSOConfig.SSOEntrypoint) > 0 {
-							log.Printf("[INFO] Set initial SSO url for logins to %s", org.SSOConfig.SSOEntrypoint)
-							SSOUrl = org.SSOConfig.SSOEntrypoint
-							break
-						}
+			orgs, err := GetAllOrgs(ctx)
+			if err == nil {
+				for _, org := range orgs {
+					if len(org.ManagerOrgs) == 0 && len(org.SSOConfig.SSOEntrypoint) > 0 {
+						log.Printf("[INFO] Set initial SSO url for logins to %s", org.SSOConfig.SSOEntrypoint)
+						SSOUrl = org.SSOConfig.SSOEntrypoint
+						break
 					}
-				} else {
-					log.Printf("[WARNING] Error loading orgs: %s", err)
 				}
+			} else {
+				log.Printf("[WARNING] Error loading orgs: %s", err)
+			}
 			*/
 		}
 	} else {
