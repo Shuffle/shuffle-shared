@@ -3566,7 +3566,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		// Encrypt API key if it's plain UUID
 		if uuidRegex.MatchString(user.ApiKey) {
-			log.Printf("[AUDIT] API key is a UUID: %s", user.ApiKey)
+			if debug { 
+				log.Printf("[AUDIT] API key is a UUID: %s", user.ApiKey)
+			}
 
 			encryptedKey, err := HandleKeyEncryption([]byte(user.ApiKey), "apikey", true)
 			if err == nil {
@@ -3578,7 +3580,10 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		// Encrypt session if matched on plain
 		if user.Session == sessionToken && uuidRegex.MatchString(sessionToken) {
-			log.Printf("[AUDIT] Encrypting session")
+			if debug { 
+				log.Printf("[AUDIT] Encrypting session for %s")
+			}
+
 			encryptedSession, err := HandleKeyEncryption([]byte(sessionToken), "session", true)
 			if err == nil {
 				user.Session = string(encryptedSession)
