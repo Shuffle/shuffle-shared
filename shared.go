@@ -118,6 +118,8 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 
 			"https://*.singul.io",
 			"https://singul.io",
+			"https://*.shutdown.no",
+			"https://shutdown.no",
 			"http://localhost:3002",
 			"http://localhost:3000",
 
@@ -15268,6 +15270,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			newCookie.Name = "__session"
 			newCookie.Domain = ".singul.io"
 			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			newCookie.Domain = ".shutdown.no"
+			http.SetCookie(resp, newCookie)
 		}
 
 		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, userdata.Session, expiration.Unix(), regionUrl)
@@ -15331,6 +15337,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		if project.Environment == "cloud" {
 			newCookie.Name = "__session"
 			newCookie.Domain = ".singul.io"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			newCookie.Domain = ".shutdown.no"
 			http.SetCookie(resp, newCookie)
 		}
 
