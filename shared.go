@@ -2177,7 +2177,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		appAuth.App.LargeImage = app.LargeImage
 	}
 
-	// If editing, reset verification?
+	// If manual editing, reset verification
 	appAuth.Validation = TypeValidation{}
 
 	appAuth.OrgId = user.ActiveOrg.Id
@@ -3456,7 +3456,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		user, err := GetSessionNew(ctx, sessionToken)
 		if err != nil {
-			log.Printf("[WARNING] No valid session token for ID %s. Setting cookie to expire. May cause fallback problems.", sessionToken)
+			log.Printf("[WARNING] No valid session token for '%s'. Setting cookie to expire. May cause fallback problems.", sessionToken)
 
 			if resp != nil {
 				newCookie := constructSessionDeleteCookie()
@@ -15237,7 +15237,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(userdata.Session) != 0 && !changeActiveOrg {
+	// Had to set this due to session hashing rollback 
+	if len(userdata.Session) != 0 && len(userdata.Session) == 36 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(8 * time.Hour)
 
@@ -32146,6 +32147,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 	handledAuth := []string{}
 	timenow := time.Now().Unix() * 1000
+	runtimeLocationName := ""
 
 	//log.Printf("\n\n[DEBUG][%s] STARTING VALIDATION WITH %d results and %d actions\n\n", exec.ExecutionId, len(exec.Results), len(workflow.Actions))
 	for _, result := range exec.Results {
@@ -32153,6 +32155,8 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		if result.Status == "SKIPPED" {
 			continue
 		}
+
+		runtimeLocationName = result.Action.Environment
 
 		found := false
 		foundAction := Action{}
@@ -32309,6 +32313,12 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 						auth.Validation.Valid = true
 						authUpdated = true
 					}
+
+					// Check if it is more than 10 days ago. If so, update again.
+					tenDaysMicroseconds := int64(432000000)
+					if timenow-auth.Validation.LastValid > tenDaysMicroseconds {
+						authUpdated = true
+					}
 				}
 
 				if authUpdated {
@@ -32318,6 +32328,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 						auth.Validation.LastValid = timenow
 					}
 
+					auth.Validation.Environment = runtimeLocationName
 					auth.Validation.WorkflowId = workflow.ID
 					auth.Validation.ExecutionId = exec.ExecutionId
 					auth.Validation.NodeId = result.Action.ID
@@ -32516,6 +32527,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 	// Updating the workflow to show the right status every time for now
 	workflowChanged = true
+	workflow.Validation.Environment = runtimeLocationName
 	workflow.Validation.ValidationRan = true
 	workflow.Validation.ExecutionId = exec.ExecutionId
 	if workflowChanged {

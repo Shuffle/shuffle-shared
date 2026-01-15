@@ -1801,6 +1801,7 @@ type TypeValidation struct {
 	NotificationsCreated int64 `json:"notifications_created" datastore:"notifications_created"`
 
 	// For the last update, which did it
+	Environment string `json:"environment" datastore:"environment"`
 	WorkflowId  string `json:"workflow_id" datastore:"workflow_id"`
 	ExecutionId string `json:"execution_id" datastore:"execution_id"`
 	NodeId      string `json:"node_id" datastore:"node_id"`
