@@ -111,7 +111,6 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 
 			"https://au.shuffler.io",
 
-
 			"https://jp.shuffler.io",
 			"https://br.shuffler.io",
 			"https://in.shuffler.io",
@@ -500,35 +499,40 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 
 		if len(user.Session) != 0 {
 			log.Printf("[INFO] User session exists - resetting session")
+			sessionValue := user.Session
+			decryptedSession, err := HandleKeyDecryption([]byte(sessionValue), "session")
+			if err == nil {
+				sessionValue = string(decryptedSession)
+			}
+
 			expiration := time.Now().Add(8 * time.Hour)
 
-			newCookie := ConstructSessionCookie(user.Session, expiration)
+			newCookie := ConstructSessionCookie(sessionValue, expiration)
 
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
 			http.SetCookie(resp, newCookie)
 
-			//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", user.Session)
 			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
 				Key:        "session_token",
-				Value:      user.Session,
+				Value:      sessionValue,
 				Expiration: expiration.Unix(),
 			})
 
 			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
 				Key:        "__session",
-				Value:      user.Session,
+				Value:      sessionValue,
 				Expiration: expiration.Unix(),
 			})
 
-			loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, user.Session, expiration.Unix())
+			loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, sessionValue, expiration.Unix())
 			newData, err := json.Marshal(returnValue)
 			if err == nil {
 				loginData = string(newData)
 			}
 
-			err = SetSession(ctx, user, user.Session)
+			err = SetSession(ctx, user, sessionValue)
 			if err != nil {
 				log.Printf("[WARNING] Error adding session to database: %s", err)
 			} else {
@@ -3343,6 +3347,8 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			newApikey = newApikey[0:248]
 		}
 
+		log.Printf("[DEBUG] Checking cache without encryption")
+
 		cache, err := GetCache(ctx, newApikey+org_id)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
@@ -3379,6 +3385,17 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
 			//log.Printf("[WARNING] Apikey %s doesn't exist or the user doesn't have an ID/Username", apikey)
 			return User{}, errors.New("Couldn't find the user")
+		}
+
+		// Encrypt API key if matched on plain (userdata.ApiKey == incoming plain key)
+		uuidRegex := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+		if userdata.ApiKey == apikeyCheck[1] && uuidRegex.MatchString(apikeyCheck[1]) {
+			encryptedKey, err := HandleKeyEncryption([]byte(apikeyCheck[1]), "apikey", true)
+			if err == nil {
+				userdata.ApiKey = string(encryptedKey)
+				SetApikey(ctx, userdata)
+				SetUser(ctx, &userdata, false)
+			}
 		}
 
 		// Caching both bad and good apikeys :)
@@ -3544,6 +3561,32 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		//}
 
 		user.SessionLogin = true
+
+		uuidRegex := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+		// Encrypt API key if it's plain UUID
+		if uuidRegex.MatchString(user.ApiKey) {
+			log.Printf("[AUDIT] API key is a UUID: %s", user.ApiKey)
+
+			encryptedKey, err := HandleKeyEncryption([]byte(user.ApiKey), "apikey", true)
+			if err == nil {
+				user.ApiKey = string(encryptedKey)
+				SetApikey(ctx, user)
+				SetUser(ctx, &user, false)
+			}
+		}
+
+		// Encrypt session if matched on plain
+		if user.Session == sessionToken && uuidRegex.MatchString(sessionToken) {
+			log.Printf("[AUDIT] Encrypting session")
+			encryptedSession, err := HandleKeyEncryption([]byte(sessionToken), "session", true)
+			if err == nil {
+				user.Session = string(encryptedSession)
+				SetSession(ctx, user, user.Session)
+			} else {
+				log.Printf("[ERROR] Failed to encrypt session: %v", err)
+			}
+		}
 
 		// Means session exists, but
 		return user, nil
@@ -9231,11 +9274,20 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	apikey := userInfo.ApiKey
+	uuidRegex := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	if !uuidRegex.MatchString(apikey) {
+		decrypted, err := HandleKeyDecryption([]byte(apikey), "apikey")
+		if err == nil {
+			apikey = string(decrypted)
+		}
+	}
+
 	newObject := SettingsReturn{
 		Success:  true,
 		Username: userInfo.Username,
 		Verified: userInfo.Verified,
-		Apikey:   userInfo.ApiKey,
+		Apikey:   apikey,
 		Image:    userInfo.PublicProfile.GithubAvatar,
 	}
 
@@ -18889,7 +18941,7 @@ func create32Hash(key string) ([]byte, error) {
 	return []byte(hex.EncodeToString(hasher.Sum(nil))), nil
 }
 
-func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
+func HandleKeyEncryption(data []byte, passphrase string, deterministic ...bool) ([]byte, error) {
 	key, err := create32Hash(passphrase)
 	if err != nil {
 		log.Printf("[WARNING] Skipped hashing in encrypt: %s", err)
@@ -18908,10 +18960,18 @@ func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 		return []byte{}, err
 	}
 
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-		log.Printf("[WARNING] Error reading GCM nonce: %s", err)
-		return []byte{}, err
+	var nonce []byte
+	if len(deterministic) > 0 && deterministic[0] {
+		// Deterministic mode: derive nonce from data + passphrase for repeatable encryption
+		nonceSource := md5.Sum(append(data, []byte(passphrase)...))
+		nonce = nonceSource[:gcm.NonceSize()]
+	} else {
+		// Random nonce (default behavior)
+		nonce = make([]byte, gcm.NonceSize())
+		if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+			log.Printf("[WARNING] Error reading GCM nonce: %s", err)
+			return []byte{}, err
+		}
 	}
 
 	ciphertext := gcm.Seal(nonce, nonce, data, nil)
