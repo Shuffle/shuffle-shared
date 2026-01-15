@@ -1711,11 +1711,26 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	if cacheGeterr != nil {
 		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: case = alert = ticket = issue = task, or message = chat = communication. Be extra careful of not confusing LIST and GET operations, based on the user query, respond with the most likely action name. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as JSON with JUST the action name."`
 
-		if label == "app_validation" || label == "test" || label == "test_api" {
-			systemMessage = fmt.Sprintf(`Your goal is to find the most correct action for TESTING an API. You have to pick the most likely action. Synonyms are accepted. A synonym example can be something like: case = alert = ticket = issue = task, or message = chat = communication. E.g. for ITSM it should be to list tickets. For email, to list emails. For EDR, to list alerts etc. Find a simple API. The current app is '%s'. Our goal is to get a 200 OK or similar. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as JSON, with JUST the action name.`, app.Name)
-		}
-
 		userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
+
+		// Special handler for validation / testing to auto-map an action for an app
+		if label == "app_validation" || label == "test" || label == "test_api" {
+			systemMessage = fmt.Sprintf(`Your goal is to select one action from the list that is most likely to return a 200 OK or similar response for testing an API. The API name is %s with the category %s.
+
+Rules:
+1. Prefer list or collection endpoints that return multiple items (e.g., emails, tickets, alerts, messages, files, resources).
+2. If no list/collection endpoint exists, fallback to a single-object retrieval (e.g., get user).
+3. Synonyms are allowed (e.g., message = email = communication, case = ticket = issue = task).
+4. Ignore authentication/permission details; assume the call works.
+5. Do not pick endpoints that create, delete, or modify data.
+
+Output only one JSON object:
+* If a valid action exists: {"success": true, "action": "<action>"}
+* If none exists: {"success": false, "action": ""}
+
+Do not add explanations, comments, or extra formatting. Only return valid JSON.`, app.Name, strings.Join(app.Categories, ", "))
+			userMessage = ""
+		}
 
 		//changedNames := map[string]string{}
 		parsedLabel := strings.ToLower(strings.ReplaceAll(label, " ", "_"))
@@ -1827,7 +1842,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 					Content: userMessage,
 				},
 			},
-			MaxTokens: maxTokens,
+			MaxCompletionTokens: maxTokens,
 			Temperature: 0,
 			ReasoningEffort: "low",
 		}
