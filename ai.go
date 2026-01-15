@@ -765,7 +765,7 @@ CONSTRAINTS
 - Do NOT add irrelevant headers or body fields
 - MUST use keys present in original JSON
 - Make sure all "Required data" values are in the output
-- Do not focus on authentication unless necessary
+- Do NOT add authentication-related headers. If they exist, remove them. 
 
 END CONSTRAINTS 
 ---
@@ -816,7 +816,24 @@ Input JSON Payload (ensure VALID JSON):
 		log.Printf("\n\n[DEBUG] SYSTEM MESSAGE: %#v\n\nINPUTDATA:\n\n\n%s\n\n\n\n", systemMessage, inputData)
 	}
 
-	contentOutput, err := RunAiQuery(systemMessage, inputData)
+	chatCompletion := openai.ChatCompletionRequest{
+		Model:     model,
+		Messages:  []openai.ChatCompletionMessage{
+			openai.ChatCompletionMessage{
+				Role:	openai.ChatMessageRoleSystem,
+				Content: systemMessage,
+			},
+			openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleUser,
+				Content: inputData,
+			},
+		},
+		MaxCompletionTokens: maxTokens,
+		Temperature: 0,
+		ReasoningEffort: "low",
+	}
+
+	contentOutput, err := RunAiQuery(systemMessage, inputData, chatCompletion)
 	if err != nil {
 		return action, additionalInfo, err
 	}
