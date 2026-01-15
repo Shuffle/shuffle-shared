@@ -1674,6 +1674,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 	var guessedAction WorkflowAppAction
 	type ActionStruct struct {
+		Success bool `json:"success"`
 		Action string `json:"action"`
 	}
 
@@ -1708,7 +1709,12 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	//userMessage := "The available actions are as follows:\n"
 
 	if cacheGeterr != nil {
-		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: case = alert = ticket = issue = task, or message = chat = communication. Be extra careful of not confusing LIST and GET operations, based on the user query, respond with the most likely action name. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as JSON."`
+		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: case = alert = ticket = issue = task, or message = chat = communication. Be extra careful of not confusing LIST and GET operations, based on the user query, respond with the most likely action name. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as JSON with JUST the action name."`
+
+		if label == "app_validation" || label == "test" || label == "test_api" {
+			systemMessage = fmt.Sprintf(`Your goal is to find the most correct action for TESTING an API. You have to pick the most likely action. Synonyms are accepted. A synonym example can be something like: case = alert = ticket = issue = task, or message = chat = communication. E.g. for ITSM it should be to list tickets. For email, to list emails. For EDR, to list alerts etc. Find a simple API. The current app is '%s'. Our goal is to get a 200 OK or similar. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as JSON, with JUST the action name.`, app.Name)
+		}
+
 		userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
 
 		//changedNames := map[string]string{}
@@ -1743,6 +1749,12 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 			} else if strings.HasPrefix(action.Name, "delete_") {
 				method = "DELETE"
 			} 
+
+			if label == "app_validation" || label == "test" || label == "test_api" {
+				if method != "GET" { 
+					continue
+				}
+			}
 
 			// We need to parse out the url from description to help
 			parsedDescriptionUrlPath := ""
@@ -1787,7 +1799,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 				parsedEnding = ""
 			}
 
-			userMessage += fmt.Sprintf("%s %s\n", action.Name, parsedEnding)
+			userMessage += fmt.Sprintf("- %s %s\n", action.Name, parsedEnding)
 		}
 
 		if len(keys) > 0 {
@@ -1803,7 +1815,24 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 		}
 
-		output, err := RunAiQuery(systemMessage, userMessage)
+		chatCompletion := openai.ChatCompletionRequest{
+			Model:     model,
+			Messages:  []openai.ChatCompletionMessage{
+				openai.ChatCompletionMessage{
+					Role:	openai.ChatMessageRoleSystem,
+					Content: systemMessage,
+				},
+				openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleUser,
+					Content: userMessage,
+				},
+			},
+			MaxTokens: maxTokens,
+			Temperature: 0,
+			ReasoningEffort: "low",
+		}
+
+		output, err := RunAiQuery(systemMessage, userMessage, chatCompletion)
 		if err != nil {
 			log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
 			return app, WorkflowAppAction{}
@@ -1817,6 +1846,22 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		err = json.Unmarshal([]byte(output), &actionStruct)
 		if err != nil {
 			log.Printf("[ERROR] FAILED action mapping parsed output: %s", output)
+		}
+
+		// Strip anything after the first space.
+		if strings.Contains(actionStruct.Action, "(") {
+			// Split and only keep everything based on first space
+			splitAction := strings.Split(actionStruct.Action, "(")
+			newAction := actionStruct.Action
+			if len(splitAction) > 0 {
+				newAction = strings.TrimSpace(splitAction[0])
+			}
+
+			if debug {
+				log.Printf("[DEBUG] Changing action from '%s' to '%s' based on parsing", actionStruct.Action, newAction)
+			}
+
+			actionStruct.Action = newAction
 		}
 
 	}

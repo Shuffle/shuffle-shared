@@ -123,6 +123,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 
 			// For a new test project
 			"https://cases.shuffler.io",
+			"https://security.shuffler.io",
 			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
 			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
 			"https://preview--shuffle-cases.lovable.app",
@@ -249,7 +250,8 @@ func ConstructSessionCookie(value string, expires time.Time) *http.Cookie {
 	if project.Environment == "cloud" {
 		c.Domain = ".shuffler.io"
 		c.Secure = true
-		c.SameSite = http.SameSiteLaxMode
+		//c.SameSite = http.SameSiteLaxMode
+		c.SameSite = http.SameSiteNoneMode
 	}
 
 	return &c
@@ -32148,6 +32150,12 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	handledAuth := []string{}
 	timenow := time.Now().Unix() * 1000
 	runtimeLocationName := ""
+	for _, action := range exec.Workflow.Actions {
+		if len(action.Environment) > 0 { 
+			runtimeLocationName = action.Environment
+			break
+		}
+	}
 
 	//log.Printf("\n\n[DEBUG][%s] STARTING VALIDATION WITH %d results and %d actions\n\n", exec.ExecutionId, len(exec.Results), len(workflow.Actions))
 	for _, result := range exec.Results {
@@ -32156,7 +32164,9 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 			continue
 		}
 
-		runtimeLocationName = result.Action.Environment
+		if len(runtimeLocationName) == 0 && len(result.Action.Environment) > 0 {
+			runtimeLocationName = result.Action.Environment
+		}
 
 		found := false
 		foundAction := Action{}
