@@ -913,6 +913,18 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		}
 	}
 
+	// Fix Me: Add daily stats update script to append daily stats immdediately after day change and reset monthly stats on month change
+	lastMonthlyReset := validationOrgStats.LastMonthlyResetMonth
+	currentMonth := time.Now().UTC().Month()
+	if int(lastMonthlyReset) != int(currentMonth) {
+		validationOrgStats = handleDailyCacheUpdate(validationOrgStats)
+
+		err = SetOrgStatistics(ctx, *validationOrgStats, validationOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting org statistics for monthly reset for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
+		}
+	}
+
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
 	if validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
