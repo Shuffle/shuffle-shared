@@ -111,15 +111,17 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 
 			"https://au.shuffler.io",
 
-
 			"https://jp.shuffler.io",
 			"https://br.shuffler.io",
 			"https://in.shuffler.io",
 
+			// Related projects (maybe)
 			"https://*.singul.io",
 			"https://singul.io",
 			"https://*.shutdown.no",
 			"https://shutdown.no",
+
+			// Local testing
 			"http://localhost:3002",
 			"http://localhost:3000",
 
