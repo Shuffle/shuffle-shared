@@ -7333,7 +7333,7 @@ RULES:
 * NEVER skip execution because of minor missing details—fill them with reasonable defaults (e.g., default units or formats) and proceed.
 * If API action, ALWAYS include the url, method, headers and body when using an API action
 * Do NOT add unnecessary fields; only include fields required for the action.
-* When using data from previous steps, extract the actual JSON values from raw_response and include them directly. Never use {{variable}} syntax like {{step_0_response}}.
+* All arguments for tool calls MUST be literal, resolved values (e.g. '12345'); using placeholders (like 'REPLACE_WITH_ID') or variable syntax (like '{step_0.response}') is STRICTLY FORBIDDEN.
 * If questions are absolutely required, combine all into one "ask" action with multiple "question" fields. Do NOT create multiple separate ones.
 * Retry actions if the result was irrelevant. After three retries of a failed decision, add the finish decision. 
 * If any decision has failed, add the finish decision with details about the failure.
