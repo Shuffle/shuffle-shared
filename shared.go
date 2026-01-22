@@ -22828,7 +22828,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		issuer := authUrlParts[0]
-		userInfo, err := fetchUserInfoFromToken(ctx, openid.AccessToken, issuer)
+		userInfo, err := fetchUserInfoFromToken(ctx, openid.AccessToken, issuer, org.SSOConfig.OpenIdAuthorization)
 		if err != nil {
 			log.Printf("[ERROR] Failed to fetch userinfo: %s", err)
 			resp.WriteHeader(401)

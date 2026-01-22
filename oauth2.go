@@ -133,9 +133,9 @@ func GetOutlookAttachment(client *http.Client, emailId, attachmentId string) (Ou
 	return attachment, body, nil
 }
 
-func fetchUserInfoFromToken(ctx context.Context, accessToken string, issuer string) (map[string]interface{}, error) {
+func fetchUserInfoFromToken(ctx context.Context, accessToken string, issuer string, openIdAuthUrl string) (map[string]interface{}, error) {
 	// Get well-known config to find userinfo endpoint
-	config, err := fetchWellKnownConfig(ctx, issuer)
+	config, err := fetchWellKnownConfig(ctx, issuer, openIdAuthUrl)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get OIDC config: %w", err)
 	}
@@ -4234,10 +4234,23 @@ func getPublicKeyFromJWKS(ctx context.Context, jwksURL, kid string) (*rsa.Public
 	return nil, fmt.Errorf("key with kid %s not found in JWKS", kid)
 }
 
-func fetchWellKnownConfig(ctx context.Context, issuer string) (map[string]interface{}, error) {
+func fetchWellKnownConfig(ctx context.Context, issuer string, openIdAuthUrl string) (map[string]interface{}, error) {
 	// Clean issuer URL and construct well-known endpoint
 	issuer = strings.TrimSuffix(issuer, "/")
 	wellKnownURL := issuer + "/.well-known/openid-configuration"
+
+	// trying to check for keyclock edgecases
+	if len(openIdAuthUrl) > 0 && openIdAuthUrl != "none" {
+		openIdAuthUrl = strings.TrimSuffix(openIdAuthUrl, "/")
+		if idx := strings.Index(openIdAuthUrl, "/realms/"); idx != -1 {
+			realmStart := idx + len("/realms/")
+			realmEnd := strings.Index(openIdAuthUrl[realmStart:], "/")
+			if realmEnd != -1 {
+				realmBase := openIdAuthUrl[:realmStart+realmEnd]
+				wellKnownURL = realmBase + "/.well-known/openid-configuration"
+			}
+		}
+	}
 
 	resp, err := http.Get(wellKnownURL)
 	if err != nil {
@@ -4324,7 +4337,7 @@ func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdT
 		// Verify JWT signature if we have an issuer
 		if len(token.Iss) > 0 {
 			// Get JWKS to verify signature
-			config, err := fetchWellKnownConfig(ctx, token.Iss)
+			config, err := fetchWellKnownConfig(ctx, token.Iss, "")
 			if err != nil {
 				log.Printf("[WARNING] Failed to fetch well-known config for JWT validation: %s", err)
 				// Continue anyway - userinfo call will validate the token
@@ -4369,7 +4382,7 @@ func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdT
 
 		// If we have an access token, enhance with userinfo data
 		if len(accessToken) > 0 && len(token.Iss) > 0 {
-			userInfo, err := fetchUserInfoFromToken(ctx, accessToken, token.Iss)
+			userInfo, err := fetchUserInfoFromToken(ctx, accessToken, token.Iss, "")
 			if err != nil {
 				log.Printf("[WARNING] Failed to fetch userinfo (continuing anyway): %s", err)
 			} else {
