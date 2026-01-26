@@ -8190,6 +8190,8 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 		Fields:   categoryAction.Fields,
 		Category: categoryAction.Category,
+
+		ActionName: categoryAction.ActionName,
 	}
 
 	// Deterministic IDs for the specific type. This is to ensure
@@ -8213,10 +8215,30 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	initialising := false
-	workflow, err := GetWorkflow(ctx, workflowId)
-	if err != nil || workflow.ID == "" {
-		log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, err)
+	workflow, workflowErr := GetWorkflow(ctx, workflowId)
+	if workflowErr != nil || workflow.ID == "" {
+		log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, workflowErr)
 		initialising = true
+	}
+
+	if categoryAction.ActionName == "remove" || categoryAction.ActionName == "disable" { 
+		if workflowErr == nil && workflow.OrgId == user.ActiveOrg.Id {
+			// Delete the workflow
+			err = DeleteKey(ctx, "workflow", workflowId)
+			if err != nil {
+				log.Printf("[ERROR] Failed deleting workflow with ID %s in GenerateSingulWorkflows: %s", workflowId, err)
+			}
+		} else {
+			log.Printf("[INFO] No existing workflow with ID %s to remove for category '%s'", workflowId, categoryAction.Label)
+			resp.WriteHeader(http.StatusOK)
+			resp.Write([]byte(`{"success": true, "reason": "No existing workflow to remove."}`))
+			return
+		}
+
+		log.Printf("[AUDIT] Removed workflow with ID %s for category '%s'. User: %s (%s)", workflowId, categoryAction.Label, user.Username, user.Id)
+		resp.WriteHeader(http.StatusOK)
+		resp.Write([]byte(`{"success": true, "reason": "Action disabled."}`))
+		return
 	}
 
 	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction)
@@ -8268,7 +8290,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Starting schedule for trigger %s in workflow %s", trigger.ID, workflow.ID)
 			err = startSchedule(workflow.Triggers[triggerIndex], user.ApiKey, *workflow)
 			if err == nil {
-				workflow.Triggers[triggerIndex].Status = "Running"
+				workflow.Triggers[triggerIndex].Status = "running"
 			}
 
 		} else if trigger.TriggerType == "WEBHOOK" {
@@ -8310,7 +8332,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 				continue
 			}
 
-			workflow.Triggers[triggerIndex].Status = "Running"
+			workflow.Triggers[triggerIndex].Status = "running"
 		}
 	}
 
@@ -8472,7 +8494,6 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	//}
 
 	config := openai.DefaultConfig(apiKey)
-
 	if len(aiRequestUrl) > 0 {
 		config.BaseURL = aiRequestUrl
 
