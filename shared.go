@@ -125,12 +125,16 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"http://localhost:3002",
 			"http://localhost:3000",
 
-			// For a new test project
+			// For a frontend test project 
 			"https://cases.shuffler.io",
 			"https://security.shuffler.io",
 			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
 			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
+
+			// Another frontend test
 			"https://preview--shuffle-cases.lovable.app",
+			"https://9f29a11a-6489-4898-8044-ed7b8f848ef9.lovableproject.com",
+			"https://id-preview--9f29a11a-6489-4898-8044-ed7b8f848ef9.lovable.app",
 		}
 
 		if len(origin) > 0 {
@@ -3378,7 +3382,11 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		// Get the user based on APIkey here
 		userdata, err := GetApikey(ctx, apikeyCheck[1])
 		if err != nil {
-			log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
+			// Due to execution auth
+			if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") { 
+				log.Printf("[WARNING] Apikey %s doesn't exist. URL: %#v: %s", apikey, request.URL.String(), err)
+			}
+
 			return User{}, err
 		}
 
@@ -14486,6 +14494,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 		appReturn.OpenAPI = openapidata
 	}
+
 
 	// Should add it to their cache in the background
 	go updateOrgAppCache(*app, user)
@@ -33461,4 +33470,193 @@ func GetDockerClient() (*dockerclient.Client, string, error) {
 	}
 
 	return cli, dockerApiVersion, err
+}
+
+// Syncs content between openapi and shuffle apps 
+// This is due to the generative growth nature of our apps 
+func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *ParsedOpenApi {
+	/*
+	// This doesn't seem to work, and isn't really in use
+	if api.Success == false {
+		if debug { 
+			log.Printf("[DEBUG] Failed to load openapi %#v. Success false.", id)
+		}
+
+		return api
+	}
+	*/
+
+	// Get the app
+	app, err := GetApp(ctx, id, User{}, false)
+	if err != nil {
+		return api
+	}
+
+	if debug { 
+		log.Printf("[DEBUG] Syncing app content labels for app %s", app.ID)
+	}
+
+	swaggerLoader := openapi3.NewSwaggerLoader()
+	swaggerLoader.IsExternalRefsAllowed = true
+	swagger, err := swaggerLoader.LoadSwaggerFromData([]byte(api.Body))
+	if err != nil {
+		log.Printf("[ERROR] Failed to load swagger during fix for ID %#v", id)
+		return api
+	}
+
+	openapiChanged := false
+	appChanged := false
+	for pathIndex, pathItem := range swagger.Paths {
+		if pathItem == nil {
+			continue
+		}
+
+		ops := map[string]*openapi3.Operation{
+			"GET":     pathItem.Get,
+			"POST":    pathItem.Post,
+			"PUT":     pathItem.Put,
+			"DELETE":  pathItem.Delete,
+			"PATCH":   pathItem.Patch,
+			"HEAD":    pathItem.Head,
+			"OPTIONS": pathItem.Options,
+			"TRACE":   pathItem.Trace,
+		}
+
+		for method, op := range ops {
+			if op == nil {
+				continue
+			}
+
+			method := strings.ToLower(method)
+
+			parsedOpId := strings.ToLower(op.OperationID)
+			if !strings.HasPrefix(parsedOpId, method) {
+				parsedOpId = fmt.Sprintf("%s_%s", method, strings.ToLower(op.OperationID))
+			}
+
+			found := false
+			for actionIndex, action := range app.Actions {
+				//parsedActionName := fmt.Sprintf("%s_%s", method, action.Name)
+				parsedActionName := fmt.Sprintf("%s", action.Name)
+				//log.Printf("%s vs %s", parsedActionName, parsedOpId)
+				if parsedActionName != parsedOpId {
+					continue
+				}
+
+				openapiLabels := []string{}
+				if methodLabels, ok := op.ExtensionProps.Extensions["x-label"]; ok {
+					labels := []string{}
+					j, err := json.Marshal(&methodLabels)
+					if err == nil {
+						err = json.Unmarshal(j, &labels)
+						if err != nil {
+							//log.Printf("[ERROR] Failed unmarshalling labels during sync for action %s (1): %s. Value: %#v\n", action.Name, err, j)
+							label := ""
+							err = json.Unmarshal(j, &label)
+							if err == nil {
+								labels = strings.Split(label, ",")
+							}
+						}
+					} else {
+						log.Printf("[ERROR] Failed marshalling labels during sync for action %s (2): %s\n", action.Name, err)
+					}
+
+					if len(labels) > 0 { 
+						openapiLabels = labels 
+					}
+				}
+
+				if len(openapiLabels) != len(action.CategoryLabel) {
+					if debug { 
+						log.Printf("APP DIFF (%s): %#v vs %#v", app.ID, openapiLabels, action.CategoryLabel)
+					}
+
+
+					seen := make(map[string]int)
+					for labelIndex, openapiLabel := range openapiLabels {
+						if strings.ReplaceAll(strings.ToLower(openapiLabel), " ", "_") == "no_label" {
+							openapiChanged = true
+							openapiLabel = "No Label"
+							openapiLabels[labelIndex] = openapiLabel
+						}
+
+						if strings.HasPrefix(openapiLabel, "[") && strings.HasSuffix(openapiLabel, "]") && len(openapiLabel) > 2 {
+							openapiChanged = true
+							openapiLabel = openapiLabel[1:len(openapiLabel)-1]
+							openapiLabels[labelIndex] = openapiLabel
+						}
+
+						seen[openapiLabel] = 1
+					}
+
+					for labelIndex, actionLabel := range action.CategoryLabel {
+						if strings.ReplaceAll(strings.ToLower(actionLabel), " ", "_") == "no_label" {
+							appChanged = true
+							actionLabel = "No Label"
+							action.CategoryLabel[labelIndex] = actionLabel
+						}
+
+						if strings.HasPrefix(actionLabel, "[") && strings.HasSuffix(actionLabel, "]") && len(actionLabel) > 2 {
+							appChanged = true
+							actionLabel = actionLabel[1:len(actionLabel)-1]
+							action.CategoryLabel[labelIndex] = actionLabel
+						}
+
+						if _, ok := seen[actionLabel]; ok {
+							seen[actionLabel] = 0
+						} else {
+							seen[actionLabel] = 2
+						}
+					}
+
+					for key, value := range seen {
+						if strings.ReplaceAll(strings.ToLower(key), " ", "_") == "no_label" {
+							key = "No Label"
+						}
+
+						switch value {
+						case 1:
+							openapiChanged = true
+							action.CategoryLabel = append(action.CategoryLabel, key)
+							app.Actions[actionIndex] = action
+						case 2:
+							appChanged = true
+							openapiLabels = append(openapiLabels, key)
+
+							// Update in openapi
+							op.ExtensionProps.Extensions["x-label"] = openapiLabels
+
+							swagger.Paths[pathIndex].Get = pathItem.Get 
+						}
+					}
+				}
+
+				found = true
+				break
+			}
+
+			if !found {
+				log.Printf("[ERROR] Failed to find operation %s. May be missing sync between app <-> openapi", parsedOpId, id)
+			}
+		}
+	}
+
+	if openapiChanged {
+		api.Success = true
+
+		marshalledSwagger, err := json.Marshal(swagger)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshalling swagger after sync for ID %#v", id)
+		} else {
+			api.Body = string(marshalledSwagger)
+			SetOpenApiDatastore(ctx, app.ID, *api)
+		}
+	}
+
+	if appChanged {
+		SetWorkflowAppDatastore(ctx, *app, app.ID)
+	}
+
+
+	return api
 }
