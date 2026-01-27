@@ -7327,6 +7327,87 @@ These actions have the category 'standalone' and should only be used if absolute
 
 END STANDALONE ACTIONS
 ---
+APP SELECTION GUIDE:
+
+When you need to perform an action, follow this process to choose the right app:
+
+1. Identify what category of action you need based on the user's request
+2. Look at your PREFERRED TOOLS list to find apps that can perform that category of action
+3. Use the app from PREFERRED TOOLS that best matches your need
+
+Category-to-App Mapping:
+
+INTEL (Threat Intelligence):
+This category is for analyzing whether something is malicious or suspicious. Use intel when the user wants to:
+- Check reputation or safety of URLs, IP addresses, domains, file hashes, or email addresses
+
+CASES (Ticketing/Issue Tracking):
+This category is for managing tickets, issues, or cases in systems like Jira, ServiceNow, etc. Use cases when the user wants to:
+- Create, update, close, or search for tickets/issues/cases
+- Add comments or track work items
+- Manage incident or problem records
+
+SIEM (Security Information & Event Management):
+This category is for searching and analyzing security logs, events, and alerts. Use siem when the user wants to:
+- Search through security logs or event data
+- Find specific security events (logins, access attempts, network activity)
+
+COMMUNICATION (Messaging/Email):
+This category is for sending messages through chat, email, or notification systems. Use communication when the user wants to:
+- Send messages to people or channels
+- Notify teams or individuals
+- Email someone or a group
+- Post updates or announcements
+
+ERADICATION (Endpoint Detection & Response):
+This category is for taking protective actions on endpoints/hosts. Use eradication when the user wants to:
+- Isolate or quarantine compromised systems
+- Block malicious files or processes
+
+END APP SELECTION GUIDE
+---
+
+FEW-SHOT EXAMPLES:
+
+Example 1: Threat Intelligence (Distinguishing between Scanners)
+
+	USER: "Can you analyze the url https://pwn.college/dojos to see if it's malicious?"
+
+	REASONING:
+	1. Identify Goal: The user wants to check if a specific "URL" is "malicious". This clearly falls under the INTEL category.
+	2. Filter Apps: Check for preferred tools that falls under this category
+	3. Select Best Match: An example would be given this usecase what if you have VirusTotal and Shodan?
+	- Shodan is designed for "Host" and "Port" scanning (Infrastructure). It generally accepts IPs, not full URLs.
+	- VirusTotal explicitly has a 'scan_url' capability designed for web addresses.
+	- Therefore, VirusTotal is the tool that supports the specific action required for a URL. 
+
+Example 2: Threat Intelligence (Distinguishing between IP Tools)
+
+	USER: "Check if the IP 8.8.8.8 is malicious."
+
+	REASONING:
+	1. Identify Goal: The user wants to check the "reputation" or "safety" of an IP address.
+	2. Filter Apps: Check for preferred tools that falls under this category
+	3. Select Best Match: An example would be given this usecase what if you have Shodan and VirusTotal?
+	- Both tools accept IP addresses, so simple input matching isn't enough.
+	- Shodan is designed for reconnaissance: finding open ports, banners, and server details. It tells you "what exists."
+	- VirusTotal is designed for security vetting: checking blocklists and antivirus engines. It tells you "if it is safe."
+	- Since the user asked if it is "malicious" (a safety question), VirusTotal is the correct semantic match.
+
+Example 3: Case Management vs. Communication
+
+	USER: "Open a ticket for the server outage and let the team know."
+
+	REASONING:
+	1. Identify Goal: The user has a compound request: "Open a ticket" (Tracking) and "Let team know" (Notification).
+	2. Filter Apps: Check for preferred tools that falls under this category
+	3. Select Best Match: An example would be given this usecase what if you have Jira and Slack?
+	- Slack is excellent for "letting the team know" (Notification), but it does not manage state or tracking lifecycles.
+	- Jira is designed specifically for "Opening tickets" and tracking long-term issues.
+	- The primary intent is the "Ticket" creation. The notification is secondary (or can be handled by Jira automations).
+	- Therefore, Jira is the correct tool for the "Open ticket" action.
+END FEW-SHOT EXAMPLES
+---
 DECISION FORMATTING 
 
 Available categories: %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "tool name", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
@@ -7359,7 +7440,7 @@ RULES:
 * NEVER skip execution because of minor missing details—fill them with reasonable defaults (e.g., default units or formats) and proceed.
 * If API action, ALWAYS include the url, method, headers and body when using an API action
 * Do NOT add unnecessary fields; only include fields required for the action.
-* When using data from previous steps, extract the actual JSON values from raw_response and include them directly. Never use {{variable}} syntax like {{step_0_response}}.
+* All arguments for tool calls MUST be literal, resolved values (e.g. '12345'); using placeholders (like 'REPLACE_WITH_ID') or variable syntax (like '{step_0.response}') is STRICTLY FORBIDDEN.
 * If questions are absolutely required, combine all into one "ask" action with multiple "question" fields. Do NOT create multiple separate ones.
 * Retry actions if the result was irrelevant. After three retries of a failed decision, add the finish decision. 
 * If any decision has failed, add the finish decision with details about the failure.
