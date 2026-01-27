@@ -4034,7 +4034,10 @@ type SchemalessOutput struct {
 
 	// Optional. Used for error handling.
 	RawResponse interface{} `json:"raw_response,omitempty"`
-	Retries int    `json:"retries,omitempty"`
+	Retries     int         `json:"retries,omitempty"`
+
+	CategoryLabels []string `json:"category_labels,omitempty"`
+	ActionName     string   `json:"action_name,omitempty"`
 }
 
 type CategoryActionFieldOverride struct {
@@ -4412,6 +4415,9 @@ type StructuredCategoryAction struct {
 	Category    string        `json:"category,omitempty"`
 	Apps        []WorkflowApp `json:"apps,omitempty"`
 
+	ActionName     string   `json:"action_name,omitempty"`
+	CategoryLabels []string `json:"category_labels,omitempty"`
+
 	Result string `json:"result,omitempty"`
 
 	ApiDebuggerUrl string `json:"api_debugger_url,omitempty"`
@@ -4561,12 +4567,14 @@ type TimeWindow struct {
 type AgentDecisionRunDetails struct {
 	Id string `json:"id" datastore:"id"`
 
-	StartedAt   int64  `json:"started_at" datastore:"started_at"`
-	CompletedAt int64  `json:"completed_at" datastore:"completed_at"`
-	Type        string `json:"type,omitempty" datastore:"type"`
-	Status      string `json:"status" datastore:"status"`
-	RawResponse string `json:"raw_response,omitempty" datastore:"raw_response"`
-	DebugUrl    string `json:"debug_url,omitempty" datastore:"debug_url"`
+	StartedAt      int64    `json:"started_at" datastore:"started_at"`
+	CompletedAt    int64    `json:"completed_at" datastore:"completed_at"`
+	Type           string   `json:"type,omitempty" datastore:"type"`
+	Status         string   `json:"status" datastore:"status"`
+	RawResponse    string   `json:"raw_response,omitempty" datastore:"raw_response"`
+	DebugUrl       string   `json:"debug_url,omitempty" datastore:"debug_url"`
+	CategoryLabels []string `json:"category_labels,omitempty" datastore:"category_labels"`
+	ActionName     string   `json:"action_name,omitempty" datastore:"action_name"`
 }
 
 // Each decision
