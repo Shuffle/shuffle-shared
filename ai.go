@@ -770,9 +770,9 @@ CONSTRAINTS
 
 - If the path is wrong, change it to be relevant to the input data. It may be /api paths or entirely different
 - Do NOT add irrelevant headers or body fields
-- MUST use keys present in original JSON
-- Make sure all "Required data" values are in the output
 - Do NOT add authentication-related headers. If they exist, remove them. 
+- MUST use keys present in original JSON
+- MUST make sure all 'Required data' VALUES are in the output. Ignore the keys. Translate them according to key synonyms and what matches the request.
 
 END CONSTRAINTS 
 ---
@@ -1324,26 +1324,37 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 }
 
 // Uploads modifyable parameter data to file storage, as to be used in the future executions of the app
-func UploadParameterBase(ctx context.Context, fields []Valuereplace, orgId, appId, actionName, paramName, paramValue string) error {
+func UploadParameterBase(ctx context.Context, fields []Valuereplace, orgId, appId, actionName, originalActionName, paramName, paramValue, paramExample string) error {
 	timeNow := time.Now().Unix()
 
 	// If NOT JSON:
 	// /rest/api/3/10010/comment -> /rest/api/3/{input.fields[i].key}/comment
 	// Does that mean we should look for the value in the data?
 
+	if paramValue == paramExample {
+		return nil
+	}
 
 	// Moving window to look for field.Value in the paramValue to directly replace
+	md5Identifier := ""
+	fieldsParsed := []string{}
 	for _, field := range fields {
 		// Arbitrary limit (for now)
 		if len(field.Value) > 1024 { 
 			continue
 		}
 
+		fieldsParsed = append(fieldsParsed, field.Key)
 		paramValue = strings.ReplaceAll(paramValue, field.Value, fmt.Sprintf("{%s}", field.Key))
 	}
 
 	// Check if the file already exists
-	fileId := fmt.Sprintf("file_parameter_%s-%s-%s-%s.json", orgId, strings.ToLower(appId), strings.Replace(strings.ToLower(actionName), " ", "_", -1), strings.ToLower(paramName))
+	fileId := fmt.Sprintf("file_parameter_%s-%s-%s-%s.json", orgId, strings.ToLower(appId), strings.Replace(strings.ToLower(originalActionName), " ", "_", -1), strings.ToLower(paramName))
+	if actionName == "custom_action" {
+		sort.Strings(fieldsParsed)
+		md5Identifier = fmt.Sprintf("%x", md5.Sum([]byte(strings.Join(fieldsParsed, "|"))))
+		fileId = fmt.Sprintf("file_parameter_%s-%s-%s-%s-%s.json", orgId, strings.ToLower(appId), md5Identifier, strings.Replace(strings.ToLower(originalActionName), " ", "_", -1), strings.ToLower(paramName))
+	}
 
 	category := "app_defaults"
 	if standalone {
@@ -6999,8 +7010,8 @@ SINGUL ACTIONS:
 			}
 
 			if debug { 
-				log.Printf("PARAM: %s", param.Value)
-				log.Printf("Systemmessage: %s", systemMessage)
+				log.Printf("PARAM (2): %s", param.Value)
+				log.Printf("Systemmessage (2): %s", systemMessage)
 			}
 
 			systemMessage += "\n\n"
