@@ -2290,7 +2290,6 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	err = json.Unmarshal(body, &outputMapped)
 	if err != nil {
 		log.Printf("[ERROR] Failed unmarshalling agent decision response: %s", err)
-		log.Printf("[HEYOOO][%s] Failed to unmarshal Singul response into SchemalessOutput", execution.ExecutionId)
 		return body, debugUrl, appname, []string{}, "", err
 	}
 
