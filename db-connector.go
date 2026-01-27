@@ -5089,6 +5089,16 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		}
 	}
 
+	// Can we diff here? Otherwise we may miss items hmm 
+	// Check if we recently cached the ID. Don't run updates more often than once a day for an app
+	checkCacheId := fmt.Sprintf("openapi_updatecheck_%s", id)
+	if _, err := GetCache(ctx, checkCacheId); err != nil {
+		api = syncAppContentLabels(ctx, id, api)
+
+		// Set a cache to not do this again for a day
+		SetCache(ctx, checkCacheId, []byte("1"), 1440)
+	}
+
 	if project.CacheDb {
 		data, err := json.Marshal(api)
 		if err != nil {
@@ -13712,7 +13722,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 					}
 
 					if debug {
-						log.Printf("[DEBUG] Found automation %s to run (2). Value: %s", automation.Name, automation.Options[0].Value)
+						log.Printf("[DEBUG] Found automation '%s' to run (2). Value: '%s'", automation.Name, automation.Options[0].Value)
 					}
 
 					// Run the automation

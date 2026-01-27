@@ -660,6 +660,13 @@ func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, stat
 		//	continue
 		//}
 
+		// Specific weird handler.
+		if param.Name == "queries" {
+			if param.Value == "data={data}" {
+				param.Value = ""
+			}
+		}
+
 		checkValue := strings.TrimSpace(strings.Replace(param.Value, "\n", "", -1))
 		if (strings.HasPrefix(checkValue, "{") && strings.HasSuffix(checkValue, "}")) || (strings.HasPrefix(param.Value, "[") && strings.HasSuffix(param.Value, "]")) {
 			inputBody += fmt.Sprintf("\"%s\": %s,\n", param.Name, param.Value)
@@ -871,8 +878,6 @@ Input JSON Payload (ensure VALID JSON):
 	for paramIndex, param := range action.Parameters {
 		// Check if inside outputJSON
 		if val, ok := outputJSON[param.Name]; ok {
-
-			//log.Printf("[INFO] Found param %s in outputJSON", param.Name)
 			// Check if it's a string or not
 			runString := false
 			formattedVal := ""
@@ -910,6 +915,21 @@ Input JSON Payload (ensure VALID JSON):
 						formattedVal = ""
 					}
 				}
+			}
+
+			// Make sure we handle variables properly IF they are added by 
+			// FIXME: This could screw up workflow referencing
+			if strings.Contains(formattedVal, "$") {
+				if debug { 
+					log.Printf("\n\n\n[WARNING] Found $ in formattedVal for param %s: %s. Escaping it. This CAN screw up referencing.\n\n", param.Name, formattedVal)
+				}
+
+				formattedVal = strings.ReplaceAll(formattedVal, "\\$", "$")
+				formattedVal = strings.ReplaceAll(formattedVal, "$", "\\$")
+			}
+
+			if param.Name == "queries" && strings.HasPrefix(formattedVal, "?") { 
+				formattedVal = strings.TrimPrefix(formattedVal, "?")
 			}
 
 			inputFields := []schemaless.Valuereplace{
@@ -4599,9 +4619,6 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 
 	systemMessage := fmt.Sprintf("If the User Instruction tells you what to do, do exactly what it tells you. Match the %s field exactly and fill in relevant data from the message IF it can be JSON formatted. Match output format exactly for '%s' doing '%s'. Output valid JSON if the input looks like JSON, otherwise follow the format. Do NOT remove JSON fields - instead follow the format, or add to it. Don't tell us to provide more information. If it does not look like JSON, don't force it to be JSON. DO NOT use the example provided in your response. It is strictly just an example and has not much to do with what the user would want. If you see anything starting with $ in the example, just assume it to be a variable and needs to be ALWAYS populated by you like a template based on the user provided details. Do NOT make up random fields like app or action name. Do NOT add %s, app and action fields - just key:values. Values should ALWAYS be strings, even if they look like other types. User Instruction to follow EXACTLY: '%s'", fieldName, strings.Replace(appname, "_", " ", -1), actionName, fieldName, inputdata)
 
-	if debug {
-		log.Printf("[DEBUG] System: %s", systemMessage)
-	}
 
 	userInfo := fmt.Sprintf("%s The API field to fill in is '%s', but do NOT add '%s', 'action' or 'app' as a keys.", inputdata, fieldName, fieldName)
 	//if len(body) > 0 {
@@ -4632,8 +4649,6 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 
 	// Diff and find strings from body vs contentOutput
 	// If there are any strings that are not in contentOutput, add them to the contentOutput
-	// If there are any strings that are not in body, remove them from the contentOutput
-	// If there are any strings that are in body but not in contentOutput, add them to the contentOutput
 	if strings.Contains(contentOutput, ".#.") {
 		// Making sure lists are now going to .#0. instead of .#. to not break stuff
 		contentOutput = strings.Replace(contentOutput, ".#.", ".#0.", -1)
@@ -8271,6 +8286,8 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 		Fields:   categoryAction.Fields,
 		Category: categoryAction.Category,
+
+		ActionName: categoryAction.ActionName,
 	}
 
 	// Deterministic IDs for the specific type. This is to ensure
@@ -8294,10 +8311,30 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	initialising := false
-	workflow, err := GetWorkflow(ctx, workflowId)
-	if err != nil || workflow.ID == "" {
-		log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, err)
+	workflow, workflowErr := GetWorkflow(ctx, workflowId)
+	if workflowErr != nil || workflow.ID == "" {
+		log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, workflowErr)
 		initialising = true
+	}
+
+	if categoryAction.ActionName == "remove" || categoryAction.ActionName == "disable" { 
+		if workflowErr == nil && workflow.OrgId == user.ActiveOrg.Id {
+			// Delete the workflow
+			err = DeleteKey(ctx, "workflow", workflowId)
+			if err != nil {
+				log.Printf("[ERROR] Failed deleting workflow with ID %s in GenerateSingulWorkflows: %s", workflowId, err)
+			}
+		} else {
+			log.Printf("[INFO] No existing workflow with ID %s to remove for category '%s'", workflowId, categoryAction.Label)
+			resp.WriteHeader(http.StatusOK)
+			resp.Write([]byte(`{"success": true, "reason": "No existing workflow to remove."}`))
+			return
+		}
+
+		log.Printf("[AUDIT] Removed workflow with ID %s for category '%s'. User: %s (%s)", workflowId, categoryAction.Label, user.Username, user.Id)
+		resp.WriteHeader(http.StatusOK)
+		resp.Write([]byte(`{"success": true, "reason": "Action disabled."}`))
+		return
 	}
 
 	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction)
@@ -8349,7 +8386,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Starting schedule for trigger %s in workflow %s", trigger.ID, workflow.ID)
 			err = startSchedule(workflow.Triggers[triggerIndex], user.ApiKey, *workflow)
 			if err == nil {
-				workflow.Triggers[triggerIndex].Status = "Running"
+				workflow.Triggers[triggerIndex].Status = "running"
 			}
 
 		} else if trigger.TriggerType == "WEBHOOK" {
@@ -8391,7 +8428,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 				continue
 			}
 
-			workflow.Triggers[triggerIndex].Status = "Running"
+			workflow.Triggers[triggerIndex].Status = "running"
 		}
 	}
 
@@ -8553,7 +8590,6 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	//}
 
 	config := openai.DefaultConfig(apiKey)
-
 	if len(aiRequestUrl) > 0 {
 		config.BaseURL = aiRequestUrl
 
