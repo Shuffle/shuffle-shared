@@ -15871,22 +15871,22 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	if sendRequest && len(resultData) > 0 {
 		//log.Printf("[INFO][%s] Should send subflow request to backendURL %s. Data: %s!", executionParent, backendUrl, string(resultData))
 
-		if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
-			backendUrl = os.Getenv("BASE_URL")
+	//	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
+	//		backendUrl = os.Getenv("BASE_URL")
 
-			if project.Environment == "cloud" {
-				backendUrl = "https://shuffler.io"
-	
-				if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
-					backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
-				}
-	
-				if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-					backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-				}
-	
-			}
-		}
+	//		if project.Environment == "cloud" {
+	//			backendUrl = "https://shuffler.io"
+	//
+	//			if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+	//				backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+	//			}
+	//
+	//			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+	//				backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	//			}
+	//
+	//		}
+	//	}
 
 		streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
 		req, err := http.NewRequest(
