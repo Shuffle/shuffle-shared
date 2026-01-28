@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2166,6 +2167,49 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 			methodValue = strings.ToUpper(field.Value)
 			break
 		}
+	}
+
+
+	if (strings.ToLower(decision.Action) == "custom_action" || strings.ToLower(decision.Action) == "api") && strings.ToLower(decision.Tool) != "http" {
+		var urlValue string
+		newFields := make([]schemaless.Valuereplace, 0, len(parsedFields))
+
+		// Extract url field and keep all non-url fields
+		for _, field := range parsedFields {
+			if strings.ToLower(field.Key) == "url" && field.Value != "" {
+				urlValue = strings.TrimSpace(field.Value)
+				continue 
+			}
+			newFields = append(newFields, field)
+		}
+
+		if urlValue != "" {
+			var path string
+
+			if strings.HasPrefix(urlValue, "http://") || strings.HasPrefix(urlValue, "https://") {
+				if u, err := neturl.Parse(urlValue); err == nil {
+					path = u.Path
+					if u.RawQuery != "" {
+						path = path + "?" + u.RawQuery
+					}
+				}
+			} else {
+				path = "/" + strings.TrimLeft(urlValue, "/")
+			}
+
+			if path != "" {
+				newFields = append(newFields, schemaless.Valuereplace{
+					Key:   "path",
+					Value: path,
+				})
+
+				if debug {
+					log.Printf("[DEBUG][%s] Converted url to path for %s: path='%s' (auth base URL will be used)", execution.ExecutionId, decision.Tool, path)
+				}
+			}
+		}
+
+		parsedFields = newFields
 	}
 
 	oldFields := []Valuereplace{}
