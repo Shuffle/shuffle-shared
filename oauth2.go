@@ -4259,12 +4259,12 @@ func fetchWellKnownConfig(ctx context.Context, issuer string, openIdAuthUrl stri
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("well-known endpoint returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("well-known endpoint returned status %d: %s", resp.StatusCode, wellKnownURL)
 	}
 
 	var config map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
-		return nil, fmt.Errorf("failed to decode well-known config: %w", err)
+		return nil, fmt.Errorf("failed to decode well-known config: %w, %s", err, wellKnownURL)
 	}
 
 	return config, nil
