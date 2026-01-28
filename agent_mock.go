@@ -100,11 +100,13 @@ func GetMockResponseFromToolCalls(toolCalls []MockToolCall, fields []Valuereplac
 	log.Printf("[DEBUG] Looking for mock data with URL: %s", requestURL)
 
 	var candidates []MockToolCall
+
 	reqURLParsed, err := url.Parse(requestURL)
 	if err != nil {
 		log.Printf("[ERROR] Invalid request URL %s: %v", requestURL, err)
 		return nil, fmt.Errorf("invalid request URL: %w", err)
 	}
+
 	for _, tc := range toolCalls {
 		if urlsEqual(reqURLParsed, tc.URL) {
 			candidates = append(candidates, tc)
@@ -123,13 +125,20 @@ func GetMockResponseFromToolCalls(toolCalls []MockToolCall, fields []Valuereplac
 		}
 	}
 
-	// If only one match, return it
 	if len(candidates) == 1 {
 		log.Printf("[DEBUG] Found exact match for URL: %s", requestURL)
+
+		// Check fields match
+		if fieldsMatch(fields, candidates[0].Fields) {
+			return marshalResponse(candidates[0].Response)
+		}
+
+		msg := fmt.Sprintf("URL matched but fields differed for %s. \nMock fields: %v\nRequest fields: %v", requestURL, candidates[0].Fields, fields)
+		log.Printf("[WARNING] Regression Risk: %s", msg)
+
 		return marshalResponse(candidates[0].Response)
 	}
 
-	// Multiple matches - compare fields to find exact match
 	log.Printf("[DEBUG] Found %d candidates for URL, comparing fields...", len(candidates))
 	for _, candidate := range candidates {
 		if fieldsMatch(fields, candidate.Fields) {
@@ -138,9 +147,9 @@ func GetMockResponseFromToolCalls(toolCalls []MockToolCall, fields []Valuereplac
 		}
 	}
 
-	// No exact match - return first candidate with a warning
-	log.Printf("[WARNING] No exact field match found, returning first candidate")
-	return marshalResponse(candidates[0].Response)
+	// No exact match among candidates
+	log.Printf("[WARNING] No exact field match found for URL %s among %d candidates", requestURL, len(candidates))
+	return nil, fmt.Errorf("matches found for URL %s, but body/parameters did not match any recorded mock", requestURL)
 }
 
 func urlsEqual(req *url.URL, stored string) bool {
