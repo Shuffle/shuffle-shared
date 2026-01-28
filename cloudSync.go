@@ -12,7 +12,6 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2140,11 +2139,11 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
-	url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
+	requestUrl := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
 	// Change timeout to be 300 seconds (just in case)
 	// Allows for reruns and self-correcting
-	client := GetExternalClient(url)
+	client := GetExternalClient(requestUrl)
 	client.Timeout = 300 * time.Second
 
 	newFields := []schemaless.Valuereplace{}
@@ -2169,7 +2168,6 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		}
 	}
 
-
 	if (strings.ToLower(decision.Action) == "custom_action" || strings.ToLower(decision.Action) == "api") && strings.ToLower(decision.Tool) != "http" {
 		var urlValue string
 		newFields := make([]schemaless.Valuereplace, 0, len(parsedFields))
@@ -2187,7 +2185,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 			var path string
 
 			if strings.HasPrefix(urlValue, "http://") || strings.HasPrefix(urlValue, "https://") {
-				if u, err := neturl.Parse(urlValue); err == nil {
+				if u, err := url.Parse(urlValue); err == nil {
 					path = u.Path
 					if u.RawQuery != "" {
 						path = path + "?" + u.RawQuery
@@ -2250,7 +2248,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	req, err := http.NewRequest(
 		"POST",
-		url,
+		requestUrl,
 		bytes.NewBuffer(marshalledAction),
 	)
 
