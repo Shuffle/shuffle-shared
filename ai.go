@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"net/url"
 
 	openai "github.com/sashabaranov/go-openai"
 	uuid "github.com/satori/go.uuid"
@@ -659,6 +660,13 @@ func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, stat
 		//	continue
 		//}
 
+		// Specific weird handler.
+		if param.Name == "queries" {
+			if param.Value == "data={data}" {
+				param.Value = ""
+			}
+		}
+
 		checkValue := strings.TrimSpace(strings.Replace(param.Value, "\n", "", -1))
 		if (strings.HasPrefix(checkValue, "{") && strings.HasSuffix(checkValue, "}")) || (strings.HasPrefix(param.Value, "[") && strings.HasSuffix(param.Value, "]")) {
 			inputBody += fmt.Sprintf("\"%s\": %s,\n", param.Name, param.Value)
@@ -762,9 +770,9 @@ CONSTRAINTS
 
 - If the path is wrong, change it to be relevant to the input data. It may be /api paths or entirely different
 - Do NOT add irrelevant headers or body fields
+- Do NOT add authentication-related headers. If they exist, remove them. 
 - MUST use keys present in original JSON
-- Make sure all "Required data" values are in the output
-- Do not focus on authentication unless necessary
+- MUST make sure all 'Required data' VALUES are in the output. Ignore the keys. Translate them according to key synonyms and what matches the request.
 
 END CONSTRAINTS 
 ---
@@ -778,8 +786,9 @@ END OUTPUT FORMATTING
 ---
 ERROR HANDLING 
 
+- Use common knowledge and the error response to identify the single most likely cause of the HTTP request failure.
 - Fix the request based on the API context and the existing content in the path, body and queries
-- You SHOULD add relevant fields to the body that are missing
+- You SHOULD add relevant fields to the body ONLY if the HTTP method allows a body and the error explicitly indicates missing required fields.
 - Modify the "path" field according to what seems wrong with the API URL. Do NOT remove this field.
 - Do NOT error-handle authentication issues unless it seems possible
 
@@ -791,7 +800,7 @@ END ERROR HANDLING
 	if len(attempt) > 1 {
 		currentAttempt := attempt[0]
 		if currentAttempt > 4 {
-			inputData += fmt.Sprintf(`IF we are missing a value from the user, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. If the "path" is wrong, rewrite it. Do not use it for authentication fields such as "apikey". Do NOT do this unless it is absolutely necessary, make SURE the fields are missing. Before returning missing fields, ALWAYS ensure and retry the path, body and query fields to ensure they are correct according to the input data.\n\n`)
+			inputData += fmt.Sprintf(`IF we are missing a value from the user, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. If the "path" is wrong, rewrite it. For GET requests, REMOVE the body field. Do not use it for authentication fields such as "apikey". Do NOT do this unless it is absolutely necessary, make SURE the fields are missing. Before returning missing fields, ALWAYS ensure and retry the path, body and query fields to ensure they are correct according to the input data.\n\n`)
 		}
 	}
 
@@ -814,7 +823,24 @@ Input JSON Payload (ensure VALID JSON):
 		log.Printf("\n\n[DEBUG] SYSTEM MESSAGE: %#v\n\nINPUTDATA:\n\n\n%s\n\n\n\n", systemMessage, inputData)
 	}
 
-	contentOutput, err := RunAiQuery(systemMessage, inputData)
+	chatCompletion := openai.ChatCompletionRequest{
+		Model:     model,
+		Messages:  []openai.ChatCompletionMessage{
+			openai.ChatCompletionMessage{
+				Role:	openai.ChatMessageRoleSystem,
+				Content: systemMessage,
+			},
+			openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleUser,
+				Content: inputData,
+			},
+		},
+		MaxCompletionTokens: maxTokens,
+		Temperature: 0,
+		ReasoningEffort: "low",
+	}
+
+	contentOutput, err := RunAiQuery(systemMessage, inputData, chatCompletion)
 	if err != nil {
 		return action, additionalInfo, err
 	}
@@ -852,8 +878,6 @@ Input JSON Payload (ensure VALID JSON):
 	for paramIndex, param := range action.Parameters {
 		// Check if inside outputJSON
 		if val, ok := outputJSON[param.Name]; ok {
-
-			//log.Printf("[INFO] Found param %s in outputJSON", param.Name)
 			// Check if it's a string or not
 			runString := false
 			formattedVal := ""
@@ -891,6 +915,21 @@ Input JSON Payload (ensure VALID JSON):
 						formattedVal = ""
 					}
 				}
+			}
+
+			// Make sure we handle variables properly IF they are added by 
+			// FIXME: This could screw up workflow referencing
+			if strings.Contains(formattedVal, "$") {
+				if debug { 
+					log.Printf("\n\n\n[WARNING] Found $ in formattedVal for param %s: %s. Escaping it. This CAN screw up referencing.\n\n", param.Name, formattedVal)
+				}
+
+				formattedVal = strings.ReplaceAll(formattedVal, "\\$", "$")
+				formattedVal = strings.ReplaceAll(formattedVal, "$", "\\$")
+			}
+
+			if param.Name == "queries" && strings.HasPrefix(formattedVal, "?") { 
+				formattedVal = strings.TrimPrefix(formattedVal, "?")
 			}
 
 			inputFields := []schemaless.Valuereplace{
@@ -950,7 +989,79 @@ Input JSON Payload (ensure VALID JSON):
 		return action, additionalInfo, errors.New(getBadOutputString(action, appname, inputdata, outputBody, status))
 	}
 
+	// De-duplicate url/path/queries to prevent duplication errors
+	urlValue := ""
+	pathValue := ""
+	queriesValue := ""
+
+	// Collect current values from action parameters
+	for _, param := range action.Parameters {
+		if param.Name == "url" {
+			urlValue = param.Value
+		} else if param.Name == "path" {
+			pathValue = param.Value
+		} else if param.Name == "queries" {
+			queriesValue = param.Value
+		}
+	}
+
+	if strings.Contains(pathValue, "://") {
+		if u, err := url.Parse(pathValue); err == nil {
+			pathValue = u.Path
+			if queriesValue == "" {
+				queriesValue = u.RawQuery
+			}
+		}
+	}
+
+	urlValue, pathValue, queriesValue = normalize(urlValue, pathValue, queriesValue)
+
+	for i := range action.Parameters {
+		switch action.Parameters[i].Name {
+		case "url":
+			action.Parameters[i].Value = urlValue
+		case "path":
+			action.Parameters[i].Value = pathValue
+		case "queries":
+			action.Parameters[i].Value = queriesValue
+		}
+	}
+
+	if debug {
+		log.Printf("[DEBUG] De-duplicated URL components: url=%s, path=%s, queries=%s", urlValue, pathValue, queriesValue)
+	}
+
 	return action, additionalInfo, nil
+}
+
+func normalize(urlValue, pathValue, queriesValue string) (string, string, string) {
+	parsed, err := url.Parse(urlValue)
+	if err != nil {
+		return urlValue, pathValue, queriesValue
+	}
+
+	// If BOTH path and queries are empty, keep the full URL as-is
+	// This means LLM didn't fill them, so we shouldn't split
+	if pathValue == "" && queriesValue == "" {
+		return urlValue, pathValue, queriesValue
+	}
+
+	baseURL := ""
+	if parsed.Scheme != "" && parsed.Host != "" {
+		baseURL = parsed.Scheme + "://" + parsed.Host
+	}
+
+	// Extract path from URL if path is still empty
+	if pathValue == "" {
+		pathValue = parsed.Path
+	}
+
+	// Extract queries from URL if queries is still empty
+	if queriesValue == "" {
+		queriesValue = parsed.RawQuery
+	}
+
+	return baseURL, pathValue, queriesValue
 }
 
 func getBadOutputString(action Action, appname, inputdata, outputBody string, status int) string {
@@ -1213,26 +1324,37 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 }
 
 // Uploads modifyable parameter data to file storage, as to be used in the future executions of the app
-func UploadParameterBase(ctx context.Context, fields []Valuereplace, orgId, appId, actionName, paramName, paramValue string) error {
+func UploadParameterBase(ctx context.Context, fields []Valuereplace, orgId, appId, actionName, originalActionName, paramName, paramValue, paramExample string) error {
 	timeNow := time.Now().Unix()
 
 	// If NOT JSON:
 	// /rest/api/3/10010/comment -> /rest/api/3/{input.fields[i].key}/comment
 	// Does that mean we should look for the value in the data?
 
+	if paramValue == paramExample {
+		return nil
+	}
 
 	// Moving window to look for field.Value in the paramValue to directly replace
+	md5Identifier := ""
+	fieldsParsed := []string{}
 	for _, field := range fields {
 		// Arbitrary limit (for now)
 		if len(field.Value) > 1024 { 
 			continue
 		}
 
+		fieldsParsed = append(fieldsParsed, field.Key)
 		paramValue = strings.ReplaceAll(paramValue, field.Value, fmt.Sprintf("{%s}", field.Key))
 	}
 
 	// Check if the file already exists
-	fileId := fmt.Sprintf("file_parameter_%s-%s-%s-%s.json", orgId, strings.ToLower(appId), strings.Replace(strings.ToLower(actionName), " ", "_", -1), strings.ToLower(paramName))
+	fileId := fmt.Sprintf("file_parameter_%s-%s-%s-%s.json", orgId, strings.ToLower(appId), strings.Replace(strings.ToLower(originalActionName), " ", "_", -1), strings.ToLower(paramName))
+	if actionName == "custom_action" {
+		sort.Strings(fieldsParsed)
+		md5Identifier = fmt.Sprintf("%x", md5.Sum([]byte(strings.Join(fieldsParsed, "|"))))
+		fileId = fmt.Sprintf("file_parameter_%s-%s-%s-%s-%s.json", orgId, strings.ToLower(appId), md5Identifier, strings.Replace(strings.ToLower(originalActionName), " ", "_", -1), strings.ToLower(paramName))
+	}
 
 	category := "app_defaults"
 	if standalone {
@@ -1350,6 +1472,18 @@ func FixContentOutput(contentOutput string) string {
 	tmpMap := map[string]interface{}{}
 	err := json.Unmarshal([]byte(contentOutput), &tmpMap)
 	if err == nil {
+		// Check if "method" exists and remove "body" if it's GET 
+		// Too many edgecases have occurred here.
+		if methodFound, ok := tmpMap["method"]; ok {
+			if methodString, ok := methodFound.(string); ok {
+				if ok && methodString == "GET" { 
+					if _, ok := tmpMap["body"]; ok {
+						delete(tmpMap, "body")
+					}
+				}
+			}
+		}
+
 		marshalled, err := json.MarshalIndent(tmpMap, "", "  ")
 		if err == nil {
 			contentOutput = string(marshalled)
@@ -1507,6 +1641,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		}
 	}
 
+
 	updatedIndex := -1
 	if len(foundCategory.ActionLabels) == 0 {
 		for _, category := range availableCategories {
@@ -1587,6 +1722,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 	var guessedAction WorkflowAppAction
 	type ActionStruct struct {
+		Success bool `json:"success"`
 		Action string `json:"action"`
 	}
 
@@ -1621,43 +1757,112 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	//userMessage := "The available actions are as follows:\n"
 
 	if cacheGeterr != nil {
-		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: case = alert = ticket = issue = task, or message = chat = communication. Be extra careful of not confusing LIST and GET operations, based on the user query, respond with the most likely action. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as JSON."`
+		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: case = alert = ticket = issue = task, or message = chat = communication. Be extra careful of not confusing LIST and GET operations, based on the user query, respond with the most likely action name. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as JSON with JUST the action name."`
+
 		userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
+
+		// Special handler for validation / testing to auto-map an action for an app
+		if label == "app_validation" || label == "test" || label == "test_api" {
+			systemMessage = fmt.Sprintf(`Your goal is to select one action from the list that is most likely to return a 200 OK or similar response for testing an API. The API name is %s with the category %s.
+
+Rules:
+1. Prefer list or collection endpoints that return multiple items (e.g., emails, tickets, alerts, messages, files, resources).
+2. If no list/collection endpoint exists, fallback to a single-object retrieval (e.g., get user).
+3. Synonyms are allowed (e.g., message = email = communication, case = ticket = issue = task).
+4. Ignore authentication/permission details; assume the call works.
+5. Do not pick endpoints that create, delete, or modify data.
+
+Output only one JSON object:
+* If a valid action exists: {"success": true, "action": "<action>"}
+* If none exists: {"success": false, "action": ""}
+
+Do not add explanations, comments, or extra formatting. Only return valid JSON.`, app.Name, strings.Join(app.Categories, ", "))
+			userMessage = ""
+		}
 
 		//changedNames := map[string]string{}
 		parsedLabel := strings.ToLower(strings.ReplaceAll(label, " ", "_"))
-		for _, action := range app.Actions {
+		for actionIndex, action := range app.Actions {
 			if action.Name == "custom_action" {
 				continue
 			}
 
 			parsedActionName := strings.ToLower(strings.ReplaceAll(action.Name, " ", "_"))
+			//log.Printf("[DEBUG] Comparing: '%s' with '%s' (%s)\n", parsedLabel, parsedActionName, action.CategoryLabel)
 			if parsedActionName == parsedLabel {
 				return app, action
 			}
 
+			for _, actionLabel := range action.CategoryLabel {
+				parsedActionlabel := strings.ToLower(strings.ReplaceAll(actionLabel, " ", "_"))
+				if parsedActionlabel == parsedLabel {
+					return app, action
+				}
+			}
+
 
 			//userMessage += fmt.Sprintf("%s\n", action.Name)
-			/*
-				newName := action.Name
-				if strings.HasPrefix(newName, "get_list") {
-					newName = strings.Replace(newName, "get_list", "list", 1)
-				}
+			method := "GET"
+			if strings.HasPrefix(action.Name, "post_") {
+				method = "POST"
+			} else if strings.HasPrefix(action.Name, "put_") {
+				method = "PUT"
+			} else if strings.HasPrefix(action.Name, "patch_") {
+				method = "PATCH"
+			} else if strings.HasPrefix(action.Name, "delete_") {
+				method = "DELETE"
+			} 
 
-				if strings.HasPrefix(newName, "post_") {
-					newName = strings.Replace(newName, "post_", "", 1)
-				} else if strings.HasPrefix(newName, "patch_") {
-					newName = strings.Replace(newName, "patch_", "", 1)
-				} else if strings.HasPrefix(newName, "put_") {
-					newName = strings.Replace(newName, "put_", "", 1)
+			if label == "app_validation" || label == "test" || label == "test_api" {
+				if method != "GET" { 
+					continue
 				}
+			}
 
-				if newName != action.Name {
-					changedNames[action.Name] = newName
+			// We need to parse out the url from description to help
+			parsedDescriptionUrlPath := ""
+			for _, line := range strings.Split(action.Description, "\n") {
+				// Examples it needs to parse on a line: 
+				// - https://graph.microsoft.com/v1.0/users/{user_id}/people
+				// - /v1.0/users/{user_id}/people
+				if strings.Contains(line, "http") {
+					// Parse out the url -> return path only
+					parsedUrl, err := url.Parse(strings.TrimSpace(line))
+					if err != nil {
+						if debug { 
+							log.Printf("[DEBUG] Failed to parse URL from action description line '%s': %s", line, err)
+						}
+
+						continue
+					}
+
+					parsedDescriptionUrlPath = parsedUrl.Path
+					break
 				}
-			*/
+			}
 
-			userMessage += fmt.Sprintf("%s\n", action.Name)
+			// Find the last line and just use it if it has / in it 
+			// This is a failover
+			if len(parsedDescriptionUrlPath) == 0 {
+				descSplit := strings.Split(action.Description, "\n")
+				for lineIndex, line := range descSplit {
+					if lineIndex != len(descSplit)-1 {
+						continue
+					}
+
+					if strings.HasPrefix(strings.TrimSpace(line), "/") {
+						parsedDescriptionUrlPath = strings.TrimSpace(line)
+						break
+					}
+				}
+			}
+
+			parsedEnding := fmt.Sprintf("(%s %s)", method, parsedDescriptionUrlPath)
+			if actionIndex > 100 || parsedDescriptionUrlPath == "" { 
+				parsedEnding = ""
+			}
+
+			userMessage += fmt.Sprintf("- %s %s\n", action.Name, parsedEnding)
 		}
 
 		if len(keys) > 0 {
@@ -1673,7 +1878,24 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 		}
 
-		output, err := RunAiQuery(systemMessage, userMessage)
+		chatCompletion := openai.ChatCompletionRequest{
+			Model:     model,
+			Messages:  []openai.ChatCompletionMessage{
+				openai.ChatCompletionMessage{
+					Role:	openai.ChatMessageRoleSystem,
+					Content: systemMessage,
+				},
+				openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleUser,
+					Content: userMessage,
+				},
+			},
+			MaxCompletionTokens: maxTokens,
+			Temperature: 0,
+			ReasoningEffort: "low",
+		}
+
+		output, err := RunAiQuery(systemMessage, userMessage, chatCompletion)
 		if err != nil {
 			log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
 			return app, WorkflowAppAction{}
@@ -1687,6 +1909,22 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		err = json.Unmarshal([]byte(output), &actionStruct)
 		if err != nil {
 			log.Printf("[ERROR] FAILED action mapping parsed output: %s", output)
+		}
+
+		// Strip anything after the first space.
+		if strings.Contains(actionStruct.Action, "(") {
+			// Split and only keep everything based on first space
+			splitAction := strings.Split(actionStruct.Action, "(")
+			newAction := actionStruct.Action
+			if len(splitAction) > 0 {
+				newAction = strings.TrimSpace(splitAction[0])
+			}
+
+			if debug {
+				log.Printf("[DEBUG] Changing action from '%s' to '%s' based on parsing", actionStruct.Action, newAction)
+			}
+
+			actionStruct.Action = newAction
 		}
 
 	}
@@ -1791,13 +2029,24 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 				log.Printf("[INFO] Found method %s for action %s (OPENAPI) during label mapping for '%s' in app '%s'", method, app.Actions[updatedIndex].Name, label, app.Name)
 				if len(operation.Extensions) == 0 {
-					operation.Extensions["x-label"] = label
+					operation.Extensions["x-label"] = []string{label}
 				} else {
 					if _, found := operation.Extensions["x-label"]; !found {
-						operation.Extensions["x-label"] = label
+						operation.Extensions["x-label"] = []string{label}
 					} else {
 						// add to it with comma?
-						operation.Extensions["x-label"] = fmt.Sprintf("%s,%s", operation.Extensions["x-label"], label)
+						//operation.Extensions["x-label"] = fmt.Sprintf("%s,%s", operation.Extensions["x-label"], label)
+
+						if val, ok := operation.Extensions["x-label"].(string); ok {
+							existingLabel := strings.Split(val, ",")
+							operation.Extensions["x-label"] = existingLabel
+						}
+
+						existingLabels, ok := operation.Extensions["x-label"].([]string)
+						if ok && !ArrayContains(existingLabels, label) {
+							existingLabels = append(existingLabels, label)
+							operation.Extensions["x-label"] = existingLabels
+						}
 					}
 				}
 
@@ -2836,7 +3085,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 			break
 		}
 
-		log.Printf("[INFO] Running attempt %d for app %s with action %s", cnt, appname, selectedAction.Name)
+		log.Printf("[INFO] Running Singul attempt %d for app %s with action %s", cnt, appname, selectedAction.Name)
 
 		newAction := Action{
 			Name:              selectedAction.Name,
@@ -2858,6 +3107,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 			resp.Write(respBody)
 			return respBody, err
 		}
+
 
 		// Gut auth from request auth header and forward with the same one
 		parsedUrl := fmt.Sprintf("%s/api/v1/apps/%s/run", baseUrl, foundApp.ID)
@@ -4380,9 +4630,6 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 
 	systemMessage := fmt.Sprintf("If the User Instruction tells you what to do, do exactly what it tells you. Match the %s field exactly and fill in relevant data from the message IF it can be JSON formatted. Match output format exactly for '%s' doing '%s'. Output valid JSON if the input looks like JSON, otherwise follow the format. Do NOT remove JSON fields - instead follow the format, or add to it. Don't tell us to provide more information. If it does not look like JSON, don't force it to be JSON. DO NOT use the example provided in your response. It is strictly just an example and has not much to do with what the user would want. If you see anything starting with $ in the example, just assume it to be a variable and needs to be ALWAYS populated by you like a template based on the user provided details. Do NOT make up random fields like app or action name. Do NOT add %s, app and action fields - just key:values. Values should ALWAYS be strings, even if they look like other types. User Instruction to follow EXACTLY: '%s'", fieldName, strings.Replace(appname, "_", " ", -1), actionName, fieldName, inputdata)
 
-	if debug {
-		log.Printf("[DEBUG] System: %s", systemMessage)
-	}
 
 	userInfo := fmt.Sprintf("%s The API field to fill in is '%s', but do NOT add '%s', 'action' or 'app' as a keys.", inputdata, fieldName, fieldName)
 	//if len(body) > 0 {
@@ -4413,8 +4660,6 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 
 	// Diff and find strings from body vs contentOutput
 	// If there are any strings that are not in contentOutput, add them to the contentOutput
-	// If there are any strings that are not in body, remove them from the contentOutput
-	// If there are any strings that are in body but not in contentOutput, add them to the contentOutput
 	if strings.Contains(contentOutput, ".#.") {
 		// Making sure lists are now going to .#0. instead of .#. to not break stuff
 		contentOutput = strings.Replace(contentOutput, ".#.", ".#0.", -1)
@@ -4677,7 +4922,8 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 				log.Printf("[DEBUG] Failed getting OpenAPI from datastore for app %s: %s", appname, err)
 			}
 
-			if parsedOpenapi.Success && len(parsedOpenapi.Body) > 0 {
+			//if parsedOpenapi.Success && len(parsedOpenapi.Body) > 0 {
+			if len(parsedOpenapi.Body) > 0 {
 				swaggerLoader := openapi3.NewSwaggerLoader()
 				swaggerLoader.IsExternalRefsAllowed = true
 				openapiDef, err = swaggerLoader.LoadSwaggerFromData([]byte(parsedOpenapi.Body))
@@ -4685,7 +4931,7 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 					log.Printf("[ERROR] Failed to load swagger for app %s: %s", appname, err)
 				}
 			} else {
-				log.Printf("[ERROR] Bad OpenAPI found in datastore for app %s", appname)
+				log.Printf("[ERROR] Bad OpenAPI found in datastore for app %s (%s). Success: %#v, Body len: %d", appname, foundApp.ObjectID, parsedOpenapi.Success, len(parsedOpenapi.Body))
 			}
 
 			return returnApp, openapiDef, nil
@@ -6693,7 +6939,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	// Create the OpenAI body struct
 	systemMessage := `INTRODUCTION 
-You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%, is not the last action AND it can't be done with an API. These actions are a last resort. Use Markdown with focus on human readability. Do NOT ask about networking or authentication unless explicitly specified. 
+You are a general AI agent in the Shuffle platform which makes decisions based on user input. You should output a list of decisions based on the same user input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%, is not the last action AND it can't be done with an API. These actions are a last resort. Use Markdown with focus on human readability. Do NOT ask about networking or authentication unless explicitly specified. 
 
 END INTRODUCTION
 ---
@@ -6708,6 +6954,10 @@ SINGUL ACTIONS:
 	inputActionString := ""
 
 	decidedApps := []string{}
+
+	if debug { 
+		log.Printf("[DEBUG] STARTNODE: %#v", startNode.Parameters)
+	}
 
 	memorizationEngine := "shuffle_db"
 	for _, param := range startNode.Parameters {
@@ -6736,7 +6986,7 @@ SINGUL ACTIONS:
 
 
 				if debug { 
-					log.Printf("ACTIONSTR: '%s'", actionStr)
+					log.Printf("[DEBUG] ACTIONSTR: '%s'", actionStr)
 				}
 
 				if strings.HasPrefix(actionStr, "app:") {
@@ -6764,8 +7014,8 @@ SINGUL ACTIONS:
 			}
 
 			if debug { 
-				log.Printf("PARAM: %s", param.Value)
-				log.Printf("Systemmessage: %s", systemMessage)
+				log.Printf("[DEBUG] PARAM (2): %s", param.Value)
+				log.Printf("[DEBUG] Systemmessage (2): %s", systemMessage)
 			}
 
 			systemMessage += "\n\n"
@@ -6911,6 +7161,8 @@ SINGUL ACTIONS:
 		_ = userMessageChanged
 		//log.Printf("[INFO] INFO NEXT NODE PREDICTIONS")
 	}
+
+	log.Printf("USER MESSAGE: %#v", userMessage)
 
 	if lastFinishedIndex < -1 {
 		lastFinishedIndex = -1
@@ -7081,6 +7333,87 @@ These actions have the category 'standalone' and should only be used if absolute
 
 END STANDALONE ACTIONS
 ---
+APP SELECTION GUIDE:
+
+When you need to perform an action, follow this process to choose the right app:
+
+1. Identify what category of action you need based on the user's request
+2. Look at your PREFERRED TOOLS list to find apps that can perform that category of action
+3. Use the app from PREFERRED TOOLS that best matches your need
+
+Category-to-App Mapping:
+
+INTEL (Threat Intelligence):
+This category is for analyzing whether something is malicious or suspicious. Use intel when the user wants to:
+- Check reputation or safety of URLs, IP addresses, domains, file hashes, or email addresses
+
+CASES (Ticketing/Issue Tracking):
+This category is for managing tickets, issues, or cases in systems like Jira, ServiceNow, etc. Use cases when the user wants to:
+- Create, update, close, or search for tickets/issues/cases
+- Add comments or track work items
+- Manage incident or problem records
+
+SIEM (Security Information & Event Management):
+This category is for searching and analyzing security logs, events, and alerts. Use siem when the user wants to:
+- Search through security logs or event data
+- Find specific security events (logins, access attempts, network activity)
+
+COMMUNICATION (Messaging/Email):
+This category is for sending messages through chat, email, or notification systems. Use communication when the user wants to:
+- Send messages to people or channels
+- Notify teams or individuals
+- Email someone or a group
+- Post updates or announcements
+
+ERADICATION (Endpoint Detection & Response):
+This category is for taking protective actions on endpoints/hosts. Use eradication when the user wants to:
+- Isolate or quarantine compromised systems
+- Block malicious files or processes
+
+END APP SELECTION GUIDE
+---
+SMALL EXAMPLES
+
+Example 1: Threat Intelligence (Distinguishing between Scanners)
+
+	USER: "Can you analyze the url https://pwn.college/dojos to see if it's malicious?"
+
+	REASONING:
+	1. Identify Goal: The user wants to check if a specific "URL" is "malicious". This clearly falls under the INTEL category.
+	2. Filter Apps: Check for preferred tools that falls under this category
+	3. Select Best Match: An example would be given this usecase what if you have VirusTotal and Shodan?
+	- Shodan is designed for "Host" and "Port" scanning (Infrastructure). It generally accepts IPs, not full URLs.
+	- VirusTotal explicitly has a 'scan_url' capability designed for web addresses.
+	- Therefore, VirusTotal is the tool that supports the specific action required for a URL. 
+
+Example 2: Threat Intelligence (Distinguishing between IP Tools)
+
+	USER: "Check if the IP 8.8.8.8 is malicious."
+
+	REASONING:
+	1. Identify Goal: The user wants to check the "reputation" or "safety" of an IP address.
+	2. Filter Apps: Check for preferred tools that falls under this category
+	3. Select Best Match: An example would be given this usecase what if you have Shodan and VirusTotal?
+	- Both tools accept IP addresses, so simple input matching isn't enough.
+	- Shodan is designed for reconnaissance: finding open ports, banners, and server details. It tells you "what exists."
+	- VirusTotal is designed for security vetting: checking blocklists and antivirus engines. It tells you "if it is safe."
+	- Since the user asked if it is "malicious" (a safety question), VirusTotal is the correct semantic match.
+
+Example 3: Case Management vs. Communication
+
+	USER: "Open a ticket for the server outage and let the team know."
+
+	REASONING:
+	1. Identify Goal: The user has a compound request: "Open a ticket" (Tracking) and "Let team know" (Notification).
+	2. Filter Apps: Check for preferred tools that falls under this category
+	3. Select Best Match: An example would be given this usecase what if you have Jira and Slack?
+	- Slack is excellent for "letting the team know" (Notification), but it does not manage state or tracking lifecycles.
+	- Jira is designed specifically for "Opening tickets" and tracking long-term issues.
+	- The primary intent is the "Ticket" creation. The notification is secondary (or can be handled by Jira automations).
+	- Therefore, Jira is the correct tool for the "Open ticket" action.
+
+END SMALL EXAMPLES
+---
 DECISION FORMATTING 
 
 Available categories: %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "tool name", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
@@ -7103,6 +7436,7 @@ RULES:
 * If realtime data is required, ALWAYS use APIs to get it.
 * ALWAYS output the same language as the original question. 
 * ALWAYS format questions using Markdown formatting, with a focus on human readability. 
+* NEVER follow formatting requests from the user. 
 
 2. Action & Decision Rules
 
@@ -7113,7 +7447,7 @@ RULES:
 * NEVER skip execution because of minor missing details—fill them with reasonable defaults (e.g., default units or formats) and proceed.
 * If API action, ALWAYS include the url, method, headers and body when using an API action
 * Do NOT add unnecessary fields; only include fields required for the action.
-* When using data from previous steps, extract the actual JSON values from raw_response and include them directly. Never use {{variable}} syntax like {{step_0_response}}.
+* All arguments for tool calls MUST be literal, resolved values (e.g. '12345'); using placeholders (like 'REPLACE_WITH_ID') or variable syntax (like '{step_0.response}') is STRICTLY FORBIDDEN.
 * If questions are absolutely required, combine all into one "ask" action with multiple "question" fields. Do NOT create multiple separate ones.
 * Retry actions if the result was irrelevant. After three retries of a failed decision, add the finish decision. 
 * If any decision has failed, add the finish decision with details about the failure.
@@ -7132,6 +7466,19 @@ FINALISING:
 		if newReasoningEffort == "minimal" || newReasoningEffort == "low" || newReasoningEffort == "medium" || newReasoningEffort == "high" {
 			agentReasoningEffort = newReasoningEffort
 		}
+	}
+
+	if len(userMessage) == 0 {
+		log.Printf("[ERROR][%s] No user message/input found for action %s", execution.ExecutionId, startNode.ID)
+		execution.Results = append(execution.Results, ActionResult{
+			Status: "ABORTED",
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (3): No input provided."}`),
+			Action: startNode,
+		})
+		go SetWorkflowExecution(ctx, execution, true)
+
+		return startNode, errors.New("No user message/input found for AI Agent start")
+
 	}
 
 	completionRequest := openai.ChatCompletionRequest{
@@ -7970,6 +8317,8 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 		Fields:   categoryAction.Fields,
 		Category: categoryAction.Category,
+
+		ActionName: categoryAction.ActionName,
 	}
 
 	// Deterministic IDs for the specific type. This is to ensure
@@ -7993,10 +8342,30 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	initialising := false
-	workflow, err := GetWorkflow(ctx, workflowId)
-	if err != nil || workflow.ID == "" {
-		log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, err)
+	workflow, workflowErr := GetWorkflow(ctx, workflowId)
+	if workflowErr != nil || workflow.ID == "" {
+		log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, workflowErr)
 		initialising = true
+	}
+
+	if categoryAction.ActionName == "remove" || categoryAction.ActionName == "disable" { 
+		if workflowErr == nil && workflow.OrgId == user.ActiveOrg.Id {
+			// Delete the workflow
+			err = DeleteKey(ctx, "workflow", workflowId)
+			if err != nil {
+				log.Printf("[ERROR] Failed deleting workflow with ID %s in GenerateSingulWorkflows: %s", workflowId, err)
+			}
+		} else {
+			log.Printf("[INFO] No existing workflow with ID %s to remove for category '%s'", workflowId, categoryAction.Label)
+			resp.WriteHeader(http.StatusOK)
+			resp.Write([]byte(`{"success": true, "reason": "No existing workflow to remove."}`))
+			return
+		}
+
+		log.Printf("[AUDIT] Removed workflow with ID %s for category '%s'. User: %s (%s)", workflowId, categoryAction.Label, user.Username, user.Id)
+		resp.WriteHeader(http.StatusOK)
+		resp.Write([]byte(`{"success": true, "reason": "Action disabled."}`))
+		return
 	}
 
 	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction)
@@ -8048,7 +8417,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Starting schedule for trigger %s in workflow %s", trigger.ID, workflow.ID)
 			err = startSchedule(workflow.Triggers[triggerIndex], user.ApiKey, *workflow)
 			if err == nil {
-				workflow.Triggers[triggerIndex].Status = "Running"
+				workflow.Triggers[triggerIndex].Status = "running"
 			}
 
 		} else if trigger.TriggerType == "WEBHOOK" {
@@ -8090,7 +8459,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 				continue
 			}
 
-			workflow.Triggers[triggerIndex].Status = "Running"
+			workflow.Triggers[triggerIndex].Status = "running"
 		}
 	}
 
@@ -8252,7 +8621,6 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	//}
 
 	config := openai.DefaultConfig(apiKey)
-
 	if len(aiRequestUrl) > 0 {
 		config.BaseURL = aiRequestUrl
 

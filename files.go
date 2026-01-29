@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/storage"
 	"github.com/google/go-github/v28/github"
 	uuid "github.com/satori/go.uuid"
 )
@@ -1580,7 +1581,10 @@ func UploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 			file.ReferenceFileId = outputFile.Id
 		}
 	} else {
-		log.Printf("[INFO] No similar file found with md5 %s. Original Md5: %s", md5, file.OriginalMd5sum)
+		if debug { 
+			log.Printf("[DEBUG] No similar file found with md5 %s. Original Md5: %s", md5, file.OriginalMd5sum)
+		}
+
 		if len(file.OriginalMd5sum) > 0 && file.OriginalMd5sum != md5 {
 			if debug {
 				log.Printf("[DEBUG] Md5 has changed for ID %s!", file.Id)
@@ -1653,7 +1657,9 @@ func UploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 	file.FileSize = int64(len(contents))
 	file.ContentType = http.DetectContentType(contents)
 
-	log.Printf("[INFO] MD5 for file %s (%s) is %s Type: %s and size: %d", file.Filename, file.Id, file.Md5sum, file.ContentType, file.FileSize)
+	if debug { 
+		log.Printf("[DEBUG] MD5 for file %s (%s) is %s Type: %s and size: %d", file.Filename, file.Id, file.Md5sum, file.ContentType, file.FileSize)
+	}
 
 	err = SetFile(ctx, *file)
 	if err != nil {
@@ -2310,4 +2316,13 @@ func HandleSetFileConfig(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "File updated successfully!"}`)))
 
+}
+
+func GetStorageClient(ctx context.Context, projectID string) (storage.Client, error) {
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		return storage.Client{}, fmt.Errorf("failed to create storage client: %v", err)
+	}
+
+	return *client, nil
 }

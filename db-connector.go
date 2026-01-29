@@ -412,9 +412,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 }
 
 func GetDatastoreClient(ctx context.Context, projectID string) (datastore.Client, error) {
-	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile(test"))
 	client, err := datastore.NewClient(ctx, projectID)
-	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile("test"))
 	if err != nil {
 		return datastore.Client{}, err
 	}
@@ -1018,7 +1016,9 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		})
 
 		if err != nil {
-			log.Printf("[WARNING] Error in org STATS get: %s", err)
+			if debug {
+				log.Printf("[WARNING] Error in org STATS get: %s", err)
+			}
 			return err
 		}
 
@@ -4219,10 +4219,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 }
 
 func init() {
-	// Skip import path check in test mode
-	if os.Getenv("SHUFFLE_TEST_MODE") == "true" {
-		return
-	}
 
 	isValid := checkImportPath()
 	if !isValid {
@@ -4904,13 +4900,14 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 
 // Index = Username
 func SetApikey(ctx context.Context, Userdata User) error {
-	log.Printf("[AUDIT] Setting API key %s", Userdata.ApiKey)
 
+	// Non indexed User data
 	newapiUser := new(Userapi)
-	newapiUser.Username = strings.ToLower(Userdata.Username)
 	newapiUser.ApiKey = Userdata.ApiKey
+	newapiUser.Username = strings.ToLower(Userdata.Username)
 	nameKey := "apikey"
 
+	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		data, err := json.Marshal(Userdata)
 		if err != nil {
@@ -5093,6 +5090,16 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		}
 	}
 
+	// Can we diff here? Otherwise we may miss items hmm
+	// Check if we recently cached the ID. Don't run updates more often than once a day for an app
+	checkCacheId := fmt.Sprintf("openapi_updatecheck_%s", id)
+	if _, err := GetCache(ctx, checkCacheId); err != nil {
+		api = syncAppContentLabels(ctx, id, api)
+
+		// Set a cache to not do this again for a day
+		SetCache(ctx, checkCacheId, []byte("1"), 1440)
+	}
+
 	if project.CacheDb {
 		data, err := json.Marshal(api)
 		if err != nil {
@@ -5109,7 +5116,10 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 	return *api, nil
 }
 
+// Index = Username
 func SetSession(ctx context.Context, user User, value string) error {
+	//parsedKey := strings.ToLower(user.Username)
+	// Non indexed User data
 	parsedKey := user.Id
 	user.Session = value
 
@@ -13813,7 +13823,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 					}
 
 					if debug {
-						log.Printf("[DEBUG] Found automation %s to run (2). Value: %s", automation.Name, automation.Options[0].Value)
+						log.Printf("[DEBUG] Found automation '%s' to run (2). Value: '%s'", automation.Name, automation.Options[0].Value)
 					}
 
 					// Run the automation
@@ -15057,7 +15067,8 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			"size": max,
 			"sort": map[string]interface{}{
 				"edited": map[string]interface{}{
-					"order": "desc",
+					"order":         "desc",
+					"unmapped_type": "date",
 				},
 			},
 			"query": map[string]interface{}{
@@ -17930,8 +17941,39 @@ func InitOpensearchIndexes() {
 		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if err != nil {
-			if !strings.Contains(fmt.Sprintf("%s", err), "serverless mode") {
+			if !strings.Contains(fmt.Sprintf("%s", err), "serverless mode") && !strings.Contains(fmt.Sprintf("%s", err), "resource_already_exists_exception") {
 				log.Printf("[WARNING] Error creating index %s: %s", index, err)
+			}
+
+			// Make sure if the resource exist it is part of correct alias
+			if strings.Contains(fmt.Sprintf("%s", err), "resource_already_exists_exception") {
+				body := fmt.Sprintf(`{
+				  "actions": [
+				    {
+				      "add": {
+				        "index": "%s",
+				        "alias": "%s",
+				        "is_write_index": true
+				      }
+				    }
+				  ]
+				}`, initialIndexName, index)
+
+				aliasResp, aerr := project.Es.Aliases(ctx, opensearchapi.AliasesReq{
+					Body: strings.NewReader(body),
+				})
+				if aerr != nil {
+					log.Printf("[WARNING] Failed to ensure alias %s for index %s: %s", index, initialIndexName, aerr)
+					return
+				}
+
+				res := aliasResp.Inspect().Response
+				defer res.Body.Close()
+
+				if res.StatusCode >= 300 {
+					log.Printf("[WARNING] Alias enforcement failed: %s", res.String())
+					return
+				}
 			}
 		} else {
 			if res.IsError() {
@@ -17958,7 +18000,7 @@ func InitOpensearchIndexes() {
 		}
 
 		rolloverResp, err := project.Es.Indices.Rollover(ctx, opensearchapi.IndicesRolloverReq{
-			Index: index,
+			Alias: index,
 			Body:  bytes.NewReader(rolloverConfig),
 		})
 

@@ -115,14 +115,26 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"https://br.shuffler.io",
 			"https://in.shuffler.io",
 
+			// Related projects (maybe)
 			"https://*.singul.io",
 			"https://singul.io",
+			"https://*.shutdown.no",
+			"https://shutdown.no",
+
+			// Local testing
 			"http://localhost:3002",
 			"http://localhost:3000",
 
-			// For a new test project
+			// For a frontend test project
 			"https://cases.shuffler.io",
+			"https://security.shuffler.io",
 			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
+			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
+
+			// Another frontend test
+			"https://preview--shuffle-cases.lovable.app",
+			"https://9f29a11a-6489-4898-8044-ed7b8f848ef9.lovableproject.com",
+			"https://id-preview--9f29a11a-6489-4898-8044-ed7b8f848ef9.lovable.app",
 		}
 
 		if len(origin) > 0 {
@@ -246,7 +258,8 @@ func ConstructSessionCookie(value string, expires time.Time) *http.Cookie {
 	if project.Environment == "cloud" {
 		c.Domain = ".shuffler.io"
 		c.Secure = true
-		c.SameSite = http.SameSiteLaxMode
+		//c.SameSite = http.SameSiteLaxMode
+		c.SameSite = http.SameSiteNoneMode
 	}
 
 	return &c
@@ -497,40 +510,35 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 
 		if len(user.Session) != 0 {
 			log.Printf("[INFO] User session exists - resetting session")
-			sessionValue := user.Session
-			decryptedSession, err := HandleKeyDecryption([]byte(sessionValue), "session")
-			if err == nil {
-				sessionValue = string(decryptedSession)
-			}
-
 			expiration := time.Now().Add(8 * time.Hour)
 
-			newCookie := ConstructSessionCookie(sessionValue, expiration)
+			newCookie := ConstructSessionCookie(user.Session, expiration)
 
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
 			http.SetCookie(resp, newCookie)
 
+			//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", user.Session)
 			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
 				Key:        "session_token",
-				Value:      sessionValue,
+				Value:      user.Session,
 				Expiration: expiration.Unix(),
 			})
 
 			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
 				Key:        "__session",
-				Value:      sessionValue,
+				Value:      user.Session,
 				Expiration: expiration.Unix(),
 			})
 
-			loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, sessionValue, expiration.Unix())
+			loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, user.Session, expiration.Unix())
 			newData, err := json.Marshal(returnValue)
 			if err == nil {
 				loginData = string(newData)
 			}
 
-			err = SetSession(ctx, user, sessionValue)
+			err = SetSession(ctx, user, user.Session)
 			if err != nil {
 				log.Printf("[WARNING] Error adding session to database: %s", err)
 			} else {
@@ -2179,7 +2187,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		appAuth.App.LargeImage = app.LargeImage
 	}
 
-	// If editing, reset verification?
+	// If manual editing, reset verification
 	appAuth.Validation = TypeValidation{}
 
 	appAuth.OrgId = user.ActiveOrg.Id
@@ -3345,8 +3353,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			newApikey = newApikey[0:248]
 		}
 
-		log.Printf("[DEBUG] Checking cache without encryption")
-
 		cache, err := GetCache(ctx, newApikey+org_id)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
@@ -3376,24 +3382,17 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		// Get the user based on APIkey here
 		userdata, err := GetApikey(ctx, apikeyCheck[1])
 		if err != nil {
-			log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
+			// Due to execution auth
+			if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") {
+				log.Printf("[WARNING] Apikey %s doesn't exist. URL: %#v: %s", apikey, request.URL.String(), err)
+			}
+
 			return User{}, err
 		}
 
 		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
 			//log.Printf("[WARNING] Apikey %s doesn't exist or the user doesn't have an ID/Username", apikey)
 			return User{}, errors.New("Couldn't find the user")
-		}
-
-		// Encrypt API key if matched on plain (userdata.ApiKey == incoming plain key)
-		uuidRegex := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-		if userdata.ApiKey == apikeyCheck[1] && uuidRegex.MatchString(apikeyCheck[1]) {
-			encryptedKey, err := HandleKeyEncryption([]byte(apikeyCheck[1]), "apikey", true)
-			if err == nil {
-				userdata.ApiKey = string(encryptedKey)
-				SetApikey(ctx, userdata)
-				SetUser(ctx, &userdata, false)
-			}
 		}
 
 		// Caching both bad and good apikeys :)
@@ -3471,7 +3470,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		user, err := GetSessionNew(ctx, sessionToken)
 		if err != nil {
-			log.Printf("[WARNING] No valid session token for ID %s. Setting cookie to expire. May cause fallback problems.", sessionToken)
+			log.Printf("[WARNING] No valid session token for '%s'. Setting cookie to expire. May cause fallback problems.", sessionToken)
 
 			if resp != nil {
 				newCookie := constructSessionDeleteCookie()
@@ -9284,20 +9283,11 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	apikey := userInfo.ApiKey
-	uuidRegex := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	if !uuidRegex.MatchString(apikey) {
-		decrypted, err := HandleKeyDecryption([]byte(apikey), "apikey")
-		if err == nil {
-			apikey = string(decrypted)
-		}
-	}
-
 	newObject := SettingsReturn{
 		Success:  true,
 		Username: userInfo.Username,
 		Verified: userInfo.Verified,
-		Apikey:   apikey,
+		Apikey:   userInfo.ApiKey,
 		Image:    userInfo.PublicProfile.GithubAvatar,
 	}
 
@@ -15306,7 +15296,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(userdata.Session) != 0 && !changeActiveOrg {
+	// Had to set this due to session hashing rollback
+	if len(userdata.Session) != 0 && len(userdata.Session) == 36 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
 
 		// Decrypt session if it's encrypted
@@ -15340,6 +15331,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		if project.Environment == "cloud" {
 			newCookie.Name = "__session"
 			newCookie.Domain = ".singul.io"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			newCookie.Domain = ".shutdown.no"
 			http.SetCookie(resp, newCookie)
 		}
 
@@ -15404,6 +15399,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		if project.Environment == "cloud" {
 			newCookie.Name = "__session"
 			newCookie.Domain = ".singul.io"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			newCookie.Domain = ".shutdown.no"
 			http.SetCookie(resp, newCookie)
 		}
 
@@ -15923,6 +15922,23 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	if sendRequest && len(resultData) > 0 {
 		//log.Printf("[INFO][%s] Should send subflow request to backendURL %s. Data: %s!", executionParent, backendUrl, string(resultData))
 
+		//	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
+		//		backendUrl = os.Getenv("BASE_URL")
+
+		//		if project.Environment == "cloud" {
+		//			backendUrl = "https://shuffler.io"
+		//
+		//			if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		//				backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+		//			}
+		//
+		//			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		//				backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		//			}
+		//
+		//		}
+		//	}
+
 		streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
 		req, err := http.NewRequest(
 			"POST",
@@ -16362,8 +16378,43 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	}
 
 	if foundActionResultIndex < 0 {
-		log.Printf("[ERROR][%s] Action '%s' was NOT found with any result in the execution (yet)", workflowExecution.ExecutionId, actionResult.Action.ID)
-		return &workflowExecution, false, errors.New(fmt.Sprintf("ActionResultIndex: Agent node ID for decision ID %s not found", decisionId))
+		// In test mode, Singul doesn't create sub-executions, so we need to handle this gracefully
+		if os.Getenv("AGENT_TEST_MODE") == "true" {
+			log.Printf("[DEBUG][%s] AGENT_TEST_MODE: Action '%s' not found in results, creating placeholder", workflowExecution.ExecutionId, actionResult.Action.ID)
+
+			// Try to get the initial agent output from cache
+			ctx := context.Background()
+			actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+			placeholderResult := `{"status":"RUNNING","decisions":[]}`
+
+			cache, err := GetCache(ctx, actionCacheId)
+			if err == nil {
+				// Found cached agent output - use it!
+				cacheData := []byte(cache.([]uint8))
+				log.Printf("[DEBUG][%s] Found cached agent output for placeholder (size: %d bytes)", workflowExecution.ExecutionId, len(cacheData))
+				placeholderResult = string(cacheData)
+			} else {
+				log.Printf("[DEBUG][%s] No cached agent output found, using empty placeholder", workflowExecution.ExecutionId)
+			}
+
+			// Create a placeholder result for the agent action
+			placeholder := ActionResult{
+				Action:      actionResult.Action,
+				ExecutionId: workflowExecution.ExecutionId,
+				Result:      placeholderResult,
+				StartedAt:   time.Now().Unix(),
+				CompletedAt: 0,
+				Status:      "EXECUTING",
+			}
+
+			workflowExecution.Results = append(workflowExecution.Results, placeholder)
+			foundActionResultIndex = len(workflowExecution.Results) - 1
+
+			log.Printf("[DEBUG][%s] Created placeholder result at index %d", workflowExecution.ExecutionId, foundActionResultIndex)
+		} else {
+			log.Printf("[ERROR][%s] Action '%s' was NOT found with any result in the execution (yet)", workflowExecution.ExecutionId, actionResult.Action.ID)
+			return &workflowExecution, false, errors.New(fmt.Sprintf("ActionResultIndex: Agent node ID for decision ID %s not found", decisionId))
+		}
 	}
 
 	mappedResult := AgentOutput{}
@@ -16373,6 +16424,28 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed unmarshalling agent result: %s. Data: %s", workflowExecution.ExecutionId, err, actionResult.Result)
 		return &workflowExecution, false, err
+	}
+
+	// In test mode, if the placeholder has no decisions, we need to add the incoming decision
+	if os.Getenv("AGENT_TEST_MODE") == "true" && len(mappedResult.Decisions) == 0 {
+		log.Printf("[DEBUG][%s] AGENT_TEST_MODE: Placeholder has no decisions, parsing incoming decision", workflowExecution.ExecutionId)
+
+		// Parse the incoming decision from actionResult
+		incomingDecision := AgentDecision{}
+		err = json.Unmarshal([]byte(actionResult.Result), &incomingDecision)
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed unmarshalling incoming decision: %s", workflowExecution.ExecutionId, err)
+		} else {
+			// Add the decision to the mapped result
+			mappedResult.Decisions = append(mappedResult.Decisions, incomingDecision)
+			mappedResult.Status = "RUNNING"
+
+			// Update the workflow execution result with the new decision
+			updatedResult, _ := json.Marshal(mappedResult)
+			workflowExecution.Results[foundActionResultIndex].Result = string(updatedResult)
+
+			log.Printf("[DEBUG][%s] Added decision %s to placeholder (total decisions: %d)", workflowExecution.ExecutionId, incomingDecision.RunDetails.Id, len(mappedResult.Decisions))
+		}
 	}
 
 	// FIXME: Need to check the current value from the workflowexecution here, instead of using the currently sent in decision
@@ -18891,7 +18964,7 @@ func create32Hash(key string) ([]byte, error) {
 	return []byte(hex.EncodeToString(hasher.Sum(nil))), nil
 }
 
-func HandleKeyEncryption(data []byte, passphrase string, deterministic ...bool) ([]byte, error) {
+func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 	key, err := create32Hash(passphrase)
 	if err != nil {
 		log.Printf("[WARNING] Skipped hashing in encrypt: %s", err)
@@ -18910,18 +18983,10 @@ func HandleKeyEncryption(data []byte, passphrase string, deterministic ...bool) 
 		return []byte{}, err
 	}
 
-	var nonce []byte
-	if len(deterministic) > 0 && deterministic[0] {
-		// Deterministic mode: derive nonce from data + passphrase for repeatable encryption
-		nonceSource := md5.Sum(append(data, []byte(passphrase)...))
-		nonce = nonceSource[:gcm.NonceSize()]
-	} else {
-		// Random nonce (default behavior)
-		nonce = make([]byte, gcm.NonceSize())
-		if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-			log.Printf("[WARNING] Error reading GCM nonce: %s", err)
-			return []byte{}, err
-		}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		log.Printf("[WARNING] Error reading GCM nonce: %s", err)
+		return []byte{}, err
 	}
 
 	ciphertext := gcm.Seal(nonce, nonce, data, nil)
@@ -20402,6 +20467,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		return workflowExecution, err
 	}
 
+	if debug {
+		log.Printf("[DEBUG] Action: %#v (%s)", action.Name, action.AppID)
+	}
+
 	if appId != action.AppID {
 
 		// Used for standalone runs stared on /agents
@@ -20436,6 +20505,23 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			}
 
 			SetWorkflowExecution(ctx, exec, true)
+
+			if os.Getenv("AGENT_TEST_MODE") == "true" {
+				var bodyMap map[string]interface{}
+				if err := json.Unmarshal(body, &bodyMap); err == nil {
+					if mockToolCalls, ok := bodyMap["mock_tool_calls"]; ok {
+						mockCacheKey := fmt.Sprintf("agent_mock_%s", exec.ExecutionId)
+						mockData, _ := json.Marshal(mockToolCalls)
+						err := SetCache(ctx, mockCacheKey, mockData, 10)
+						if err != nil {
+							log.Printf("[ERROR] Failed to set cache the mock_tool_calls data for the exection %s", exec.ExecutionId)
+						}
+						log.Printf("[DEBUG] Cached mock tool calls for execution %s", exec.ExecutionId)
+					} else {
+						log.Printf("[WARNING] No mock_tool_calls found in the request body")
+					}
+				}
+			}
 
 			action, err := HandleAiAgentExecutionStart(exec, action, false)
 			if err != nil {
@@ -32147,12 +32233,23 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 	handledAuth := []string{}
 	timenow := time.Now().Unix() * 1000
+	runtimeLocationName := ""
+	for _, action := range exec.Workflow.Actions {
+		if len(action.Environment) > 0 {
+			runtimeLocationName = action.Environment
+			break
+		}
+	}
 
 	//log.Printf("\n\n[DEBUG][%s] STARTING VALIDATION WITH %d results and %d actions\n\n", exec.ExecutionId, len(exec.Results), len(workflow.Actions))
 	for _, result := range exec.Results {
 		// FIXME: Skipping anything that outright fails right now
 		if result.Status == "SKIPPED" {
 			continue
+		}
+
+		if len(runtimeLocationName) == 0 && len(result.Action.Environment) > 0 {
+			runtimeLocationName = result.Action.Environment
 		}
 
 		found := false
@@ -32310,6 +32407,12 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 						auth.Validation.Valid = true
 						authUpdated = true
 					}
+
+					// Check if it is more than 10 days ago. If so, update again.
+					tenDaysMicroseconds := int64(432000000)
+					if timenow-auth.Validation.LastValid > tenDaysMicroseconds {
+						authUpdated = true
+					}
 				}
 
 				if authUpdated {
@@ -32319,6 +32422,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 						auth.Validation.LastValid = timenow
 					}
 
+					auth.Validation.Environment = runtimeLocationName
 					auth.Validation.WorkflowId = workflow.ID
 					auth.Validation.ExecutionId = exec.ExecutionId
 					auth.Validation.NodeId = result.Action.ID
@@ -32517,6 +32621,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 	// Updating the workflow to show the right status every time for now
 	workflowChanged = true
+	workflow.Validation.Environment = runtimeLocationName
 	workflow.Validation.ValidationRan = true
 	workflow.Validation.ExecutionId = exec.ExecutionId
 	if workflowChanged {
@@ -32602,7 +32707,14 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 			}
 		*/
 
-		if strings.ToLower(automation.Name) == "run workflow" {
+		if strings.ToLower(automation.Name) == "run ai agent" {
+			for optionIndex, option := range automation.Options {
+				if option.Key == "" {
+					automation.Options[optionIndex].Key = "action"
+				}
+			}
+
+		} else if strings.ToLower(automation.Name) == "run workflow" {
 			foundWorkflowIds := ""
 			foundWorkflowIdIndex := -1
 
@@ -33428,4 +33540,191 @@ func GetDockerClient() (*dockerclient.Client, string, error) {
 	}
 
 	return cli, dockerApiVersion, err
+}
+
+// Syncs content between openapi and shuffle apps
+// This is due to the generative growth nature of our apps
+func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *ParsedOpenApi {
+	/*
+		// This doesn't seem to work, and isn't really in use
+		if api.Success == false {
+			if debug {
+				log.Printf("[DEBUG] Failed to load openapi %#v. Success false.", id)
+			}
+
+			return api
+		}
+	*/
+
+	// Get the app
+	app, err := GetApp(ctx, id, User{}, false)
+	if err != nil {
+		return api
+	}
+
+	if debug {
+		log.Printf("[DEBUG] Syncing app content labels for app %s", app.ID)
+	}
+
+	swaggerLoader := openapi3.NewSwaggerLoader()
+	swaggerLoader.IsExternalRefsAllowed = true
+	swagger, err := swaggerLoader.LoadSwaggerFromData([]byte(api.Body))
+	if err != nil {
+		log.Printf("[ERROR] Failed to load swagger during fix for ID %#v", id)
+		return api
+	}
+
+	openapiChanged := false
+	appChanged := false
+	for pathIndex, pathItem := range swagger.Paths {
+		if pathItem == nil {
+			continue
+		}
+
+		ops := map[string]*openapi3.Operation{
+			"GET":     pathItem.Get,
+			"POST":    pathItem.Post,
+			"PUT":     pathItem.Put,
+			"DELETE":  pathItem.Delete,
+			"PATCH":   pathItem.Patch,
+			"HEAD":    pathItem.Head,
+			"OPTIONS": pathItem.Options,
+			"TRACE":   pathItem.Trace,
+		}
+
+		for method, op := range ops {
+			if op == nil {
+				continue
+			}
+
+			method := strings.ToLower(method)
+
+			parsedOpId := strings.ToLower(op.OperationID)
+			if !strings.HasPrefix(parsedOpId, method) {
+				parsedOpId = fmt.Sprintf("%s_%s", method, strings.ToLower(op.OperationID))
+			}
+
+			found := false
+			for actionIndex, action := range app.Actions {
+				//parsedActionName := fmt.Sprintf("%s_%s", method, action.Name)
+				parsedActionName := fmt.Sprintf("%s", action.Name)
+				//log.Printf("%s vs %s", parsedActionName, parsedOpId)
+				if parsedActionName != parsedOpId {
+					continue
+				}
+
+				openapiLabels := []string{}
+				if methodLabels, ok := op.ExtensionProps.Extensions["x-label"]; ok {
+					labels := []string{}
+					j, err := json.Marshal(&methodLabels)
+					if err == nil {
+						err = json.Unmarshal(j, &labels)
+						if err != nil {
+							//log.Printf("[ERROR] Failed unmarshalling labels during sync for action %s (1): %s. Value: %#v\n", action.Name, err, j)
+							label := ""
+							err = json.Unmarshal(j, &label)
+							if err == nil {
+								labels = strings.Split(label, ",")
+							}
+						}
+					} else {
+						log.Printf("[ERROR] Failed marshalling labels during sync for action %s (2): %s\n", action.Name, err)
+					}
+
+					if len(labels) > 0 {
+						openapiLabels = labels
+					}
+				}
+
+				if len(openapiLabels) != len(action.CategoryLabel) {
+					if debug {
+						log.Printf("APP DIFF (%s): %#v vs %#v", app.ID, openapiLabels, action.CategoryLabel)
+					}
+
+					seen := make(map[string]int)
+					for labelIndex, openapiLabel := range openapiLabels {
+						if strings.ReplaceAll(strings.ToLower(openapiLabel), " ", "_") == "no_label" {
+							openapiChanged = true
+							openapiLabel = "No Label"
+							openapiLabels[labelIndex] = openapiLabel
+						}
+
+						if strings.HasPrefix(openapiLabel, "[") && strings.HasSuffix(openapiLabel, "]") && len(openapiLabel) > 2 {
+							openapiChanged = true
+							openapiLabel = openapiLabel[1 : len(openapiLabel)-1]
+							openapiLabels[labelIndex] = openapiLabel
+						}
+
+						seen[openapiLabel] = 1
+					}
+
+					for labelIndex, actionLabel := range action.CategoryLabel {
+						if strings.ReplaceAll(strings.ToLower(actionLabel), " ", "_") == "no_label" {
+							appChanged = true
+							actionLabel = "No Label"
+							action.CategoryLabel[labelIndex] = actionLabel
+						}
+
+						if strings.HasPrefix(actionLabel, "[") && strings.HasSuffix(actionLabel, "]") && len(actionLabel) > 2 {
+							appChanged = true
+							actionLabel = actionLabel[1 : len(actionLabel)-1]
+							action.CategoryLabel[labelIndex] = actionLabel
+						}
+
+						if _, ok := seen[actionLabel]; ok {
+							seen[actionLabel] = 0
+						} else {
+							seen[actionLabel] = 2
+						}
+					}
+
+					for key, value := range seen {
+						if strings.ReplaceAll(strings.ToLower(key), " ", "_") == "no_label" {
+							key = "No Label"
+						}
+
+						switch value {
+						case 1:
+							openapiChanged = true
+							action.CategoryLabel = append(action.CategoryLabel, key)
+							app.Actions[actionIndex] = action
+						case 2:
+							appChanged = true
+							openapiLabels = append(openapiLabels, key)
+
+							// Update in openapi
+							op.ExtensionProps.Extensions["x-label"] = openapiLabels
+
+							swagger.Paths[pathIndex].Get = pathItem.Get
+						}
+					}
+				}
+
+				found = true
+				break
+			}
+
+			if !found {
+				log.Printf("[ERROR] Failed to find operation %s. May be missing sync between app <-> openapi", parsedOpId, id)
+			}
+		}
+	}
+
+	if openapiChanged {
+		api.Success = true
+
+		marshalledSwagger, err := json.Marshal(swagger)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshalling swagger after sync for ID %#v", id)
+		} else {
+			api.Body = string(marshalledSwagger)
+			SetOpenApiDatastore(ctx, app.ID, *api)
+		}
+	}
+
+	if appChanged {
+		SetWorkflowAppDatastore(ctx, *app, app.ID)
+	}
+
+	return api
 }

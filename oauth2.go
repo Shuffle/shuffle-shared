@@ -3922,7 +3922,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 	if strings.Contains(string(respBody), "error") {
 		//log.Printf("\n\n[ERROR] Oauth2 RESPONSE: %s\n\nencoded: %#v\n", string(respBody), v.Encode())
-		log.Printf("\n\n[ERROR] Bad Oauth2 RESPONSE (%d) from %s: %s. Auth ID: %s", newresp.StatusCode, url, string(respBody), appAuth.Id)
+		log.Printf("[ERROR] Bad Oauth2 RESPONSE (%d) from %s: %s. Auth ID: %s", newresp.StatusCode, url, string(respBody), appAuth.Id)
 
 		go CreateOrgNotification(
 			context.Background(),
