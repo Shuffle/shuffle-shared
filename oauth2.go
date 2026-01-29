@@ -3138,6 +3138,8 @@ func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, c
 	client := &http.Client{}
 	data := fmt.Sprintf("client_id=%s&grant_type=authorization_code&redirect_uri=%s&code=%s", clientId, redirectUri, code)
 
+	log.Printf("[DEBUG] RunOpenidLogin - tokenUrl: %s, redirectUri: %s, code: %s, verifier: %s", baseUrl, redirectUri, code, codeChallenge)
+
 	if len(codeChallenge) > 0 {
 		data += fmt.Sprintf("&code_verifier=%s", codeChallenge)
 	}
