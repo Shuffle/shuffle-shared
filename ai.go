@@ -6927,6 +6927,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	// Metadata = org-specific context
 	// This e.g. makes "me" mean "users in my org" and such
 	metadata := ""
+	metadata += fmt.Sprintf("Current time: %s\n", time.Now().Format(time.RFC3339))
 	if len(execution.Workflow.UpdatedBy) > 0 {
 		metadata += fmt.Sprintf("Current user: %s\n", execution.Workflow.UpdatedBy)
 	}
