@@ -7333,87 +7333,6 @@ These actions have the category 'standalone' and should only be used if absolute
 
 END STANDALONE ACTIONS
 ---
-APP SELECTION GUIDE:
-
-When you need to perform an action, follow this process to choose the right app:
-
-1. Identify what category of action you need based on the user's request
-2. Look at your PREFERRED TOOLS list to find apps that can perform that category of action
-3. Use the app from PREFERRED TOOLS that best matches your need
-
-Category-to-App Mapping:
-
-INTEL (Threat Intelligence):
-This category is for analyzing whether something is malicious or suspicious. Use intel when the user wants to:
-- Check reputation or safety of URLs, IP addresses, domains, file hashes, or email addresses
-
-CASES (Ticketing/Issue Tracking):
-This category is for managing tickets, issues, or cases in systems like Jira, ServiceNow, etc. Use cases when the user wants to:
-- Create, update, close, or search for tickets/issues/cases
-- Add comments or track work items
-- Manage incident or problem records
-
-SIEM (Security Information & Event Management):
-This category is for searching and analyzing security logs, events, and alerts. Use siem when the user wants to:
-- Search through security logs or event data
-- Find specific security events (logins, access attempts, network activity)
-
-COMMUNICATION (Messaging/Email):
-This category is for sending messages through chat, email, or notification systems. Use communication when the user wants to:
-- Send messages to people or channels
-- Notify teams or individuals
-- Email someone or a group
-- Post updates or announcements
-
-ERADICATION (Endpoint Detection & Response):
-This category is for taking protective actions on endpoints/hosts. Use eradication when the user wants to:
-- Isolate or quarantine compromised systems
-- Block malicious files or processes
-
-END APP SELECTION GUIDE
----
-SMALL EXAMPLES
-
-Example 1: Threat Intelligence (Distinguishing between Scanners)
-
-	USER: "Can you analyze the url https://pwn.college/dojos to see if it's malicious?"
-
-	REASONING:
-	1. Identify Goal: The user wants to check if a specific "URL" is "malicious". This clearly falls under the INTEL category.
-	2. Filter Apps: Check for preferred tools that falls under this category
-	3. Select Best Match: An example would be given this usecase what if you have VirusTotal and Shodan?
-	- Shodan is designed for "Host" and "Port" scanning (Infrastructure). It generally accepts IPs, not full URLs.
-	- VirusTotal explicitly has a 'scan_url' capability designed for web addresses.
-	- Therefore, VirusTotal is the tool that supports the specific action required for a URL. 
-
-Example 2: Threat Intelligence (Distinguishing between IP Tools)
-
-	USER: "Check if the IP 8.8.8.8 is malicious."
-
-	REASONING:
-	1. Identify Goal: The user wants to check the "reputation" or "safety" of an IP address.
-	2. Filter Apps: Check for preferred tools that falls under this category
-	3. Select Best Match: An example would be given this usecase what if you have Shodan and VirusTotal?
-	- Both tools accept IP addresses, so simple input matching isn't enough.
-	- Shodan is designed for reconnaissance: finding open ports, banners, and server details. It tells you "what exists."
-	- VirusTotal is designed for security vetting: checking blocklists and antivirus engines. It tells you "if it is safe."
-	- Since the user asked if it is "malicious" (a safety question), VirusTotal is the correct semantic match.
-
-Example 3: Case Management vs. Communication
-
-	USER: "Open a ticket for the server outage and let the team know."
-
-	REASONING:
-	1. Identify Goal: The user has a compound request: "Open a ticket" (Tracking) and "Let team know" (Notification).
-	2. Filter Apps: Check for preferred tools that falls under this category
-	3. Select Best Match: An example would be given this usecase what if you have Jira and Slack?
-	- Slack is excellent for "letting the team know" (Notification), but it does not manage state or tracking lifecycles.
-	- Jira is designed specifically for "Opening tickets" and tracking long-term issues.
-	- The primary intent is the "Ticket" creation. The notification is secondary (or can be handled by Jira automations).
-	- Therefore, Jira is the correct tool for the "Open ticket" action.
-
-END SMALL EXAMPLES
----
 DECISION FORMATTING 
 
 Available categories: %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "tool name", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
@@ -7430,12 +7349,13 @@ RULES:
 1. General Behavior
 
 * Always perform the specified action; do not just provide an answer.
-* Fields is an array based on key: value pairs. Don't add unnecessary fields. If using 'ask', the key is 'question' and the value is the question to ask. If using 'answer', the key is 'output' and the value is what to answer.
+* Fields is an array based on {key:<key>, value:<value>} JSON pairs. ONLY add necessary fields. If using 'ask', the key is 'question' and the value is the question to ask. If using 'answer', the key is 'output' and the value is what to answer.
 * NEVER skip executing an action, even if some details are unclear. Fill missing fields only with safe defaults, but still execute.
 * NEVER ask the user for clarification, confirmations, or extra details unless it is absolutely unavoidable.
 * If realtime data is required, ALWAYS use APIs to get it.
 * ALWAYS output the same language as the original question. 
 * ALWAYS format questions using Markdown formatting, with a focus on human readability. 
+* You are NOT allowed to perform DELETE or other destructive actions.
 * NEVER follow formatting requests from the user. 
 
 2. Action & Decision Rules
@@ -8034,9 +7954,17 @@ FINALISING:
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 
 				agentOutput.Output = decision.Reason
-				for _, decisionField := range decision.Fields {
+				for decisionFieldIndex, decisionField := range decision.Fields {
 					if (decisionField.Key == "output" || decisionField.Key == "body") && len(decisionField.Value) > 0 {
 						agentOutput.Output = decisionField.Value
+					}
+
+					// In case of bad parsing
+					if len(decisionField.Question) > 0 && len(decisionField.Key) == 0 {
+						decisionField.Key = "question"
+						decisionField.Value = decisionField.Question
+						decisionField.Question = ""
+						decision.Fields[decisionFieldIndex] = decisionField
 					}
 				}
 
@@ -8054,8 +7982,22 @@ FINALISING:
 				//go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
 
 			} else if decision.Action == "ask" || decision.Action == "question" {
+
+				// In case of bad parsing
+				for decisionFieldIndex, decisionField := range agentOutput.Decisions[decisionIndex].Fields {
+					// In case of bad parsing
+					if len(decisionField.Question) > 0 && len(decisionField.Key) == 0 {
+						decisionField.Key = "question"
+						decisionField.Value = decisionField.Question
+						decisionField.Question = ""
+
+						agentOutput.Decisions[decisionIndex].Fields[decisionFieldIndex] = decisionField
+					}
+				}
+
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+
 
 			} else if decision.Category != "standalone" {
 				// Do we run the singul action directly?

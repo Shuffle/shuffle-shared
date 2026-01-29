@@ -286,6 +286,7 @@ type Valuereplace struct {
 
 	// Used for e.g. user input storage
 	Answer string `json:"answer,omitempty" datastore:"answer,noindex" yaml:"answer,omitempty"`
+	Question string `json:"question,omitempty" datastore:"question,noindex" yaml:"question,omitempty"`
 }
 
 type WorkflowAppAction struct {
