@@ -158,6 +158,10 @@ func fetchUserInfoFromToken(ctx context.Context, accessToken string, issuer stri
 		return nil, fmt.Errorf("failed to create userinfo request: %w", err)
 	}
 
+	if len(accessToken) == 0 {
+		return nil, fmt.Errorf("access token is empty")
+	}
+
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
 
@@ -3160,6 +3164,12 @@ func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, c
 	}
 
 	log.Printf("OpenID return BODY: %s", body)
+
+	// check if status code is non 200
+	if res.StatusCode != http.StatusOK {
+		log.Printf("[WARNING] OpenID Client: %s", err)
+		return []byte{}, err
+	}
 
 	return body, nil
 }
