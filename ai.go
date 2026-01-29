@@ -6954,11 +6954,6 @@ SINGUL ACTIONS:
 	inputActionString := ""
 
 	decidedApps := []string{}
-
-	if debug { 
-		log.Printf("[DEBUG] STARTNODE: %#v", startNode.Parameters)
-	}
-
 	memorizationEngine := "shuffle_db"
 	for _, param := range startNode.Parameters {
 		if param.Name == "app_name" {
@@ -7162,8 +7157,6 @@ SINGUL ACTIONS:
 		//log.Printf("[INFO] INFO NEXT NODE PREDICTIONS")
 	}
 
-	log.Printf("USER MESSAGE: %#v", userMessage)
-
 	if lastFinishedIndex < -1 {
 		lastFinishedIndex = -1
 	}
@@ -7194,7 +7187,10 @@ SINGUL ACTIONS:
 			}
 
 			if len(decidedApps) > 0 {
-				metadata += fmt.Sprintf("\n\nPREFERRED TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
+
+				// Forces away all other apps
+				metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
+
 			} else {
 				decidedApps := ""
 				appauth, autherr := GetAllWorkflowAppAuth(ctx, org.Id)
@@ -7316,7 +7312,7 @@ SINGUL ACTIONS:
 				}
 
 				if len(decidedApps) > 0 {
-					metadata += fmt.Sprintf("\n\nPREFERRED TOOLS: %s\n\n", decidedApps)
+					metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
 				}
 			}
 		}
@@ -7372,6 +7368,7 @@ RULES:
 * Retry actions if the result was irrelevant. After three retries of a failed decision, add the finish decision. 
 * If any decision has failed, add the finish decision with details about the failure.
 * If a formatting is specified for the output, use it exactly how explained for the finish decision.
+* NEVER finalise until the task is actually performed. Action is our focus - not analysis. If skipping actions, make it VERY clear why.
 
 END RULES
 ---
