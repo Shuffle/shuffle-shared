@@ -3136,7 +3136,8 @@ func (v *CodeVerifier) CodeChallengeS256() string {
 // https://dev-18062.okta.com/oauth2/default/v1/authorize?client_id=0oa3&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
 func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, codeChallenge, clientSecret string) ([]byte, error) {
 	client := &http.Client{}
-	data := fmt.Sprintf("client_id=%s&grant_type=authorization_code&redirect_uri=%s&code=%s", clientId, redirectUri, code, codeChallenge)
+	data := fmt.Sprintf("client_id=%s&grant_type=authorization_code&redirect_uri=%s&code=%s", clientId, redirectUri, code)
+
 	if len(codeChallenge) > 0 {
 		data += fmt.Sprintf("&code_verifier=%s", codeChallenge)
 	}
@@ -3167,12 +3168,12 @@ func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, c
 		return []byte{}, err
 	}
 
-	log.Printf("OpenID return BODY: %s", body)
+	log.Printf("OpenID return BODY: %s (status: %d)", body, res.StatusCode)
 
-	// check if status code is 400
-	if res.StatusCode == http.StatusBadRequest {
-		log.Printf("[WARNING] OpenID returned 400 with body: %s", body)
-		return []byte{}, err
+	// check if status code indicates an error (4xx or 5xx)
+	if res.StatusCode >= 400 {
+		log.Printf("[WARNING] OpenID returned %d with body: %s", res.StatusCode, body)
+		return []byte{}, fmt.Errorf("OpenID token request failed with status %d: %s", res.StatusCode, body)
 	}
 
 	return body, nil
