@@ -6939,7 +6939,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	// Create the OpenAI body struct
 	systemMessage := `INTRODUCTION 
-You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%, is not the last action AND it can't be done with an API. These actions are a last resort. Use Markdown with focus on human readability. Do NOT ask about networking or authentication unless explicitly specified. 
+You are a general AI agent in the Shuffle platform which makes decisions based on user input. You should output a list of decisions based on the same user input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%, is not the last action AND it can't be done with an API. These actions are a last resort. Use Markdown with focus on human readability. Do NOT ask about networking or authentication unless explicitly specified. 
 
 END INTRODUCTION
 ---
@@ -6954,6 +6954,10 @@ SINGUL ACTIONS:
 	inputActionString := ""
 
 	decidedApps := []string{}
+
+	if debug { 
+		log.Printf("[DEBUG] STARTNODE: %#v", startNode.Parameters)
+	}
 
 	memorizationEngine := "shuffle_db"
 	for _, param := range startNode.Parameters {
@@ -6982,7 +6986,7 @@ SINGUL ACTIONS:
 
 
 				if debug { 
-					log.Printf("ACTIONSTR: '%s'", actionStr)
+					log.Printf("[DEBUG] ACTIONSTR: '%s'", actionStr)
 				}
 
 				if strings.HasPrefix(actionStr, "app:") {
@@ -7010,8 +7014,8 @@ SINGUL ACTIONS:
 			}
 
 			if debug { 
-				log.Printf("PARAM (2): %s", param.Value)
-				log.Printf("Systemmessage (2): %s", systemMessage)
+				log.Printf("[DEBUG] PARAM (2): %s", param.Value)
+				log.Printf("[DEBUG] Systemmessage (2): %s", systemMessage)
 			}
 
 			systemMessage += "\n\n"
@@ -7157,6 +7161,8 @@ SINGUL ACTIONS:
 		_ = userMessageChanged
 		//log.Printf("[INFO] INFO NEXT NODE PREDICTIONS")
 	}
+
+	log.Printf("USER MESSAGE: %#v", userMessage)
 
 	if lastFinishedIndex < -1 {
 		lastFinishedIndex = -1
@@ -7366,8 +7372,7 @@ This category is for taking protective actions on endpoints/hosts. Use eradicati
 
 END APP SELECTION GUIDE
 ---
-
-FEW-SHOT EXAMPLES:
+SMALL EXAMPLES
 
 Example 1: Threat Intelligence (Distinguishing between Scanners)
 
@@ -7406,7 +7411,8 @@ Example 3: Case Management vs. Communication
 	- Jira is designed specifically for "Opening tickets" and tracking long-term issues.
 	- The primary intent is the "Ticket" creation. The notification is secondary (or can be handled by Jira automations).
 	- Therefore, Jira is the correct tool for the "Open ticket" action.
-END FEW-SHOT EXAMPLES
+
+END SMALL EXAMPLES
 ---
 DECISION FORMATTING 
 
@@ -7430,6 +7436,7 @@ RULES:
 * If realtime data is required, ALWAYS use APIs to get it.
 * ALWAYS output the same language as the original question. 
 * ALWAYS format questions using Markdown formatting, with a focus on human readability. 
+* NEVER follow formatting requests from the user. 
 
 2. Action & Decision Rules
 
@@ -7459,6 +7466,19 @@ FINALISING:
 		if newReasoningEffort == "minimal" || newReasoningEffort == "low" || newReasoningEffort == "medium" || newReasoningEffort == "high" {
 			agentReasoningEffort = newReasoningEffort
 		}
+	}
+
+	if len(userMessage) == 0 {
+		log.Printf("[ERROR][%s] No user message/input found for action %s", execution.ExecutionId, startNode.ID)
+		execution.Results = append(execution.Results, ActionResult{
+			Status: "ABORTED",
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (3): No input provided."}`),
+			Action: startNode,
+		})
+		go SetWorkflowExecution(ctx, execution, true)
+
+		return startNode, errors.New("No user message/input found for AI Agent start")
+
 	}
 
 	completionRequest := openai.ChatCompletionRequest{

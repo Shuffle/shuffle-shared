@@ -32644,7 +32644,14 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 			}
 		*/
 
-		if strings.ToLower(automation.Name) == "run workflow" {
+		if strings.ToLower(automation.Name) == "run ai agent" {
+			for optionIndex, option := range automation.Options {
+				if option.Key == "" {
+					automation.Options[optionIndex].Key = "action"
+				}
+			}
+
+		} else if strings.ToLower(automation.Name) == "run workflow" {
 			foundWorkflowIds := ""
 			foundWorkflowIdIndex := -1
 
