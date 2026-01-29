@@ -243,8 +243,9 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	jsonId := json.RawMessage(`"` + id + `"`)
 	data.ExtensionProps.Extensions["id"] = jsonId
 	data.ExtensionProps.Extensions["editing"] = json.RawMessage(`false`)
-	data.Info.Title = "Shuffle-Copy"
+	data.Info.Title = "Shuffle-Healthcheck"
 	data.Info.Version = "2.0"
+	data.Info.Description = fmt.Sprintf("Description for health check app with always some random string %s", randStr(10, "alphanum"))
 
 	//	newOpenapiString := strings.Replace(openapiString, `"edaa73d40238ee60874a853dc3ccaa6f"`, `"`+id+`"`, 1)
 	//	newOpenapiString = strings.Replace(newOpenapiString, `"editing":true`, `"editing":false`, 1)

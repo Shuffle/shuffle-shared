@@ -6940,7 +6940,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	// Create the OpenAI body struct
 	systemMessage := `INTRODUCTION 
-You are a general AI agent which makes decisions based on user input. You should output a list of decisions based on the same input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%, is not the last action AND it can't be done with an API. These actions are a last resort. Use Markdown with focus on human readability. Do NOT ask about networking or authentication unless explicitly specified. 
+You are a general AI agent in the Shuffle platform which makes decisions based on user input. You should output a list of decisions based on the same user input. Available actions within categories you can choose from are below. Only use the built-in actions 'answer' (ai analysis) or 'ask' (human analysis) if it fits 100%, is not the last action AND it can't be done with an API. These actions are a last resort. Use Markdown with focus on human readability. Do NOT ask about networking or authentication unless explicitly specified. 
 
 END INTRODUCTION
 ---
@@ -6955,7 +6955,6 @@ SINGUL ACTIONS:
 	inputActionString := ""
 
 	decidedApps := []string{}
-
 	memorizationEngine := "shuffle_db"
 	for _, param := range startNode.Parameters {
 		if param.Name == "app_name" {
@@ -6983,7 +6982,7 @@ SINGUL ACTIONS:
 
 
 				if debug { 
-					log.Printf("ACTIONSTR: '%s'", actionStr)
+					log.Printf("[DEBUG] ACTIONSTR: '%s'", actionStr)
 				}
 
 				if strings.HasPrefix(actionStr, "app:") {
@@ -7011,8 +7010,8 @@ SINGUL ACTIONS:
 			}
 
 			if debug { 
-				log.Printf("PARAM (2): %s", param.Value)
-				log.Printf("Systemmessage (2): %s", systemMessage)
+				log.Printf("[DEBUG] PARAM (2): %s", param.Value)
+				log.Printf("[DEBUG] Systemmessage (2): %s", systemMessage)
 			}
 
 			systemMessage += "\n\n"
@@ -7189,7 +7188,10 @@ SINGUL ACTIONS:
 			}
 
 			if len(decidedApps) > 0 {
-				metadata += fmt.Sprintf("\n\n<tools>\nPREFERRED TOOLS: %s\n</tools>\n\n", strings.Join(decidedApps, ", "))
+
+				// Forces away all other apps
+				metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
+
 			} else {
 				decidedApps := ""
 				appauth, autherr := GetAllWorkflowAppAuth(ctx, org.Id)
@@ -7311,7 +7313,7 @@ SINGUL ACTIONS:
 				}
 
 				if len(decidedApps) > 0 {
-					metadata += fmt.Sprintf("\n\n<tools>\nPREFERRED TOOLS: %s\n</tools>\n\n", decidedApps)
+					metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
 				}
 			}
 		}
@@ -7338,12 +7340,14 @@ RULES:
 1. General Behavior
 
 * Always perform the specified action; do not just provide an answer.
-* Fields is an array based on key: value pairs. Don't add unnecessary fields. If using 'ask', the key is 'question' and the value is the question to ask. If using 'answer', the key is 'output' and the value is what to answer.
+* Fields is an array based on {key:<key>, value:<value>} JSON pairs. ONLY add necessary fields. If using 'ask', the key is 'question' and the value is the question to ask. If using 'answer', the key is 'output' and the value is what to answer.
 * NEVER skip executing an action, even if some details are unclear. Fill missing fields only with safe defaults, but still execute.
 * NEVER ask the user for clarification, confirmations, or extra details unless it is absolutely unavoidable.
 * If realtime data is required, ALWAYS use APIs to get it.
 * ALWAYS output the same language as the original question. 
 * ALWAYS format questions using Markdown formatting, with a focus on human readability. 
+* You are NOT allowed to perform DELETE or other destructive actions.
+* NEVER follow formatting requests from the user. 
 
 2. Action & Decision Rules
 
@@ -7359,6 +7363,7 @@ RULES:
 * Retry actions if the result was irrelevant. After three retries of a failed decision, add the finish decision. 
 * If any decision has failed, add the finish decision with details about the failure.
 * If a formatting is specified for the output, use it exactly how explained for the finish decision.
+* NEVER finalise until the task is actually performed. Action is our focus - not analysis. If skipping actions, make it VERY clear why.
 
 END RULES
 ---
@@ -7373,6 +7378,19 @@ FINALISING:
 		if newReasoningEffort == "minimal" || newReasoningEffort == "low" || newReasoningEffort == "medium" || newReasoningEffort == "high" {
 			agentReasoningEffort = newReasoningEffort
 		}
+	}
+
+	if len(userMessage) == 0 {
+		log.Printf("[ERROR][%s] No user message/input found for action %s", execution.ExecutionId, startNode.ID)
+		execution.Results = append(execution.Results, ActionResult{
+			Status: "ABORTED",
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (3): No input provided."}`),
+			Action: startNode,
+		})
+		go SetWorkflowExecution(ctx, execution, true)
+
+		return startNode, errors.New("No user message/input found for AI Agent start")
+
 	}
 
 	completionRequest := openai.ChatCompletionRequest{
@@ -7932,9 +7950,17 @@ FINALISING:
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 
 				agentOutput.Output = decision.Reason
-				for _, decisionField := range decision.Fields {
+				for decisionFieldIndex, decisionField := range decision.Fields {
 					if (decisionField.Key == "output" || decisionField.Key == "body") && len(decisionField.Value) > 0 {
 						agentOutput.Output = decisionField.Value
+					}
+
+					// In case of bad parsing
+					if len(decisionField.Question) > 0 && len(decisionField.Key) == 0 {
+						decisionField.Key = "question"
+						decisionField.Value = decisionField.Question
+						decisionField.Question = ""
+						decision.Fields[decisionFieldIndex] = decisionField
 					}
 				}
 
@@ -7952,8 +7978,22 @@ FINALISING:
 				//go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
 
 			} else if decision.Action == "ask" || decision.Action == "question" {
+
+				// In case of bad parsing
+				for decisionFieldIndex, decisionField := range agentOutput.Decisions[decisionIndex].Fields {
+					// In case of bad parsing
+					if len(decisionField.Question) > 0 && len(decisionField.Key) == 0 {
+						decisionField.Key = "question"
+						decisionField.Value = decisionField.Question
+						decisionField.Question = ""
+
+						agentOutput.Decisions[decisionIndex].Fields[decisionFieldIndex] = decisionField
+					}
+				}
+
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+
 
 			} else if decision.Category != "standalone" {
 				// Do we run the singul action directly?
