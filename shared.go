@@ -33394,6 +33394,10 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 	appId := ""
 	var err error
 
+	if debug {
+		log.Printf("[DEBUG] Getting prioritised app actions for '%s'", inputApp)
+	}
+
 	if strings.Contains(inputApp, ":") || len(inputApp) == 32 {
 		appnamesplit := strings.Split(inputApp, ":")
 		appId = appnamesplit[0]
@@ -33411,7 +33415,7 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 	}
 
 	if foundApp.ID == "" && len(appName) > 0 {
-		log.Printf("[ERROR] Should find app based on name (not implemented)")
+		log.Printf("[ERROR] Should find app + actions based on name (not implemented): %#v", appName)
 	}
 
 	for _, action := range foundApp.Actions {
@@ -33425,9 +33429,27 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 			continue
 		}
 
-		if len(returnActions) > maxAmount {
+		if len(returnActions) >= maxAmount {
 			break
 		}
+	}
+
+	if len(returnActions) <= maxAmount {
+		for _, action := range foundApp.Actions {
+			if len(returnActions) >= maxAmount {
+				break
+			}
+
+			if action.Name == "custom_action" {
+				continue
+			}
+
+			returnActions = append(returnActions, action)
+		}
+	}
+
+	if debug {
+		log.Printf("[DEBUG] Found %d priority actions for app %#v", len(returnActions), inputApp)
 	}
 
 	return returnActions

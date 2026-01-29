@@ -6952,9 +6952,10 @@ SINGUL ACTIONS:
 	openaiAllowedApps := []string{"openai"}
 	runOpenaiRequest := false
 	appname := ""
-	inputActionString := ""
+	allowedActionString := ""
 
 	decidedApps := []string{}
+	specificAppMetadata := ""
 	memorizationEngine := "shuffle_db"
 	for _, param := range startNode.Parameters {
 		if param.Name == "app_name" {
@@ -6973,7 +6974,7 @@ SINGUL ACTIONS:
 		}
 
 		if param.Name == "action" {
-			inputActionString = param.Value
+			allowedActionString = param.Value
 			for _, actionStr := range strings.Split(param.Value, ",") {
 				actionStr = strings.ToLower(strings.TrimSpace(actionStr))
 				if actionStr == "" || actionStr == "nothing" {
@@ -6996,16 +6997,30 @@ SINGUL ACTIONS:
 						}
 
 						decidedApps = append(decidedApps, trimmedActionStr)
-						systemMessage += fmt.Sprintf("The next %d actions are for %s:\n", len(sortedAppActions), trimmedActionStr)
-						for _, sortedAppAction := range sortedAppActions {
-							systemMessage += fmt.Sprintf("%s() # %s\n", strings.ReplaceAll(sortedAppAction.Name, " ", "_"), sortedAppAction.Label)
+						specificAppMetadata += fmt.Sprintf("%d Available actions for app %s:\n", len(sortedAppActions), trimmedActionStr)
+						for counter, sortedAppAction := range sortedAppActions {
+							exampleBody := ""
+
+							for _, param := range sortedAppAction.Parameters {
+								if param.Name == "body" {
+									exampleBody = param.Example
+									break
+								}
+							}
+							
+							if len(exampleBody) > 200 { 
+								exampleBody = exampleBody[:200] + "..."
+							}
+
+							specificAppMetadata += fmt.Sprintf("%d. %s(%s) # %s\n", counter+1, strings.ReplaceAll(sortedAppAction.Name, " ", "_"), exampleBody, sortedAppAction.Label)
 						}
 					} else {
 						log.Printf("[ERROR] Failed getting prioritised app actions for app '%s'", strings.TrimPrefix(actionStr, "app:"))
 					}
 
+
 				} else {
-					systemMessage += fmt.Sprintf("- %s\n", strings.ReplaceAll(actionStr, " ", "_"))
+					metadata += fmt.Sprintf("- %s\n", strings.ReplaceAll(actionStr, " ", "_"))
 				}
 			}
 
@@ -7059,7 +7074,7 @@ SINGUL ACTIONS:
 	_ = oldActionResult
 	oldAgentOutput := AgentOutput{}
 	if createNextActions == true {
-		extraString = "This is a continuation of a previous execution. ONLY output decisions that fit AFTER the last FINISHED decision. DO NOT repeat previous decisions, and make sure your indexing is on point. Output as an array of decisions.\n\nIF you don't want to add any new decision, add AT LEAST one decision saying why it is finished, summarising EXACTLY what the user wants in a user-friendly Markdown format, OR the format the user asked for. Make the action and category 'finish', and put the reason in the 'reason' field. Do NOT summarize, explain or say things like 'user said'. JUST give exactly the final answer and nothing more, in past tense. If any action failed, make sure to mention why"
+		extraString = "This is a continuation of a previous execution. ONLY output decisions that fit AFTER the last FINISHED decision. DO NOT repeat previous decisions, and make sure your indexing is on point. Output as an array of decisions.\n\nIF you don't want to add any new decision, add AT LEAST one decision saying why it is finished, summarising EXACTLY what the user wants in a user-friendly Markdown format, OR the format the user asked for. Make the action and category 'finish', and put the reason in the 'reason' field. Summarise and explain, but don't say things like 'user said'. JUST give objective final answer in past tense. Interpret the output of previous actions, and summarise it well. If something failed, mention it. Do NOT lie."
 
 		userMessageChanged := false
 
@@ -7179,18 +7194,21 @@ SINGUL ACTIONS:
 				}
 			}
 
-			if len(admins) > 0 {
-				metadata += fmt.Sprintf("admins: %s\n", strings.Join(admins, ", "))
-			}
+			// FIXME: Do we need this? Skipping for now.
+			//if len(admins) > 0 {
+			//	metadata += fmt.Sprintf("admins: %s\n", strings.Join(admins, ", "))
+			//}
 
-			if len(users) > 0 {
-				metadata += fmt.Sprintf("users: %s\n", strings.Join(users, ", "))
-			}
+			//if len(users) > 0 {
+			//	metadata += fmt.Sprintf("users: %s\n", strings.Join(users, ", "))
+			//}
 
 			if len(decidedApps) > 0 {
 
 				// Forces away all other apps
-				metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
+				if len(allowedActionString) == 0 { 
+					metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
+				}
 
 			} else {
 				decidedApps := ""
@@ -7313,10 +7331,17 @@ SINGUL ACTIONS:
 				}
 
 				if len(decidedApps) > 0 {
-					metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
+					if len(allowedActionString) == 0 { 
+						metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
+					}
 				}
 			}
 		}
+	}
+	
+	// Not necessary as it's directly injected instead
+	if len(specificAppMetadata) > 0 { 
+		metadata += fmt.Sprintf("\n%s\n", specificAppMetadata)
 	}
 
 	systemMessage += fmt.Sprintf(`
@@ -7363,7 +7388,7 @@ RULES:
 * Retry actions if the result was irrelevant. After three retries of a failed decision, add the finish decision. 
 * If any decision has failed, add the finish decision with details about the failure.
 * If a formatting is specified for the output, use it exactly how explained for the finish decision.
-* NEVER finalise until the task is actually performed. Action is our focus - not analysis. If skipping actions, make it VERY clear why.
+* NEVER finalise until the task is actually performed. Action is our focus - not analysis. If we skipped ANYTHING - explain it. If we failed, don't lie. Be truthful about EXACTLY what happened and summarise it.
 
 END RULES
 ---
@@ -7402,7 +7427,7 @@ FINALISING:
 			},
 			{
 				Role:    openai.ChatMessageRoleUser,
-				Content: fmt.Sprintf("CONTEXT_DATA:\n<context_data>\n%s\n</context_data>", metadata),
+				Content: fmt.Sprintf("USER CONTEXT\n\n\n%s\n", metadata),
 			},
 			{
 				Role:    openai.ChatMessageRoleUser,
@@ -7806,7 +7831,7 @@ FINALISING:
 
 			Memory: memorizationEngine,
 
-			AllowedActions: strings.Split(inputActionString, ","),
+			AllowedActions: strings.Split(allowedActionString, ","),
 		}
 
 		if len(errorMessage) > 0 {
