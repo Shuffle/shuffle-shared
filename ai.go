@@ -6927,6 +6927,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	// Metadata = org-specific context
 	// This e.g. makes "me" mean "users in my org" and such
 	metadata := ""
+	metadata += fmt.Sprintf("Current time: %s\n", time.Now().Format(time.RFC3339))
 	if len(execution.Workflow.UpdatedBy) > 0 {
 		metadata += fmt.Sprintf("Current user: %s\n", execution.Workflow.UpdatedBy)
 	}
@@ -7334,12 +7335,6 @@ DECISION FORMATTING
 Available categories: %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "tool name", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "body", "value": "$action_name"}] WITHOUT newlines. The reason should be concise and understandable to a user, and should not include unnecessary details.
 
 END DECISION FORMATTING
----
-USER CONTEXT:
-
-%s
-
-END USER CONTEXT
 --- 
 RULES:
 1. General Behavior
@@ -7373,7 +7368,7 @@ RULES:
 END RULES
 ---
 FINALISING:
-%s`, strings.Join(typeOptions, ", "), metadata, extraString)
+%s`, strings.Join(typeOptions, ", "), extraString)
 
 	//systemMessage += `If you are missing information (such as emails) to make a list of decisions, just add a single decision which asks them to clarify the input better.`
 
@@ -7407,7 +7402,11 @@ FINALISING:
 			},
 			{
 				Role:    openai.ChatMessageRoleUser,
-				Content: userMessage,
+				Content: fmt.Sprintf("CONTEXT_DATA:\n<context_data>\n%s\n</context_data>", metadata),
+			},
+			{
+				Role:    openai.ChatMessageRoleUser,
+				Content: fmt.Sprintf("TASK:\n%s", userMessage),
 			},
 		},
 
