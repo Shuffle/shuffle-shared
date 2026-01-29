@@ -3167,7 +3167,7 @@ func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, c
 
 	// check if status code is 400
 	if res.StatusCode == http.StatusBadRequest {
-		log.Printf("[WARNING] OpenID Client: %s", err)
+		log.Printf("[WARNING] OpenID returned 400 with body: %s", body)
 		return []byte{}, err
 	}
 
