@@ -745,7 +745,7 @@ func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, stat
 
 	systemMessage := fmt.Sprintf(`INTRODUCTION
 
-Return all key:value pairs from the last user message, but with modified values to fix ALL the HTTP errors at once. Don't add any comments. Do not try the same thing twice, and use your existing knowledge of the API name and action to reformat the output until it works. All fields in "Required data" MUST be a part of the output if possible. Output MUST be valid JSON. 
+Return all key:value pairs from the last user message, but with modified values to fix ALL the HTTP errors at once. Don't add any comments. Do not try the same thing twice, and use your existing knowledge of the API name and action to reformat the output until it works. Output MUST be valid JSON. 
 
 END INTRODUCTION
 ---
@@ -781,6 +781,7 @@ OUTPUT FORMATTING
 - Output as JSON for a Rest API
 - Do NOT make the same output mistake twice. 
 - Headers should be separated by newline between each key:value pair
+- Queries should be a single string (e.g. "q=foo&bar=baz")
 
 END OUTPUT FORMATTING
 ---
@@ -993,6 +994,7 @@ Input JSON Payload (ensure VALID JSON):
 	urlValue := ""
 	pathValue := ""
 	queriesValue := ""
+	method := ""
 
 	// Collect current values from action parameters
 	for _, param := range action.Parameters {
@@ -1002,6 +1004,8 @@ Input JSON Payload (ensure VALID JSON):
 			pathValue = param.Value
 		} else if param.Name == "queries" {
 			queriesValue = param.Value
+		} else if param.Name == "method" {
+			method = param.Value
 		}
 	}
 
@@ -1024,6 +1028,11 @@ Input JSON Payload (ensure VALID JSON):
 			action.Parameters[i].Value = pathValue
 		case "queries":
 			action.Parameters[i].Value = queriesValue
+		case "body":
+			// If method does not allow body, empty it.
+			if method == "GET" {
+				action.Parameters[i].Value = ""
+			}
 		}
 	}
 
@@ -1035,33 +1044,59 @@ Input JSON Payload (ensure VALID JSON):
 }
 
 func normalize(urlValue, pathValue, queriesValue string) (string, string, string) {
-	parsed, err := url.Parse(urlValue)
-	if err != nil {
-		return urlValue, pathValue, queriesValue
-	}
-
-	// If BOTH path and queries are empty, keep the full URL as-is
-	// This means LLM didn't fill them, so we shouldn't split
-	if pathValue == "" && queriesValue == "" {
-		return urlValue, pathValue, queriesValue
-	}
-
+	path := strings.TrimSpace(pathValue)
+	queries := strings.TrimSpace(queriesValue)
 	baseURL := ""
-	if parsed.Scheme != "" && parsed.Host != "" {
-		baseURL = parsed.Scheme + "://" + parsed.Host
+
+	var parsed *url.URL
+	if urlValue != "" {
+		u, err := url.Parse(urlValue)
+		if err == nil {
+			parsed = u
+			if u.Scheme != "" && u.Host != "" {
+				baseURL = u.Scheme + "://" + u.Host
+			}
+		}
 	}
 
-	// Extract path from URL if path is still empty
-	if pathValue == "" {
-		pathValue = parsed.Path
+	// 1. Normalize queries if LLM returned JSON
+	if strings.HasPrefix(queries, "{") {
+		var m map[string]interface{}
+		if json.Unmarshal([]byte(queries), &m) == nil {
+			parts := []string{}
+			for k, v := range m {
+				parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+			}
+			queries = strings.Join(parts, "&")
+		}
 	}
 
-	// Extract queries from URL if queries is still empty
-	if queriesValue == "" {
-		queriesValue = parsed.RawQuery
+	// 2. If path contains queries and queries field is empty, extract them
+	if queries == "" && strings.Contains(path, "?") {
+		parts := strings.SplitN(path, "?", 2)
+		path = parts[0]
+		if len(parts) == 2 {
+			queries = parts[1]
+		}
 	}
 
-	return baseURL, pathValue, queriesValue
+	// 3. If path is empty, try URL
+	if path == "" && parsed != nil {
+		path = parsed.Path
+	}
+
+	// 4. If queries still empty, try URL
+	if queries == "" && parsed != nil {
+		queries = parsed.RawQuery
+	}
+
+	// 5. Final safety: path must never contain '?'
+	if strings.Contains(path, "?") {
+		parts := strings.SplitN(path, "?", 2)
+		path = parts[0]
+	}
+
+	return baseURL, path, queries
 }
 
 func getBadOutputString(action Action, appname, inputdata, outputBody string, status int) string {
