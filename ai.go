@@ -3634,7 +3634,7 @@ func findActionByInput(inputQuery, actionLabel string, foundApp WorkflowApp) (st
 		}
 
 		newAction := action.Name
-		parsed := fmt.Sprintf(strings.Replace(strings.ToLower(newAction), "_", " ", -1))
+		parsed := fmt.Sprintf("%s", strings.Replace(strings.ToLower(newAction), "_", " ", -1))
 		parsed = GetCorrectActionName(parsed)
 		if len(parsed) > 30 {
 			parsed = parsed[:30]
@@ -4399,7 +4399,7 @@ func findNextAction(action Action, stepOutput []byte, additionalInfo, inputdata,
 		}
 
 		if debug {
-			log.Printf("[DEBUG] ERROR in body handler. Status: %#v: %s", string(body), status)
+			log.Printf("[DEBUG] ERROR in body handler. Status: %#v: %d", string(body), status)
 		}
 
 		// Should turn body into a string and check OpenAPI for problems if status is bad
@@ -7635,7 +7635,7 @@ FINALISING:
 	// https://pkg.go.dev/github.com/sashabaranov/go-openai#ChatCompletionMessage
 	for messageIndex, _ := range completionRequest.Messages {
 		if len(completionRequest.Messages[messageIndex].Name) == 0 {
-			completionRequest.Messages[messageIndex].Name = string(time.Now().Unix())
+			completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().Unix())
 		}
 	}
 
@@ -8193,7 +8193,7 @@ FINALISING:
 
 		for messageIndex, _ := range completionRequest.Messages {
 			if len(completionRequest.Messages[messageIndex].Name) == 0 {
-				completionRequest.Messages[messageIndex].Name = string(time.Now().Unix())
+				completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().Unix())
 			}
 		}
 

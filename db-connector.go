@@ -4699,7 +4699,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			}
 
 			if len(orgUsers) > 0 {
-				log.Printf("[ERROR] Found 0 users for org %d. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", data.Id, len(orgUsers))
+				log.Printf("[ERROR] Found 0 users for org %s. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", data.Id, len(orgUsers))
 				data.Users = orgUsers
 			}
 		}
@@ -5270,7 +5270,7 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 	var apps []WorkflowApp
 
 	nameKey := "workflowapp"
-	cacheKey := fmt.Sprintf("%s_appname_%s", appName)
+	cacheKey := fmt.Sprintf("%s_appname_%s", nameKey, appName)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -14258,7 +14258,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		resp, err := project.Es.Info(ctx, infoSearchReq)
 		if err != nil {
 			if strings.Contains(fmt.Sprintf("%s", err), "the client noticed that the server is not a supported distribution") {
-				log.Printf("[ERROR] Version is not supported - most likely Elasticsearch >= 8.0.0: %s -> %s", resp, err)
+				log.Printf("[ERROR] Version is not supported - most likely Elasticsearch >= 8.0.0: %#v -> %s", resp, err)
 			}
 		}
 

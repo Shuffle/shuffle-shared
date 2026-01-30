@@ -2372,7 +2372,7 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Connect", path.Connect.Summary),
-		Label:       fmt.Sprintf(path.Connect.Summary),
+		Label:       fmt.Sprintf("%s", path.Connect.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
@@ -2582,7 +2582,7 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Get", path.Get.Summary),
-		Label:       fmt.Sprintf(path.Get.Summary),
+		Label:       fmt.Sprintf("%s", path.Get.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
@@ -2804,7 +2804,7 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Head", path.Head.Summary),
-		Label:       fmt.Sprintf(path.Head.Summary),
+		Label:       fmt.Sprintf("%s", path.Head.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
@@ -3011,7 +3011,7 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Delete", path.Delete.Summary),
-		Label:       fmt.Sprintf(path.Delete.Summary),
+		Label:       fmt.Sprintf("%s", path.Delete.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
@@ -3238,7 +3238,7 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Post", path.Post.Summary),
-		Label:       fmt.Sprintf(path.Post.Summary),
+		Label:       fmt.Sprintf("%s", path.Post.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
@@ -3493,7 +3493,7 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Patch", path.Patch.Summary),
-		Label:       fmt.Sprintf(path.Patch.Summary),
+		Label:       fmt.Sprintf("%s", path.Patch.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
@@ -3724,7 +3724,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Put", path.Put.Summary),
-		Label:       fmt.Sprintf(path.Put.Summary),
+		Label:       fmt.Sprintf("%s", path.Put.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,

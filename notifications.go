@@ -869,7 +869,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			}
 
 			if workflow.OrgId != mainNotification.OrgId {
-				log.Printf("[WARNING] Can't access workflow %s with org %s (%s): %s", workflow.ID, mainNotification.OrgName, mainNotification.OrgId, workflow.Org)
+				log.Printf("[WARNING] Can't access workflow %s with org %s (%s): %#v", workflow.ID, mainNotification.OrgName, mainNotification.OrgId, workflow.Org)
 
 				// Get parent org if it exists and check too
 				if len(org.ManagerOrgs) > 0 {
@@ -991,7 +991,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			// Allows for execution authorization
 			if len(notification.ExecutionId) == 0 {
-				log.Printf("[INFO] User tried to create notification without an execution ID present", notification.ExecutionId, orgId, notification.OrgId)
+				log.Printf("[INFO][%s] User tried to create notification without an execution ID present. OrgId: %s", notification.ExecutionId, orgId)
 				resp.WriteHeader(403)
 				resp.Write([]byte(`{"success": false}`))
 				return

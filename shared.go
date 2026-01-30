@@ -3428,7 +3428,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			}
 
 			if !found {
-				return User{}, errors.New(fmt.Sprintf("(2) User doesn't have access to this org", org_id))
+				return User{}, errors.New(fmt.Sprintf("(2) User doesn't have access to org '%s'", org_id))
 			}
 
 			if userdata.ActiveOrg.Id != org_id {
@@ -11697,7 +11697,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
-			DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
+			DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
 			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
@@ -11707,7 +11707,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
-			DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
+			DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
 			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 			return
@@ -11988,7 +11988,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
-	DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
+	DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
 	DeleteCache(ctx, user.Session)
 
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
@@ -12139,7 +12139,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit {
-			log.Printf("[WARNING] Org %s is not allowed to make more than %d sub-organizations: %s", parentOrg.Id, parentOrg.SyncFeatures.MultiTenant.Limit)
+			log.Printf("[WARNING] Org %s is not allowed to make more than %d sub-organizations.", parentOrg.Id, parentOrg.SyncFeatures.MultiTenant.Limit)
 			resp.WriteHeader(400)
 			//resp.Write([]byte(`{"success": false, "reason": "Sub-organizations require an active subscription or to be in the POV stage with access to multi-tenancy. Contact support@shuffler.io to try it out."}`))
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have made %d/%d sub-organizations. Contact support@shuffler.io to increase this limit"}`, parentOrg.SyncUsage.MultiTenant.Counter, parentOrg.SyncFeatures.MultiTenant.Limit)))
@@ -15698,7 +15698,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 			// Can it be if this and also status = "WAITING"?
 			if len(parentSubflowResult) == finishedSubflows && foundResult.Status != "SUCCESS" && foundResult.Status != "FAILURE" {
-				log.Printf("[INFO][%s] ALL THE SUBFLOW GOT THE RESULT BACK SO UPATING THE STATUS TO SUCCESS")
+				log.Printf("[INFO][%s] ALL THE SUBFLOW GOT THE RESULT BACK SO UPATING THE STATUS TO SUCCESS", subflowExecutionId)
 				foundResult.Status = "SUCCESS"
 				if foundResult.CompletedAt == 0 {
 					foundResult.CompletedAt = time.Now().Unix() * 1000
@@ -16531,7 +16531,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 		// FIXME: Set the status of the node to failed
 		if len(failedDecisions) > 0 {
-			log.Printf("[WARNING][%s] Failed decision found. Should exit out agent %s. It should have exited before this point.", workflowExecution.ExecutionId, decisionId)
+			log.Printf("[WARNING][%s] Failed decision found. Should exit out agent %d. It should have exited before this point.", workflowExecution.ExecutionId, decisionId)
 
 			//go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 			//break
@@ -23579,7 +23579,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						start = append(start, workflow.Actions[0].ID)
 						oldExecution.Results[0].Status = "WAITING"
 					} else {
-						log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Decision ID: %s", workflow.ID, decisionId[0])
+						log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Decision ID: %#v", workflow.ID, decisionId[0])
 					}
 				}
 			}
@@ -25818,7 +25818,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 					continue
 				}
 
-				addedParamIndexes = append(addedParamIndexes, string(paramIndex))
+				addedParamIndexes = append(addedParamIndexes, fmt.Sprintf("%d", paramIndex))
 				param.Value = authparam.Value
 				break
 			}
@@ -25827,7 +25827,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 		}
 
 		for paramIndex, authparam := range curAuth.Fields {
-			if ArrayContains(addedParamIndexes, string(paramIndex)) {
+			if ArrayContains(addedParamIndexes, fmt.Sprintf("%d", paramIndex)) {
 				continue
 			}
 
@@ -33099,7 +33099,7 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 
 				wf, err := GetWorkflow(ctx, strings.TrimSpace(workflowId))
 				if err != nil {
-					log.Printf("[WARNING] Failed getting workflow '%s' for automation %s: %s", workflowId, automationId, err)
+					log.Printf("[WARNING] Failed getting workflow '%s' for automation %d: %s", workflowId, automationId, err)
 					continue
 				}
 
@@ -34093,7 +34093,7 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 			}
 
 			if !found {
-				log.Printf("[ERROR] Failed to find operation %s. May be missing sync between app <-> openapi", parsedOpId, id)
+				log.Printf("[ERROR] Failed to find operation %s. May be missing sync between app <-> openapi. ID: %s", parsedOpId, id)
 			}
 		}
 	}
