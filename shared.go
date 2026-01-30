@@ -17,12 +17,26 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
+
 	"sync"
+
+	neturl "net/url"
+	"path"
+	"sort"
+
+	"github.com/go-git/go-billy/v5"
+	"github.com/go-git/go-billy/v5/memfs"
 
 	scheduler "cloud.google.com/go/scheduler/apiv1"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	http2 "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v5/storage/memory"
 	"gopkg.in/yaml.v3"
+
+	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 
 	//"os/exec"
 	"regexp"
@@ -26083,6 +26097,420 @@ func findReferenceAppDocs(ctx context.Context, allApps []WorkflowApp) []Workflow
 	}
 
 	return newApps
+}
+
+func CheckGitProxy(cloneOptions *git.CloneOptions) *git.CloneOptions {
+	if os.Getenv("HTTP_PROXY") != "" && !isGitNoProxy(cloneOptions.URL) {
+		cloneOptions.ProxyOptions = transport.ProxyOptions{
+			URL: os.Getenv("HTTP_PROXY"),
+		}
+	}
+
+	if os.Getenv("HTTPS_PROXY") != "" && !isGitNoProxy(cloneOptions.URL) {
+		cloneOptions.ProxyOptions = transport.ProxyOptions{
+			URL: os.Getenv("HTTPS_PROXY"),
+		}
+	}
+
+	return cloneOptions
+}
+
+func isGitNoProxy(rawURL string) bool {
+	noProxy := os.Getenv("NO_PROXY")
+	if noProxy == "" {
+		return false
+	}
+
+	if noProxy == "*" {
+		return true
+	}
+
+	noProxyList := strings.Split(noProxy, ",")
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := parsedURL.Hostname()
+
+	for _, value := range noProxyList {
+		value = strings.TrimSpace(value)
+
+		if host == value {
+			return true
+		}
+		if strings.HasPrefix(value, "*.") && strings.HasSuffix(host, value[2:]) {
+			return true
+		}
+	}
+	return false
+}
+
+func loadGithubWorkflows(url, username, password, userId, branch, orgId string) error {
+	fs := memfs.New()
+
+	// Extract path parameter from Azure DevOps URLs
+	targetPath := ""
+	specificFile := ""
+	if strings.Contains(url, "dev.azure.com") {
+		if strings.Contains(url, "?path=") {
+			parts := strings.Split(url, "?path=")
+			if len(parts) == 2 {
+				targetPath = parts[1]
+				decodedPath, err := neturl.QueryUnescape(targetPath)
+				if err == nil {
+					targetPath = decodedPath
+				}
+
+				targetPath = strings.TrimPrefix(targetPath, "/")
+
+				if strings.HasSuffix(strings.ToLower(targetPath), ".json") {
+					specificFile = path.Base(targetPath)
+					targetPath = path.Dir(targetPath)
+					if targetPath == "." {
+						targetPath = ""
+					}
+				}
+
+				log.Printf("[INFO] Extracted target path: '%s', specific file: '%s'", targetPath, specificFile)
+			}
+			// Clean the URL
+			url = parts[0]
+		}
+	}
+
+	// Handle GitHub-specific file URLs
+	if strings.Contains(url, "github.com") && strings.Contains(url, "/blob/") {
+		parts := strings.SplitN(url, "/blob/", 2)
+		if len(parts) == 2 {
+			baseURL := parts[0]
+			remainder := parts[1]
+
+			pathParts := strings.SplitN(remainder, "/", 2)
+			if len(pathParts) >= 1 {
+				// If branch wasn't already specified, use the one from URL
+				if len(branch) == 0 || branch == "main" || branch == "master" {
+					branch = pathParts[0]
+				}
+
+				if len(pathParts) == 2 {
+					targetPath = pathParts[1]
+
+					// Check if it's a specific file
+					if strings.HasSuffix(strings.ToLower(targetPath), ".json") {
+						specificFile = path.Base(targetPath)
+						targetPath = path.Dir(targetPath)
+						if targetPath == "." {
+							targetPath = ""
+						}
+					}
+				}
+			}
+
+			// Convert to proper git URL
+			url = baseURL + ".git"
+			log.Printf("[INFO] Converted GitHub URL. Repo: %s, Branch: %s, Path: '%s', File: '%s'", url, branch, targetPath, specificFile)
+		}
+	}
+
+	log.Printf("Starting load of %s with branch %s", url, branch)
+
+	cloneOptions := &git.CloneOptions{
+		URL: url,
+	}
+
+	if len(username) > 0 && len(password) > 0 {
+		cloneOptions.Auth = &http2.BasicAuth{
+
+			Username: username,
+			Password: password,
+		}
+	} else {
+		org, err := GetOrg(context.Background(), orgId)
+		if err != nil {
+			log.Printf("Failed getting org %s: %s", orgId, err)
+			return err
+		}
+
+		// check if org has git credentials
+		if len(org.Defaults.WorkflowUploadUsername) > 0 && len(org.Defaults.WorkflowUploadToken) > 0 {
+			cloneOptions.Auth = &http2.BasicAuth{
+				Username: org.Defaults.WorkflowUploadUsername,
+				Password: org.Defaults.WorkflowUploadToken,
+			}
+		}
+	}
+
+	// main is the new master
+	if len(branch) > 0 && branch != "main" && branch != "master" {
+		cloneOptions.ReferenceName = plumbing.ReferenceName(branch)
+	}
+
+	cloneOptions = CheckGitProxy(cloneOptions)
+
+	// Azure DevOps requires special capability handling
+	isAzureDevOps := strings.Contains(url, "dev.azure.com")
+	if isAzureDevOps {
+		transport.UnsupportedCapabilities = []capability.Capability{
+			capability.ThinPack,
+		}
+	}
+
+	storer := memory.NewStorage()
+	r, err := git.Clone(storer, fs, cloneOptions)
+	if err != nil {
+		log.Printf("[INFO] Failed loading repo %s into memory (github workflows): %s", url, err)
+		return err
+	}
+
+	// Navigate to the target directory if specified
+	searchPath := "/"
+	if targetPath != "" {
+		searchPath = "/" + targetPath
+		log.Printf("[INFO] Navigating to target path: %s", searchPath)
+	}
+
+	dir, err := fs.ReadDir(searchPath)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading folder '%s': %s", searchPath, err)
+		// Try without leading slash
+		searchPath = strings.TrimPrefix(searchPath, "/")
+		if searchPath == "" {
+			searchPath = "."
+		}
+		dir, err = fs.ReadDir(searchPath)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading folder '%s' (retry): %s", searchPath, err)
+			return err
+		}
+	}
+	_ = r
+
+	// Prepare the extra parameter for the iteration function
+	// Always use forward slashes for git filesystem paths
+	extraPath := ""
+	if targetPath != "" {
+		extraPath = targetPath
+		// Ensure forward slashes
+		extraPath = strings.ReplaceAll(extraPath, "\\", "/")
+		if !strings.HasSuffix(extraPath, "/") {
+			extraPath += "/"
+		}
+	}
+
+	log.Printf("[INFO] Starting workflow folder iteration in path '%s' with specific file: '%s'", searchPath, specificFile)
+	iterateWorkflowGithubFolders(fs, dir, extraPath, specificFile, userId, orgId)
+
+	return nil
+}
+
+func LoadSpecificWorkflows(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Just need to be logged in
+	// FIXME - should have some permissions?
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in load apps: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("Wrong user (%s) when downloading from github", user.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Downloading remotely requires admin"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error with body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Field1 & 2 can be a lot of things..
+	type tmpStruct struct {
+		URL      string `json:"url"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Branch   string `json:"branch"`
+	}
+	//log.Printf("Body: %s", string(body))
+
+	var tmpBody tmpStruct
+	err = json.Unmarshal(body, &tmpBody)
+	if err != nil {
+		log.Printf("Error with unmarshal tmpBody: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Field3 = branch
+	err = loadGithubWorkflows(tmpBody.URL, tmpBody.Username, tmpBody.Password, user.Id, tmpBody.Branch, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("Failed to update workflows: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+}
+
+// Onlyname is used to
+func iterateWorkflowGithubFolders(fs billy.Filesystem, dir []os.FileInfo, extra string, onlyname, userId, orgId string) error {
+	var err error
+	secondsOffset := 0
+
+	// sort file names
+	filenames := []string{}
+	for _, file := range dir {
+		filename := file.Name()
+		filenames = append(filenames, filename)
+	}
+	sort.Strings(filenames)
+
+	// iterate through sorted filenames
+	for _, filename := range filenames {
+		secondsOffset -= 10
+		if len(onlyname) > 0 && filename != onlyname {
+			continue
+		}
+
+		// Construct full path for stat
+		fullPath := fmt.Sprintf("%s%s", extra, filename)
+		file, err := fs.Stat(fullPath)
+		if err != nil {
+			log.Printf("[DEBUG] Failed to stat file '%s': %s", fullPath, err)
+			continue
+		}
+
+		// Folder?
+		switch mode := file.Mode(); {
+		case mode.IsDir():
+			tmpExtra := fmt.Sprintf("%s%s/", extra, file.Name())
+			dir, err := fs.ReadDir(tmpExtra)
+			if err != nil {
+				log.Printf("Failed to read dir: %s", err)
+				continue
+			}
+
+			// Go routine? Hmm, this can be super quick I guess
+			err = iterateWorkflowGithubFolders(fs, dir, tmpExtra, "", userId, orgId)
+			if err != nil {
+				continue
+			}
+		case mode.IsRegular():
+			// Check the file
+			if strings.HasSuffix(filename, ".json") {
+				path := fmt.Sprintf("%s%s", extra, file.Name())
+				fileReader, err := fs.Open(path)
+				if err != nil {
+					log.Printf("Error reading file: %s", err)
+					continue
+				}
+
+				readFile, err := ioutil.ReadAll(fileReader)
+				if err != nil {
+					log.Printf("Error reading file: %s", err)
+					continue
+				}
+
+				var workflow Workflow
+				err = json.Unmarshal(readFile, &workflow)
+				if err != nil {
+					continue
+				}
+
+				// rewrite owner to user who imports now
+				if userId != "" {
+					workflow.Owner = userId
+				}
+
+				workflow.ID = uuid.NewV4().String()
+				workflow.OrgId = orgId
+				workflow.ExecutingOrg = OrgMini{
+					Id: orgId,
+				}
+
+				workflow.Org = append(workflow.Org, OrgMini{
+					Id: orgId,
+				})
+				workflow.IsValid = false
+				workflow.Errors = []string{"Imported, not locally saved. Save before using."}
+
+				// Restore app and trigger images
+				ctx := context.Background()
+
+				// Restore app images from app definitions
+				if len(workflow.Actions) > 0 {
+					workflowapps, err := GetAllWorkflowApps(ctx, 1000, 0)
+					if err == nil && len(workflowapps) > 0 {
+						for actionIndex, action := range workflow.Actions {
+							if action.AppID == "" {
+								continue
+							}
+
+							// Find matching app
+							for _, app := range workflowapps {
+								if app.ID == action.AppID && app.AppVersion == action.AppVersion {
+									// Restore app images
+									workflow.Actions[actionIndex].LargeImage = app.LargeImage
+									workflow.Actions[actionIndex].SmallImage = ""
+									if len(app.LargeImage) > 0 {
+										workflow.Actions[actionIndex].SmallImage = app.LargeImage
+									}
+									break
+								} else if app.Name == action.AppName && app.AppVersion == action.AppVersion {
+									// Fallback: match by name and version
+									workflow.Actions[actionIndex].LargeImage = app.LargeImage
+									workflow.Actions[actionIndex].SmallImage = ""
+									if len(app.LargeImage) > 0 {
+										workflow.Actions[actionIndex].SmallImage = app.LargeImage
+									}
+									break
+								}
+							}
+						}
+					}
+				}
+
+				/*
+					// Find existing similar ones
+					q = datastore.NewQuery("workflow").Filter("org_id =", user.ActiveOrg.Id).Filter("name", workflow.name)
+					var workflows []Workflow
+					_, err = dbclient.GetAll(ctx, q, &workflows)
+					if err == nil {
+						log.Printf("Failed getting workflows for user %s: %s", user.Username, err)
+						if len(workflows) == 0 {
+							resp.WriteHeader(200)
+							resp.Write([]byte("[]"))
+							return
+						}
+					}
+				*/
+
+				log.Printf("Import workflow from file: %s", filename)
+				err = SetWorkflow(ctx, workflow, workflow.ID, secondsOffset)
+				if err != nil {
+					log.Printf("Failed setting (download) workflow: %s", err)
+					continue
+				}
+
+				log.Printf("Uploaded workflow %s for user %s and org %s!", filename, userId, orgId)
+			}
+		}
+	}
+
+	return err
 }
 
 func EchoOpenapiData(resp http.ResponseWriter, request *http.Request) {
