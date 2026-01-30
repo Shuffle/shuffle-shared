@@ -6437,7 +6437,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 	// So now I'm endlessly confused.
 	trigger := childTrigger
 	for paramIndex, param := range trigger.Parameters {
-		if param.Name != "startnode" && param.Name != "startnode" {
+		if param.Name != "startnode" {
 			// Use same as action IDs are identical
 			trigger.Parameters[paramIndex].Value = param.Value
 			continue

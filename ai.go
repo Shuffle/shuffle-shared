@@ -2210,7 +2210,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 
 		parseCategories += fmt.Sprintf("category: %s, labels: ", category.Name)
 		for _, actionLabel := range category.ActionLabels {
-			parseCategories += fmt.Sprintf(actionLabel)
+			parseCategories += fmt.Sprintf("%s", actionLabel)
 
 			// Check if actionLabel in RequiredFields map
 			required, ok := category.RequiredFields[actionLabel]
@@ -2483,7 +2483,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 							log.Printf("[INFO] API for %s requires auth (2), but we don't have it. Returning error: %s", relevantApps[0].Name, err)
 
 							if !strings.HasPrefix(outputFormat, "action") {
-								respBody = []byte(fmt.Sprintf(authMessage))
+								respBody = []byte(fmt.Sprintf("%s", authMessage))
 								resp.WriteHeader(500)
 								resp.Write(respBody)
 								return respBody, err
@@ -2621,7 +2621,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 			} else {
 				log.Printf("[ERROR] No matching apps found in the org for category '%s' and action label '%s'", category, actionLabel)
 
-				googleQuery := fmt.Sprintf(inputQuery)
+				googleQuery := fmt.Sprintf("%s", inputQuery)
 				if !strings.Contains(inputQuery, "API") {
 					googleQuery += "API for " + inputQuery
 				}
@@ -2849,7 +2849,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 							log.Printf("[INFO] API for %s requires auth (2), but we didn't get a key. Returning error: %s", relevantApps[0].Name, err)
 
 							if !strings.HasPrefix(outputFormat, "action") {
-								respBody = []byte(fmt.Sprintf(authMessage))
+								respBody = []byte(fmt.Sprintf("%s", authMessage))
 								resp.WriteHeader(500)
 								resp.Write(respBody)
 								return respBody, errors.New("API requires auth (2)")
