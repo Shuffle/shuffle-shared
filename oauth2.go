@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/go-querystring/query"
 	uuid "github.com/satori/go.uuid"
 	"golang.org/x/oauth2"
@@ -4285,6 +4286,90 @@ func fetchWellKnownConfig(ctx context.Context, issuer string, openIdAuthUrl stri
 	}
 
 	return config, nil
+}
+
+// IdTokenClaims represents the claims extracted from a verified ID token
+type IdTokenClaims struct {
+	Sub           string   `json:"sub"`
+	Email         string   `json:"email"`
+	EmailVerified bool     `json:"email_verified"`
+	Roles         []string `json:"roles"`
+	Groups        []string `json:"groups"`
+	RealmAccess   struct {
+		Roles []string `json:"roles"`
+	} `json:"realm_access"` // Keycloak format
+}
+
+// VerifyIdTokenWithOIDC verifies an ID token using the go-oidc library and extracts roles
+// This performs proper signature verification via JWKS, expiry check, issuer and audience validation
+func VerifyIdTokenWithOIDC(ctx context.Context, idToken string, issuer string, clientID string) (*IdTokenClaims, error) {
+	if idToken == "" {
+		return nil, fmt.Errorf("id token is empty")
+	}
+	if issuer == "" {
+		return nil, fmt.Errorf("issuer is empty")
+	}
+	if clientID == "" {
+		return nil, fmt.Errorf("client ID is empty")
+	}
+
+	// Create OIDC provider (fetches JWKS automatically from .well-known/openid-configuration)
+	provider, err := oidc.NewProvider(ctx, issuer)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create OIDC provider for issuer %s: %w", issuer, err)
+	}
+
+	// Create verifier with expected audience (client_id)
+	verifier := provider.Verifier(&oidc.Config{
+		ClientID: clientID,
+	})
+
+	// Verify the token (signature, expiry, issuer, audience)
+	token, err := verifier.Verify(ctx, idToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to verify ID token: %w", err)
+	}
+
+	// Extract claims
+	var claims IdTokenClaims
+	if err := token.Claims(&claims); err != nil {
+		return nil, fmt.Errorf("failed to extract claims from ID token: %w", err)
+	}
+
+	// Set sub from the verified token
+	claims.Sub = token.Subject
+
+	return &claims, nil
+}
+
+// ExtractRolesFromIdToken verifies an ID token and extracts roles from various claim formats
+// Returns a deduplicated list of roles from: roles, groups, realm_access.roles (Keycloak)
+func ExtractRolesFromIdToken(ctx context.Context, idToken string, issuer string, clientID string) ([]string, error) {
+	claims, err := VerifyIdTokenWithOIDC(ctx, idToken, issuer, clientID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect roles from all possible sources
+	roleSet := make(map[string]bool)
+
+	for _, role := range claims.Roles {
+		roleSet[role] = true
+	}
+	for _, group := range claims.Groups {
+		roleSet[group] = true
+	}
+	for _, role := range claims.RealmAccess.Roles {
+		roleSet[role] = true
+	}
+
+	// Convert to slice
+	roles := make([]string, 0, len(roleSet))
+	for role := range roleSet {
+		roles = append(roles, role)
+	}
+
+	return roles, nil
 }
 
 func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdTokenCheck, string, error) {

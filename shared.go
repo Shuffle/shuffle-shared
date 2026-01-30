@@ -22862,6 +22862,17 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+
+		// Extract roles from ID token (if available) using proper JWT verification
+		if openid.IdToken != "" && org.SSOConfig.OpenIdClientId != "" {
+			extractedRoles, err := ExtractRolesFromIdToken(ctx, openid.IdToken, issuer, org.SSOConfig.OpenIdClientId)
+			if err != nil {
+				log.Printf("[WARNING] Failed to extract roles from ID token: %s", err)
+			} else if len(extractedRoles) > 0 {
+				log.Printf("[DEBUG] Extracted roles from ID token: %v", extractedRoles)
+				openidUser.Roles = extractedRoles
+			}
+		}
 	}
 
 	if len(openidUser.Sub) == 0 && len(openidUser.Email) == 0 {
