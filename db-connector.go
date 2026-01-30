@@ -223,6 +223,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 				if len(totalData) > 10062147 {
 					//log.Printf("[WARNING] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
 				}
+
 				return totalData, nil
 			} else {
 				return item.Value, nil
@@ -13319,6 +13320,63 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			// goroutine as we use heavy caching for this.
 			config, getCacheError := GetDatastoreKey(ctx, datastoreId, cacheData.Category)
 			if getCacheError == nil && config.Created > 0 {
+
+				// Compares old vs new, checks if allowed
+
+				categoryConfig, err := GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting category config for org %s and category %s: %s", orgId, mainCategory, err)
+				}
+
+				if debug { 
+					log.Printf("HERE: %#v -> %#v", getCacheError, config.Created)
+				}
+
+				ruleValid := true
+				for _, automation := range categoryConfig.Automations {
+					if !automation.Enabled {
+						continue
+					}
+
+					if automation.Name != "security_rules" && automation.Name != "Security Rules" { 
+						continue
+					}
+
+					foundRule := ""
+					for _, option := range automation.Options {
+						if option.Key == "rule" {
+							foundRule = option.Value
+							break
+						}
+					}
+
+					if debug {
+						log.Printf("[DEBUG] FOUND SECURITY RULES AUTOMATION FOR ORG %s AND CATEGORY %s: %#v", cacheData.OrgId, mainCategory, foundRule)
+					}
+
+					if len(foundRule) > 5 {
+						oldDoc := config.Value
+						newDoc := cacheData.Value
+						mergedJSON, allowed := EvalPolicyJSON(foundRule, oldDoc, newDoc)
+						log.Printf("RULE OUTCOME (%s): %#v. Merged: %#v", foundRule, allowed, mergedJSON)
+						if allowed {
+							ruleValid = true
+							cacheData.Value = mergedJSON
+						} else {
+							ruleValid = false
+						}
+
+					}
+
+					break
+				}
+
+				if !ruleValid {
+					// Break out
+					log.Printf("Rule isn't valid! NOT modifying.")
+					return
+				}
+
 				cacheData.Created = config.Created
 				cacheData.Authorization = config.Authorization
 				cacheData.SuborgDistribution = config.SuborgDistribution

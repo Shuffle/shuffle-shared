@@ -61,6 +61,8 @@ type countingWriter struct {
 	n *int64
 }
 
+
+
 func CopyFile(fromfile, tofile string) error {
 	from, err := os.Open(fromfile)
 	if err != nil {
@@ -4797,6 +4799,11 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	ctx := context.Background()
 	parsedName := strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_")
 
+	// These are ran pre-execution
+	if parsedName == "security_rules" {
+		return nil 
+	}
+
 	// Unmarshal cacheData.Value to parsedOutput
 	parsedOutput := map[string]interface{}{}
 	if err := json.Unmarshal([]byte(cacheData.Value), &parsedOutput); err != nil {
@@ -4861,12 +4868,12 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		// FIXME: Make dynamic
 		aiAppname := "openai"
 		parsedParams := []map[string]string{
-			map[string]string{ 
-				"name": "app_name",
+			map[string]string{
+				"name":  "app_name",
 				"value": aiAppname,
 			},
 			map[string]string{
-				"name": "action",
+				"name":  "action",
 				"value": "API",
 			},
 		}
@@ -4878,7 +4885,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			option.Key = "input"
 			option.Value += fmt.Sprintf("\n\n%s", cacheData.Value)
 			parsedParams = append(parsedParams, map[string]string{
-				"name": option.Key,
+				"name":  option.Key,
 				"value": option.Value,
 			})
 		}
@@ -4891,14 +4898,13 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		agentUrl := fmt.Sprintf("%s/api/v1/apps/agent_starter/run", backendUrl)
 		agentStartRequest := AgentStartRequest{
 			//ID          string              `json:"id"`
-			Name       : "agent", 
-			AppName     : "AI Agent",
-			AppID       : "shuffle_agent",
-			AppVersion  : "1.0.0",
-			Environment : "cloud",
-			Parameters: parsedParams,
+			Name:        "agent",
+			AppName:     "AI Agent",
+			AppID:       "shuffle_agent",
+			AppVersion:  "1.0.0",
+			Environment: "cloud",
+			Parameters:  parsedParams,
 		}
-
 
 		newParsedBody, err := json.Marshal(agentStartRequest)
 		if err != nil {
