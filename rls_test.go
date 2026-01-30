@@ -4,17 +4,17 @@ import (
 	"testing"
 )
 
-func TestEvalPolicyJSON(t *testing.T) {
+func TestEvalPolicyJSON_Comprehensive(t *testing.T) {
 	tests := []struct {
-		name       string
-		policy     string
-		oldJSON    string
-		newJSON    string
-		wantJSON   string
-		wantOk     bool
+		name     string
+		policy   string
+		oldJSON  string
+		newJSON  string
+		wantJSON string
+		wantOk   bool
 	}{
 		// -----------------------------
-		// Basic top-level merge
+		// Basic merge tests
 		// -----------------------------
 		{
 			name:     "merge top-level allowed field",
@@ -29,18 +29,18 @@ func TestEvalPolicyJSON(t *testing.T) {
 			policy:   `merge if allowed_fields["hello"]`,
 			oldJSON:  `{"hello": null}`,
 			newJSON:  `{"other": "test"}`,
-			wantJSON: `{"hello": null}`,
+			wantJSON: `{"hello":null}`,
 			wantOk:   true,
 		},
 
 		// -----------------------------
-		// Overwrite action
+		// Overwrite action tests
 		// -----------------------------
 		{
 			name:     "overwrite same_shape",
 			policy:   `overwrite if same_shape`,
-			oldJSON:  `{"a": 1, "b": 2}`,
-			newJSON:  `{"a": 3, "b": 4}`,
+			oldJSON:  `{"a":1,"b":2}`,
+			newJSON:  `{"a":3,"b":4}`,
 			wantJSON: `{"a":3,"b":4}`,
 			wantOk:   true,
 		},
@@ -57,7 +57,7 @@ func TestEvalPolicyJSON(t *testing.T) {
 		// Deny action
 		// -----------------------------
 		{
-			name:     "deny has_deleted_field",
+			name:     "deny deleted field",
 			policy:   `deny if has_deleted_field`,
 			oldJSON:  `{"a":1,"b":2}`,
 			newJSON:  `{"a":1}`,
@@ -94,7 +94,7 @@ func TestEvalPolicyJSON(t *testing.T) {
 		},
 
 		// -----------------------------
-		// Null values
+		// Nulls
 		// -----------------------------
 		{
 			name:     "merge null -> value",
@@ -134,15 +134,23 @@ func TestEvalPolicyJSON(t *testing.T) {
 		},
 
 		// -----------------------------
-		// New top-level fields
+		// Type replacement
 		// -----------------------------
 		{
-			name:     "merge adds new top-level field",
-			policy:   `merge if allowed_fields["new"]`,
-			oldJSON:  `{"existing":1}`,
-			newJSON:  `{"new":42}`,
-			wantJSON: `{"existing":1,"new":42}`,
-			wantOk:   true,
+			name: "replace object with primitive",
+			policy: `merge if allowed_fields["hell"]`,
+			oldJSON: `{"hell":{"hell":"naw","hello":"you"}}`,
+			newJSON: `{"hell":"naw"}`,
+			wantJSON: `{"hell":"naw"}`,
+			wantOk: true,
+		},
+		{
+			name: "replace primitive with object",
+			policy: `merge if allowed_fields["hello"]`,
+			oldJSON: `{"hello":"old"}`,
+			newJSON: `{"hello":{"nested":42}}`,
+			wantJSON: `{"hello":{"nested":42}}`,
+			wantOk: true,
 		},
 
 		// -----------------------------
@@ -159,6 +167,148 @@ func TestEvalPolicyJSON(t *testing.T) {
 			newJSON:  `{"hell":"naw","hello":"you"}`,
 			wantJSON: `{"hell":"naw","hello":"you"}`,
 			wantOk:   true,
+		},
+
+		{
+			name: "merge + overwrite + deny with deleted field",
+			policy: `
+				merge if allowed_fields["hello","hell"];
+				overwrite if same_shape;
+				deny if has_deleted_field
+			`,
+			oldJSON:  `{"hell":"naw","hello":"old"}`,
+			newJSON:  `{"hell":"naw"}`, // hello deleted
+			wantJSON: ``,
+			wantOk:   false,
+		},
+
+		{
+			name: "deeply nested merge allowed fields",
+			policy: `merge if allowed_fields["a.b.c.d"]`,
+			oldJSON: `{"a":{"b":{"c":{"d":1,"e":2}}}}`,
+			newJSON: `{"a":{"b":{"c":{"d":99}}}}`,
+			wantJSON: `{"a":{"b":{"c":{"d":99,"e":2}}}}`,
+			wantOk: true,
+		},
+		{
+			name: "deeply nested overwrite same_shape",
+			policy: `overwrite if same_shape`,
+			oldJSON: `{"x":{"y":{"z":1}}}`,
+			newJSON: `{"x":{"y":{"z":42}}}`,
+			wantJSON: `{"x":{"y":{"z":42}}}`,
+			wantOk: true,
+		},
+		{
+			name: "deeply nested shape mismatch overwrite",
+			policy: `overwrite if same_shape`,
+			oldJSON: `{"x":{"y":{"z":1}}}`,
+			newJSON: `{"x":{"y":42}}`,
+			wantJSON: `{}`,
+			wantOk: false,
+		},
+
+		// -----------------------------
+		// Arrays of primitives + nested objects
+		// -----------------------------
+		{
+			name: "array merge with nested objects",
+			policy: `merge if allowed_fields["arr"]`,
+			oldJSON: `{"arr":[{"id":1,"val":"a"},{"id":2,"val":"b"}]}`,
+			newJSON: `{"arr":[{"id":2,"val":"b"},{"id":3,"val":"c"}]}`,
+			wantJSON: `{"arr":[{"id":1,"val":"a"},{"id":2,"val":"b"},{"id":3,"val":"c"}]}`,
+			wantOk: true,
+		},
+
+		// -----------------------------
+		// Nulls inside nested objects/arrays
+		// -----------------------------
+		{
+			name: "merge null in nested object",
+			policy: `merge if allowed_fields["a.b"]`,
+			oldJSON: `{"a":{"b":null,"c":2}}`,
+			newJSON: `{"a":{"b":99}}`,
+			wantJSON: `{"a":{"b":99,"c":2}}`,
+			wantOk: true,
+		},
+		{
+			name: "merge null inside array of objects",
+			policy: `merge if allowed_fields["arr"]`,
+			oldJSON: `{"arr":[{"id":1,"val":null}]}`,
+			newJSON: `{"arr":[{"id":1,"val":"filled"}]}`,
+			wantJSON: `{"arr":[{"id":1,"val":"filled"}]}`,
+			wantOk: true,
+		},
+
+		// -----------------------------
+		// Type replacement edge cases
+		// -----------------------------
+		{
+			name: "replace object with array",
+			policy: `merge if allowed_fields["foo"]`,
+			oldJSON: `{"foo":{"nested":42}}`,
+			newJSON: `{"foo":[1,2,3]}`,
+			wantJSON: `{"foo":[1,2,3]}`,
+			wantOk: true,
+		},
+		{
+			name: "replace array with object",
+			policy: `merge if allowed_fields["bar"]`,
+			oldJSON: `{"bar":[1,2]}`,
+			newJSON: `{"bar":{"x":1}}`,
+			wantJSON: `{"bar":{"x":1}}`,
+			wantOk: true,
+		},
+
+		// -----------------------------
+		// Multiple allowed fields overlapping
+		// -----------------------------
+		{
+			name: "merge multiple overlapping fields",
+			policy: `merge if allowed_fields["a.b","a.c","a.d.e"]`,
+			oldJSON: `{"a":{"b":1,"c":2,"d":{"e":3,"f":4}}}`,
+			newJSON: `{"a":{"b":99,"c":22,"d":{"e":33}}}`,
+			wantJSON: `{"a":{"b":99,"c":22,"d":{"e":33,"f":4}}}`,
+			wantOk: true,
+		},
+
+		// -----------------------------
+		// Deleted fields with deny
+		// -----------------------------
+		{
+			name: "deny when nested field deleted",
+			policy: `deny if has_deleted_field`,
+			oldJSON: `{"a":{"b":1,"c":2}}`,
+			newJSON: `{"a":{"b":1}}`,
+			wantJSON: ``,
+			wantOk: false,
+		},
+
+		// -----------------------------
+		// Complex mix of merge/overwrite/deny
+		// -----------------------------
+		{
+			name: "merge + overwrite + deny complex",
+			policy: `
+				merge if allowed_fields["x","y.z"];
+				overwrite if same_shape;
+				deny if has_deleted_field
+			`,
+			oldJSON: `{"x":1,"y":{"z":2,"w":3}}`,
+			newJSON: `{"x":10,"y":{"z":20,"w":3}}`,
+			wantJSON: `{"x":10,"y":{"z":20,"w":3}}`,
+			wantOk: true,
+		},
+		{
+			name: "merge + overwrite + deny complex with deleted",
+			policy: `
+				merge if allowed_fields["x","y.z"];
+				overwrite if same_shape;
+				deny if has_deleted_field
+			`,
+			oldJSON: `{"x":1,"y":{"z":2,"w":3}}`,
+			newJSON: `{"x":10,"y":{"z":20}}`,
+			wantJSON: ``,
+			wantOk: false,
 		},
 	}
 
