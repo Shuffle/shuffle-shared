@@ -69,7 +69,7 @@ var SSOUrl = ""
 var kmsDebug = false
 
 var debug = os.Getenv("DEBUG") == "true"
-var sandboxProject = "shuffle-sandbox-337810"
+var sandboxProject = "shuffle-australia-southeast1"
 
 func GetProject() ShuffleStorage {
 	return project
@@ -22797,6 +22797,14 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		if foundMode == "login" {
 			verifierToUse = "" // No PKCE in login mode
 		}
+
+		// Debug: verify the verifier hashes to the expected challenge
+		if verifierToUse != "" {
+			verifierCheck := &CodeVerifier{Value: verifierToUse}
+			computedChallenge := verifierCheck.CodeChallengeS256()
+			log.Printf("[DEBUG] Verifier check - foundChallenge: %s, computedChallenge: %s, match: %t", foundChallenge, computedChallenge, foundChallenge == computedChallenge)
+		}
+		log.Printf("[DEBUG] Calling RunOpenidLogin with verifierToUse=%s (len=%d)", verifierToUse, len(verifierToUse))
 
 		body, err := RunOpenidLogin(ctx, clientId, tokenUrl, foundRedir, code, verifierToUse, org.SSOConfig.OpenIdClientSecret)
 		if err != nil {
