@@ -611,7 +611,8 @@ func FindNextApiStep(originalFields []Valuereplace, action Action, stepOutput []
 			}
 
 			// Body = previous requests' body
-			action, additionalInfo, err := RunSelfCorrectingRequest(originalFields, action, status, additionalInfo, fullUrl, string(body), useApp, inputdata, curAttempt)
+			intent := ""
+			action, additionalInfo, err := RunSelfCorrectingRequest(originalFields, action, status, additionalInfo, fullUrl, string(body), useApp, intent, inputdata, curAttempt)
 			if err != nil {
 				if !strings.Contains(err.Error(), "missing_fields") {
 					log.Printf("[ERROR] Error running self-correcting request: %s", err)
@@ -645,7 +646,7 @@ func FindNextApiStep(originalFields []Valuereplace, action Action, stepOutput []
 // 1. The fully filled-in action
 // 2. The additional info from the previous request
 // 3. Any error that may have occurred
-func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, status int, additionalInfo, fullUrl, outputBody, appname, inputdata string, attempt ...int) (Action, string, error) {
+func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, status int, additionalInfo, fullUrl, outputBody, appname, intent, inputdata string, attempt ...int) (Action, string, error) {
 	// Add all fields with value from here
 	additionalInfo = ""
 	inputBody := "{\n"
@@ -743,6 +744,12 @@ func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, stat
 		fullUrl = fmt.Sprintf("- API URL: %s", fullUrl)
 	}
 
+	// Add Intent Context if available
+	intentContext := ""
+	if len(intent) > 0 {
+		intentContext = fmt.Sprintf("USER INTENT (GOAL): %s\n\nUse this goal to verify if the API path, body, and parameters are even correct for what the user wants to achieve. If the path seems wrong for this goal, CHANGE IT.", intent)
+	}
+
 	systemMessage := fmt.Sprintf(`INTRODUCTION
 
 Return all key:value pairs from the last user message, but with modified values to fix ALL the HTTP errors at once. Don't add any comments. Do not try the same thing twice, and use your existing knowledge of the API name and action to reformat the output until it works. All fields in "Required data" MUST be a part of the output if possible. Output MUST be valid JSON. 
@@ -752,6 +759,7 @@ END INTRODUCTION
 INPUTDATA
 
 API name: %s
+%s
 Required data: %s
 
 END INPUTDATA 
@@ -793,8 +801,7 @@ ERROR HANDLING
 - Do NOT error-handle authentication issues unless it seems possible
 
 END ERROR HANDLING
-   `, action.AppName, /*action.Description, */ inputFields)
-
+   `, action.AppName, intentContext, inputFields)
 
 	inputData := ""
 	if len(attempt) > 1 {
