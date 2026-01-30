@@ -13328,9 +13328,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 					log.Printf("[WARNING] Failed getting category config for org %s and category %s: %s", orgId, mainCategory, err)
 				}
 
-				if debug { 
-					log.Printf("HERE: %#v -> %#v", getCacheError, config.Created)
-				}
+				//if debug { 
+				//	log.Printf("[DEBUG] RULECHECK %#v -> %#v", getCacheError, config.Created)
+				//}
 
 				ruleValid := true
 				for _, automation := range categoryConfig.Automations {
@@ -13357,8 +13357,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 					if len(foundRule) > 5 {
 						oldDoc := config.Value
 						newDoc := cacheData.Value
-						mergedJSON, allowed := EvalPolicyJSON(foundRule, oldDoc, newDoc)
-						log.Printf("RULE OUTCOME (%s): %#v. Merged: %#v", foundRule, allowed, mergedJSON)
+						mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
+						log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. Merged: %#v. Error: %#v", foundRule, allowed, mergedJSON, errString)
 						if allowed {
 							ruleValid = true
 							cacheData.Value = mergedJSON

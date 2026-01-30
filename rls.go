@@ -2,82 +2,15 @@ package shuffle
 
 import (
 	"strings"
-	"reflect"
+	//"reflect"
 	"encoding/json"
+
+	"sort"
+	"bytes"
+	"fmt"
 )
 
-// This file is for handling RLS-like security rules for datastore
-// It is an attempt to prevent overwrites of fields that should not be 
-// changed based on shape comparisons and allowed fields lists
-
 const MaxDepth = 10
-func EvalPolicyJSON(policy string, oldJSON, newJSON string) (string, bool) {
-	var oldDoc, newDoc map[string]any
-	if err := json.Unmarshal([]byte(oldJSON), &oldDoc); err != nil {
-		return "", false
-	}
-	if err := json.Unmarshal([]byte(newJSON), &newDoc); err != nil {
-		return "", false
-	}
-
-	var merged any = deepCopy(oldDoc)
-	clauses := strings.Split(policy, ";")
-	for _, c := range clauses {
-		c = strings.TrimSpace(c)
-		if c == "" {
-			continue
-		}
-		parts := strings.SplitN(c, "if", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		action := strings.TrimSpace(parts[0])
-		condition := strings.TrimSpace(parts[1])
-
-		var mergedResult any
-		var ok bool
-
-		// allowed_fields
-		if strings.HasPrefix(condition, "allowed_fields") {
-			start := strings.Index(condition, "[")
-			end := strings.Index(condition, "]")
-			if start < 0 || end < 0 || start >= end {
-				continue
-			}
-			listStr := condition[start+1 : end]
-			paths := []string{}
-			for _, s := range strings.Split(listStr, ",") {
-				paths = append(paths, strings.Trim(strings.TrimSpace(s), `"`))
-			}
-			mergedResult, ok = evalAllowedFields(merged, newDoc, paths, MaxDepth)
-		} else {
-			mergedResult, ok = evalConditionMerge(condition, merged, newDoc, MaxDepth)
-		}
-
-		if !ok {
-			continue
-		}
-
-		// apply action
-		switch action {
-		case "merge":
-			merged = mergedResult
-		case "overwrite":
-			merged = deepCopy(newDoc)
-		case "deny":
-			return "", false
-		default:
-			return "", false
-		}
-	}
-
-	resultJSON, err := json.Marshal(merged)
-	if err != nil {
-		return "", false
-	}
-	return string(resultJSON), true
-}
-
 // --------------------
 // Deep copy
 // --------------------
@@ -179,134 +112,258 @@ func setLeafByPath(merged any, path []string, newVal any) any {
 	}
 }
 
-// --------------------
-// Merge engine for merge/overwrite logic
-// --------------------
-func mergeJSON(oldDoc, newDoc any, maxDepth int) any {
-	if maxDepth < 0 || newDoc == nil {
-		return newDoc
+// EvalPolicyJSON applies RLS rules to oldJSON and newJSON.
+// Returns:
+//   merged JSON (updated if allowed, otherwise oldJSON),
+//   ok (true if allowed, false if denied),
+//   reason string (why denied, empty if ok)
+func EvalPolicyJSON(policy, oldJSON, newJSON string) (string, bool, string) {
+	var oldDoc, newDoc map[string]any
+	if err := json.Unmarshal([]byte(oldJSON), &oldDoc); err != nil {
+		return oldJSON, false, "invalid old JSON"
 	}
-	if oldDoc == nil {
-		return deepCopy(newDoc)
+	if err := json.Unmarshal([]byte(newJSON), &newDoc); err != nil {
+		return oldJSON, false, "invalid new JSON"
 	}
 
-	switch oldVal := oldDoc.(type) {
-	case map[string]any:
-		newVal, ok := newDoc.(map[string]any)
-		if !ok {
-			return deepCopy(newDoc) // type mismatch → replace
-		}
-		result := deepCopy(oldVal).(map[string]any)
-		for k, vNew := range newVal {
-			if vOld, exists := result[k]; exists {
-				result[k] = mergeJSON(vOld, vNew, maxDepth-1)
-			} else {
-				result[k] = deepCopy(vNew)
-			}
-		}
-		return result
-	case []any:
-		newVal, ok := newDoc.([]any)
-		if !ok {
-			return deepCopy(newDoc)
-		}
-		result := deepCopy(oldVal).([]any)
-		for _, item := range newVal {
-			found := false
-			for _, oldItem := range oldVal {
-				if reflect.DeepEqual(oldItem, item) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				result = append(result, item)
-			}
-		}
-		return result
-	default:
-		return deepCopy(newDoc) // primitive → always replace
+	merged, ok, reason := evalPolicyRules(parsePolicy(policy), oldDoc, newDoc, 0)
+	if !ok {
+		// Denied: return old JSON
+		resultBytes, _ := marshalOrdered(oldDoc)
+		return string(resultBytes), false, reason
 	}
+
+	resultBytes, _ := marshalOrdered(merged)
+	return string(resultBytes), true, ""
 }
 
-// --------------------
-// Condition evaluation
-// --------------------
-func evalConditionMerge(condition string, oldDoc, newDoc any, maxDepth int) (any, bool) {
-	switch condition {
-	case "same_shape":
-		if compareShape(oldDoc, newDoc, false, maxDepth) {
-			return mergeJSON(oldDoc, newDoc, maxDepth), true
-		}
-		return nil, false
-	case "is_superset":
-		if compareShape(oldDoc, newDoc, true, maxDepth) {
-			return mergeJSON(oldDoc, newDoc, maxDepth), true
-		}
-		return nil, false
-	case "has_deleted_field":
-		if !compareShape(oldDoc, newDoc, true, maxDepth) {
-			return nil, false
-		}
-		return oldDoc, true
-	default:
-		return nil, false
-	}
+// ---------------------- Policy Parsing ----------------------
+
+type NewAction string
+const (
+	ActionMerge     NewAction = "merge"
+	ActionOverwrite NewAction = "overwrite"
+	ActionDeny      NewAction = "deny"
+)
+
+type ConditionFunc func(oldDoc, newDoc map[string]any) bool
+
+type Rule struct {
+	Action    NewAction
+	Condition string
 }
 
-// --------------------
-// Shape comparison
-// --------------------
-func compareShape(a, b any, allowSubset bool, maxDepth int) bool {
-	if maxDepth < 0 {
-		return true
-	}
-	if a == nil || b == nil {
-		return a == b
-	}
-
-	typeA := reflect.TypeOf(a)
-	typeB := reflect.TypeOf(b)
-	if typeA != typeB {
-		return false
-	}
-
-	switch va := a.(type) {
-	case map[string]any:
-		vb := b.(map[string]any)
-		if !allowSubset && len(va) != len(vb) {
-			return false
+func parsePolicy(policy string) []Rule {
+	rules := []Rule{}
+	parts := strings.Split(policy, ";")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
 		}
-		for k, vA := range va {
-			vB, exists := vb[k]
-			if !exists {
-				if !allowSubset {
-					return false
-				}
+		fields := strings.Fields(p)
+		if len(fields) < 3 || fields[1] != "if" {
+			continue
+		}
+		rules = append(rules, Rule{
+			Action:    NewAction(fields[0]),
+			Condition: strings.Join(fields[2:], " "),
+		})
+	}
+	return rules
+}
+
+// ---------------------- Core Rule Evaluation ----------------------
+
+func evalPolicyRules(rules []Rule, oldDoc, newDoc map[string]any, depth int) (map[string]any, bool, string) {
+	if depth > MaxDepth {
+		return oldDoc, false, "max depth exceeded"
+	}
+
+	for _, r := range rules {
+		if evalCondition(r.Condition, oldDoc, newDoc) {
+			switch r.Action {
+			case ActionMerge:
+				fields := parseAllowedFields(r.Condition)
+				merged := mergeAllowedFieldsRecursive(oldDoc, newDoc, fields)
+				return merged, true, ""
+
+			case ActionOverwrite:
+				return newDoc, true, ""
+			case ActionDeny:
+				return oldDoc, false, r.Condition
+			}
+		}
+	}
+	// No rule matched: deny by default
+	return oldDoc, false, "no rule matched"
+}
+
+func mergeAllowedFieldsRecursive(oldDoc, newDoc map[string]any, allowed []string) map[string]any {
+	result := deepCopyMap(oldDoc)
+	for _, key := range allowed {
+		newVal, ok := newDoc[key]
+		if !ok {
+			continue // skip missing keys
+		}
+
+		// Check for nested map
+		if oldMap, ok1 := oldDoc[key].(map[string]any); ok1 {
+			if newMap, ok2 := newVal.(map[string]any); ok2 {
+				// recursive merge for nested map
+				result[key] = mergeAllowedFieldsRecursive(oldMap, newMap, allowedFieldsForMap(newMap))
 				continue
 			}
-			if !compareShape(vA, vB, allowSubset, maxDepth-1) {
-				return false
-			}
 		}
-		return true
-	case []any:
-		vb := b.([]any)
-		if !allowSubset && len(va) != len(vb) {
-			return false
-		}
-		minLen := len(va)
-		if len(vb) < minLen {
-			minLen = len(vb)
-		}
-		for i := 0; i < minLen; i++ {
-			if !compareShape(va[i], vb[i], allowSubset, maxDepth-1) {
-				return false
-			}
-		}
-		return true
-	default:
-		return true
+
+		// Otherwise just overwrite
+		result[key] = newVal
 	}
+	return result
 }
 
+// optional helper: allow all keys in nested map
+func allowedFieldsForMap(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+
+func mergeAllowedFields(oldDoc, newDoc map[string]any, allowed []string) map[string]any {
+	result := deepCopyMap(oldDoc)
+	for _, f := range allowed {
+		if val, ok := newDoc[f]; ok {
+			result[f] = val
+		}
+	}
+	return result
+}
+
+func evalCondition(cond string, oldDoc, newDoc map[string]any) bool {
+	cond = strings.TrimSpace(cond)
+	switch {
+	case cond == "same_shape":
+		return compareShape(oldDoc, newDoc)
+	case strings.HasPrefix(cond, "allowed_fields["):
+		fields := parseAllowedFields(cond)
+		// return true if at least one field exists in newDoc
+		for _, f := range fields {
+			if _, ok := newDoc[f]; ok {
+				return true
+			}
+		}
+		return false
+	case cond == "has_deleted_field":
+		for k := range oldDoc {
+			if _, ok := newDoc[k]; !ok {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+
+func parseAllowedFields(cond string) []string {
+	start := strings.Index(cond, "[")
+	end := strings.Index(cond, "]")
+	if start < 0 || end < 0 || end <= start {
+		return nil
+	}
+	inner := cond[start+1 : end]
+	parts := strings.Split(inner, ",")
+	for i := range parts {
+		parts[i] = strings.Trim(strings.Trim(parts[i], `"`), " ")
+	}
+	return parts
+}
+
+func mergeJSON(oldDoc, newDoc map[string]any) map[string]any {
+    result := deepCopyMap(oldDoc)
+    for k, v := range newDoc {
+        if oldMap, ok1 := result[k].(map[string]any); ok1 {
+            if newMap, ok2 := v.(map[string]any); ok2 {
+                result[k] = mergeJSON(oldMap, newMap)
+                continue
+            }
+        }
+        result[k] = v
+    }
+    return result
+}
+
+func compareShape(oldDoc, newDoc map[string]any) bool {
+	if len(oldDoc) != len(newDoc) {
+		return false
+	}
+	for k, oldVal := range oldDoc {
+		newVal, ok := newDoc[k]
+		if !ok {
+			return false
+		}
+		oldMap, oldIsMap := oldVal.(map[string]any)
+		newMap, newIsMap := newVal.(map[string]any)
+		if oldIsMap && newIsMap {
+			if !compareShape(oldMap, newMap) {
+				return false
+			}
+		} else if oldIsMap != newIsMap {
+			return false
+		}
+	}
+	return true
+}
+
+// ---------------------- Utilities ----------------------
+
+func deepCopyMap(orig map[string]any) map[string]any {
+	copy := make(map[string]any, len(orig))
+	for k, v := range orig {
+		if m, ok := v.(map[string]any); ok {
+			copy[k] = deepCopyMap(m)
+		} else {
+			copy[k] = v
+		}
+	}
+	return copy
+}
+
+// Recursively marshal maps with sorted keys
+func marshalOrdered(v any) ([]byte, error) {
+	switch vv := v.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(vv))
+		for k := range vv {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		buf := bytes.NewBufferString("{")
+		for i, k := range keys {
+			if i > 0 {
+				buf.WriteString(",")
+			}
+			buf.WriteString(fmt.Sprintf("%q:", k))
+			valBytes, _ := marshalOrdered(vv[k])
+			buf.Write(valBytes)
+		}
+		buf.WriteString("}")
+		return buf.Bytes(), nil
+	case []any:
+		buf := bytes.NewBufferString("[")
+		for i, elem := range vv {
+			if i > 0 {
+				buf.WriteString(",")
+			}
+			elemBytes, _ := marshalOrdered(elem)
+			buf.Write(elemBytes)
+		}
+		buf.WriteString("]")
+		return buf.Bytes(), nil
+	default:
+		return json.Marshal(v)
+	}
+}
