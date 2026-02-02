@@ -821,7 +821,7 @@ END ERROR HANDLING
 	}
 
 	// We are using a unique Action ID here most of the time, meaning the chat will be continued.
-	inputBody = FixContentOutput(inputBody) 
+	inputBody = FixContentOutput(inputBody)
 
 	inputData += fmt.Sprintf(`Precise JSON Field Correction Instructions:
 API context for %s with action %s:
@@ -933,10 +933,10 @@ Input JSON Payload (ensure VALID JSON):
 				}
 			}
 
-			// Make sure we handle variables properly IF they are added by 
+			// Make sure we handle variables properly IF they are added by
 			// FIXME: This could screw up workflow referencing
 			if strings.Contains(formattedVal, "$") {
-				if debug { 
+				if debug {
 					log.Printf("\n\n\n[WARNING] Found $ in formattedVal for param %s: %s. Escaping it. This CAN screw up referencing.\n\n", param.Name, formattedVal)
 				}
 
@@ -944,7 +944,7 @@ Input JSON Payload (ensure VALID JSON):
 				formattedVal = strings.ReplaceAll(formattedVal, "$", "\\$")
 			}
 
-			if param.Name == "queries" && strings.HasPrefix(formattedVal, "?") { 
+			if param.Name == "queries" && strings.HasPrefix(formattedVal, "?") {
 				formattedVal = strings.TrimPrefix(formattedVal, "?")
 			}
 
@@ -1219,7 +1219,7 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 				log.Printf("[ERROR] Failed to get app in get action body for find http endpoint (9): %s", err)
 				return contentOutput, nil
 			}
-		} 
+		}
 
 		for actionIndex, foundAction := range app.Actions {
 			if foundAction.Name != action.Name {
@@ -1390,7 +1390,7 @@ func UploadParameterBase(ctx context.Context, fields []Valuereplace, orgId, appI
 	fieldsParsed := []string{}
 	for _, field := range fields {
 		// Arbitrary limit (for now)
-		if len(field.Value) > 1024 { 
+		if len(field.Value) > 1024 {
 			continue
 		}
 
@@ -1518,15 +1518,15 @@ func FixContentOutput(contentOutput string) string {
 	// Attempts to balance it automatically
 	contentOutput = balanceJSONLikeString(contentOutput)
 
-	// Indent it with marshalling  
+	// Indent it with marshalling
 	tmpMap := map[string]interface{}{}
 	err := json.Unmarshal([]byte(contentOutput), &tmpMap)
 	if err == nil {
-		// Check if "method" exists and remove "body" if it's GET 
+		// Check if "method" exists and remove "body" if it's GET
 		// Too many edgecases have occurred here.
 		if methodFound, ok := tmpMap["method"]; ok {
 			if methodString, ok := methodFound.(string); ok {
-				if ok && methodString == "GET" { 
+				if ok && methodString == "GET" {
 					if _, ok := tmpMap["body"]; ok {
 						delete(tmpMap, "body")
 					}
@@ -1861,10 +1861,10 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 				method = "PATCH"
 			} else if strings.HasPrefix(action.Name, "delete_") {
 				method = "DELETE"
-			} 
+			}
 
 			if label == "app_validation" || label == "test" || label == "test_api" {
-				if method != "GET" { 
+				if method != "GET" {
 					continue
 				}
 			}
@@ -1872,14 +1872,14 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 			// We need to parse out the url from description to help
 			parsedDescriptionUrlPath := ""
 			for _, line := range strings.Split(action.Description, "\n") {
-				// Examples it needs to parse on a line: 
+				// Examples it needs to parse on a line:
 				// - https://graph.microsoft.com/v1.0/users/{user_id}/people
 				// - /v1.0/users/{user_id}/people
 				if strings.Contains(line, "http") {
 					// Parse out the url -> return path only
 					parsedUrl, err := url.Parse(strings.TrimSpace(line))
 					if err != nil {
-						if debug { 
+						if debug {
 							log.Printf("[DEBUG] Failed to parse URL from action description line '%s': %s", line, err)
 						}
 
@@ -1891,7 +1891,7 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 				}
 			}
 
-			// Find the last line and just use it if it has / in it 
+			// Find the last line and just use it if it has / in it
 			// This is a failover
 			if len(parsedDescriptionUrlPath) == 0 {
 				descSplit := strings.Split(action.Description, "\n")
@@ -1908,7 +1908,7 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 			}
 
 			parsedEnding := fmt.Sprintf("(%s %s)", method, parsedDescriptionUrlPath)
-			if actionIndex > 100 || parsedDescriptionUrlPath == "" { 
+			if actionIndex > 100 || parsedDescriptionUrlPath == "" {
 				parsedEnding = ""
 			}
 
@@ -2059,7 +2059,7 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 		actionName := GetCorrectActionName(app.Actions[updatedIndex].Name)
 		changed := false
 		_ = openapi
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] OPENAPI, ACTIONNAME: %s", actionName)
 		}
 
@@ -4950,7 +4950,7 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 	var err error
 	returnApp := &WorkflowApp{}
 	openapiDef := &openapi3.Swagger{}
-	if !standalone { 
+	if !standalone {
 		log.Printf("[DEBUG] In GetAppSingul from non-standalone mode, using GetApp for '%s'", appname)
 		ctx := context.Background()
 
@@ -4959,7 +4959,7 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 			return returnApp, openapiDef, err
 		}
 
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Found app ID %s in algolia for name %s", foundApp.ObjectID, appname)
 		}
 
@@ -5052,7 +5052,7 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 
 		baseUrl = fmt.Sprintf("%s/api/v1", baseUrl)
 		url := fmt.Sprintf("%s/apps/%s/config", baseUrl, appId)
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Loading app %s (%s) from url '%s'", appname, appId, url)
 		}
 		req, err := http.NewRequest(
@@ -5131,7 +5131,7 @@ func GetAppSingul(sourcepath, appname string) (*WorkflowApp, *openapi3.Swagger, 
 		// Associated 99% of the time with github.com/shuffle/python-apps
 		rawPath := fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/refs/heads/master/%s/%s/src/app.py", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(parsedApp.Name, "_", "-"), " ", "-")), parsedApp.AppVersion)
 		log.Printf("LOADING APP SCRIPT FROM %s INTO FILE %s", rawPath, parsedApp.ID)
-		
+
 		os.MkdirAll(fmt.Sprintf("%s/scripts", sourcepath), os.ModePerm)
 
 		// What a mess :)
@@ -7032,7 +7032,7 @@ SINGUL ACTIONS:
 				}
 
 
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG] ACTIONSTR: '%s'", actionStr)
 				}
 
@@ -7057,15 +7057,15 @@ SINGUL ACTIONS:
 									break
 								}
 							}
-							
-							if len(exampleBody) > 200 { 
+
+							if len(exampleBody) > 200 {
 								exampleBody = exampleBody[:200] + "..."
 							}
 
 							specificAppMetadata += fmt.Sprintf("%d. %s(%s) # %s\n", counter+1, strings.ReplaceAll(sortedAppAction.Name, " ", "_"), exampleBody, sortedAppAction.Label)
 						}
 					} else {
-						log.Printf("[ERROR] Failed getting prioritised app actions for app '%s'", strings.TrimPrefix(actionStr, "app:"))
+						log.Printf("[ERROR] AI Agent: Failed getting prioritised app actions for app '%s'", strings.TrimPrefix(actionStr, "app:"))
 					}
 
 
@@ -7074,7 +7074,7 @@ SINGUL ACTIONS:
 				}
 			}
 
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] PARAM (2): %s", param.Value)
 				log.Printf("[DEBUG] Systemmessage (2): %s", systemMessage)
 			}
@@ -7140,7 +7140,7 @@ SINGUL ACTIONS:
 			mappedResult := AgentOutput{}
 			err := json.Unmarshal([]byte(result.Result), &mappedResult)
 			if err != nil {
-				log.Printf("[ERROR][%s] Failed unmarshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
+				log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
 				break
 			}
 
@@ -7198,7 +7198,7 @@ SINGUL ACTIONS:
 
 			marshalledDecisions, err := json.MarshalIndent(relevantDecisions, "", "  ")
 			if err != nil {
-				log.Printf("[ERROR][%s] Failed marshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
+				log.Printf("[ERROR][%s] AI Agent: Failed marshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
 				break
 			}
 
@@ -7256,7 +7256,7 @@ SINGUL ACTIONS:
 			if len(decidedApps) > 0 {
 
 				// Forces away all other apps
-				if len(allowedActionString) == 0 { 
+				if len(allowedActionString) == 0 {
 					metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
 				}
 
@@ -7381,16 +7381,16 @@ SINGUL ACTIONS:
 				}
 
 				if len(decidedApps) > 0 {
-					if len(allowedActionString) == 0 { 
+					if len(allowedActionString) == 0 {
 						metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
 					}
 				}
 			}
 		}
 	}
-	
+
 	// Not necessary as it's directly injected instead
-	if len(specificAppMetadata) > 0 { 
+	if len(specificAppMetadata) > 0 {
 		metadata += fmt.Sprintf("\n%s\n", specificAppMetadata)
 	}
 
@@ -7456,7 +7456,7 @@ FINALISING:
 	}
 
 	if len(userMessage) == 0 {
-		log.Printf("[ERROR][%s] No user message/input found for action %s", execution.ExecutionId, startNode.ID)
+		log.Printf("[ERROR][%s] AI Agent: No user message/input found for action %s", execution.ExecutionId, startNode.ID)
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
 			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (3): No input provided."}`),
@@ -7502,7 +7502,7 @@ FINALISING:
 
 	initialAgentRequestBody, err := json.MarshalIndent(completionRequest, "", "  ")
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed marshalling input for action %s: %s", execution.ExecutionId, startNode.ID, err)
+		log.Printf("[ERROR][%s] AI Agent: Failed marshalling input for action %s: %s", execution.ExecutionId, startNode.ID, err)
 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
@@ -7518,7 +7518,7 @@ FINALISING:
 	//go executeSpecificCloudApp(ctx, execution.ExecutionId, execution.Authorization, urls, startNode)
 	if !runOpenaiRequest {
 
-		log.Printf("[ERROR] Unhandled Singul BODY for OpenAI agent (first request): %s. AI APPNAME (can't be empty): %#v", string(initialAgentRequestBody), appname)
+		log.Printf("[ERROR] AI Agent: Unhandled Singul BODY for OpenAI agent (first request): %s. AI APPNAME (can't be empty): %#v", string(initialAgentRequestBody), appname)
 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
@@ -7572,7 +7572,7 @@ FINALISING:
 
 	marshalledAction, err := json.Marshal(aiNode)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed marshalling action for AI Agent (first agent request): %s", execution.ExecutionId, err)
+		log.Printf("[ERROR][%s] AI Agent: Failed marshalling action for AI Agent (first agent request): %s", execution.ExecutionId, err)
 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
@@ -7609,7 +7609,7 @@ FINALISING:
 	)
 
 	if err != nil {
-		log.Printf("[ERROR] Failed creating request during LLM setup: %s", err)
+		log.Printf("[ERROR] AI Agent: Failed creating request during LLM setup: %s", err)
 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
@@ -7624,7 +7624,7 @@ FINALISING:
 
 	newresp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[ERROR] Failed sending request during LLM setup: %s", err)
+		log.Printf("[ERROR] AI Agent: Failed sending request during LLM setup: %s", err)
 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
@@ -7650,7 +7650,7 @@ FINALISING:
 	defer newresp.Body.Close()
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
-		log.Printf("[ERROR] Failed reading response from sending request for stream during SKIPPED user input: %s", err)
+		log.Printf("[ERROR] AI Agent: Failed reading response from sending request for stream during SKIPPED user input: %s", err)
 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
@@ -7667,7 +7667,7 @@ FINALISING:
 	resultMapping := ActionResult{}
 	err = json.Unmarshal(body, &resultMapping)
 	if err != nil {
-		log.Printf("[ERROR] Failed unmarshalling response into decisions. Response from sending AI Agent request: %d - %s", newresp.StatusCode, string(body))
+		log.Printf("[ERROR] AI Agent: Failed unmarshalling response into decisions. Response from sending AI Agent request: %d - %s", newresp.StatusCode, string(body))
 	}
 
 	resultMapping.ExecutionId = execution.ExecutionId
@@ -7689,7 +7689,7 @@ FINALISING:
 		if len(additionalResultMapping.Errors) > 0 {
 			// Handle this.
 			if debug {
-				log.Printf("\n\n[ERROR][%s] BODY LEN: %d. Got %d errors from Agent AI subrequest", resultMapping.ExecutionId, len(body), len(additionalResultMapping.Errors))
+				log.Printf("\n\n[ERROR][%s] AI Agent: BODY LEN: %d. Got %d errors from Agent AI subrequest", resultMapping.ExecutionId, len(body), len(additionalResultMapping.Errors))
 			}
 		}
 
@@ -7722,7 +7722,7 @@ FINALISING:
 		outputMap := HTTPOutput{}
 		err = json.Unmarshal([]byte(resultMapping.Result), &outputMap)
 		if err != nil {
-			log.Printf("[ERROR][%s] Failed unmarshalling response from sending request for stream during SKIPPED user input: %s. Body: %s", execution.ExecutionId, err, string(resultMapping.Result))
+			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling response from sending request for stream during SKIPPED user input: %s. Body: %s", execution.ExecutionId, err, string(resultMapping.Result))
 
 			execution.Status = "ABORTED"
 			execution.Results = append(execution.Results, ActionResult{
@@ -7736,7 +7736,7 @@ FINALISING:
 		}
 
 		if outputMap.Status != 200 {
-			log.Printf("[ERROR][%s] Failed to run AI agent with status code %d", execution.ExecutionId, outputMap.Status)
+			log.Printf("[ERROR][%s] AI Agent: Failed to run AI agent with status code %d", execution.ExecutionId, outputMap.Status)
 			//return startNode, errors.New(fmt.Sprintf("Failed to run AI agent with status code %d", outputMap.Status))
 		}
 
@@ -7745,13 +7745,13 @@ FINALISING:
 		bodyString := []byte{}
 		bodyMap, ok := outputMap.Body.(map[string]interface{})
 		if !ok {
-			log.Printf("[ERROR][%s] Failed to convert body to MAP in AI Agent response. Raw response: %s", execution.ExecutionId, string(resultMapping.Result))
+			log.Printf("[ERROR][%s] AI Agent: Failed to convert body to MAP in AI Agent response. Raw response: %s", execution.ExecutionId, string(resultMapping.Result))
 
 			choicesString = fmt.Sprintf("LLM Response Error: %s", string(resultMapping.Result))
 		} else {
 			bodyString, err = json.Marshal(bodyMap)
 			if err != nil {
-				log.Printf("[ERROR] Failed marshalling body to string in AI Agent response: %s", err)
+				log.Printf("[ERROR] AI Agent: Failed marshalling body to string in AI Agent response: %s", err)
 
 				execution.Status = "ABORTED"
 				execution.Results = append(execution.Results, ActionResult{
@@ -7768,15 +7768,15 @@ FINALISING:
 		openaiOutput := openai.ChatCompletionResponse{}
 		err = json.Unmarshal(bodyString, &openaiOutput)
 		if err != nil {
-			log.Printf("[ERROR][%s] Failed unmarshalling response from OpenAI Agent request: %s", execution.ExecutionId, err)
+			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling response from OpenAI Agent request: %s", execution.ExecutionId, err)
 		}
 
 		// Edgecase handling for LLM not being available etc
 		if len(choicesString) > 0 {
-			log.Printf("\n\n[ERROR][%s] Found choicesString (1) in AI Agent response error handling: %s\n\n", execution.ExecutionId, choicesString)
+			log.Printf("\n\n[ERROR][%s] AI Agent: Found choicesString (1) in AI Agent response error handling: %s\n\n", execution.ExecutionId, choicesString)
 
 		} else if len(openaiOutput.Choices) == 0 {
-			log.Printf("[ERROR][%s] No choices found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
+			log.Printf("[ERROR][%s] AI Agent: No choices found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
 
 			// FIXME: This is specific to OpenAI, but may work for others :thinking:
 			newOutput := openai.ErrorResponse{}
@@ -7786,7 +7786,7 @@ FINALISING:
 
 				resultMapping.Status = "FAILURE"
 			} else {
-				log.Printf("[ERROR][%s] No choices, nor error found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
+				log.Printf("[ERROR][%s] AI Agent: No choices, nor error found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
 				resultMapping.Status = "FAILURE"
 			}
 		} else {
@@ -7830,14 +7830,14 @@ FINALISING:
 		errorMessage := ""
 		err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
 		if err != nil {
-			log.Printf("[ERROR][%s] Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
+			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
 
 			if len(mappedDecisions) == 0 {
 				decisionString = strings.Replace(decisionString, `\"`, `"`, -1)
 
 				err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
 				if err != nil {
-					log.Printf("[ERROR][%s] Failed unmarshalling decisions in AI Agent response (2): %s. String: %s", execution.ExecutionId, err, decisionString)
+					log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling decisions in AI Agent response (2): %s. String: %s", execution.ExecutionId, err, decisionString)
 					resultMapping.Status = "FAILURE"
 
 					// Updating the OUTPUT in some way to help the user a bit.
@@ -7921,7 +7921,7 @@ FINALISING:
 				if err == nil {
 					mappedDecision.RunDetails.Id = base64.RawURLEncoding.EncodeToString(b)
 				} else {
-					log.Printf("[ERROR][%s] Failed generating random string for decision index %s-%d (2)", execution.ExecutionId, mappedDecision.Tool, mappedDecision.I)
+					log.Printf("[ERROR][%s] AI Agent: Failed generating random string for decision index %s-%d (2)", execution.ExecutionId, mappedDecision.Tool, mappedDecision.I)
 				}
 
 				agentOutput.Decisions = append(agentOutput.Decisions, mappedDecision)
@@ -7940,7 +7940,7 @@ FINALISING:
 					// Re-marshal the result
 					agentOutputMarshalled, err := json.Marshal(agentOutput)
 					if err != nil {
-						log.Printf("[ERROR] Failed marshalling agent output in AI Agent response: %s", err)
+						log.Printf("[ERROR] AI Agent: Failed marshalling agent output in AI Agent response: %s", err)
 					} else {
 						execution.Results[resultIndex].Result = string(agentOutputMarshalled)
 					}
@@ -7951,7 +7951,7 @@ FINALISING:
 					actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, result.Action.ID)
 					err = SetCache(ctx, actionCacheId, []byte(execution.Results[resultIndex].Result), 35)
 					if err != nil {
-						log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
+						log.Printf("[ERROR] AI Agent: Failed setting cache for action result %s: %s", actionCacheId, err)
 					}
 				}
 
@@ -7986,7 +7986,7 @@ FINALISING:
 				b := make([]byte, 6)
 				_, err := rand.Read(b)
 				if err != nil {
-					log.Printf("[ERROR][%s] Failed generating random string for decision index %s-%d", execution.ExecutionId, decision.Tool, decision.I)
+					log.Printf("[ERROR][%s] AI Agent: Failed generating random string for decision index %s-%d", execution.ExecutionId, decision.Tool, decision.I)
 				} else {
 					agentOutput.Decisions[decisionIndex].RunDetails.Id = base64.RawURLEncoding.EncodeToString(b)
 					decision.RunDetails.Id = agentOutput.Decisions[decisionIndex].RunDetails.Id
@@ -7997,7 +7997,7 @@ FINALISING:
 			// Which do we use:
 			// 1. Local Singul
 			if decision.Action == "" {
-				log.Printf("[ERROR] No action found in AI agent decision: %#v", decision)
+				log.Printf("[ERROR] AI Agent: No action found in AI agent decision: %#v", decision)
 				continue
 			}
 
@@ -8090,7 +8090,7 @@ FINALISING:
 
 					marshalledDecision, err := json.Marshal(decision)
 					if err != nil {
-						log.Printf("[ERROR] Failed marshalling decision in AI Agent decision handler: %s", err)
+						log.Printf("[ERROR] AI Agent: Failed marshalling decision in AI Agent decision handler: %s", err)
 					} else {
 						actionResult := ActionResult{
 							ExecutionId:   execution.ExecutionId,
@@ -8113,7 +8113,7 @@ FINALISING:
 
 								newExec, err := GetWorkflowExecution(context.Background(), execution.ExecutionId)
 								if err != nil {
-									log.Printf("[ERROR] Failed getting workflow execution for handling first decision in AI Agent: %s", err)
+									log.Printf("[ERROR] AI Agent: Failed getting workflow execution for handling first decision in AI Agent: %s", err)
 								} else {
 									execution = *newExec
 								}
@@ -8129,7 +8129,7 @@ FINALISING:
 					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 					agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 
-					log.Printf("\n\n\n\n\n[ERROR] Action '%s' with category '%s' is NOT supported in AI Agent decisions. Skipping...\n\n\n\n\n", decision.Action, decision.Category)
+					log.Printf("\n\n\n\n\n[ERROR] AI Agent: Action '%s' with category '%s' is NOT supported in AI Agent decisions. Skipping...\n\n\n\n\n", decision.Action, decision.Category)
 				}
 			}
 
@@ -8137,12 +8137,12 @@ FINALISING:
 		}
 
 		if !decisionActionRan {
-			log.Printf("[ERROR][%s] No decision action was run. Marking the agent as FAILURE.", execution.ExecutionId)
+			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Marking the agent as FAILURE.", execution.ExecutionId)
 		}
 
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
 		if err != nil {
-			log.Printf("[ERROR] Failed marshalling agent output in AI Agent response: %s", err)
+			log.Printf("[ERROR] AI Agent: Failed marshalling agent output in AI Agent response: %s", err)
 			return startNode, err
 		}
 
@@ -8152,7 +8152,7 @@ FINALISING:
 		actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, resultMapping.Action.ID)
 		err = SetCache(ctx, actionCacheId, []byte(resultMapping.Result), 35)
 		if err != nil {
-			log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
+			log.Printf("[ERROR] AI Agent: Failed setting cache for action result %s: %s", actionCacheId, err)
 		}
 
 		// Makes sure ot update the execution itself as well
@@ -8193,7 +8193,7 @@ FINALISING:
 		}
 
 	} else {
-		log.Printf("[ERROR] No result found in AI agent response. Status: %d. Body: %s", newresp.StatusCode, string(body))
+		log.Printf("[ERROR] AI Agent: No result found in AI agent response. Status: %d. Body: %s", newresp.StatusCode, string(body))
 	}
 
 	if memorizationEngine == "shuffle_db" {
@@ -8209,7 +8209,7 @@ FINALISING:
 		marshalledCompletionRequest, err := json.MarshalIndent(completionRequest, "", "  ")
 
 		if err != nil {
-			log.Printf("[ERROR][%s] Failed marshalling openai completion request: %s", execution.ExecutionId, err)
+			log.Printf("[ERROR][%s] AI Agent: Failed marshalling openai completion request: %s", execution.ExecutionId, err)
 		} else {
 			cacheData := CacheKeyData{
 				Key:      requestKey,
@@ -8224,7 +8224,7 @@ FINALISING:
 
 			err := SetDatastoreKey(ctx, cacheData)
 			if err != nil {
-				log.Printf("[ERROR][%s] Failed updating AI requests: %s", execution.ExecutionId, err)
+				log.Printf("[ERROR][%s] AI Agent: Failed updating AI requests: %s", execution.ExecutionId, err)
 			}
 		}
 	}
@@ -8232,7 +8232,7 @@ FINALISING:
 	// 1. Map the response back
 	newResult, err := json.Marshal(resultMapping)
 	if err != nil {
-		log.Printf("[ERROR] Failed marshalling response from sending request for stream during SKIPPED user input: %s", err)
+		log.Printf("[ERROR] AI Agent: Failed marshalling response from sending request for stream during SKIPPED user input: %s", err)
 	}
 
 	// Send the stream result to /api/v1/streams
@@ -8244,20 +8244,20 @@ FINALISING:
 	)
 
 	if err != nil {
-		log.Printf("[ERROR] Failed creating request for stream during SKIPPED user input: %s", err)
+		log.Printf("[ERROR] AI Agent: Failed creating request for stream during SKIPPED user input: %s", err)
 		return startNode, err
 	}
 
 	streamResp, err := client.Do(streamReq)
 	if err != nil {
-		log.Printf("[ERROR] Failed sending request for stream during SKIPPED user input: %s", err)
+		log.Printf("[ERROR] AI Agent: Failed sending request for stream during SKIPPED user input: %s", err)
 		return startNode, err
 	}
 
 	defer streamResp.Body.Close()
 	streamBody, err := ioutil.ReadAll(streamResp.Body)
 	if err != nil {
-		log.Printf("[ERROR] Failed reading response from sending request for stream during SKIPPED user input: %s", err)
+		log.Printf("[ERROR] AI Agent: Failed reading response from sending request for stream during SKIPPED user input: %s", err)
 		return startNode, err
 	}
 
@@ -8361,7 +8361,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		initialising = true
 	}
 
-	if categoryAction.ActionName == "remove" || categoryAction.ActionName == "disable" { 
+	if categoryAction.ActionName == "remove" || categoryAction.ActionName == "disable" {
 		if workflowErr == nil && workflow.OrgId == user.ActiveOrg.Id {
 			// Delete the workflow
 			err = DeleteKey(ctx, "workflow", workflowId)
@@ -8745,7 +8745,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		//log.Printf("\n\n\nGot %d messages in chat completion (%s)\n\n\n", len(chatCompletion.Messages), cachedChat)
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("\n\n[DEBUG] Chatcompletion messages: %d\n\n", len(chatCompletion.Messages))
 	}
 
