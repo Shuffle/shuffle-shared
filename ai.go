@@ -747,7 +747,15 @@ func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, stat
 	// Add Intent Context if available
 	intentContext := ""
 	if len(intent) > 0 {
-		intentContext = fmt.Sprintf("USER INTENT (GOAL): %s\n\nUse this goal to verify if the API path, body, and parameters are even correct for what the user wants to achieve. If the path seems wrong for this goal, CHANGE IT.", intent)
+		intentContext = fmt.Sprintf(`USER INTENT (GOAL): %s 
+		
+Your primary job is to ensure the API request achieves this GOAL. The specific HTTP error is just a symptom. If the current Path, Body, or Query parameters do not semantically match this goal, REWRITE them to match the correct API endpoint and usage.
+
+SEMANTIC VALIDATION RULES:
+1. INTENT MATCHING: Does the current "path" actually perform the User's Intent? If not, find the correct path for this API (e.g. changing /items to /items/{id}).
+2. BODY ACCURACY: Do the fields in the body belong to this specific Endpoint? Remove fields that don't belong (e.g. sending 'id' in a create body if not needed).
+3. QUERY CORRECTNESS: Are the query parameters valid for this endpoint?
+4. METHOD CHECK: Ensure the HTTP Method (GET/POST/etc) is correct. NEVER send a body with GET/HEAD/OPTIONS.`, intent)
 	}
 
 	systemMessage := fmt.Sprintf(`INTRODUCTION
