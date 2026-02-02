@@ -760,7 +760,7 @@ SEMANTIC VALIDATION RULES:
 
 	systemMessage := fmt.Sprintf(`INTRODUCTION
 
-Return all key:value pairs from the last user message, but with modified values to fix ALL the HTTP errors at once. Don't add any comments. Do not try the same thing twice, and use your existing knowledge of the API name and action to reformat the output until it works. All fields in "Required data" MUST be a part of the output if possible. Output MUST be valid JSON. 
+Return all key:value pairs from the last user message, but with modified values to fix ALL the HTTP errors at once. Don't add any comments. Do not try the same thing twice, and use your existing knowledge of the API name and action to reformat the output until it works. Output MUST be valid JSON. 
 
 END INTRODUCTION
 ---
@@ -797,6 +797,7 @@ OUTPUT FORMATTING
 - Output as JSON for a Rest API
 - Do NOT make the same output mistake twice. 
 - Headers should be separated by newline between each key:value pair
+- Queries should be a single string (e.g. "q=foo&bar=baz")
 
 END OUTPUT FORMATTING
 ---
@@ -1008,6 +1009,7 @@ Input JSON Payload (ensure VALID JSON):
 	urlValue := ""
 	pathValue := ""
 	queriesValue := ""
+	method := ""
 
 	// Collect current values from action parameters
 	for _, param := range action.Parameters {
@@ -1017,6 +1019,8 @@ Input JSON Payload (ensure VALID JSON):
 			pathValue = param.Value
 		} else if param.Name == "queries" {
 			queriesValue = param.Value
+		} else if param.Name == "method" {
+			method = param.Value
 		}
 	}
 
@@ -1039,6 +1043,11 @@ Input JSON Payload (ensure VALID JSON):
 			action.Parameters[i].Value = pathValue
 		case "queries":
 			action.Parameters[i].Value = queriesValue
+		case "body":
+			// If method does not allow body, empty it.
+			if method == "GET" {
+				action.Parameters[i].Value = ""
+			}
 		}
 	}
 
@@ -1050,33 +1059,59 @@ Input JSON Payload (ensure VALID JSON):
 }
 
 func normalize(urlValue, pathValue, queriesValue string) (string, string, string) {
-	parsed, err := url.Parse(urlValue)
-	if err != nil {
-		return urlValue, pathValue, queriesValue
-	}
-
-	// If BOTH path and queries are empty, keep the full URL as-is
-	// This means LLM didn't fill them, so we shouldn't split
-	if pathValue == "" && queriesValue == "" {
-		return urlValue, pathValue, queriesValue
-	}
-
+	path := strings.TrimSpace(pathValue)
+	queries := strings.TrimSpace(queriesValue)
 	baseURL := ""
-	if parsed.Scheme != "" && parsed.Host != "" {
-		baseURL = parsed.Scheme + "://" + parsed.Host
+
+	var parsed *url.URL
+	if urlValue != "" {
+		u, err := url.Parse(urlValue)
+		if err == nil {
+			parsed = u
+			if u.Scheme != "" && u.Host != "" {
+				baseURL = u.Scheme + "://" + u.Host
+			}
+		}
 	}
 
-	// Extract path from URL if path is still empty
-	if pathValue == "" {
-		pathValue = parsed.Path
+	// 1. Normalize queries if LLM returned JSON
+	if strings.HasPrefix(queries, "{") {
+		var m map[string]interface{}
+		if json.Unmarshal([]byte(queries), &m) == nil {
+			parts := []string{}
+			for k, v := range m {
+				parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+			}
+			queries = strings.Join(parts, "&")
+		}
 	}
 
-	// Extract queries from URL if queries is still empty
-	if queriesValue == "" {
-		queriesValue = parsed.RawQuery
+	// 2. If path contains queries and queries field is empty, extract them
+	if queries == "" && strings.Contains(path, "?") {
+		parts := strings.SplitN(path, "?", 2)
+		path = parts[0]
+		if len(parts) == 2 {
+			queries = parts[1]
+		}
 	}
 
-	return baseURL, pathValue, queriesValue
+	// 3. If path is empty, try URL
+	if path == "" && parsed != nil {
+		path = parsed.Path
+	}
+
+	// 4. If queries still empty, try URL
+	if queries == "" && parsed != nil {
+		queries = parsed.RawQuery
+	}
+
+	// 5. Final safety: path must never contain '?'
+	if strings.Contains(path, "?") {
+		parts := strings.SplitN(path, "?", 2)
+		path = parts[0]
+	}
+
+	return baseURL, path, queries
 }
 
 func getBadOutputString(action Action, appname, inputdata, outputBody string, status int) string {
@@ -2183,7 +2218,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 
 		parseCategories += fmt.Sprintf("category: %s, labels: ", category.Name)
 		for _, actionLabel := range category.ActionLabels {
-			parseCategories += fmt.Sprintf(actionLabel)
+			parseCategories += fmt.Sprintf("%s", actionLabel)
 
 			// Check if actionLabel in RequiredFields map
 			required, ok := category.RequiredFields[actionLabel]
@@ -2456,7 +2491,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 							log.Printf("[INFO] API for %s requires auth (2), but we don't have it. Returning error: %s", relevantApps[0].Name, err)
 
 							if !strings.HasPrefix(outputFormat, "action") {
-								respBody = []byte(fmt.Sprintf(authMessage))
+								respBody = []byte(fmt.Sprintf("%s", authMessage))
 								resp.WriteHeader(500)
 								resp.Write(respBody)
 								return respBody, err
@@ -2594,7 +2629,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 			} else {
 				log.Printf("[ERROR] No matching apps found in the org for category '%s' and action label '%s'", category, actionLabel)
 
-				googleQuery := fmt.Sprintf(inputQuery)
+				googleQuery := fmt.Sprintf("%s", inputQuery)
 				if !strings.Contains(inputQuery, "API") {
 					googleQuery += "API for " + inputQuery
 				}
@@ -2822,7 +2857,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 							log.Printf("[INFO] API for %s requires auth (2), but we didn't get a key. Returning error: %s", relevantApps[0].Name, err)
 
 							if !strings.HasPrefix(outputFormat, "action") {
-								respBody = []byte(fmt.Sprintf(authMessage))
+								respBody = []byte(fmt.Sprintf("%s", authMessage))
 								resp.WriteHeader(500)
 								resp.Write(respBody)
 								return respBody, errors.New("API requires auth (2)")
@@ -3607,7 +3642,7 @@ func findActionByInput(inputQuery, actionLabel string, foundApp WorkflowApp) (st
 		}
 
 		newAction := action.Name
-		parsed := fmt.Sprintf(strings.Replace(strings.ToLower(newAction), "_", " ", -1))
+		parsed := fmt.Sprintf("%s", strings.Replace(strings.ToLower(newAction), "_", " ", -1))
 		parsed = GetCorrectActionName(parsed)
 		if len(parsed) > 30 {
 			parsed = parsed[:30]
@@ -4372,7 +4407,7 @@ func findNextAction(action Action, stepOutput []byte, additionalInfo, inputdata,
 		}
 
 		if debug {
-			log.Printf("[DEBUG] ERROR in body handler. Status: %#v: %s", string(body), status)
+			log.Printf("[DEBUG] ERROR in body handler. Status: %#v: %d", string(body), status)
 		}
 
 		// Should turn body into a string and check OpenAPI for problems if status is bad
@@ -7608,7 +7643,7 @@ FINALISING:
 	// https://pkg.go.dev/github.com/sashabaranov/go-openai#ChatCompletionMessage
 	for messageIndex, _ := range completionRequest.Messages {
 		if len(completionRequest.Messages[messageIndex].Name) == 0 {
-			completionRequest.Messages[messageIndex].Name = string(time.Now().Unix())
+			completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().Unix())
 		}
 	}
 
@@ -8166,7 +8201,7 @@ FINALISING:
 
 		for messageIndex, _ := range completionRequest.Messages {
 			if len(completionRequest.Messages[messageIndex].Name) == 0 {
-				completionRequest.Messages[messageIndex].Name = string(time.Now().Unix())
+				completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().Unix())
 			}
 		}
 

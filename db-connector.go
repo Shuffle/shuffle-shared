@@ -223,6 +223,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 				if len(totalData) > 10062147 {
 					//log.Printf("[WARNING] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
 				}
+
 				return totalData, nil
 			} else {
 				return item.Value, nil
@@ -4698,7 +4699,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			}
 
 			if len(orgUsers) > 0 {
-				log.Printf("[ERROR] Found 0 users for org %d. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", data.Id, len(orgUsers))
+				log.Printf("[ERROR] Found 0 users for org %s. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", data.Id, len(orgUsers))
 				data.Users = orgUsers
 			}
 		}
@@ -5269,7 +5270,7 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 	var apps []WorkflowApp
 
 	nameKey := "workflowapp"
-	cacheKey := fmt.Sprintf("%s_appname_%s", appName)
+	cacheKey := fmt.Sprintf("%s_appname_%s", nameKey, appName)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -13319,6 +13320,63 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			// goroutine as we use heavy caching for this.
 			config, getCacheError := GetDatastoreKey(ctx, datastoreId, cacheData.Category)
 			if getCacheError == nil && config.Created > 0 {
+
+				// Compares old vs new, checks if allowed
+
+				categoryConfig, err := GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting category config for org %s and category %s: %s", orgId, mainCategory, err)
+				}
+
+				//if debug { 
+				//	log.Printf("[DEBUG] RULECHECK %#v -> %#v", getCacheError, config.Created)
+				//}
+
+				ruleValid := true
+				for _, automation := range categoryConfig.Automations {
+					if !automation.Enabled {
+						continue
+					}
+
+					if automation.Name != "security_rules" && automation.Name != "Security Rules" { 
+						continue
+					}
+
+					foundRule := ""
+					for _, option := range automation.Options {
+						if option.Key == "rule" {
+							foundRule = option.Value
+							break
+						}
+					}
+
+					if debug {
+						log.Printf("[DEBUG] FOUND SECURITY RULES AUTOMATION FOR ORG %s AND CATEGORY %s: %#v", cacheData.OrgId, mainCategory, foundRule)
+					}
+
+					if len(foundRule) > 5 {
+						oldDoc := config.Value
+						newDoc := cacheData.Value
+						mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
+						log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. Merged: %#v. Error: %#v", foundRule, allowed, mergedJSON, errString)
+						if allowed {
+							ruleValid = true
+							cacheData.Value = mergedJSON
+						} else {
+							ruleValid = false
+						}
+
+					}
+
+					break
+				}
+
+				if !ruleValid {
+					// Break out
+					log.Printf("Rule isn't valid! NOT modifying.")
+					return
+				}
+
 				cacheData.Created = config.Created
 				cacheData.Authorization = config.Authorization
 				cacheData.SuborgDistribution = config.SuborgDistribution
@@ -14200,7 +14258,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		resp, err := project.Es.Info(ctx, infoSearchReq)
 		if err != nil {
 			if strings.Contains(fmt.Sprintf("%s", err), "the client noticed that the server is not a supported distribution") {
-				log.Printf("[ERROR] Version is not supported - most likely Elasticsearch >= 8.0.0: %s -> %s", resp, err)
+				log.Printf("[ERROR] Version is not supported - most likely Elasticsearch >= 8.0.0: %#v -> %s", resp, err)
 			}
 		}
 

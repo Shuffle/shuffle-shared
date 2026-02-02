@@ -460,7 +460,7 @@ func HandleNewGithubRegister(resp http.ResponseWriter, request *http.Request) {
 
 	trigger := TriggerAuth{}
 	trigger.Id = fmt.Sprintf("github_%s", user.Id)
-	trigger.Username = fmt.Sprintf(user.Username)
+	trigger.Username = fmt.Sprintf("%s", user.Username)
 	trigger.OrgId = user.ActiveOrg.Id
 	trigger.Owner = user.Id
 	trigger.Type = "github"
