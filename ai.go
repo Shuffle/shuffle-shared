@@ -7431,7 +7431,8 @@ RULES:
 * Do NOT add unnecessary fields; only include fields required for the action.
 * All arguments for tool calls MUST be literal, resolved values (e.g. '12345'); using placeholders (like 'REPLACE_WITH_ID') or variable syntax (like '{step_0.response}') is STRICTLY FORBIDDEN.
 * If questions are absolutely required, combine all into one "ask" action with multiple "question" fields. Do NOT create multiple separate ones.
-* Retry actions if the result was irrelevant. After three retries of a failed decision, add the finish decision. 
+* Retry actions if the result was irrelevant. After three retries of a failed decision, add the finish decision.
+* Read response bodies, not just status codes. If the response doesn't match what success should look like for that action, treat it as failure and retry.
 * If any decision has failed, add the finish decision with details about the failure.
 * If a formatting is specified for the output, use it exactly how explained for the finish decision.
 * NEVER finalise until the task is actually performed. Action is our focus - not analysis. If we skipped ANYTHING - explain it. If we failed, don't lie. Be truthful about EXACTLY what happened and summarise it.
