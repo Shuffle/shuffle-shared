@@ -7254,12 +7254,11 @@ SINGUL ACTIONS:
 			//}
 
 			if len(decidedApps) > 0 {
-
 				// Forces away all other apps
-				if len(allowedActionString) == 0 {
+				// if len(allowedActionString) == 0 {
+				// 	metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
+				// }
 					metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
-				}
-
 			} else {
 				decidedApps := ""
 				appauth, autherr := GetAllWorkflowAppAuth(ctx, org.Id)
@@ -7381,13 +7380,14 @@ SINGUL ACTIONS:
 				}
 
 				if len(decidedApps) > 0 {
-					if len(allowedActionString) == 0 {
+					// if len(allowedActionString) == 0 {
+					// 	metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
+					// }
 						metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
 					}
 				}
 			}
 		}
-	}
 
 	// Not necessary as it's directly injected instead
 	if len(specificAppMetadata) > 0 {
