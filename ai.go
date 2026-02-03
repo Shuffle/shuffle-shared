@@ -7427,7 +7427,6 @@ RULES:
 * NEVER ask for confirmation before performing an action.
 * NEVER skip execution because of minor missing details—fill them with reasonable defaults (e.g., default units or formats) and proceed.
 * If API action, ALWAYS include the url, method, headers and body when using an API action
-* Base URLs are handled by authentication. Focus more on the API path/endpoint. Use paths from the tool's documentation or your internal knowledge - do NOT invent paths.
 * Do NOT add unnecessary fields; only include fields required for the action.
 * All arguments for tool calls MUST be literal, resolved values (e.g. '12345'); using placeholders (like 'REPLACE_WITH_ID') or variable syntax (like '{step_0.response}') is STRICTLY FORBIDDEN.
 * If questions are absolutely required, combine all into one "ask" action with multiple "question" fields. Do NOT create multiple separate ones.
