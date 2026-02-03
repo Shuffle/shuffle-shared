@@ -1546,10 +1546,10 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 		execType := "CATEGORY_UPDATE"
 		err = SetDetectionOrborusRequest(ctx, user.ActiveOrg.Id, execType, file.Filename, "SIGMA", "SHUFFLE_DISCOVER")
 		if err != nil {
-			log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false}`))
-			return
+			log.Printf("[ERROR] Failed setting workflow queue for env: %s. This is at the end of file upload for Sigma specifically.", err)
+			//resp.WriteHeader(500)
+			//resp.Write([]byte(`{"success": false}`))
+			//return
 		}
 	}
 
