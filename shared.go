@@ -20663,9 +20663,27 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	// This is NOT a good solution, but a good bypass
-	if app.Authentication.Required || len(action.AuthenticationId) > 0 {
+	// Check if this is from AI Agent - if so, skip the auth logic
+	isAiAgent := false
+	for _, param := range action.Parameters {
+		if param.Name == "_shuffle_ai_agent" && param.Value == "true" {
+			isAiAgent = true
+			break
+		}
+	}
 
-		if len(action.AuthenticationId) > 0 {
+	if app.Authentication.Required || len(action.AuthenticationId) > 0 {
+		// Skip auth logic for AI Agent
+		if isAiAgent {
+			// Remove the marker parameter before continuing
+			newParams := []WorkflowAppActionParameter{}
+			for _, param := range action.Parameters {
+				if param.Name != "_shuffle_ai_agent" {
+					newParams = append(newParams, param)
+				}
+			}
+			action.Parameters = newParams
+		} else if len(action.AuthenticationId) > 0 {
 			if debug {
 				log.Printf("[DEBUG][%s] Found auth ID for single action: %s", workflowExecution.ExecutionId, action.AuthenticationId)
 			}

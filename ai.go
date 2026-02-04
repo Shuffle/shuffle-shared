@@ -7004,6 +7004,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	ctx := context.Background()
 
+	// Track AI credits for cloud (only on first call)
+	if project.Environment == "cloud" && !createNextActions {
+		if len(execution.ExecutionOrg) > 0 {
+			IncrementCache(ctx, execution.ExecutionOrg, "ai_executions", 1)
+			log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", execution.ExecutionOrg, execution.ExecutionId)
+		}
+	}
+
 	systemMessage := "" // Handled further down now
 	userMessage := ""
 
@@ -7540,6 +7548,16 @@ Output ONLY a valid JSON list. Do not use Markdown blocks.
 		log.Printf("\n\n\n[DEBUG] BODY for AI Agent (first request): %s\n\n\n", string(initialAgentRequestBody))
 	}
 
+	apiKey := os.Getenv("AI_API_KEY")
+	if apiKey == "" {
+		apiKey = os.Getenv("OPENAI_API_KEY")
+	}
+
+	aiUrl := os.Getenv("AI_API_URL")
+	if aiUrl == "" {
+		aiUrl = "https://api.openai.com"
+	}
+
 	// Hardcoded for now
 	aiNode := Action{}
 	aiNode.AppID = "5d19dd82517870c68d40cacad9b5ca91"
@@ -7553,12 +7571,8 @@ Output ONLY a valid JSON list. Do not use Markdown blocks.
 	aiNode.Parameters = []WorkflowAppActionParameter{
 		WorkflowAppActionParameter{
 			Name:  "url",
-			Value: "",
+			Value: aiUrl,
 		},
-		//WorkflowAppActionParameter{
-		//	Name:  "apikey",
-		//	Value: "",
-		//},
 		WorkflowAppActionParameter{
 			Name:  "body",
 			Value: string(initialAgentRequestBody),
@@ -7567,6 +7581,18 @@ Output ONLY a valid JSON list. Do not use Markdown blocks.
 			Name:  "headers",
 			Value: "Content-Type: application/json\nAccept: application/json",
 		},
+		WorkflowAppActionParameter{
+			Name:  "_shuffle_ai_agent",
+			Value: "true",
+		},
+	}
+
+	if len(apiKey) > 0 {
+		aiNode.Parameters = append(aiNode.Parameters, WorkflowAppActionParameter{
+			Name:          "apikey",
+			Value:         apiKey,
+			Configuration: true,
+		})
 	}
 
 	// To ensure we get the context of an execution properly
