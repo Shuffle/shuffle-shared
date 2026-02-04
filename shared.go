@@ -20662,28 +20662,60 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		app = *newApp
 	}
 
-	// This is NOT a good solution, but a good bypass
-	// Check if this is from AI Agent - if so, skip the auth logic
-	isAiAgent := false
-	for _, param := range action.Parameters {
-		if param.Name == "_shuffle_ai_agent" && param.Value == "true" {
-			isAiAgent = true
-			break
+	// Special handling for OpenAI app when no authentication is provided
+	if appId == "5d19dd82517870c68d40cacad9b5ca91" && len(action.AuthenticationId) == 0 {
+		apiKey := os.Getenv("AI_API_KEY")
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		}
+
+		apiUrl := os.Getenv("AI_API_URL")
+		if apiUrl == "" {
+			apiUrl = os.Getenv("OPENAI_API_URL")
+		}
+		if apiUrl == "" {
+			apiUrl = "https://api.openai.com"
+		}
+
+		// Only inject if we have an API key
+		// so let's set both URL and apikey together to prevent sending credentials to wrong endpoints
+		if len(apiKey) > 0 {
+			urlFound := false
+			apikeyFound := false
+
+			for i, param := range action.Parameters {
+				if param.Name == "url" {
+					action.Parameters[i].Value = apiUrl
+					urlFound = true
+				}
+				if param.Name == "apikey" {
+					action.Parameters[i].Value = apiKey
+					action.Parameters[i].Configuration = true
+					apikeyFound = true
+				}
+			}
+
+			// Add parameters if they don't exist
+			if !urlFound {
+				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					Name:  "url",
+					Value: apiUrl,
+				})
+			}
+			if !apikeyFound {
+				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					Name:          "apikey",
+					Value:         apiKey,
+					Configuration: true,
+				})
+			}
+
+			log.Printf("[INFO] Injected system OpenAI credentials for execution %s", workflowExecution.ExecutionId)
 		}
 	}
 
 	if app.Authentication.Required || len(action.AuthenticationId) > 0 {
-		// Skip auth logic for AI Agent
-		if isAiAgent {
-			// Remove the marker parameter before continuing
-			newParams := []WorkflowAppActionParameter{}
-			for _, param := range action.Parameters {
-				if param.Name != "_shuffle_ai_agent" {
-					newParams = append(newParams, param)
-				}
-			}
-			action.Parameters = newParams
-		} else if len(action.AuthenticationId) > 0 {
+		if len(action.AuthenticationId) > 0 {
 			if debug {
 				log.Printf("[DEBUG][%s] Found auth ID for single action: %s", workflowExecution.ExecutionId, action.AuthenticationId)
 			}

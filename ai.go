@@ -7547,32 +7547,13 @@ Output ONLY a valid JSON list. Do not use Markdown blocks.
 	if debug {
 		log.Printf("\n\n\n[DEBUG] BODY for AI Agent (first request): %s\n\n\n", string(initialAgentRequestBody))
 	}
-
-	apiKey := os.Getenv("AI_API_KEY")
-	if apiKey == "" {
-		apiKey = os.Getenv("OPENAI_API_KEY")
-	}
-
-	aiUrl := os.Getenv("AI_API_URL")
-	if aiUrl == "" {
-		aiUrl = "https://api.openai.com"
-	}
-
-	// Hardcoded for now
 	aiNode := Action{}
 	aiNode.AppID = "5d19dd82517870c68d40cacad9b5ca91"
 	aiNode.AppName = "openai"
 	aiNode.Name = "post_generate_a_chat_response"
+	aiNode.AuthenticationId = "" 
 
-	//aiNode.Environment = "cloud"
-
-	// FIXME: Resetting auth as it should auto-pick (if possible)
-	aiNode.AuthenticationId = ""
 	aiNode.Parameters = []WorkflowAppActionParameter{
-		WorkflowAppActionParameter{
-			Name:  "url",
-			Value: aiUrl,
-		},
 		WorkflowAppActionParameter{
 			Name:  "body",
 			Value: string(initialAgentRequestBody),
@@ -7581,18 +7562,6 @@ Output ONLY a valid JSON list. Do not use Markdown blocks.
 			Name:  "headers",
 			Value: "Content-Type: application/json\nAccept: application/json",
 		},
-		WorkflowAppActionParameter{
-			Name:  "_shuffle_ai_agent",
-			Value: "true",
-		},
-	}
-
-	if len(apiKey) > 0 {
-		aiNode.Parameters = append(aiNode.Parameters, WorkflowAppActionParameter{
-			Name:          "apikey",
-			Value:         apiKey,
-			Configuration: true,
-		})
 	}
 
 	// To ensure we get the context of an execution properly
