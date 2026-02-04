@@ -285,7 +285,7 @@ type Valuereplace struct {
 	Value string `json:"value" datastore:"value,noindex" yaml:"value"`
 
 	// Used for e.g. user input storage
-	Answer string `json:"answer,omitempty" datastore:"answer,noindex" yaml:"answer,omitempty"`
+	Answer   string `json:"answer,omitempty" datastore:"answer,noindex" yaml:"answer,omitempty"`
 	Question string `json:"question,omitempty" datastore:"question,noindex" yaml:"question,omitempty"`
 }
 
@@ -684,7 +684,7 @@ type User struct {
 	UserGeoInfo UserGeoInfo `datastore:"user_geo_info" json:"user_geo_info"`
 
 	// Old web3 integration
-	EthInfo EthInfo `datastore:"eth_info" json:"eth_info"`
+	EthInfo  EthInfo   `datastore:"eth_info" json:"eth_info"`
 	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
 }
 
@@ -1160,10 +1160,14 @@ type DatastoreAutomationOption struct {
 }
 
 type DatastoreAutomation struct {
-	Name    string                      `json:"name" datastore:"name"`
-	Icon    string                      `json:"icon" datastore:"icon"`
-	Enabled bool                        `json:"enabled" datastore:"enabled"`
-	Options []DatastoreAutomationOption `json:"options" datastore:"options"`
+	Name        string                      `json:"name" datastore:"name"`
+	Description string                      `json:"description" datastore:"description"`
+	Options     []DatastoreAutomationOption `json:"options" datastore:"options"`
+	Type        string                      `json:"type" datastore:"type"`
+	Icon        string                      `json:"icon" datastore:"icon"`
+	Beta        bool                        `json:"beta" datastore:"beta"`
+	Disabled    bool                        `json:"disabled" datastore:"disabled"`
+	Enabled     bool                        `json:"enabled" datastore:"enabled"`
 }
 
 type DatastoreCategorySettings struct {
@@ -1186,27 +1190,27 @@ type DatastoreKeyMini struct {
 }
 
 type CacheKeyDataMini struct {
-	Category      string `json:"category" datastore:"category"`
-	Key           string `json:"key" datastore:"Key"`
-	Value         string `json:"value" datastore:"Value,noindex"`
+	Category string `json:"category" datastore:"category"`
+	Key      string `json:"key" datastore:"Key"`
+	Value    string `json:"value" datastore:"Value,noindex"`
 
-	OrgId         string `json:"org_id,omitempty" datastore:"OrgId"`
-	ExecutionId   string `json:"execution_id,omityempty" datastore:"ExecutionId"`
-	Authorization string `json:"authorization,omitempty" datastore:"Authorization"`
-	SuborgDistribution  []string `json:"suborg_distribution" datastore:"suborg_distribution"`
-	Tags []string `json:"tags,omitempty" datastore:"tags"`
+	OrgId              string   `json:"org_id,omitempty" datastore:"OrgId"`
+	ExecutionId        string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	Authorization      string   `json:"authorization,omitempty" datastore:"Authorization"`
+	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
+	Tags               []string `json:"tags,omitempty" datastore:"tags"`
 }
 
 type CacheKeyData struct {
-	Success       bool   `json:"success" datastore:"Success"`
-	WorkflowId    string `json:"workflow_id," datastore:"WorkflowId"`
-	ExecutionId   string `json:"execution_id,omityempty" datastore:"ExecutionId"`
-	Authorization string `json:"authorization,omitempty" datastore:"Authorization"`
-	OrgId         string `json:"org_id,omitempty" datastore:"OrgId"`
-	Key           string `json:"key" datastore:"Key"`
-	Value         string `json:"value" datastore:"Value,noindex"`
-	Category      string `json:"category" datastore:"category"`
-	Tags		 []string `json:"tags,omitempty" datastore:"tags"`
+	Success       bool     `json:"success" datastore:"Success"`
+	WorkflowId    string   `json:"workflow_id," datastore:"WorkflowId"`
+	ExecutionId   string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	Authorization string   `json:"authorization,omitempty" datastore:"Authorization"`
+	OrgId         string   `json:"org_id,omitempty" datastore:"OrgId"`
+	Key           string   `json:"key" datastore:"Key"`
+	Value         string   `json:"value" datastore:"Value,noindex"`
+	Category      string   `json:"category" datastore:"category"`
+	Tags          []string `json:"tags,omitempty" datastore:"tags"`
 
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
@@ -3096,17 +3100,17 @@ type FileResponse struct {
 }
 
 type SSOConfig struct {
-	SSOEntrypoint       string `json:"sso_entrypoint" datastore:"sso_entrypoint"`
-	SSOCertificate      string `json:"sso_certificate" datastore:"sso_certificate"`
-	SSOLongCertificate  string `json:"sso_long_certificate" datastore:"sso_long_certificate,noindex"`
-	SSOCertificateHash  string `json:"sso_certificate_hash" datastore:"sso_certificate_hash"`
+	SSOEntrypoint      string `json:"sso_entrypoint" datastore:"sso_entrypoint"`
+	SSOCertificate     string `json:"sso_certificate" datastore:"sso_certificate"`
+	SSOLongCertificate string `json:"sso_long_certificate" datastore:"sso_long_certificate,noindex"`
+	SSOCertificateHash string `json:"sso_certificate_hash" datastore:"sso_certificate_hash"`
 
 	OpenIdClientId      string `json:"client_id" datastore:"client_id"`
 	OpenIdClientSecret  string `json:"client_secret" datastore:"client_secret"`
 	OpenIdAuthorization string `json:"openid_authorization" datastore:"openid_authorization"`
 	OpenIdToken         string `json:"openid_token" datastore:"openid_token"`
 
-	SSORequired         bool   `json:"SSORequired" datastore:"SSORequired"`
+	SSORequired bool `json:"SSORequired" datastore:"SSORequired"`
 	// i have a distinct hatered for this name.
 	// says "auto_provision" but all logic treats it as disable_auto_provision.
 	AutoProvision    bool `json:"auto_provision" datastore:"auto_provision"`

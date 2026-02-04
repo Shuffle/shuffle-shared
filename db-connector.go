@@ -13358,7 +13358,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						oldDoc := config.Value
 						newDoc := cacheData.Value
 						mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
-						log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. Merged: %#v. Error: %#v", foundRule, allowed, mergedJSON, errString)
+						if debug { 
+							log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. Merged: %#v.\n\nError: %#v", foundRule, allowed, mergedJSON, errString)
+						}
+
 						if allowed {
 							ruleValid = true
 							cacheData.Value = mergedJSON
@@ -13373,7 +13376,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 				if !ruleValid {
 					// Break out
-					log.Printf("Rule isn't valid! NOT modifying.")
+					log.Printf("Rule is NOT valid! Skipping modification.")
 					return
 				}
 
