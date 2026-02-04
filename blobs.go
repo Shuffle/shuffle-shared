@@ -765,6 +765,12 @@ func GetAppCategories() []AppCategory {
 			ActionLabels: []string{"Get Rules", "Allow IP", "Block IP"},
 		},
 		AppCategory{
+			Name:         "Storage",
+			Color:        "#FFC107",
+			Icon:         "network",
+			ActionLabels: []string{"Get Value", "Set Value", "Delete Value", "List Keys"},
+		},
+		AppCategory{
 			Name:         "AI",
 			Color:        "#FFC107",
 			Icon:         "AI",

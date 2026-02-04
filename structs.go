@@ -4452,16 +4452,16 @@ type UserRequest struct {
 type HTTPOutput struct {
 	Success   bool   `json:"success"`
 	Reason    string `json:"reason,omitempty"`
-	Result    string `jjson:"result,omitempty"`
+	Result    string `json:"result,omitempty"`
 	Exception string `json:"exception,omitempty"`
 	Details   string `json:"details,omitempty"`
 
 	Status  int               `json:"status,omitempty"`
 	Url     string            `json:"url,omitempty"`
-	Body    interface{}       `json:"body,omitempty"`
 	Headers map[string]string `json:"headers,omitempty"`
 	Cookies map[string]string `json:"cookies,omitempty"`
 	Errors  []string          `json:"errors,omitempty"`
+	Body    interface{}       `json:"body,omitempty"`
 }
 
 type SnappStep struct {
