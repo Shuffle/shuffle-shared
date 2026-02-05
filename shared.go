@@ -20663,6 +20663,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	// Special handling for OpenAI app when no authentication is provided
+	skipAuthBlock := false
 	if appId == "5d19dd82517870c68d40cacad9b5ca91" && len(action.AuthenticationId) == 0 {
 		apiKey := os.Getenv("AI_API_KEY")
 		if apiKey == "" {
@@ -20678,8 +20679,9 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 		// Only inject if we have an API key
-		// so let's set both URL and apikey together to prevent sending credentials to wrong endpoints
+		// set both URL and apikey together to prevent sending credentials to wrong endpoints
 		if len(apiKey) > 0 {
+			// Overwrite or add url parameter
 			urlFound := false
 			apikeyFound := false
 
@@ -20695,7 +20697,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				}
 			}
 
-			// Add parameters if they don't exist
 			if !urlFound {
 				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
 					Name:  "url",
@@ -20710,11 +20711,12 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				})
 			}
 
+			skipAuthBlock = true
 			log.Printf("[DEBUG] Injected system OpenAI credentials for execution %s", workflowExecution.ExecutionId)
 		}
 	}
 
-	if app.Authentication.Required || len(action.AuthenticationId) > 0 {
+	if !skipAuthBlock && (app.Authentication.Required || len(action.AuthenticationId) > 0) {
 		if len(action.AuthenticationId) > 0 {
 			if debug {
 				log.Printf("[DEBUG][%s] Found auth ID for single action: %s", workflowExecution.ExecutionId, action.AuthenticationId)
@@ -32650,7 +32652,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	timenow := time.Now().Unix() * 1000
 	runtimeLocationName := ""
 	for _, action := range exec.Workflow.Actions {
-		if len(action.Environment) > 0 { 
+		if len(action.Environment) > 0 {
 			runtimeLocationName = action.Environment
 			break
 		}
