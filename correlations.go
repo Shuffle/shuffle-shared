@@ -40,26 +40,42 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-
-	searchKey := fmt.Sprintf("%s|%s", correlationData.Category, correlationData.Key)
-
-	availableTypes := []string{"datastore"}
-	if correlationData.Type == "datastore" {
-		// Nothing to do as we have the right key already
-	} else {
-		log.Printf("[WARNING] Invalid type in GetCorrelations: %#v. Available types: %#v", correlationData.Type, strings.Join(availableTypes, ", "))
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Invalid type"}`))
-		return
-	}
-
 	ctx := GetContext(request)
-	correlations, err := GetDatastoreNgramItems(ctx, user.ActiveOrg.Id, searchKey, 50)
-	if err != nil {
-		log.Printf("[ERROR] Failed to get correlations from DB in GetCorrelations: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Internal server error"}`))
-		return
+	correlations := []NGramItem{}
+	if len(correlationData.Category) == 0 {
+		searchKey := fmt.Sprintf("%s", correlationData.Key)
+		ngramItem, err := GetDatastoreNGramItem(ctx, searchKey)
+		if err != nil {
+			log.Printf("[WARNING] Failed to get ngram item in GetCorrelations: %s", err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No correlations found"}`))
+			return
+		}
+
+		correlations = []NGramItem{*ngramItem}
+	} else {
+		searchKey := fmt.Sprintf("%s|%s", correlationData.Category, correlationData.Key)
+		availableTypes := []string{"datastore"}
+		if len(correlationData.Type) == 0 { 
+			correlationData.Type = "datastore" 
+		}
+
+		if correlationData.Type == "datastore" {
+			// Nothing to do as we have the right key already
+		} else {
+			log.Printf("[WARNING] Invalid type in GetCorrelations: %#v. Available types: %#v", correlationData.Type, strings.Join(availableTypes, ", "))
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Invalid type"}`))
+			return
+		}
+
+		correlations, err = GetDatastoreNgramItems(ctx, user.ActiveOrg.Id, searchKey, 50)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get correlations from DB in GetCorrelations: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Internal server error"}`))
+			return
+		}
 	}
 
 	newCorrelations := []NGramItem{}

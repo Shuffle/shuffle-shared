@@ -198,7 +198,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 					//fw.Write(cacheData)
 					//w.Write(cacheData)
 
-					_, err := fmt.Fprintf(resp, string(cacheData))
+					_, err := fmt.Fprintf(resp, "%s", string(cacheData))
 					if err != nil {
 						log.Printf("[ERROR] Failed in writing stream to user '%s' (%s): %s", user.Username, user.Id, err)
 

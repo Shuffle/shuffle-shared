@@ -366,7 +366,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 							Name:      "code",
 							Multiline: true,
 							Required:  true,
-							Value:     getIocIngestionScript(),
+							Value:     getIocIngestionScript(orgId),
 						},
 					},
 				},
@@ -476,8 +476,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 	// This is done specifically for Singul ingests
 	positionAddition := float64(250)
 
-	log.Printf("ACTIONS: %d, TRIGGERS: %d, APPNAMES: %d, FIRSTACTION: %s, TRIGGER: %s", len(workflow.Actions), len(workflow.Triggers), len(appNames), workflow.Actions[0].AppName, workflow.Triggers[0].TriggerType)
-	os.Exit(3)
+	//log.Printf("ACTIONS: %d, TRIGGERS: %d, APPNAMES: %d, FIRSTACTION: %s, TRIGGER: %s", len(workflow.Actions), len(workflow.Triggers), len(appNames), workflow.Actions[0].AppName, workflow.Triggers[0].TriggerType)
+	//os.Exit(3)
 	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && len(appNames) > 0 && len(workflow.Triggers) == 1 && workflow.Triggers[0].TriggerType == "SCHEDULE" {
 
 		actionTemplate := workflow.Actions[0]
@@ -763,6 +763,12 @@ func GetAppCategories() []AppCategory {
 			Color:        "#FFC107",
 			Icon:         "network",
 			ActionLabels: []string{"Get Rules", "Allow IP", "Block IP"},
+		},
+		AppCategory{
+			Name:         "Storage",
+			Color:        "#FFC107",
+			Icon:         "network",
+			ActionLabels: []string{"Get Value", "Set Value", "Delete Value", "List Keys"},
 		},
 		AppCategory{
 			Name:         "AI",
@@ -1942,8 +1948,30 @@ func GetTriggerData(triggerType string) string {
 	}
 }
 
-func getIocIngestionScript() string {
-	return `import os
+func getIocIngestionScript(orgId string) string {
+	defaultRegexes := map[string]string{
+	  "md5": `r"\b[a-fA-F0-9]{32}\b"`,
+	  "sha1": `r'\b[a-fA-F0-9]{40}\b'`,
+	  "sha256": `r"\b[a-fA-F0-9]{64}\b"`,
+	  "ip": `r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.|$)){4}\b"`,
+	  "domain": `r"\b(?:[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,63}\b"`,
+	}
+
+	// Load the shuffle-security ioc-config datastore category
+	// Skipping cursor.
+	keys, _, err := GetAllCacheKeys(context.Background(), orgId, "shuffle-security ioc-config", 1000, "")
+	if err == nil {
+		log.Printf("[INFO] Found %d IOC config keys", len(keys))
+	}
+
+	marshaledRegexes, err := json.MarshalIndent(defaultRegexes, "", "  ")
+	if err != nil {
+		log.Printf("[ERROR] Failed marshaling regexes: %v", err)
+	}
+
+	timestampFormat := "%Y-%m-%d %H:%M:%S"
+	timestampFormat2 := "%Y-%m-%dT%H:%M:%SZ"
+	return fmt.Sprintf(`import os
 import re
 import json
 import uuid
@@ -1955,26 +1983,14 @@ upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
 
 parsed_headers = {}
 if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
-  parsed_headers["Authorization"] = "Bearer %s" % os.environ.get("SHUFFLE_AUTHORIZATION", "")
+  parsed_headers["Authorization"] = f"Bearer {os.environ.get('SHUFFLE_AUTHORIZATION', '')}"
 else:
   upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
 
 # This is shitty, but is used for a basic test. 
-regexsearch = {
-  "md5": r"\b[a-fA-F0-9]{32}\b",
-  "sha1": r'\b[a-fA-F0-9]{40}\b',
-  "sha256": r"\b[a-fA-F0-9]{64}\b",
-  "ip": r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.|$)){4}\b",
-  "domain": r"\b(?:[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,63}\b",
-}
+regexsearch = %s
 
-all_items = {
-  "md5": {},
-  "sha1": {},
-  "sha256": {},
-  "ip": {},
-  "domain": {},
-}
+all_items = {}
 
 if not isinstance(input_data, list):
   input_data = [input_data]
@@ -2019,7 +2035,7 @@ for content in input_data:
       if datestamp_index >= 0:
         # Check if the timestamp is more than 90 days ago (threat_timeout)
         try:
-          timestamp = time.strptime(linesplit[datestamp_index], "%Y-%m-%d %H:%M:%S")
+          timestamp = time.strptime(linesplit[datestamp_index], "%s")
           current_time = time.time()
           if (current_time - time.mktime(timestamp)) / (24 * 3600) > threat_timeout:
             continue
@@ -2041,7 +2057,7 @@ for content in input_data:
           # Check if item is a timestamp
           import time
           try:
-            time.strptime(item, "%Y-%m-%d %H:%M:%S")
+            time.strptime(item, "%s")
             datestamp_index = itemcnt
 
             # Check if the timestamp is more than 90 days ago. If so, break and continue
@@ -2074,15 +2090,17 @@ for content in input_data:
 
       stix_pattern = ""
       if found_type == "md5":
-        stix_pattern = "[file:hashes.MD5 = '%s']" % (key)
+        stix_pattern = f"[file:hashes.MD5 = '{key}']" 
       elif found_type == "sha1":
-        stix_pattern = "[file:hashes.SHA1 = '%s']" % (key)
+        stix_pattern = f"[file:hashes.SHA1 = '{key}']" 
       elif found_type == "sha256":
-        stix_pattern = "[file:hashes.SHA256 = '%s']" % (key)
+        stix_pattern = f"[file:hashes.SHA256 = '{key}']" 
       elif found_type == "ip":
-        stix_pattern = "[ipv4-addr:value = '%s']" % (key)
+        stix_pattern = f"[ipv4-addr:value = '{key}']" 
       elif found_type == "domain":
-        stix_pattern = "[domain-name:value = '%s']" % (key)
+        stix_pattern = f"[domain-name:value = '{key}']" 
+      else:
+        stix_pattern = f"[{found_type}:value = '{key}']"
 
       all_items[found_type][key] = {
         "type": "indicator",
@@ -2091,8 +2109,8 @@ for content in input_data:
         "pattern": stix_pattern,
         "pattern_type": "stix",
 
-        "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "modified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "created": time.strftime("%s", time.gmtime()),
+        "modified": time.strftime("%s", time.gmtime()),
 
 		"x_raw_pattern": key,
         "urls": [content["url"]],
@@ -2113,7 +2131,7 @@ for k, v in all_items.items():
         del subval["urls"]
         new_list.append({
             "key": subkey,
-            "category": "ioc_%s" % k,
+            "category": f"ioc_{k}", 
             "value": json.dumps(subval),
         })
 
@@ -2122,9 +2140,8 @@ for k, v in all_items.items():
         #    break
 
     if len(new_list) > 0:
-        print("Uploading %s items of type %s" % (len(new_list), k))
         ret = requests.post(upload_url, json=new_list, headers=parsed_headers)
         print(ret.text)
         print(ret.status_code)
-	`
+	`, marshaledRegexes, timestampFormat, timestampFormat, timestampFormat2, timestampFormat2)
 }

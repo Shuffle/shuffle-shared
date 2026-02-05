@@ -223,6 +223,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 				if len(totalData) > 10062147 {
 					//log.Printf("[WARNING] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
 				}
+
 				return totalData, nil
 			} else {
 				return item.Value, nil
@@ -411,9 +412,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 }
 
 func GetDatastoreClient(ctx context.Context, projectID string) (datastore.Client, error) {
-	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile(test"))
 	client, err := datastore.NewClient(ctx, projectID)
-	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile("test"))
 	if err != nil {
 		return datastore.Client{}, err
 	}
@@ -1017,7 +1016,9 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		})
 
 		if err != nil {
-			log.Printf("[WARNING] Error in org STATS get: %s", err)
+			if debug {
+				log.Printf("[WARNING] Error in org STATS get: %s", err)
+			}
 			return err
 		}
 
@@ -1742,6 +1743,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 				//} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
 			} else if (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") && (innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent") {
+
 				// Auto fixing decision data based on cache for better decisionmaking
 				// Map the result into AgentOutput to check decisions
 				mappedOutput := AgentOutput{}
@@ -1773,6 +1775,19 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						//finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						failedFound = true
 						continue
+					} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
+
+						// Max runtime of a decision at 5 minutes
+						if decision.RunDetails.StartedAt > 0 && time.Now().Unix()-decision.RunDetails.StartedAt > 300 {
+							log.Printf("[INFO][%s] Should stop decision %s for agent action %s due to running for more than 5 minutes. Marking as FAILURE.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID)
+
+							decisionsUpdated = true
+							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE" 
+							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
+							mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
+						}
+
+
 					} else {
 						if decision.RunDetails.CompletedAt > 0 {
 							if debug {
@@ -1813,6 +1828,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				// due to having a 'finish' action that should handle it properly
 				if failedFound {
 					decisionsUpdated = true
+					//if debug { 
+					//	log.Printf("[DEBUG][%s] Failure found for agent %s. Should we exit?", workflowExecution.ExecutionId, action.ID)
+					//}
 
 					/*
 						mappedOutput.Status = "FAILURE"
@@ -4698,7 +4716,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			}
 
 			if len(orgUsers) > 0 {
-				log.Printf("[ERROR] Found 0 users for org %d. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", data.Id, len(orgUsers))
+				log.Printf("[ERROR] Found 0 users for org %s. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", data.Id, len(orgUsers))
 				data.Users = orgUsers
 			}
 		}
@@ -5089,6 +5107,16 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		}
 	}
 
+	// Can we diff here? Otherwise we may miss items hmm 
+	// Check if we recently cached the ID. Don't run updates more often than once a day for an app
+	checkCacheId := fmt.Sprintf("openapi_updatecheck_%s", id)
+	if _, err := GetCache(ctx, checkCacheId); err != nil {
+		api = syncAppContentLabels(ctx, id, api)
+
+		// Set a cache to not do this again for a day
+		SetCache(ctx, checkCacheId, []byte("1"), 1440)
+	}
+
 	if project.CacheDb {
 		data, err := json.Marshal(api)
 		if err != nil {
@@ -5259,7 +5287,7 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 	var apps []WorkflowApp
 
 	nameKey := "workflowapp"
-	cacheKey := fmt.Sprintf("%s_appname_%s", appName)
+	cacheKey := fmt.Sprintf("%s_appname_%s", nameKey, appName)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -13307,8 +13335,78 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 			// Check for if the key already existed. Ok with
 			// goroutine as we use heavy caching for this.
+			sameValue := false
 			config, getCacheError := GetDatastoreKey(ctx, datastoreId, cacheData.Category)
+
+			cacheData.Changed = true
+			if getCacheError == nil && config.Value == cacheData.Value {
+				sameValue = true
+			}
+
 			if getCacheError == nil && config.Created > 0 {
+
+				// Compares old vs new, checks if allowed
+
+				categoryConfig, err := GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting category config for org %s and category %s: %s", orgId, mainCategory, err)
+				}
+
+				//if debug { 
+				//	log.Printf("[DEBUG] RULECHECK %#v -> %#v", getCacheError, config.Created)
+				//}
+
+				ruleValid := true
+				for _, automation := range categoryConfig.Automations {
+					if !automation.Enabled {
+						continue
+					}
+
+					if automation.Name != "security_rules" && automation.Name != "Security Rules" { 
+						continue
+					}
+
+					foundRule := ""
+					for _, option := range automation.Options {
+						if option.Key == "rule" {
+							foundRule = option.Value
+							break
+						}
+					}
+
+					if debug {
+						log.Printf("[DEBUG] FOUND SECURITY RULES AUTOMATION FOR ORG %s AND CATEGORY %s: %#v", cacheData.OrgId, mainCategory, foundRule)
+					}
+
+					if len(foundRule) > 5 {
+						oldDoc := config.Value
+						newDoc := cacheData.Value
+						mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
+						if debug { 
+							log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. Merged: %#v.\n\nError: %#v", foundRule, allowed, mergedJSON, errString)
+						}
+
+						if allowed {
+							ruleValid = true
+							cacheData.Value = mergedJSON
+						} else {
+							ruleValid = false
+						}
+
+					}
+
+					break
+				}
+
+				if !ruleValid {
+					// Break out
+					if debug { 
+						log.Printf("[WARNING] Rule is NOT valid! Skipping modification.")
+					}
+
+					return
+				}
+
 				cacheData.Created = config.Created
 				cacheData.Authorization = config.Authorization
 				cacheData.SuborgDistribution = config.SuborgDistribution
@@ -13316,15 +13414,11 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 				if len(cacheData.Tags) == 0 {
 					cacheData.Tags = config.Tags
+				} else {
+					sameValue = false
 				}
 
 				cacheData.Existed = true
-			}
-
-			cacheData.Changed = true
-			sameValue := false
-			if getCacheError == nil && config.Value == cacheData.Value {
-				sameValue = true
 			}
 
 			if cacheData.Created == 0 {
@@ -13711,8 +13805,12 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						continue
 					}
 
+					if automation.Name == "security_rules" || automation.Name == "Security Rules" {
+						continue
+					}
+
 					if debug {
-						log.Printf("[DEBUG] Found automation %s to run (2). Value: %s", automation.Name, automation.Options[0].Value)
+						log.Printf("[DEBUG] Found automation '%s' to run (2). Value: '%s'", automation.Name, automation.Options[0].Value)
 					}
 
 					// Run the automation
@@ -13812,6 +13910,63 @@ func SetDatastoreKeyRevision(ctx context.Context, cacheData CacheKeyData) error 
 	}
 
 	DeleteCache(ctx, fmt.Sprintf("datastore_category_revisions_%s", cacheData.OrgId))
+	return nil
+}
+
+// Primarily used for updating tags and other metadata.
+func SetDatastoreKeyMeta(ctx context.Context, cacheData CacheKeyData) error {
+	nameKey := "org_cache"
+	cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+	if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+		cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
+	}
+
+	// URL encode
+	cacheId = url.QueryEscape(cacheId)
+	if len(cacheId) > 127 {
+		cacheId = cacheId[:127]
+	}
+
+	if len(cacheData.Tags) > 1 {
+		newTags := []string{}
+		for _, cacheTag := range cacheData.Tags {
+			if cacheTag == "none" {
+				continue
+			}
+
+			newTags = append(newTags, cacheTag)
+		}
+
+		cacheData.Tags = newTags
+	}
+
+	data, err := json.Marshal(cacheData)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling in set cache key: %s", err)
+		return nil
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, cacheId, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, cacheId, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
+			log.Printf("[ERROR] Error setting org cache: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting cache for set cache key '%s': %s", cacheKey, err)
+		}
+	}
+
 	return nil
 }
 
@@ -14190,7 +14345,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		resp, err := project.Es.Info(ctx, infoSearchReq)
 		if err != nil {
 			if strings.Contains(fmt.Sprintf("%s", err), "the client noticed that the server is not a supported distribution") {
-				log.Printf("[ERROR] Version is not supported - most likely Elasticsearch >= 8.0.0: %s -> %s", resp, err)
+				log.Printf("[ERROR] Version is not supported - most likely Elasticsearch >= 8.0.0: %#v -> %s", resp, err)
 			}
 		}
 
@@ -14957,6 +15112,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			"sort": map[string]interface{}{
 				"edited": map[string]interface{}{
 					"order": "desc",
+					"unmapped_type": "date",
 				},
 			},
 			"query": map[string]interface{}{
@@ -17829,8 +17985,39 @@ func InitOpensearchIndexes() {
 		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if err != nil {
-			if !strings.Contains(fmt.Sprintf("%s", err), "serverless mode") {
+			if !strings.Contains(fmt.Sprintf("%s", err), "serverless mode") && !strings.Contains(fmt.Sprintf("%s", err), "resource_already_exists_exception") {
 				log.Printf("[WARNING] Error creating index %s: %s", index, err)
+			}
+
+			// Make sure if the resource exist it is part of correct alias
+			if strings.Contains(fmt.Sprintf("%s", err), "resource_already_exists_exception") {
+				body := fmt.Sprintf(`{
+				  "actions": [
+				    {
+				      "add": {
+				        "index": "%s",
+				        "alias": "%s",
+				        "is_write_index": true
+				      }
+				    }
+				  ]
+				}`, initialIndexName, index)
+
+				aliasResp, aerr := project.Es.Aliases(ctx, opensearchapi.AliasesReq{
+					Body: strings.NewReader(body),
+				})
+				if aerr != nil {
+					log.Printf("[WARNING] Failed to ensure alias %s for index %s: %s", index, initialIndexName, aerr)
+					return
+				}
+
+				res := aliasResp.Inspect().Response
+				defer res.Body.Close()
+
+				if res.StatusCode >= 300 {
+					log.Printf("[WARNING] Alias enforcement failed: %s", res.String())
+					return
+				}
 			}
 		} else {
 			if res.IsError() {
@@ -17857,7 +18044,7 @@ func InitOpensearchIndexes() {
 		}
 
 		rolloverResp, err := project.Es.Indices.Rollover(ctx, opensearchapi.IndicesRolloverReq{
-			Index: index,
+			Alias: index,
 			Body:  bytes.NewReader(rolloverConfig),
 		})
 

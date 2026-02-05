@@ -913,6 +913,18 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		}
 	}
 
+	// Fix Me: Add daily stats update script to append daily stats immdediately after day change and reset monthly stats on month change
+	lastMonthlyReset := validationOrgStats.LastMonthlyResetMonth
+	currentMonth := time.Now().UTC().Month()
+	if int(lastMonthlyReset) != int(currentMonth) {
+		validationOrgStats = handleDailyCacheUpdate(validationOrgStats)
+
+		err = SetOrgStatistics(ctx, *validationOrgStats, validationOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting org statistics for monthly reset for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
+		}
+	}
+
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
 	if validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
@@ -2105,9 +2117,18 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 
 // This is JUST for Singul actions with AI agents.
 // As AI Agents can have multiple types of runs, this could change every time.
-func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, error) {
+func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, []string, string, error) {
 	debugUrl := ""
 	log.Printf("[INFO][%s] Running agent decision action '%s' with app '%s'. This is ran with Singul.", execution.ExecutionId, decision.Action, decision.Tool)
+
+	// Check if running in test mode
+	if os.Getenv("AGENT_TEST_MODE") == "true" {
+		log.Printf("[DEBUG][%s] AGENT_TEST_MODE enabled - using mock tool execution", execution.ExecutionId)
+
+		// Call mock handler
+		body, debugUrl, appName, err := RunAgentDecisionMockHandler(execution, decision)
+		return body, debugUrl, appName, []string{}, "", err
+	}
 
 	baseUrl := "https://shuffler.io"
 	if os.Getenv("BASE_URL") != "" {
@@ -2118,11 +2139,11 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
-	url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
+	requestUrl := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
 	// Change timeout to be 300 seconds (just in case)
 	// Allows for reruns and self-correcting
-	client := GetExternalClient(url)
+	client := GetExternalClient(requestUrl)
 	client.Timeout = 300 * time.Second
 
 	newFields := []schemaless.Valuereplace{}
@@ -2137,8 +2158,66 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	parsedFields := schemaless.TranslateBadFieldFormats(newFields)
 
+	// Check if this is a GET request and strip the body field if present
+	// GET requests should not have a body and can cause 400 errors
+	methodValue := ""
+	for _, field := range parsedFields {
+		if strings.ToLower(field.Key) == "method" {
+			methodValue = strings.ToUpper(field.Value)
+			break
+		}
+	}
+
+	if (strings.ToLower(decision.Action) == "custom_action" || strings.ToLower(decision.Action) == "api") && strings.ToLower(decision.Tool) != "http" {
+		var urlValue string
+		newFields := make([]schemaless.Valuereplace, 0, len(parsedFields))
+
+		// Extract url field and keep all non-url fields
+		for _, field := range parsedFields {
+			if strings.ToLower(field.Key) == "url" && field.Value != "" {
+				urlValue = strings.TrimSpace(field.Value)
+				continue 
+			}
+			newFields = append(newFields, field)
+		}
+
+		if urlValue != "" {
+			var path string
+
+			if strings.HasPrefix(urlValue, "http://") || strings.HasPrefix(urlValue, "https://") {
+				if u, err := url.Parse(urlValue); err == nil {
+					path = u.Path
+					if u.RawQuery != "" {
+						path = path + "?" + u.RawQuery
+					}
+				}
+			} else {
+				path = "/" + strings.TrimLeft(urlValue, "/")
+			}
+
+			if path != "" {
+				newFields = append(newFields, schemaless.Valuereplace{
+					Key:   "path",
+					Value: path,
+				})
+
+				if debug {
+					log.Printf("[DEBUG][%s] Converted url to path for %s: path='%s' (auth base URL will be used)", execution.ExecutionId, decision.Tool, path)
+				}
+			}
+		}
+
+		parsedFields = newFields
+	}
+
 	oldFields := []Valuereplace{}
 	for _, field := range parsedFields {
+		// Skip body field for GET requests
+		if methodValue == "GET" && strings.ToLower(field.Key) == "body" {
+			log.Printf("[INFO][%s] Stripping 'body' field from GET request to %s", execution.ExecutionId, decision.Tool)
+			continue
+		}
+
 		oldFields = append(oldFields, Valuereplace{
 			Key:   field.Key,
 			Value: field.Value,
@@ -2148,8 +2227,9 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	}
 
 	parsedAction := CategoryAction{
-		AppName: decision.Tool,
-		Label:   decision.Action,
+		AppName:  decision.Tool,
+		Label:    decision.Action,
+		Query:    decision.Reason,   // Add the reason field for LLM context
 
 		Fields: oldFields,
 
@@ -2162,26 +2242,26 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	marshalledAction, err := json.Marshal(parsedAction)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed marshalling action in agent decision: %s", execution.ExecutionId, err)
-		return []byte{}, debugUrl, decision.Tool, err
+		log.Printf("[ERROR][%s] AI Agent: Failed marshalling action in agent decision: %s", execution.ExecutionId, err)
+		return []byte{}, debugUrl, decision.Tool, []string{}, "", err
 	}
 
 	req, err := http.NewRequest(
 		"POST",
-		url,
+		requestUrl,
 		bytes.NewBuffer(marshalledAction),
 	)
 
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed creating request for agent decision: %s", execution.ExecutionId, err)
-		return []byte{}, debugUrl, decision.Tool, err
+		log.Printf("[ERROR][%s] AI Agent: Failed creating request for agent decision: %s", execution.ExecutionId, err)
+		return []byte{}, debugUrl, decision.Tool, []string{}, "", err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed running agent decision (1). Timeout: %d: %s", execution.ExecutionId, client.Timeout, err)
-		return []byte{}, debugUrl, decision.Tool, err
+		log.Printf("[ERROR][%s] AI Agent: Failed running agent decision (1). Timeout: %d: %s", execution.ExecutionId, client.Timeout, err)
+		return []byte{}, debugUrl, decision.Tool, []string{}, "", err
 	}
 
 	appname := decision.Tool
@@ -2236,8 +2316,8 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	originalBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed reading body from agent decision: %s", execution.ExecutionId, err)
-		return []byte{}, debugUrl, appname, err
+		log.Printf("[ERROR][%s] AI Agent: Failed reading body from agent decision: %s", execution.ExecutionId, err)
+		return []byte{}, debugUrl, appname, []string{}, "", err
 	}
 
 	body := originalBody
@@ -2251,8 +2331,8 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	outputMapped := SchemalessOutput{}
 	err = json.Unmarshal(body, &outputMapped)
 	if err != nil {
-		log.Printf("[ERROR] Failed unmarshalling agent decision response: %s", err)
-		return body, debugUrl, appname, err
+		log.Printf("[ERROR] AI Agent: Failed unmarshalling agent decision response: %s", err)
+		return body, debugUrl, appname, []string{}, "", err
 	}
 
 	if val, ok := outputMapped.RawResponse.(string); ok {
@@ -2262,23 +2342,23 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	} else if val, ok := outputMapped.RawResponse.(map[string]interface{}); ok {
 		marshalledRawResp, err := json.MarshalIndent(val, "", "  ")
 		if err != nil {
-			log.Printf("[ERROR][%s] Failed marshalling agent decision response: %s", execution.ExecutionId, err)
+			log.Printf("[ERROR][%s] AI Agent: Failed marshalling agent decision response: %s", execution.ExecutionId, err)
 		} else {
 			body = marshalledRawResp
 		}
 	} else if outputMapped.RawResponse == nil {
 		// Do nothing
 	} else {
-		log.Printf("[ERROR][%s] FAILED MAPPING RAW RESP INTERfACE. TYPE: %T\n\n\n", execution.ExecutionId, outputMapped.RawResponse)
+		log.Printf("[ERROR][%s] AI Agent: FAILED MAPPING RAW RESP INTERfACE. TYPE: %T\n\n\n", execution.ExecutionId, outputMapped.RawResponse)
 	}
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR][%s] Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
-		return body, debugUrl, appname, errors.New(fmt.Sprintf("Failed running agent decision (2). Status code %d", resp.StatusCode))
+		log.Printf("[ERROR][%s] AI Agent: Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
+		return body, debugUrl, appname, []string{}, "", errors.New(fmt.Sprintf("Failed running agent decision (2). Status code %d", resp.StatusCode))
 	}
 
 	if outputMapped.Success == false {
-		return originalBody, debugUrl, appname, errors.New("Failed running agent decision (3). Success false for Singul action")
+		return originalBody, debugUrl, appname, []string{}, "", errors.New("Failed running agent decision (3). Success false for Singul action")
 	}
 
 	/*
@@ -2296,7 +2376,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		}
 	*/
 
-	return body, debugUrl, appname, nil
+	return body, debugUrl, appname, outputMapped.CategoryLabels, outputMapped.ActionName, nil
 }
 
 // Runs an Agent Decision -> returns the result from it
@@ -2333,7 +2413,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	decision.RunDetails.Status = "RUNNING"
 	marshalledDecision, err := json.Marshal(decision)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed marshalling decision %s", execution.ExecutionId, decision.RunDetails.Id)
+		log.Printf("[ERROR][%s] AI Agent: Failed marshalling decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 
 	go SetCache(ctx, decisionId, marshalledDecision, 60)
@@ -2341,7 +2421,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	if decision.Action == "user_input" || decision.Action == "answer" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" || decision.Category == "standalone" {
 	} else {
 		// Singul handler
-		rawResponse, debugUrl, appname, err := RunAgentDecisionSingulActionHandler(execution, decision)
+		rawResponse, debugUrl, appname, categoryLabels, actionName, err := RunAgentDecisionSingulActionHandler(execution, decision)
 
 		if len(appname) > 0 {
 			decision.Tool = appname
@@ -2349,8 +2429,11 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 		decision.RunDetails.RawResponse = string(rawResponse)
 		decision.RunDetails.DebugUrl = debugUrl
+		decision.RunDetails.CategoryLabels = categoryLabels
+		decision.RunDetails.ActionName = actionName
+
 		if err != nil {
-			log.Printf("[ERROR][%s] Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
+			log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
 			decision.RunDetails.Status = "FAILURE"
 
 			if len(decision.RunDetails.RawResponse) == 0 {
@@ -2368,7 +2451,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	decision.RunDetails.CompletedAt = time.Now().Unix()
 	marshalledDecision, err = json.Marshal(decision)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed marshalling completed decision %s", execution.ExecutionId, decision.RunDetails.Id)
+		log.Printf("[ERROR][%s] AI Agent: Failed marshalling completed decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 
 	go SetCache(ctx, decisionId, marshalledDecision, 60)
@@ -2414,7 +2497,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 	marshalledAction, err := json.Marshal(parsedAction)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed marshalling action in agent decision: %s", execution.ExecutionId, err)
+		log.Printf("[ERROR][%s] AI Agent: Failed marshalling action in agent decision: %s", execution.ExecutionId, err)
 		return
 	}
 
@@ -2425,25 +2508,25 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	)
 
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed agent decision request creation: %s", execution.ExecutionId, err)
+		log.Printf("[ERROR][%s] AI Agent: Failed agent decision request creation: %s", execution.ExecutionId, err)
 		return
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed sending agent decision result: %s", execution.ExecutionId, err)
+		log.Printf("[ERROR][%s] AI Agent: Failed sending agent decision result: %s", execution.ExecutionId, err)
 		return
 	}
 
 	foundBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed reading body from agent decision: %s", execution.ExecutionId, err)
+		log.Printf("[ERROR][%s] AI Agent: Failed reading body from agent decision: %s", execution.ExecutionId, err)
 		return
 	}
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR][%s] Status %d for decision %s. Body: %s", execution.ExecutionId, resp.StatusCode, decision.RunDetails.Id, string(foundBody))
+		log.Printf("[ERROR][%s] AI Agent: Status %d for decision %s. Body: %s", execution.ExecutionId, resp.StatusCode, decision.RunDetails.Id, string(foundBody))
 	}
 }
 

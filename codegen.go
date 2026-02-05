@@ -61,6 +61,8 @@ type countingWriter struct {
 	n *int64
 }
 
+
+
 func CopyFile(fromfile, tofile string) error {
 	from, err := os.Open(fromfile)
 	if err != nil {
@@ -2370,18 +2372,24 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Connect", path.Connect.Summary),
-		Label:       fmt.Sprintf(path.Connect.Summary),
+		Label:       fmt.Sprintf("%s", path.Connect.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
 	}
 
 	if val, ok := path.Connect.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -2574,18 +2582,24 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Get", path.Get.Summary),
-		Label:       fmt.Sprintf(path.Get.Summary),
+		Label:       fmt.Sprintf("%s", path.Get.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
 	}
 
 	if val, ok := path.Get.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -2790,18 +2804,24 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Head", path.Head.Summary),
-		Label:       fmt.Sprintf(path.Head.Summary),
+		Label:       fmt.Sprintf("%s", path.Head.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
 	}
 
 	if val, ok := path.Head.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -2991,18 +3011,24 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Delete", path.Delete.Summary),
-		Label:       fmt.Sprintf(path.Delete.Summary),
+		Label:       fmt.Sprintf("%s", path.Delete.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
 	}
 
 	if val, ok := path.Delete.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -3212,18 +3238,24 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Post", path.Post.Summary),
-		Label:       fmt.Sprintf(path.Post.Summary),
+		Label:       fmt.Sprintf("%s", path.Post.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
 	}
 
 	if val, ok := path.Post.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -3461,18 +3493,24 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Patch", path.Patch.Summary),
-		Label:       fmt.Sprintf(path.Patch.Summary),
+		Label:       fmt.Sprintf("%s", path.Patch.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
 	}
 
 	if val, ok := path.Patch.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -3686,18 +3724,24 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	action := WorkflowAppAction{
 		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Put", path.Put.Summary),
-		Label:       fmt.Sprintf(path.Put.Summary),
+		Label:       fmt.Sprintf("%s", path.Put.Summary),
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
 	}
 
 	if val, ok := path.Put.ExtensionProps.Extensions["x-label"]; ok {
-		label := string(val.(json.RawMessage))
-		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
-			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		labels := []string{}
+		j, err := json.Marshal(&val)
+		if err == nil {
+			err = json.Unmarshal(j, &labels)
+			if err == nil {
+				action.CategoryLabel = labels
+			} else {
+				log.Printf("[ERROR] Could not unmarshal x-label array: %s", err)
+			}
 		} else {
-			action.CategoryLabel = []string{label}
+			log.Printf("[ERROR] Could not marshal x-label: %s", err)
 		}
 	}
 
@@ -4755,6 +4799,11 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	ctx := context.Background()
 	parsedName := strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_")
 
+	// These are ran pre-execution
+	if parsedName == "security_rules" {
+		return nil 
+	}
+
 	// Unmarshal cacheData.Value to parsedOutput
 	parsedOutput := map[string]interface{}{}
 	if err := json.Unmarshal([]byte(cacheData.Value), &parsedOutput); err != nil {
@@ -4770,6 +4819,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		"timestamp":           cacheData.Edited,
 		"workflow_id":         cacheData.WorkflowId,
 		"suborg_distribution": cacheData.SuborgDistribution,
+		"tags": 			   cacheData.Tags,
 	}
 
 	marshalledBody, err := json.Marshal(parsedOutput)
@@ -4778,9 +4828,140 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		return err
 	}
 
+	backendUrl := "https://shuffler.io"
+	if len(os.Getenv("BASE_URL")) > 0 {
+		backendUrl = os.Getenv("BASE_URL")
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
+		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	org, err := GetOrg(ctx, cacheData.OrgId)
+	if err != nil {
+		return err
+	}
+
+	foundApikey := ""
+	for _, user := range org.Users {
+		foundUser, err := GetUser(ctx, user.Id)
+		if err != nil {
+			continue
+		}
+
+		if len(foundUser.Role) == 0 || foundUser.Role == "org-reader" {
+			continue
+		}
+
+		if len(foundUser.ApiKey) > 0 {
+			foundApikey = foundUser.ApiKey
+			break
+		}
+	}
+
 	if parsedName == "correlate_categories" {
 		// Correlations don't matter anymore as ngrams are automatic. Cleaned up
 		// november 2025 after adding graphic system to datastore
+
+	} else if parsedName == "run_ai_agent" {
+		log.Printf("[DEBUG] Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
+
+		if len(foundApikey) == 0 {
+			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
+			return errors.New("No admin user with API key found")
+		}
+
+		// Already handled check
+		for index, option := range automation.Options { 
+			agentTagName := fmt.Sprintf("agent-%s-%d", option.Key, index)
+			if ArrayContains(cacheData.Tags, agentTagName) {
+				continue
+			}
+
+			if !strings.Contains(option.Key, "action") { 
+				log.Printf("[WARNING] Agent option key %s does not contain 'action' - skipping to avoid confusion. This may cause the agent to not run if no other options are present.", option.Key)
+				continue
+			}
+
+			// FIXME: Make dynamic
+			aiAppname := "openai"
+			parsedParams := []map[string]string{
+				map[string]string{
+					"name":  "app_name",
+					"value": aiAppname,
+				},
+				map[string]string{
+					"name":  "action",
+					"value": "API",
+				},
+			}
+
+			option.Value += fmt.Sprintf("\n%s", cacheData.Value)
+			parsedParams = append(parsedParams, map[string]string{
+				"name":  "input",
+				"value": fmt.Sprintf("### Datastore Value\nKey: %s\nCategory: %s\nValue: %s", cacheData.Key, cacheData.Category, option.Value),
+			})
+
+
+			agentUrl := fmt.Sprintf("%s/api/v1/apps/agent_starter/run", backendUrl)
+			agentStartRequest := AgentStartRequest{
+				//ID          string              `json:"id"`
+				Name:        "agent",
+				AppName:     "AI Agent",
+				AppID:       "shuffle_agent",
+				AppVersion:  "1.0.0",
+				Environment: "cloud",
+				Parameters:  parsedParams,
+			}
+
+			newParsedBody, err := json.Marshal(agentStartRequest)
+			if err != nil {
+				log.Printf("[ERROR] Failed to marshal body for ai agent execution: %s", err)
+				return err
+			}
+
+			client := GetExternalClient(agentUrl)
+			req, err := http.NewRequest(
+				"POST",
+				agentUrl,
+				bytes.NewBuffer(newParsedBody),
+			)
+
+			if err != nil {
+				log.Printf("[ERROR] Failed to create request for enrichment workflow execution: %s", err)
+				return err
+			}
+
+			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
+			req.Header.Add("Org-Id", cacheData.OrgId)
+
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("[ERROR] Failed to send enrichment workflow execution request: %s", err)
+				return err
+			}
+
+			// Makes sure we don't re-run the same twice
+			cacheData.Tags = append(cacheData.Tags, agentTagName)
+			err = SetDatastoreKeyMeta(ctx, cacheData) 
+			if err != nil {
+				log.Printf("[ERROR] Failed to set cache key after running AI agent: %s", err)
+			}
+
+			defer resp.Body.Close()
+			body, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				log.Printf("[ERROR] Failed to read response body from AI AGENT execution request: %s", err)
+				return err
+			}
+
+
+			if debug { 
+				log.Printf("[DEBUG] RESP FOR RUNNING AI AGENT (%d): %s", resp.StatusCode, string(body))
+			}
+
+			break
+		}
 
 	} else if parsedName == "enrich" {
 		// Prevent recursion
@@ -4806,33 +4987,6 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		if _, ok := parsedData["enrichments"]; ok {
 			//log.Printf("[DEBUG] Enrichments key already exists - skipping enrichment automation for key %s in category %s", cacheData.Key, cacheData.Category)
 			return nil
-		}
-
-		org, err := GetOrg(ctx, cacheData.OrgId)
-		if err != nil {
-			return err
-		}
-
-		foundApikey := ""
-		for _, user := range org.Users {
-			foundUser, err := GetUser(ctx, user.Id)
-			if err != nil {
-				continue
-			}
-
-			if len(foundUser.Role) == 0 || foundUser.Role == "org-reader" {
-				continue
-			}
-
-			if len(foundUser.ApiKey) > 0 {
-				foundApikey = foundUser.ApiKey
-				break
-			}
-		}
-
-		if len(foundApikey) == 0 {
-			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
-			return errors.New("No admin user with API key found")
 		}
 
 		// Send the data into shuffle_tools => parse_ioc?
@@ -4869,15 +5023,12 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			}
 		*/
 
-		backendUrl := "https://shuffler.io"
-		if len(os.Getenv("BASE_URL")) > 0 {
-			backendUrl = os.Getenv("BASE_URL")
+		if len(foundApikey) == 0 {
+			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
+			return errors.New("No admin user with API key found")
 		}
 
-		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
-			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-		}
-
+		// FIXME: Find it dynamically.
 		relevantWorkflowId := "fd44510b-dab7-4e77-8882-e205cb844c84"
 		fullUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", backendUrl, relevantWorkflowId)
 
