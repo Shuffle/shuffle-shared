@@ -20710,7 +20710,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				})
 			}
 
-			log.Printf("[INFO] Injected system OpenAI credentials for execution %s", workflowExecution.ExecutionId)
+			log.Printf("[DEBUG] Injected system OpenAI credentials for execution %s", workflowExecution.ExecutionId)
 		}
 	}
 

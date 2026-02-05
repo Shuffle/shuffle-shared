@@ -7010,6 +7010,21 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			IncrementCache(ctx, execution.ExecutionOrg, "ai_executions", 1)
 			log.Printf("[AUDIT] Incremented AI usage count for org %s (%s)", execution.ExecutionOrg, execution.ExecutionId)
 		}
+	} else if project.Environment != "cloud" {
+		// Validate On-Prem Configuration immediately
+		if os.Getenv("AI_MODEL") == "" && os.Getenv("OPENAI_MODEL") == "" {
+			err := errors.New("AI Configuration Error: AI_MODEL or OPENAI_MODEL environment variable must be set for On-Premise AI Agent execution.")
+			log.Printf("[ERROR] %v", err)
+
+			execution.Status = "ABORTED"
+			execution.Results = append(execution.Results, ActionResult{
+				Status: "ABORTED",
+				Result: fmt.Sprintf(`{"success": false, "reason": "%s"}`, err.Error()),
+				Action: startNode,
+			})
+			go SetWorkflowExecution(ctx, execution, true)
+			return startNode, err
+		}
 	}
 
 	systemMessage := "" // Handled further down now
@@ -7481,8 +7496,16 @@ Output ONLY a valid JSON list. Do not use Markdown blocks.
 
 	}
 
+	aiModel := "gpt-5-mini"
+	if project.Environment != "cloud" {
+		aiModel = os.Getenv("AI_MODEL")
+		if aiModel == "" {
+			aiModel = os.Getenv("OPENAI_MODEL")
+		}
+	}
+
 	completionRequest := openai.ChatCompletionRequest{
-		Model: "gpt-5-mini",
+		Model: aiModel,
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
