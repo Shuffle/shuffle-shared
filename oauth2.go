@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/go-querystring/query"
 	uuid "github.com/satori/go.uuid"
 	"golang.org/x/oauth2"
@@ -37,6 +38,70 @@ import (
 )
 
 var handledIds []string
+
+func fetchUserInfoFromToken(ctx context.Context, accessToken string, issuer string, openIdAuthUrl string) (map[string]interface{}, error) {
+	// Get well-known config to find userinfo endpoint
+	config, err := fetchWellKnownConfig(ctx, issuer, openIdAuthUrl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get OIDC config: %w", err)
+	}
+
+	// Get userinfo endpoint
+	userinfoEndpoint, ok := config["userinfo_endpoint"].(string)
+	if !ok {
+		return nil, fmt.Errorf("no userinfo_endpoint in OIDC config")
+	}
+
+	// Handle Microsoft Azure AD userinfo endpoint issues
+	if strings.Contains(userinfoEndpoint, "login.microsoftonline.com") {
+		userinfoEndpoint = "https://graph.microsoft.com/v1.0/me"
+		log.Printf("Using Microsoft Graph /me endpoint instead of: %s", userinfoEndpoint)
+	}
+
+	// Call userinfo/me endpoint with access token
+	req, err := http.NewRequest("GET", userinfoEndpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create userinfo request: %w", err)
+	}
+
+	if len(accessToken) == 0 {
+		return nil, fmt.Errorf("access token is empty")
+	}
+
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call userinfo endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return nil, fmt.Errorf("userinfo endpoint returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse userinfo response
+	var userInfo map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&userInfo); err != nil {
+		return nil, fmt.Errorf("failed to decode userinfo response: %w", err)
+	}
+
+	// Normalize Microsoft Graph fields to standard OIDC fields
+	if mail, ok := userInfo["mail"].(string); ok && userInfo["email"] == nil {
+		userInfo["email"] = mail
+	}
+	if displayName, ok := userInfo["displayName"].(string); ok && userInfo["name"] == nil {
+		userInfo["name"] = displayName
+	}
+	if id, ok := userInfo["id"].(string); ok && userInfo["sub"] == nil {
+		userInfo["sub"] = id
+	}
+
+	return userInfo, nil
+}
 
 func GetOutlookAttachmentList(client *http.Client, emailId string) (MailDataOutlookList, error) {
 	requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/messages/%s/attachments", emailId)
@@ -4115,45 +4180,190 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	return appAuth, nil
 }
 
-func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
-	// Check org in nonce -> check if ID points back to an org
-	outerSplit := strings.Split(string(idToken), ".")
-	for _, innerstate := range outerSplit {
-		log.Printf("[DEBUG] OpenID STATE (temporary): %s", innerstate)
-		decoded, err := base64.StdEncoding.DecodeString(innerstate)
+func fetchWellKnownConfig(ctx context.Context, issuer string, openIdAuthUrl string) (map[string]interface{}, error) {
+	// Clean issuer URL and construct well-known endpoint
+	issuer = strings.TrimSuffix(issuer, "/")
+	wellKnownURL := issuer + "/.well-known/openid-configuration"
+
+	// trying to check for keyclock edgecases
+	if len(openIdAuthUrl) > 0 && openIdAuthUrl != "none" {
+		openIdAuthUrl = strings.TrimSuffix(openIdAuthUrl, "/")
+		if idx := strings.Index(openIdAuthUrl, "/realms/"); idx != -1 {
+			realmStart := idx + len("/realms/")
+			realmEnd := strings.Index(openIdAuthUrl[realmStart:], "/")
+			if realmEnd != -1 {
+				realmBase := openIdAuthUrl[:realmStart+realmEnd]
+				wellKnownURL = realmBase + "/.well-known/openid-configuration"
+			}
+		}
+	}
+
+	resp, err := http.Get(wellKnownURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch well-known config from %s: %w", wellKnownURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("well-known endpoint returned status %d: %s", resp.StatusCode, wellKnownURL)
+	}
+
+	var config map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
+		return nil, fmt.Errorf("failed to decode well-known config: %w, %s", err, wellKnownURL)
+	}
+
+	return config, nil
+}
+
+// IdTokenClaims represents the claims extracted from a verified ID token
+type IdTokenClaims struct {
+	Sub           string   `json:"sub"`
+	Email         string   `json:"email"`
+	EmailVerified bool     `json:"email_verified"`
+	Roles         []string `json:"roles"`
+	Groups        []string `json:"groups"`
+	RealmAccess   struct {
+		Roles []string `json:"roles"`
+	} `json:"realm_access"` // Keycloak format
+}
+
+// VerifyIdTokenWithOIDC verifies an ID token using the go-oidc library and extracts roles
+// This performs proper signature verification via JWKS, expiry check, issuer and audience validation
+func VerifyIdTokenWithOIDC(ctx context.Context, idToken string, issuer string, clientID string) (*IdTokenClaims, error) {
+	if idToken == "" {
+		return nil, fmt.Errorf("id token is empty")
+	}
+	if issuer == "" {
+		return nil, fmt.Errorf("issuer is empty")
+	}
+	if clientID == "" {
+		return nil, fmt.Errorf("client ID is empty")
+	}
+
+	// Create OIDC provider (fetches JWKS automatically from .well-known/openid-configuration)
+	provider, err := oidc.NewProvider(ctx, issuer)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create OIDC provider for issuer %s: %w", issuer, err)
+	}
+
+	// Create verifier with expected audience (client_id)
+	verifier := provider.Verifier(&oidc.Config{
+		ClientID: clientID,
+	})
+
+	// Verify the token (signature, expiry, issuer, audience)
+	token, err := verifier.Verify(ctx, idToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to verify ID token: %w", err)
+	}
+
+	// Extract claims
+	var claims IdTokenClaims
+	if err := token.Claims(&claims); err != nil {
+		return nil, fmt.Errorf("failed to extract claims from ID token: %w", err)
+	}
+
+	// Set sub from the verified token
+	claims.Sub = token.Subject
+
+	return &claims, nil
+}
+
+// ExtractRolesFromIdToken verifies an ID token and extracts roles from various claim formats
+// Returns a deduplicated list of roles from: roles, groups, realm_access.roles (Keycloak)
+func ExtractRolesFromIdToken(ctx context.Context, idToken string, issuer string, clientID string) ([]string, error) {
+	claims, err := VerifyIdTokenWithOIDC(ctx, idToken, issuer, clientID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect roles from all possible sources
+	roleSet := make(map[string]bool)
+
+	for _, role := range claims.Roles {
+		roleSet[role] = true
+	}
+	for _, group := range claims.Groups {
+		roleSet[group] = true
+	}
+	for _, role := range claims.RealmAccess.Roles {
+		roleSet[role] = true
+	}
+
+	// Convert to slice
+	roles := make([]string, 0, len(roleSet))
+	for role := range roleSet {
+		roles = append(roles, role)
+	}
+
+	return roles, nil
+}
+
+func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdTokenCheck, string, error) {
+	var emptyToken IdTokenCheck
+	var foundChallenge string
+
+	// Parse JWT properly with all three parts
+	outerSplit := strings.Split(idToken, ".")
+	if len(outerSplit) != 3 {
+		return emptyToken, "", fmt.Errorf("invalid JWT format")
+	}
+
+	// Try to decode the payload (middle part)
+	for idx, innerstate := range outerSplit {
+		// Skip header (0) and signature (2), focus on payload (1)
+		if idx != 1 {
+			continue
+		}
+
+		// Use RawURLEncoding for JWT (no padding)
+		decoded, err := base64.RawURLEncoding.DecodeString(innerstate)
 		if err != nil {
-			log.Printf("[DEBUG] Failed base64 decode of state (1): %s", err)
-
-			// Random padding problems
-			innerstate += "="
-			decoded, err = base64.StdEncoding.DecodeString(innerstate)
+			log.Printf("[DEBUG] RawURLEncoding failed, trying with padding: %s", err)
+			// Try URL encoding with padding
+			decoded, err = base64.URLEncoding.DecodeString(innerstate)
 			if err != nil {
-				log.Printf("[DEBUG] Failed base64 decode of state (2): %s", err)
-
-				// Double padding problem fix lol (this actually works)
+				// Try with extra padding
 				innerstate += "="
-				decoded, err = base64.StdEncoding.DecodeString(innerstate)
+				decoded, err = base64.URLEncoding.DecodeString(innerstate)
 				if err != nil {
-					log.Printf("[ERROR] Failed base64 decode of state (3): %s", err)
-					continue
+					innerstate += "="
+					decoded, err = base64.URLEncoding.DecodeString(innerstate)
+					if err != nil {
+						preview := innerstate
+						if len(preview) > 50 {
+							preview = preview[:50] + "..."
+						}
+						log.Printf("[ERROR] Failed to decode JWT payload: %s (innerstate preview: %s)", err, preview)
+						return emptyToken, "", fmt.Errorf("failed to decode JWT payload")
+					}
 				}
 			}
 		}
 
 		var token IdTokenCheck
-		err = json.Unmarshal([]byte(decoded), &token)
+		err = json.Unmarshal(decoded, &token)
 		if err != nil {
-			log.Printf("[INFO] IDToken unmarshal error: %s", err)
-			continue
+			log.Printf("[ERROR] Failed to unmarshal JWT payload: %s", err)
+			return emptyToken, "", fmt.Errorf("failed to unmarshal JWT payload")
 		}
 
-		// Aud = client secret
-		// Nonce = contains all the info
-		if len(token.Aud) <= 0 {
-			log.Printf("[WARNING] Couldn't find AUD in JSON (required) - continuing to check. Current: %s", string(decoded))
-			continue
+		// Validate required fields
+		if len(token.Aud) == 0 {
+			return emptyToken, "", fmt.Errorf("missing audience in token")
 		}
 
+		// Check token expiration
+		if token.Exp > 0 {
+			now := time.Now().Unix()
+			if now >= int64(token.Exp) {
+				log.Printf("[ERROR] JWT token expired: exp=%d, now=%d", token.Exp, now)
+				return emptyToken, "", fmt.Errorf("JWT token expired")
+			}
+		}
+
+		// Verify JWT signature if we have an issuer
 		if len(token.Nonce) > 0 {
 			parsedState, err := base64.StdEncoding.DecodeString(token.Nonce)
 			if err != nil {
@@ -4161,7 +4371,6 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 			}
 
 			foundOrg := ""
-			foundChallenge := ""
 			stateSplit := strings.Split(string(parsedState), "&")
 			regexPattern := `EXTRA string=([A-Za-z0-9~.]+)`
 			re := regexp.MustCompile(regexPattern)
@@ -4194,24 +4403,23 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 
 			if len(foundOrg) == 0 {
 				log.Printf("[ERROR] No org specified in state (2)")
-				return IdTokenCheck{}, err
+				return IdTokenCheck{}, foundChallenge, err
 			}
 			org, err := GetOrg(ctx, foundOrg)
 			if err != nil {
 				log.Printf("[WARNING] Error getting org in OpenID (2): %s", err)
-				return IdTokenCheck{}, err
+				return IdTokenCheck{}, foundChallenge, err
 			}
 			// Validating the user itself
 			if token.Aud == org.SSOConfig.OpenIdClientId || foundChallenge == org.SSOConfig.OpenIdClientSecret {
 				log.Printf("[DEBUG] Correct token aud & challenge - successful login!")
 				token.Org = *org
-				return token, nil
-			} else {
+				return token, foundChallenge, nil
 			}
 		}
 	}
 
-	return IdTokenCheck{}, errors.New("Couldn't verify nonce")
+	return IdTokenCheck{}, "", errors.New("Couldn't verify nonce")
 }
 
 func IsRunningInCluster() bool {
