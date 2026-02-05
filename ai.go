@@ -44,7 +44,8 @@ var standalone bool
 
 // var model = "gpt-5-mini"
 var maxTokens = 5000
-var model = "gpt-5-mini"
+//var model = "gpt-5-mini"
+var model = "gpt-5.2-codex"
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
 var docsVectorStoreID = os.Getenv("OPENAI_DOCS_VS_ID")
@@ -6971,10 +6972,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		break
 	}
 
-	if debug { 
-		log.Printf("[DEBUG] IN HERE (1)")
-	}
-
 	// Metadata = org-specific context
 	// This e.g. makes "me" mean "users in my org" and such
 	metadata := ""
@@ -7215,9 +7212,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				break
 			}
 
-			if debug { 
-				log.Printf("DECISIONS: %s", string(marshalledDecisions))
-			}
+			//if debug { 
+			//	log.Printf("[DEBUG] DECISIONS: %s", string(marshalledDecisions))
+			//}
 
 			if len(userMessage) == 0 && len(oldAgentOutput.OriginalInput) > 0 {
 				userMessage = fmt.Sprintf("Original input: '%s'", oldAgentOutput.OriginalInput)
@@ -7419,75 +7416,61 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	}
 
 	systemMessage += fmt.Sprintf(`### MISSION
-You are the Action Execution Agent for the Shuffle platform. You receive a list of authorized tools (USER CONTEXT), a request (USER REQUEST), and execution history. Your goal is to map the request to the correct tool and output a strict JSON execution plan.
+You are the Action Execution Agent for the Shuffle platform. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute the task and **IMMEDIATELY** stop and summarize when done.
 
 ### INPUT PROTOCOL
 1. **USER CONTEXT:** Available actions/tools.
 2. **USER REQUEST:** Task to process.
 3. **HISTORY:** JSON list of previous executions (Newest First).
 
-### RECOVERY & RETRY PROTOCOL (HIGHEST PRIORITY)
-**Analyze the execution history FIRST.**
-
-1. **CRITICAL STOP: Authentication/Permission Failure**
-   - **Trigger:** If "status" is "FAILURE" AND ("raw_response" contains "401" OR "403" OR "app_authentication" OR "Authenticate").
-   - **Action:** STOP immediately. Do NOT retry.
-   - **Output:** Select "answer" (Category: "standalone").
-   - **Field "output":** "**Authentication Error:** The previous action failed (401/403). Please authenticate [Tool Name] and try again."
-
-2. **RETRY LOGIC: General Failures**
-   - **Trigger:** If "status" is "FAILURE" for other reasons.
-   - **Check Runs:** If "runs" >= 3, ABORT.
-     - **Action:** Select "answer" (Category: "standalone").
-     - **Field "output":** "**Task Failed:** Action [Action Name] failed 3 times. Reason: [Error summary]."
-   - **Retry:** If "runs" < 3, RETRY the same action. Reason: "Attempt [runs+1]/3: Retrying due to [Error]."
-
-### FINALIZATION PROTOCOL (WHEN TO STOP)
-**Analyze the history to see if the user's request is SATISFIED.**
-1. **Check:** Did the last action in "HISTORY" succeed ("status": "SUCCESS")?
-2. **Verify:** Does that success completes the user's core request? (e.g., User asked to "Scan IP", and history shows "Scan IP: Success").
-3. **Action:** If YES, you MUST select "answer" (Category: "standalone") to finalize.
-   - **Field "output":** A concise Markdown summary of the results. (e.g., "✅ **Task Complete:** IP 1.2.3.4 was scanned. Result: Clean.")
-
-### VERIFICATION PROTOCOL (READ BEFORE WRITE)
-**If the user wants to MODIFY (edit, append, patch) a resource:**
-1. **Check Context:** Do you see the *current content* of the resource in the "HISTORY" results?
+### PHASE 1: COMPLETION CHECK (HIGHEST PRIORITY)
+**Compare the "USER REQUEST" against the "HISTORY".**
+1. **Analyze:** Does the "HISTORY" contain a successful execution that matches the core intent of the "USER REQUEST"?
+   - *Example:* User asked "Scan IP", History shows "Scan IP: Success". -> **DONE.**
 2. **Decision:**
-   - **NO (Content Unknown):** You MUST run the corresponding **"Get" / "Read"** tool first.
-   - **YES (Content Known):** Proceed with the **"Update" / "Edit"** tool using the known data.
+   - **IF DONE:** You are **FORBIDDEN** from selecting a "singul" tool. You MUST select "finish".
+   - **Fields:**
+     - **category:** "finish"
+     - **action:** "finish"
+     - **fields:** [{ "key": "output", "value": "A Markdown summary (e.g., ✅ **Task Complete:** IP 8.8.8.8 scanned. Result: Clean.)" }]
 
-### DECISION LOGIC (NORMAL OPERATION)
-**Only proceed here if the task is NOT done and NOT failed.**
+### PHASE 2: RECOVERY & RETRY
+**Only proceed if the task is NOT done.**
+1. **Auth Failure (401/403):** STOP.
+   - **Output:** category="finish", action="finish".
+   - **Field "output":** "**Authentication Failed:** Please check credentials for [Tool]."
 
-1. **Map Request:**
-   - Select a tool from "USER CONTEXT" that fits the next step (Category: "singul").
-   - **CRITICAL:** Do NOT ask for approval. If a tool is listed, you have permission.
-   - Use "ask" (Category: "standalone") ONLY if missing a *required* parameter that prevents execution.
+2. **General Failure:**
+   - If "runs" >= 3: STOP.
+     - **Output:** category="finish", action="finish".
+     - **Field "output":** "**Task Failed:** Action [Action Name] failed 3 times. Reason: [Error]."
+   - If "runs" < 3: RETRY same action.
+     - **Reason:** "Attempt [runs+1]/3: Retrying due to [Error]."
 
-2. **Resolve Parameters:**
-   - Extract values from the request to fill arguments.
-   - Values must be **LITERAL** strings.
-   - **FORBIDDEN:** Do not use variables (e.g., "{ip}") or placeholders.
+### PHASE 3: EXECUTION LOGIC
+**Only proceed if Task is Incomplete and No Failures exist.**
 
-### OUTPUT STYLE & FORMATTING
-- **Conciseness:** Be direct. No fluff.
-- **Markdown:** Use Markdown in your "reason" and "answer" fields.
-- **"Ask" Rules:** If using "ask", ONLY use the field key "question".
+1. **Verification (Read-Before-Write):**
+   - If modifying a resource, do you see its content in "HISTORY"?
+   - **No:** Run "Get/Read" tool.
+   - **Yes:** Run "Update/Write" tool.
+
+2. **New Action:**
+   - Select the tool that performs the *next logical step*.
+   - **CRITICAL:** Do NOT ask "Is there anything else?". If the step is done, go to PHASE 1.
 
 ### OUTPUT FORMAT (STRICT JSON)
-Output ONLY a valid JSON list.
-
 [
   {
     "i": 0,
-    "category": "singul", // Use "standalone" if finalising (answer) or blocked (ask)
-    "action": "exact_name_from_context", // Use "answer" or "ask" if standalone
-    "tool": "tool_name_from_context", // Use "core" if standalone
+    "category": "singul", // Use "finish" if done
+    "action": "exact_name", // Use "finish" if done
+    "tool": "tool_name", // Use "core" for finish
     "confidence": 1.0,
-    "runs": "1",
-    "reason": "Explain WHY. If finalising, state 'Task completed successfully'.",
+    "runs": "1", 
+    "reason": "If continuing, explain WHY. If finishing, state 'Core request matches History success'.",
     "fields": [
-      { "key": "argument_name", "value": "literal_string_value" }
+      { "key": "argument_name", "value": "literal_value" }
     ]
   }
 ]`)
@@ -7847,7 +7830,7 @@ Output ONLY a valid JSON list.
 		} else {
 			choicesString = openaiOutput.Choices[0].Message.Content
 			if debug {
-				log.Printf("[DEBUG] Found choices string (2) - len: %d: %s", len(choicesString), choicesString)
+				log.Printf("[DEBUG] Found choices string (2) in AI Agent response - len: %d: %s", len(choicesString), choicesString)
 			}
 
 			// Handles reasoning models for Refusal control edgecases

@@ -4458,10 +4458,10 @@ type HTTPOutput struct {
 
 	Status  int               `json:"status,omitempty"`
 	Url     string            `json:"url,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Cookies map[string]string `json:"cookies,omitempty"`
 	Errors  []string          `json:"errors,omitempty"`
 	Body    interface{}       `json:"body,omitempty"`
+	Cookies map[string]string `json:"cookies,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 type SnappStep struct {

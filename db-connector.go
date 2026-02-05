@@ -1743,6 +1743,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 				//} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
 			} else if (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") && (innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent") {
+
 				// Auto fixing decision data based on cache for better decisionmaking
 				// Map the result into AgentOutput to check decisions
 				mappedOutput := AgentOutput{}
@@ -1774,6 +1775,19 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						//finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						failedFound = true
 						continue
+					} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
+
+						// Max runtime of a decision at 5 minutes
+						if decision.RunDetails.StartedAt > 0 && time.Now().Unix()-decision.RunDetails.StartedAt > 300 {
+							log.Printf("[INFO][%s] Should stop decision %s for agent action %s due to running for more than 5 minutes. Marking as FAILURE.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID)
+
+							decisionsUpdated = true
+							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE" 
+							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
+							mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
+						}
+
+
 					} else {
 						if decision.RunDetails.CompletedAt > 0 {
 							if debug {
@@ -1814,6 +1828,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				// due to having a 'finish' action that should handle it properly
 				if failedFound {
 					decisionsUpdated = true
+					//if debug { 
+					//	log.Printf("[DEBUG][%s] Failure found for agent %s. Should we exit?", workflowExecution.ExecutionId, action.ID)
+					//}
 
 					/*
 						mappedOutput.Status = "FAILURE"
