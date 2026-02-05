@@ -167,6 +167,7 @@ type RetStruct struct {
 	IntervalSeconds int64                 `json:"interval_seconds"`
 	Subscriptions   []PaymentSubscription `json:"subscriptions,omitempty"`
 	Licensed        bool                  `json:"licensed"`
+	CloudSyncUrl    string                `json:"cloud_sync_url,omitempty"`
 }
 
 type AppMini struct {
@@ -284,7 +285,8 @@ type Valuereplace struct {
 	Value string `json:"value" datastore:"value,noindex" yaml:"value"`
 
 	// Used for e.g. user input storage
-	Answer string `json:"answer,omitempty" datastore:"answer,noindex" yaml:"answer,omitempty"`
+	Answer   string `json:"answer,omitempty" datastore:"answer,noindex" yaml:"answer,omitempty"`
+	Question string `json:"question,omitempty" datastore:"question,noindex" yaml:"question,omitempty"`
 }
 
 type WorkflowAppAction struct {
@@ -684,8 +686,6 @@ type User struct {
 	// Old web3 integration
 	EthInfo  EthInfo   `datastore:"eth_info" json:"eth_info"`
 	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
-
-	ProvisionedByOrg string `datastore:"provisioned_by_org" json:"provisioned_by_org"`
 }
 
 type SSOInfo struct {
@@ -1160,10 +1160,14 @@ type DatastoreAutomationOption struct {
 }
 
 type DatastoreAutomation struct {
-	Name    string                      `json:"name" datastore:"name"`
-	Icon    string                      `json:"icon" datastore:"icon"`
-	Enabled bool                        `json:"enabled" datastore:"enabled"`
-	Options []DatastoreAutomationOption `json:"options" datastore:"options"`
+	Name        string                      `json:"name" datastore:"name"`
+	Description string                      `json:"description" datastore:"description"`
+	Options     []DatastoreAutomationOption `json:"options" datastore:"options"`
+	Type        string                      `json:"type" datastore:"type"`
+	Icon        string                      `json:"icon" datastore:"icon"`
+	Beta        bool                        `json:"beta" datastore:"beta"`
+	Disabled    bool                        `json:"disabled" datastore:"disabled"`
+	Enabled     bool                        `json:"enabled" datastore:"enabled"`
 }
 
 type DatastoreCategorySettings struct {
@@ -1197,6 +1201,14 @@ type CacheKeyDataMini struct {
 	Tags               []string `json:"tags,omitempty" datastore:"tags"`
 }
 
+type CacheKeyDataFallback struct {
+	OrgId    string   `json:"org_id,omitempty" datastore:"OrgId"`
+	Key      string   `json:"key" datastore:"Key"`
+	Value    any      `json:"value" datastore:"Value,noindex"`
+	Category string   `json:"category" datastore:"category"`
+	Tags     []string `json:"tags,omitempty" datastore:"tags"`
+}
+
 type CacheKeyData struct {
 	Success       bool     `json:"success" datastore:"Success"`
 	WorkflowId    string   `json:"workflow_id," datastore:"WorkflowId"`
@@ -1219,6 +1231,7 @@ type CacheKeyData struct {
 	SuborgDistribution  []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 	RevisionId          string   `json:"revision_id" datastore:"revision_id"`
 }
+
 type SyncConfig struct {
 	Interval int64  `json:"interval" datastore:"interval"`
 	Apikey   string `json:"api_key" datastore:"api_key"`
@@ -1802,6 +1815,7 @@ type TypeValidation struct {
 	NotificationsCreated int64 `json:"notifications_created" datastore:"notifications_created"`
 
 	// For the last update, which did it
+	Environment string `json:"environment" datastore:"environment"`
 	WorkflowId  string `json:"workflow_id" datastore:"workflow_id"`
 	ExecutionId string `json:"execution_id" datastore:"execution_id"`
 	NodeId      string `json:"node_id" datastore:"node_id"`
@@ -4035,6 +4049,9 @@ type SchemalessOutput struct {
 	// Optional. Used for error handling.
 	RawResponse interface{} `json:"raw_response,omitempty"`
 	Retries     int         `json:"retries,omitempty"`
+
+	CategoryLabels []string `json:"category_labels,omitempty"`
+	ActionName     string   `json:"action_name,omitempty"`
 }
 
 type CategoryActionFieldOverride struct {
@@ -4412,6 +4429,9 @@ type StructuredCategoryAction struct {
 	Category    string        `json:"category,omitempty"`
 	Apps        []WorkflowApp `json:"apps,omitempty"`
 
+	ActionName     string   `json:"action_name,omitempty"`
+	CategoryLabels []string `json:"category_labels,omitempty"`
+
 	Result string `json:"result,omitempty"`
 
 	ApiDebuggerUrl string `json:"api_debugger_url,omitempty"`
@@ -4441,16 +4461,16 @@ type UserRequest struct {
 type HTTPOutput struct {
 	Success   bool   `json:"success"`
 	Reason    string `json:"reason,omitempty"`
-	Result    string `jjson:"result,omitempty"`
+	Result    string `json:"result,omitempty"`
 	Exception string `json:"exception,omitempty"`
 	Details   string `json:"details,omitempty"`
 
 	Status  int               `json:"status,omitempty"`
 	Url     string            `json:"url,omitempty"`
-	Body    interface{}       `json:"body,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Cookies map[string]string `json:"cookies,omitempty"`
 	Errors  []string          `json:"errors,omitempty"`
+	Body    interface{}       `json:"body,omitempty"`
+	Cookies map[string]string `json:"cookies,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 type SnappStep struct {
@@ -4561,12 +4581,14 @@ type TimeWindow struct {
 type AgentDecisionRunDetails struct {
 	Id string `json:"id" datastore:"id"`
 
-	StartedAt   int64  `json:"started_at" datastore:"started_at"`
-	CompletedAt int64  `json:"completed_at" datastore:"completed_at"`
-	Type        string `json:"type,omitempty" datastore:"type"`
-	Status      string `json:"status" datastore:"status"`
-	RawResponse string `json:"raw_response,omitempty" datastore:"raw_response"`
-	DebugUrl    string `json:"debug_url,omitempty" datastore:"debug_url"`
+	StartedAt      int64    `json:"started_at" datastore:"started_at"`
+	CompletedAt    int64    `json:"completed_at" datastore:"completed_at"`
+	Type           string   `json:"type,omitempty" datastore:"type"`
+	Status         string   `json:"status" datastore:"status"`
+	RawResponse    string   `json:"raw_response,omitempty" datastore:"raw_response"`
+	DebugUrl       string   `json:"debug_url,omitempty" datastore:"debug_url"`
+	CategoryLabels []string `json:"category_labels,omitempty" datastore:"category_labels"`
+	ActionName     string   `json:"action_name,omitempty" datastore:"action_name"`
 }
 
 // Each decision
@@ -4835,4 +4857,59 @@ type StreamData struct {
 	Type  string `json:"type"` // "chunk", "done", "error"
 	Chunk string `json:"chunk,omitempty"`
 	Data  string `json:"data,omitempty"` // For the final ID or error
+}
+
+type MockToolCall struct {
+	URL      string                 `json:"url"`
+	Method   string                 `json:"method"`
+	Fields   map[string]string      `json:"fields"`
+	Response map[string]interface{} `json:"response"`
+}
+
+type MockUseCaseData struct {
+	UseCase           string          `json:"use_case"`
+	UserPrompt        string          `json:"user_prompt"`
+	ToolCalls         []MockToolCall  `json:"tool_calls"`
+	ExpectedDecisions []AgentDecision `json:"expected_decisions"`
+}
+
+type AgentStartResponse struct {
+	Success       bool   `json:"success"`
+	ExecutionId   string `json:"execution_id"`
+	Authorization string `json:"authorization"`
+}
+
+type StreamsResultResponse struct {
+	Result  string         `json:"result"`
+	Results []ActionResult `json:"results"`
+	Status  string         `json:"status"`
+}
+
+type AgentStartRequest struct {
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	AppName     string              `json:"app_name"`
+	AppID       string              `json:"app_id"`
+	AppVersion  string              `json:"app_version"`
+	Environment string              `json:"environment"`
+	Parameters  []map[string]string `json:"parameters"`
+}
+
+type StreamsResultRequest struct {
+	ExecutionID   string `json:"execution_id"`
+	Authorization string `json:"authorization"`
+}
+
+type TestResponse struct {
+	Success bool         `json:"success"`
+	Total   int          `json:"total"`
+	Passed  int          `json:"passed"`
+	Failed  int          `json:"failed"`
+	Results []TestResult `json:"results"`
+}
+
+type TestResult struct {
+	TestCase string `json:"test_case"`
+	Status   string `json:"status"`
+	Error    string `json:"error,omitempty"`
 }
