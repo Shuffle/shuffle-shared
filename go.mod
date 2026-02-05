@@ -19,6 +19,7 @@ require (
 	github.com/frikky/schemaless v0.0.28
 	github.com/go-git/go-billy/v5 v5.6.2
 	github.com/go-git/go-git/v5 v5.16.1
+	github.com/goccy/go-json v0.10.5
 	github.com/google/go-github/v28 v28.1.1
 	github.com/google/go-querystring v1.1.0
 	github.com/google/uuid v1.6.0
