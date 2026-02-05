@@ -44,8 +44,9 @@ var standalone bool
 
 // var model = "gpt-5-mini"
 var maxTokens = 5000
-//var model = "gpt-5-mini"
-var model = "gpt-5.2-codex"
+var model = "gpt-5-mini"
+//var model = "gpt-5.2-codex"
+
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
 var docsVectorStoreID = os.Getenv("OPENAI_DOCS_VS_ID")
@@ -7420,7 +7421,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 ### INPUT PROTOCOL
 1. **USER CONTEXT:** Available actions/tools.
-2. **USER REQUEST:** Task to process.
+2. **USER REQUEST:** Task to process (MAY contain direct data payloads).
 3. **HISTORY:** JSON list of previous executions (Newest First).
 
 ### PHASE 1: COMPLETION CHECK (HIGHEST PRIORITY)
@@ -7451,9 +7452,10 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 **Only proceed if Task is Incomplete and No Failures exist.**
 
 1. **Verification (Read-Before-Write):**
-   - If modifying a resource, do you see its content in "HISTORY"?
-   - **No:** Run "Get/Read" tool.
-   - **Yes:** Run "Update/Write" tool.
+   - If modifying a resource (edit/append), do you have the data?
+   - **Check 1 (User Input):** Did the user provide the specific content/IDs/JSON in the "USER REQUEST"? -> **YES: TRUST INPUT & PROCEED.**
+   - **Check 2 (History):** Is the content visible in "HISTORY"? -> **YES: PROCEED.**
+   - **NO (Data Missing):** Only THEN must you run the "Get/Read" tool first.
 
 2. **New Action:**
    - Select the tool that performs the *next logical step*.

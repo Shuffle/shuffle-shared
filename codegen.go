@@ -4819,6 +4819,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		"timestamp":           cacheData.Edited,
 		"workflow_id":         cacheData.WorkflowId,
 		"suborg_distribution": cacheData.SuborgDistribution,
+		"tags": 			   cacheData.Tags,
 	}
 
 	marshalledBody, err := json.Marshal(parsedOutput)
@@ -4865,82 +4866,102 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	} else if parsedName == "run_ai_agent" {
 		log.Printf("[DEBUG] Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
 
-		// FIXME: Make dynamic
-		aiAppname := "openai"
-		parsedParams := []map[string]string{
-			map[string]string{
-				"name":  "app_name",
-				"value": aiAppname,
-			},
-			map[string]string{
-				"name":  "action",
-				"value": "API",
-			},
-		}
-		for _, option := range automation.Options {
-			if option.Key != "action" {
-				continue
-			}
-
-			option.Key = "input"
-			option.Value += fmt.Sprintf("\n\n%s", cacheData.Value)
-			parsedParams = append(parsedParams, map[string]string{
-				"name":  option.Key,
-				"value": option.Value,
-			})
-		}
-
 		if len(foundApikey) == 0 {
 			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
 			return errors.New("No admin user with API key found")
 		}
 
-		agentUrl := fmt.Sprintf("%s/api/v1/apps/agent_starter/run", backendUrl)
-		agentStartRequest := AgentStartRequest{
-			//ID          string              `json:"id"`
-			Name:        "agent",
-			AppName:     "AI Agent",
-			AppID:       "shuffle_agent",
-			AppVersion:  "1.0.0",
-			Environment: "cloud",
-			Parameters:  parsedParams,
+		// Already handled check
+		for index, option := range automation.Options { 
+			agentTagName := fmt.Sprintf("agent-%s-%d", option.Key, index)
+			if ArrayContains(cacheData.Tags, agentTagName) {
+				continue
+			}
+
+			if !strings.Contains(option.Key, "action") { 
+				log.Printf("[WARNING] Agent option key %s does not contain 'action' - skipping to avoid confusion. This may cause the agent to not run if no other options are present.", option.Key)
+				continue
+			}
+
+			// FIXME: Make dynamic
+			aiAppname := "openai"
+			parsedParams := []map[string]string{
+				map[string]string{
+					"name":  "app_name",
+					"value": aiAppname,
+				},
+				map[string]string{
+					"name":  "action",
+					"value": "API",
+				},
+			}
+
+			option.Value += fmt.Sprintf("\n%s", cacheData.Value)
+			parsedParams = append(parsedParams, map[string]string{
+				"name":  "input",
+				"value": fmt.Sprintf("### Datastore Value\nKey: %s\nCategory: %s\nValue: %s", cacheData.Key, cacheData.Category, option.Value),
+			})
+
+
+			agentUrl := fmt.Sprintf("%s/api/v1/apps/agent_starter/run", backendUrl)
+			agentStartRequest := AgentStartRequest{
+				//ID          string              `json:"id"`
+				Name:        "agent",
+				AppName:     "AI Agent",
+				AppID:       "shuffle_agent",
+				AppVersion:  "1.0.0",
+				Environment: "cloud",
+				Parameters:  parsedParams,
+			}
+
+			newParsedBody, err := json.Marshal(agentStartRequest)
+			if err != nil {
+				log.Printf("[ERROR] Failed to marshal body for ai agent execution: %s", err)
+				return err
+			}
+
+			client := GetExternalClient(agentUrl)
+			req, err := http.NewRequest(
+				"POST",
+				agentUrl,
+				bytes.NewBuffer(newParsedBody),
+			)
+
+			if err != nil {
+				log.Printf("[ERROR] Failed to create request for enrichment workflow execution: %s", err)
+				return err
+			}
+
+			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
+			req.Header.Add("Org-Id", cacheData.OrgId)
+
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Printf("[ERROR] Failed to send enrichment workflow execution request: %s", err)
+				return err
+			}
+
+			// Makes sure we don't re-run the same twice
+			cacheData.Tags = append(cacheData.Tags, agentTagName)
+			err = SetDatastoreKeyMeta(ctx, cacheData) 
+			if err != nil {
+				log.Printf("[ERROR] Failed to set cache key after running AI agent: %s", err)
+			}
+
+			defer resp.Body.Close()
+			body, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				log.Printf("[ERROR] Failed to read response body from AI AGENT execution request: %s", err)
+				return err
+			}
+
+
+			if debug { 
+				log.Printf("[DEBUG] RESP FOR RUNNING AI AGENT (%d): %s", resp.StatusCode, string(body))
+			}
+
+			break
 		}
-
-		newParsedBody, err := json.Marshal(agentStartRequest)
-		if err != nil {
-			log.Printf("[ERROR] Failed to marshal body for ai agent execution: %s", err)
-			return err
-		}
-
-		client := GetExternalClient(agentUrl)
-		req, err := http.NewRequest(
-			"POST",
-			agentUrl,
-			bytes.NewBuffer(newParsedBody),
-		)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed to create request for enrichment workflow execution: %s", err)
-			return err
-		}
-
-		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
-		req.Header.Add("Org-Id", cacheData.OrgId)
-
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[ERROR] Failed to send enrichment workflow execution request: %s", err)
-			return err
-		}
-
-		defer resp.Body.Close()
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed to read response body from AI AGENT execution request: %s", err)
-			return err
-		}
-
-		log.Printf("RESP FOR RUNNING AI AGENT (%d): %s", resp.StatusCode, string(body))
 
 	} else if parsedName == "enrich" {
 		// Prevent recursion

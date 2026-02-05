@@ -19731,13 +19731,14 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
-			log.Printf("Path too short: %d", len(location))
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
+			log.Printf("[ERROR] Path too short: %d", len(location))
+			fileId = ""
+			//resp.WriteHeader(401)
+			//resp.Write([]byte(`{"success": false}`))
+			//return
+		} else {
+			fileId = location[4]
 		}
-
-		fileId = location[4]
 	}
 
 	if strings.Contains(fileId, "?") {
@@ -19768,15 +19769,25 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if tmpData.OrgId != fileId {
-			log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
-			return
+			if fileId == "" {
+				fileId = tmpData.OrgId 
+			} else {
+				log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
+				return
+			}
 		}
 
 		user, err := HandleApiAuthentication(resp, request)
 		if err == nil {
-			user.ActiveOrg.Id = fileId
+			if len(fileId) == 0 {
+				fileId = user.ActiveOrg.Id
+				tmpData.OrgId = user.ActiveOrg.Id
+			} else {
+				user.ActiveOrg.Id = fileId
+			}
+
 			skipExecutionAuth = true
 
 			if user.ActiveOrg.Id != fileId {
@@ -19902,7 +19913,9 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		executionId = workflowExecution.ExecutionId
 	}
 
-	//log.Printf("\n\n[DEBUG] Getting key '%s' from category '%s'\n\n", tmpData.Key, tmpData.Category)
+	//if debug { 
+	//	log.Printf("\n\n[DEBUG] Getting key '%s' from category '%s'\n\n", tmpData.Key, tmpData.Category)
+	//}
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
@@ -20102,9 +20115,45 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	var tmpData []CacheKeyData
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling in setvalue (1): %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
+
+		var tmpDataOverride CacheKeyDataFallback
+		err = json.Unmarshal(body, &tmpDataOverride)
+		if err != nil {
+			log.Printf("[WARNING] Failed unmarshalling in setvalue (1): %s", err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		// Check if value is a map[] or []map first
+		parsedValue := ""
+		if _, ok := tmpDataOverride.Value.(string); ok {
+			parsedValue = tmpDataOverride.Value.(string)
+		} else {
+			marshalledValue, err := json.Marshal(tmpDataOverride.Value)
+			if err == nil {
+				parsedValue = string(marshalledValue)
+			} else {
+				log.Printf("[WARNING] Failed to marshal value in setvalue: %s", err)
+				resp.WriteHeader(400)
+				resp.Write([]byte(`{"success": false, "reason": "Failed to parse value. Make sure it is in the [{"key": "key", "value": "value"}] format."}`))
+				return
+			}
+		}
+
+		tmpData = append(tmpData, CacheKeyData{
+			OrgId:    tmpDataOverride.OrgId,
+			Key:      tmpDataOverride.Key,
+			Category: tmpDataOverride.Category,
+			Tags:     tmpDataOverride.Tags,
+
+			Value:    parsedValue,
+		})
+	}
+
+	if len(tmpData) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No data provided. Value of each key should be a string."}`))
 		return
 	}
 
@@ -20158,7 +20207,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[AUDIT] Running bulk upload for org %s to category '%s. Keys: %d'", user.ActiveOrg.Id, mainCategory, len(tmpData))
+	log.Printf("[AUDIT] Running bulk upload for org %s to category '%s. Keys: %d'. Tags: %#v", user.ActiveOrg.Id, mainCategory, len(tmpData), tmpData[0].Tags)
 
 	existingInfo, err := SetDatastoreKeyBulk(ctx, tmpData)
 	if err != nil {
@@ -20976,6 +21025,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				foundDecisionIndex = decisionIndex
 				mappedOutput.CompletedAt = 0
 				mappedOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+				mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 				mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = 0
 				mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse = ""
 				mappedOutput.Decisions[decisionIndex].RunDetails.DebugUrl = ""

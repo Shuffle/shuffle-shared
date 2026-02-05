@@ -3,7 +3,7 @@ package shuffle
 import (
 	"bytes"
 	"encoding/json"
-	//"fmt"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -32,49 +32,100 @@ func EvalPolicyJSON(policy, oldJSON, newJSON string) (string, bool, string) {
 	return string(resultBytes), true, ""
 }
 
+// findDeletedField returns the path of the first missing field found, or "" if none.
+func findDeletedField(oldVal, newVal any, currentPath string) string {
+	switch o := oldVal.(type) {
+
+	case map[string]any:
+		// Expect new value to also be a map
+		n, ok := newVal.(map[string]any)
+		if !ok {
+			// Type mismatch implies the whole object at 'currentPath' was replaced/deleted
+			return currentPath
+		}
+
+		for k, vOld := range o {
+			vNew, exists := n[k]
+
+			// Format the next path segment
+			nextPath := k
+			if currentPath != "" {
+				nextPath = currentPath + "." + k
+			}
+
+			if !exists {
+				return nextPath // Found it!
+			}
+
+			// Recurse
+			if path := findDeletedField(vOld, vNew, nextPath); path != "" {
+				return path
+			}
+		}
+
+	case []any:
+		n, ok := newVal.([]any)
+		if !ok {
+			return currentPath
+		}
+
+		// If the new array is shorter, we lost items
+		if len(n) < len(o) {
+			if currentPath == "" {
+				return "[]" // Root array truncated
+			}
+			return fmt.Sprintf("%s[%d]", currentPath, len(n)) // Point to the first missing index
+		}
+
+		// Check matching items recursively
+		for i := range o {
+			nextPath := fmt.Sprintf("[%d]", i)
+			if currentPath != "" {
+				nextPath = fmt.Sprintf("%s[%d]", currentPath, i)
+			}
+
+			if path := findDeletedField(o[i], n[i], nextPath); path != "" {
+				return path
+			}
+		}
+	}
+
+	return ""
+}
+
 // ----------------------
 // Core Logic
 // ----------------------
-
 func evalPolicyRules(rules []Rule, oldDoc, newDoc map[string]any) (map[string]any, bool, string) {
-	// Start with oldDoc as the base, but we need to determine the 'Candidate' (Proposed State).
+	// ... (Phase 1: Determine Candidate logic remains the same) ...
 	
-	// Default Strategy: Overwrite (Full Replacement)
-	// If no positive rule matches, we assume the user intends to replace the document with newDoc.
-	// This allows "deny" rules to correctly catch missing fields.
+	// [COPY_PASTE_YOUR_PHASE_1_CODE_HERE_OR_LEAVE_IT_AS_IS]
+	// Recapping Phase 1 briefly for context:
 	candidate := deepCopyMap(newDoc)
-	
 	ruleMatched := false
 
-	// Phase 1: Determine Candidate via Positive Rules (Merge/Overwrite)
 	for _, r := range rules {
 		if r.Action == ActionOverwrite {
-			if r.Condition == "same_shape" {
-				if compareShape(oldDoc, newDoc) {
-					candidate = deepCopyMap(newDoc)
-					ruleMatched = true
-					break 
-				}
+			if r.Condition == "same_shape" && compareShape(oldDoc, newDoc) {
+				candidate = deepCopyMap(newDoc)
+				ruleMatched = true
+				break
 			}
 		} else if r.Action == ActionMerge {
-            // NEW: Generic merge support (Patch Mode)
-            if r.Condition == "always" {
-                candidate = mergeJSON(oldDoc, newDoc)
-                ruleMatched = true
-                break
-            }
-            // EXISTING: Specific field merging
-            if strings.HasPrefix(r.Condition, "allowed_fields[") {
-                fields := parseAllowedFields(r.Condition)
-                candidate = mergeAllowedFields(oldDoc, newDoc, fields)
-                ruleMatched = true
-                break
-            }
-        }
+			if r.Condition == "true" || r.Condition == "always" {
+				candidate = mergeJSON(oldDoc, newDoc)
+				ruleMatched = true
+				break
+			}
+			if strings.HasPrefix(r.Condition, "allowed_fields[") {
+				fields := parseAllowedFields(r.Condition)
+				candidate = mergeAllowedFields(oldDoc, newDoc, fields)
+				ruleMatched = true
+				break
+			}
+		}
 	}
 
-	// If positive rules existed but none matched (e.g., shape mismatch), we fail fast.
-	// But if ONLY "deny" rules exist (no Merge/Overwrite rules), we use the Default Strategy (Overwrite).
 	hasPositiveRules := false
 	for _, r := range rules {
 		if r.Action == ActionMerge || r.Action == ActionOverwrite {
@@ -84,18 +135,16 @@ func evalPolicyRules(rules []Rule, oldDoc, newDoc map[string]any) (map[string]an
 	}
 	
 	if hasPositiveRules && !ruleMatched {
-		// Specific allow rules exist but weren't met (e.g. wrong shape)
-		// We return oldDoc to signify "No Change Allowed"
 		return deepCopyMap(oldDoc), false, "no matching allow rule"
 	}
 
 	// Phase 2: Apply Deny Rules (Guardrails)
-	// These run against the Candidate vs OldDoc
 	for _, r := range rules {
 		if r.Action == ActionDeny {
 			if r.Condition == "has_deleted_field" {
-				if hasDeletedField(oldDoc, candidate) {
-					return deepCopyMap(oldDoc), false, "deny: field deletion detected"
+				// NEW: Get the specific path of the deleted field
+				if deletedPath := findDeletedField(oldDoc, candidate, ""); deletedPath != "" {
+					return deepCopyMap(oldDoc), false, fmt.Sprintf("deny: field deletion detected at '%s'", deletedPath)
 				}
 			}
 		}
@@ -143,18 +192,46 @@ func mergeAllowedFields(oldDoc, newDoc map[string]any, allowed []string) map[str
 	return result
 }
 
-// mergeJSON recursively merges `source` into `target` (standard merge patch logic).
+// mergeJSON recursively merges source into target.
+// CHANGE: Arrays are now appended, not replaced.
 func mergeJSON(target, source map[string]any) map[string]any {
 	result := deepCopyMap(target)
+
 	for k, vNew := range source {
 		vOld, exists := result[k]
-		
+
+		if !exists {
+			// New key? Just add it.
+			result[k] = deepCopy(vNew)
+			continue
+		}
+
+		// Check types for recursion
 		oldMap, oldIsMap := vOld.(map[string]any)
 		newMap, newIsMap := vNew.(map[string]any)
 
-		if exists && oldIsMap && newIsMap {
+		oldSlice, oldIsSlice := vOld.([]any)
+		newSlice, newIsSlice := vNew.([]any)
+
+		if oldIsMap && newIsMap {
+			// both are maps -> recurse
 			result[k] = mergeJSON(oldMap, newMap)
+		} else if oldIsSlice && newIsSlice {
+			// NEW LOGIC: both are arrays -> APPEND
+			// We create a new slice containing Old + New elements
+			combined := make([]any, 0, len(oldSlice)+len(newSlice))
+
+			// Copy old items
+			for _, item := range oldSlice {
+				combined = append(combined, deepCopy(item))
+			}
+			// Append new items
+			for _, item := range newSlice {
+				combined = append(combined, deepCopy(item))
+			}
+			result[k] = combined
 		} else {
+			// Type mismatch or primitives -> Overwrite
 			result[k] = deepCopy(vNew)
 		}
 	}

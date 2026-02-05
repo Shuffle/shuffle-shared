@@ -54,7 +54,7 @@ func TestEvalPolicyJSON_Comprehensive(t *testing.T) {
 		newJSON    string
 		wantJSON   string
 		wantOk     bool
-		wantReason string // Partial match checking usually safer, but exact string here
+		wantReason string
 	}{
 		// ---------------------- 1. Basic Merging ----------------------
 		{
@@ -67,13 +67,12 @@ func TestEvalPolicyJSON_Comprehensive(t *testing.T) {
 			wantReason: "",
 		},
 		{
-			// "Allowed" implies optional. Updating only one of the allowed fields is valid.
 			name:       "merge_allowed_field_partial_update",
 			policy:     `merge if allowed_fields["nested","missing"]`,
 			oldJSON:    `{"nested":{"a":1}}`,
 			newJSON:    `{"nested":{"a":2}}`,
 			wantJSON:   `{"nested":{"a":2}}`,
-			wantOk:     true, // changed from false
+			wantOk:     true,
 			wantReason: "",
 		},
 
@@ -92,9 +91,9 @@ func TestEvalPolicyJSON_Comprehensive(t *testing.T) {
 			policy:     `overwrite if same_shape`,
 			oldJSON:    `{"a":1}`,
 			newJSON:    `{"a":1,"b":2}`,
-			wantJSON:   `{"a":1}`, // Returns old doc
+			wantJSON:   `{"a":1}`,
 			wantOk:     false,
-			wantReason: "no matching allow rule", // The rule condition failed, so no rule matched
+			wantReason: "no matching allow rule",
 		},
 
 		// ---------------------- 3. Deny / Deletion Logic ----------------------
@@ -105,24 +104,25 @@ func TestEvalPolicyJSON_Comprehensive(t *testing.T) {
 			newJSON:    `{"a":1}`,
 			wantJSON:   `{"a":1,"b":2}`,
 			wantOk:     false,
-			wantReason: "deny: field deletion detected",
+			// UPDATED: Now expects specific path
+			wantReason: "deny: field deletion detected at 'b'",
 		},
 		{
-			// Nested deletion: removing 'y' from inside 'nested'
 			name:       "deny_deleted_field_nested",
 			policy:     `deny if has_deleted_field`,
 			oldJSON:    `{"nested":{"x":1,"y":2}}`,
 			newJSON:    `{"nested":{"x":1}}`,
 			wantJSON:   `{"nested":{"x":1,"y":2}}`,
 			wantOk:     false,
-			wantReason: "deny: field deletion detected",
+			// UPDATED: Now expects nested path
+			wantReason: "deny: field deletion detected at 'nested.y'",
 		},
 		{
 			// Implicit Merge + Injection (Should be allowed if only deny rules exist)
 			name:       "deny_only_allows_injection",
 			policy:     `deny if has_deleted_field`,
 			oldJSON:    `{"a":1}`,
-			newJSON:    `{"a":1, "b":2}`, // Injecting 'b'
+			newJSON:    `{"a":1, "b":2}`,
 			wantJSON:   `{"a":1, "b":2}`,
 			wantOk:     true,
 			wantReason: "",
@@ -139,19 +139,12 @@ func TestEvalPolicyJSON_Comprehensive(t *testing.T) {
 			wantReason: "",
 		},
 		{
-			// CRITICAL LOGIC CHECK:
-			// We only allow merging "nested". The input is `{"nested":...}`.
-			// Field `keep` is NOT in the allowed list, so the merge function ignores it in the newDoc.
-			// It copies `keep` from oldDoc.
-			// Result: `keep` is preserved.
-			// Since `keep` is preserved, `has_deleted_field` is false (no deletion).
-			// The operation succeeds.
 			name:       "merge_safely_ignores_missing_unallowed_fields",
 			policy:     `merge if allowed_fields["nested"]; deny if has_deleted_field`,
 			oldJSON:    `{"nested":{"a":1,"b":2},"keep":42}`,
 			newJSON:    `{"nested":{"b":20}}`, // 'keep' is missing here
 			wantJSON:   `{"nested":{"a":1,"b":20},"keep":42}`, // 'keep' is preserved by merge logic
-			wantOk:     true, // changed from false
+			wantOk:     true,
 			wantReason: "",
 		},
 
@@ -166,12 +159,6 @@ func TestEvalPolicyJSON_Comprehensive(t *testing.T) {
 			wantReason: "",
 		},
 		{
-			// Type Change: String -> Map.
-			// Standard Merge usually overwrites primitives with maps.
-			// "deny if has_deleted_field" might flag this if the old primitive is considered "deleted" by replacement?
-			// Actually, replacing "a":1 with "a":{} deletes the value 1.
-			// But structurally, the key "a" remains.
-			// The current logic only flags if a KEY is missing.
 			name:       "allow_type_change_string_to_map",
 			policy:     `deny if has_deleted_field`,
 			oldJSON:    `{"a": "value"}`,
@@ -181,26 +168,26 @@ func TestEvalPolicyJSON_Comprehensive(t *testing.T) {
 			wantReason: "",
 		},
 		{
-			// Type Change: Map -> String.
-			// This implicitly deletes the children of the map.
-			// If we have strict deletion checking, this should fail.
 			name:       "deny_type_change_map_to_string",
 			policy:     `deny if has_deleted_field`,
 			oldJSON:    `{"a": {"sub": 1}}`,
 			newJSON:    `{"a": "value"}`,
 			wantJSON:   `{"a": {"sub": 1}}`,
 			wantOk:     false,
-			wantReason: "deny: field deletion detected",
+			// UPDATED: "a" is the key where the map structure disappeared
+			wantReason: "deny: field deletion detected at 'a'",
 		},
+		
+		// ---------------------- 6. Array Deletion Logic ----------------------
 		{
 			name:       "deny_deleted_nested_in_array",
 			policy:     `deny if has_deleted_field`,
 			oldJSON:    `{"list": [ {"id": 1, "secret": "keep_me"}, {"id": 2} ]}`,
-			// We try to remove "secret" from the first object in the array
 			newJSON:    `{"list": [ {"id": 1}, {"id": 2} ]}`,
-			wantJSON:   `{"list": [ {"id": 1, "secret": "keep_me"}, {"id": 2} ]}`, // Should return old doc
+			wantJSON:   `{"list": [ {"id": 1, "secret": "keep_me"}, {"id": 2} ]}`,
 			wantOk:     false,
-			wantReason: "deny: field deletion detected",
+			// UPDATED: Standard array notation
+			wantReason: "deny: field deletion detected at 'list[0].secret'",
 		},
 		{
 			name:       "deny_deleted_array_item",
@@ -209,7 +196,44 @@ func TestEvalPolicyJSON_Comprehensive(t *testing.T) {
 			newJSON:    `{"list": [1, 2]}`, // Deleted '3'
 			wantJSON:   `{"list": [1, 2, 3]}`,
 			wantOk:     false,
-			wantReason: "deny: field deletion detected",
+			// UPDATED: Index 2 is missing
+			wantReason: "deny: field deletion detected at 'list[2]'",
+		},
+		
+		// ---------------------- 7. Array Append Logic ----------------------
+		{
+			// FAILING CASE: User sends a partial object in the list.
+			name:       "nested_array_partial_update_fails_deletion_check",
+			policy:     "merge if always; deny if has_deleted_field",
+			oldJSON:    `{"metadata":{"tasks":[{"id":1,"title":"Keep Me"}]}}`,
+			// "title" field is removed in this update
+			newJSON:    `{"metadata":{"tasks":[{"id":2}]}}`, 
+			wantJSON:   `{"metadata":{"tasks":[{"id":1,"title":"Keep Me"}]}}`,
+			wantOk:     false,
+			// UPDATED: Nested path inside array
+			wantReason: "deny: field deletion detected at 'metadata.tasks[0].title'",
+		},
+		{
+			// SUCCESS CASE: User sends the Full List (Old + New).
+			name:       "nested_array_full_update_succeeds",
+			policy:     "merge if always; deny if has_deleted_field",
+			oldJSON:    `{"metadata":{"tasks":[{"id":1,"title":"Keep Me"}]}}`,
+			newJSON:    `{"metadata":{"tasks":[{"id":1,"title":"Keep Me"},{"id":2,"title":"New Task"}]}}`,
+			wantJSON:   `{"metadata":{"tasks":[{"id":1,"title":"Keep Me"},{"id":2,"title":"New Task"}]}}`,
+			wantOk:     true,
+			wantReason: "",
+		},
+		{
+			// APPEND SUCCESS: User sends ONLY the new item.
+			// Logic now appends it to the existing list.
+			name:       "merge_array_append_behavior",
+			policy:     "merge; deny if has_deleted_field",
+			oldJSON:    `{"tasks": [{"id":1, "title":"Keep Me"}]}`,
+			newJSON:    `{"tasks": [{"id":2, "title":"New Task"}]}`,
+			// Result should have BOTH
+			wantJSON:   `{"tasks": [{"id":1, "title":"Keep Me"},{"id":2,"title":"New Task"}]}`,
+			wantOk:     true,
+			wantReason: "",
 		},
 	}
 

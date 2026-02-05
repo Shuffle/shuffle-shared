@@ -1201,6 +1201,14 @@ type CacheKeyDataMini struct {
 	Tags               []string `json:"tags,omitempty" datastore:"tags"`
 }
 
+type CacheKeyDataFallback struct {
+	OrgId    string   `json:"org_id,omitempty" datastore:"OrgId"`
+	Key      string   `json:"key" datastore:"Key"`
+	Value    any      `json:"value" datastore:"Value,noindex"`
+	Category string   `json:"category" datastore:"category"`
+	Tags     []string `json:"tags,omitempty" datastore:"tags"`
+}
+
 type CacheKeyData struct {
 	Success       bool     `json:"success" datastore:"Success"`
 	WorkflowId    string   `json:"workflow_id," datastore:"WorkflowId"`
@@ -1223,6 +1231,7 @@ type CacheKeyData struct {
 	SuborgDistribution  []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 	RevisionId          string   `json:"revision_id" datastore:"revision_id"`
 }
+
 type SyncConfig struct {
 	Interval int64  `json:"interval" datastore:"interval"`
 	Apikey   string `json:"api_key" datastore:"api_key"`

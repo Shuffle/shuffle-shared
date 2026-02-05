@@ -13335,7 +13335,14 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 			// Check for if the key already existed. Ok with
 			// goroutine as we use heavy caching for this.
+			sameValue := false
 			config, getCacheError := GetDatastoreKey(ctx, datastoreId, cacheData.Category)
+
+			cacheData.Changed = true
+			if getCacheError == nil && config.Value == cacheData.Value {
+				sameValue = true
+			}
+
 			if getCacheError == nil && config.Created > 0 {
 
 				// Compares old vs new, checks if allowed
@@ -13393,7 +13400,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 				if !ruleValid {
 					// Break out
-					log.Printf("Rule is NOT valid! Skipping modification.")
+					if debug { 
+						log.Printf("[WARNING] Rule is NOT valid! Skipping modification.")
+					}
+
 					return
 				}
 
@@ -13404,15 +13414,11 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 				if len(cacheData.Tags) == 0 {
 					cacheData.Tags = config.Tags
+				} else {
+					sameValue = false
 				}
 
 				cacheData.Existed = true
-			}
-
-			cacheData.Changed = true
-			sameValue := false
-			if getCacheError == nil && config.Value == cacheData.Value {
-				sameValue = true
 			}
 
 			if cacheData.Created == 0 {
@@ -13799,6 +13805,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						continue
 					}
 
+					if automation.Name == "security_rules" || automation.Name == "Security Rules" {
+						continue
+					}
+
 					if debug {
 						log.Printf("[DEBUG] Found automation '%s' to run (2). Value: '%s'", automation.Name, automation.Options[0].Value)
 					}
@@ -13900,6 +13910,63 @@ func SetDatastoreKeyRevision(ctx context.Context, cacheData CacheKeyData) error 
 	}
 
 	DeleteCache(ctx, fmt.Sprintf("datastore_category_revisions_%s", cacheData.OrgId))
+	return nil
+}
+
+// Primarily used for updating tags and other metadata.
+func SetDatastoreKeyMeta(ctx context.Context, cacheData CacheKeyData) error {
+	nameKey := "org_cache"
+	cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+	if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+		cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
+	}
+
+	// URL encode
+	cacheId = url.QueryEscape(cacheId)
+	if len(cacheId) > 127 {
+		cacheId = cacheId[:127]
+	}
+
+	if len(cacheData.Tags) > 1 {
+		newTags := []string{}
+		for _, cacheTag := range cacheData.Tags {
+			if cacheTag == "none" {
+				continue
+			}
+
+			newTags = append(newTags, cacheTag)
+		}
+
+		cacheData.Tags = newTags
+	}
+
+	data, err := json.Marshal(cacheData)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling in set cache key: %s", err)
+		return nil
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, cacheId, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, cacheId, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
+			log.Printf("[ERROR] Error setting org cache: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting cache for set cache key '%s': %s", cacheKey, err)
+		}
+	}
+
 	return nil
 }
 
