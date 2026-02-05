@@ -17,26 +17,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-
-	"sync"
-
-	neturl "net/url"
-	"path"
 	"sort"
-
-	"github.com/go-git/go-billy/v5"
-	"github.com/go-git/go-billy/v5/memfs"
+	"sync"
 
 	scheduler "cloud.google.com/go/scheduler/apiv1"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	http2 "github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/go-git/go-git/v5/storage/memory"
 	"gopkg.in/yaml.v3"
-
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
-	"github.com/go-git/go-git/v5/plumbing/transport"
 
 	//"os/exec"
 	"regexp"
@@ -83,7 +69,7 @@ var SSOUrl = ""
 var kmsDebug = false
 
 var debug = os.Getenv("DEBUG") == "true"
-var sandboxProject = "shuffle-sandbox-337810"
+var sandboxProject = "shuffle-australia-southeast1"
 
 func GetProject() ShuffleStorage {
 	return project
@@ -129,26 +115,10 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"https://br.shuffler.io",
 			"https://in.shuffler.io",
 
-			// Related projects (maybe)
 			"https://*.singul.io",
 			"https://singul.io",
-			"https://*.shutdown.no",
-			"https://shutdown.no",
-
-			// Local testing
 			"http://localhost:3002",
 			"http://localhost:3000",
-
-			// For a frontend test project 
-			"https://cases.shuffler.io",
-			"https://security.shuffler.io",
-			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
-			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
-
-			// Another frontend test
-			"https://preview--shuffle-cases.lovable.app",
-			"https://9f29a11a-6489-4898-8044-ed7b8f848ef9.lovableproject.com",
-			"https://id-preview--9f29a11a-6489-4898-8044-ed7b8f848ef9.lovable.app",
 		}
 
 		if len(origin) > 0 {
@@ -272,8 +242,6 @@ func ConstructSessionCookie(value string, expires time.Time) *http.Cookie {
 	if project.Environment == "cloud" {
 		c.Domain = ".shuffler.io"
 		c.Secure = true
-		//c.SameSite = http.SameSiteLaxMode
-		c.SameSite = http.SameSiteNoneMode
 	}
 
 	return &c
@@ -1062,7 +1030,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if !found {
-				log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (%s) (get org)", user.Username, user.Id, org.Name, org.Id)
+				log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, org.Id)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
 				return
@@ -1414,7 +1382,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !userFound && !parentUser && !user.SupportAccess {
-		log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (%s) (get suborgs from parent)", user.Username, user.Id, parentOrg.Name, parentOrg.Id)
+		log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, orgId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
 		return
@@ -2201,7 +2169,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		appAuth.App.LargeImage = app.LargeImage
 	}
 
-	// If manual editing, reset verification
+	// If editing, reset verification?
 	appAuth.Validation = TypeValidation{}
 
 	appAuth.OrgId = user.ActiveOrg.Id
@@ -3396,11 +3364,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		// Get the user based on APIkey here
 		userdata, err := GetApikey(ctx, apikeyCheck[1])
 		if err != nil {
-			// Due to execution auth
-			if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") { 
-				log.Printf("[WARNING] Apikey %s doesn't exist. URL: %#v: %s", apikey, request.URL.String(), err)
-			}
-
+			log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
 			return User{}, err
 		}
 
@@ -3428,7 +3392,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			}
 
 			if !found {
-				return User{}, errors.New(fmt.Sprintf("(2) User doesn't have access to org '%s'", org_id))
+				return User{}, errors.New(fmt.Sprintf("(2) User doesn't have access to this org", org_id))
 			}
 
 			if userdata.ActiveOrg.Id != org_id {
@@ -3484,7 +3448,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		user, err := GetSessionNew(ctx, sessionToken)
 		if err != nil {
-			log.Printf("[WARNING] No valid session token for '%s'. Setting cookie to expire. May cause fallback problems.", sessionToken)
+			log.Printf("[WARNING] No valid session token for ID %s. Setting cookie to expire. May cause fallback problems.", sessionToken)
 
 			if resp != nil {
 				newCookie := constructSessionDeleteCookie()
@@ -6437,7 +6401,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 	// So now I'm endlessly confused.
 	trigger := childTrigger
 	for paramIndex, param := range trigger.Parameters {
-		if param.Name != "startnode" {
+		if param.Name != "startnode" && param.Name != "startnode" {
 			// Use same as action IDs are identical
 			trigger.Parameters[paramIndex].Value = param.Value
 			continue
@@ -11697,7 +11661,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
+			DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
 			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
@@ -11707,7 +11671,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
+			DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
 			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 			return
@@ -11772,9 +11736,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Support access pivot to an org BY EMAIL (not org id)
+	// Support access pivot
 	if strings.Contains(fileId, "@") && strings.Contains(fileId, ".") && user.SupportAccess && user.Active && user.Verified && project.Environment == "cloud" {
-		//foundUsers, err := FindUser(ctx, fileId)
 		foundUsers, err := FindUser(ctx, fileId)
 		if err != nil || len(foundUsers) == 0 {
 			log.Printf("[ERROR] Failed finding user %s for support access: %s", user.Username, err)
@@ -11817,33 +11780,19 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		foundOrg = true
 	}
 
+	if !foundOrg || tmpData.OrgId != fileId {
+		log.Printf("[WARNING] User swap to the org \"%s\" - access denied", tmpData.OrgId)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org. Please contact support@shuffler.io if this is unexpected."}`))
+		return
+	}
+
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
 		log.Printf("[WARNING] Organization %s doesn't exist: %s", tmpData.OrgId, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
-	}
-
-	if !foundOrg || tmpData.OrgId != fileId {
-		found := false
-		if !foundOrg {
-			for _, user := range org.Users {
-				if user.Id == user.Id {
-					log.Printf("[ERROR] User %s (%s) lost org %s (%s) in their user list, but has it in their org list. Fixing.", user.Username, user.Id, org.Name, org.Id)
-					user.Orgs = append(user.Orgs, org.Id)
-					found = true
-					break
-				}
-			}
-		}
-
-		if !found {
-			log.Printf("[WARNING] User swap to the org \"%s\" - access denied", tmpData.OrgId)
-			resp.WriteHeader(403)
-			resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org. Please contact support@shuffler.io if this is unexpected."}`))
-			return
-		}
 	}
 
 	if (org.SSOConfig.SSORequired == true && user.UsersLastSession != user.Session && user.SupportAccess == false) || tmpData.SSO {
@@ -11872,18 +11821,23 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		baseSSOUrl := ""
-		redirectKey := "SSO_REDIRECT"
-		if len(org.SSOConfig.OpenIdAuthorization) > 0 {
-			log.Printf("[INFO] OpenID login for %s", org.Id)
-			redirectKey = "SSO_REDIRECT"
-
-			baseSSOUrl = GetOpenIdUrl(request, *org)
-		}
-
-		if skipSSO || len(baseSSOUrl) == 0 {
-			log.Printf("[AUDIT] User %s (%s) is skipping SSO for suborg %s (%s). URL: %s", user.Username, user.Id, org.Name, org.Id, baseSSOUrl)
+		if skipSSO {
+			log.Printf("[AUDIT] User %s (%s) is skipping SSO for suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
 		} else {
+			baseSSOUrl := org.SSOConfig.SSOEntrypoint
+			redirectKey := "SSO_REDIRECT"
+			if len(org.SSOConfig.OpenIdAuthorization) > 0 {
+				log.Printf("[INFO] OpenID login for %s", org.Id)
+				redirectKey = "SSO_REDIRECT"
+
+				baseSSOUrl, err = GetOpenIdUrl(request, *org, user, tmpData.Mode)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting OpenID URL: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "Failed getting OpenID URL"}`))
+					return
+				}
+			}
 
 			if !strings.HasPrefix(baseSSOUrl, "http") {
 				log.Printf("[ERROR] SSO URL for %s (%s) is invalid: %s", org.Name, org.Id, baseSSOUrl)
@@ -11988,7 +11942,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
-	DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
+	DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
 	DeleteCache(ctx, user.Session)
 
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
@@ -12139,7 +12093,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit {
-			log.Printf("[WARNING] Org %s is not allowed to make more than %d sub-organizations.", parentOrg.Id, parentOrg.SyncFeatures.MultiTenant.Limit)
+			log.Printf("[WARNING] Org %s is not allowed to make more than %d sub-organizations: %s", parentOrg.Id, parentOrg.SyncFeatures.MultiTenant.Limit)
 			resp.WriteHeader(400)
 			//resp.Write([]byte(`{"success": false, "reason": "Sub-organizations require an active subscription or to be in the POV stage with access to multi-tenancy. Contact support@shuffler.io to try it out."}`))
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have made %d/%d sub-organizations. Contact support@shuffler.io to increase this limit"}`, parentOrg.SyncUsage.MultiTenant.Counter, parentOrg.SyncFeatures.MultiTenant.Limit)))
@@ -14509,7 +14463,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		appReturn.OpenAPI = openapidata
 	}
 
-
 	// Should add it to their cache in the background
 	go updateOrgAppCache(*app, user)
 
@@ -14534,15 +14487,47 @@ func verifier() (*CodeVerifier, error) {
 	return CreateCodeVerifierFromBytes(b)
 }
 
-func GetOpenIdUrl(request *http.Request, org Org) string {
+func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (string, error) {
 	baseSSOUrl := org.SSOConfig.OpenIdAuthorization
 
-	codeChallenge := uuid.NewV4().String()
-	//h.Write([]byte(v.Value))
+	signIn := mode == "signin" || mode == "login"
+
 	verifier, verifiererr := verifier()
-	if verifiererr == nil {
-		codeChallenge = verifier.Value
+	if verifiererr != nil {
+		return "", verifiererr
 	}
+
+	codeChallenge := verifier.CodeChallengeS256()
+
+	if !signIn {
+		user.InitSSOInfos()
+
+		existingSSOInfo, _ := user.GetSSOInfo(org.Id)
+		user.SetSSOInfo(org.Id, SSOInfo{
+			Sub:             existingSSOInfo.Sub, // Keep existing Sub for this org
+			ClientID:        org.SSOConfig.OpenIdClientId,
+			CodeVerifier:    verifier.Value,
+			ChallengeExpiry: time.Now().Add(60 * time.Minute),
+		})
+
+		ctx := context.Background()
+		err := SetUser(ctx, &user, true)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		log.Printf("[DEBUG] Generating SSO login link for all non-logged in users using the org")
+	}
+
+	// We might need to do a check for existing users
+	// to make sure that they are verified first, to force verification.
+	// For new, for whom we are creating an account in this whole flow,
+	// Let's allow them some time before we warn them and lock them?
+
+	// if (project.Environment == "cloud") && !user.Verified {
+	// 	log.Printf("[ERROR] user %s (%s) not verified. This is unsafe.", user.Username, user.Id)
+	// 	return "", errors.New("user not verified")
+	// }
 
 	//log.Printf("[DEBUG] Got challenge value %s (pre state)", codeChallenge)
 
@@ -14551,7 +14536,11 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 	//redirectUrl := url.QueryEscape("http://localhost:5001/api/v1/login_openid")
 	redirectUrl := url.QueryEscape(fmt.Sprintf("http://%s/api/v1/login_openid", request.Host))
 	if project.Environment == "cloud" {
-		redirectUrl = url.QueryEscape(fmt.Sprintf("https://shuffler.io/api/v1/login_openid"))
+		baseUrl := "https://shuffler.io"
+		if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+			baseUrl = os.Getenv("SSO_REDIRECT_URL")
+		}
+		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", baseUrl))
 	}
 
 	//Redirect url for onprem
@@ -14572,24 +14561,49 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("SSO_REDIRECT_URL")))
 	}
 
-	state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
+	state := ""
 
-	// has to happen after initial value is stored
-	if verifiererr == nil {
-		codeChallenge = verifier.CodeChallengeS256()
-	}
-
-	if len(org.SSOConfig.OpenIdClientSecret) > 0 {
-
-		//baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid&redirect_uri=%s&state=%s&client_secret=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, org.SSOConfig.OpenIdClientSecret)
-		state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&redirect=%s&challenge=%s", org.Id, redirectUrl, org.SSOConfig.OpenIdClientSecret)))
-		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=id_token&scope=openid email&redirect_uri=%s&state=%s&response_mode=form_post&nonce=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, state)
-		//baseSSOUrl += fmt.Sprintf("&client_secret=%s", org.SSOConfig.OpenIdClientSecret)
+	if !(signIn) {
+		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
 	} else {
-		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid email&redirect_uri=%s&state=%s&code_challenge_method=S256&code_challenge=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, codeChallenge)
+		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&mode=login&redirect=%s", org.Id, redirectUrl)))
 	}
 
-	return baseSSOUrl
+	isMicrosoft := strings.Contains(org.SSOConfig.OpenIdAuthorization, "login.microsoftonline.com")
+
+	scopes := []string{"openid", "email"}
+
+	if isMicrosoft {
+		scopes = append(scopes, "User.Read")
+	}
+
+	usePKCE := !signIn
+
+	params := url.Values{}
+	params.Set("client_id", org.SSOConfig.OpenIdClientId)
+	params.Set("response_type", "code")
+	params.Set("scope", strings.Join(scopes, " "))
+	params.Set("state", state)
+	params.Set("redirect_uri", redirectUrl)
+
+	if usePKCE {
+		params.Set("code_challenge_method", "S256")
+		params.Set("code_challenge", codeChallenge)
+	}
+
+	paramString := ""
+	for key, value := range params {
+		paramString += fmt.Sprintf("%s=%s&", key, value[0])
+	}
+
+	// remove last &
+	paramString = strings.TrimSuffix(paramString, "&")
+
+	baseSSOUrl = baseSSOUrl + "?" + paramString
+
+	log.Printf("[DEBUG] Generated SSO URL: %s", baseSSOUrl)
+
+	return baseSSOUrl, nil
 }
 
 func GetRequestIp(r *http.Request) string {
@@ -14722,6 +14736,250 @@ func GetUserLocation(ctx context.Context, ip string) (UserGeoInfo, error) {
 	}
 
 	return userLocationData, nil
+}
+
+func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Failed authentication in user provision: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication required"}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[WARNING] Non-admin user %s attempted to provision user", user.Username)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Admin access required"}`))
+		return
+	}
+
+	// check if user is in a partner org
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed to get org for user %s: %s", user.Username, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get organization"}`))
+		return
+	}
+
+	validationOrg := org
+	if len(org.CreatorOrg) > 0 {
+		parentOrg, err := GetOrg(ctx, org.CreatorOrg)
+		if err != nil {
+			log.Printf("[WARNING] Failed to get parent org %s for user %s: %s", org.CreatorOrg, user.Username, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to get parent organization"}`))
+			return
+		}
+		validationOrg = parentOrg
+	}
+
+	isAdmin := false
+	for _, orgUser := range validationOrg.Users {
+		if orgUser.Id == user.Id && orgUser.Role == "admin" {
+			isAdmin = true
+			break
+		}
+	}
+
+	if !isAdmin {
+		log.Printf("[WARNING] User %s attempted to provision user without admin access in validation org %s", user.Username, validationOrg.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Admin access required in the relevant org"}`))
+		return
+	}
+
+	if !(validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.ServicePartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.ChannelPartner) {
+		log.Printf("[WARNING] User %s attempted to provision user without partner access in validation org %s", user.Username, validationOrg.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Provisioning not allowed. We need a partner org for this."}`))
+		return
+	}
+
+	// check if auto provision is true (since this stupid variable is flipped)
+	if org.SSOConfig.AutoProvision {
+		log.Printf("[WARNING] User %s attempted to provision user with auto provision disabled", user.Username)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Provisioning not allowed. Auto provision is disabled."}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed to read body in user provision: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
+		return
+	}
+
+	var provisionRequest struct {
+		Email string `json:"email"`
+	}
+
+	err = json.Unmarshal(body, &provisionRequest)
+	if err != nil {
+		log.Printf("[WARNING] Failed to parse provision request: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid request format"}`))
+		return
+	}
+
+	provisionRequest.Email = strings.ToLower(strings.TrimSpace(provisionRequest.Email))
+	if !strings.Contains(provisionRequest.Email, "@") {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid email address"}`))
+		return
+	}
+
+	if strings.Contains(provisionRequest.Email, "@shuffler.io") {
+		log.Printf("[WARNING] Attempted to provision @shuffler.io email: %s", provisionRequest.Email)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Cannot provision @shuffler.io email addresses"}`))
+		return
+	}
+
+	if len(org.SSOConfig.OpenIdClientId) == 0 || len(org.SSOConfig.OpenIdToken) == 0 {
+		log.Printf("[WARNING] SSO not configured for org %s", org.Id)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "SSO not configured for this organization"}`))
+		return
+	}
+
+	existingUser, err := GetUser(ctx, provisionRequest.Email)
+	if err != nil {
+		users, err := FindGeneratedUser(ctx, provisionRequest.Email)
+		if err != nil {
+			log.Printf("[ERROR] Failed to find generated user for email %s: %s", provisionRequest.Email, err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to find user"}`))
+			return
+		}
+
+		if len(users) > 1 {
+			log.Printf("[ERROR] (suspicious) Found multiple generated users for email %s", provisionRequest.Email)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to find user"}`))
+			return
+		}
+
+		if len(users) == 1 {
+			existingUser = &users[0]
+		}
+	}
+
+	if existingUser.Id != "" {
+		if existingUser.ProvisionedByOrg == org.Id {
+			existingUser.InitSSOInfos()
+			ssoInfo, exists := existingUser.GetSSOInfo(org.Id)
+
+			log.Printf("[INFO] User ssoInfo: %+v", ssoInfo)
+
+			mode := ""
+			if exists && ssoInfo.Sub != "" {
+				mode = "login"
+				log.Printf("[INFO] User %s already has SSO configured, generating login URL", provisionRequest.Email)
+			} else {
+				log.Printf("[INFO] User %s was provisioned by org %s but SSO not completed, generating setup URL", provisionRequest.Email, org.Id)
+			}
+
+			ssoUrl, err := GetOpenIdUrl(request, *org, *existingUser, mode)
+			if err != nil {
+				log.Printf("[ERROR] Failed to generate SSO URL for existing user %s: %s", existingUser.Id, err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed to generate SSO URL"}`))
+				return
+			}
+
+			log.Printf("[AUDIT] Admin %s generated SSO URL for user %s in org %s (mode: %s)", user.Username, provisionRequest.Email, org.Id, mode)
+
+			resp.WriteHeader(200)
+			resp.Write([]byte(fmt.Sprintf(`{
+				"success": true,
+				"sso_url": "%s",
+				"existing_user": true,
+				"sso_configured": %t
+			}`, ssoUrl, mode == "login")))
+			return
+		}
+
+		log.Printf("[WARNING] User %s already exists but wasn't provisioned by org %s", provisionRequest.Email, org.Id)
+		resp.WriteHeader(409)
+		resp.Write([]byte(`{"success": false, "reason": "User already exists"}`))
+		return
+	}
+
+	log.Printf("[AUDIT] User %s doesn't exist, creating new user", provisionRequest.Email)
+
+	newUser := new(User)
+	newUser.Username = provisionRequest.Email
+	newUser.GeneratedUsername = provisionRequest.Email
+	newUser.Password = uuid.NewV4().String()
+	newUser.Verified = true
+	newUser.Active = true
+	newUser.CreationTime = time.Now().Unix()
+	newUser.Orgs = []string{org.Id}
+	newUser.Role = "user"
+	newUser.Id = uuid.NewV4().String()
+	newUser.ProvisionedByOrg = org.Id
+	newUser.ActiveOrg = OrgMini{
+		Name: org.Name,
+		Id:   org.Id,
+		Role: "user",
+	}
+
+	if project.Environment == "cloud" {
+		newUser.Regions = []string{"https://shuffler.io"}
+		if org.RegionUrl != "https://shuffler.io" {
+			newUser.Regions = append(newUser.Regions, org.RegionUrl)
+		}
+	}
+
+	err = SetUser(ctx, newUser, true)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create user %s: %s", provisionRequest.Email, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to create user"}`))
+		return
+	}
+
+	// Add user to org
+	org.Users = append(org.Users, User{
+		Id:       newUser.Id,
+		Username: newUser.Username,
+		Role:     "user",
+	})
+
+	err = SetOrg(ctx, *org, org.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed to update org %s after adding user: %s", org.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to add user to organization"}`))
+		return
+	}
+
+	ssoUrl, err := GetOpenIdUrl(request, *org, *newUser, "")
+	if err != nil {
+		log.Printf("[ERROR] Failed to generate SSO URL for provisioned user %s: %s", newUser.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to generate SSO URL"}`))
+		return
+	}
+
+	log.Printf("[AUDIT] Admin %s (%s) provisioned user %s in org %s (%s)", user.Username, user.Id, provisionRequest.Email, org.Name, org.Id)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{
+		"success": true,
+		"sso_url": "%s",
+		"user_id": "%s",
+	}`, ssoUrl, newUser.Id)))
 }
 
 func HandleLogin(resp http.ResponseWriter, request *http.Request) {
@@ -14884,19 +15142,24 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				break
 			}
 
-			baseSSOUrl := "" //org.SSOConfig.SSOEntrypoint
-			redirectKey := "SSO_REDIRECT"
-			if len(org.SSOConfig.OpenIdAuthorization) > 0 {
-				log.Printf("[INFO] OpenID login for %s", org.Id)
-				redirectKey = "SSO_REDIRECT"
-
-				baseSSOUrl = GetOpenIdUrl(request, *org)
-			}
-
-			if !orgFound && len(baseSSOUrl) > 0 {
+			if !orgFound {
 
 				log.Printf("[INFO] Inside SSO / OpenID check: %s", org.Id)
 				// has to contain http(s)
+				baseSSOUrl := org.SSOConfig.SSOEntrypoint
+				redirectKey := "SSO_REDIRECT"
+				if len(org.SSOConfig.OpenIdAuthorization) > 0 {
+					log.Printf("[INFO] OpenID login for %s", org.Id)
+					redirectKey = "SSO_REDIRECT"
+
+					baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata, "signin")
+					if err != nil {
+						log.Printf("[ERROR] Failed to get OpenID URL: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get OpenID URL: %s"}`, err)))
+						return
+					}
+				}
 
 				log.Printf("[DEBUG] Login: Should redirect user %s in org %s(%s) to SSO login at %s", userdata.Username, userdata.ActiveOrg.Name, userdata.ActiveOrg.Id, baseSSOUrl)
 
@@ -15266,8 +15529,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Had to set this due to session hashing rollback 
-	if len(userdata.Session) != 0 && len(userdata.Session) == 36 && !changeActiveOrg {
+	if len(userdata.Session) != 0 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(8 * time.Hour)
 
@@ -15294,10 +15556,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		if project.Environment == "cloud" {
 			newCookie.Name = "__session"
 			newCookie.Domain = ".singul.io"
-			http.SetCookie(resp, newCookie)
-
-			newCookie.Name = "__session"
-			newCookie.Domain = ".shutdown.no"
 			http.SetCookie(resp, newCookie)
 		}
 
@@ -15363,10 +15621,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			newCookie.Name = "__session"
 			newCookie.Domain = ".singul.io"
 			http.SetCookie(resp, newCookie)
-
-			newCookie.Name = "__session"
-			newCookie.Domain = ".shutdown.no"
-			http.SetCookie(resp, newCookie)
 		}
 
 		err = SetUser(ctx, &userdata, true)
@@ -15394,6 +15648,106 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 func HandleSAML(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte("SAML SSO is deprecated. Please use OpenID Connect instead. Contact support@shuffler.io if you need help migrating, or are having trouble logging in to your account."))
 	return
+}
+
+func HandleDisconnectSSO(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Only allow POST requests for security
+	if request.Method != "POST" {
+		resp.WriteHeader(405)
+		resp.Write([]byte(`{"success": false, "reason": "Method not allowed"}`))
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in disconnect SSO: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
+		return
+	}
+
+	// Get org ID from URL path or request body
+	var orgId string
+	location := strings.Split(request.URL.String(), "/")
+	if len(location) >= 5 {
+		orgId = location[4] // /api/v1/disconnect_sso/{orgId}
+	}
+
+	if len(orgId) == 0 {
+		// Try to get from request body as fallback
+		body, err := ioutil.ReadAll(request.Body)
+		if err == nil {
+			var requestData struct {
+				OrgId string `json:"org_id"`
+			}
+			if json.Unmarshal(body, &requestData) == nil {
+				orgId = requestData.OrgId
+			}
+		}
+	}
+
+	if len(orgId) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Missing org_id parameter"}`))
+		return
+	}
+
+	// Verify user has access to this org
+	hasAccess := false
+	for _, userOrg := range user.Orgs {
+		if userOrg == orgId {
+			hasAccess = true
+			break
+		}
+	}
+
+	if !hasAccess {
+		log.Printf("[WARNING] User %s (%s) tried to disconnect SSO for org %s they don't have access to", user.Username, user.Id, orgId)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Access denied to this organization"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	// Get the current SSO info for this org
+	ssoInfo, exists := user.GetSSOInfo(orgId)
+	if !exists || len(ssoInfo.Sub) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No SSO connection found for this organization"}`))
+		return
+	}
+
+	// Log the disconnection for audit purposes
+	log.Printf("[AUDIT] User %s (%s) is disconnecting SSO (sub: %s) from org %s", user.Username, user.Id, ssoInfo.Sub, orgId)
+
+	// Remove SSO info for this org by filtering the slice
+	newSSOInfos := []SSOInfo{}
+	for _, info := range user.SSOInfos {
+		if info.OrgID != orgId {
+			newSSOInfos = append(newSSOInfos, info)
+		}
+	}
+	user.SSOInfos = newSSOInfos
+
+	// Save the updated user
+	err = SetUser(ctx, &user, true)
+	if err != nil {
+		log.Printf("[ERROR] Failed to update user after SSO disconnection: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to disconnect SSO account"}`))
+		return
+	}
+
+	log.Printf("[INFO] Successfully disconnected SSO for user %s (%s) from org %s", user.Username, user.Id, orgId)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "reason": "SSO account disconnected successfully"}`))
 }
 
 func ParseLoginParameters(resp http.ResponseWriter, request *http.Request) (loginStruct, error) {
@@ -15698,7 +16052,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 			// Can it be if this and also status = "WAITING"?
 			if len(parentSubflowResult) == finishedSubflows && foundResult.Status != "SUCCESS" && foundResult.Status != "FAILURE" {
-				log.Printf("[INFO][%s] ALL THE SUBFLOW GOT THE RESULT BACK SO UPATING THE STATUS TO SUCCESS", subflowExecutionId)
+				log.Printf("[INFO][%s] ALL THE SUBFLOW GOT THE RESULT BACK SO UPATING THE STATUS TO SUCCESS")
 				foundResult.Status = "SUCCESS"
 				if foundResult.CompletedAt == 0 {
 					foundResult.CompletedAt = time.Now().Unix() * 1000
@@ -15884,23 +16238,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 	if sendRequest && len(resultData) > 0 {
 		//log.Printf("[INFO][%s] Should send subflow request to backendURL %s. Data: %s!", executionParent, backendUrl, string(resultData))
-
-	//	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
-	//		backendUrl = os.Getenv("BASE_URL")
-
-	//		if project.Environment == "cloud" {
-	//			backendUrl = "https://shuffler.io"
-	//
-	//			if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
-	//				backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
-	//			}
-	//
-	//			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-	//				backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	//			}
-	//
-	//		}
-	//	}
 
 		streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
 		req, err := http.NewRequest(
@@ -16341,43 +16678,8 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	}
 
 	if foundActionResultIndex < 0 {
-		// In test mode, Singul doesn't create sub-executions, so we need to handle this gracefully
-		if os.Getenv("AGENT_TEST_MODE") == "true" {
-			log.Printf("[DEBUG][%s] AGENT_TEST_MODE: Action '%s' not found in results, creating placeholder", workflowExecution.ExecutionId, actionResult.Action.ID)
-
-			// Try to get the initial agent output from cache
-			ctx := context.Background()
-			actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
-			placeholderResult := `{"status":"RUNNING","decisions":[]}`
-
-			cache, err := GetCache(ctx, actionCacheId)
-			if err == nil {
-				// Found cached agent output - use it!
-				cacheData := []byte(cache.([]uint8))
-				log.Printf("[DEBUG][%s] Found cached agent output for placeholder (size: %d bytes)", workflowExecution.ExecutionId, len(cacheData))
-				placeholderResult = string(cacheData)
-			} else {
-				log.Printf("[DEBUG][%s] No cached agent output found, using empty placeholder", workflowExecution.ExecutionId)
-			}
-
-			// Create a placeholder result for the agent action
-			placeholder := ActionResult{
-				Action:      actionResult.Action,
-				ExecutionId: workflowExecution.ExecutionId,
-				Result:      placeholderResult,
-				StartedAt:   time.Now().Unix(),
-				CompletedAt: 0,
-				Status:      "EXECUTING",
-			}
-
-			workflowExecution.Results = append(workflowExecution.Results, placeholder)
-			foundActionResultIndex = len(workflowExecution.Results) - 1
-
-			log.Printf("[DEBUG][%s] Created placeholder result at index %d", workflowExecution.ExecutionId, foundActionResultIndex)
-		} else {
-			log.Printf("[ERROR][%s] Action '%s' was NOT found with any result in the execution (yet)", workflowExecution.ExecutionId, actionResult.Action.ID)
-			return &workflowExecution, false, errors.New(fmt.Sprintf("ActionResultIndex: Agent node ID for decision ID %s not found", decisionId))
-		}
+		log.Printf("[ERROR][%s] Action '%s' was NOT found with any result in the execution (yet)", workflowExecution.ExecutionId, actionResult.Action.ID)
+		return &workflowExecution, false, errors.New(fmt.Sprintf("ActionResultIndex: Agent node ID for decision ID %s not found", decisionId))
 	}
 
 	mappedResult := AgentOutput{}
@@ -16387,28 +16689,6 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed unmarshalling agent result: %s. Data: %s", workflowExecution.ExecutionId, err, actionResult.Result)
 		return &workflowExecution, false, err
-	}
-
-	// In test mode, if the placeholder has no decisions, we need to add the incoming decision
-	if os.Getenv("AGENT_TEST_MODE") == "true" && len(mappedResult.Decisions) == 0 {
-		log.Printf("[DEBUG][%s] AGENT_TEST_MODE: Placeholder has no decisions, parsing incoming decision", workflowExecution.ExecutionId)
-
-		// Parse the incoming decision from actionResult
-		incomingDecision := AgentDecision{}
-		err = json.Unmarshal([]byte(actionResult.Result), &incomingDecision)
-		if err != nil {
-			log.Printf("[ERROR][%s] Failed unmarshalling incoming decision: %s", workflowExecution.ExecutionId, err)
-		} else {
-			// Add the decision to the mapped result
-			mappedResult.Decisions = append(mappedResult.Decisions, incomingDecision)
-			mappedResult.Status = "RUNNING"
-
-			// Update the workflow execution result with the new decision
-			updatedResult, _ := json.Marshal(mappedResult)
-			workflowExecution.Results[foundActionResultIndex].Result = string(updatedResult)
-
-			log.Printf("[DEBUG][%s] Added decision %s to placeholder (total decisions: %d)", workflowExecution.ExecutionId, incomingDecision.RunDetails.Id, len(mappedResult.Decisions))
-		}
 	}
 
 	// FIXME: Need to check the current value from the workflowexecution here, instead of using the currently sent in decision
@@ -16531,7 +16811,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 		// FIXME: Set the status of the node to failed
 		if len(failedDecisions) > 0 {
-			log.Printf("[WARNING][%s] Failed decision found. Should exit out agent %d. It should have exited before this point.", workflowExecution.ExecutionId, decisionId)
+			log.Printf("[WARNING][%s] Failed decision found. Should exit out agent %s. It should have exited before this point.", workflowExecution.ExecutionId, decisionId)
 
 			//go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 			//break
@@ -19639,6 +19919,10 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
+	if debug {
+		log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v. Cache ID: %s", tmpData.Key, tmpData.OrgId, err, string(cacheId))
+	}
+
 	if err != nil || len(cacheData.Key) == 0 {
 		log.Printf("[ERROR] Failed to DELETE cache key '%s' for org %s (delete) in category '%s'. Does it exist?", tmpData.Key, tmpData.OrgId, tmpData.Category)
 		resp.WriteHeader(400)
@@ -19672,14 +19956,10 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		cacheId = cacheId[:127]
 	}
 
-	if debug {
-		log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v. Cache ID: %s", tmpData.Key, tmpData.OrgId, err, string(cacheId))
-	}
-
 	entity := "org_cache"
 	err = DeleteKey(ctx, entity, cacheId)
 	if err != nil {
-		log.Printf("[WARNING] Failed to DELETE cache key '%s' for org %s (delete) (2)", cacheId, tmpData.OrgId)
+		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete) (2)", tmpData.Key, tmpData.OrgId)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to delete key"}`))
 		return
@@ -19731,14 +20011,13 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
-			log.Printf("[ERROR] Path too short: %d", len(location))
-			fileId = ""
-			//resp.WriteHeader(401)
-			//resp.Write([]byte(`{"success": false}`))
-			//return
-		} else {
-			fileId = location[4]
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
 		}
+
+		fileId = location[4]
 	}
 
 	if strings.Contains(fileId, "?") {
@@ -19769,25 +20048,15 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if tmpData.OrgId != fileId {
-			if fileId == "" {
-				fileId = tmpData.OrgId 
-			} else {
-				log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
-				return
-			}
+			log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
+			return
 		}
 
 		user, err := HandleApiAuthentication(resp, request)
 		if err == nil {
-			if len(fileId) == 0 {
-				fileId = user.ActiveOrg.Id
-				tmpData.OrgId = user.ActiveOrg.Id
-			} else {
-				user.ActiveOrg.Id = fileId
-			}
-
+			user.ActiveOrg.Id = fileId
 			skipExecutionAuth = true
 
 			if user.ActiveOrg.Id != fileId {
@@ -19913,9 +20182,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		executionId = workflowExecution.ExecutionId
 	}
 
-	//if debug { 
-	//	log.Printf("\n\n[DEBUG] Getting key '%s' from category '%s'\n\n", tmpData.Key, tmpData.Category)
-	//}
+	//log.Printf("\n\n[DEBUG] Getting key '%s' from category '%s'\n\n", tmpData.Key, tmpData.Category)
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
@@ -20115,45 +20382,9 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	var tmpData []CacheKeyData
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
-
-		var tmpDataOverride CacheKeyDataFallback
-		err = json.Unmarshal(body, &tmpDataOverride)
-		if err != nil {
-			log.Printf("[WARNING] Failed unmarshalling in setvalue (1): %s", err)
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		// Check if value is a map[] or []map first
-		parsedValue := ""
-		if _, ok := tmpDataOverride.Value.(string); ok {
-			parsedValue = tmpDataOverride.Value.(string)
-		} else {
-			marshalledValue, err := json.Marshal(tmpDataOverride.Value)
-			if err == nil {
-				parsedValue = string(marshalledValue)
-			} else {
-				log.Printf("[WARNING] Failed to marshal value in setvalue: %s", err)
-				resp.WriteHeader(400)
-				resp.Write([]byte(`{"success": false, "reason": "Failed to parse value. Make sure it is in the [{"key": "key", "value": "value"}] format."}`))
-				return
-			}
-		}
-
-		tmpData = append(tmpData, CacheKeyData{
-			OrgId:    tmpDataOverride.OrgId,
-			Key:      tmpDataOverride.Key,
-			Category: tmpDataOverride.Category,
-			Tags:     tmpDataOverride.Tags,
-
-			Value:    parsedValue,
-		})
-	}
-
-	if len(tmpData) == 0 {
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "No data provided. Value of each key should be a string."}`))
+		log.Printf("[WARNING] Failed unmarshalling in setvalue (1): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
@@ -20207,7 +20438,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[AUDIT] Running bulk upload for org %s to category '%s. Keys: %d'. Tags: %#v", user.ActiveOrg.Id, mainCategory, len(tmpData), tmpData[0].Tags)
+	log.Printf("[AUDIT] Running bulk upload for org %s to category '%s. Keys: %d'", user.ActiveOrg.Id, mainCategory, len(tmpData))
 
 	existingInfo, err := SetDatastoreKeyBulk(ctx, tmpData)
 	if err != nil {
@@ -20479,10 +20710,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		return workflowExecution, err
 	}
 
-	if debug { 
-		log.Printf("[DEBUG] Action: %#v (%s)", action.Name, action.AppID)
-	}
-
 	if appId != action.AppID {
 
 		// Used for standalone runs stared on /agents
@@ -20517,23 +20744,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			}
 
 			SetWorkflowExecution(ctx, exec, true)
-
-			if os.Getenv("AGENT_TEST_MODE") == "true" {
-				var bodyMap map[string]interface{}
-				if err := json.Unmarshal(body, &bodyMap); err == nil {
-					if mockToolCalls, ok := bodyMap["mock_tool_calls"]; ok {
-						mockCacheKey := fmt.Sprintf("agent_mock_%s", exec.ExecutionId)
-						mockData, _ := json.Marshal(mockToolCalls)
-						err := SetCache(ctx, mockCacheKey, mockData, 10)
-						if err != nil {
-							log.Printf("[ERROR] Failed to set cache the mock_tool_calls data for the exection %s", exec.ExecutionId)
-						}
-						log.Printf("[DEBUG] Cached mock tool calls for execution %s", exec.ExecutionId)
-					} else {
-						log.Printf("[WARNING] No mock_tool_calls found in the request body")
-					}
-				}
-			}
 
 			action, err := HandleAiAgentExecutionStart(exec, action, false)
 			if err != nil {
@@ -21025,7 +21235,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				foundDecisionIndex = decisionIndex
 				mappedOutput.CompletedAt = 0
 				mappedOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
-				mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 				mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = 0
 				mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse = ""
 				mappedOutput.Decisions[decisionIndex].RunDetails.DebugUrl = ""
@@ -22379,6 +22588,17 @@ func fixCertificate(parsedX509Key string) string {
 
 // Example implementation of SSO, including a redirect for the user etc
 // Should make this stuff only possible after login
+// 0x0elliot: post authentication, user comes here
+// "code_challenge" is the main guy for this implementation. Keep it near and dear.
+// login mode, without needing authentication would look like this:
+// https://dev-qtj6b0z6gxf38ssy.us.auth0.com/authorize?
+// client_id=cBsxWxQry9wJbQpwJQT9OfYhOQTpI7sx&
+// response_type=code&scope=openid%20email&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&
+// state=b3JnPWMxZDRjZmQ0LWE5ZWYtNGQ2My05YmQxLTk3NDYxMDcyZmZmOCZyZWRpcmVjdD1odHRwJTNBJTJGJTJGbG9jYWxob3N0JTNBNTAwMiUyRmFwaSUyRnYxJTJGbG9naW5fb3BlbmlkJm1vZGU9bG9naW4=
+//
+// the state here breaks down to:
+// org=c1d4cfd4-a9ef-4d63-9bd1-97461072fff8&redirect=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&mode=login
+// otherwise, it needs to the code_challenge as well for linking.
 func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -22391,54 +22611,78 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	//code -> Token
 	ctx := GetContext(request)
 
+	codeChallenge := ""
+	foundMode := ""
+
+	// skipValidation is always false now
+	// temp at least
 	skipValidation := false
 	openidUser := OpenidUserinfo{}
 	org := &Org{}
 	code := request.URL.Query().Get("code")
 	if len(code) == 0 {
 		// Check id_token grant info
-		if request.Method == "POST" {
-			body, err := ioutil.ReadAll(request.Body)
-			if err != nil {
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No code or id_token specified - body read error in POST"}`)))
-				resp.WriteHeader(401)
-				return
-			}
+		// This is where we get redirect back from the SSO service.
 
-			stateSplit := strings.Split(string(body), "&")
-			for _, innerstate := range stateSplit {
-				itemsplit := strings.Split(innerstate, "=")
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must enable PKCE to use shuffle SSO"}`)))
+		resp.WriteHeader(401)
+		return
 
-				if len(itemsplit) <= 1 {
-					log.Printf("[WARNING] No key:value: %s", innerstate)
-					continue
-				}
+		// if request.Method == "POST" {
+		// 	body, err := ioutil.ReadAll(request.Body)
+		// 	if err != nil {
+		// 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No code or id_token specified - body read error in POST"}`)))
+		// 		resp.WriteHeader(401)
+		// 		return
+		// 	}
 
-				if itemsplit[0] == "id_token" {
-					token, err := VerifyIdToken(ctx, itemsplit[1])
-					if err != nil {
-						log.Printf("[ERROR] Bad ID token provided: %s", err)
-						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad ID token provided"}`)))
-						resp.WriteHeader(401)
-						return
-					}
+		// 	stateSplit := strings.Split(string(body), "&")
+		// 	accessToken := ""
+		// 	// First pass - look for access_token
+		// 	for _, innerstate := range stateSplit {
+		// 		itemsplit := strings.Split(innerstate, "=")
+		// 		if len(itemsplit) > 1 && itemsplit[0] == "access_token" {
+		// 			accessToken = itemsplit[1]
+		// 			break
+		// 		}
+		// 	}
 
-					openidUser.Sub = token.Sub
-					openidUser.Email = token.Email
-					openidUser.Roles = token.Roles
-					org = &token.Org
-					skipValidation = true
+		// 	// Second pass - process id_token
+		// 	for _, innerstate := range stateSplit {
+		// 		itemsplit := strings.Split(innerstate, "=")
 
-					break
-				}
-			}
-		}
+		// 		if len(itemsplit) <= 1 {
+		// 			log.Printf("[WARNING] No key:value: %s", innerstate)
+		// 			continue
+		// 		}
 
-		if !skipValidation {
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No code specified"}`)))
-			resp.WriteHeader(401)
-			return
-		}
+		// 		if itemsplit[0] == "id_token" {
+		// 			token, challenge, err := VerifyIdToken(ctx, itemsplit[1], accessToken)
+		// 			if err != nil {
+		// 				log.Printf("[ERROR] Bad ID token provided: %s", err)
+		// 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad ID token provided"}`)))
+		// 				resp.WriteHeader(401)
+		// 				return
+		// 			}
+
+		// 			codeChallenge = challenge
+
+		// 			// sub can be slightly more trusted.
+		// 			openidUser.Sub = token.Sub
+		// 			openidUser.Email = token.Email
+		// 			openidUser.Roles = token.Roles
+		// 			org = &token.Org
+		// 			skipValidation = true
+		// 			break
+		// 		}
+		// 	}
+		// }
+
+		// if !skipValidation {
+		// 	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No code specified"}`)))
+		// 	resp.WriteHeader(401)
+		// 	return
+		// }
 	}
 
 	if !skipValidation {
@@ -22481,9 +22725,15 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			if itemsplit[0] == "challenge" {
 				foundChallenge = strings.TrimSpace(itemsplit[1])
 			}
+
+			if itemsplit[0] == "mode" {
+				foundMode = strings.TrimSpace(itemsplit[1])
+			}
 		}
 
-		//log.Printf("Challenge len2: %d", len(foundChallenge))
+		log.Printf("challenge: %s", foundChallenge)
+		log.Printf("code sent: %s", code)
+		log.Printf("mode: %s", foundMode)
 
 		if len(foundOrg) == 0 {
 			log.Printf("[ERROR] No org specified in state")
@@ -22509,14 +22759,63 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		// Handle login mode (no PKCE) vs registration mode (with PKCE)
+		var foundVerifier string
+		if foundMode == "login" {
+			// Login mode: skip PKCE verification, will match user by SSO Sub later
+			log.Printf("[INFO] Login mode detected, skipping PKCE verification")
+			foundVerifier = "login_mode" // placeholder to skip PKCE
+		} else {
+			// Registration/connection mode: require PKCE
+			for _, userInOrg := range org.Users {
+				fullUser, err := GetUser(ctx, userInOrg.Id)
+				if err != nil {
+					continue
+				}
+				ssoInfo, exists := fullUser.GetSSOInfo(org.Id)
+				log.Printf("[DEBUG] SSOInfo exists: %t", exists)
+				if exists && ssoInfo.CodeVerifier != "" {
+					verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
+					if verifierObj.CodeChallengeS256() == foundChallenge {
+						foundVerifier = ssoInfo.CodeVerifier
+						break
+					}
+				}
+			}
+
+			if foundVerifier == "" {
+				log.Printf("[ERROR] No verifier found for challenge %s in org %s", foundChallenge, org.Id)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Invalid PKCE challenge"}`))
+				return
+			}
+		}
+
 		//log.Printf("Challenge: %s", foundChallenge)
-		body, err := RunOpenidLogin(ctx, clientId, tokenUrl, foundRedir, code, foundChallenge, org.SSOConfig.OpenIdClientSecret)
+		// Use unified function - pass empty string for login mode (no PKCE)
+		verifierToUse := foundVerifier
+		if foundMode == "login" {
+			verifierToUse = "" // No PKCE in login mode
+		}
+
+		// Debug: verify the verifier hashes to the expected challenge
+		if verifierToUse != "" {
+			verifierCheck := &CodeVerifier{Value: verifierToUse}
+			computedChallenge := verifierCheck.CodeChallengeS256()
+			log.Printf("[DEBUG] Verifier check - foundChallenge: %s, computedChallenge: %s, match: %t", foundChallenge, computedChallenge, foundChallenge == computedChallenge)
+		}
+		log.Printf("[DEBUG] Calling RunOpenidLogin with verifierToUse=%s (len=%d)", verifierToUse, len(verifierToUse))
+
+		body, err := RunOpenidLogin(ctx, clientId, tokenUrl, foundRedir, code, verifierToUse, org.SSOConfig.OpenIdClientSecret)
 		if err != nil {
 			log.Printf("[WARNING] Error with body read of OpenID Connect: %s", err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+
+		// RunOpenidLogin does some validation
+		codeChallenge = foundChallenge
 
 		openid := OpenidResp{}
 		err = json.Unmarshal(body, &openid)
@@ -22527,37 +22826,34 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		// Automated replacement
-		userInfoUrlSplit := strings.Split(org.SSOConfig.OpenIdAuthorization, "/")
-		userinfoEndpoint := strings.Join(userInfoUrlSplit[0:len(userInfoUrlSplit)-1], "/") + "/userinfo"
-		//userinfoEndpoint := strings.Replace(org.SSOConfig.OpenIdAuthorization, "/authorize", "/userinfo", -1)
-		log.Printf("Userinfo endpoint: %s", userinfoEndpoint)
-		client := &http.Client{}
-		req, err := http.NewRequest(
-			"GET",
-			userinfoEndpoint,
-			nil,
-		)
-
-		//req.Header.Add("accept", "application/json")
-		//req.Header.Add("cache-control", "no-cache")
-		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", openid.AccessToken))
-		res, err := client.Do(req)
-		if err != nil {
-			log.Printf("[WARNING] OpenID client DO (2): %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed userinfo request"}`))
+		// Fetch userinfo using the new helper function
+		authUrlParts := strings.Split(org.SSOConfig.OpenIdAuthorization, "/oauth2")
+		if len(authUrlParts) == 0 {
+			log.Printf("[ERROR] Invalid OpenIdAuthorization URL format")
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Invalid SSO configuration"}`))
 			return
 		}
 
-		defer res.Body.Close()
-		body, err = ioutil.ReadAll(res.Body)
+		issuer := authUrlParts[0]
+		userInfo, err := fetchUserInfoFromToken(ctx, openid.AccessToken, issuer, org.SSOConfig.OpenIdAuthorization)
 		if err != nil {
-			log.Printf("[WARNING] OpenID client Body (2): %s", err)
+			log.Printf("[ERROR] Failed to fetch userinfo: %s", err)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed userinfo body parsing"}`))
+			resp.Write([]byte(`{"success": false, "reason": "Failed to fetch user information"}`))
 			return
 		}
+
+		// Convert map to JSON for compatibility with existing code
+		body, err = json.Marshal(userInfo)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal userinfo: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to process user information"}`))
+			return
+		}
+
+		log.Printf("[DEBUG] OpenID userinfo response: %s", string(body))
 
 		err = json.Unmarshal(body, &openidUser)
 		if err != nil {
@@ -22565,6 +22861,17 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
+		}
+
+		// Extract roles from ID token (if available) using proper JWT verification
+		if openid.IdToken != "" && org.SSOConfig.OpenIdClientId != "" {
+			extractedRoles, err := ExtractRolesFromIdToken(ctx, openid.IdToken, issuer, org.SSOConfig.OpenIdClientId)
+			if err != nil {
+				log.Printf("[WARNING] Failed to extract roles from ID token: %s", err)
+			} else if len(extractedRoles) > 0 {
+				log.Printf("[DEBUG] Extracted roles from ID token: %v", extractedRoles)
+				openidUser.Roles = extractedRoles
+			}
 		}
 	}
 
@@ -22585,12 +22892,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	userName := strings.ToLower(strings.TrimSpace(openidUser.Email))
 	if !strings.Contains(userName, "@") {
 		log.Printf("[ERROR] Bad username, but allowing due to OpenID: %s. Full Subject: %#v", userName, openidUser)
-	}
-
-	if strings.Contains(userName, "@shuffler.io") {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Disabled for support users"}`))
-		return
 	}
 
 	redirectUrl := "https://shuffler.io/workflows"
@@ -22618,14 +22919,17 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if strings.Contains(strings.ToLower(userName), "shuffler.io") {
-		log.Printf("[ERROR] Username (%v) contains invalid domain in OpenID login for org: %v", userName, org.Id)
+	// Login mode: skip code challenge validation
+	if foundMode != "login" && len(codeChallenge) == 0 {
+		log.Printf("[ERROR] Code challenge (%v) is empty in OpenID login for org: %v", codeChallenge, org.Id)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Invalid username"}"`))
+		resp.Write([]byte(`{"success": false, "reason": "Code challenge is empty"}`))
 		return
 	}
 
 	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
+	// this means user with the same email
+	// has exists in the db
 	if err == nil && len(users) > 0 {
 		for _, user := range users {
 			log.Printf("%s - %s", user.GeneratedUsername, userName)
@@ -22648,6 +22952,8 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
+				// don't be confused. "AutoProvision" acts like "DisableAutoProvision"
+				// it's super stupid.
 				if (!foundOrgInUser || !foundUserInOrg) && org.SSOConfig.AutoProvision {
 					log.Printf("[WARNING] User %s (%s) is not in org %s (%s). Please contact the administrator - (1)", user.Username, user.Id, org.Name, org.Id)
 					resp.WriteHeader(401)
@@ -22666,7 +22972,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				// check whether role is required for org
-
 				if org.SSOConfig.RoleRequired {
 					foundRole := false
 					for _, role := range openidUser.Roles {
@@ -22718,6 +23023,137 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Role: role,
 				}
 
+				// Skip PKCE validation in login mode
+				ssoErrors := []string{}
+
+				if foundMode != "login" {
+					// before we do any setting,
+					// verify that challenge was valid
+					user.InitSSOInfos()
+
+					// Get the specific org's SSO info for validation
+					ssoInfo, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						ssoErrors = append(ssoErrors, "no_sso_info_for_org")
+					} else {
+						if ssoInfo.ClientID != org.SSOConfig.OpenIdClientId {
+							ssoErrors = append(ssoErrors, "client mismatch")
+						}
+
+						// Validate challenge by computing S256 hash from stored verifier
+						if ssoInfo.CodeVerifier == "" {
+							ssoErrors = append(ssoErrors, "no code verifier stored")
+						} else {
+							verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
+							expectedChallenge := verifierObj.CodeChallengeS256()
+							if expectedChallenge != codeChallenge {
+								log.Printf("[WARNING] Challenge mismatch for user %s. Expected: %s, Got: %s", user.Id, expectedChallenge, codeChallenge)
+								ssoErrors = append(ssoErrors, "challenge mismatch")
+							} else {
+								log.Printf("[INFO] Challenge verified for user %s. %s == %s", user.Id, expectedChallenge, codeChallenge)
+							}
+						}
+
+						if time.Now().After(ssoInfo.ChallengeExpiry) {
+							ssoErrors = append(ssoErrors, "challenge expired")
+						}
+					}
+
+					if len(ssoErrors) > 0 {
+						log.Printf("[WARNING] SSO validation failed for user %s: %s -- (1)", user.Id, strings.Join(ssoErrors,
+							", "))
+
+						// Clear verifier on validation failure for security
+						if exists {
+							ssoInfo.CodeVerifier = ""
+							ssoInfo.ChallengeExpiry = time.Time{}
+							user.SetSSOInfo(org.Id, ssoInfo)
+							SetUser(ctx, &user, false)
+						}
+
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO validation failed"}`))
+						return
+					}
+				} else {
+					// Login mode: validate complete SSO identity match
+					user.InitSSOInfos()
+					_, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						log.Printf("[ERROR] No SSO info found for user %s in org %s", user.Id, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO info not found"}`))
+						return
+					}
+
+					// Use FindUserBySSOIdentity to validate all SSO details
+					validatedUser, err := FindUserBySSOIdentity(ctx, openidUser.Sub, org.SSOConfig.OpenIdClientId, org.Id, openidUser.Email)
+					if err != nil {
+						log.Printf("[ERROR] SSO identity validation failed: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity validation failed"}`))
+						return
+					}
+
+					// Verify it's the same user
+					if validatedUser.Id != user.Id {
+						log.Printf("[ERROR] SSO identity validation returned different user. Expected: %s, Got: %s", user.Id, validatedUser.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity mismatch"}`))
+						return
+					}
+
+					log.Printf("[INFO] Login mode: Complete SSO identity validated for user %s", user.Id)
+				}
+
+				// Get SSO info for this org (used in both modes)
+				orgSSOInfo, _ := user.GetSSOInfo(org.Id)
+
+				// Only update SSO info in registration mode, not login mode
+				if foundMode != "login" {
+					// Clear verifier in registration mode
+					orgSSOInfo.CodeVerifier = ""
+					orgSSOInfo.ChallengeExpiry = time.Time{}
+
+					// Check if user has used this client ID with a different Sub in other orgs
+					currentClientID := org.SSOConfig.OpenIdClientId
+					var existingSubForClient string
+
+					for _, ssoInfo := range user.SSOInfos {
+						if ssoInfo.ClientID == currentClientID && ssoInfo.Sub != "" && ssoInfo.OrgID != org.Id {
+							existingSubForClient = ssoInfo.Sub
+							break
+						}
+					}
+
+					if existingSubForClient != "" && existingSubForClient != openidUser.Sub {
+						log.Printf("[ERROR] User %s attempted to use Sub %s with client ID %s, but already has Sub %s for this client ID", user.Id, openidUser.Sub, currentClientID, existingSubForClient)
+						resp.WriteHeader(409)
+						resp.Write([]byte(`{"success": false, "reason": "You must use the same SSO account that you first registered with for this SSO provider"}`))
+						return
+					}
+
+					// Update/set the sub claim for this specific org
+					if orgSSOInfo.Sub == "" {
+						// First time SSO binding for this org
+						orgSSOInfo.Sub = openidUser.Sub
+						log.Printf("[INFO] Initial SSO binding for user %s to sub %s in org %s with client ID %s", user.Id, openidUser.Sub, org.Id, currentClientID)
+					} else if orgSSOInfo.Sub != openidUser.Sub {
+						// This shouldn't happen if validation passed, but log it
+						log.Printf("[WARNING] Sub changed for user %s in org %s: %s -> %s", user.Id, org.Id, orgSSOInfo.Sub, openidUser.Sub)
+					}
+
+					// Update other SSO info for this org
+					orgSSOInfo.ClientID = org.SSOConfig.OpenIdClientId
+
+					// Store back to slice
+					user.SetSSOInfo(org.Id, orgSSOInfo)
+
+					log.Printf("[INFO] SSO info updated for user %s", user.Id)
+				} else {
+					log.Printf("[INFO] Login mode: skipping SSO info update for user %s", user.Id)
+				}
+
 				expiration := time.Now().Add(8 * time.Hour)
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (1)")
@@ -22764,7 +23200,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				//Store users last session as new session so user don't have to go through sso again while changing org.
 				user.UsersLastSession = user.Session
 
-				err = SetUser(ctx, &user, false)
+				err = SetUser(ctx, &user, true)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
 					resp.WriteHeader(401)
@@ -22837,7 +23273,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 						org.Users = append(org.Users, user)
 					}
 				} else {
-					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!- (2)", user.Username, user.Id, userName)
+					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s", user.Username, user.Id, userName)
 				}
 				//log.Printf("SESSION: %s", user.Session)
 
@@ -22893,6 +23329,121 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Role: role,
 				}
 
+				// before we do any setting,
+				// verify that challenge was valid
+				ssoErrors := []string{}
+
+				if foundMode != "login" {
+					// Initialize slice if needed for safety
+					user.InitSSOInfos()
+
+					// Get the specific org's SSO info for validation
+					ssoInfo, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						ssoErrors = append(ssoErrors, "no_sso_info_for_org")
+					} else {
+						if ssoInfo.ClientID != org.SSOConfig.OpenIdClientId {
+							ssoErrors = append(ssoErrors, "client mismatch")
+						}
+						// Validate challenge by computing S256 hash from stored verifier
+						if ssoInfo.CodeVerifier == "" {
+							ssoErrors = append(ssoErrors, "no code verifier stored")
+						} else {
+							verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
+							expectedChallenge := verifierObj.CodeChallengeS256()
+							if expectedChallenge != codeChallenge {
+								log.Printf("[DEBUG] Challenge mismatch for user %s: expected %s, got %s", user.Id, expectedChallenge, codeChallenge)
+								ssoErrors = append(ssoErrors, "challenge mismatch")
+							}
+						}
+						if time.Now().After(ssoInfo.ChallengeExpiry) {
+							ssoErrors = append(ssoErrors, "challenge expired")
+						}
+					}
+
+					if len(ssoErrors) > 0 {
+						log.Printf("[WARNING] SSO validation failed for user %s: %s -- (2)", user.Id, strings.Join(ssoErrors,
+							", "))
+
+						// Clear verifier on validation failure for security
+						if exists {
+							ssoInfo.CodeVerifier = ""
+							ssoInfo.ChallengeExpiry = time.Time{}
+							user.SetSSOInfo(org.Id, ssoInfo)
+							SetUser(ctx, &user, false)
+						}
+
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO validation failed"}`))
+						return
+					}
+				} else {
+					// Login mode: validate complete SSO identity match
+					user.InitSSOInfos()
+					_, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						log.Printf("[ERROR] No SSO info found for user %s in org %s", user.Id, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO info not found"}`))
+						return
+					}
+
+					// Use FindUserBySSOIdentity to validate all SSO details
+					validatedUser, err := FindUserBySSOIdentity(ctx, openidUser.Sub, org.SSOConfig.OpenIdClientId, org.Id, openidUser.Email)
+					if err != nil {
+						log.Printf("[ERROR] SSO identity validation failed: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity validation failed"}`))
+						return
+					}
+
+					// Verify it's the same user
+					if validatedUser.Id != user.Id {
+						log.Printf("[ERROR] SSO identity validation returned different user. Expected: %s, Got: %s", user.Id, validatedUser.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity mismatch"}`))
+						return
+					}
+
+					log.Printf("[INFO] Login mode: Complete SSO identity validated for user %s", user.Id)
+				}
+
+				// Clear verifier and update SSO info for this org
+				orgSSOInfo, _ := user.GetSSOInfo(org.Id)
+				orgSSOInfo.CodeVerifier = ""
+				orgSSOInfo.ChallengeExpiry = time.Time{}
+
+				// Check if user has used this client ID with a different Sub in other orgs
+				currentClientID := org.SSOConfig.OpenIdClientId
+				var existingSubForClient string
+
+				for _, ssoInfo := range user.SSOInfos {
+					if ssoInfo.ClientID == currentClientID && ssoInfo.Sub != "" && ssoInfo.OrgID != org.Id {
+						existingSubForClient = ssoInfo.Sub
+						break
+					}
+				}
+
+				if existingSubForClient != "" && existingSubForClient != openidUser.Sub {
+					log.Printf("[ERROR] User %s attempted to use Sub %s with client ID %s, but already has Sub %s for this client ID", user.Id, openidUser.Sub, currentClientID, existingSubForClient)
+					resp.WriteHeader(409)
+					resp.Write([]byte(`{"success": false, "reason": "You must use the same SSO account that you first registered with for this SSO provider"}`))
+					return
+				}
+
+				// Update/set the sub claim for this specific org
+				if orgSSOInfo.Sub == "" {
+					// First time SSO binding for this org
+					orgSSOInfo.Sub = openidUser.Sub
+					log.Printf("[INFO] Initial SSO binding for user %s to sub %s in org %s", user.Id, openidUser.Sub, org.Id)
+				} else if orgSSOInfo.Sub != openidUser.Sub {
+					// This shouldn't happen if validation passed, but log it
+					log.Printf("[WARNING] Sub changed for user %s in org %s: %s -> %s", user.Id, org.Id, orgSSOInfo.Sub, openidUser.Sub)
+				}
+
+				// Store back to slice
+				user.SetSSOInfo(org.Id, orgSSOInfo)
+
 				expiration := time.Now().Add(8 * time.Hour)
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
@@ -22930,6 +23481,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					}
 
 				}
+
 				user.LoginInfo = append(user.LoginInfo, LoginInfo{
 					IP:        GetRequestIp(request),
 					Timestamp: time.Now().Unix(),
@@ -22938,7 +23490,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				//Store users last session as new session so user don't have to go through sso again while changing org.
 				user.UsersLastSession = user.Session
 
-				err = SetUser(ctx, &user, false)
+				err = SetUser(ctx, &user, true)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
 					resp.WriteHeader(401)
@@ -23024,195 +23576,85 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 	// Assign default role as "user" for generated user, else assign the role from openid if available
 	// Change active org role and user.role to assign role
-	role := "user"
-	if len(openidUser.Roles) > 0 {
-		for _, newRole := range openidUser.Roles {
-			if newRole == "shuffle-admin" {
-				role = "admin"
-				break
-			}
 
-			if newRole == "shuffle-user" {
-				role = "user"
-				break
-			}
+	// log.Printf("[AUDIT] Adding user %s with role %s to org %s (%s) through single sign-on", userName, role, org.Name, org.Id)
 
-			if newRole == "shuffle-org-reader" {
-				role = "org-reader"
-				break
-			}
+	// newUser := new(User)
+	// // Random password to ensure its not empty
+	// newUser.Password = uuid.NewV4().String()
+	// newUser.Username = userName
+	// newUser.GeneratedUsername = userName
+	// newUser.Verified = true
+	// newUser.Active = true
+	// newUser.CreationTime = time.Now().Unix()
+	// newUser.Orgs = []string{org.Id}
+	// newUser.LoginType = "OpenID"
+	// newUser.Role = role
+	// newUser.Session = uuid.NewV4().String()
+	// newUser.ActiveOrg = OrgMini{
+	// 	Name: org.Name,
+	// 	Id:   org.Id,
+	// 	Role: role,
+	// }
 
-		}
+	// // Initialize SSOInfos and set Sub for this org
+	// newUser.InitSSOInfos()
+	// newUser.SetSSOInfo(org.Id, SSOInfo{
+	// 	Sub: openidUser.Sub,
+	// })
 
-	}
+	// if project.Environment == "cloud" {
+	// 	newUser.Regions = []string{"https://shuffler.io"}
+	// }
 
-	log.Printf("[AUDIT] Adding user %s with role %s to org %s (%s) through single sign-on", userName, role, org.Name, org.Id)
+	// verifyToken := uuid.NewV4()
+	// ID := uuid.NewV4()
+	// newUser.Id = ID.String()
+	// newUser.VerificationToken = verifyToken.String()
 
-	newUser := new(User)
-	// Random password to ensure its not empty
-	newUser.Password = uuid.NewV4().String()
-	newUser.Username = userName
-	newUser.GeneratedUsername = userName
-	newUser.Verified = true
-	newUser.Active = true
-	newUser.CreationTime = time.Now().Unix()
-	newUser.Orgs = []string{org.Id}
-	newUser.LoginType = "OpenID"
-	newUser.Role = role
-	newUser.Session = uuid.NewV4().String()
-	newUser.ActiveOrg = OrgMini{
-		Name: org.Name,
-		Id:   org.Id,
-		Role: role,
-	}
+	// expiration := time.Now().Add(8 * time.Hour)
+	// //if len(user.Session) == 0 {
+	// log.Printf("[INFO] User does NOT have session - creating")
+	// sessionToken := uuid.NewV4().String()
 
-	if project.Environment == "cloud" {
-		newUser.Regions = []string{"https://shuffler.io"}
-	}
+	// newCookie := ConstructSessionCookie(sessionToken, expiration)
+	// http.SetCookie(resp, newCookie)
 
-	verifyToken := uuid.NewV4()
-	ID := uuid.NewV4()
-	newUser.Id = ID.String()
-	newUser.VerificationToken = verifyToken.String()
+	// newCookie.Name = "__session"
+	// http.SetCookie(resp, newCookie)
 
-	expiration := time.Now().Add(8 * time.Hour)
-	//if len(user.Session) == 0 {
-	log.Printf("[INFO] User does NOT have session - creating")
-	sessionToken := uuid.NewV4().String()
+	// err = SetSession(ctx, *newUser, sessionToken)
+	// if err != nil {
+	// 	log.Printf("[WARNING] Error creating session for user: %s", err)
+	// 	resp.WriteHeader(401)
+	// 	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+	// 	return
+	// }
 
-	newCookie := ConstructSessionCookie(sessionToken, expiration)
-	http.SetCookie(resp, newCookie)
+	// newUser.Session = sessionToken
 
-	newCookie.Name = "__session"
-	http.SetCookie(resp, newCookie)
+	// if project.Environment == "cloud" && org.RegionUrl != "https://shuffler.io" {
+	// 	newUser.Regions = append(newUser.Regions, org.RegionUrl)
+	// }
 
-	err = SetSession(ctx, *newUser, sessionToken)
-	if err != nil {
-		log.Printf("[WARNING] Error creating session for user: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
-		return
-	}
+	// //Store users last session as new session so user don't have to go through sso again while changing org.
+	// newUser.UsersLastSession = sessionToken
 
-	newUser.Session = sessionToken
+	// err = SetUser(ctx, newUser, true)
+	// if err != nil {
+	// 	log.Printf("[WARNING] Failed setting new user in DB: %s", err)
+	// 	resp.WriteHeader(401)
+	// 	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed updating the user"}`)))
+	// 	return
+	// }
 
-	if project.Environment == "cloud" && org.RegionUrl != "https://shuffler.io" {
-		newUser.Regions = append(newUser.Regions, org.RegionUrl)
-	}
+	// http.Redirect(resp, request, redirectUrl+"?type=sso_login", http.StatusSeeOther)
 
-	//Store users last session as new session so user don't have to go through sso again while changing org.
-	newUser.UsersLastSession = sessionToken
+	log.Printf("[AUDIT] Disabled new user creation")
+	resp.WriteHeader(http.StatusForbidden)
+	resp.Write([]byte(`{"success": false, "reason": "New user creation is disabled"}`))
 
-	err = SetUser(ctx, newUser, true)
-	if err != nil {
-		log.Printf("[WARNING] Failed setting new user in DB: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed updating the user"}`)))
-		return
-	}
-
-	http.Redirect(resp, request, redirectUrl+"?type=sso_login", http.StatusSeeOther)
 	return
-}
-
-func HandleDisconnectSSO(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	// Only allow POST requests for security
-	if request.Method != "POST" {
-		resp.WriteHeader(405)
-		resp.Write([]byte(`{"success": false, "reason": "Method not allowed"}`))
-		return
-	}
-
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in disconnect SSO: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
-		return
-	}
-
-	// Get org ID from URL path or request body
-	var orgId string
-	location := strings.Split(request.URL.String(), "/")
-	if len(location) >= 5 {
-		orgId = location[4] // /api/v1/disconnect_sso/{orgId}
-	}
-
-	if len(orgId) == 0 {
-		// Try to get from request body as fallback
-		body, err := ioutil.ReadAll(request.Body)
-		if err == nil {
-			var requestData struct {
-				OrgId string `json:"org_id"`
-			}
-			if json.Unmarshal(body, &requestData) == nil {
-				orgId = requestData.OrgId
-			}
-		}
-	}
-
-	if len(orgId) == 0 {
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Missing org_id parameter"}`))
-		return
-	}
-
-	// Verify user has access to this org
-	hasAccess := false
-	for _, userOrg := range user.Orgs {
-		if userOrg == orgId {
-			hasAccess = true
-			break
-		}
-	}
-
-	if !hasAccess {
-		log.Printf("[WARNING] User %s (%s) tried to disconnect SSO for org %s they don't have access to", user.Username, user.Id, orgId)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Access denied to this organization"}`))
-		return
-	}
-
-	ctx := GetContext(request)
-
-	// Get the current SSO info for this org
-	ssoInfo, exists := user.GetSSOInfo(orgId)
-	if !exists || len(ssoInfo.Sub) == 0 {
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "No SSO connection found for this organization"}`))
-		return
-	}
-
-	// Log the disconnection for audit purposes
-	log.Printf("[AUDIT] User %s (%s) is disconnecting SSO (sub: %s) from org %s", user.Username, user.Id, ssoInfo.Sub, orgId)
-
-	// Remove SSO info for this org by filtering the slice
-	newSSOInfos := []SSOInfo{}
-	for _, info := range user.SSOInfos {
-		if info.OrgID != orgId {
-			newSSOInfos = append(newSSOInfos, info)
-		}
-	}
-	user.SSOInfos = newSSOInfos
-
-	// Save the updated user
-	err = SetUser(ctx, &user, true)
-	if err != nil {
-		log.Printf("[ERROR] Failed to update user after SSO disconnection: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to disconnect SSO account"}`))
-		return
-	}
-
-	log.Printf("[INFO] Successfully disconnected SSO for user %s (%s) from org %s", user.Username, user.Id, orgId)
-
-	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true, "reason": "SSO account disconnected successfully"}`))
 }
 
 // Downloads documentation from Github to be placed in an app/workflow as markdown
@@ -23629,7 +24071,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						start = append(start, workflow.Actions[0].ID)
 						oldExecution.Results[0].Status = "WAITING"
 					} else {
-						log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Decision ID: %#v", workflow.ID, decisionId[0])
+						log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Decision ID: %s", workflow.ID, decisionId[0])
 					}
 				}
 			}
@@ -25868,7 +26310,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 					continue
 				}
 
-				addedParamIndexes = append(addedParamIndexes, fmt.Sprintf("%d", paramIndex))
+				addedParamIndexes = append(addedParamIndexes, string(paramIndex))
 				param.Value = authparam.Value
 				break
 			}
@@ -25877,7 +26319,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 		}
 
 		for paramIndex, authparam := range curAuth.Fields {
-			if ArrayContains(addedParamIndexes, fmt.Sprintf("%d", paramIndex)) {
+			if ArrayContains(addedParamIndexes, string(paramIndex)) {
 				continue
 			}
 
@@ -26158,420 +26600,6 @@ func findReferenceAppDocs(ctx context.Context, allApps []WorkflowApp) []Workflow
 	}
 
 	return newApps
-}
-
-func CheckGitProxy(cloneOptions *git.CloneOptions) *git.CloneOptions {
-	if os.Getenv("HTTP_PROXY") != "" && !isGitNoProxy(cloneOptions.URL) {
-		cloneOptions.ProxyOptions = transport.ProxyOptions{
-			URL: os.Getenv("HTTP_PROXY"),
-		}
-	}
-
-	if os.Getenv("HTTPS_PROXY") != "" && !isGitNoProxy(cloneOptions.URL) {
-		cloneOptions.ProxyOptions = transport.ProxyOptions{
-			URL: os.Getenv("HTTPS_PROXY"),
-		}
-	}
-
-	return cloneOptions
-}
-
-func isGitNoProxy(rawURL string) bool {
-	noProxy := os.Getenv("NO_PROXY")
-	if noProxy == "" {
-		return false
-	}
-
-	if noProxy == "*" {
-		return true
-	}
-
-	noProxyList := strings.Split(noProxy, ",")
-	parsedURL, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	host := parsedURL.Hostname()
-
-	for _, value := range noProxyList {
-		value = strings.TrimSpace(value)
-
-		if host == value {
-			return true
-		}
-		if strings.HasPrefix(value, "*.") && strings.HasSuffix(host, value[2:]) {
-			return true
-		}
-	}
-	return false
-}
-
-func loadGithubWorkflows(url, username, password, userId, branch, orgId string) error {
-	fs := memfs.New()
-
-	// Extract path parameter from Azure DevOps URLs
-	targetPath := ""
-	specificFile := ""
-	if strings.Contains(url, "dev.azure.com") {
-		if strings.Contains(url, "?path=") {
-			parts := strings.Split(url, "?path=")
-			if len(parts) == 2 {
-				targetPath = parts[1]
-				decodedPath, err := neturl.QueryUnescape(targetPath)
-				if err == nil {
-					targetPath = decodedPath
-				}
-
-				targetPath = strings.TrimPrefix(targetPath, "/")
-
-				if strings.HasSuffix(strings.ToLower(targetPath), ".json") {
-					specificFile = path.Base(targetPath)
-					targetPath = path.Dir(targetPath)
-					if targetPath == "." {
-						targetPath = ""
-					}
-				}
-
-				log.Printf("[INFO] Extracted target path: '%s', specific file: '%s'", targetPath, specificFile)
-			}
-			// Clean the URL
-			url = parts[0]
-		}
-	}
-
-	// Handle GitHub-specific file URLs
-	if strings.Contains(url, "github.com") && strings.Contains(url, "/blob/") {
-		parts := strings.SplitN(url, "/blob/", 2)
-		if len(parts) == 2 {
-			baseURL := parts[0]
-			remainder := parts[1]
-
-			pathParts := strings.SplitN(remainder, "/", 2)
-			if len(pathParts) >= 1 {
-				// If branch wasn't already specified, use the one from URL
-				if len(branch) == 0 || branch == "main" || branch == "master" {
-					branch = pathParts[0]
-				}
-
-				if len(pathParts) == 2 {
-					targetPath = pathParts[1]
-
-					// Check if it's a specific file
-					if strings.HasSuffix(strings.ToLower(targetPath), ".json") {
-						specificFile = path.Base(targetPath)
-						targetPath = path.Dir(targetPath)
-						if targetPath == "." {
-							targetPath = ""
-						}
-					}
-				}
-			}
-
-			// Convert to proper git URL
-			url = baseURL + ".git"
-			log.Printf("[INFO] Converted GitHub URL. Repo: %s, Branch: %s, Path: '%s', File: '%s'", url, branch, targetPath, specificFile)
-		}
-	}
-
-	log.Printf("Starting load of %s with branch %s", url, branch)
-
-	cloneOptions := &git.CloneOptions{
-		URL: url,
-	}
-
-	if len(username) > 0 && len(password) > 0 {
-		cloneOptions.Auth = &http2.BasicAuth{
-
-			Username: username,
-			Password: password,
-		}
-	} else {
-		org, err := GetOrg(context.Background(), orgId)
-		if err != nil {
-			log.Printf("Failed getting org %s: %s", orgId, err)
-			return err
-		}
-
-		// check if org has git credentials
-		if len(org.Defaults.WorkflowUploadUsername) > 0 && len(org.Defaults.WorkflowUploadToken) > 0 {
-			cloneOptions.Auth = &http2.BasicAuth{
-				Username: org.Defaults.WorkflowUploadUsername,
-				Password: org.Defaults.WorkflowUploadToken,
-			}
-		}
-	}
-
-	// main is the new master
-	if len(branch) > 0 && branch != "main" && branch != "master" {
-		cloneOptions.ReferenceName = plumbing.ReferenceName(branch)
-	}
-
-	cloneOptions = CheckGitProxy(cloneOptions)
-
-	// Azure DevOps requires special capability handling
-	isAzureDevOps := strings.Contains(url, "dev.azure.com")
-	if isAzureDevOps {
-		transport.UnsupportedCapabilities = []capability.Capability{
-			capability.ThinPack,
-		}
-	}
-
-	storer := memory.NewStorage()
-	r, err := git.Clone(storer, fs, cloneOptions)
-	if err != nil {
-		log.Printf("[INFO] Failed loading repo %s into memory (github workflows): %s", url, err)
-		return err
-	}
-
-	// Navigate to the target directory if specified
-	searchPath := "/"
-	if targetPath != "" {
-		searchPath = "/" + targetPath
-		log.Printf("[INFO] Navigating to target path: %s", searchPath)
-	}
-
-	dir, err := fs.ReadDir(searchPath)
-	if err != nil {
-		log.Printf("[ERROR] Failed reading folder '%s': %s", searchPath, err)
-		// Try without leading slash
-		searchPath = strings.TrimPrefix(searchPath, "/")
-		if searchPath == "" {
-			searchPath = "."
-		}
-		dir, err = fs.ReadDir(searchPath)
-		if err != nil {
-			log.Printf("[ERROR] Failed reading folder '%s' (retry): %s", searchPath, err)
-			return err
-		}
-	}
-	_ = r
-
-	// Prepare the extra parameter for the iteration function
-	// Always use forward slashes for git filesystem paths
-	extraPath := ""
-	if targetPath != "" {
-		extraPath = targetPath
-		// Ensure forward slashes
-		extraPath = strings.ReplaceAll(extraPath, "\\", "/")
-		if !strings.HasSuffix(extraPath, "/") {
-			extraPath += "/"
-		}
-	}
-
-	log.Printf("[INFO] Starting workflow folder iteration in path '%s' with specific file: '%s'", searchPath, specificFile)
-	iterateWorkflowGithubFolders(fs, dir, extraPath, specificFile, userId, orgId)
-
-	return nil
-}
-
-func LoadSpecificWorkflows(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	// Just need to be logged in
-	// FIXME - should have some permissions?
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("Api authentication failed in load apps: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if user.Role != "admin" {
-		log.Printf("Wrong user (%s) when downloading from github", user.Username)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Downloading remotely requires admin"}`))
-		return
-	}
-
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		log.Printf("Error with body read: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	// Field1 & 2 can be a lot of things..
-	type tmpStruct struct {
-		URL      string `json:"url"`
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Branch   string `json:"branch"`
-	}
-	//log.Printf("Body: %s", string(body))
-
-	var tmpBody tmpStruct
-	err = json.Unmarshal(body, &tmpBody)
-	if err != nil {
-		log.Printf("Error with unmarshal tmpBody: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	// Field3 = branch
-	err = loadGithubWorkflows(tmpBody.URL, tmpBody.Username, tmpBody.Password, user.Id, tmpBody.Branch, user.ActiveOrg.Id)
-	if err != nil {
-		log.Printf("Failed to update workflows: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
-}
-
-// Onlyname is used to
-func iterateWorkflowGithubFolders(fs billy.Filesystem, dir []os.FileInfo, extra string, onlyname, userId, orgId string) error {
-	var err error
-	secondsOffset := 0
-
-	// sort file names
-	filenames := []string{}
-	for _, file := range dir {
-		filename := file.Name()
-		filenames = append(filenames, filename)
-	}
-	sort.Strings(filenames)
-
-	// iterate through sorted filenames
-	for _, filename := range filenames {
-		secondsOffset -= 10
-		if len(onlyname) > 0 && filename != onlyname {
-			continue
-		}
-
-		// Construct full path for stat
-		fullPath := fmt.Sprintf("%s%s", extra, filename)
-		file, err := fs.Stat(fullPath)
-		if err != nil {
-			log.Printf("[DEBUG] Failed to stat file '%s': %s", fullPath, err)
-			continue
-		}
-
-		// Folder?
-		switch mode := file.Mode(); {
-		case mode.IsDir():
-			tmpExtra := fmt.Sprintf("%s%s/", extra, file.Name())
-			dir, err := fs.ReadDir(tmpExtra)
-			if err != nil {
-				log.Printf("Failed to read dir: %s", err)
-				continue
-			}
-
-			// Go routine? Hmm, this can be super quick I guess
-			err = iterateWorkflowGithubFolders(fs, dir, tmpExtra, "", userId, orgId)
-			if err != nil {
-				continue
-			}
-		case mode.IsRegular():
-			// Check the file
-			if strings.HasSuffix(filename, ".json") {
-				path := fmt.Sprintf("%s%s", extra, file.Name())
-				fileReader, err := fs.Open(path)
-				if err != nil {
-					log.Printf("Error reading file: %s", err)
-					continue
-				}
-
-				readFile, err := ioutil.ReadAll(fileReader)
-				if err != nil {
-					log.Printf("Error reading file: %s", err)
-					continue
-				}
-
-				var workflow Workflow
-				err = json.Unmarshal(readFile, &workflow)
-				if err != nil {
-					continue
-				}
-
-				// rewrite owner to user who imports now
-				if userId != "" {
-					workflow.Owner = userId
-				}
-
-				workflow.ID = uuid.NewV4().String()
-				workflow.OrgId = orgId
-				workflow.ExecutingOrg = OrgMini{
-					Id: orgId,
-				}
-
-				workflow.Org = append(workflow.Org, OrgMini{
-					Id: orgId,
-				})
-				workflow.IsValid = false
-				workflow.Errors = []string{"Imported, not locally saved. Save before using."}
-
-				// Restore app and trigger images
-				ctx := context.Background()
-
-				// Restore app images from app definitions
-				if len(workflow.Actions) > 0 {
-					workflowapps, err := GetAllWorkflowApps(ctx, 1000, 0)
-					if err == nil && len(workflowapps) > 0 {
-						for actionIndex, action := range workflow.Actions {
-							if action.AppID == "" {
-								continue
-							}
-
-							// Find matching app
-							for _, app := range workflowapps {
-								if app.ID == action.AppID && app.AppVersion == action.AppVersion {
-									// Restore app images
-									workflow.Actions[actionIndex].LargeImage = app.LargeImage
-									workflow.Actions[actionIndex].SmallImage = ""
-									if len(app.LargeImage) > 0 {
-										workflow.Actions[actionIndex].SmallImage = app.LargeImage
-									}
-									break
-								} else if app.Name == action.AppName && app.AppVersion == action.AppVersion {
-									// Fallback: match by name and version
-									workflow.Actions[actionIndex].LargeImage = app.LargeImage
-									workflow.Actions[actionIndex].SmallImage = ""
-									if len(app.LargeImage) > 0 {
-										workflow.Actions[actionIndex].SmallImage = app.LargeImage
-									}
-									break
-								}
-							}
-						}
-					}
-				}
-
-				/*
-					// Find existing similar ones
-					q = datastore.NewQuery("workflow").Filter("org_id =", user.ActiveOrg.Id).Filter("name", workflow.name)
-					var workflows []Workflow
-					_, err = dbclient.GetAll(ctx, q, &workflows)
-					if err == nil {
-						log.Printf("Failed getting workflows for user %s: %s", user.Username, err)
-						if len(workflows) == 0 {
-							resp.WriteHeader(200)
-							resp.Write([]byte("[]"))
-							return
-						}
-					}
-				*/
-
-				log.Printf("Import workflow from file: %s", filename)
-				err = SetWorkflow(ctx, workflow, workflow.ID, secondsOffset)
-				if err != nil {
-					log.Printf("Failed setting (download) workflow: %s", err)
-					continue
-				}
-
-				log.Printf("Uploaded workflow %s for user %s and org %s!", filename, userId, orgId)
-			}
-		}
-	}
-
-	return err
 }
 
 func EchoOpenapiData(resp http.ResponseWriter, request *http.Request) {
@@ -32648,23 +32676,12 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 	handledAuth := []string{}
 	timenow := time.Now().Unix() * 1000
-	runtimeLocationName := ""
-	for _, action := range exec.Workflow.Actions {
-		if len(action.Environment) > 0 { 
-			runtimeLocationName = action.Environment
-			break
-		}
-	}
 
 	//log.Printf("\n\n[DEBUG][%s] STARTING VALIDATION WITH %d results and %d actions\n\n", exec.ExecutionId, len(exec.Results), len(workflow.Actions))
 	for _, result := range exec.Results {
 		// FIXME: Skipping anything that outright fails right now
 		if result.Status == "SKIPPED" {
 			continue
-		}
-
-		if len(runtimeLocationName) == 0 && len(result.Action.Environment) > 0 {
-			runtimeLocationName = result.Action.Environment
 		}
 
 		found := false
@@ -32822,12 +32839,6 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 						auth.Validation.Valid = true
 						authUpdated = true
 					}
-
-					// Check if it is more than 10 days ago. If so, update again.
-					tenDaysMicroseconds := int64(432000000)
-					if timenow-auth.Validation.LastValid > tenDaysMicroseconds {
-						authUpdated = true
-					}
 				}
 
 				if authUpdated {
@@ -32837,7 +32848,6 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 						auth.Validation.LastValid = timenow
 					}
 
-					auth.Validation.Environment = runtimeLocationName
 					auth.Validation.WorkflowId = workflow.ID
 					auth.Validation.ExecutionId = exec.ExecutionId
 					auth.Validation.NodeId = result.Action.ID
@@ -33036,7 +33046,6 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 	// Updating the workflow to show the right status every time for now
 	workflowChanged = true
-	workflow.Validation.Environment = runtimeLocationName
 	workflow.Validation.ValidationRan = true
 	workflow.Validation.ExecutionId = exec.ExecutionId
 	if workflowChanged {
@@ -33122,14 +33131,7 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 			}
 		*/
 
-		if strings.ToLower(automation.Name) == "run ai agent" {
-			for optionIndex, option := range automation.Options {
-				if option.Key == "" {
-					automation.Options[optionIndex].Key = "action"
-				}
-			}
-
-		} else if strings.ToLower(automation.Name) == "run workflow" {
+		if strings.ToLower(automation.Name) == "run workflow" {
 			foundWorkflowIds := ""
 			foundWorkflowIdIndex := -1
 
@@ -33149,7 +33151,7 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 
 				wf, err := GetWorkflow(ctx, strings.TrimSpace(workflowId))
 				if err != nil {
-					log.Printf("[WARNING] Failed getting workflow '%s' for automation %d: %s", workflowId, automationId, err)
+					log.Printf("[WARNING] Failed getting workflow '%s' for automation %s: %s", workflowId, automationId, err)
 					continue
 				}
 
@@ -33872,10 +33874,6 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 	appId := ""
 	var err error
 
-	if debug {
-		log.Printf("[DEBUG] Getting prioritised app actions for '%s'", inputApp)
-	}
-
 	if strings.Contains(inputApp, ":") || len(inputApp) == 32 {
 		appnamesplit := strings.Split(inputApp, ":")
 		appId = appnamesplit[0]
@@ -33893,7 +33891,7 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 	}
 
 	if foundApp.ID == "" && len(appName) > 0 {
-		log.Printf("[ERROR] Should find app + actions based on name (not implemented): %#v", appName)
+		log.Printf("[ERROR] Should find app based on name (not implemented)")
 	}
 
 	for _, action := range foundApp.Actions {
@@ -33907,27 +33905,9 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 			continue
 		}
 
-		if len(returnActions) >= maxAmount {
+		if len(returnActions) > maxAmount {
 			break
 		}
-	}
-
-	if len(returnActions) <= maxAmount {
-		for _, action := range foundApp.Actions {
-			if len(returnActions) >= maxAmount {
-				break
-			}
-
-			if action.Name == "custom_action" {
-				continue
-			}
-
-			returnActions = append(returnActions, action)
-		}
-	}
-
-	if debug {
-		log.Printf("[DEBUG] Found %d priority actions for app %#v", len(returnActions), inputApp)
 	}
 
 	return returnActions
@@ -33977,193 +33957,4 @@ func GetDockerClient() (*dockerclient.Client, string, error) {
 	}
 
 	return cli, dockerApiVersion, err
-}
-
-// Syncs content between openapi and shuffle apps 
-// This is due to the generative growth nature of our apps 
-func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *ParsedOpenApi {
-	/*
-	// This doesn't seem to work, and isn't really in use
-	if api.Success == false {
-		if debug { 
-			log.Printf("[DEBUG] Failed to load openapi %#v. Success false.", id)
-		}
-
-		return api
-	}
-	*/
-
-	// Get the app
-	app, err := GetApp(ctx, id, User{}, false)
-	if err != nil {
-		return api
-	}
-
-	if debug { 
-		log.Printf("[DEBUG] Syncing app content labels for app %s", app.ID)
-	}
-
-	swaggerLoader := openapi3.NewSwaggerLoader()
-	swaggerLoader.IsExternalRefsAllowed = true
-	swagger, err := swaggerLoader.LoadSwaggerFromData([]byte(api.Body))
-	if err != nil {
-		log.Printf("[ERROR] Failed to load swagger during fix for ID %#v", id)
-		return api
-	}
-
-	openapiChanged := false
-	appChanged := false
-	for pathIndex, pathItem := range swagger.Paths {
-		if pathItem == nil {
-			continue
-		}
-
-		ops := map[string]*openapi3.Operation{
-			"GET":     pathItem.Get,
-			"POST":    pathItem.Post,
-			"PUT":     pathItem.Put,
-			"DELETE":  pathItem.Delete,
-			"PATCH":   pathItem.Patch,
-			"HEAD":    pathItem.Head,
-			"OPTIONS": pathItem.Options,
-			"TRACE":   pathItem.Trace,
-		}
-
-		for method, op := range ops {
-			if op == nil {
-				continue
-			}
-
-			method := strings.ToLower(method)
-
-			parsedOpId := strings.ToLower(op.OperationID)
-			if !strings.HasPrefix(parsedOpId, method) {
-				parsedOpId = fmt.Sprintf("%s_%s", method, strings.ToLower(op.OperationID))
-			}
-
-			found := false
-			for actionIndex, action := range app.Actions {
-				//parsedActionName := fmt.Sprintf("%s_%s", method, action.Name)
-				parsedActionName := fmt.Sprintf("%s", action.Name)
-				//log.Printf("%s vs %s", parsedActionName, parsedOpId)
-				if parsedActionName != parsedOpId {
-					continue
-				}
-
-				openapiLabels := []string{}
-				if methodLabels, ok := op.ExtensionProps.Extensions["x-label"]; ok {
-					labels := []string{}
-					j, err := json.Marshal(&methodLabels)
-					if err == nil {
-						err = json.Unmarshal(j, &labels)
-						if err != nil {
-							//log.Printf("[ERROR] Failed unmarshalling labels during sync for action %s (1): %s. Value: %#v\n", action.Name, err, j)
-							label := ""
-							err = json.Unmarshal(j, &label)
-							if err == nil {
-								labels = strings.Split(label, ",")
-							}
-						}
-					} else {
-						log.Printf("[ERROR] Failed marshalling labels during sync for action %s (2): %s\n", action.Name, err)
-					}
-
-					if len(labels) > 0 { 
-						openapiLabels = labels 
-					}
-				}
-
-				if len(openapiLabels) != len(action.CategoryLabel) {
-					if debug { 
-						log.Printf("APP DIFF (%s): %#v vs %#v", app.ID, openapiLabels, action.CategoryLabel)
-					}
-
-
-					seen := make(map[string]int)
-					for labelIndex, openapiLabel := range openapiLabels {
-						if strings.ReplaceAll(strings.ToLower(openapiLabel), " ", "_") == "no_label" {
-							openapiChanged = true
-							openapiLabel = "No Label"
-							openapiLabels[labelIndex] = openapiLabel
-						}
-
-						if strings.HasPrefix(openapiLabel, "[") && strings.HasSuffix(openapiLabel, "]") && len(openapiLabel) > 2 {
-							openapiChanged = true
-							openapiLabel = openapiLabel[1:len(openapiLabel)-1]
-							openapiLabels[labelIndex] = openapiLabel
-						}
-
-						seen[openapiLabel] = 1
-					}
-
-					for labelIndex, actionLabel := range action.CategoryLabel {
-						if strings.ReplaceAll(strings.ToLower(actionLabel), " ", "_") == "no_label" {
-							appChanged = true
-							actionLabel = "No Label"
-							action.CategoryLabel[labelIndex] = actionLabel
-						}
-
-						if strings.HasPrefix(actionLabel, "[") && strings.HasSuffix(actionLabel, "]") && len(actionLabel) > 2 {
-							appChanged = true
-							actionLabel = actionLabel[1:len(actionLabel)-1]
-							action.CategoryLabel[labelIndex] = actionLabel
-						}
-
-						if _, ok := seen[actionLabel]; ok {
-							seen[actionLabel] = 0
-						} else {
-							seen[actionLabel] = 2
-						}
-					}
-
-					for key, value := range seen {
-						if strings.ReplaceAll(strings.ToLower(key), " ", "_") == "no_label" {
-							key = "No Label"
-						}
-
-						switch value {
-						case 1:
-							openapiChanged = true
-							action.CategoryLabel = append(action.CategoryLabel, key)
-							app.Actions[actionIndex] = action
-						case 2:
-							appChanged = true
-							openapiLabels = append(openapiLabels, key)
-
-							// Update in openapi
-							op.ExtensionProps.Extensions["x-label"] = openapiLabels
-
-							swagger.Paths[pathIndex].Get = pathItem.Get 
-						}
-					}
-				}
-
-				found = true
-				break
-			}
-
-			if !found {
-				log.Printf("[ERROR] Failed to find operation %s. May be missing sync between app <-> openapi. ID: %s", parsedOpId, id)
-			}
-		}
-	}
-
-	if openapiChanged {
-		api.Success = true
-
-		marshalledSwagger, err := json.Marshal(swagger)
-		if err != nil {
-			log.Printf("[ERROR] Failed marshalling swagger after sync for ID %#v", id)
-		} else {
-			api.Body = string(marshalledSwagger)
-			SetOpenApiDatastore(ctx, app.ID, *api)
-		}
-	}
-
-	if appChanged {
-		SetWorkflowAppDatastore(ctx, *app, app.ID)
-	}
-
-
-	return api
 }
