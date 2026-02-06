@@ -7541,10 +7541,20 @@ Output ONLY a valid JSON list. Do not use Markdown blocks.
 		completionRequest.Store = true
 		completionRequest.MaxCompletionTokens = 5000
 	} else {
-		// For on-prem, we want to use the old method of just max tokens for now as reasoning effort is not supported in some models
-		completionRequest.MaxCompletionTokens = 1024
-	}
+		// For on-prem
+		if maxTokens := os.Getenv("AI_MAX_TOKENS"); maxTokens != "" {
+			maxTokensInt, err := strconv.Atoi(maxTokens)
+			if err == nil {
+				completionRequest.MaxCompletionTokens = maxTokensInt
+			}
+		} else {
+			completionRequest.MaxCompletionTokens = 1024
+		}
 
+		if effort := os.Getenv("AI_REASONING_EFFORT"); effort != "" {
+			completionRequest.ReasoningEffort = effort
+		}
+	}
 
 	initialAgentRequestBody, err := json.MarshalIndent(completionRequest, "", "  ")
 	if err != nil {
