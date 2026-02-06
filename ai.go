@@ -7669,7 +7669,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (8): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent after %d seconds (8): %s"}`, int(client.Timeout.Seconds()), strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)

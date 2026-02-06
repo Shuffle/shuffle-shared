@@ -6,9 +6,14 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"math"
 )
 
 const MaxDepth = 10
+
+// ----------------------
+// Public API
+// ----------------------
 
 func EvalPolicyJSON(policy, oldJSON, newJSON string) (string, bool, string) {
 	var oldDoc, newDoc map[string]any
@@ -32,86 +37,25 @@ func EvalPolicyJSON(policy, oldJSON, newJSON string) (string, bool, string) {
 	return string(resultBytes), true, ""
 }
 
-// findDeletedField returns the path of the first missing field found, or "" if none.
-func findDeletedField(oldVal, newVal any, currentPath string) string {
-	switch o := oldVal.(type) {
-
-	case map[string]any:
-		// Expect new value to also be a map
-		n, ok := newVal.(map[string]any)
-		if !ok {
-			// Type mismatch implies the whole object at 'currentPath' was replaced/deleted
-			return currentPath
-		}
-
-		for k, vOld := range o {
-			vNew, exists := n[k]
-
-			// Format the next path segment
-			nextPath := k
-			if currentPath != "" {
-				nextPath = currentPath + "." + k
-			}
-
-			if !exists {
-				return nextPath // Found it!
-			}
-
-			// Recurse
-			if path := findDeletedField(vOld, vNew, nextPath); path != "" {
-				return path
-			}
-		}
-
-	case []any:
-		n, ok := newVal.([]any)
-		if !ok {
-			return currentPath
-		}
-
-		// If the new array is shorter, we lost items
-		if len(n) < len(o) {
-			if currentPath == "" {
-				return "[]" // Root array truncated
-			}
-			return fmt.Sprintf("%s[%d]", currentPath, len(n)) // Point to the first missing index
-		}
-
-		// Check matching items recursively
-		for i := range o {
-			nextPath := fmt.Sprintf("[%d]", i)
-			if currentPath != "" {
-				nextPath = fmt.Sprintf("%s[%d]", currentPath, i)
-			}
-
-			if path := findDeletedField(o[i], n[i], nextPath); path != "" {
-				return path
-			}
-		}
-	}
-
-	return ""
-}
-
 // ----------------------
 // Core Logic
 // ----------------------
+
 func evalPolicyRules(rules []Rule, oldDoc, newDoc map[string]any) (map[string]any, bool, string) {
-	// ... (Phase 1: Determine Candidate logic remains the same) ...
-	
-	// [COPY_PASTE_YOUR_PHASE_1_CODE_HERE_OR_LEAVE_IT_AS_IS]
-	// Recapping Phase 1 briefly for context:
+	// Default: Overwrite candidate
 	candidate := deepCopyMap(newDoc)
 	ruleMatched := false
 
+	// Phase 1: Determine Candidate
 	for _, r := range rules {
 		if r.Action == ActionOverwrite {
 			if r.Condition == "same_shape" && compareShape(oldDoc, newDoc) {
 				candidate = deepCopyMap(newDoc)
 				ruleMatched = true
-				break
+				break 
 			}
 		} else if r.Action == ActionMerge {
+			// Handle "merge" (implicit true) OR "merge if always"
 			if r.Condition == "true" || r.Condition == "always" {
 				candidate = mergeJSON(oldDoc, newDoc)
 				ruleMatched = true
@@ -126,6 +70,7 @@ func evalPolicyRules(rules []Rule, oldDoc, newDoc map[string]any) (map[string]an
 		}
 	}
 
+	// If explicit rules existed but didn't match, fail.
 	hasPositiveRules := false
 	for _, r := range rules {
 		if r.Action == ActionMerge || r.Action == ActionOverwrite {
@@ -138,13 +83,12 @@ func evalPolicyRules(rules []Rule, oldDoc, newDoc map[string]any) (map[string]an
 		return deepCopyMap(oldDoc), false, "no matching allow rule"
 	}
 
-	// Phase 2: Apply Deny Rules (Guardrails)
+	// Phase 2: Deny Guardrails
 	for _, r := range rules {
 		if r.Action == ActionDeny {
 			if r.Condition == "has_deleted_field" {
-				// NEW: Get the specific path of the deleted field
-				if deletedPath := findDeletedField(oldDoc, candidate, ""); deletedPath != "" {
-					return deepCopyMap(oldDoc), false, fmt.Sprintf("deny: field deletion detected at '%s'", deletedPath)
+				if path := findDeletedField(oldDoc, candidate, ""); path != "" {
+					return deepCopyMap(oldDoc), false, fmt.Sprintf("deny: field deletion detected at '%s'", path)
 				}
 			}
 		}
@@ -154,166 +98,204 @@ func evalPolicyRules(rules []Rule, oldDoc, newDoc map[string]any) (map[string]an
 }
 
 // ----------------------
-// Merge & Check Logic
+// Smart Merge Logic
 // ----------------------
 
-// mergeAllowedFields creates a new doc based on OldDoc, merging ONLY the keys in `allowed` from newDoc.
 func mergeAllowedFields(oldDoc, newDoc map[string]any, allowed []string) map[string]any {
-	// Start with a full copy of OldDoc (preserve everything by default)
 	result := deepCopyMap(oldDoc)
-
 	for _, k := range allowed {
-		newVal, existsInNew := newDoc[k]
-		if !existsInNew {
-			continue // No update for this allowed field
-		}
-
-		oldVal, existsInOld := result[k]
-
-		// Smart Merge:
-		// If both are maps, we merge recursively (to preserve siblings like "a" when updating "b").
-		// If not, we overwrite.
-		if existsInOld {
-			oldMap, oldIsMap := oldVal.(map[string]any)
-			newMap, newIsMap := newVal.(map[string]any)
-			
-			if oldIsMap && newIsMap {
-				// Recursive merge inside the allowed field
-				result[k] = mergeJSON(oldMap, newMap)
-			} else {
-				// Direct replacement (Primitive or Type Change)
-				result[k] = deepCopy(newVal)
+		if newVal, ok := newDoc[k]; ok {
+			if oldVal, exists := result[k]; exists {
+				if oldMap, ok1 := oldVal.(map[string]any); ok1 {
+					if newMap, ok2 := newVal.(map[string]any); ok2 {
+						result[k] = mergeJSON(oldMap, newMap)
+						continue
+					}
+				}
 			}
-		} else {
-			// Injection (Field didn't exist in Old)
 			result[k] = deepCopy(newVal)
 		}
 	}
 	return result
 }
 
-// mergeJSON recursively merges source into target.
-// CHANGE: Arrays are now appended, not replaced.
 func mergeJSON(target, source map[string]any) map[string]any {
 	result := deepCopyMap(target)
 
 	for k, vNew := range source {
 		vOld, exists := result[k]
-
 		if !exists {
-			// New key? Just add it.
 			result[k] = deepCopy(vNew)
 			continue
 		}
 
-		// Check types for recursion
 		oldMap, oldIsMap := vOld.(map[string]any)
 		newMap, newIsMap := vNew.(map[string]any)
-
 		oldSlice, oldIsSlice := vOld.([]any)
 		newSlice, newIsSlice := vNew.([]any)
 
 		if oldIsMap && newIsMap {
-			// both are maps -> recurse
 			result[k] = mergeJSON(oldMap, newMap)
 		} else if oldIsSlice && newIsSlice {
-			// NEW LOGIC: both are arrays -> APPEND
-			// We create a new slice containing Old + New elements
-			combined := make([]any, 0, len(oldSlice)+len(newSlice))
-
-			// Copy old items
-			for _, item := range oldSlice {
-				combined = append(combined, deepCopy(item))
+			// KEYED LIST LOGIC
+			if isKeyedList(oldSlice) || isKeyedList(newSlice) {
+				result[k] = mergeKeyedList(oldSlice, newSlice)
+			} else {
+				// Primitive List -> Overwrite
+				result[k] = deepCopy(vNew)
 			}
-			// Append new items
-			for _, item := range newSlice {
-				combined = append(combined, deepCopy(item))
-			}
-			result[k] = combined
 		} else {
-			// Type mismatch or primitives -> Overwrite
 			result[k] = deepCopy(vNew)
 		}
 	}
 	return result
 }
 
-// hasDeletedField checks if any key present in `original` is missing in `candidate`.
-// It recurses into Maps AND Arrays.
-func hasDeletedField(original, candidate map[string]any) bool {
-	for k, vOld := range original {
-		vNew, exists := candidate[k]
-		if !exists {
-			return true // Key completely missing in the new object
-		}
-
-		// Check if the value itself has internal deletions (nested maps or arrays)
-		if hasDeletedValue(vOld, vNew) {
-			return true
-		}
-	}
-	return false
+func isKeyedList(s []any) bool {
+	if len(s) == 0 { return false }
+	_, ok := getID(s[0])
+	return ok
 }
 
-// hasDeletedValue inspects the values to see if they contain deletions.
-func hasDeletedValue(oldVal, newVal any) bool {
-	switch o := oldVal.(type) {
-
-	// Case 1: The old value is a Map
-	case map[string]any:
-		n, ok := newVal.(map[string]any)
-		if !ok {
-			// Old was a Map, New is NOT a Map (e.g., replaced by string/null).
-			// This implies all fields inside the old map are deleted.
-			// (Unless the old map was empty, technically no fields lost).
-			return len(o) > 0
+// getID robustly handles float/int/string IDs
+func getID(v any) (any, bool) {
+	if m, ok := v.(map[string]any); ok {
+		// Priority 1: "id"
+		if val, found := m["id"]; found {
+			return normalizeID(val), true
 		}
-		// Recurse: Check the keys of this nested map
-		return hasDeletedField(o, n)
-
-	// Case 2: The old value is an Array/Slice
-	case []any:
-		n, ok := newVal.([]any)
-		if !ok {
-			// Old was Array, New is Not. Data loss.
-			return len(o) > 0
+		// Priority 2: "uid"
+		if val, found := m["uid"]; found {
+			return normalizeID(val), true
 		}
+	}
+	return nil, false
+}
 
-		// logic: If the new array is shorter, items (and their fields) were deleted.
-		if len(n) < len(o) {
-			return true
+// normalizeID ensures that 1.0 (float) and 1 (int) are treated as the same key
+func normalizeID(v any) any {
+	switch n := v.(type) {
+	case float64:
+		// If it's a whole number, return it as int to ensure map matching works
+		if n == math.Trunc(n) {
+			return int(n)
 		}
+		return n
+	case int:
+		return int(n)
+	default:
+		return v // strings, etc.
+	}
+}
 
-		// Recurse: Check items pairwise.
-		// We assume standard JSON semantics where indices align.
-		// If you swap items, this might flag false positives/negatives depending on structure,
-		// but for RLS "Anti-Deletion", strict index checking is the safest default.
-		for i := range o {
-			if hasDeletedValue(o[i], n[i]) {
-				return true
-			}
+func mergeKeyedList(oldList, newList []any) []any {
+	// 1. Start with a COPY of the Old List (Preserve History)
+	result := make([]any, len(oldList))
+	
+	// Lookup Map: ID -> Index in Result
+	lookup := make(map[any]int)
+
+	for i, item := range oldList {
+		result[i] = deepCopy(item)
+		if id, ok := getID(item); ok {
+			lookup[id] = i
 		}
 	}
 
-	// Primitives (strings, numbers) do not have "fields", so they can't have deleted fields.
-	return false
+	// 2. Merge in the New Items
+	for _, newItem := range newList {
+		newID, ok := getID(newItem)
+		
+		if ok {
+			if idx, found := lookup[newID]; found {
+				// UPDATE: Merge newItem into the existing result item
+				oldItemMap, _ := result[idx].(map[string]any)
+				newItemMap, _ := newItem.(map[string]any)
+				result[idx] = mergeJSON(oldItemMap, newItemMap)
+				continue
+			}
+		}
+		
+		// APPEND: It's new (or has no ID), so add it
+		result = append(result, deepCopy(newItem))
+		
+		// If it has an ID, add to lookup (handles duplicates in new list)
+		if ok {
+			lookup[newID] = len(result) - 1
+		}
+	}
+	return result
+}
+
+// ----------------------
+// Check Logic (Deletion)
+// ----------------------
+
+func findDeletedField(oldVal, newVal any, currentPath string) string {
+	switch o := oldVal.(type) {
+	case map[string]any:
+		n, ok := newVal.(map[string]any)
+		if !ok { return currentPath }
+		for k, vOld := range o {
+			vNew, exists := n[k]
+			nextPath := k
+			if currentPath != "" { nextPath = currentPath + "." + k }
+			if !exists { return nextPath }
+			if path := findDeletedField(vOld, vNew, nextPath); path != "" { return path }
+		}
+
+	case []any:
+		n, ok := newVal.([]any)
+		if !ok { return currentPath }
+
+		// KEYED MATCHING
+		if len(o) > 0 {
+			if _, hasID := getID(o[0]); hasID {
+				newItemsByID := make(map[any]any)
+				for _, item := range n {
+					if id, ok := getID(item); ok {
+						newItemsByID[id] = item
+					}
+				}
+				for _, oldItem := range o {
+					id, _ := getID(oldItem)
+					newItem, found := newItemsByID[id]
+					nextPath := fmt.Sprintf("%s[id=%v]", currentPath, id)
+					
+					if !found { return nextPath } // ID missing
+					if path := findDeletedField(oldItem, newItem, nextPath); path != "" {
+						return path
+					}
+				}
+				return ""
+			}
+		}
+
+		// POSITIONAL MATCHING
+		if len(n) < len(o) {
+			if currentPath == "" { return "[]" }
+			return fmt.Sprintf("%s[%d]", currentPath, len(n))
+		}
+		for i, vOld := range o {
+			if i >= len(n) { return fmt.Sprintf("%s[%d]", currentPath, i) }
+			vNew := n[i]
+			nextPath := fmt.Sprintf("[%d]", i)
+			if currentPath != "" { nextPath = fmt.Sprintf("%s[%d]", currentPath, i) }
+			if path := findDeletedField(vOld, vNew, nextPath); path != "" { return path }
+		}
+	}
+	return ""
 }
 
 func compareShape(a, b map[string]any) bool {
-	if len(a) != len(b) {
-		return false
-	}
+	if len(a) != len(b) { return false }
 	for k, vA := range a {
 		vB, ok := b[k]
-		if !ok {
-			return false
-		}
+		if !ok { return false }
 		mapA, aIsMap := vA.(map[string]any)
 		mapB, bIsMap := vB.(map[string]any)
 		if aIsMap && bIsMap {
-			if !compareShape(mapA, mapB) {
-				return false
-			}
+			if !compareShape(mapA, mapB) { return false }
 		} else if aIsMap != bIsMap {
 			return false
 		}
@@ -322,7 +304,7 @@ func compareShape(a, b map[string]any) bool {
 }
 
 // ----------------------
-// Policy Parser
+// Parser / Utils
 // ----------------------
 
 type NewAction string
@@ -342,17 +324,14 @@ func parsePolicy(policy string) []Rule {
 	parts := strings.Split(policy, ";")
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
+		if p == "" { continue }
 		fields := strings.Fields(p)
-		if len(fields) < 3 || fields[1] != "if" {
+		if len(fields) == 1 {
+			rules = append(rules, Rule{Action: NewAction(strings.ToLower(fields[0])), Condition: "true"})
 			continue
 		}
-		rules = append(rules, Rule{
-			Action:    NewAction(strings.ToLower(fields[0])),
-			Condition: strings.Join(fields[2:], " "),
-		})
+		if len(fields) < 3 || fields[1] != "if" { continue }
+		rules = append(rules, Rule{Action: NewAction(strings.ToLower(fields[0])), Condition: strings.Join(fields[2:], " ")})
 	}
 	return rules
 }
@@ -360,51 +339,32 @@ func parsePolicy(policy string) []Rule {
 func parseAllowedFields(cond string) []string {
 	start := strings.Index(cond, "[")
 	end := strings.LastIndex(cond, "]")
-	if start == -1 || end == -1 {
-		return nil
-	}
+	if start == -1 || end == -1 { return nil }
 	inner := cond[start+1 : end]
-	if strings.TrimSpace(inner) == "" {
-		return nil
-	}
+	if strings.TrimSpace(inner) == "" { return nil }
 	raw := strings.Split(inner, ",")
 	clean := make([]string, 0, len(raw))
 	for _, s := range raw {
-		s = strings.TrimSpace(s)
-		s = strings.Trim(s, "\"")
-		s = strings.Trim(s, "'")
-		clean = append(clean, s)
+		clean = append(clean, strings.Trim(strings.TrimSpace(s), "\"'"))
 	}
 	return clean
 }
 
-// ----------------------
-// Deep Copy / Utils
-// ----------------------
-
 func deepCopy(v any) any {
 	switch val := v.(type) {
-	case map[string]any:
-		return deepCopyMap(val)
+	case map[string]any: return deepCopyMap(val)
 	case []any:
-		newSlice := make([]any, len(val))
-		for i, item := range val {
-			newSlice[i] = deepCopy(item)
-		}
-		return newSlice
-	default:
-		return val
+		out := make([]any, len(val))
+		for i, item := range val { out[i] = deepCopy(item) }
+		return out
+	default: return val
 	}
 }
 
 func deepCopyMap(m map[string]any) map[string]any {
-	if m == nil {
-		return nil
-	}
+	if m == nil { return nil }
 	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = deepCopy(v)
-	}
+	for k, v := range m { out[k] = deepCopy(v) }
 	return out
 }
 
@@ -412,16 +372,12 @@ func marshalOrdered(v any) ([]byte, error) {
 	switch val := v.(type) {
 	case map[string]any:
 		keys := make([]string, 0, len(val))
-		for k := range val {
-			keys = append(keys, k)
-		}
+		for k := range val { keys = append(keys, k) }
 		sort.Strings(keys)
 		var buf bytes.Buffer
 		buf.WriteString("{")
 		for i, k := range keys {
-			if i > 0 {
-				buf.WriteString(",")
-			}
+			if i > 0 { buf.WriteString(",") }
 			b, _ := json.Marshal(k)
 			buf.Write(b)
 			buf.WriteString(":")
@@ -434,15 +390,12 @@ func marshalOrdered(v any) ([]byte, error) {
 		var buf bytes.Buffer
 		buf.WriteString("[")
 		for i, item := range val {
-			if i > 0 {
-				buf.WriteString(",")
-			}
+			if i > 0 { buf.WriteString(",") }
 			valBytes, _ := marshalOrdered(item)
 			buf.Write(valBytes)
 		}
 		buf.WriteString("]")
 		return buf.Bytes(), nil
-	default:
-		return json.Marshal(v)
+	default: return json.Marshal(v)
 	}
 }

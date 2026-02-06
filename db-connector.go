@@ -13383,7 +13383,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						newDoc := cacheData.Value
 						mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
 						if debug { 
-							log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. Merged: %#v.\n\nError: %#v", foundRule, allowed, mergedJSON, errString)
+							log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. .\n\nError: %#v", foundRule, allowed, errString)
 						}
 
 						if allowed {
@@ -13809,9 +13809,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						continue
 					}
 
-					if debug {
-						log.Printf("[DEBUG] Found automation '%s' to run (2). Value: '%s'", automation.Name, automation.Options[0].Value)
-					}
+					//if debug {
+					//	log.Printf("[DEBUG] Found automation '%s' to run (2). Value: '%s'", automation.Name, automation.Options[0].Value)
+					//}
 
 					// Run the automation
 					// This should make a notification if it fails

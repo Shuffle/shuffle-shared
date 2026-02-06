@@ -1157,6 +1157,9 @@ type Defaults struct {
 type DatastoreAutomationOption struct {
 	Key   string `json:"key" datastore:"key"`
 	Value string `json:"value" datastore:"value,noindex"`
+
+	Description string `json:"description" datastore:"description"`
+	Disabled    bool   `json:"disabled" datastore:"disabled"`
 }
 
 type DatastoreAutomation struct {

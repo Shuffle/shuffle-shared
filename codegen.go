@@ -4865,18 +4865,39 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 
 	} else if parsedName == "run_ai_agent" {
 		log.Printf("[DEBUG] Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
-
 		if len(foundApikey) == 0 {
 			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
 			return errors.New("No admin user with API key found")
 		}
 
 		// Already handled check
-		for index, option := range automation.Options { 
-			agentTagName := fmt.Sprintf("agent-%s-%d", option.Key, index)
+		for _, option := range automation.Options { 
+			// 'remove' icon in the UI does this
+			if option.Disabled {
+				continue
+			}
+
+			if len(option.Value) < 10 {
+				log.Printf("Actions too short: %s - skipping", option.Key)
+				continue
+			}
+
+			agentTagName := fmt.Sprintf("agent-%s", option.Key)
 			if ArrayContains(cacheData.Tags, agentTagName) {
 				continue
 			}
+
+			// As a fallback in case of slow datastore update
+			// Prevents super quick reruns
+			cacheName := fmt.Sprintf("%s_%s_%s_%s", cacheData.Key, cacheData.Category, cacheData.OrgId, option.Key)
+			_, err := GetCache(ctx, cacheName)
+			if err == nil {
+				//log.Printf("[DEBUG] Cache hit for %s - skipping to avoid re-running agent", cacheName)
+				continue
+			}
+
+			SetCache(ctx, cacheName, []byte("1"), 3)
+
 
 			if !strings.Contains(option.Key, "action") { 
 				log.Printf("[WARNING] Agent option key %s does not contain 'action' - skipping to avoid confusion. This may cause the agent to not run if no other options are present.", option.Key)
