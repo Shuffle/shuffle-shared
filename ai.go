@@ -7531,10 +7531,20 @@ Output ONLY a valid JSON list. Do not use Markdown blocks.
 
 		// Reasoning control
 		//ReasoningEffort: "medium", // old
-		MaxCompletionTokens: 5000,
-		ReasoningEffort:     agentReasoningEffort,
-		Store:               true,
+		// MaxCompletionTokens: 5000,
+		// ReasoningEffort:     agentReasoningEffort,
+		// Store:               true,
 	}
+
+	if project.Environment == "cloud" {
+		completionRequest.ReasoningEffort = agentReasoningEffort
+		completionRequest.Store = true
+		completionRequest.MaxCompletionTokens = 5000
+	} else {
+		// For on-prem, we want to use the old method of just max tokens for now as reasoning effort is not supported in some models
+		completionRequest.MaxCompletionTokens = 1024
+	}
+
 
 	initialAgentRequestBody, err := json.MarshalIndent(completionRequest, "", "  ")
 	if err != nil {
