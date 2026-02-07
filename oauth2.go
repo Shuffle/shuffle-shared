@@ -3561,6 +3561,11 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		return appAuth, fmt.Errorf("Missing oauth2 fields. Required: token_uri, client_id, client_secret, scopes")
 	}
 
+	zscalerAuth := strings.Contains(tokenUrl, ".zslogin.net")
+	if zscalerAuth && len(scope) == 0 {
+		scope = "https://api.zscaler.com"
+	}
+
 	refreshData := fmt.Sprintf("grant_type=client_credentials")
 	if len(grantType) > 0 {
 		refreshData = fmt.Sprintf("grant_type=%s", grantType)
@@ -3579,8 +3584,17 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		refreshData += fmt.Sprintf("&client_secret=%s", clientSecret)
 	}
 
+	if grantType == "client_credentials" && zscalerAuth {
+		refreshData += fmt.Sprintf("&client_id=%s", clientId)
+		refreshData += fmt.Sprintf("&client_secret=%s", clientSecret)
+	}
+
 	if len(scope) > 0 {
-		refreshData += fmt.Sprintf("&scope=%s", strings.Replace(scope, ",", " ", -1))
+		if zscalerAuth {
+			refreshData += fmt.Sprintf("&audience=%s", strings.Replace(scope, ",", " ", -1))
+		} else {
+			refreshData += fmt.Sprintf("&scope=%s", strings.Replace(scope, ",", " ", -1))
+		}
 	}
 
 	if strings.Contains(refreshData, "user_impersonation") && strings.Contains(refreshData, "azure") && !strings.Contains(refreshData, "resource=") {
@@ -3603,7 +3617,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	}
 
 	// Basic auth handler for client_credentials. May not always be the case, it's currently used by default
-	if grantType == "client_credentials" {
+	if grantType == "client_credentials" && !zscalerAuth {
 		authHeader := fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", clientId, clientSecret))))
 		req.Header.Set("Authorization", authHeader)
 	}
@@ -3640,6 +3654,11 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 			refreshData += fmt.Sprintf("&audience=%s", strings.Replace(scope, ",", " ", -1))
 			req.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(refreshData)))
 			req.ContentLength = int64(len(refreshData))
+
+			if !zscalerAuth {
+				authHeader := fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", clientId, clientSecret))))
+				req.Header.Set("Authorization", authHeader)
+			}
 
 			newresp, err = client.Do(req)
 			if err != nil {
