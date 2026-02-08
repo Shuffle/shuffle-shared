@@ -28979,7 +28979,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 		}
 	}
 
-	transport := http.DefaultTransport.(*http.Transport)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConnsPerHost = 100
 	transport.ResponseHeaderTimeout = time.Second * 60
 	transport.IdleConnTimeout = time.Second * 60

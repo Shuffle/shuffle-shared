@@ -726,7 +726,7 @@ func GetEsConfig(defaultCreds bool) *opensearchapi.Client {
 
 	//config.Transport.TLSClientConfig
 	//transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport := http.DefaultTransport.(*http.Transport)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConnsPerHost = 100
 	transport.ResponseHeaderTimeout = time.Second * 10
 	transport.Proxy = nil
