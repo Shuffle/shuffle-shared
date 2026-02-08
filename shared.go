@@ -139,7 +139,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"http://localhost:3002",
 			"http://localhost:3000",
 
-			// For a frontend test project 
+			// For a frontend test project
 			"https://cases.shuffler.io",
 			"https://security.shuffler.io",
 			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
@@ -265,15 +265,16 @@ func ConstructSessionCookie(value string, expires time.Time) *http.Cookie {
 	}
 
 	d := os.Getenv("SHUFFLE_COOKIE_DOMAIN")
-	if len(d) > 0 {
-		c.Domain = d
-	}
 
 	if project.Environment == "cloud" {
 		c.Domain = ".shuffler.io"
 		c.Secure = true
 		//c.SameSite = http.SameSiteLaxMode
 		c.SameSite = http.SameSiteNoneMode
+	}
+
+	if len(d) > 0 {
+		c.Domain = d
 	}
 
 	return &c
@@ -3397,7 +3398,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		userdata, err := GetApikey(ctx, apikeyCheck[1])
 		if err != nil {
 			// Due to execution auth
-			if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") { 
+			if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") {
 				log.Printf("[WARNING] Apikey %s doesn't exist. URL: %#v: %s", apikey, request.URL.String(), err)
 			}
 
@@ -11731,8 +11732,9 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		OrgId     string `json:"org_id" datastore:"org_id"`
 		RegionUrl string `json:"region_url" datastore:"region_url"`
 		// SSO       bool   `json:"sso"`
-		SSO  bool   `json:"sso_test"`
-		Mode string `json:"mode"`
+		SSOTest bool   `json:"sso_test"`
+		SSO     bool   `json:"sso"`
+		Mode    string `json:"mode"`
 	}
 
 	var tmpData ReturnData
@@ -11742,6 +11744,11 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	if tmpData.SSOTest || tmpData.SSO {
+		tmpData.SSOTest = true
+		tmpData.SSO = true
 	}
 
 	var fileId string
@@ -14513,7 +14520,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		appReturn.OpenAPI = openapidata
 	}
 
-
 	// Should add it to their cache in the background
 	go updateOrgAppCache(*app, user)
 
@@ -15565,7 +15571,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Had to set this due to session hashing rollback 
+	// Had to set this due to session hashing rollback
 	if len(userdata.Session) != 0 && len(userdata.Session) == 36 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(8 * time.Hour)
@@ -16184,22 +16190,22 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	if sendRequest && len(resultData) > 0 {
 		//log.Printf("[INFO][%s] Should send subflow request to backendURL %s. Data: %s!", executionParent, backendUrl, string(resultData))
 
-	//	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
-	//		backendUrl = os.Getenv("BASE_URL")
+		//	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
+		//		backendUrl = os.Getenv("BASE_URL")
 
-	//		if project.Environment == "cloud" {
-	//			backendUrl = "https://shuffler.io"
-	//
-	//			if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
-	//				backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
-	//			}
-	//
-	//			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-	//				backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	//			}
-	//
-	//		}
-	//	}
+		//		if project.Environment == "cloud" {
+		//			backendUrl = "https://shuffler.io"
+		//
+		//			if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		//				backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+		//			}
+		//
+		//			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		//				backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		//			}
+		//
+		//		}
+		//	}
 
 		streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
 		req, err := http.NewRequest(
@@ -20069,7 +20075,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 		if tmpData.OrgId != fileId {
 			if fileId == "" {
-				fileId = tmpData.OrgId 
+				fileId = tmpData.OrgId
 			} else {
 				log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
 				resp.WriteHeader(401)
@@ -20212,7 +20218,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		executionId = workflowExecution.ExecutionId
 	}
 
-	//if debug { 
+	//if debug {
 	//	log.Printf("\n\n[DEBUG] Getting key '%s' from category '%s'\n\n", tmpData.Key, tmpData.Category)
 	//}
 
@@ -20446,7 +20452,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 			Category: tmpDataOverride.Category,
 			Tags:     tmpDataOverride.Tags,
 
-			Value:    parsedValue,
+			Value: parsedValue,
 		})
 	}
 
@@ -20778,7 +20784,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		return workflowExecution, err
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] Action: %#v (%s)", action.Name, action.AppID)
 	}
 
@@ -33271,7 +33277,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	timenow := time.Now().Unix() * 1000
 	runtimeLocationName := ""
 	for _, action := range exec.Workflow.Actions {
-		if len(action.Environment) > 0 { 
+		if len(action.Environment) > 0 {
 			runtimeLocationName = action.Environment
 			break
 		}
@@ -34600,18 +34606,18 @@ func GetDockerClient() (*dockerclient.Client, string, error) {
 	return cli, dockerApiVersion, err
 }
 
-// Syncs content between openapi and shuffle apps 
-// This is due to the generative growth nature of our apps 
+// Syncs content between openapi and shuffle apps
+// This is due to the generative growth nature of our apps
 func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *ParsedOpenApi {
 	/*
-	// This doesn't seem to work, and isn't really in use
-	if api.Success == false {
-		if debug { 
-			log.Printf("[DEBUG] Failed to load openapi %#v. Success false.", id)
-		}
+		// This doesn't seem to work, and isn't really in use
+		if api.Success == false {
+			if debug {
+				log.Printf("[DEBUG] Failed to load openapi %#v. Success false.", id)
+			}
 
-		return api
-	}
+			return api
+		}
 	*/
 
 	// Get the app
@@ -34620,7 +34626,7 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 		return api
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] Syncing app content labels for app %s", app.ID)
 	}
 
@@ -34689,16 +34695,15 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 						log.Printf("[ERROR] Failed marshalling labels during sync for action %s (2): %s\n", action.Name, err)
 					}
 
-					if len(labels) > 0 { 
-						openapiLabels = labels 
+					if len(labels) > 0 {
+						openapiLabels = labels
 					}
 				}
 
 				if len(openapiLabels) != len(action.CategoryLabel) {
-					if debug { 
+					if debug {
 						log.Printf("APP DIFF (%s): %#v vs %#v", app.ID, openapiLabels, action.CategoryLabel)
 					}
-
 
 					seen := make(map[string]int)
 					for labelIndex, openapiLabel := range openapiLabels {
@@ -34710,7 +34715,7 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 
 						if strings.HasPrefix(openapiLabel, "[") && strings.HasSuffix(openapiLabel, "]") && len(openapiLabel) > 2 {
 							openapiChanged = true
-							openapiLabel = openapiLabel[1:len(openapiLabel)-1]
+							openapiLabel = openapiLabel[1 : len(openapiLabel)-1]
 							openapiLabels[labelIndex] = openapiLabel
 						}
 
@@ -34726,7 +34731,7 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 
 						if strings.HasPrefix(actionLabel, "[") && strings.HasSuffix(actionLabel, "]") && len(actionLabel) > 2 {
 							appChanged = true
-							actionLabel = actionLabel[1:len(actionLabel)-1]
+							actionLabel = actionLabel[1 : len(actionLabel)-1]
 							action.CategoryLabel[labelIndex] = actionLabel
 						}
 
@@ -34754,7 +34759,7 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 							// Update in openapi
 							op.ExtensionProps.Extensions["x-label"] = openapiLabels
 
-							swagger.Paths[pathIndex].Get = pathItem.Get 
+							swagger.Paths[pathIndex].Get = pathItem.Get
 						}
 					}
 				}
@@ -34784,7 +34789,6 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 	if appChanged {
 		SetWorkflowAppDatastore(ctx, *app, app.ID)
 	}
-
 
 	return api
 }

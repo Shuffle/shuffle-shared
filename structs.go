@@ -3052,9 +3052,14 @@ type Oauth2Resp struct {
 }
 
 type OpenidUserinfo struct {
-	Sub   string   `json:"sub"`
-	Email string   `json:"email"`
-	Roles []string `json:"roles"`
+	Sub           string   `json:"sub"`
+	Email         string   `json:"email"`
+	EmailVerified bool     `json:"email_verified"`
+	Roles         []string `json:"roles"`
+	Groups        []string `json:"groups"`
+	RealmAccess   struct {
+		Roles []string `json:"roles"`
+	} `json:"realm_access"` // Keycloak format
 }
 
 type OpenidResp struct {

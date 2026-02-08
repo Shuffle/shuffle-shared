@@ -4216,21 +4216,9 @@ func fetchWellKnownConfig(ctx context.Context, issuer string, openIdAuthUrl stri
 	return config, nil
 }
 
-// IdTokenClaims represents the claims extracted from a verified ID token
-type IdTokenClaims struct {
-	Sub           string   `json:"sub"`
-	Email         string   `json:"email"`
-	EmailVerified bool     `json:"email_verified"`
-	Roles         []string `json:"roles"`
-	Groups        []string `json:"groups"`
-	RealmAccess   struct {
-		Roles []string `json:"roles"`
-	} `json:"realm_access"` // Keycloak format
-}
-
-// VerifyIdTokenWithOIDC verifies an ID token using the go-oidc library and extracts roles
+// VerifyIdTokenWithOIDC verifies an ID token using the go-oidc library and extracts claims
 // This performs proper signature verification via JWKS, expiry check, issuer and audience validation
-func VerifyIdTokenWithOIDC(ctx context.Context, idToken string, issuer string, clientID string) (*IdTokenClaims, error) {
+func VerifyIdTokenWithOIDC(ctx context.Context, idToken string, issuer string, clientID string) (*OpenidUserinfo, error) {
 	if idToken == "" {
 		return nil, fmt.Errorf("id token is empty")
 	}
@@ -4259,7 +4247,7 @@ func VerifyIdTokenWithOIDC(ctx context.Context, idToken string, issuer string, c
 	}
 
 	// Extract claims
-	var claims IdTokenClaims
+	var claims OpenidUserinfo
 	if err := token.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("failed to extract claims from ID token: %w", err)
 	}
