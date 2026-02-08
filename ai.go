@@ -52,6 +52,18 @@ var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
 var docsVectorStoreID = os.Getenv("OPENAI_DOCS_VS_ID")
 var assistantModel = model
 
+var aiMaxTokens = 1024 // Default for on-prem
+var aiReasoningEffort = ""
+
+func init() {
+	if tok := os.Getenv("AI_MAX_TOKENS"); tok != "" {
+		if t, err := strconv.Atoi(tok); err == nil {
+			aiMaxTokens = t
+		}
+	}
+	aiReasoningEffort = os.Getenv("AI_REASONING_EFFORT")
+}
+
 // Provide an incident triage and response plan for the reported incident finding. Make a short list of actions to perform in the following format: [{"title": "Title of the task", "category": "triage/containment/recovery/communication/documentation", "completed": false, "createdBy": "ai-agent@shuffler.io"}]. ONLY output as JSON array and nothing more. After the list is made, add these to the metadata.extensions.custom_attributes.tasks[] in the next action.
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
@@ -7586,10 +7598,10 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	// FIXME: Resetting auth as it should auto-pick (if possible)
 	aiNode.AuthenticationId = ""
 	aiNode.Parameters = []WorkflowAppActionParameter{
-		WorkflowAppActionParameter{
-			Name:  "url",
-			Value: "",
-		},
+		// WorkflowAppActionParameter{
+		// 	Name:  "url",
+		// 	Value: "",
+		// },
 		//WorkflowAppActionParameter{
 		//	Name:  "apikey",
 		//	Value: "",
