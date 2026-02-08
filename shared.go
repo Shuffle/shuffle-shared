@@ -20794,6 +20794,53 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 	}
 
+    // Fallback to inject AI creds if the user don't have any
+	if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
+		apiKey := os.Getenv("AI_API_KEY")
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		}
+
+		apiUrl := os.Getenv("AI_API_URL")
+		if apiUrl == "" {
+			apiUrl = os.Getenv("OPENAI_API_URL")
+		}
+		if apiUrl == "" {
+			apiUrl = "https://api.openai.com"
+		}
+
+		if len(apiKey) > 0 {
+			// TODO: Track actual token usage from response
+
+			urlFound := false
+			apikeyFound := false
+			for i, param := range action.Parameters {
+				if param.Name == "url" {
+					action.Parameters[i].Value = apiUrl // Don't trust the user provided url, use the one from the env 
+					urlFound = true
+				}
+				if param.Name == "apikey" {
+					action.Parameters[i].Value = apiKey 
+					action.Parameters[i].Configuration = true
+					apikeyFound = true
+				}
+			}
+			if !urlFound {
+				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					Name:  "url",
+					Value: apiUrl,
+				})
+			}
+			if !apikeyFound {
+				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					Name:          "apikey",
+					Value:         apiKey,
+					Configuration: true,
+				})
+			}
+		}
+	}
+
 	if runValidationAction {
 		log.Printf("\n\n[INFO] SHOULD BE Running validation action for %s for org %s (%s)\n\n", app.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
