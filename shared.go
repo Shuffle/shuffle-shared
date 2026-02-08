@@ -16303,6 +16303,44 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		return errors.New(fmt.Sprintf("No result in %s request for agent", status))
 	}
 
+	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
+		// Check if this workflow is running in different env (not cloud)
+		fullExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+		if err != nil {
+			log.Printf("[WARNING][%s] Failed getting full execution for AI Agent redeployment: %s", workflowExecution.ExecutionId, err)
+		} else {
+			// Get the AI Agent node's environment - Is that where the worker is waiting ?
+			agentEnvironment := actionResult.Action.Environment
+
+			if strings.ToLower(agentEnvironment) != "cloud" && agentEnvironment != "" {
+				log.Printf("[INFO][%s] AI Agent finished (status: %s). Redeploying workflow to env '%s' with MAX priority",
+					workflowExecution.ExecutionId, status, agentEnvironment)
+
+				executionRequest := ExecutionRequest{
+					ExecutionId:   fullExecution.ExecutionId,
+					WorkflowId:    fullExecution.Workflow.ID,
+					Authorization: fullExecution.Authorization,
+					Environments:  []string{agentEnvironment},
+					Priority:      11, // I'm assuming 11 is the max priority
+				}
+
+				parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(agentEnvironment, " ", "-"), "_", "-")), fullExecution.ExecutionOrg)
+
+				log.Printf("[INFO][%s] Redeploying workflow to queue: %s with priority %d", fullExecution.ExecutionId, parsedEnv, executionRequest.Priority)
+				// log.Printf("[DEBUG] AI Agent finished - REDEPLOYING workflow to Queue: '%s' (Priority: %d). Original Env: '%s', Org: '%s'", parsedEnv, executionRequest.Priority, agentEnvironment, fullExecution.ExecutionOrg)
+
+				err = SetWorkflowQueue(ctx, executionRequest, parsedEnv)
+				if err != nil {
+					log.Printf("[ERROR][%s] Failed redeploying workflow after AI Agent completion to env %s: %s", fullExecution.ExecutionId, parsedEnv, err)
+				} else {
+					log.Printf("[DEBUG][%s] Successfully redeployed workflow to %s after AI Agent completion", workflowExecution.ExecutionId, parsedEnv)
+				}
+			} else {
+				log.Printf("[DEBUG][%s] AI Agent finished (env: %s), no redeployment needed (cloud or empty env).", workflowExecution.ExecutionId, agentEnvironment)
+			}
+		}
+	}
+
 	return nil
 }
 
