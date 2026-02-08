@@ -20794,7 +20794,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 	}
 
-    // Fallback to inject AI creds if the user don't have any
+	// Fallback to inject AI creds if the user don't have any
 	if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
 		apiKey := os.Getenv("AI_API_KEY")
 		if apiKey == "" {
@@ -20810,17 +20810,17 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 		if len(apiKey) > 0 {
-			// TODO: Track actual token usage from response
+			// TODO: Track actual token usage from response	
 
 			urlFound := false
 			apikeyFound := false
 			for i, param := range action.Parameters {
 				if param.Name == "url" {
-					action.Parameters[i].Value = apiUrl // Don't trust the user provided url, use the one from the env 
+					action.Parameters[i].Value = apiUrl // Don't trust the user provided url, use the one from the env
 					urlFound = true
 				}
 				if param.Name == "apikey" {
-					action.Parameters[i].Value = apiKey 
+					action.Parameters[i].Value = apiKey
 					action.Parameters[i].Configuration = true
 					apikeyFound = true
 				}
@@ -20838,6 +20838,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 					Configuration: true,
 				})
 			}
+			log.Printf("[AUDIT] Injected system OpenAI credentials (fallback) for org %s", user.ActiveOrg.Id)
 		}
 	}
 

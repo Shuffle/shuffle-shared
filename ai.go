@@ -7013,6 +7013,23 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	ctx := context.Background()
 
+	// Validate On-Prem Configuration immediately
+	if project.Environment != "cloud" {
+		if os.Getenv("AI_MODEL") == "" && os.Getenv("OPENAI_MODEL") == "" {
+			err := errors.New("AI Configuration Error: AI_MODEL or OPENAI_MODEL environment variable must be set for On-Premise AI Agent execution.")
+			log.Printf("[ERROR] %v", err)
+
+			execution.Status = "ABORTED"
+			execution.Results = append(execution.Results, ActionResult{
+				Status: "ABORTED",
+				Result: fmt.Sprintf(`{"success": false, "reason": "%s"}`, err.Error()),
+				Action: startNode,
+			})
+			go SetWorkflowExecution(ctx, execution, true)
+			return startNode, err
+		}
+	}
+
 	systemMessage := "" // Handled further down now
 	userMessage := ""
 
@@ -7225,7 +7242,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				break
 			}
 
-			//if debug { 
+			//if debug {
 			//	log.Printf("[DEBUG] DECISIONS: %s", string(marshalledDecisions))
 			//}
 
@@ -7512,8 +7529,17 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 	}
 
+	// Set model based on environment
+	aiModel := "gpt-5-mini"
+	if project.Environment != "cloud" {
+		aiModel = os.Getenv("AI_MODEL")
+		if aiModel == "" {
+			aiModel = os.Getenv("OPENAI_MODEL")
+		}
+	}
+
 	completionRequest := openai.ChatCompletionRequest{
-		Model: "gpt-5-mini",
+		Model: aiModel,
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
@@ -7535,9 +7561,21 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		// Reasoning control
 		//ReasoningEffort: "medium", // old
-		MaxCompletionTokens: 5000,
-		ReasoningEffort:     agentReasoningEffort,
-		Store:               true,
+		// MaxCompletionTokens: 5000,
+		// ReasoningEffort:     agentReasoningEffort,
+		// Store:               true,
+	}
+
+	if project.Environment == "cloud" {
+		completionRequest.ReasoningEffort = agentReasoningEffort
+		completionRequest.Store = true
+		completionRequest.MaxCompletionTokens = 5000
+	} else {
+		// For on-prem
+		completionRequest.MaxCompletionTokens = aiMaxTokens
+		if aiReasoningEffort != "" {
+			completionRequest.ReasoningEffort = aiReasoningEffort
+		}
 	}
 
 	if len(marshalledDecisions) > 4 { 
