@@ -7,7 +7,7 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/hex"
-	"encoding/json"
+//	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"github.com/goccy/go-json"
 
 	runtimeDebug "runtime/debug"
 
@@ -886,6 +887,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 		wrapped := ExecWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
+		//err = gojson.Unmarshal(respBody, &wrapped)
 		if err != nil && len(wrapped.Source.ExecutionId) == 0 {
 			return workflowExecution, err
 		}
@@ -3527,7 +3529,12 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
-			return stats, errors.New(fmt.Sprintf("Org stats for %s doesn't exist", orgId))
+			//return stats, errors.New(fmt.Sprintf("Org stats for %s doesn't exist", orgId))
+			_, err := GetOrg(ctx, orgId)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get org(%s) for org_stats creation", orgId)
+				return stats, errors.New(fmt.Sprintf("Org not found to create org stats"))
+			}
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
@@ -4070,6 +4077,10 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 
 	setOrg := false
 	if project.DbType == "opensearch" {
+		if len(id) == 0 {
+			return &Org{}, errors.New("Empty org id")
+		}
+
 		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
 			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
 			DocumentID: id,
@@ -17915,6 +17926,7 @@ func InitOpensearchIndexes() {
 		GetESIndexPrefix("workflowapp"),
 		GetESIndexPrefix("workflow"),
 		GetESIndexPrefix("workflow_revisions"),
+		GetESIndexPrefix("datastore_category"),
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")

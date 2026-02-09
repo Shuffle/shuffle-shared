@@ -48,7 +48,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
+//	"encoding/json"
+	"github.com/goccy/go-json"
 
 	"os/exec"
 	"runtime"
