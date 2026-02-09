@@ -695,8 +695,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 	//log.Printf("[DEBUG] Creating notification for org '%s'", orgId)
 	notifications, err := GetOrgNotifications(ctx, orgId)
 	if err != nil {
-		log.Printf("\n\n\n[ERROR] Failed getting org notifications for %s: %s", orgId, err)
-		return err
+		log.Printf("[ERROR] Failed getting org notifications for %s: %s", orgId, err)
 	}
 
 	matchingNotifications := []Notification{}
