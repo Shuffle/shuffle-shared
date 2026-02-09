@@ -1745,6 +1745,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 				//} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
 			} else if (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") && (innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent") {
+				if workflowExecution.Results[resultIndex].StartedAt == 0 {
+					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMicro()
+				}
 
 				// Auto fixing decision data based on cache for better decisionmaking
 				// Map the result into AgentOutput to check decisions
@@ -1864,10 +1867,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 				}
 
-				if debug { 
-					log.Printf("[DEBUG][%s] Finished decisions for agent action %s: %v out of %v", workflowExecution.ExecutionId, action.ID, len(finishedDecisions), len(mappedOutput.Decisions))
-				}
-
 				if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
 
 					// Check if requests was recently sent or not
@@ -1911,7 +1910,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							sendAgentActionSelfRequest("WAITING", workflowExecution, workflowExecution.Results[resultIndex])
 						}()
 					}
-
+				} else if (result.Status == "" || result.Status == "WAITING") && mappedOutput.Status == "FINISHED" {
+					workflowExecution.Results[resultIndex].Status = "SUCCESS"
+					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 				}
 
 				if decisionsUpdated {

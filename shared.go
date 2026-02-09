@@ -16568,7 +16568,12 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	actionResult.ExecutionId = workflowExecution.ExecutionId
 	actionResult.Authorization = workflowExecution.Authorization
 	actionResult.Status = status
-	actionResult.CompletedAt = time.Now().Unix()
+
+	timenow := time.Now().UnixMicro()
+	if actionResult.StartedAt == 0 {
+		actionResult.StartedAt = timenow
+	}
+	actionResult.CompletedAt = timenow
 
 	baseUrl := fmt.Sprintf("https://shuffler.io")
 	if len(os.Getenv("BASE_URL")) > 0 {
@@ -21246,13 +21251,16 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 				// Mapping to internal so the execution itself is not referencable
 				if project.Environment == "cloud" {
-					workflowExecution.ExecutionOrg = "INTERNAL"
-					workflowExecution.Workflow.OrgId = "INTERNAL"
+					workflow.ID = "INTERNAL"
 					workflow.OrgId = "INTERNAL"
 					workflow.ExecutingOrg = OrgMini{
 						Name: "INTERNAL",
 						Id: "INTERNAL",
 					}
+
+					workflowExecution.Workflow = workflow
+					workflowExecution.ExecutionOrg = "INTERNAL"
+					workflowExecution.Workflow.OrgId = "INTERNAL"
 				}
 			}
 		}
