@@ -23712,6 +23712,37 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						for key, value := range mappedArgument {
 							// Handles special case for Continuing an existing Agent run by modifying the "finish" action
 							log.Printf("[DEBUG][%s] Handling key '%s' with value '%s' during agentic decision handling. findContinue: %#v", oldExecution.ExecutionId, key, value, findContinue)
+							if key == "approve" && decision.RunDetails.Status == "WAITING" && (decision.Category == "singul" || decision.Category == "standalone") {
+								log.Printf("[INFO][%s] Approving decision '%s' with value '%s' during agentic decision handling. This will finish the decision and the execution if it's a standalone decision.", oldExecution.ExecutionId, key, value)
+
+								if value == "true" {
+									unmarshalledDecision.Status = "RUNNING"
+
+									decision.RunDetails.Status = "RUNNING"
+									decision.Fields = append(decision.Fields, Valuereplace{
+										Key:    "approve",
+										Value:  fmt.Sprintf("Approved to continue by %s at %d", oldExecution.ExecutionId, time.Now().Unix()),
+									})
+
+									fieldsChanged = true
+									cleanupFailures = true
+								} else if value == "false" { 
+									decision.RunDetails.Status = "FINISHED"
+									decision.Fields = append(decision.Fields, Valuereplace{
+										Key:    "approve",
+										Value:  fmt.Sprintf("Denied to continue by %s at %d", oldExecution.ExecutionId, time.Now().Unix()),
+									})
+
+									fieldsChanged = true
+									cleanupFailures = true
+								} else {
+									log.Printf("[ERROR][%s] Invalid value for 'approve': %s", oldExecution.ExecutionId, value)
+								}
+
+								unmarshalledDecision.Decisions[decisionIndex] = decision
+								break
+							}
+
 
 							if findContinue {
 								// The only key we care about in this case
