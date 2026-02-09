@@ -48,7 +48,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
-//	"encoding/json"
+
+	//	"encoding/json"
 	"github.com/goccy/go-json"
 
 	"os/exec"
@@ -14656,6 +14657,15 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting GET SUBORG request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
 	ctx := GetContext(request)
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
@@ -21489,8 +21499,6 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		log.Printf("[DEBUG] Starting single action execution check for %s. Max seconds: %d", workflowExecution.ExecutionId, maxSeconds)
 	}
 
-
-
 	addedParams := []string{}
 	sleeptime := 100
 	for {
@@ -22697,6 +22705,15 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting GET SUBORG request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
 	//https://dev-18062475.okta.com/oauth2/default/v1/authorize?client_id=oa3romteykJ2aMgx5d7&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
 	// http://localhost:5001/api/v1/login_openid#id_token=asdasd&session_state=asde9d78d8-6535-45fe-848d-0efa9f119595
 
@@ -23753,6 +23770,15 @@ func HandleDisconnectSSO(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
+	}
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting GET SUBORG request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
 	}
 
 	// Only allow POST requests for security
