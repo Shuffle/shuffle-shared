@@ -16309,8 +16309,23 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		if err != nil {
 			log.Printf("[WARNING][%s] Failed getting full execution for AI Agent redeployment: %s", workflowExecution.ExecutionId, err)
 		} else {
-			// Get the AI Agent node's environment - Is that where the worker is waiting ?
-			agentEnvironment := actionResult.Action.Environment
+			// Get environment from the execution or from other workflow actions
+			agentEnvironment := ""
+
+			// First try: Check if any action in the workflow has an environment set
+			for _, action := range fullExecution.Workflow.Actions {
+				if len(action.Environment) > 0 {
+					agentEnvironment = action.Environment
+					break
+				}
+			}
+
+			// Fallback: Check execution environment
+			if len(agentEnvironment) == 0 && len(fullExecution.Workflow.ExecutionEnvironment) > 0 {
+				agentEnvironment = fullExecution.Workflow.ExecutionEnvironment
+			}
+
+			log.Printf("[DEBUG][%s] AI Agent finished. Detected environment: '%s'", workflowExecution.ExecutionId, agentEnvironment)
 
 			if strings.ToLower(agentEnvironment) != "cloud" && agentEnvironment != "" {
 				log.Printf("[INFO][%s] AI Agent finished (status: %s). Redeploying workflow to env '%s' with MAX priority",
