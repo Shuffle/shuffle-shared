@@ -3521,7 +3521,6 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
-			return stats, err
 		}
 
 		res := resp.Inspect().Response
@@ -9052,6 +9051,10 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	if project.DbType == "opensearch" {
+		if (len([]byte(workflow.Image)) > 32766) {
+			workflow.Image = ""
+		}
+
 		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
 			return err
