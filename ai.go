@@ -52,6 +52,18 @@ var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
 var docsVectorStoreID = os.Getenv("OPENAI_DOCS_VS_ID")
 var assistantModel = model
 
+var aiMaxTokens = 1024 // Default for on-prem
+var aiReasoningEffort = ""
+
+func init() {
+	if tok := os.Getenv("AI_MAX_TOKENS"); tok != "" {
+		if t, err := strconv.Atoi(tok); err == nil {
+			aiMaxTokens = t
+		}
+	}
+	aiReasoningEffort = os.Getenv("AI_REASONING_EFFORT")
+}
+
 // Provide an incident triage and response plan for the reported incident finding. Make a short list of actions to perform in the following format: [{"title": "Title of the task", "category": "triage/containment/recovery/communication/documentation", "completed": false, "createdBy": "ai-agent@shuffler.io"}]. ONLY output as JSON array and nothing more. After the list is made, add these to the metadata.extensions.custom_attributes.tasks[] in the next action.
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
@@ -7001,6 +7013,23 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	ctx := context.Background()
 
+	// Validate On-Prem Configuration immediately
+	if project.Environment != "cloud" {
+		if os.Getenv("AI_MODEL") == "" && os.Getenv("OPENAI_MODEL") == "" {
+			err := errors.New("AI Configuration Error: AI_MODEL or OPENAI_MODEL environment variable must be set for On-Premise AI Agent execution.")
+			log.Printf("[ERROR] %v", err)
+
+			execution.Status = "ABORTED"
+			execution.Results = append(execution.Results, ActionResult{
+				Status: "ABORTED",
+				Result: fmt.Sprintf(`{"success": false, "reason": "%s"}`, err.Error()),
+				Action: startNode,
+			})
+			go SetWorkflowExecution(ctx, execution, true)
+			return startNode, err
+		}
+	}
+
 	systemMessage := "" // Handled further down now
 	userMessage := ""
 
@@ -7209,7 +7238,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				break
 			}
 
-			//if debug { 
+			//if debug {
 			//	log.Printf("[DEBUG] DECISIONS: %s", string(marshalledDecisions))
 			//}
 
@@ -7485,6 +7514,16 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 	}
 
+<<<<<<< llm-auth-fix
+	// Set model based on environment
+	aiModel := "gpt-5-mini"
+	if project.Environment != "cloud" {
+		aiModel = os.Getenv("AI_MODEL")
+		if aiModel == "" {
+			aiModel = os.Getenv("OPENAI_MODEL")
+		}
+	}
+=======
 	// Escape relevant... weird data 
 	//In case of previous escapes
 	metadata = strings.ReplaceAll(metadata, "${", "{")
@@ -7494,9 +7533,10 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	userMessage = strings.ReplaceAll(userMessage, "${", "{")
 	userMessage = strings.ReplaceAll(userMessage, "\\$", "$")
 	userMessage = strings.ReplaceAll(userMessage, "$", "\\$")
+>>>>>>> main
 
 	completionRequest := openai.ChatCompletionRequest{
-		Model: "gpt-5-mini",
+		Model: aiModel,
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
@@ -7514,9 +7554,21 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		// Reasoning control
 		//ReasoningEffort: "medium", // old
-		MaxCompletionTokens: 5000,
-		ReasoningEffort:     agentReasoningEffort,
-		Store:               true,
+		// MaxCompletionTokens: 5000,
+		// ReasoningEffort:     agentReasoningEffort,
+		// Store:               true,
+	}
+
+	if project.Environment == "cloud" {
+		completionRequest.ReasoningEffort = agentReasoningEffort
+		completionRequest.Store = true
+		completionRequest.MaxCompletionTokens = 5000
+	} else {
+		// For on-prem
+		completionRequest.MaxCompletionTokens = aiMaxTokens
+		if aiReasoningEffort != "" {
+			completionRequest.ReasoningEffort = aiReasoningEffort
+		}
 	}
 
 	if len(marshalledDecisions) > 4 { 
@@ -7577,10 +7629,10 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	// FIXME: Resetting auth as it should auto-pick (if possible)
 	aiNode.AuthenticationId = ""
 	aiNode.Parameters = []WorkflowAppActionParameter{
-		WorkflowAppActionParameter{
-			Name:  "url",
-			Value: "",
-		},
+		// WorkflowAppActionParameter{
+		// 	Name:  "url",
+		// 	Value: "",
+		// },
 		//WorkflowAppActionParameter{
 		//	Name:  "apikey",
 		//	Value: "",
