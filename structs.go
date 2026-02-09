@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"sync"
 	"time"
@@ -4948,4 +4949,72 @@ type MCPResponse struct {
 	Jsonrpc string                 `json:"jsonrpc"`
 	ID      string                 `json:"id"`
 	Result  map[string]interface{} `json:"result,omitempty"`
+}
+
+type OpensearchPrefixFixResult struct {
+	Success      bool                               `json:"success"`
+	Reason       string                             `json:"reason,omitempty"`
+	Reindexed    []string                           `json:"reindexed,omitempty"`
+	AliasUpdates []string                           `json:"alias_updates,omitempty"`
+	Skipped      []string                           `json:"skipped,omitempty"`
+	Counts       []OpensearchPrefixFixCountSnapshot `json:"counts,omitempty"`
+}
+
+type OpensearchPrefixFixCountSnapshot struct {
+	SourceIndex string `json:"source_index"`
+	TargetIndex string `json:"target_index"`
+	SourceDocs  int64  `json:"source_docs"`
+	TargetDocs  int64  `json:"target_docs"`
+}
+
+type OpensearchAliasResponse map[string]OpensearchAliasEntry
+
+type OpensearchAliasEntry struct {
+	Aliases map[string]json.RawMessage `json:"aliases"`
+}
+
+type OpensearchIndexInfoResponse map[string]OpensearchIndexInfo
+
+type OpensearchIndexInfo struct {
+	Settings map[string]map[string]interface{} `json:"settings"`
+	Mappings map[string]interface{}            `json:"mappings"`
+}
+
+type OpensearchReindexRequest struct {
+	Source OpensearchReindexSourceDest `json:"source"`
+	Dest   OpensearchReindexSourceDest `json:"dest"`
+}
+
+type OpensearchReindexSourceDest struct {
+	Index string `json:"index"`
+}
+
+type OpensearchAliasActionsRequest struct {
+	Actions []OpensearchAliasAction `json:"actions"`
+}
+
+type OpensearchAliasAction struct {
+	Add    *OpensearchAliasActionTarget `json:"add,omitempty"`
+	Remove *OpensearchAliasActionTarget `json:"remove,omitempty"`
+}
+
+type OpensearchAliasActionTarget struct {
+	Index        string `json:"index"`
+	Alias        string `json:"alias"`
+	IsWriteIndex *bool  `json:"is_write_index,omitempty"`
+}
+
+type OpensearchCreateIndexRequest struct {
+	Settings map[string]interface{} `json:"settings,omitempty"`
+	Mappings map[string]interface{} `json:"mappings,omitempty"`
+}
+
+type OpensearchIndexConfig struct {
+	Aliases  map[string]OpensearchIndexAliasConfig `json:"aliases,omitempty"`
+	Settings map[string]interface{}                `json:"settings,omitempty"`
+	Mappings map[string]interface{}                `json:"mappings,omitempty"`
+}
+
+type OpensearchIndexAliasConfig struct {
+	IsWriteIndex bool `json:"is_write_index,omitempty"`
 }
