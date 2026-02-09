@@ -726,7 +726,7 @@ func GetEsConfig(defaultCreds bool) *opensearchapi.Client {
 
 	//config.Transport.TLSClientConfig
 	//transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport := http.DefaultTransport.(*http.Transport)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConnsPerHost = 100
 	transport.ResponseHeaderTimeout = time.Second * 10
 	transport.Proxy = nil
@@ -13383,7 +13383,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						newDoc := cacheData.Value
 						mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
 						if debug { 
-							log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. Merged: %#v.\n\nError: %#v", foundRule, allowed, mergedJSON, errString)
+							log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. .\n\nError: %#v", foundRule, allowed, errString)
 						}
 
 						if allowed {
@@ -13809,9 +13809,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						continue
 					}
 
-					if debug {
-						log.Printf("[DEBUG] Found automation '%s' to run (2). Value: '%s'", automation.Name, automation.Options[0].Value)
-					}
+					//if debug {
+					//	log.Printf("[DEBUG] Found automation '%s' to run (2). Value: '%s'", automation.Name, automation.Options[0].Value)
+					//}
 
 					// Run the automation
 					// This should make a notification if it fails
@@ -16666,18 +16666,34 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		}
 
 		if len(search.WorkflowId) > 0 {
-			// Change out the "must" part entirely to contain the workflow id as well
-			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
-				{
-					"match": map[string]interface{}{
-						"execution_org": orgId,
+			if search.WorkflowId == "AGENT" {
+				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
+					{
+						"match": map[string]interface{}{
+							"execution_org": orgId,
+						},
 					},
-				},
-				{
-					"match": map[string]interface{}{
-						"workflow_id": search.WorkflowId,
+					{
+						"match": map[string]interface{}{
+							"type": "AGENT",
+						},
 					},
-				},
+				}
+
+			} else {
+				// Change out the "must" part entirely to contain the workflow id as well
+				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
+					{
+						"match": map[string]interface{}{
+							"execution_org": orgId,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"workflow_id": search.WorkflowId,
+						},
+					},
+				}
 			}
 		}
 
@@ -16782,7 +16798,11 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		}
 
 		if len(search.WorkflowId) > 0 {
-			query = query.Filter("workflow_id =", search.WorkflowId)
+			if search.WorkflowId == "AGENT" {  
+				query = query.Filter("type =", "AGENT")
+			} else {
+				query = query.Filter("workflow_id =", search.WorkflowId)
+			}
 		}
 
 		if len(search.Status) > 0 {

@@ -3936,7 +3936,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.1.8\nshuffle-sdk==0.0.31"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.33"
 }
 
 // Removes JSON values from the input
@@ -4865,18 +4865,39 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 
 	} else if parsedName == "run_ai_agent" {
 		log.Printf("[DEBUG] Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
-
 		if len(foundApikey) == 0 {
 			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
 			return errors.New("No admin user with API key found")
 		}
 
 		// Already handled check
-		for index, option := range automation.Options { 
-			agentTagName := fmt.Sprintf("agent-%s-%d", option.Key, index)
+		for _, option := range automation.Options { 
+			// 'remove' icon in the UI does this
+			if option.Disabled {
+				continue
+			}
+
+			if len(option.Value) < 10 {
+				//log.Printf("[DEBUG] Actions info too short: %s - skipping", option.Key)
+				continue
+			}
+
+			agentTagName := fmt.Sprintf("agent-%s", option.Key)
 			if ArrayContains(cacheData.Tags, agentTagName) {
 				continue
 			}
+
+			// As a fallback in case of slow datastore update
+			// Prevents super quick reruns
+			cacheName := fmt.Sprintf("%s_%s_%s_%s", cacheData.Key, cacheData.Category, cacheData.OrgId, option.Key)
+			_, err := GetCache(ctx, cacheName)
+			if err == nil {
+				//log.Printf("[DEBUG] Cache hit for %s - skipping to avoid re-running agent", cacheName)
+				continue
+			}
+
+			SetCache(ctx, cacheName, []byte("1"), 3)
+
 
 			if !strings.Contains(option.Key, "action") { 
 				log.Printf("[WARNING] Agent option key %s does not contain 'action' - skipping to avoid confusion. This may cause the agent to not run if no other options are present.", option.Key)
@@ -4899,7 +4920,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			option.Value += fmt.Sprintf("\n%s", cacheData.Value)
 			parsedParams = append(parsedParams, map[string]string{
 				"name":  "input",
-				"value": fmt.Sprintf("### Datastore Value\nKey: %s\nCategory: %s\nValue: %s", cacheData.Key, cacheData.Category, option.Value),
+				"value": fmt.Sprintf("TASK: %s\nKey: %s\nCategory: %s\n\nUNTRUSTED DATA:\n%s", option.Value, cacheData.Key, cacheData.Category,  cacheData.Value),
 			})
 
 

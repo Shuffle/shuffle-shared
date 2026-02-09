@@ -180,61 +180,55 @@ func TestEvalPolicyJSON_Comprehensive(t *testing.T) {
 		
 		// ---------------------- 6. Array Deletion Logic ----------------------
 		{
+			// FAIL: Explicitly removing a field from an ID-ed item
 			name:       "deny_deleted_nested_in_array",
 			policy:     `deny if has_deleted_field`,
 			oldJSON:    `{"list": [ {"id": 1, "secret": "keep_me"}, {"id": 2} ]}`,
 			newJSON:    `{"list": [ {"id": 1}, {"id": 2} ]}`,
 			wantJSON:   `{"list": [ {"id": 1, "secret": "keep_me"}, {"id": 2} ]}`,
 			wantOk:     false,
-			// UPDATED: Standard array notation
-			wantReason: "deny: field deletion detected at 'list[0].secret'",
+			// UPDATED PATH: Uses [id=1]
+			wantReason: "deny: field deletion detected at 'list[id=1].secret'",
 		},
+
+		// ---------------------- 7. Smart Merge Logic (Delta Updates) ----------------------
 		{
-			name:       "deny_deleted_array_item",
-			policy:     `deny if has_deleted_field`,
-			oldJSON:    `{"list": [1, 2, 3]}`,
-			newJSON:    `{"list": [1, 2]}`, // Deleted '3'
-			wantJSON:   `{"list": [1, 2, 3]}`,
-			wantOk:     false,
-			// UPDATED: Index 2 is missing
-			wantReason: "deny: field deletion detected at 'list[2]'",
-		},
-		
-		// ---------------------- 7. Array Append Logic ----------------------
-		{
-			// FAILING CASE: User sends a partial object in the list.
-			name:       "nested_array_partial_update_fails_deletion_check",
+			// SUCCESS: User sends ONLY the new item.
+			// Smart Merge sees ID 2 is new, so it APPENDS it. ID 1 is preserved.
+			// Old Logic would have failed/overwritten. New Logic allows this.
+			name:       "nested_array_smart_append",
 			policy:     "merge if always; deny if has_deleted_field",
 			oldJSON:    `{"metadata":{"tasks":[{"id":1,"title":"Keep Me"}]}}`,
-			// "title" field is removed in this update
 			newJSON:    `{"metadata":{"tasks":[{"id":2}]}}`, 
-			wantJSON:   `{"metadata":{"tasks":[{"id":1,"title":"Keep Me"}]}}`,
-			wantOk:     false,
-			// UPDATED: Nested path inside array
-			wantReason: "deny: field deletion detected at 'metadata.tasks[0].title'",
+			// Result: Combined List
+			wantJSON:   `{"metadata":{"tasks":[{"id":1,"title":"Keep Me"},{"id":2}]}}`,
+			wantOk:     true,
+			wantReason: "",
 		},
 		{
-			// SUCCESS CASE: User sends the Full List (Old + New).
-			name:       "nested_array_full_update_succeeds",
+			// SUCCESS: User sends Full List (No Duplication).
+			// Smart Merge sees ID 1 exists (merges it), ID 2 is new (appends it).
+			name:       "nested_array_smart_merge_no_dupes",
 			policy:     "merge if always; deny if has_deleted_field",
 			oldJSON:    `{"metadata":{"tasks":[{"id":1,"title":"Keep Me"}]}}`,
 			newJSON:    `{"metadata":{"tasks":[{"id":1,"title":"Keep Me"},{"id":2,"title":"New Task"}]}}`,
+			// Result: Exact match (No "Keep Me" duplication)
 			wantJSON:   `{"metadata":{"tasks":[{"id":1,"title":"Keep Me"},{"id":2,"title":"New Task"}]}}`,
 			wantOk:     true,
 			wantReason: "",
 		},
 		{
-			// APPEND SUCCESS: User sends ONLY the new item.
-			// Logic now appends it to the existing list.
-			name:       "merge_array_append_behavior",
+			// SUCCESS: Patch Existing Item via Merge
+			// User sends partial data for ID 1. Smart Merge updates it.
+			name:       "nested_array_smart_patch",
 			policy:     "merge; deny if has_deleted_field",
-			oldJSON:    `{"tasks": [{"id":1, "title":"Keep Me"}]}`,
-			newJSON:    `{"tasks": [{"id":2, "title":"New Task"}]}`,
-			// Result should have BOTH
-			wantJSON:   `{"tasks": [{"id":1, "title":"Keep Me"},{"id":2,"title":"New Task"}]}`,
+			oldJSON:    `{"tasks": [{"id":1, "title":"Old", "status":"open"}]}`,
+			newJSON:    `{"tasks": [{"id":1, "status":"closed"}]}`,
+			// Result: Title preserved (from Old), Status updated (from New)
+			wantJSON:   `{"tasks": [{"id":1, "status":"closed","title":"Old"}]}`,
 			wantOk:     true,
 			wantReason: "",
-		},
+		},	
 	}
 
 	for _, tt := range tests {
