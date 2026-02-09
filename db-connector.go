@@ -16666,18 +16666,34 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		}
 
 		if len(search.WorkflowId) > 0 {
-			// Change out the "must" part entirely to contain the workflow id as well
-			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
-				{
-					"match": map[string]interface{}{
-						"execution_org": orgId,
+			if search.WorkflowId == "AGENT" {
+				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
+					{
+						"match": map[string]interface{}{
+							"execution_org": orgId,
+						},
 					},
-				},
-				{
-					"match": map[string]interface{}{
-						"workflow_id": search.WorkflowId,
+					{
+						"match": map[string]interface{}{
+							"type": "AGENT",
+						},
 					},
-				},
+				}
+
+			} else {
+				// Change out the "must" part entirely to contain the workflow id as well
+				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
+					{
+						"match": map[string]interface{}{
+							"execution_org": orgId,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"workflow_id": search.WorkflowId,
+						},
+					},
+				}
 			}
 		}
 
@@ -16782,7 +16798,11 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		}
 
 		if len(search.WorkflowId) > 0 {
-			query = query.Filter("workflow_id =", search.WorkflowId)
+			if search.WorkflowId == "AGENT" {  
+				query = query.Filter("type =", "AGENT")
+			} else {
+				query = query.Filter("workflow_id =", search.WorkflowId)
+			}
 		}
 
 		if len(search.Status) > 0 {

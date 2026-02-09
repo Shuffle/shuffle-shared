@@ -21149,7 +21149,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 }
 
 // Handles the return of a single action
-func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecution, resultAmount int, actionId ...string) SingleResult {
+func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecution, resultAmount int, timeout int, actionId ...string) SingleResult {
 	findActionId := ""
 	if len(actionId) > 0 {
 		findActionId = actionId[0]
@@ -21175,9 +21175,15 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		maxSeconds = 180
 	}
 
+	if timeout > maxSeconds {
+		maxSeconds = timeout
+	}
+
 	if debug {
 		log.Printf("[DEBUG] Starting single action execution check for %s. Max seconds: %d", workflowExecution.ExecutionId, maxSeconds)
 	}
+
+
 
 	addedParams := []string{}
 	sleeptime := 100

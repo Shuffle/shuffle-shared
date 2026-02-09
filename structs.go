@@ -686,6 +686,9 @@ type User struct {
 	// Old web3 integration
 	EthInfo  EthInfo   `datastore:"eth_info" json:"eth_info"`
 	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
+
+	// Not sure why, but this was removed leading to harsh org mapping errors
+	ProvisionedByOrg string `datastore:"provisioned_by_org" json:"provisioned_by_org"`
 }
 
 type SSOInfo struct {
@@ -4598,15 +4601,16 @@ type AgentDecisionRunDetails struct {
 type AgentDecision struct {
 
 	// Predictive Agent data
-	I          int            `json:"i" datastore:"i"`
-	Action     string         `json:"action" datastore:"action"`
-	Tool       string         `json:"tool" datastore:"tool"`
-	Category   string         `json:"category" datastore:"category"`
-	Confidence float64        `json:"confidence" datastore:"confidence"`
-	Runs       string         `json:"runs" datastore:"runs"`
-	Sources    string         `json:"sources,omitempty" datastore:"sources"`
-	Fields     []Valuereplace `json:"fields" datastore:"fields"`
-	Reason     string         `json:"reason" datastore:"reason"`
+	I                int            `json:"i" datastore:"i"`
+	Action           string         `json:"action" datastore:"action"`
+	Tool             string         `json:"tool" datastore:"tool"`
+	Category         string         `json:"category" datastore:"category"`
+	Confidence       float64        `json:"confidence" datastore:"confidence"`
+	Runs             string         `json:"runs" datastore:"runs"`
+	Sources          string         `json:"sources,omitempty" datastore:"sources"`
+	Fields           []Valuereplace `json:"fields" datastore:"fields"`
+	Reason           string         `json:"reason" datastore:"reason"`
+	ApprovalRequired bool           `json:"approval_required" datastore:"approval_required"` // Set TRUE only for destructive/high-risk actions
 
 	// Responses
 	RunDetails AgentDecisionRunDetails `json:"run_details" datastore:"run_details"`
@@ -4915,4 +4919,29 @@ type TestResult struct {
 	TestCase string `json:"test_case"`
 	Status   string `json:"status"`
 	Error    string `json:"error,omitempty"`
+}
+
+type MCPRequest struct {
+	Jsonrpc string `json:"jsonrpc"`
+	ID      string `json:"id"`
+	Method  string `json:"method"`
+	Params  struct {
+		ToolName string `json:"tool_name"`
+		Input    struct {
+			Text  string `json:"text"`
+			Voice string `json:"voice"`
+		} `json:"input"`
+		Context struct {
+			SessionID string `json:"session_id"`
+		} `json:"context"`
+
+		ToolID      string `json:"tool_id"`
+		Environment string `json:"environment"`
+	} `json:"params"`
+}
+
+type MCPResponse struct {
+	Jsonrpc string                 `json:"jsonrpc"`
+	ID      string                 `json:"id"`
+	Result  map[string]interface{} `json:"result,omitempty"`
 }
