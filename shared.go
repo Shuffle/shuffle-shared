@@ -21185,63 +21185,74 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 	// Fallback to inject AI creds if the user don't have any
 	if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
-		apiKey := os.Getenv("AI_API_KEY")
-		if apiKey == "" {
-			apiKey = os.Getenv("OPENAI_API_KEY")
-		}
+		// cloud => only do it on cloud location
+		// This prevents local users from being able to see it
+		if project.Environment != "cloud" || (project.Environment == "cloud" && action.Environment == "cloud") {
+			apiKey := os.Getenv("AI_API_KEY")
+			if apiKey == "" {
+				apiKey = os.Getenv("OPENAI_API_KEY")
+			}
 
-		apiUrl := os.Getenv("AI_API_URL")
-		if apiUrl == "" {
-			apiUrl = os.Getenv("OPENAI_API_URL")
-		}
+			apiUrl := os.Getenv("AI_API_URL")
+			if apiUrl == "" {
+				apiUrl = os.Getenv("OPENAI_API_URL")
+			}
 
-		if apiUrl == "" {
-			apiUrl = "https://api.openai.com"
-		}
+			if apiUrl == "" {
+				apiUrl = "https://api.openai.com"
+			}
 
-		if len(apiKey) > 0 {
-			IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
+			if len(apiKey) > 0 {
+				IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
 
-			urlFound := false
-			apikeyFound := false
-			for i, param := range action.Parameters {
-				if param.Name == "url" {
-					action.Parameters[i].Value = apiUrl 
-					urlFound = true
+				urlFound := false
+				apikeyFound := false
+				for paramIndex, param := range action.Parameters {
+
+					// Cleanup to prevent bad functions from being injected
+					// Such as liquid
+					if project.Environment == "cloud" && action.Environment == "cloud" {
+						action.Parameters[paramIndex].Value = strings.ReplaceAll(action.Parameters[paramIndex].Value, "${", "")
+						action.Parameters[paramIndex].Value = strings.ReplaceAll(action.Parameters[paramIndex].Value, "{{", "")
+						action.Parameters[paramIndex].Value = strings.ReplaceAll(action.Parameters[paramIndex].Value, "python", "")
+					}
+
+					if param.Name == "url" {
+						action.Parameters[paramIndex].Value = apiUrl 
+						urlFound = true
+					} else if param.Name == "apikey" {
+						action.Parameters[paramIndex].Value = apiKey
+						action.Parameters[paramIndex].Configuration = true
+						apikeyFound = true
+					}
 				}
 
-				if param.Name == "apikey" {
-					action.Parameters[i].Value = apiKey
-					action.Parameters[i].Configuration = true
-					apikeyFound = true
+				if !urlFound {
+					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+						Name:  "url",
+						Value: apiUrl,
+					})
 				}
-			}
 
-			if !urlFound {
-				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-					Name:  "url",
-					Value: apiUrl,
-				})
-			}
+				if !apikeyFound {
+					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+						Name:          "apikey",
+						Value:         apiKey,
+						Configuration: true,
+					})
+				}
 
-			if !apikeyFound {
-				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-					Name:          "apikey",
-					Value:         apiKey,
-					Configuration: true,
-				})
-			}
+				log.Printf("[AUDIT] Injected system AI credentials (fallback) for org %s", user.ActiveOrg.Id)
 
-			log.Printf("[AUDIT] Injected system AI credentials (fallback) for org %s", user.ActiveOrg.Id)
-
-			// Mapping to internal so the execution itself is not referencable
-			if project.Environment == "cloud" {
-				workflowExecution.ExecutionOrg = "INTERNAL"
-				workflowExecution.Workflow.OrgId = "INTERNAL"
-				workflow.OrgId = "INTERNAL"
-				workflow.ExecutingOrg = OrgMini{
-					Name: "INTERNAL",
-					Id: "INTERNAL",
+				// Mapping to internal so the execution itself is not referencable
+				if project.Environment == "cloud" {
+					workflowExecution.ExecutionOrg = "INTERNAL"
+					workflowExecution.Workflow.OrgId = "INTERNAL"
+					workflow.OrgId = "INTERNAL"
+					workflow.ExecutingOrg = OrgMini{
+						Name: "INTERNAL",
+						Id: "INTERNAL",
+					}
 				}
 			}
 		}

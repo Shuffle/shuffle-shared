@@ -1806,6 +1806,22 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}
 							continue
 						} else {
+							if decision.Action == "finish" && decision.RunDetails.Status == "" {
+								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+								if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
+									mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+								}
+
+								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+								mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
+								decisionsUpdated = true
+
+								marshalledDecision, err := json.Marshal(mappedOutput.Decisions[decisionIndex])
+								if err == nil {
+									err = SetCache(ctx, decisionId, marshalledDecision, 60)
+								}
+							}
+
 							if debug { 
 								log.Printf("[DEBUG][%s] Decision %s for agent action %s is still RUNNING but no completed at timestamp. Checking cache for updates.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID)
 							}
@@ -1846,6 +1862,10 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[resultIndex])
 					*/
 
+				}
+
+				if debug { 
+					log.Printf("[DEBUG][%s] Finished decisions for agent action %s: %v out of %v", workflowExecution.ExecutionId, action.ID, len(finishedDecisions), len(mappedOutput.Decisions))
 				}
 
 				if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
