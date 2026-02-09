@@ -3521,6 +3521,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			return stats, err
 		}
 
 		res := resp.Inspect().Response
