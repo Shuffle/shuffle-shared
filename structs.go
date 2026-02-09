@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"sync"
 	"time"
@@ -686,6 +687,8 @@ type User struct {
 	// Old web3 integration
 	EthInfo  EthInfo   `datastore:"eth_info" json:"eth_info"`
 	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
+
+	ProvisionedByOrg string `datastore:"provisioned_by_org" json:"provisioned_by_org"`
 }
 
 type SSOInfo struct {
@@ -3053,9 +3056,14 @@ type Oauth2Resp struct {
 }
 
 type OpenidUserinfo struct {
-	Sub   string   `json:"sub"`
-	Email string   `json:"email"`
-	Roles []string `json:"roles"`
+	Sub           string   `json:"sub"`
+	Email         string   `json:"email"`
+	EmailVerified bool     `json:"email_verified"`
+	Roles         []string `json:"roles"`
+	Groups        []string `json:"groups"`
+	RealmAccess   struct {
+		Roles []string `json:"roles"`
+	} `json:"realm_access"` // Keycloak format
 }
 
 type OpenidResp struct {
@@ -4598,15 +4606,16 @@ type AgentDecisionRunDetails struct {
 type AgentDecision struct {
 
 	// Predictive Agent data
-	I          int            `json:"i" datastore:"i"`
-	Action     string         `json:"action" datastore:"action"`
-	Tool       string         `json:"tool" datastore:"tool"`
-	Category   string         `json:"category" datastore:"category"`
-	Confidence float64        `json:"confidence" datastore:"confidence"`
-	Runs       string         `json:"runs" datastore:"runs"`
-	Sources    string         `json:"sources,omitempty" datastore:"sources"`
-	Fields     []Valuereplace `json:"fields" datastore:"fields"`
-	Reason     string         `json:"reason" datastore:"reason"`
+	I                int            `json:"i" datastore:"i"`
+	Action           string         `json:"action" datastore:"action"`
+	Tool             string         `json:"tool" datastore:"tool"`
+	Category         string         `json:"category" datastore:"category"`
+	Confidence       float64        `json:"confidence" datastore:"confidence"`
+	Runs             string         `json:"runs" datastore:"runs"`
+	Sources          string         `json:"sources,omitempty" datastore:"sources"`
+	Fields           []Valuereplace `json:"fields" datastore:"fields"`
+	Reason           string         `json:"reason" datastore:"reason"`
+	ApprovalRequired bool           `json:"approval_required" datastore:"approval_required"` // Set TRUE only for destructive/high-risk actions
 
 	// Responses
 	RunDetails AgentDecisionRunDetails `json:"run_details" datastore:"run_details"`
@@ -4915,4 +4924,97 @@ type TestResult struct {
 	TestCase string `json:"test_case"`
 	Status   string `json:"status"`
 	Error    string `json:"error,omitempty"`
+}
+
+type MCPRequest struct {
+	Jsonrpc string `json:"jsonrpc"`
+	ID      string `json:"id"`
+	Method  string `json:"method"`
+	Params  struct {
+		ToolName string `json:"tool_name"`
+		Input    struct {
+			Text  string `json:"text"`
+			Voice string `json:"voice"`
+		} `json:"input"`
+		Context struct {
+			SessionID string `json:"session_id"`
+		} `json:"context"`
+
+		ToolID      string `json:"tool_id"`
+		Environment string `json:"environment"`
+	} `json:"params"`
+}
+
+type MCPResponse struct {
+	Jsonrpc string                 `json:"jsonrpc"`
+	ID      string                 `json:"id"`
+	Result  map[string]interface{} `json:"result,omitempty"`
+}
+
+type OpensearchPrefixFixResult struct {
+	Success      bool                               `json:"success"`
+	Reason       string                             `json:"reason,omitempty"`
+	Reindexed    []string                           `json:"reindexed,omitempty"`
+	AliasUpdates []string                           `json:"alias_updates,omitempty"`
+	Skipped      []string                           `json:"skipped,omitempty"`
+	Counts       []OpensearchPrefixFixCountSnapshot `json:"counts,omitempty"`
+}
+
+type OpensearchPrefixFixCountSnapshot struct {
+	SourceIndex string `json:"source_index"`
+	TargetIndex string `json:"target_index"`
+	SourceDocs  int64  `json:"source_docs"`
+	TargetDocs  int64  `json:"target_docs"`
+}
+
+type OpensearchAliasResponse map[string]OpensearchAliasEntry
+
+type OpensearchAliasEntry struct {
+	Aliases map[string]json.RawMessage `json:"aliases"`
+}
+
+type OpensearchIndexInfoResponse map[string]OpensearchIndexInfo
+
+type OpensearchIndexInfo struct {
+	Settings map[string]map[string]interface{} `json:"settings"`
+	Mappings map[string]interface{}            `json:"mappings"`
+}
+
+type OpensearchReindexRequest struct {
+	Source OpensearchReindexSourceDest `json:"source"`
+	Dest   OpensearchReindexSourceDest `json:"dest"`
+}
+
+type OpensearchReindexSourceDest struct {
+	Index string `json:"index"`
+}
+
+type OpensearchAliasActionsRequest struct {
+	Actions []OpensearchAliasAction `json:"actions"`
+}
+
+type OpensearchAliasAction struct {
+	Add    *OpensearchAliasActionTarget `json:"add,omitempty"`
+	Remove *OpensearchAliasActionTarget `json:"remove,omitempty"`
+}
+
+type OpensearchAliasActionTarget struct {
+	Index        string `json:"index"`
+	Alias        string `json:"alias"`
+	IsWriteIndex *bool  `json:"is_write_index,omitempty"`
+}
+
+type OpensearchCreateIndexRequest struct {
+	Settings map[string]interface{} `json:"settings,omitempty"`
+	Mappings map[string]interface{} `json:"mappings,omitempty"`
+}
+
+type OpensearchIndexConfig struct {
+	Aliases  map[string]OpensearchIndexAliasConfig `json:"aliases,omitempty"`
+	Settings map[string]interface{}                `json:"settings,omitempty"`
+	Mappings map[string]interface{}                `json:"mappings,omitempty"`
+}
+
+type OpensearchIndexAliasConfig struct {
+	IsWriteIndex bool `json:"is_write_index,omitempty"`
 }

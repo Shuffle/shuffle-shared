@@ -3936,7 +3936,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.1.8\nshuffle-sdk==0.0.31"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.33"
 }
 
 // Removes JSON values from the input
@@ -4878,7 +4878,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			}
 
 			if len(option.Value) < 10 {
-				log.Printf("Actions too short: %s - skipping", option.Key)
+				//log.Printf("[DEBUG] Actions info too short: %s - skipping", option.Key)
 				continue
 			}
 
@@ -4920,7 +4920,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			option.Value += fmt.Sprintf("\n%s", cacheData.Value)
 			parsedParams = append(parsedParams, map[string]string{
 				"name":  "input",
-				"value": fmt.Sprintf("### Datastore Value\nKey: %s\nCategory: %s\nValue: %s", cacheData.Key, cacheData.Category, option.Value),
+				"value": fmt.Sprintf("TASK: %s\nKey: %s\nCategory: %s\n\nUNTRUSTED DATA:\n%s", option.Value, cacheData.Key, cacheData.Category,  cacheData.Value),
 			})
 
 

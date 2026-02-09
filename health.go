@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
+//	"encoding/json"
+	"github.com/goccy/go-json"
 	"errors"
 	"fmt"
 	"io"
@@ -777,7 +778,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}()
 
 		fileHealthChannel := make(chan FileHealth)
-		go func () {
+		go func() {
 			fileHealth, err := RunOpsFile(apiKey, orgId)
 			if err != nil {
 				log.Printf("[ERROR] Failed running file health check: %s", err)
@@ -1272,15 +1273,15 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		}
 
 		/*
-		if project.Environment == "onprem" {
-			//log.Printf("Trying to fix opensearch mappings")
-			//err = fixOpensearch()
-			//if err != nil {
-			//	log.Printf("[ERROR] Failed fixing opensearch mappings: %s", err)
-			//} else {
-			//	log.Printf("[DEBUG] Fixed opensearch mappings successfully! Maybe try ops dashboard again?")
-			//}
-		}
+			if project.Environment == "onprem" {
+				//log.Printf("Trying to fix opensearch mappings")
+				//err = fixOpensearch()
+				//if err != nil {
+				//	log.Printf("[ERROR] Failed fixing opensearch mappings: %s", err)
+				//} else {
+				//	log.Printf("[DEBUG] Fixed opensearch mappings successfully! Maybe try ops dashboard again?")
+				//}
+			}
 		*/
 		// return workflowHealth, err
 	}
@@ -2017,7 +2018,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 
 	datastoreHealth := DatastoreHealth{
 		Create: false,
-		Read: false,
+		Read:   false,
 		Result: "",
 		Delete: false,
 	}
@@ -2042,7 +2043,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 		log.Printf("[ERROR] Failed to send request (%s) for set_cache %s", url, err)
 		return datastoreHealth, err
 	}
-	
+
 	datastoreHealth.Create = true
 	//read datastore entry
 	PAYLOAD = fmt.Sprintf(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK"}`, orgId)
@@ -2123,8 +2124,8 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	req.Header.Set("Content-Type", "application/json")
 
 	var fileRespStruct struct {
-		Success bool	`json:success`
-		Id		string	`json:id`
+		Success bool   `json:success`
+		Id      string `json:id`
 	}
 
 	client := GetExternalClient(baseUrl)
@@ -2140,7 +2141,6 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 		log.Printf("[ERROR] Failed to read response body")
 		return fileHealth, err
 	}
-
 
 	err = json.Unmarshal(body, &fileRespStruct)
 	if err != nil {
@@ -2158,9 +2158,9 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 		log.Printf("[ERROR] Failed to fetch remote file: %s", err)
 		return fileHealth, err
 	}
-	
+
 	defer resp.Body.Close()
-	
+
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
 	formFile, err := w.CreateFormFile("shuffle_file", "file.txt")
@@ -2188,7 +2188,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 		log.Printf("[ERROR] Upload request failed: %s", err)
 		return fileHealth, err
 	}
-	
+
 	defer uploadResp.Body.Close()
 	if uploadResp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed to upload file, not 200 status code")
@@ -3447,6 +3447,389 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("[DEBUG] RERAN %d execution(s) in total for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully RERAN %d executions"}`, total)))
+}
+
+func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, error) {
+	result := OpensearchPrefixFixResult{}
+	if project.Environment == "cloud" {
+		result.Reason = "Opensearch prefix repair not supported in cloud"
+		return result, errors.New(result.Reason)
+	}
+
+	if project.DbType != "opensearch" {
+		result.Reason = "Opensearch is not configured"
+		return result, errors.New(result.Reason)
+	}
+
+	prefix := strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_OPENSEARCH_INDEX_PREFIX")))
+	if prefix == "" {
+		result.Success = true
+		result.Reason = "No index prefix configured"
+		return result, nil
+	}
+
+	opensearchUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
+	if len(opensearchUrl) == 0 {
+		opensearchUrl = "https://shuffle-opensearch:9200"
+	}
+
+	foundClient := project.Es
+	aliasReq, err := http.NewRequest("GET", fmt.Sprintf("%s/_aliases", opensearchUrl), nil)
+	if err != nil {
+		return result, err
+	}
+
+	aliasResp, err := foundClient.Client.Transport.Perform(aliasReq)
+	if err != nil {
+		return result, err
+	}
+
+	aliasBody, err := io.ReadAll(aliasResp.Body)
+	if err != nil {
+		aliasResp.Body.Close()
+		return result, err
+	}
+	aliasResp.Body.Close()
+
+	if aliasResp.StatusCode >= 300 {
+		return result, fmt.Errorf("failed reading opensearch aliases: %s", string(aliasBody))
+	}
+
+	aliasInfo := OpensearchAliasResponse{}
+
+	if err := json.Unmarshal(aliasBody, &aliasInfo); err != nil {
+		return result, err
+	}
+
+	aliasToIndices := map[string][]string{}
+	indexNames := []string{}
+	for indexName, info := range aliasInfo {
+		indexNames = append(indexNames, indexName)
+		for aliasName := range info.Aliases {
+			aliasToIndices[aliasName] = append(aliasToIndices[aliasName], indexName)
+		}
+	}
+
+	baseIndexes := []string{
+		"workflowexecution",
+		"datastore_ngram",
+		"org_cache",
+		"org_cache_revisions",
+		"notifications",
+		"shuffle_logs",
+		"environments",
+		"org_statistics",
+		"workflowapp",
+		"workflow",
+		"workflow_revisions",
+	}
+
+	for _, baseIndex := range baseIndexes {
+		expectedAlias := strings.ToLower(GetESIndexPrefix(baseIndex))
+		doubleAlias := strings.ToLower(fmt.Sprintf("%s_%s", prefix, expectedAlias))
+
+		candidateIndices := []string{}
+		if aliasIndices, ok := aliasToIndices[doubleAlias]; ok {
+			candidateIndices = append(candidateIndices, aliasIndices...)
+		}
+
+		if len(candidateIndices) == 0 {
+			for _, indexName := range indexNames {
+				if indexName == doubleAlias || strings.HasPrefix(indexName, doubleAlias+"-") {
+					candidateIndices = append(candidateIndices, indexName)
+				}
+			}
+		}
+
+		if len(candidateIndices) == 0 {
+			result.Skipped = append(result.Skipped, expectedAlias)
+			continue
+		}
+
+		for _, indexName := range candidateIndices {
+			newIndex := strings.Replace(indexName, doubleAlias, expectedAlias, 1)
+			if newIndex == indexName {
+				result.Skipped = append(result.Skipped, indexName)
+				continue
+			}
+
+			existsReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s", opensearchUrl, newIndex), nil)
+			if err != nil {
+				return result, err
+			}
+
+			existsResp, err := foundClient.Client.Transport.Perform(existsReq)
+			if err != nil {
+				return result, err
+			}
+			existsBody, err := io.ReadAll(existsResp.Body)
+			if err != nil {
+				existsResp.Body.Close()
+				return result, err
+			}
+			existsResp.Body.Close()
+
+			if existsResp.StatusCode == 404 {
+				indexConfig := OpensearchIndexConfig{}
+				if customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG"); len(customConfig) > 0 {
+					if err := json.Unmarshal([]byte(customConfig), &indexConfig); err != nil {
+						return result, fmt.Errorf("invalid OPENSEARCH_INDEX_CONFIG: %w", err)
+					}
+					if len(indexConfig.Aliases) > 0 {
+						indexConfig.Aliases = nil
+					}
+				}
+
+				if len(indexConfig.Aliases) == 0 && len(indexConfig.Settings) == 0 && len(indexConfig.Mappings) == 0 {
+					indexConfig = OpensearchIndexConfig{
+						Settings: map[string]interface{}{
+							"number_of_shards":   3,
+							"number_of_replicas": 1,
+							"refresh_interval":   "30s",
+						},
+						Mappings: map[string]interface{}{
+							"dynamic_templates": []map[string]interface{}{
+								{
+									"strings_as_keywords": map[string]interface{}{
+										"match_mapping_type": "string",
+										"mapping": map[string]interface{}{
+											"type": "keyword",
+										},
+									},
+								},
+							},
+						},
+					}
+				}
+
+				indexConfigJson, err := json.Marshal(indexConfig)
+				if err != nil {
+					return result, err
+				}
+
+				createReq, err := http.NewRequest("PUT", fmt.Sprintf("%s/%s", opensearchUrl, newIndex), bytes.NewBuffer(indexConfigJson))
+				if err != nil {
+					return result, err
+				}
+				createReq.Header.Set("Content-Type", "application/json")
+
+				createResp, err := foundClient.Client.Transport.Perform(createReq)
+				if err != nil {
+					return result, err
+				}
+
+				createRespBody, err := io.ReadAll(createResp.Body)
+				if err != nil {
+					createResp.Body.Close()
+					return result, err
+				}
+				createResp.Body.Close()
+
+				if createResp.StatusCode >= 300 {
+					return result, fmt.Errorf("failed creating index %s: %s", newIndex, string(createRespBody))
+				}
+			} else if existsResp.StatusCode >= 300 {
+				return result, fmt.Errorf("failed checking index %s: %s", newIndex, string(existsBody))
+			}
+
+			reindexBody, err := json.Marshal(OpensearchReindexRequest{
+				Source: OpensearchReindexSourceDest{Index: indexName},
+				Dest:   OpensearchReindexSourceDest{Index: newIndex},
+			})
+			if err != nil {
+				return result, err
+			}
+
+			sourceCountReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_count", opensearchUrl, indexName), nil)
+			if err != nil {
+				return result, err
+			}
+
+			sourceCountResp, err := foundClient.Client.Transport.Perform(sourceCountReq)
+			if err != nil {
+				return result, err
+			}
+
+			sourceCountBody, err := io.ReadAll(sourceCountResp.Body)
+			if err != nil {
+				sourceCountResp.Body.Close()
+				return result, err
+			}
+			sourceCountResp.Body.Close()
+
+			if sourceCountResp.StatusCode >= 300 {
+				return result, fmt.Errorf("failed counting source index %s: %s", indexName, string(sourceCountBody))
+			}
+
+			var sourceCount struct {
+				Count int64 `json:"count"`
+			}
+			if err := json.Unmarshal(sourceCountBody, &sourceCount); err != nil {
+				return result, err
+			}
+
+			reindexReq, err := http.NewRequest("POST", fmt.Sprintf("%s/_reindex?wait_for_completion=true", opensearchUrl), bytes.NewBuffer(reindexBody))
+			if err != nil {
+				return result, err
+			}
+			reindexReq.Header.Set("Content-Type", "application/json")
+
+			reindexResp, err := foundClient.Client.Transport.Perform(reindexReq)
+			if err != nil {
+				return result, err
+			}
+
+			reindexBodyResp, err := io.ReadAll(reindexResp.Body)
+			if err != nil {
+				reindexResp.Body.Close()
+				return result, err
+			}
+			reindexResp.Body.Close()
+
+			if reindexResp.StatusCode >= 300 {
+				return result, fmt.Errorf("failed reindexing %s -> %s: %s", indexName, newIndex, string(reindexBodyResp))
+			}
+
+			targetCountReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_count", opensearchUrl, newIndex), nil)
+			if err != nil {
+				return result, err
+			}
+
+			targetCountResp, err := foundClient.Client.Transport.Perform(targetCountReq)
+			if err != nil {
+				return result, err
+			}
+
+			targetCountBody, err := io.ReadAll(targetCountResp.Body)
+			if err != nil {
+				targetCountResp.Body.Close()
+				return result, err
+			}
+			targetCountResp.Body.Close()
+
+			if targetCountResp.StatusCode >= 300 {
+				return result, fmt.Errorf("failed counting target index %s: %s", newIndex, string(targetCountBody))
+			}
+
+			var targetCount struct {
+				Count int64 `json:"count"`
+			}
+			if err := json.Unmarshal(targetCountBody, &targetCount); err != nil {
+				return result, err
+			}
+
+			result.Counts = append(result.Counts, OpensearchPrefixFixCountSnapshot{
+				SourceIndex: indexName,
+				TargetIndex: newIndex,
+				SourceDocs:  sourceCount.Count,
+				TargetDocs:  targetCount.Count,
+			})
+
+			result.Reindexed = append(result.Reindexed, fmt.Sprintf("%s -> %s", indexName, newIndex))
+
+			aliasActionsList := []OpensearchAliasAction{}
+			if aliasIndices, ok := aliasToIndices[expectedAlias]; ok {
+				for _, aliasIndex := range aliasIndices {
+					if aliasIndex == newIndex {
+						continue
+					}
+					aliasActionsList = append(aliasActionsList, OpensearchAliasAction{
+						Remove: &OpensearchAliasActionTarget{Index: aliasIndex, Alias: expectedAlias},
+					})
+				}
+			}
+
+			aliasActionsList = append(aliasActionsList, OpensearchAliasAction{
+				Remove: &OpensearchAliasActionTarget{Index: indexName, Alias: doubleAlias},
+			})
+
+			isWriteIndex := true
+			aliasActionsList = append(aliasActionsList, OpensearchAliasAction{
+				Add: &OpensearchAliasActionTarget{Index: newIndex, Alias: expectedAlias, IsWriteIndex: &isWriteIndex},
+			})
+
+			aliasActions := OpensearchAliasActionsRequest{
+				Actions: aliasActionsList,
+			}
+
+			aliasBody, err := json.Marshal(aliasActions)
+			if err != nil {
+				return result, err
+			}
+
+			aliasReq, err := http.NewRequest("POST", fmt.Sprintf("%s/_aliases", opensearchUrl), bytes.NewBuffer(aliasBody))
+			if err != nil {
+				return result, err
+			}
+			aliasReq.Header.Set("Content-Type", "application/json")
+
+			aliasResp, err := foundClient.Client.Transport.Perform(aliasReq)
+			if err != nil {
+				return result, err
+			}
+
+			aliasRespBody, err := io.ReadAll(aliasResp.Body)
+			if err != nil {
+				aliasResp.Body.Close()
+				return result, err
+			}
+			aliasResp.Body.Close()
+
+			if aliasResp.StatusCode >= 300 {
+				return result, fmt.Errorf("failed updating aliases for %s: %s", newIndex, string(aliasRespBody))
+			}
+
+			result.AliasUpdates = append(result.AliasUpdates, fmt.Sprintf("%s -> %s", expectedAlias, newIndex))
+		}
+	}
+
+	result.Success = true
+	result.Reason = "Opensearch indices reindexed with single prefix"
+	return result, nil
+}
+
+func HandleFixOpensearchPrefix(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in opensearch prefix fix: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Api authentication failed"}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Only admins or support can run this"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	result, err := FixOpensearchIndexPrefix(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Failed fixing opensearch index prefix: %s", err)
+		result.Success = false
+		result.Reason = err.Error()
+		responseData, _ := json.Marshal(result)
+		resp.WriteHeader(500)
+		resp.Write(responseData)
+		return
+	}
+
+	responseData, err := json.Marshal(result)
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing"}`))
+		return
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write(responseData)
 }
 
 func RunOpensearchOps(ctx context.Context) (*opensearchapi.ClusterHealthResp, error) {
