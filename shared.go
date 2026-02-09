@@ -21163,6 +21163,54 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 	}
 
+	// Fallback to inject AI creds if the user don't have any
+	if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
+		apiKey := os.Getenv("AI_API_KEY")
+		if apiKey == "" {
+			apiKey = os.Getenv("OPENAI_API_KEY")
+		}
+
+		apiUrl := os.Getenv("AI_API_URL")
+		if apiUrl == "" {
+			apiUrl = os.Getenv("OPENAI_API_URL")
+		}
+		if apiUrl == "" {
+			apiUrl = "https://api.openai.com"
+		}
+
+		if len(apiKey) > 0 {
+			// TODO: Track actual token usage from response	
+
+			urlFound := false
+			apikeyFound := false
+			for i, param := range action.Parameters {
+				if param.Name == "url" {
+					action.Parameters[i].Value = apiUrl // Don't trust the user provided url, use the one from the env
+					urlFound = true
+				}
+				if param.Name == "apikey" {
+					action.Parameters[i].Value = apiKey
+					action.Parameters[i].Configuration = true
+					apikeyFound = true
+				}
+			}
+			if !urlFound {
+				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					Name:  "url",
+					Value: apiUrl,
+				})
+			}
+			if !apikeyFound {
+				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					Name:          "apikey",
+					Value:         apiKey,
+					Configuration: true,
+				})
+			}
+			log.Printf("[AUDIT] Injected system OpenAI credentials (fallback) for org %s", user.ActiveOrg.Id)
+		}
+	}
+
 	if runValidationAction {
 		log.Printf("\n\n[INFO] SHOULD BE Running validation action for %s for org %s (%s)\n\n", app.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
@@ -24419,6 +24467,37 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						for key, value := range mappedArgument {
 							// Handles special case for Continuing an existing Agent run by modifying the "finish" action
 							log.Printf("[DEBUG][%s] Handling key '%s' with value '%s' during agentic decision handling. findContinue: %#v", oldExecution.ExecutionId, key, value, findContinue)
+							if key == "approve" && decision.RunDetails.Status == "WAITING" && (decision.Category == "singul" || decision.Category == "standalone") {
+								log.Printf("[INFO][%s] Approving decision '%s' with value '%s' during agentic decision handling. This will finish the decision and the execution if it's a standalone decision.", oldExecution.ExecutionId, key, value)
+
+								if value == "true" {
+									unmarshalledDecision.Status = "RUNNING"
+
+									decision.RunDetails.Status = "RUNNING"
+									decision.Fields = append(decision.Fields, Valuereplace{
+										Key:    "approve",
+										Value:  fmt.Sprintf("Approved to continue at %s", time.Now().Format(time.RFC1123)),
+									})
+
+									fieldsChanged = true
+									cleanupFailures = true
+								} else if value == "false" { 
+									decision.RunDetails.Status = "FINISHED"
+									decision.Fields = append(decision.Fields, Valuereplace{
+										Key:    "approve",
+										Value:  fmt.Sprintf("Approval DENIED at %s. Should stop the agent.", time.Now().Unix()),
+									})
+
+									fieldsChanged = true
+									cleanupFailures = true
+								} else {
+									log.Printf("[ERROR][%s] Invalid value for 'approve': %s", oldExecution.ExecutionId, value)
+								}
+
+								unmarshalledDecision.Decisions[decisionIndex] = decision
+								break
+							}
+
 
 							if findContinue {
 								// The only key we care about in this case
