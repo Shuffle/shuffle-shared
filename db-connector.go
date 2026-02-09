@@ -3521,7 +3521,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 			DocumentID: orgId,
 		})
 
-		if err != nil {
+		if err != nil && !strings.Contains("status: 404", err.Error()){
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return stats, err
 		}
@@ -3529,12 +3529,20 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
-			//return stats, errors.New(fmt.Sprintf("Org stats for %s doesn't exist", orgId))
-			_, err := GetOrg(ctx, orgId)
+			org, err := GetOrg(ctx, orgId)
 			if err != nil {
-				log.Printf("[ERROR] Failed to get org(%s) for org_stats creation", orgId)
-				return stats, errors.New(fmt.Sprintf("Org not found to create org stats"))
+				log.Printf("[ERROR] Failed to get org(%s) for org_stats: %s", orgId, err)
+				return stats, err
 			}
+
+			stats.OrgId = orgId
+			stats.OrgName = org.Name
+			if err := SetOrgStatistics(ctx, *stats, orgId); err != nil {
+				log.Printf("[ERROR] Failed to set org(%s) stats after 404: %s", orgId, err)
+				return stats, err
+			}
+
+			return stats, nil
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
