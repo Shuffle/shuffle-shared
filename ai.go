@@ -8034,18 +8034,14 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 			nextActionType = decision.Action
 
-			// FIXME: Remove this for prod. It is a test of continuations
-			if debug { 
-				decision.ApprovalRequired = true
+			// Handles approvals
+			if decision.ApprovalRequired && decision.Action != "ask" && decision.Action != "question" && (decision.Category == "singul" || decision.Category == "standalone") && (decision.RunDetails.Status == "" || decision.RunDetails.Status == "RUNNING") {
+				log.Printf("[DEBUG] Decision %d requires approval. SHOULD mark as waiting for approval (not implemented)...", decision.I)
+				decision.RunDetails.StartedAt = time.Now().Unix()
+				decision.RunDetails.Status = "WAITING"
 
-				if decision.ApprovalRequired && decision.Action != "finish" && (decision.RunDetails.Status == "" || decision.RunDetails.Status == "RUNNING") {
-					log.Printf("[DEBUG] Decision %d requires approval. SHOULD mark as waiting for approval (not implemented)...", decision.I)
-					decision.RunDetails.StartedAt = time.Now().Unix()
-					decision.RunDetails.Status = "WAITING"
-
-					agentOutput.Decisions[decisionIndex] = decision
-					continue
-				}
+				agentOutput.Decisions[decisionIndex] = decision
+				continue
 			}
 
 			// A self-corrective measure for last-finished index
@@ -8070,18 +8066,9 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 					}
 				}
 
+				agentOutput.Decisions[decisionIndex] = decision
 				agentOutput.Status = "FINISHED"
 				agentOutput.CompletedAt = time.Now().Unix()
-
-				//workflowExecution.Results[resultIndex].Status = "SUCCESS"
-				//go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
-
-				//} else if decision.Action == "answer" {
-				//	agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
-				//	agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
-				//	agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
-
-				//go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
 
 			} else if decision.Action == "ask" || decision.Action == "question" {
 

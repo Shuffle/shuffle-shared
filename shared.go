@@ -24375,7 +24375,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									decision.RunDetails.Status = "RUNNING"
 									decision.Fields = append(decision.Fields, Valuereplace{
 										Key:    "approve",
-										Value:  fmt.Sprintf("Approved to continue by %s at %d", oldExecution.ExecutionId, time.Now().Unix()),
+										Value:  fmt.Sprintf("Approved to continue at %s", time.Now().Format(time.RFC1123)),
 									})
 
 									fieldsChanged = true
@@ -24384,7 +24384,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									decision.RunDetails.Status = "FINISHED"
 									decision.Fields = append(decision.Fields, Valuereplace{
 										Key:    "approve",
-										Value:  fmt.Sprintf("Denied to continue by %s at %d", oldExecution.ExecutionId, time.Now().Unix()),
+										Value:  fmt.Sprintf("Approval DENIED at %s. Should stop the agent.", time.Now().Unix()),
 									})
 
 									fieldsChanged = true
