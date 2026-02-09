@@ -4926,6 +4926,7 @@ type TestResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
+// Standard used for MCP
 type MCPRequest struct {
 	Jsonrpc string `json:"jsonrpc"`
 	ID      string `json:"id"`

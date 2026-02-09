@@ -7514,16 +7514,17 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 	}
 
-<<<<<<< llm-auth-fix
 	// Set model based on environment
 	aiModel := "gpt-5-mini"
-	if project.Environment != "cloud" {
-		aiModel = os.Getenv("AI_MODEL")
-		if aiModel == "" {
-			aiModel = os.Getenv("OPENAI_MODEL")
-		}
+	newAiModel := os.Getenv("AI_MODEL")
+	if newAiModel == "" {
+		newAiModel = os.Getenv("OPENAI_MODEL")
 	}
-=======
+
+	if len(newAiModel) > 0 {
+		aiModel = newAiModel
+	}
+
 	// Escape relevant... weird data 
 	//In case of previous escapes
 	metadata = strings.ReplaceAll(metadata, "${", "{")
@@ -7533,7 +7534,6 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	userMessage = strings.ReplaceAll(userMessage, "${", "{")
 	userMessage = strings.ReplaceAll(userMessage, "\\$", "$")
 	userMessage = strings.ReplaceAll(userMessage, "$", "\\$")
->>>>>>> main
 
 	completionRequest := openai.ChatCompletionRequest{
 		Model: aiModel,
