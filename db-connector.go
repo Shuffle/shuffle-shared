@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 
 	"crypto/sha256"
@@ -5163,7 +5164,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		}
 	}
 
-	// Can we diff here? Otherwise we may miss items hmm 
+	// Can we diff here? Otherwise we may miss items hmm
 	// Check if we recently cached the ID. Don't run updates more often than once a day for an app
 	checkCacheId := fmt.Sprintf("openapi_updatecheck_%s", id)
 	if _, err := GetCache(ctx, checkCacheId); err != nil {
@@ -5812,8 +5813,9 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 	return newUsers, nil
 }
 
-func GetUser(ctx context.Context, username string) (*User, error) {
+func GetUser(ctx context.Context, username string, returnEncrypted ...bool) (*User, error) {
 	curUser := &User{}
+	uuidRegex := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 	parsedKey := strings.ToLower(username)
 	cacheKey := fmt.Sprintf("user_%s", parsedKey)
@@ -5823,6 +5825,21 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &curUser)
 			if err == nil {
+				// uuid or not
+				if len(returnEncrypted) == 0 || !returnEncrypted[0] {
+					if len(curUser.ApiKey) > 0 && !uuidRegex.MatchString(curUser.ApiKey) {
+						decryptedApiKey, decErr := HandleKeyDecryption([]byte(curUser.ApiKey), "apikey")
+						if decErr == nil {
+							curUser.ApiKey = string(decryptedApiKey)
+						}
+					}
+					if len(curUser.Session) > 0 && !uuidRegex.MatchString(curUser.Session) {
+						decryptedSession, decErr := HandleKeyDecryption([]byte(curUser.Session), "session")
+						if decErr == nil {
+							curUser.Session = string(decryptedSession)
+						}
+					}
+				}
 				return curUser, nil
 			}
 		} else {
@@ -5889,12 +5906,40 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 		data, err := json.Marshal(curUser)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling user: %s", err)
+			// uuid check
+			if len(returnEncrypted) == 0 || !returnEncrypted[0] {
+				if len(curUser.ApiKey) > 0 && !uuidRegex.MatchString(curUser.ApiKey) {
+					if decrypted, decErr := HandleKeyDecryption([]byte(curUser.ApiKey), "apikey"); decErr == nil {
+						curUser.ApiKey = string(decrypted)
+					}
+				}
+				if len(curUser.Session) > 0 && !uuidRegex.MatchString(curUser.Session) {
+					if decrypted, decErr := HandleKeyDecryption([]byte(curUser.Session), "session"); decErr == nil {
+						curUser.Session = string(decrypted)
+					}
+				}
+			}
 			return curUser, nil
 		}
 
 		err = SetCache(ctx, cacheKey, data, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating cache: %s", err)
+		}
+	}
+
+	if len(returnEncrypted) == 0 || !returnEncrypted[0] {
+		if len(curUser.ApiKey) > 0 && !uuidRegex.MatchString(curUser.ApiKey) {
+			decryptedApiKey, err := HandleKeyDecryption([]byte(curUser.ApiKey), "apikey")
+			if err == nil {
+				curUser.ApiKey = string(decryptedApiKey)
+			}
+		}
+		if len(curUser.Session) > 0 && !uuidRegex.MatchString(curUser.Session) {
+			decryptedSession, err := HandleKeyDecryption([]byte(curUser.Session), "session")
+			if err == nil {
+				curUser.Session = string(decryptedSession)
+			}
 		}
 	}
 
@@ -6305,7 +6350,7 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 				if !strings.Contains(err.Error(), "doesn't exist") {
 					log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
 				}
-					
+
 				return
 			}
 
@@ -9826,17 +9871,34 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 		}
 	}
 
-	// Query for the specific API-key in users
+	sessionsToSearch := []string{sessionId}
+	encryptedSession, encErr := HandleKeyEncryption([]byte(sessionId), "session", true)
+	if encErr == nil {
+		sessionsToSearch = append([]string{string(encryptedSession)}, sessionsToSearch...)
+	} else {
+		log.Printf("[WARNING] Failed encrypting session: %s", encErr)
+	}
+
 	nameKey := "Users"
 	var users []User
 	if project.DbType == "opensearch" {
+		shouldClauses := make([]map[string]interface{}, len(sessionsToSearch))
+		for i, sess := range sessionsToSearch {
+			shouldClauses[i] = map[string]interface{}{
+				"match": map[string]interface{}{
+					"session": sess,
+				},
+			}
+		}
+
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
 			"size": 1000,
 			"query": map[string]interface{}{
-				"match": map[string]interface{}{
-					"session": sessionId,
+				"bool": map[string]interface{}{
+					"should":               shouldClauses,
+					"minimum_should_match": 1,
 				},
 			},
 		}
@@ -9858,7 +9920,7 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 				return User{}, nil
 			}
 
-			log.Printf("[ERROR] Error getting response from Opensearch (get api keys): %s", err)
+			log.Printf("[ERROR] Error getting response from Opensearch (get session): %s", err)
 			return User{}, err
 		}
 
@@ -9901,27 +9963,37 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 
 		users = []User{}
 		for _, hit := range wrapped.Hits.Hits {
-			if hit.Source.Session != sessionId {
+			// Check if session matches any of our search keys
+			matched := false
+			for _, sess := range sessionsToSearch {
+				if hit.Source.Session == sess {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				continue
 			}
-
 			users = append(users, hit.Source)
 		}
 
 	} else {
-		//log.Printf("[DEBUG] Searching for session %s", sessionId)
-		q := datastore.NewQuery(nameKey).Filter("session =", sessionId).Limit(1)
-		_, err := project.Dbclient.GetAll(ctx, q, &users)
-		if err != nil && len(users) == 0 {
-			if !strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[WARNING] Error getting session: %s", err)
-				return User{}, err
+		for _, sess := range sessionsToSearch {
+			q := datastore.NewQuery(nameKey).Filter("session =", sess).Limit(1)
+			_, err := project.Dbclient.GetAll(ctx, q, &users)
+			if err != nil && len(users) == 0 {
+				if !strings.Contains(err.Error(), `cannot load field`) {
+					continue
+				}
+			}
+			if len(users) > 0 {
+				break
 			}
 		}
 	}
 
 	if len(users) == 0 {
-		return User{}, errors.New("No users found for this apikey (1)")
+		return User{}, errors.New("No users found for this session")
 	}
 
 	if project.CacheDb {
@@ -9941,17 +10013,34 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 }
 
 func GetApikey(ctx context.Context, apikey string) (User, error) {
-	// Query for the specific API-key in users
+	// Build list of keys to search: encrypted (new) + plain (backwards compat)
+	keysToSearch := []string{apikey}
+	encryptedKey, encErr := HandleKeyEncryption([]byte(apikey), "apikey", true)
+	if encErr == nil {
+		keysToSearch = append([]string{string(encryptedKey)}, keysToSearch...)
+	}
+
 	nameKey := "Users"
 	var users []User
 	if project.DbType == "opensearch" {
+		// Build OR query for both encrypted and plain apikey
+		shouldClauses := make([]map[string]interface{}, len(keysToSearch))
+		for i, key := range keysToSearch {
+			shouldClauses[i] = map[string]interface{}{
+				"match": map[string]interface{}{
+					"apikey": key,
+				},
+			}
+		}
+
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
 			"size": 1000,
 			"query": map[string]interface{}{
-				"match": map[string]interface{}{
-					"apikey": apikey,
+				"bool": map[string]interface{}{
+					"should":               shouldClauses,
+					"minimum_should_match": 1,
 				},
 			},
 		}
@@ -10016,20 +10105,32 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 		users = []User{}
 		for _, hit := range wrapped.Hits.Hits {
-			if hit.Source.ApiKey != apikey {
+			// Check if apikey matches any of our search keys
+			matched := false
+			for _, key := range keysToSearch {
+				if hit.Source.ApiKey == key {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				continue
 			}
-
 			users = append(users, hit.Source)
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("apikey =", apikey).Limit(1)
-		_, err := project.Dbclient.GetAll(ctx, q, &users)
-		if err != nil && len(users) == 0 {
-			if !strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[WARNING] Error getting apikey: %s", err)
-				return User{}, err
+		// Datastore: try encrypted first, then plain (no IN filter support)
+		for _, key := range keysToSearch {
+			q := datastore.NewQuery(nameKey).Filter("apikey =", key).Limit(1)
+			_, err := project.Dbclient.GetAll(ctx, q, &users)
+			if err != nil && len(users) == 0 {
+				if !strings.Contains(err.Error(), `cannot load field`) {
+					continue
+				}
+			}
+			if len(users) > 0 {
+				break
 			}
 		}
 	}
@@ -14180,7 +14281,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 
 	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
 	if len(category) > 0 && category != "default" {
-		// FIXME: If they key itself is 'test_protected' and category 
+		// FIXME: If they key itself is 'test_protected' and category
 		// is 'protected' this breaks... Keeping it for now.
 		if !strings.HasSuffix(id, fmt.Sprintf("_%s", category)) {
 			id = fmt.Sprintf("%s_%s", id, category)
@@ -14440,18 +14541,18 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		} else {
 			//log.Printf("\n\n[INFO] Should check for SSO during setup - finding main org\n\n")
 			/*
-			orgs, err := GetAllOrgs(ctx)
-			if err == nil {
-				for _, org := range orgs {
-					if len(org.ManagerOrgs) == 0 && len(org.SSOConfig.SSOEntrypoint) > 0 {
-						log.Printf("[INFO] Set initial SSO url for logins to %s", org.SSOConfig.SSOEntrypoint)
-						SSOUrl = org.SSOConfig.SSOEntrypoint
-						break
+				orgs, err := GetAllOrgs(ctx)
+				if err == nil {
+					for _, org := range orgs {
+						if len(org.ManagerOrgs) == 0 && len(org.SSOConfig.SSOEntrypoint) > 0 {
+							log.Printf("[INFO] Set initial SSO url for logins to %s", org.SSOConfig.SSOEntrypoint)
+							SSOUrl = org.SSOConfig.SSOEntrypoint
+							break
+						}
 					}
+				} else {
+					log.Printf("[WARNING] Error loading orgs: %s", err)
 				}
-			} else {
-				log.Printf("[WARNING] Error loading orgs: %s", err)
-			}
 			*/
 		}
 	} else {
@@ -15171,7 +15272,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			"size": max,
 			"sort": map[string]interface{}{
 				"edited": map[string]interface{}{
-					"order": "desc",
+					"order":         "desc",
 					"unmapped_type": "date",
 				},
 			},

@@ -3576,7 +3576,45 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		user.SessionLogin = true
 
-		// Means session exists, but
+		uuidRegex := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+		// since GetSessionNew returns encrypted values
+		plainApiKey := user.ApiKey
+		if len(plainApiKey) > 0 && !uuidRegex.MatchString(plainApiKey) {
+			if decrypted, err := HandleKeyDecryption([]byte(plainApiKey), "apikey"); err == nil {
+				plainApiKey = string(decrypted)
+			}
+		}
+		plainSession := user.Session
+		if len(plainSession) > 0 && !uuidRegex.MatchString(plainSession) {
+			if decrypted, err := HandleKeyDecryption([]byte(plainSession), "session"); err == nil {
+				plainSession = string(decrypted)
+			}
+		}
+
+		// save encrypted to just db
+		if uuidRegex.MatchString(user.ApiKey) {
+			encryptedKey, err := HandleKeyEncryption([]byte(user.ApiKey), "apikey", true)
+			if err == nil {
+				user.ApiKey = string(encryptedKey)
+				SetApikey(ctx, user)
+				SetUser(ctx, &user, false)
+			}
+		}
+
+		if user.Session == sessionToken && uuidRegex.MatchString(sessionToken) {
+			encryptedSession, err := HandleKeyEncryption([]byte(sessionToken), "session", true)
+			if err == nil {
+				user.Session = string(encryptedSession)
+				SetSession(ctx, user, user.Session)
+			}
+		}
+
+		// we use user.Apikey throughout the codebase
+		// from the returned function value. Trying to keep the usage consistent.
+		user.ApiKey = plainApiKey
+		user.Session = plainSession
+
 		return user, nil
 	}
 
@@ -11989,7 +12027,14 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	expiration := time.Now().Add(8 * time.Hour)
 
-	newCookie := ConstructSessionCookie(user.Session, expiration)
+	// Decrypt session if it's encrypted
+	sessionValue := user.Session
+	decryptedSession, err := HandleKeyDecryption([]byte(sessionValue), "session")
+	if err == nil {
+		sessionValue = string(decryptedSession)
+	}
+
+	newCookie := ConstructSessionCookie(sessionValue, expiration)
 	http.SetCookie(resp, newCookie)
 
 	newCookie.Name = "__session"
@@ -15585,24 +15630,31 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	// Had to set this due to session hashing rollback
 	if len(userdata.Session) != 0 && len(userdata.Session) == 36 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
+
+		// Decrypt session if it's encrypted
+		sessionValue := userdata.Session
+		decryptedSession, err := HandleKeyDecryption([]byte(sessionValue), "session")
+		if err == nil {
+			sessionValue = string(decryptedSession)
+		}
+
 		expiration := time.Now().Add(8 * time.Hour)
 
-		newCookie := ConstructSessionCookie(userdata.Session, expiration)
+		newCookie := ConstructSessionCookie(sessionValue, expiration)
 		http.SetCookie(resp, newCookie)
 
 		newCookie.Name = "__session"
 		http.SetCookie(resp, newCookie)
 
-		//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", userdata.Session)
 		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
 			Key:        "session_token",
-			Value:      userdata.Session,
+			Value:      sessionValue,
 			Expiration: expiration.Unix(),
 		})
 
 		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
 			Key:        "__session",
-			Value:      userdata.Session,
+			Value:      sessionValue,
 			Expiration: expiration.Unix(),
 		})
 
@@ -15617,7 +15669,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 		}
 
-		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, userdata.Session, expiration.Unix(), regionUrl)
+		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, sessionValue, expiration.Unix(), regionUrl)
 		newData, err := json.Marshal(returnValue)
 		if err == nil {
 			loginData = string(newData)
@@ -23423,13 +23475,19 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (1)", userName)
 					sessionToken := user.Session
+					// Decrypt session if it's encrypted
+					decryptedSession, decErr := HandleKeyDecryption([]byte(sessionToken), "session")
+					if decErr == nil {
+						sessionToken = string(decryptedSession)
+					}
+
 					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
 					http.SetCookie(resp, newCookie)
 
-					err = SetSession(ctx, user, sessionToken)
+					err = SetSession(ctx, user, user.Session)
 					if err != nil {
 						log.Printf("[WARNING] Error creating session for user: %s", err)
 						resp.WriteHeader(401)
@@ -23712,13 +23770,19 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
 					sessionToken := user.Session
+					// Decrypt session if it's encrypted
+					decryptedSession, decErr := HandleKeyDecryption([]byte(sessionToken), "session")
+					if decErr == nil {
+						sessionToken = string(decryptedSession)
+					}
+
 					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
 					http.SetCookie(resp, newCookie)
 
-					err = SetSession(ctx, user, sessionToken)
+					err = SetSession(ctx, user, user.Session)
 					if err != nil {
 						log.Printf("[WARNING] Error creating session for user: %s", err)
 						resp.WriteHeader(401)
