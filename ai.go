@@ -8330,6 +8330,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 				execution.Results[resultIndex].Status = "SUCCESS"
 				execution.Results[resultIndex].CompletedAt = agentOutput.CompletedAt
+				log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for agent action %s", execution.ExecutionId, startNode.ID)
 				go sendAgentActionSelfRequest("SUCCESS", execution, execution.Results[resultIndex])
 				break
 			}
