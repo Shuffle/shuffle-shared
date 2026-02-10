@@ -7928,7 +7928,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			log.Printf("\n\n[ERROR][%s] AI Agent: Found choicesString (1) in AI Agent response error handling: %s\n\n", execution.ExecutionId, choicesString)
 
 		} else if len(openaiOutput.Choices) == 0 {
-			log.Printf("[ERROR][%s] AI Agent: No choices found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
+			log.Printf("[ERROR][%s] AI Agent: No choices found in AI agent response (1). Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
 
 			// FIXME: This is specific to OpenAI, but may work for others :thinking:
 			newOutput := openai.ErrorResponse{}
@@ -8931,7 +8931,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		}
 
 		if len(openaiResp.Choices) == 0 {
-			return "", errors.New("No choices found in OpenAI response. This should be AT LEAST 1.")
+			return "", errors.New("No choices found in OpenAI response (2). This should be AT LEAST 1.")
 		}
 
 		contentOutput = openaiResp.Choices[0].Message.Content

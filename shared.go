@@ -34677,7 +34677,7 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 		}
 
 		if len(action.CategoryLabel) > 0 {
-			log.Printf("ACTION TAG: %#v => %#v", action.Label, action.CategoryLabel)
+			//log.Printf("ACTION TAG: %#v => %#v", action.Label, action.CategoryLabel)
 			returnActions = append(returnActions, action)
 			continue
 		}
