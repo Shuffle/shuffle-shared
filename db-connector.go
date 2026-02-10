@@ -1745,6 +1745,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 				//} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
 			} else if (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") && (innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent") {
+				if workflowExecution.Results[resultIndex].StartedAt == 0 {
+					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMicro()
+				}
 
 				// Auto fixing decision data based on cache for better decisionmaking
 				// Map the result into AgentOutput to check decisions
@@ -1806,6 +1809,22 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}
 							continue
 						} else {
+							if decision.Action == "finish" && decision.RunDetails.Status == "" {
+								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+								if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
+									mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+								}
+
+								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+								mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
+								decisionsUpdated = true
+
+								marshalledDecision, err := json.Marshal(mappedOutput.Decisions[decisionIndex])
+								if err == nil {
+									err = SetCache(ctx, decisionId, marshalledDecision, 60)
+								}
+							}
+
 							if debug { 
 								log.Printf("[DEBUG][%s] Decision %s for agent action %s is still RUNNING but no completed at timestamp. Checking cache for updates.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID)
 							}
@@ -1891,7 +1910,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							sendAgentActionSelfRequest("WAITING", workflowExecution, workflowExecution.Results[resultIndex])
 						}()
 					}
-
+				} else if (result.Status == "" || result.Status == "WAITING") && mappedOutput.Status == "FINISHED" {
+					workflowExecution.Results[resultIndex].Status = "SUCCESS"
+					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 				}
 
 				if decisionsUpdated {
