@@ -1754,7 +1754,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				mappedOutput := AgentOutput{}
 				err = json.Unmarshal([]byte(innerresult.Result), &mappedOutput)
 				if err != nil {
-					log.Printf("[DEBUG] Failed in mapped output mapping: %s", err)
+					log.Printf("[WARNING] Agent mapping: Failed in mapped output mapping: %s", err)
 				}
 
 				decisionsUpdated := false
