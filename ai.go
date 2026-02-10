@@ -11218,6 +11218,8 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		return
 	}
 
+	
+
 	output, err := generateWorkflowJson(ctx, input, user, workflow)
 	if err != nil {
 		reason := err.Error()
@@ -11421,7 +11423,8 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	output, err := editWorkflowWithLLM(ctx, workflow, user, editRequest)
+	output, err := editWorkflowWithLLMV2(ctx, workflow, user, editRequest)
+
 	if err != nil {
 		reason := err.Error()
 		if strings.HasPrefix(reason, "AI rejected the task: ") {
@@ -11436,6 +11439,8 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
+
+	
 
 	if project.Environment == "cloud" {
 		IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
@@ -11454,6 +11459,1119 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(workflowJson)
+}
+
+// func newGeneratePrototypeWorkflow() *Workflow {
+// 	return &Workflow{
+// 		ID: uuid.NewV4().String(),
+// 		Actions: []Action{
+// 			{
+// 				ID:         uuid.NewV4().String(),
+// 				AppName:   "Prototype",
+// 				Label:     "Generate Prototype",
+// 				Parameters: []WorkflowAppActionParameter{},
+// 			},
+// 		},
+// 		Triggers:  []Trigger{},
+// 		Branches:  []Branch{},
+// 	}
+// }
+
+func editWorkflowWithLLMV2(ctx context.Context, workflow *Workflow, user User, input WorkflowEditAIRequest) (*Workflow, error) {
+
+	// we are going to split this into multiple stages where
+	// stage 1 is going to be a intent classifier
+	// at this stage it breaks down what should be done to full the user request
+	// lets start by identifying the multiple intents
+
+	intents, err := classifyMultipleIntents(input.Query, workflow)
+
+	if err != nil {
+		return nil, err
+	}
+
+	for _, task := range intents.Tasks {
+		log.Printf("[DEBUG] Detected intent: %s on target node: %v from source text: %s", task.Intent, task.TargetNode, task.SourceText)
+
+		switch task.Intent {
+		case "ADD_NODE":
+			workflow, err = handleAddNodeTask(ctx, workflow, task, input.Environment, user)
+			if err != nil {
+				log.Printf("[WARN] ADD_NODE failed for workflow %s: %s", workflow.ID, err)
+			}
+		case "REMOVE_NODE":
+			workflow, err = handleRemoveNodeTask(workflow, task)
+			if err != nil {
+				log.Printf("[WARN] REMOVE_NODE failed for workflow %s: %s", workflow.ID, err)
+			}
+		case "ADD_CONDITION":
+			workflow, err = handleAddConditionTask(workflow, task)
+			if err != nil {
+				log.Printf("[WARN] ADD_CONDITION failed for workflow %s: %s", workflow.ID, err)
+			}
+		case "REMOVE_CONDITION":
+			workflow, err = handleRemoveConditionTask(workflow, task)
+			if err != nil {
+				log.Printf("[WARN] REMOVE_CONDITION failed for workflow %s: %s", workflow.ID, err)
+			}
+		case "MODIFY_ACTION_PARAMETER":
+			workflow, err = handleModifyParameterTask(workflow, task)
+			if err != nil {
+				log.Printf("[WARN] MODIFY_ACTION_PARAMETER failed for workflow %s: %s", workflow.ID, err)
+			}
+		case "NO_ACTION_NEEDED":
+			log.Printf("[DEBUG] No action needed for workflow %s", workflow.ID)
+		default:
+			log.Printf("[WARN] Unknown intent '%s' for workflow %s", task.Intent, workflow.ID)
+		}
+	}
+
+	return workflow, nil
+}
+
+func handleAddNodeTask(ctx context.Context, workflow *Workflow, task WorkflowIntentTask, environment string, user User) (*Workflow, error) {
+
+	systemMessage := `Generate a single JSON node (action or trigger) for Shuffle workflow based on user request.
+
+CRITICAL RULES:
+- Use real API endpoints and standard HTTP methods (GET/POST/PUT/DELETE/PATCH)
+- Never leave "url" field empty - use actual API base URLs like https://api.vendor.com
+- For unknown APIs, use standard patterns: https://api.vendor.com/v1 or https://vendor.com/api
+- For on-premise systems, use templates: https://<server-ip>/api/v1
+
+node in shuffle comes in two types: Trigger and Action, Trigger is the starting point of workflow and action is the step that performs some operation
+Here is an example format of an action
+
+ADDING A NEW APP ACTION or TRIGGER
+     If the user says:
+      - Add a step to send an email after this
+	  - Insert a new action before X
+	  - Add an enrichment step between trigger and Slack
+
+	  Some important notes:
+	    when adding a new app action, keep in mind that:
+		Each app and action in the workflow represents a real API call. When modifying actions or adding new ones:
+		- Use public OpenAPI specs or common API conventions
+		- Accurately infer the correct method, endpoint, headers, and parameters
+		- Avoid guessing random fields, stick to what’s real or well-known
+		- If you're unsure of an API detail, **make an educated guess using real-world patterns.**
+		- You must never leave the "url" field empty.
+
+			If you know the official base URL, use it directly
+			If you're unsure, guess using common formats like:
+
+			https://api.vendor.com/v1
+			https://vendor.com/api or 
+			https://api.vendor.com
+
+			Also when ever you use the base url make sure you include it as is, for example if a vendor base url according to their open api spec or public doc is like this "https://api.vendor.com/v1"  or any other variation, just use the base url as is and do not change it in any way
+			You are allowed to use your training to approximate well-known APIs
+			Do **not** leave the field out or null under any circumstance
+
+			example "url": "https://slack.com/api"
+
+			The only two times where the url can be less relevant is when you are using the "Shuffle Tools" app and its actions like "execute_python" or "run_ssh_command" even in these cases provide something like this "url": "https://shuffle.io"
+			The other case is when the api server is actually running on premises where the url is not known in advance, for example fortigate firewall or Classic Active Directory (AD), in those case you can use template urls like "url": "https://<fortigate-ip>/api/v2", "url": "https://<your-server-ip>/api/v1"
+			But apart from these cases most of the platforms are in the cloud and you can find the base url in their documentation or OpenAPI spec, so you can use that as the url.
+		
+			Here is the format for adding a new action:
+			Action format
+
+			 "action" :{
+				"id": "sample-id", // do not stress about this, the system will generate a unique ID for you
+				"app_name": "string",  // e.g., "Jira"
+				"action_name": "custom_action", // always keep as "custom_action" except for the Shuffle Tools app where it can be "execute_python" or "run_ssh_command"
+				
+				TRIGGER FORMAT:
+				{
+				"trigger": {
+					"app_name": "Webhook|Schedule",
+					"label": "unique_label_name",
+					"parameters": [
+					{"name": "url|cron", "value": "webhook_url|cron_expression"}
+					]
+				}
+				}
+
+SPECIAL CASES:
+- Shuffle Tools app: use "execute_python" or "run_ssh_command" as action_name, url: "https://shuffle.io"
+- Reference previous steps: use $exec.field_name or $label_name.field_name
+
+Return ONLY the JSON object, no explanations.
+`
+
+	finalContentOutput, err := RunAiQuery(systemMessage, task.SourceText)
+	if err != nil {
+		return nil, err
+	}
+
+	var nodeResponse AddNodeResponse
+	err = json.Unmarshal([]byte(finalContentOutput), &nodeResponse)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse add node response: %s", err)
+	}
+
+	var newWorkflowApp WorkflowApp
+	var newTriggerApp Trigger
+
+	// Use the parsed response
+	if nodeResponse.Trigger != nil {
+		TriggerImage := GetTriggerData(nodeResponse.Trigger.AppName)
+		switch strings.ToLower(nodeResponse.Trigger.AppName) {
+		case "webhook":
+			ID := uuid.NewV4().String()
+			webhookURL := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", ID)
+			if project.Environment != "cloud" {
+				if len(os.Getenv("BASE_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("BASE_URL"), ID)
+				} else if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+					webhookURL = fmt.Sprintf("%s/api/v1/hooks/webhook_%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"), ID)
+				} else {
+					port := os.Getenv("PORT")
+					if len(port) == 0 {
+						port = "5001"
+					}
+					webhookURL = fmt.Sprintf("http://localhost:%s/api/v1/hooks/webhook_%s", port, ID)
+				}
+			}
+
+			newTriggerApp = Trigger{
+				AppName:     "Webhook",
+				AppVersion:  "1.0.0",
+				Label:       nodeResponse.Trigger.Label,
+				TriggerType: "WEBHOOK",
+				ID:          ID,
+				Description: "Custom HTTP input trigger",
+				LargeImage:  TriggerImage,
+				Environment: environment,
+				Status:      "uninitialized",
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "url", Value: webhookURL},
+					{Name: "tmp", Value: ""},
+					{Name: "auth_headers", Value: ""},
+					{Name: "custom_response_body", Value: ""},
+					{Name: "await_response", Value: "v1"},
+				},
+			}
+		case "schedule":
+			ScheduleValue := "*/25 * * * *"
+			if len(nodeResponse.Trigger.Params) != 0 {
+				ScheduleValue = nodeResponse.Trigger.Params[0].Value
+			}
+			newTriggerApp = Trigger{
+				AppName:     "Schedule",
+				AppVersion:  "1.0.0",
+				Label:       nodeResponse.Trigger.Label,
+				TriggerType: "SCHEDULE",
+				ID:          uuid.NewV4().String(),
+				Description: "Schedule time trigger",
+				LargeImage:  TriggerImage,
+				Environment: environment,
+				Status:      "uninitialized",
+				Parameters: []WorkflowAppActionParameter{
+					{Name: "cron", Value: ScheduleValue},
+					{Name: "execution_argument", Value: ""},
+				},
+			}
+
+		default:
+			return nil, fmt.Errorf("unsupported trigger app name: %s", nodeResponse.Trigger.AppName)
+		}
+	} else if nodeResponse.Action != nil {
+		// Handle action - find the app using same approach as generateWorkflowJson
+		newActionItem := nodeResponse.Action
+		appName := strings.TrimSpace(newActionItem.AppName)
+		foundApp := false
+
+		if appName != "" {
+			// 1) First try local DB search
+			foundApps, err := FindWorkflowAppByName(ctx, appName)
+			if err == nil && len(foundApps) > 0 {
+				newWorkflowApp = foundApps[0]
+				foundApp = true
+			}
+
+			// 2) Fallback to Algolia search for public apps
+			if !foundApp {
+				algoliaApp, err := HandleAlgoliaAppSearch(ctx, appName)
+				if err == nil && len(algoliaApp.ObjectID) > 0 {
+					discoveredApp := &WorkflowApp{}
+					standalone := os.Getenv("STANDALONE") == "true"
+					if standalone {
+						discoveredApp, err = GetSingulApp("", algoliaApp.ObjectID)
+					} else {
+						discoveredApp, err = GetApp(ctx, algoliaApp.ObjectID, user, false)
+					}
+					if err == nil && discoveredApp != nil {
+						newWorkflowApp = *discoveredApp
+						foundApp = true
+					}
+				}
+			}
+
+			if !foundApp {
+				log.Printf("[WARN] ADD_NODE failed - App not found: '%s' for workflow %s. Workflow unchanged.", appName, workflow.ID)
+				return workflow, nil
+			}
+		}
+	}
+
+	// Now add the created trigger/action to the workflow and handle branches
+	if nodeResponse.Trigger != nil {
+		// Calculate trigger position based on existing nodes
+		triggerX := -312.6988673793812 // Default position
+		triggerY := 190.6413454035773
+
+		// If we have existing triggers, position before the first one
+		if len(workflow.Triggers) > 0 {
+			triggerX = workflow.Triggers[0].Position.X - 437.0
+		} else if len(workflow.Actions) > 0 {
+			// If no triggers but actions exist, position before first action
+			triggerX = workflow.Actions[0].Position.X - 437.0
+		}
+		// If no nodes exist, use default position
+
+		newTriggerApp.Position = Position{
+			X: triggerX,
+			Y: triggerY,
+		}
+
+		// Add trigger to the workflow
+		workflow.Triggers = append(workflow.Triggers, newTriggerApp)
+
+		// Create branch from trigger to first action (if actions exist)
+		if len(workflow.Actions) > 0 {
+			firstAction := workflow.Actions[0]
+			newBranch := Branch{
+				ID:            uuid.NewV4().String(),
+				SourceID:      newTriggerApp.ID,
+				DestinationID: firstAction.ID,
+			}
+			workflow.Branches = append(workflow.Branches, newBranch)
+
+			// Update workflow start if needed
+			if workflow.Start == "" {
+				workflow.Start = firstAction.ID
+			}
+		}
+
+	} else if nodeResponse.Action != nil {
+		// Create new action from the AI response and found app
+		// Note: If app wasn't found, we already returned early above
+		newAction := Action{
+			ID:          uuid.NewV4().String(),
+			AppName:     newWorkflowApp.Name,
+			AppVersion:  newWorkflowApp.AppVersion,
+			Label:       nodeResponse.Action.Label,
+			Name:        nodeResponse.Action.ActionName,
+			Environment: environment,
+			IsValid:     true,
+			IsStartNode: false,
+		}
+
+		// Add parameters from AI response
+		var parameters []WorkflowAppActionParameter
+		for _, param := range nodeResponse.Action.Params {
+			parameters = append(parameters, WorkflowAppActionParameter{
+				Name:  param.Name,
+				Value: param.Value,
+			})
+		}
+		newAction.Parameters = parameters
+
+		// Find insert position based on task.InsertAfter or task.InsertBefore
+		insertAfterID, insertBeforeID := findInsertPositionByLabel(workflow, task)
+
+		// Insert action at the correct position
+		workflow = insertActionAtPosition(workflow, newAction, insertAfterID, insertBeforeID)
+	}
+
+	return workflow, nil
+}
+
+func handleRemoveNodeTask(workflow *Workflow, task WorkflowIntentTask) (*Workflow, error) {
+	if task.TargetNode == nil || *task.TargetNode == "" {
+		return workflow, fmt.Errorf("no target_node specified for REMOVE_NODE")
+	}
+
+	targetLabel := strings.ToLower(*task.TargetNode)
+	log.Printf("[DEBUG] Attempting to remove node with label: %s", targetLabel)
+
+	// Try to find and remove from actions first
+	actionRemoved, actionID := removeActionByLabel(workflow, targetLabel)
+	if actionRemoved {
+		log.Printf("[INFO] Removed action with ID: %s", actionID)
+		fixBranchesAfterRemoval(workflow, actionID)
+		return workflow, nil
+	}
+
+	// Try to find and remove from triggers
+	triggerRemoved, triggerID := removeTriggerByLabel(workflow, targetLabel)
+	if triggerRemoved {
+		log.Printf("[INFO] Removed trigger with ID: %s", triggerID)
+		fixBranchesAfterRemoval(workflow, triggerID)
+		return workflow, nil
+	}
+
+	return workflow, fmt.Errorf("node not found with label: %s", *task.TargetNode)
+}
+
+func removeActionByLabel(workflow *Workflow, targetLabel string) (removed bool, removedID string) {
+	for i, action := range workflow.Actions {
+		actionLabel := strings.ToLower(action.Label)
+		actionAppName := strings.ToLower(action.AppName)
+
+		if actionLabel == targetLabel || actionAppName == targetLabel ||
+			strings.Contains(actionLabel, targetLabel) || strings.Contains(targetLabel, actionLabel) ||
+			strings.Contains(actionAppName, targetLabel) || strings.Contains(targetLabel, actionAppName) {
+
+			removedID = action.ID
+
+			// Handle start node
+			if workflow.Start == removedID {
+				for _, branch := range workflow.Branches {
+					if branch.SourceID == removedID {
+						workflow.Start = branch.DestinationID
+						for j := range workflow.Actions {
+							if workflow.Actions[j].ID == branch.DestinationID {
+								workflow.Actions[j].IsStartNode = true
+								break
+							}
+						}
+						break
+					}
+				}
+				if workflow.Start == removedID {
+					workflow.Start = ""
+				}
+			}
+
+			workflow.Actions = append(workflow.Actions[:i], workflow.Actions[i+1:]...)
+			return true, removedID
+		}
+	}
+	return false, ""
+}
+
+func removeTriggerByLabel(workflow *Workflow, targetLabel string) (removed bool, removedID string) {
+	for i, trigger := range workflow.Triggers {
+		triggerLabel := strings.ToLower(trigger.Label)
+		triggerAppName := strings.ToLower(trigger.AppName)
+
+		if triggerLabel == targetLabel || triggerAppName == targetLabel ||
+			strings.Contains(triggerLabel, targetLabel) || strings.Contains(targetLabel, triggerLabel) ||
+			strings.Contains(triggerAppName, targetLabel) || strings.Contains(targetLabel, triggerAppName) {
+
+			removedID = trigger.ID
+			workflow.Triggers = append(workflow.Triggers[:i], workflow.Triggers[i+1:]...)
+			return true, removedID
+		}
+	}
+	return false, ""
+}
+
+func fixBranchesAfterRemoval(workflow *Workflow, removedID string) {
+	var incomingSourceIDs []string
+	var outgoingDestIDs []string
+
+	for _, branch := range workflow.Branches {
+		if branch.DestinationID == removedID {
+			incomingSourceIDs = append(incomingSourceIDs, branch.SourceID)
+		}
+		if branch.SourceID == removedID {
+			outgoingDestIDs = append(outgoingDestIDs, branch.DestinationID)
+		}
+	}
+
+	// Remove branches involving removed node
+	var newBranches []Branch
+	for _, branch := range workflow.Branches {
+		if branch.SourceID != removedID && branch.DestinationID != removedID {
+			newBranches = append(newBranches, branch)
+		}
+	}
+	workflow.Branches = newBranches
+
+	// Reconnect: A -> Removed -> B becomes A -> B
+	for _, sourceID := range incomingSourceIDs {
+		for _, destID := range outgoingDestIDs {
+			exists := false
+			for _, branch := range workflow.Branches {
+				if branch.SourceID == sourceID && branch.DestinationID == destID {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				workflow.Branches = append(workflow.Branches, Branch{
+					ID:            uuid.NewV4().String(),
+					SourceID:      sourceID,
+					DestinationID: destID,
+				})
+			}
+		}
+	}
+}
+
+func handleAddConditionTask(workflow *Workflow, task WorkflowIntentTask) (*Workflow, error) {
+	// Silent fail: no target node specified
+	if task.TargetNode == nil || *task.TargetNode == "" {
+		log.Printf("[WARN] ADD_CONDITION: no target_node (source node) specified, skipping")
+		return workflow, nil
+	}
+
+	// target_node = source node (where condition checks from)
+	// insert_before = destination node (where flow goes if condition passes)
+	sourceLabel := strings.ToLower(*task.TargetNode)
+
+	// Find source node ID
+	sourceID := findNodeIDByLabel(workflow, sourceLabel)
+	if sourceID == "" {
+		log.Printf("[WARN] ADD_CONDITION: source node '%s' not found, skipping", sourceLabel)
+		return workflow, nil
+	}
+
+	// Find destination node ID if specified
+	var destID string
+	if task.InsertBefore != nil && *task.InsertBefore != "" {
+		destID = findNodeIDByLabel(workflow, strings.ToLower(*task.InsertBefore))
+	}
+
+	// Find the branch to add condition to
+	branchIndex := -1
+	for i, branch := range workflow.Branches {
+		if branch.SourceID == sourceID {
+			if destID == "" || branch.DestinationID == destID {
+				branchIndex = i
+				break
+			}
+		}
+	}
+
+	if branchIndex == -1 {
+		log.Printf("[WARN] ADD_CONDITION: no branch found from '%s', skipping", sourceLabel)
+		return workflow, nil
+	}
+
+	// Build workflow context for LLM
+	var workflowContext strings.Builder
+	workflowContext.WriteString("Available nodes in workflow:\n")
+	for _, trigger := range workflow.Triggers {
+		workflowContext.WriteString(fmt.Sprintf("- Trigger: %s (label: %s) - use $exec to reference\n", trigger.AppName, trigger.Label))
+	}
+	for _, action := range workflow.Actions {
+		workflowContext.WriteString(fmt.Sprintf("- Action: %s (label: %s) - use $%s to reference\n", action.AppName, action.Label, action.Label))
+	}
+
+	// LLM prompt to parse the condition from user request
+	systemMessage := `You parse condition requests for Shuffle workflows.
+
+Conditions control flow between nodes. If condition is false, downstream actions are skipped.
+
+AVAILABLE CONDITION TYPES:
+- equals: exact match
+- doesnotequal: not equal
+- startswith: string starts with value
+- endswith: string ends with value
+- contains: string contains value
+- containsanyof: contains any of comma-separated values
+- largerthan: numeric greater than
+- lessthan: numeric less than
+- isempty: check if empty
+
+REFERENCING VALUES:
+- For triggers: use $exec.field_name (e.g., $exec.severity, $exec.status)
+- For actions: use $label_name.field_name (e.g., $http_1.status, $jira_1.success)
+
+Return ONLY valid JSON:
+{
+  "source_value": "$exec.field_name or $label.field",
+  "condition_type": "equals",
+  "destination_value": "expected_value"
+}
+
+Examples:
+- "only if status is success" -> {"source_value": "$exec.status", "condition_type": "equals", "destination_value": "success"}
+- "when severity contains critical" -> {"source_value": "$exec.severity", "condition_type": "contains", "destination_value": "critical"}
+- "if count is greater than 10" -> {"source_value": "$http_1.count", "condition_type": "largerthan", "destination_value": "10"}`
+
+	userPrompt := fmt.Sprintf("%s\n\nUser request: \"%s\"\n\nParse the condition and return JSON.", workflowContext.String(), task.SourceText)
+
+	llmOutput, err := RunAiQuery(systemMessage, userPrompt)
+	if err != nil {
+		log.Printf("[WARN] ADD_CONDITION: LLM call failed: %s, skipping", err)
+		return workflow, nil
+	}
+
+	// Clean and parse response
+	llmOutput = strings.TrimSpace(llmOutput)
+	llmOutput = strings.TrimPrefix(llmOutput, "```json")
+	llmOutput = strings.TrimPrefix(llmOutput, "```")
+	llmOutput = strings.TrimSuffix(llmOutput, "```")
+	llmOutput = strings.TrimSpace(llmOutput)
+
+	var conditionResponse struct {
+		SourceValue      string `json:"source_value"`
+		ConditionType    string `json:"condition_type"`
+		DestinationValue string `json:"destination_value"`
+	}
+
+	err = json.Unmarshal([]byte(llmOutput), &conditionResponse)
+	if err != nil {
+		log.Printf("[WARN] ADD_CONDITION: failed to parse LLM response: %s, skipping", err)
+		return workflow, nil
+	}
+
+	// Validate condition type
+	validConditions := map[string]bool{
+		"equals": true, "doesnotequal": true,
+		"startswith": true, "endswith": true,
+		"contains": true, "containsanyof": true,
+		"largerthan": true, "lessthan": true,
+		"isempty": true,
+	}
+	if !validConditions[strings.ToLower(conditionResponse.ConditionType)] {
+		log.Printf("[WARN] ADD_CONDITION: invalid condition type '%s', defaulting to 'equals'", conditionResponse.ConditionType)
+		conditionResponse.ConditionType = "equals"
+	}
+
+	// Create the condition
+	condition := Condition{
+		Source: WorkflowAppActionParameter{
+			ID:      uuid.NewV4().String(),
+			Name:    "source",
+			Variant: "STATIC_VALUE",
+			Value:   conditionResponse.SourceValue,
+		},
+		Condition: WorkflowAppActionParameter{
+			ID:    uuid.NewV4().String(),
+			Name:  "condition",
+			Value: strings.ToLower(conditionResponse.ConditionType),
+		},
+		Destination: WorkflowAppActionParameter{
+			ID:      uuid.NewV4().String(),
+			Name:    "destination",
+			Variant: "STATIC_VALUE",
+			Value:   conditionResponse.DestinationValue,
+		},
+	}
+
+	workflow.Branches[branchIndex].Conditions = append(workflow.Branches[branchIndex].Conditions, condition)
+	workflow.Branches[branchIndex].HasError = false
+	log.Printf("[INFO] Added condition '%s %s %s' to branch from %s",
+		conditionResponse.SourceValue, conditionResponse.ConditionType, conditionResponse.DestinationValue, sourceLabel)
+
+	return workflow, nil
+}
+
+func handleRemoveConditionTask(workflow *Workflow, task WorkflowIntentTask) (*Workflow, error) {
+	if task.TargetNode == nil || *task.TargetNode == "" {
+		return workflow, fmt.Errorf("no target_node specified for REMOVE_CONDITION")
+	}
+
+	sourceLabel := strings.ToLower(*task.TargetNode)
+	sourceID := findNodeIDByLabel(workflow, sourceLabel)
+	if sourceID == "" {
+		return workflow, fmt.Errorf("source node not found: %s", sourceLabel)
+	}
+
+	// Find destination if specified
+	var destID string
+	if task.InsertBefore != nil && *task.InsertBefore != "" {
+		destID = findNodeIDByLabel(workflow, strings.ToLower(*task.InsertBefore))
+	}
+
+	// Find and clear conditions on matching branches
+	removed := false
+	for i, branch := range workflow.Branches {
+		if branch.SourceID == sourceID {
+			if destID == "" || branch.DestinationID == destID {
+				if len(workflow.Branches[i].Conditions) > 0 {
+					workflow.Branches[i].Conditions = []Condition{}
+					removed = true
+					log.Printf("[INFO] Removed conditions from branch at index %d", i)
+				}
+			}
+		}
+	}
+
+	if !removed {
+		return workflow, fmt.Errorf("no conditions found to remove from %s", sourceLabel)
+	}
+
+	return workflow, nil
+}
+
+func handleModifyParameterTask(workflow *Workflow, task WorkflowIntentTask) (*Workflow, error) {
+	if task.TargetNode == nil || *task.TargetNode == "" {
+		log.Printf("[WARN] MODIFY_ACTION_PARAMETER: no target_node specified, skipping")
+		return workflow, nil
+	}
+
+	targetLabel := strings.ToLower(*task.TargetNode)
+
+	var actionParams *[]WorkflowAppActionParameter
+	var nodeName string
+	var nodeLabel string
+
+	// First check actions
+	for i, action := range workflow.Actions {
+		actionLabel := strings.ToLower(action.Label)
+		actionAppName := strings.ToLower(action.AppName)
+		if actionLabel == targetLabel || actionAppName == targetLabel ||
+			strings.Contains(actionLabel, targetLabel) || strings.Contains(targetLabel, actionLabel) ||
+			strings.Contains(actionAppName, targetLabel) || strings.Contains(targetLabel, actionAppName) {
+			actionParams = &workflow.Actions[i].Parameters
+			nodeName = action.AppName
+			nodeLabel = action.Label
+			break
+		}
+	}
+
+	// If not found in actions, check triggers
+	if actionParams == nil {
+		for i, trigger := range workflow.Triggers {
+			triggerLabel := strings.ToLower(trigger.Label)
+			triggerAppName := strings.ToLower(trigger.AppName)
+			if triggerLabel == targetLabel || triggerAppName == targetLabel ||
+				strings.Contains(triggerLabel, targetLabel) || strings.Contains(targetLabel, triggerLabel) ||
+				strings.Contains(triggerAppName, targetLabel) || strings.Contains(targetLabel, triggerAppName) {
+				actionParams = &workflow.Triggers[i].Parameters
+				nodeName = trigger.AppName
+				nodeLabel = trigger.Label
+				break
+			}
+		}
+	}
+
+	if actionParams == nil {
+		log.Printf("[WARN] MODIFY_ACTION_PARAMETER: node '%s' not found in workflow %s, skipping", *task.TargetNode, workflow.ID)
+		return workflow, nil
+	}
+
+	var paramsInfo strings.Builder
+	for _, param := range *actionParams {
+		paramsInfo.WriteString(fmt.Sprintf("- %s: %s\n", param.Name, param.Value))
+	}
+
+	systemMessage := `You modify workflow action parameters based on user requests.
+
+Given the user's request and current parameters, determine which parameter(s) to modify.
+
+Return ONLY valid JSON:
+{
+  "modifications": [
+    {"param_name": "parameter_name", "new_value": "new_value_here"}
+  ]
+}
+
+Rules:
+- Only modify parameters that exist in the current parameters list
+- If modifying JSON in body param, return the complete updated JSON string
+- If user wants to reference another node's output, use format: $node_label.field_name
+- If user doesn't specify a value, make a reasonable guess or skip
+- Return empty modifications array if unclear what to change`
+
+	userPrompt := fmt.Sprintf(`User request: "%s"
+
+Node: %s (%s)
+Current parameters:
+%s
+Return the JSON with modifications.`, task.SourceText, nodeLabel, nodeName, paramsInfo.String())
+
+	llmOutput, err := RunAiQuery(systemMessage, userPrompt)
+	if err != nil {
+		log.Printf("[WARN] MODIFY_ACTION_PARAMETER: LLM call failed for node '%s': %s, skipping", nodeLabel, err)
+		return workflow, nil
+	}
+
+	// Clean and parse response
+	llmOutput = strings.TrimSpace(llmOutput)
+	llmOutput = strings.TrimPrefix(llmOutput, "```json")
+	llmOutput = strings.TrimPrefix(llmOutput, "```")
+	llmOutput = strings.TrimSuffix(llmOutput, "```")
+	llmOutput = strings.TrimSpace(llmOutput)
+
+	var response struct {
+		Modifications []struct {
+			ParamName string `json:"param_name"`
+			NewValue  string `json:"new_value"`
+		} `json:"modifications"`
+	}
+
+	err = json.Unmarshal([]byte(llmOutput), &response)
+	if err != nil {
+		log.Printf("[WARN] MODIFY_ACTION_PARAMETER: failed to parse LLM response for node '%s': %s, skipping", nodeLabel, err)
+		return workflow, nil
+	}
+
+	// Silent fail: no modifications identified
+	if len(response.Modifications) == 0 {
+		log.Printf("[WARN] MODIFY_ACTION_PARAMETER: no modifications identified for node '%s', skipping", nodeLabel)
+		return workflow, nil
+	}
+
+	// Apply modifications
+	for _, mod := range response.Modifications {
+		for i, param := range *actionParams {
+			if strings.EqualFold(param.Name, mod.ParamName) {
+				(*actionParams)[i].Value = mod.NewValue
+				log.Printf("[INFO] Modified param '%s' on node '%s'", mod.ParamName, nodeLabel)
+				break
+			}
+		}
+	}
+
+	return workflow, nil
+}
+
+func findNodeIDByLabel(workflow *Workflow, targetLabel string) string {
+	for _, trigger := range workflow.Triggers {
+		triggerLabel := strings.ToLower(trigger.Label)
+		triggerAppName := strings.ToLower(trigger.AppName)
+		if triggerLabel == targetLabel || triggerAppName == targetLabel ||
+			strings.Contains(triggerLabel, targetLabel) || strings.Contains(targetLabel, triggerLabel) ||
+			strings.Contains(triggerAppName, targetLabel) || strings.Contains(targetLabel, triggerAppName) {
+			return trigger.ID
+		}
+	}
+	for _, action := range workflow.Actions {
+		actionLabel := strings.ToLower(action.Label)
+		actionAppName := strings.ToLower(action.AppName)
+		if actionLabel == targetLabel || actionAppName == targetLabel ||
+			strings.Contains(actionLabel, targetLabel) || strings.Contains(targetLabel, actionLabel) ||
+			strings.Contains(actionAppName, targetLabel) || strings.Contains(targetLabel, actionAppName) {
+			return action.ID
+		}
+	}
+	return ""
+}
+
+func findInsertPositionByLabel(workflow *Workflow, task WorkflowIntentTask) (insertAfterID, insertBeforeID string) {
+	labelToID := make(map[string]string)
+
+	for _, trigger := range workflow.Triggers {
+		labelToID[strings.ToLower(trigger.Label)] = trigger.ID
+		labelToID[strings.ToLower(trigger.AppName)] = trigger.ID
+	}
+	for _, action := range workflow.Actions {
+		labelToID[strings.ToLower(action.Label)] = action.ID
+		labelToID[strings.ToLower(action.AppName)] = action.ID
+	}
+
+	if task.InsertAfter != nil && *task.InsertAfter != "" {
+		searchLabel := strings.ToLower(*task.InsertAfter)
+		if id, ok := labelToID[searchLabel]; ok {
+			insertAfterID = id
+		} else {
+			for label, id := range labelToID {
+				if strings.Contains(label, searchLabel) || strings.Contains(searchLabel, label) {
+					insertAfterID = id
+					break
+				}
+			}
+		}
+	}
+
+	if task.InsertBefore != nil && *task.InsertBefore != "" {
+		searchLabel := strings.ToLower(*task.InsertBefore)
+		if id, ok := labelToID[searchLabel]; ok {
+			insertBeforeID = id
+		} else {
+			for label, id := range labelToID {
+				if strings.Contains(label, searchLabel) || strings.Contains(searchLabel, label) {
+					insertBeforeID = id
+					break
+				}
+			}
+		}
+	}
+
+	return insertAfterID, insertBeforeID
+}
+
+// insertActionAtPosition inserts an action at the correct position and fixes branches
+func insertActionAtPosition(workflow *Workflow, newAction Action, insertAfterID, insertBeforeID string) *Workflow {
+	const nodeSpacing = 437.0
+	defaultX := -312.6988673793812
+	defaultY := 190.6413454035773
+
+	// Case 1: Insert after a specific node
+	if insertAfterID != "" {
+		sourcePos := findNodePositionByID(workflow, insertAfterID)
+		if sourcePos != nil {
+			newAction.Position = Position{X: sourcePos.X + nodeSpacing, Y: sourcePos.Y}
+
+			for i, branch := range workflow.Branches {
+				if branch.SourceID == insertAfterID {
+					oldDestID := branch.DestinationID
+					workflow.Branches[i].DestinationID = newAction.ID
+					workflow.Branches = append(workflow.Branches, Branch{
+						ID: uuid.NewV4().String(), SourceID: newAction.ID, DestinationID: oldDestID,
+					})
+					workflow.Actions = append(workflow.Actions, newAction)
+					return workflow
+				}
+			}
+			workflow.Branches = append(workflow.Branches, Branch{
+				ID: uuid.NewV4().String(), SourceID: insertAfterID, DestinationID: newAction.ID,
+			})
+			workflow.Actions = append(workflow.Actions, newAction)
+			return workflow
+		}
+	}
+
+	// Case 2: Insert before a specific node
+	if insertBeforeID != "" {
+		destPos := findNodePositionByID(workflow, insertBeforeID)
+		if destPos != nil {
+			newAction.Position = Position{X: destPos.X - nodeSpacing, Y: destPos.Y}
+
+			for i, branch := range workflow.Branches {
+				if branch.DestinationID == insertBeforeID {
+					workflow.Branches[i].DestinationID = newAction.ID
+					workflow.Branches = append(workflow.Branches, Branch{
+						ID: uuid.NewV4().String(), SourceID: newAction.ID, DestinationID: insertBeforeID,
+					})
+					workflow.Actions = append(workflow.Actions, newAction)
+					return workflow
+				}
+			}
+
+			if workflow.Start == insertBeforeID {
+				workflow.Start = newAction.ID
+				newAction.IsStartNode = true
+				workflow.Branches = append(workflow.Branches, Branch{
+					ID: uuid.NewV4().String(), SourceID: newAction.ID, DestinationID: insertBeforeID,
+				})
+				for _, trigger := range workflow.Triggers {
+					workflow.Branches = append(workflow.Branches, Branch{
+						ID: uuid.NewV4().String(), SourceID: trigger.ID, DestinationID: newAction.ID,
+					})
+				}
+			}
+			workflow.Actions = append(workflow.Actions, newAction)
+			return workflow
+		}
+	}
+
+	// Case 3: No position specified - add at the end
+	if len(workflow.Actions) > 0 {
+		lastAction := workflow.Actions[len(workflow.Actions)-1]
+		newAction.Position = Position{X: lastAction.Position.X + nodeSpacing, Y: lastAction.Position.Y}
+		workflow.Branches = append(workflow.Branches, Branch{
+			ID: uuid.NewV4().String(), SourceID: lastAction.ID, DestinationID: newAction.ID,
+		})
+	} else if len(workflow.Triggers) > 0 {
+		lastTrigger := workflow.Triggers[len(workflow.Triggers)-1]
+		newAction.Position = Position{X: lastTrigger.Position.X + nodeSpacing, Y: lastTrigger.Position.Y}
+		newAction.IsStartNode = true
+		workflow.Start = newAction.ID
+		workflow.Branches = append(workflow.Branches, Branch{
+			ID: uuid.NewV4().String(), SourceID: lastTrigger.ID, DestinationID: newAction.ID,
+		})
+	} else {
+		newAction.Position = Position{X: defaultX, Y: defaultY}
+		newAction.IsStartNode = true
+		workflow.Start = newAction.ID
+	}
+
+	workflow.Actions = append(workflow.Actions, newAction)
+	return workflow
+}
+
+// findNodePositionByID finds a node's position by ID
+func findNodePositionByID(workflow *Workflow, nodeID string) *Position {
+	for _, trigger := range workflow.Triggers {
+		if trigger.ID == nodeID {
+			return &Position{X: trigger.Position.X, Y: trigger.Position.Y}
+		}
+	}
+	for _, action := range workflow.Actions {
+		if action.ID == nodeID {
+			return &Position{X: action.Position.X, Y: action.Position.Y}
+		}
+	}
+	return nil
+}
+
+// buildWorkflowStructureText creates a simple text representation of the workflow
+func buildWorkflowStructureText(workflow *Workflow) string {
+	if workflow == nil {
+		return "Empty workflow (no nodes)"
+	}
+
+	var lines []string
+	connections := make(map[string][]string)
+	for _, branch := range workflow.Branches {
+		connections[branch.SourceID] = append(connections[branch.SourceID], branch.DestinationID)
+	}
+
+	nodeInfo := make(map[string]string)
+
+	for i, trigger := range workflow.Triggers {
+		label := trigger.Label
+		if label == "" {
+			label = fmt.Sprintf("trigger_%d", i)
+		}
+		info := fmt.Sprintf("%s (%s)", label, trigger.AppName)
+		nodeInfo[trigger.ID] = info
+		lines = append(lines, fmt.Sprintf("[TRIGGER] %s", info))
+	}
+
+	actionMap := make(map[string]Action)
+	for _, action := range workflow.Actions {
+		actionMap[action.ID] = action
+	}
+
+	visited := make(map[string]bool)
+	var orderedActions []Action
+	startID := workflow.Start
+	if startID == "" && len(workflow.Actions) > 0 {
+		startID = workflow.Actions[0].ID
+	}
+
+	queue := []string{startID}
+	for len(queue) > 0 {
+		currentID := queue[0]
+		queue = queue[1:]
+		if visited[currentID] {
+			continue
+		}
+		visited[currentID] = true
+		if action, ok := actionMap[currentID]; ok {
+			orderedActions = append(orderedActions, action)
+		}
+		for _, destID := range connections[currentID] {
+			if !visited[destID] {
+				queue = append(queue, destID)
+			}
+		}
+	}
+
+	for _, action := range workflow.Actions {
+		if !visited[action.ID] {
+			orderedActions = append(orderedActions, action)
+		}
+	}
+
+	for i, action := range orderedActions {
+		label := action.Label
+		if label == "" {
+			label = fmt.Sprintf("action_%d", i)
+		}
+		info := fmt.Sprintf("%s (%s)", label, action.AppName)
+		nodeInfo[action.ID] = info
+		lines = append(lines, fmt.Sprintf("[ACTION %d] %s", i+1, info))
+	}
+
+	if len(connections) > 0 {
+		lines = append(lines, "\nConnections:")
+		for sourceID, destIDs := range connections {
+			sourceName := nodeInfo[sourceID]
+			if sourceName == "" {
+				sourceName = sourceID
+			}
+			for _, destID := range destIDs {
+				destName := nodeInfo[destID]
+				if destName == "" {
+					destName = destID
+				}
+				lines = append(lines, fmt.Sprintf("  %s -> %s", sourceName, destName))
+			}
+		}
+	}
+
+	if len(lines) == 0 {
+		return "Empty workflow (no nodes)"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func classifyMultipleIntents(userInput string, workflow *Workflow) (*WorkflowIntentResponse, error) {
+	workflowStructure := buildWorkflowStructureText(workflow)
+
+	systemMessage := `You are a Workflow Intent Classifier for Shuffle, a security automation platform.
+
+Your job: Parse the user's edit request into atomic tasks, and determine WHERE each change should happen.
+
+AVAILABLE INTENTS:
+1) ADD_NODE - Add a new action/step. Specify insert_after OR insert_before.
+2) MODIFY_ACTION_PARAMETER - Change a setting/value in an existing node. Specify target_node.
+3) REMOVE_NODE - Delete an existing node. Specify target_node.
+4) ADD_CONDITION - Add if-then logic between two nodes.
+5) REMOVE_CONDITION - Remove a condition.
+6) NO_ACTION_NEEDED - Request is unclear or needs no changes.
+
+OUTPUT FORMAT (JSON only):
+{
+  "tasks": [
+    {
+      "intent": "INTENT_NAME",
+      "target_node": "label of existing node (for MODIFY/REMOVE)",
+      "source_text": "exact part of user request for this task",
+      "insert_after": "label of node to insert AFTER (for ADD_NODE)",
+      "insert_before": "label of node to insert BEFORE (for ADD_NODE)"
+    }
+  ]
+}
+
+RULES FOR ADD_NODE:
+- "add X after Y" -> insert_after: "Y_label"
+- "add X before Y" -> insert_before: "Y_label"
+- "add X at the end" -> insert_after: last node's label
+- If position unclear, default to insert_after the last node
+
+RULES FOR REMOVE_NODE:
+- "remove the Slack step" -> target_node: "slack_notify" (match the label)
+- "delete the Jira action" -> target_node: "jira_create_ticket"
+
+RULES FOR ADD_CONDITION:
+- "only proceed to Slack if Jira succeeds" -> target_node: "jira_label", insert_before: "slack_label"
+- "add condition after X" -> target_node: "X_label" (condition on outgoing branch)
+- target_node = source node, insert_before = destination node
+
+RULES FOR REMOVE_CONDITION:
+- "remove condition from Jira to Slack" -> target_node: "jira_label", insert_before: "slack_label"
+- "remove condition after X" -> target_node: "X_label"
+
+TASK ORDERING (CRITICAL):
+Tasks are executed in array order. Order them so dependencies are satisfied:
+- ADD_NODE before any task that references the new node
+- ADD_NODE before ADD_CONDITION on that node's branch
+- REMOVE_CONDITION before REMOVE_NODE (remove conditions first)
+- Generally: create before modify/condition, modify before remove
+
+Use EXACT labels from the workflow structure. Match by app name if user doesn't use exact labels.`
+
+	userPrompt := fmt.Sprintf("CURRENT WORKFLOW:\n%s\n\nUSER REQUEST: \"%s\"\n\nReturn ONLY the JSON.", workflowStructure, userInput)
+
+	finalContentOutput, err := RunAiQuery(systemMessage, userPrompt)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in classifyMultipleIntents: %s", err)
+		return nil, err
+	}
+
+	if len(finalContentOutput) == 0 {
+		return nil, errors.New("AI response is empty")
+	}
+
+	finalContentOutput = strings.TrimSpace(finalContentOutput)
+	finalContentOutput = strings.TrimPrefix(finalContentOutput, "```json")
+	finalContentOutput = strings.TrimPrefix(finalContentOutput, "```")
+	finalContentOutput = strings.TrimSuffix(finalContentOutput, "```")
+	finalContentOutput = strings.TrimSpace(finalContentOutput)
+
+	log.Printf("[DEBUG] classifyMultipleIntents LLM output: %s", finalContentOutput)
+
+	var intentResponse WorkflowIntentResponse
+	err = json.Unmarshal([]byte(finalContentOutput), &intentResponse)
+	if err != nil {
+		log.Printf("[ERROR] Failed to unmarshal intent classification response: %s", err)
+		return nil, fmt.Errorf("failed to parse AI intent response: %s", err)
+	}
+
+	return &intentResponse, nil
 }
 
 func runSupportLLMAssistant(ctx context.Context, input QueryInput, user User) (string, string, error) {
