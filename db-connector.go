@@ -15116,8 +15116,8 @@ func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, 
 
 func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int, inputcursor string) ([]CacheKeyData, string, error) {
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" {
-		if debug {
-			log.Printf("[DEBUG] Disabled GetAllCacheKeys in swarm mode")
+		if debug && category != "protected" {
+			log.Printf("[DEBUG] Disabled GetAllCacheKeys for '%s' in worker swarm mode", category)
 		}
 
 		return []CacheKeyData{}, "", errors.New("Not available in worker mode")
