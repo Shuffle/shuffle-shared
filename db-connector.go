@@ -818,7 +818,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflowExecution)
 
-			if (err == nil && workflowExecution != nil)|| len(workflowExecution.ExecutionId) > 0 {
+			if (err == nil && workflowExecution != nil) && len(workflowExecution.ExecutionId) > 0 {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
 				if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
 					baseArgument := &ActionResult{
