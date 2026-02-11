@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-//	"encoding/json"
-	"github.com/goccy/go-json"
+	//	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/goccy/go-json"
 	"io"
 	"io/ioutil"
 	"log"
@@ -93,6 +93,12 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	}
 
 	baseURL := "https://shuffler.io"
+	var err error
+	var url string
+	var req *http.Request
+	var client *http.Client
+	var resp *http.Response
+	var respBody []byte
 	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
 		//log.Printf("[DEBUG] Setting the baseUrl for health check to %s", baseURL)
 		baseURL = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -106,42 +112,51 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		}
 	}
 
-	url := baseURL + "/api/v1/apps/edaa73d40238ee60874a853dc3ccaa6f/config"
-	log.Printf("[DEBUG] Getting app with URL: %s", url)
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		log.Printf("[ERROR] Failed creating HTTP request: %s", err)
-		return appHealth, err
-	}
-
-	// send the request
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[ERROR] Failed sending HTTP request: %s", err)
-		return appHealth, err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed getting health check app: %s. The status code was: %d", err, resp.StatusCode)
-		return appHealth, err
-	}
-
-	respBody, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[ERROR] Failed readin while getting HTTP response body: %s", err)
-		return appHealth, err
-	}
-
-	// Unmarshal the JSON data into a Workflow instance
 	app := appConfig{}
-	err = json.Unmarshal([]byte(respBody), &app)
-	if err != nil {
-		log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
-		return appHealth, err
+	if project.Environment == "onprem" {
+		config := GetHealthAppConfig()
+		err = json.Unmarshal([]byte(config), &app)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshalling health app config blob: %s", err)
+			return appHealth, err
+		}
+	} else {
+		url = baseURL + "/api/v1/apps/edaa73d40238ee60874a853dc3ccaa6f/config"
+		log.Printf("[DEBUG] Getting app with URL: %s", url)
+
+		req, err = http.NewRequest("GET", url, nil)
+		if err != nil {
+			log.Printf("[ERROR] Failed creating HTTP request: %s", err)
+			return appHealth, err
+		}
+
+		// send the request
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[ERROR] Failed sending HTTP request: %s", err)
+			return appHealth, err
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			log.Printf("[ERROR] Failed getting health check app: %s. The status code was: %d", err, resp.StatusCode)
+			return appHealth, err
+		}
+
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed readin while getting HTTP response body: %s", err)
+			return appHealth, err
+		}
+
+		// Unmarshal the JSON data into a Workflow instance
+		err = json.Unmarshal([]byte(respBody), &app)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
+			return appHealth, err
+		}
 	}
 
 	if app.Success == false {
@@ -709,7 +724,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 	// Use channel for getting RunOpsWorkflow function results
 	workflowHealthChannel := make(chan WorkflowHealth)
-	errorChannel := make(chan error)
+	errorChannel := make(chan error, 6)
 	go func() {
 		if debug {
 			log.Printf("[DEBUG] Running workflowHealthChannel goroutine")
@@ -732,6 +747,9 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			opensearchHealth, err := RunOpensearchOps(ctx)
 			if err != nil {
 				log.Printf("[ERROR] Failed running opensearch health check: %s", err)
+				opensearchHealthChannel <- opensearchapi.ClusterHealthResp{}
+				errorChannel <- err
+				return
 			}
 
 			opensearchHealthChannel <- *opensearchHealth
@@ -742,19 +760,42 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// TODO: More testing for onprem health checks
+	openapiAppHealthChannel := make(chan AppHealth)
+	go func() {
+		appHealth, err := RunOpsAppHealthCheck(apiKey, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed running app health check: %s", err)
+		}
+
+		appHealth.Result = ""
+		openapiAppHealthChannel <- appHealth
+		errorChannel <- err
+	}()
+
+	datastoreHealthChannel := make(chan DatastoreHealth)
+	go func() {
+		datastoreHealth, err := RunOpsDatastore(apiKey, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed running datastore health check: %s", err)
+		}
+
+		datastoreHealthChannel <- datastoreHealth
+		errorChannel <- err
+	}()
+
+	fileHealthChannel := make(chan FileHealth)
+	go func() {
+		fileHealth, err := RunOpsFile(apiKey, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed running file health check: %s", err)
+		}
+
+		fileHealthChannel <- fileHealth
+		errorChannel <- err
+	}()
+
 	if project.Environment == "cloud" {
-		openapiAppHealthChannel := make(chan AppHealth)
-		go func() {
-			appHealth, err := RunOpsAppHealthCheck(apiKey, orgId)
-			if err != nil {
-				log.Printf("[ERROR] Failed running app health check: %s", err)
-			}
-
-			appHealth.Result = ""
-			openapiAppHealthChannel <- appHealth
-			errorChannel <- err
-		}()
-
+		// App upload via zip is not supported in self-hosted machine yet
 		pythonAppHealthChannel := make(chan AppHealth)
 		go func() {
 			pythonAppHealth, err := RunOpsAppUpload(apiKey, orgId)
@@ -766,37 +807,23 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			errorChannel <- err
 		}()
 
-		datastoreHealthChannel := make(chan DatastoreHealth)
-		go func() {
-			datastoreHealth, err := RunOpsDatastore(apiKey, orgId)
-			if err != nil {
-				log.Printf("[ERROR] Failed running datastore health check: %s", err)
-			}
-
-			datastoreHealthChannel <- datastoreHealth
-			errorChannel <- err
-		}()
-
-		fileHealthChannel := make(chan FileHealth)
-		go func() {
-			fileHealth, err := RunOpsFile(apiKey, orgId)
-			if err != nil {
-				log.Printf("[ERROR] Failed running file health check: %s", err)
-			}
-
-			fileHealthChannel <- fileHealth
-			errorChannel <- err
-		}()
 
 		// Use channel for getting RunOpsWorkflow function results
-		platformHealth.Apps = <-openapiAppHealthChannel
 		platformHealth.PythonApps = <-pythonAppHealthChannel
-		platformHealth.Datastore = <-datastoreHealthChannel
-		platformHealth.FileOps = <-fileHealthChannel
 	}
 
+	platformHealth.Datastore = <-datastoreHealthChannel
+	platformHealth.FileOps = <-fileHealthChannel
+	platformHealth.Apps = <-openapiAppHealthChannel
 	platformHealth.Workflows = <-workflowHealthChannel
 	err = <-errorChannel
+
+	if project.Environment != "cloud" {
+		select {
+		case <-errorChannel:
+		default:
+		}
+	}
 
 	if err != nil {
 		if err.Error() == "High number of requests. Try again later" {
@@ -1045,6 +1072,7 @@ func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string, orgId strin
 	// send the request
 	client := &http.Client{}
 	resp, err := client.Do(req)
+
 	if err != nil {
 		log.Printf("[ERROR] Failed deleting the health check workflow with HTTP request: %s", err)
 		return err

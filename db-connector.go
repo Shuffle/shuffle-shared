@@ -225,8 +225,18 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 					//log.Printf("[WARNING] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
 				}
 
+				if len(totalData) == 0 {
+					log.Printf("[ERROR] Cache payload invalid for key %s", name)
+					return "", fmt.Errorf("Cache payload invalid for %s", name)
+				}
+
 				return totalData, nil
 			} else {
+				if len(item.Value) == 0 {
+					log.Printf("[ERROR] Cache payload invalid for %s", name)
+					return "", fmt.Errorf("Cache payload invalid for %s", name)
+				}
+
 				return item.Value, nil
 			}
 		}
@@ -299,6 +309,10 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 	if len(name) == 0 {
 		log.Printf("[WARNING] Key '%s' is empty with value length %d and expiration %d. Skipping cache.", name, len(data), expiration)
 		return nil
+	}
+
+	if len(data) == 0 {
+		log.Printf("[WARNING] Data is empty with key %s and expiration %d. Skipping cache", name, expiration)
 	}
 
 	// Maxsize ish~
@@ -804,7 +818,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflowExecution)
 
-			if err == nil || len(workflowExecution.ExecutionId) > 0 {
+			if (err == nil && workflowExecution != nil)|| len(workflowExecution.ExecutionId) > 0 {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
 				if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
 					baseArgument := &ActionResult{
@@ -3345,7 +3359,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &workflow)
+			err = json.Unmarshal(cacheData, workflow)
 			if err == nil && workflow.ID != "" {
 				validationData, err := GetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID))
 				if err == nil {
@@ -3395,7 +3409,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				return workflow, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
 		}
 	}
 
@@ -3531,12 +3545,12 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &stats)
+			err = json.Unmarshal(cacheData, stats)
 			if err == nil {
 				return stats, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for stats: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for stats: %s", err)
 		}
 	}
 
@@ -3996,12 +4010,12 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &curOrg)
+			err = json.Unmarshal(cacheData, curOrg)
 			if err == nil {
 				return curOrg, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
 		}
 	}
 
@@ -4095,7 +4109,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &curOrg)
+			err = json.Unmarshal(cacheData, curOrg)
 			if err == nil {
 				if curOrg.Id == "" {
 					return curOrg, errors.New("Org doesn't exist")
@@ -4104,7 +4118,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				}
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
 		}
 	}
 
