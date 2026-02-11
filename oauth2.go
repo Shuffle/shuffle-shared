@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/go-querystring/query"
 	uuid "github.com/satori/go.uuid"
 	"golang.org/x/oauth2"
@@ -39,6 +38,7 @@ import (
 
 var handledIds []string
 
+/*
 func fetchUserInfoFromToken(ctx context.Context, accessToken string, issuer string, openIdAuthUrl string) (map[string]interface{}, error) {
 	// Get well-known config to find userinfo endpoint
 	config, err := fetchWellKnownConfig(ctx, issuer, openIdAuthUrl)
@@ -102,6 +102,7 @@ func fetchUserInfoFromToken(ctx context.Context, accessToken string, issuer stri
 
 	return userInfo, nil
 }
+*/
 
 func GetOutlookAttachmentList(client *http.Client, emailId string) (MailDataOutlookList, error) {
 	requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/messages/%s/attachments", emailId)
@@ -4199,6 +4200,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	return appAuth, nil
 }
 
+/*
 func fetchWellKnownConfig(ctx context.Context, issuer string, openIdAuthUrl string) (map[string]interface{}, error) {
 	// Clean issuer URL and construct well-known endpoint
 	issuer = strings.TrimSuffix(issuer, "/")
@@ -4306,71 +4308,47 @@ func ExtractRolesFromIdToken(ctx context.Context, idToken string, issuer string,
 
 	return roles, nil
 }
+*/
 
-func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdTokenCheck, string, error) {
-	var emptyToken IdTokenCheck
-	var foundChallenge string
-
-	// Parse JWT properly with all three parts
-	outerSplit := strings.Split(idToken, ".")
-	if len(outerSplit) != 3 {
-		return emptyToken, "", fmt.Errorf("invalid JWT format")
-	}
-
-	// Try to decode the payload (middle part)
-	for idx, innerstate := range outerSplit {
-		// Skip header (0) and signature (2), focus on payload (1)
-		if idx != 1 {
-			continue
-		}
-
-		// Use RawURLEncoding for JWT (no padding)
-		decoded, err := base64.RawURLEncoding.DecodeString(innerstate)
+func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
+	// Check org in nonce -> check if ID points back to an org
+	outerSplit := strings.Split(string(idToken), ".")
+	for _, innerstate := range outerSplit {
+		log.Printf("[DEBUG] OpenID STATE (temporary): %s", innerstate)
+		decoded, err := base64.StdEncoding.DecodeString(innerstate)
 		if err != nil {
-			log.Printf("[DEBUG] RawURLEncoding failed, trying with padding: %s", err)
-			// Try URL encoding with padding
-			decoded, err = base64.URLEncoding.DecodeString(innerstate)
+			log.Printf("[DEBUG] Failed base64 decode of state (1): %s", err)
+
+			// Random padding problems
+			innerstate += "="
+			decoded, err = base64.StdEncoding.DecodeString(innerstate)
 			if err != nil {
-				// Try with extra padding
+				log.Printf("[DEBUG] Failed base64 decode of state (2): %s", err)
+
+				// Double padding problem fix lol (this actually works)
 				innerstate += "="
-				decoded, err = base64.URLEncoding.DecodeString(innerstate)
+				decoded, err = base64.StdEncoding.DecodeString(innerstate)
 				if err != nil {
-					innerstate += "="
-					decoded, err = base64.URLEncoding.DecodeString(innerstate)
-					if err != nil {
-						preview := innerstate
-						if len(preview) > 50 {
-							preview = preview[:50] + "..."
-						}
-						log.Printf("[ERROR] Failed to decode JWT payload: %s (innerstate preview: %s)", err, preview)
-						return emptyToken, "", fmt.Errorf("failed to decode JWT payload")
-					}
+					log.Printf("[ERROR] Failed base64 decode of state (3): %s", err)
+					continue
 				}
 			}
 		}
 
 		var token IdTokenCheck
-		err = json.Unmarshal(decoded, &token)
+		err = json.Unmarshal([]byte(decoded), &token)
 		if err != nil {
-			log.Printf("[ERROR] Failed to unmarshal JWT payload: %s", err)
-			return emptyToken, "", fmt.Errorf("failed to unmarshal JWT payload")
+			log.Printf("[INFO] IDToken unmarshal error: %s", err)
+			continue
 		}
 
-		// Validate required fields
-		if len(token.Aud) == 0 {
-			return emptyToken, "", fmt.Errorf("missing audience in token")
+		// Aud = client secret
+		// Nonce = contains all the info
+		if len(token.Aud) <= 0 {
+			log.Printf("[WARNING] Couldn't find AUD in JSON (required) - continuing to check. Current: %s", string(decoded))
+			continue
 		}
 
-		// Check token expiration
-		if token.Exp > 0 {
-			now := time.Now().Unix()
-			if now >= int64(token.Exp) {
-				log.Printf("[ERROR] JWT token expired: exp=%d, now=%d", token.Exp, now)
-				return emptyToken, "", fmt.Errorf("JWT token expired")
-			}
-		}
-
-		// Verify JWT signature if we have an issuer
 		if len(token.Nonce) > 0 {
 			parsedState, err := base64.StdEncoding.DecodeString(token.Nonce)
 			if err != nil {
@@ -4378,6 +4356,7 @@ func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdT
 			}
 
 			foundOrg := ""
+			foundChallenge := ""
 			stateSplit := strings.Split(string(parsedState), "&")
 			regexPattern := `EXTRA string=([A-Za-z0-9~.]+)`
 			re := regexp.MustCompile(regexPattern)
@@ -4410,23 +4389,24 @@ func VerifyIdToken(ctx context.Context, idToken string, accessToken string) (IdT
 
 			if len(foundOrg) == 0 {
 				log.Printf("[ERROR] No org specified in state (2)")
-				return IdTokenCheck{}, foundChallenge, err
+				return IdTokenCheck{}, err
 			}
 			org, err := GetOrg(ctx, foundOrg)
 			if err != nil {
 				log.Printf("[WARNING] Error getting org in OpenID (2): %s", err)
-				return IdTokenCheck{}, foundChallenge, err
+				return IdTokenCheck{}, err
 			}
 			// Validating the user itself
 			if token.Aud == org.SSOConfig.OpenIdClientId || foundChallenge == org.SSOConfig.OpenIdClientSecret {
 				log.Printf("[DEBUG] Correct token aud & challenge - successful login!")
 				token.Org = *org
-				return token, foundChallenge, nil
+				return token, nil
+			} else {
 			}
 		}
 	}
 
-	return IdTokenCheck{}, "", errors.New("Couldn't verify nonce")
+	return IdTokenCheck{}, errors.New("Couldn't verify nonce")
 }
 
 func IsRunningInCluster() bool {
