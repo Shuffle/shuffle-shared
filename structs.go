@@ -4374,10 +4374,14 @@ type HealthCheck struct {
 }
 
 type HealthCheckDB struct {
-	Success   bool           `json:"success"`
-	Updated   int64          `json:"updated"`
-	Workflows WorkflowHealth `json:"workflows"`
-	ID        string         `json:"id"`
+	Success		bool							`json:"success"`
+	Updated		int64							`json:"updated"`
+	Workflows	WorkflowHealth					`json:"workflows"`
+	Opensearch	opensearchapi.ClusterHealthResp `json:"opnsearch"`
+	Datastore	DatastoreHealth					`json:"datastore"`
+	FileOps		FileHealth						`json:"fileops"`
+	Apps		AppHealth						`json:"apps"`
+	ID			string							`json:"id"`
 }
 
 type NodeData struct {
