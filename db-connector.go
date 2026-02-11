@@ -226,12 +226,14 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 				}
 
 				if len(totalData) == 0 {
+					log.Printf("[ERROR] Cache payload invalid for key %s", name)
 					return "", fmt.Errorf("Cache payload invalid for %s", name)
 				}
 
 				return totalData, nil
 			} else {
 				if len(item.Value) == 0 {
+					log.Printf("[ERROR] Cache payload invalid for %s", name)
 					return "", fmt.Errorf("Cache payload invalid for %s", name)
 				}
 
@@ -3407,7 +3409,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				return workflow, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
 		}
 	}
 
@@ -3548,7 +3550,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 				return stats, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for stats: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for stats: %s", err)
 		}
 	}
 
@@ -4013,7 +4015,7 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 				return curOrg, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
 		}
 	}
 
@@ -4116,7 +4118,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				}
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
 		}
 	}
 
