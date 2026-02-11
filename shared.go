@@ -16525,6 +16525,10 @@ func RunExecutionTranslation(ctx context.Context, actionResult ActionResult) {
 }
 
 func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecution, actionResult ActionResult) error {
+	if project.Environment == "worker" {
+		return nil
+	}
+
 	ctx := context.Background()
 
 	// Check if the request has been sent already (just in case)
