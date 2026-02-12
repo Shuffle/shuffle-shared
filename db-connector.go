@@ -7,7 +7,8 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/hex"
-//	"encoding/json"
+
+	//	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -24,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	"github.com/goccy/go-json"
 
 	runtimeDebug "runtime/debug"
@@ -816,7 +818,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &workflowExecution)
+			err = json.Unmarshal(cacheData, workflowExecution)
 
 			if (err == nil && workflowExecution != nil) && len(workflowExecution.ExecutionId) > 0 {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
@@ -1801,11 +1803,10 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							log.Printf("[INFO][%s] Should stop decision %s for agent action %s due to running for more than 5 minutes. Marking as FAILURE.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID)
 
 							decisionsUpdated = true
-							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE" 
+							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
 							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
 							mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
 						}
-
 
 					} else {
 						if decision.RunDetails.CompletedAt > 0 {
@@ -1839,7 +1840,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 								}
 							}
 
-							if debug { 
+							if debug {
 								log.Printf("[DEBUG][%s] Decision %s for agent action %s is still RUNNING but no completed at timestamp. Checking cache for updates.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID)
 							}
 						}
@@ -1867,7 +1868,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				// due to having a 'finish' action that should handle it properly
 				if failedFound {
 					decisionsUpdated = true
-					//if debug { 
+					//if debug {
 					//	log.Printf("[DEBUG][%s] Failure found for agent %s. Should we exit?", workflowExecution.ExecutionId, action.ID)
 					//}
 
@@ -3560,7 +3561,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 			DocumentID: orgId,
 		})
 
-		if err != nil && !strings.Contains("status: 404", err.Error()){
+		if err != nil && !strings.Contains("status: 404", err.Error()) {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return stats, err
 		}
@@ -5165,7 +5166,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		}
 	}
 
-	// Can we diff here? Otherwise we may miss items hmm 
+	// Can we diff here? Otherwise we may miss items hmm
 	// Check if we recently cached the ID. Don't run updates more often than once a day for an app
 	checkCacheId := fmt.Sprintf("openapi_updatecheck_%s", id)
 	if _, err := GetCache(ctx, checkCacheId); err != nil {
@@ -6307,7 +6308,7 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 				if !strings.Contains(err.Error(), "doesn't exist") {
 					log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
 				}
-					
+
 				return
 			}
 
@@ -9110,7 +9111,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	if project.DbType == "opensearch" {
-		if (len([]byte(workflow.Image)) > 32766) {
+		if len([]byte(workflow.Image)) > 32766 {
 			workflow.Image = ""
 		}
 
@@ -13414,7 +13415,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 					log.Printf("[WARNING] Failed getting category config for org %s and category %s: %s", orgId, mainCategory, err)
 				}
 
-				//if debug { 
+				//if debug {
 				//	log.Printf("[DEBUG] RULECHECK %#v -> %#v", getCacheError, config.Created)
 				//}
 
@@ -13424,7 +13425,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						continue
 					}
 
-					if automation.Name != "security_rules" && automation.Name != "Security Rules" { 
+					if automation.Name != "security_rules" && automation.Name != "Security Rules" {
 						continue
 					}
 
@@ -13444,7 +13445,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						oldDoc := config.Value
 						newDoc := cacheData.Value
 						mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
-						if debug { 
+						if debug {
 							log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. .\n\nError: %#v", foundRule, allowed, errString)
 						}
 
@@ -13462,7 +13463,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 				if !ruleValid {
 					// Break out
-					if debug { 
+					if debug {
 						log.Printf("[WARNING] Rule is NOT valid! Skipping modification.")
 					}
 
@@ -14182,7 +14183,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 
 	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
 	if len(category) > 0 && category != "default" {
-		// FIXME: If they key itself is 'test_protected' and category 
+		// FIXME: If they key itself is 'test_protected' and category
 		// is 'protected' this breaks... Keeping it for now.
 		if !strings.HasSuffix(id, fmt.Sprintf("_%s", category)) {
 			id = fmt.Sprintf("%s_%s", id, category)
@@ -14442,18 +14443,18 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		} else {
 			//log.Printf("\n\n[INFO] Should check for SSO during setup - finding main org\n\n")
 			/*
-			orgs, err := GetAllOrgs(ctx)
-			if err == nil {
-				for _, org := range orgs {
-					if len(org.ManagerOrgs) == 0 && len(org.SSOConfig.SSOEntrypoint) > 0 {
-						log.Printf("[INFO] Set initial SSO url for logins to %s", org.SSOConfig.SSOEntrypoint)
-						SSOUrl = org.SSOConfig.SSOEntrypoint
-						break
+				orgs, err := GetAllOrgs(ctx)
+				if err == nil {
+					for _, org := range orgs {
+						if len(org.ManagerOrgs) == 0 && len(org.SSOConfig.SSOEntrypoint) > 0 {
+							log.Printf("[INFO] Set initial SSO url for logins to %s", org.SSOConfig.SSOEntrypoint)
+							SSOUrl = org.SSOConfig.SSOEntrypoint
+							break
+						}
 					}
+				} else {
+					log.Printf("[WARNING] Error loading orgs: %s", err)
 				}
-			} else {
-				log.Printf("[WARNING] Error loading orgs: %s", err)
-			}
 			*/
 		}
 	} else {
@@ -15173,7 +15174,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			"size": max,
 			"sort": map[string]interface{}{
 				"edited": map[string]interface{}{
-					"order": "desc",
+					"order":         "desc",
 					"unmapped_type": "date",
 				},
 			},
@@ -16860,7 +16861,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		}
 
 		if len(search.WorkflowId) > 0 {
-			if search.WorkflowId == "AGENT" {  
+			if search.WorkflowId == "AGENT" {
 				query = query.Filter("type =", "AGENT")
 			} else {
 				query = query.Filter("workflow_id =", search.WorkflowId)
