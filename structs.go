@@ -4363,10 +4363,10 @@ type LiveExecutionStatus struct {
 }
 
 type HealthCheck struct {
-	Success       bool                            `json:"success"`
-	Updated       int64                           `json:"updated"`
-	Apps          AppHealth                       `json:"apps"`
-	Workflows     WorkflowHealth                  `json:"workflows"`
+	Success   bool           `json:"success"`
+	Updated   int64          `json:"updated"`
+	Apps      AppHealth      `json:"apps"`
+	Workflows WorkflowHealth `json:"workflows"`
 	//PythonApps    AppHealth                       `json:"python_apps"`
 	Datastore     DatastoreHealth                 `json:"datastore"`
 	FileOps       FileHealth                      `json:"fileops"`
@@ -4374,14 +4374,14 @@ type HealthCheck struct {
 }
 
 type HealthCheckDB struct {
-	Success		bool							`json:"success"`
-	Updated		int64							`json:"updated"`
-	Workflows	WorkflowHealth					`json:"workflows"`
-	Opensearch	opensearchapi.ClusterHealthResp `json:"opnsearch"`
-	Datastore	DatastoreHealth					`json:"datastore"`
-	FileOps		FileHealth						`json:"fileops"`
-	Apps		AppHealth						`json:"apps"`
-	ID			string							`json:"id"`
+	Success    bool                            `json:"success"`
+	Updated    int64                           `json:"updated"`
+	Workflows  WorkflowHealth                  `json:"workflows"`
+	Opensearch opensearchapi.ClusterHealthResp `json:"opnsearch"`
+	Datastore  DatastoreHealth                 `json:"datastore"`
+	FileOps    FileHealth                      `json:"fileops"`
+	Apps       AppHealth                       `json:"apps"`
+	ID         string                          `json:"id"`
 }
 
 type NodeData struct {
@@ -4933,7 +4933,7 @@ type TestResult struct {
 // Standard used for MCP
 type MCPRequest struct {
 	Jsonrpc string `json:"jsonrpc"`
-	ID      string `json:"id"`
+	ID      int    `json:"id"`
 	Method  string `json:"method"`
 	Params  struct {
 		ToolName string `json:"tool_name"`
@@ -4944,17 +4944,60 @@ type MCPRequest struct {
 		Context struct {
 			SessionID string `json:"session_id"`
 		} `json:"context"`
-
 		ToolID      string `json:"tool_id"`
 		Environment string `json:"environment"`
+
+		// From testing in the wild
+		ProtocolVersion string `json:"protocolVersion"`
+		Capabilities    struct {
+			Roots struct {
+				ListChanged bool `json:"listChanged"`
+			} `json:"roots"`
+			Sampling struct {
+			} `json:"sampling"`
+			Tools struct {
+				ListChanged bool `json:"listChanged"`
+			} `json:"tools"`
+		} `json:"capabilities"`
+		ClientInfo struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"clientInfo"`
 	} `json:"params"`
 }
 
 type MCPResponse struct {
 	Jsonrpc string                 `json:"jsonrpc"`
-	ID      string                 `json:"id"`
+	ID      int                    `json:"id"`
 	Result  map[string]interface{} `json:"result,omitempty"`
 }
+
+type MCPInitResponse struct {
+	Jsonrpc string                 `json:"jsonrpc"`
+	ID      int                    `json:"id"`
+	Result  MCPToolResult `json:"result,omitempty"`
+}
+
+type MCPToolResult struct {
+	Tools []MCPTool `json:"tools"`
+}
+
+type MCPTool struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	InputSchema MCPToolInputSchema `json:"inputSchema"`
+}
+
+type MCPProperty struct{
+	Type        string `json:"type"`
+	Description string `json:"description"`
+}
+
+type MCPToolInputSchema struct {
+	Type       string `json:"type"`
+	Properties map[string]MCPProperty `json:"properties"`
+	Required []string `json:"required"`
+} 
 
 type OpensearchPrefixFixResult struct {
 	Success      bool                               `json:"success"`

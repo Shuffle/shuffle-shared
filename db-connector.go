@@ -5459,7 +5459,7 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 		}
 	}
 
-	log.Printf("[INFO] Found %d apps for name %s in db-connector", len(apps), appName)
+	log.Printf("[INFO] Found %d apps for name '%s' in db-connector", len(apps), appName)
 	return apps, nil
 }
 

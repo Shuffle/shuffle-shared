@@ -12811,3 +12811,50 @@ func RunMCPAction(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(returnBytes))
 }
+
+func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (MCPInitResponse, error) {
+	if len(app.Name) == 0 || len(app.ID) == 0 {
+		return MCPInitResponse{}, errors.New("app not found")
+	}
+
+	tools := MCPInitResponse{
+		Jsonrpc: request.Jsonrpc,
+		ID:	  request.ID,
+		Result: MCPToolResult{
+			Tools: []MCPTool{},
+		},
+	}
+
+	for cnt, action := range app.Actions {
+		tool := MCPTool{
+			Name: action.Name,
+			Description: action.Description,
+			InputSchema: MCPToolInputSchema{
+				Type: "object",
+				Required: []string{},
+				Properties: map[string]MCPProperty{},
+			},
+		}
+
+		requiredParams := []string{}
+		for _, param := range action.Parameters {
+			if param.Configuration {
+				requiredParams = append(requiredParams, param.Name)
+			}
+
+			parsedDescription := param.Description
+			tool.InputSchema.Properties[param.Name] = MCPProperty{
+				Type: "string",
+				Description: parsedDescription,
+			}
+		}
+
+		tools.Result.Tools = append(tools.Result.Tools, tool)
+
+		if cnt > 10 {
+			break
+		}
+	}
+
+	return tools, nil
+}
