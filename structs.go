@@ -689,6 +689,9 @@ type User struct {
 	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
 
 	ProvisionedByOrg string `datastore:"provisioned_by_org" json:"provisioned_by_org"`
+
+	// replacement of ProvisionedByOrg
+	ControlledByOrgs []string `datastore:"controlled_by_orgs" json:"controlled_by_orgs"`
 }
 
 type SSOInfo struct {
@@ -3056,14 +3059,14 @@ type Oauth2Resp struct {
 }
 
 type OpenidUserinfo struct {
-	Sub   string   `json:"sub"`
-	Email string   `json:"email"`
-	Roles []string `json:"roles"`
-	// EmailVerified bool     `json:"email_verified"`
-	// Groups        []string `json:"groups"`
-	// RealmAccess   struct {
-	// 	Roles []string `json:"roles"`
-	// } `json:"realm_access"` // Keycloak format
+	Sub           string   `json:"sub"`
+	Email         string   `json:"email"`
+	EmailVerified bool     `json:"email_verified"`
+	Roles         []string `json:"roles"`
+	Groups        []string `json:"groups"`
+	RealmAccess   struct {
+		Roles []string `json:"roles"`
+	} `json:"realm_access"` // Keycloak format
 }
 
 type OpenidResp struct {
@@ -4374,14 +4377,14 @@ type HealthCheck struct {
 }
 
 type HealthCheckDB struct {
-	Success		bool							`json:"success"`
-	Updated		int64							`json:"updated"`
-	Workflows	WorkflowHealth					`json:"workflows"`
-	Opensearch	opensearchapi.ClusterHealthResp `json:"opnsearch"`
-	Datastore	DatastoreHealth					`json:"datastore"`
-	FileOps		FileHealth						`json:"fileops"`
-	Apps		AppHealth						`json:"apps"`
-	ID			string							`json:"id"`
+	Success    bool                            `json:"success"`
+	Updated    int64                           `json:"updated"`
+	Workflows  WorkflowHealth                  `json:"workflows"`
+	Opensearch opensearchapi.ClusterHealthResp `json:"opnsearch"`
+	Datastore  DatastoreHealth                 `json:"datastore"`
+	FileOps    FileHealth                      `json:"fileops"`
+	Apps       AppHealth                       `json:"apps"`
+	ID         string                          `json:"id"`
 }
 
 type NodeData struct {
