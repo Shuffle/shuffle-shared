@@ -759,7 +759,6 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		platformHealth.OpensearchOps = <-opensearchHealthChannel
 	}
 
-	
 	datastoreHealthChannel := make(chan DatastoreHealth)
 	go func() {
 		datastoreHealth, err := RunOpsDatastore(apiKey, orgId)
@@ -795,22 +794,22 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		errorChannel <- err
 	}()
 
-//	if project.Environment == "cloud" {
-//		// App upload via zip is not supported in self-hosted machine yet
-//		pythonAppHealthChannel := make(chan AppHealth)
-//		go func() {
-//			pythonAppHealth, err := RunOpsAppUpload(apiKey, orgId)
-//			if err != nil {
-//				log.Printf("[ERROR] Failed running python app health check: %s", err)
-//			}
-//
-//			pythonAppHealthChannel <- pythonAppHealth
-//			errorChannel <- err
-//		}()
-//
-//		// Use channel for getting RunOpsWorkflow function results
-//		platformHealth.PythonApps = <-pythonAppHealthChannel
-//	}
+	//	if project.Environment == "cloud" {
+	//		// App upload via zip is not supported in self-hosted machine yet
+	//		pythonAppHealthChannel := make(chan AppHealth)
+	//		go func() {
+	//			pythonAppHealth, err := RunOpsAppUpload(apiKey, orgId)
+	//			if err != nil {
+	//				log.Printf("[ERROR] Failed running python app health check: %s", err)
+	//			}
+	//
+	//			pythonAppHealthChannel <- pythonAppHealth
+	//			errorChannel <- err
+	//		}()
+	//
+	//		// Use channel for getting RunOpsWorkflow function results
+	//		platformHealth.PythonApps = <-pythonAppHealthChannel
+	//	}
 
 	platformHealth.Datastore = <-datastoreHealthChannel
 	platformHealth.FileOps = <-fileHealthChannel
@@ -3615,7 +3614,34 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 							"number_of_replicas": 1,
 							"refresh_interval":   "30s",
 						},
-						Mappings: map[string]interface{}{
+					}
+
+					sourceMappings := map[string]interface{}{}
+					mappingReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_mapping", opensearchUrl, indexName), nil)
+					if err == nil {
+						mappingResp, err := foundClient.Client.Transport.Perform(mappingReq)
+						if err == nil {
+							mappingBody, err := io.ReadAll(mappingResp.Body)
+							if err == nil {
+								mappingResp.Body.Close()
+								mappingInfo := map[string]struct {
+									Mappings map[string]interface{} `json:"mappings"`
+								}{}
+								if err := json.Unmarshal(mappingBody, &mappingInfo); err == nil {
+									if info, ok := mappingInfo[indexName]; ok && len(info.Mappings) > 0 {
+										sourceMappings = info.Mappings
+									}
+								}
+							} else {
+								mappingResp.Body.Close()
+							}
+						}
+					}
+
+					if len(sourceMappings) > 0 {
+						indexConfig.Mappings = sourceMappings
+					} else {
+						indexConfig.Mappings = map[string]interface{}{
 							"dynamic_templates": []map[string]interface{}{
 								{
 									"strings_as_keywords": map[string]interface{}{
@@ -3626,7 +3652,7 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 									},
 								},
 							},
-						},
+						}
 					}
 				}
 
@@ -3660,14 +3686,6 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 				return result, fmt.Errorf("failed checking index %s: %s", newIndex, string(existsBody))
 			}
 
-			reindexBody, err := json.Marshal(OpensearchReindexRequest{
-				Source: OpensearchReindexSourceDest{Index: indexName},
-				Dest:   OpensearchReindexSourceDest{Index: newIndex},
-			})
-			if err != nil {
-				return result, err
-			}
-
 			sourceCountReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_count", opensearchUrl, indexName), nil)
 			if err != nil {
 				return result, err
@@ -3696,7 +3714,41 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 				return result, err
 			}
 
-			reindexReq, err := http.NewRequest("POST", fmt.Sprintf("%s/_reindex?wait_for_completion=true", opensearchUrl), bytes.NewBuffer(reindexBody))
+			reindexPayload := map[string]interface{}{
+				"source": map[string]interface{}{
+					"index": indexName,
+				},
+				"dest": map[string]interface{}{
+					"index": newIndex,
+				},
+			}
+
+			if batchSizeStr := os.Getenv("OPENSEARCH_REINDEX_BATCH_SIZE"); batchSizeStr != "" {
+				if batchSize, err := strconv.Atoi(batchSizeStr); err == nil && batchSize > 0 {
+					reindexPayload["source"].(map[string]interface{})["size"] = batchSize
+				}
+			}
+
+			if slicesStr := os.Getenv("OPENSEARCH_REINDEX_SLICES"); slicesStr != "" {
+				if slices, err := strconv.Atoi(slicesStr); err == nil && slices > 0 {
+					reindexPayload["slices"] = slices
+				}
+			}
+
+			reindexBody, err := json.Marshal(reindexPayload)
+			if err != nil {
+				return result, err
+			}
+
+			reindexUrl := fmt.Sprintf("%s/_reindex?wait_for_completion=true", opensearchUrl)
+			if scroll := strings.TrimSpace(os.Getenv("OPENSEARCH_REINDEX_SCROLL")); scroll != "" {
+				reindexUrl = fmt.Sprintf("%s&scroll=%s", reindexUrl, scroll)
+			}
+			if rps := strings.TrimSpace(os.Getenv("OPENSEARCH_REINDEX_RPS")); rps != "" {
+				reindexUrl = fmt.Sprintf("%s&requests_per_second=%s", reindexUrl, rps)
+			}
+
+			reindexReq, err := http.NewRequest("POST", reindexUrl, bytes.NewBuffer(reindexBody))
 			if err != nil {
 				return result, err
 			}
