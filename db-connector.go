@@ -563,6 +563,9 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	// This may get data from cache, hence we need to continuously set things in the database. Mainly as a precaution.
 	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+	if err != nil {
+		return fmt.Errorf("[ERROR] Failed to get new execution(%s): %s", workflowExecution.ExecutionId, err)
+	}
 
 	HandleExecutionCacheIncrement(ctx, *newexec)
 	if !dbSave && err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {

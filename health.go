@@ -261,7 +261,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	data.ExtensionProps.Extensions["editing"] = json.RawMessage(`false`)
 	data.Info.Title = "Shuffle-Healthcheck"
 	data.Info.Version = "2.0"
-	data.Info.Description = fmt.Sprintf("Description for health check app with always some random string %s", randStr(10, "alphanum"))
+	data.Info.Description = fmt.Sprintf("Description for health check app with always some random string")
 
 	//	newOpenapiString := strings.Replace(openapiString, `"edaa73d40238ee60874a853dc3ccaa6f"`, `"`+id+`"`, 1)
 	//	newOpenapiString = strings.Replace(newOpenapiString, `"editing":true`, `"editing":false`, 1)
@@ -759,19 +759,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		platformHealth.OpensearchOps = <-opensearchHealthChannel
 	}
 
-	// TODO: More testing for onprem health checks
-	openapiAppHealthChannel := make(chan AppHealth)
-	go func() {
-		appHealth, err := RunOpsAppHealthCheck(apiKey, orgId)
-		if err != nil {
-			log.Printf("[ERROR] Failed running app health check: %s", err)
-		}
-
-		appHealth.Result = ""
-		openapiAppHealthChannel <- appHealth
-		errorChannel <- err
-	}()
-
+	
 	datastoreHealthChannel := make(chan DatastoreHealth)
 	go func() {
 		datastoreHealth, err := RunOpsDatastore(apiKey, orgId)
@@ -794,23 +782,35 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		errorChannel <- err
 	}()
 
-	if project.Environment == "cloud" {
-		// App upload via zip is not supported in self-hosted machine yet
-		pythonAppHealthChannel := make(chan AppHealth)
-		go func() {
-			pythonAppHealth, err := RunOpsAppUpload(apiKey, orgId)
-			if err != nil {
-				log.Printf("[ERROR] Failed running python app health check: %s", err)
-			}
+	// TODO: More testing for onprem health checks
+	openapiAppHealthChannel := make(chan AppHealth)
+	go func() {
+		appHealth, err := RunOpsAppHealthCheck(apiKey, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed running app health check: %s", err)
+		}
 
-			pythonAppHealthChannel <- pythonAppHealth
-			errorChannel <- err
-		}()
+		appHealth.Result = ""
+		openapiAppHealthChannel <- appHealth
+		errorChannel <- err
+	}()
 
-
-		// Use channel for getting RunOpsWorkflow function results
-		platformHealth.PythonApps = <-pythonAppHealthChannel
-	}
+//	if project.Environment == "cloud" {
+//		// App upload via zip is not supported in self-hosted machine yet
+//		pythonAppHealthChannel := make(chan AppHealth)
+//		go func() {
+//			pythonAppHealth, err := RunOpsAppUpload(apiKey, orgId)
+//			if err != nil {
+//				log.Printf("[ERROR] Failed running python app health check: %s", err)
+//			}
+//
+//			pythonAppHealthChannel <- pythonAppHealth
+//			errorChannel <- err
+//		}()
+//
+//		// Use channel for getting RunOpsWorkflow function results
+//		platformHealth.PythonApps = <-pythonAppHealthChannel
+//	}
 
 	platformHealth.Datastore = <-datastoreHealthChannel
 	platformHealth.FileOps = <-fileHealthChannel
@@ -2152,8 +2152,8 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	req.Header.Set("Content-Type", "application/json")
 
 	var fileRespStruct struct {
-		Success bool   `json:success`
-		Id      string `json:id`
+		Success bool   `json:"success"`
+		Id      string `json:"id"`
 	}
 
 	client := GetExternalClient(baseUrl)

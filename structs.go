@@ -4367,7 +4367,7 @@ type HealthCheck struct {
 	Updated       int64                           `json:"updated"`
 	Apps          AppHealth                       `json:"apps"`
 	Workflows     WorkflowHealth                  `json:"workflows"`
-	PythonApps    AppHealth                       `json:"python_apps"`
+	//PythonApps    AppHealth                       `json:"python_apps"`
 	Datastore     DatastoreHealth                 `json:"datastore"`
 	FileOps       FileHealth                      `json:"fileops"`
 	OpensearchOps opensearchapi.ClusterHealthResp `json:"opensearch"`
