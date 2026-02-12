@@ -689,9 +689,6 @@ type User struct {
 	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
 
 	ProvisionedByOrg string `datastore:"provisioned_by_org" json:"provisioned_by_org"`
-
-	// replacement of ProvisionedByOrg
-	ControlledByOrgs []string `datastore:"controlled_by_orgs" json:"controlled_by_orgs"`
 }
 
 type SSOInfo struct {
