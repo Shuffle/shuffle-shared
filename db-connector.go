@@ -14208,7 +14208,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			parsedCache := []byte(cache.([]uint8))
-			err = json.Unmarshal(parsedCache, &cacheData)
+			err = json.Unmarshal(parsedCache, cacheData)
 			if err == nil {
 				return cacheData, nil
 			}
