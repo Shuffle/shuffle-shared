@@ -4947,7 +4947,7 @@ type MCPRequest struct {
 		ToolID      string `json:"tool_id"`
 		Environment string `json:"environment"`
 
-		// From testing in the wild
+		// From testing in Lovable
 		ProtocolVersion string `json:"protocolVersion"`
 		Capabilities    struct {
 			Roots struct {
@@ -4958,6 +4958,18 @@ type MCPRequest struct {
 			Tools struct {
 				ListChanged bool `json:"listChanged"`
 			} `json:"tools"`
+
+			// OpenAI testing
+			Experimental struct {
+				OpenaiVisibility struct {
+					Enabled bool `json:"enabled"`
+				} `json:"openai/visibility"`
+			} `json:"openAiVisibility"`
+			Extensions struct {
+				IoModelContextProtocolUi struct {
+					MimeTypes []string `json:"mimeTypes"`
+				} `json:"io.modelcontextprotocol/ui"`
+			} `json:"extensions"`
 		} `json:"capabilities"`
 		ClientInfo struct {
 			Name    string `json:"name"`
@@ -4973,31 +4985,48 @@ type MCPResponse struct {
 }
 
 type MCPInitResponse struct {
-	Jsonrpc string                 `json:"jsonrpc"`
-	ID      int                    `json:"id"`
+	Jsonrpc string        `json:"jsonrpc"`
+	ID      int           `json:"id"`
 	Result  MCPToolResult `json:"result,omitempty"`
 }
 
+type MCPCapabilitiesTools struct {
+	List bool `json:"list"`
+	Call bool `json:"call"`
+}
+
+type MCPCapabilities struct {
+	Tools MCPCapabilitiesTools `json:"tools"`
+}
+
+type MCPServerInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
 type MCPToolResult struct {
-	Tools []MCPTool `json:"tools"`
+	ProtocolVersion string          `json:"protocolVersion"`
+	Capabilities    MCPCapabilities `json:"capabilities"`
+	ServerInfo      MCPServerInfo   `json:"serverInfo"`
+	Tools           []MCPTool       `json:"tools"`
 }
 
 type MCPTool struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
 	InputSchema MCPToolInputSchema `json:"inputSchema"`
 }
 
-type MCPProperty struct{
+type MCPProperty struct {
 	Type        string `json:"type"`
 	Description string `json:"description"`
 }
 
 type MCPToolInputSchema struct {
-	Type       string `json:"type"`
+	Type       string                 `json:"type"`
 	Properties map[string]MCPProperty `json:"properties"`
-	Required []string `json:"required"`
-} 
+	Required   []string               `json:"required"`
+}
 
 type OpensearchPrefixFixResult struct {
 	Success      bool                               `json:"success"`
