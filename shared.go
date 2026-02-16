@@ -16574,7 +16574,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		return errors.New(fmt.Sprintf("No result in %s request for agent", status))
 	}
 
-	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
+	if strings.ToLower(actionResult.Action.AppName) == "ai agent" && (status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED") {
 		// Check if this workflow is running in different env (not cloud)
 		fullExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err != nil {
@@ -16596,7 +16596,9 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 				agentEnvironment = fullExecution.Workflow.ExecutionEnvironment
 			}
 
-			log.Printf("[DEBUG][%s] AI Agent finished. Detected environment: '%s'", workflowExecution.ExecutionId, agentEnvironment)
+			if debug {
+				log.Printf("[DEBUG][%s] AI Agent node '%s' finished with status %s. Detected environment: '%s'", workflowExecution.ExecutionId, actionResult.Action.Label, status, agentEnvironment)
+			}
 
 			if strings.ToLower(agentEnvironment) != "cloud" && agentEnvironment != "" {
 				log.Printf("[INFO][%s] AI Agent finished (status: %s). Redeploying workflow to env '%s' with MAX priority",
@@ -16619,10 +16621,12 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 				if err != nil {
 					log.Printf("[ERROR][%s] Failed redeploying workflow after AI Agent completion to env %s: %s", fullExecution.ExecutionId, parsedEnv, err)
 				} else {
-					log.Printf("[DEBUG][%s] Successfully redeployed workflow to %s after AI Agent completion", workflowExecution.ExecutionId, parsedEnv)
+					log.Printf("[INFO][%s] Successfully redeployed workflow to %s after AI Agent completion", workflowExecution.ExecutionId, parsedEnv)
 				}
 			} else {
-				log.Printf("[DEBUG][%s] AI Agent finished (env: %s), no redeployment needed (cloud or empty env).", workflowExecution.ExecutionId, agentEnvironment)
+				if debug {
+					log.Printf("[DEBUG][%s] AI Agent finished (env: %s), no redeployment needed (cloud-only execution).", workflowExecution.ExecutionId, agentEnvironment)
+				}
 			}
 		}
 	}
