@@ -12811,3 +12811,97 @@ func RunMCPAction(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(returnBytes))
 }
+
+func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (MCPInitResponse, error) {
+	if len(app.Name) == 0 || len(app.ID) == 0 {
+		return MCPInitResponse{}, errors.New("app not found")
+	}
+
+	foundServerVersion := "0.0.1"
+	tools := MCPInitResponse{
+		Jsonrpc: request.Jsonrpc,
+		ID:	  request.ID,
+		Result: MCPToolResult{
+			ProtocolVersion: "2024-11-05",
+			Tools: []MCPTool{},
+			Capabilities: MCPCapabilities{},
+			ServerInfo: MCPServerInfo{
+				Name: "shuffle",
+				Version: foundServerVersion,
+			},
+		},
+	}
+
+	for cnt, action := range app.Actions {
+		tool := MCPTool{
+			Name: action.Name,
+			Description: action.Description,
+			InputSchema: MCPToolInputSchema{
+				Type: "object",
+				Required: []string{},
+				Properties: map[string]MCPProperty{},
+			},
+		}
+
+		handledName := []string{}
+		requiredParams := []string{}
+		for _, param := range action.Parameters {
+			// Skipping config items as they are auth-oriented
+			if param.Configuration {
+				//requiredParams = append(requiredParams, param.Name)
+				continue
+			}
+
+			if ArrayContains(handledName, param.Name) {
+				continue
+			}
+
+			handledName = append(handledName, param.Name)
+
+			if param.Required {
+				requiredParams = append(requiredParams, param.Name)
+			}
+
+			parsedDescription := param.Description
+			tool.InputSchema.Properties[param.Name] = MCPProperty{
+				Type: "string",
+				Description: parsedDescription,
+			}
+		}
+
+		if len(tool.InputSchema.Properties) == 0 {
+			continue
+		}
+
+		// Make all required
+		if len(tool.InputSchema.Required) == 0 {
+			for _, param := range action.Parameters {
+				if param.Configuration {
+					continue
+				}
+
+				if ArrayContains(requiredParams, param.Name) {
+					continue
+				}
+
+				requiredParams = append(requiredParams, param.Name)
+			}
+		}
+
+		if len(requiredParams) == 0 {
+			log.Printf("[WARNING] No required parameters found for tool %s. Defaulting to all non-configuration parameters as required.", tool.Name)
+			continue
+		}
+
+		//tool.Capabilities.Tools.List = true
+		//tool.Capabilities.Tools.Call = true
+		tool.InputSchema.Required = requiredParams
+		tools.Result.Tools = append(tools.Result.Tools, tool)
+
+		if cnt > 10 {
+			break
+		}
+	}
+
+	return tools, nil
+}

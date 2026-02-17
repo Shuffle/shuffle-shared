@@ -563,6 +563,9 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	// This may get data from cache, hence we need to continuously set things in the database. Mainly as a precaution.
 	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+	if err != nil {
+		return fmt.Errorf("[ERROR] Failed to get new execution(%s): %s", workflowExecution.ExecutionId, err)
+	}
 
 	HandleExecutionCacheIncrement(ctx, *newexec)
 	if !dbSave && err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
@@ -5469,7 +5472,7 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 		}
 	}
 
-	log.Printf("[INFO] Found %d apps for name %s in db-connector", len(apps), appName)
+	log.Printf("[INFO] Found %d apps for name '%s' in db-connector", len(apps), appName)
 	return apps, nil
 }
 
@@ -14218,7 +14221,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			parsedCache := []byte(cache.([]uint8))
-			err = json.Unmarshal(parsedCache, &cacheData)
+			err = json.Unmarshal(parsedCache, cacheData)
 			if err == nil {
 				return cacheData, nil
 			}
