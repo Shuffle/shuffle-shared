@@ -1168,6 +1168,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			hasActivePaidSubscription := false
 			hasFreeSubscription := false
 
+			updateSub := false
+
 			for _, sub := range org.Subscriptions {
 				if sub.Active && sub.Amount != "0" {
 					hasActivePaidSubscription = true
@@ -1186,18 +1188,22 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 				org.Subscriptions = filteredSubs
+				updateSub = true
 				log.Printf("[INFO] Removed free subscription for org %s (active paid subscription exists)", org.Id)
 			} else if !hasActivePaidSubscription && !hasFreeSubscription {
 				// No active paid subscription and no free plan, add one
 				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(*org, 2000))
+				updateSub = true
 				log.Printf("[INFO] Added free subscription for org %s (no active paid subscriptions found)", org.Id)
 			}
 
 			// Persist any subscription changes made above
-			if err := SetOrg(ctx, *org, org.Id); err != nil {
-				log.Printf("[ERROR] Failed to persist subscription changes for org %s: %v", org.Id, err)
-			} else {
-				log.Printf("[DEBUG] Successfully persisted subscription changes for org %s", org.Id)
+			if updateSub {
+				if err := SetOrg(ctx, *org, org.Id); err != nil {
+					log.Printf("[ERROR] Failed to persist subscription changes for org %s: %v", org.Id, err)
+				} else {
+					log.Printf("[DEBUG] Successfully persisted subscription changes for org %s", org.Id)
+				}
 			}
 		}
 
