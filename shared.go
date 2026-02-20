@@ -1105,7 +1105,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		//log.Printf("LIMIT: %s", org.SyncFeatures.AppExecutions.Limit)
 		orgChanged := false
 		if org.SyncFeatures.AppExecutions.Limit == 0 || org.SyncFeatures.AppExecutions.Limit == 1500 {
-			org.SyncFeatures.AppExecutions.Limit = 10000
+			org.SyncFeatures.AppExecutions.Limit = 2000
 			orgChanged = true
 		}
 
@@ -1156,7 +1156,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		if len(org.Subscriptions) == 0 && len(org.CreatorOrg) == 0 {
 			// Only when there is no subscription in the org and it's not a suborg :)
 			// Placeholder subscription that to add at very first time
-			base := buildBaseSubscription(*org, org.SyncFeatures.AppExecutions.Limit)
+			base := BuildBaseSubscription(*org, org.SyncFeatures.AppExecutions.Limit)
 			org.Subscriptions = append(org.Subscriptions, base)
 
 			if err := SetOrg(ctx, *org, org.Id); err != nil {
@@ -1164,7 +1164,44 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			} else {
 				log.Printf("[INFO] Added a base subscription (%s) for org %s", base.Name, org.Id)
 			}
-		} else if len(org.CreatorOrg) == 0 && project.Environment == "onprem" {
+		} else if len(org.CreatorOrg) == 0 && len(org.Subscriptions) >= 1 {
+			hasActivePaidSubscription := false
+			hasFreeSubscription := false
+
+			for _, sub := range org.Subscriptions {
+				if sub.Active && sub.Amount != "0" {
+					hasActivePaidSubscription = true
+				}
+				if sub.Amount == "0" && sub.Reference == "" {
+					hasFreeSubscription = true
+				}
+			}
+
+			if hasActivePaidSubscription && hasFreeSubscription {
+				// Remove free subscriptions since user has active paid plan
+				var filteredSubs []PaymentSubscription
+				for _, sub := range org.Subscriptions {
+					if !(sub.Amount == "0" && sub.Reference == "") {
+						filteredSubs = append(filteredSubs, sub)
+					}
+				}
+				org.Subscriptions = filteredSubs
+				log.Printf("[INFO] Removed free subscription for org %s (active paid subscription exists)", org.Id)
+			} else if !hasActivePaidSubscription && !hasFreeSubscription {
+				// No active paid subscription and no free plan, add one
+				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(*org, 2000))
+				log.Printf("[INFO] Added free subscription for org %s (no active paid subscriptions found)", org.Id)
+			}
+
+			// Persist any subscription changes made above
+			if err := SetOrg(ctx, *org, org.Id); err != nil {
+				log.Printf("[ERROR] Failed to persist subscription changes for org %s: %v", org.Id, err)
+			} else {
+				log.Printf("[DEBUG] Successfully persisted subscription changes for org %s", org.Id)
+			}
+		}
+
+		if len(org.CreatorOrg) == 0 && project.Environment == "onprem" {
 			// This is used to update the subscription for the onprem orgs
 			// That have cloud sync active
 			// Not a suborg
@@ -12417,7 +12454,7 @@ func getSignatureSample(org Org) PaymentSubscription {
 	return PaymentSubscription{}
 }
 
-func buildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription {
+func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription {
 
 	now := int64(time.Now().Unix())
 	log.Printf("[DEBUG] Building base subscription for org %s that has %d monthly exec limit", org.Id, monthlyExecLimit)
@@ -12456,7 +12493,7 @@ func buildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 				"15 Users",
 				"Select Datacenter Region",
 			}
-			amount = "32" // Just for placeholder
+			amount = fmt.Sprintf("%d", int64(((monthlyExecLimit-2000)/10000)*32)) // Calculate based on app runs: (paid_runs / 10k) * $32
 		} else if monthlyExecLimit >= 2000 && monthlyExecLimit < 12000 {
 			planName = "Free License"
 			supportLevel = "Community Support"
@@ -12562,7 +12599,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 		CreatorConfig     string              `json:"creator_config" datastore:"creator_config"`
 		Subscription      PaymentSubscription `json:"subscription" datastore:"subscription"`
-		SubscriptionIndex int                 `json:"subscription_index" datastore:"subscription_index"`
+		SubscriptionIndex string              `json:"subscription_index" datastore:"subscription_index"`
 
 		SyncFeatures    SyncFeatures `json:"sync_features" datastore:"sync_features"`
 		Billing         Billing      `json:"billing" datastore:"billing"`
@@ -12656,10 +12693,17 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Allow editing a specific subscription card from UI except Eula and Reference
 	if tmpData.Editing == "subscription_update" {
-		idx := tmpData.SubscriptionIndex
-		if idx < 0 || idx >= len(org.Subscriptions) {
+		// Find subscription by reference (SubscriptionIndex now holds the reference string)
+		var idx int = -1
+		for i, sub := range org.Subscriptions {
+			if sub.Reference == tmpData.SubscriptionIndex {
+				idx = i
+				break
+			}
+		}
+		if idx == -1 {
 			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "invalid subscription index"}`))
+			resp.Write([]byte(`{"success": false, "reason": "subscription not found by reference"}`))
 			return
 		}
 
@@ -12677,11 +12721,40 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			updated.EulaSigned = true
 			updated.EulaSignedBy = user.Username
 		}
-		// Do not overwrite subscription reference number
-		updated.Reference = existing.Reference
 
 		// Apply the rest
 		org.Subscriptions[idx] = updated
+
+		// This is to set user in free plan is the current plan is Inactive by us
+		if len(org.CreatorOrg) == 0 {
+			hasActivePaidSubscription := false
+			hasFreeSubscription := false
+
+			for _, sub := range org.Subscriptions {
+				if sub.Active && sub.Amount != "0" {
+					hasActivePaidSubscription = true
+				}
+				if sub.Amount == "0" && sub.Reference == "" {
+					hasFreeSubscription = true
+				}
+			}
+
+			if hasActivePaidSubscription && hasFreeSubscription {
+				// Remove free subscriptions since user has active paid plan
+				var filteredSubs []PaymentSubscription
+				for _, sub := range org.Subscriptions {
+					if !(sub.Amount == "0" && sub.Reference == "") {
+						filteredSubs = append(filteredSubs, sub)
+					}
+				}
+				org.Subscriptions = filteredSubs
+				log.Printf("[INFO] Removed free subscription for org %s (active paid subscription exists)", org.Id)
+			} else if !hasActivePaidSubscription && !hasFreeSubscription {
+				// No active paid subscription and no free plan, add one
+				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(*org, 2000))
+				log.Printf("[INFO] Added free subscription for org %s (no active paid subscriptions found)", org.Id)
+			}
+		}
 
 		if err := SetOrg(ctx, *org, org.Id); err != nil {
 			log.Printf("[WARNING] Failed to update subscription for org %s: %s", org.Id, err)
