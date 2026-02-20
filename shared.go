@@ -1153,6 +1153,28 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			org.SyncFeatures.MultiEnv.Usage = int64(len(envs))
 		}
 
+		// Backfill subscription IDs if any subscription is missing an ID
+		addSubId := false
+		for _, sub := range org.Subscriptions {
+			if sub.Id == "" {
+				addSubId = true
+				break
+			}
+		}
+
+		if addSubId {
+			for i := range org.Subscriptions {
+				if org.Subscriptions[i].Id == "" {
+					org.Subscriptions[i].Id = uuid.NewV4().String()
+				}
+			}
+			if err := SetOrg(ctx, *org, org.Id); err != nil {
+				log.Printf("[WARNING] Failed to backfill subscription IDs for org %s: %s", org.Id, err)
+			} else {
+				log.Printf("[INFO] Backfilled subscription IDs for org %s", org.Id)
+			}
+		}
+
 		if len(org.Subscriptions) == 0 && len(org.CreatorOrg) == 0 {
 			// Only when there is no subscription in the org and it's not a suborg :)
 			// Placeholder subscription that to add at very first time
@@ -12531,6 +12553,7 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 	endDate := int64(firstNextMonth.Unix())
 
 	return PaymentSubscription{
+		Id:               uuid.NewV4().String(),
 		Active:           true,
 		Startdate:        now,
 		Enddate:          endDate,
@@ -12699,23 +12722,24 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Allow editing a specific subscription card from UI except Eula and Reference
 	if tmpData.Editing == "subscription_update" {
-		// Find subscription by reference (SubscriptionIndex now holds the reference string)
+		// Find subscription by ID (SubscriptionIndex now holds the ID string)
 		var idx int = -1
 		for i, sub := range org.Subscriptions {
-			if sub.Reference == tmpData.SubscriptionIndex {
+			if sub.Id == tmpData.SubscriptionIndex {
 				idx = i
 				break
 			}
 		}
 		if idx == -1 {
 			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "subscription not found by reference"}`))
+			resp.Write([]byte(`{"success": false, "reason": "subscription not found by ID"}`))
 			return
 		}
 
 		// Preserve immutable fields
 		existing := org.Subscriptions[idx]
 		updated := tmpData.Subscription
+		updated.Id = existing.Id
 		updated.Eula = existing.Eula
 
 		// Do not overwrite existing EULA signature info if it's already signed
