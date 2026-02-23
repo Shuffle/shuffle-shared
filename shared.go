@@ -3390,6 +3390,87 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+// AutoRepairUserOrgLinks checks all child orgs of the user's active org's parent
+// and adds any missing orgs to user.Orgs where user exists in org.Users.
+// Should only be called from main region (shuffler). Only runs on cloud.
+// Uses cache to avoid running on every request (1 hour TTL).
+func AutoRepairUserOrgLinks(ctx context.Context, user *User) int {
+	// Only run on cloud environment
+	if project.Environment != "cloud" {
+		return 0
+	}
+
+	if user == nil || len(user.ActiveOrg.Id) == 0 {
+		return 0
+	}
+
+	// Skip if we've checked this user recently (1 hour cache)
+	cacheKey := fmt.Sprintf("orgrepair_%s", user.Id)
+	if _, err := GetCache(ctx, cacheKey); err == nil {
+		return 0
+	}
+
+	// Get the active org to find its parent
+	activeOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] AutoRepairUserOrgLinks: Failed to get active org %s: %s", user.ActiveOrg.Id, err)
+		return 0
+	}
+
+	// Determine parent org ID
+	parentOrgId := activeOrg.CreatorOrg
+	if len(parentOrgId) == 0 {
+		parentOrgId = activeOrg.Id // Active org is the parent
+	}
+
+	// Get all child orgs
+	childOrgs, err := GetAllChildOrgs(ctx, parentOrgId)
+	if err != nil {
+		log.Printf("[WARNING] AutoRepairUserOrgLinks: Failed to get child orgs for %s: %s", parentOrgId, err)
+		return 0
+	}
+
+	// Build set of orgs user already has
+	userOrgSet := make(map[string]bool)
+	for _, orgId := range user.Orgs {
+		userOrgSet[orgId] = true
+	}
+
+	repairCount := 0
+	for _, childOrg := range childOrgs {
+		// Skip if user already has this org
+		if userOrgSet[childOrg.Id] {
+			continue
+		}
+
+		// Check if user is in org.Users
+		for _, orgUser := range childOrg.Users {
+			if orgUser.Id == user.Id {
+				log.Printf("[INFO] Auto-repairing user<->org link: user %s (%s) found in org.Users for %s (%s) but missing from user.Orgs",
+					user.Username, user.Id, childOrg.Name, childOrg.Id)
+				user.Orgs = append(user.Orgs, childOrg.Id)
+				userOrgSet[childOrg.Id] = true
+				repairCount++
+				break
+			}
+		}
+	}
+
+	if repairCount > 0 {
+		err := SetUser(ctx, user, false)
+		if err != nil {
+			log.Printf("[ERROR] Failed saving auto-repaired user.Orgs for %s: %s", user.Username, err)
+			return 0
+		}
+		log.Printf("[INFO] Successfully auto-repaired %d org links for user %s", repairCount, user.Username)
+	}
+
+	// Cache for 1 hour to avoid checking on every request
+	SetCache(ctx, cacheKey, []byte("1"), 60)
+
+	return repairCount
+}
+
 func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (User, error) {
 	if request == nil {
 		return User{}, errors.New("No request given")
