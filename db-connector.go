@@ -4108,6 +4108,19 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		}, nil
 	}
 
+	// Clean the ID: remove whitespace, quotes, and backslashes
+	originalId := id
+	id = strings.TrimSpace(id)
+	id = strings.ReplaceAll(id, "\"", "")
+	id = strings.ReplaceAll(id, "'", "")
+	id = strings.ReplaceAll(id, "\\", "")
+	if len(id) == 0 {
+		return &Org{}, errors.New("Empty org id after cleaning")
+	}
+	if id != originalId {
+		log.Printf("[WARNING] GetOrg ID was cleaned from '%s' to '%s' - check data source", originalId, id)
+	}
+
 	nameKey := "Organizations"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	curOrg := &Org{}

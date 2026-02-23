@@ -11746,20 +11746,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		Mode    string `json:"mode"`
 	}
 
-	var tmpData ReturnData
-	err = json.Unmarshal(body, &tmpData)
-	if err != nil {
-		log.Printf("Failed unmarshalling test: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if tmpData.SSOTest || tmpData.SSO {
-		tmpData.SSOTest = true
-		tmpData.SSO = true
-	}
-
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
@@ -11771,6 +11757,25 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		fileId = location[4]
+	}
+
+	var tmpData ReturnData
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		if len(fileId) == 36 && strings.Count(fileId, "-") == 4 {
+			log.Printf("[DEBUG] Empty body in change org, using fileId from URL: %s", fileId)
+			tmpData.OrgId = fileId
+		} else {
+			log.Printf("[WARNING] Failed unmarshalling change org body: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	if tmpData.SSOTest || tmpData.SSO {
+		tmpData.SSOTest = true
+		tmpData.SSO = true
 	}
 
 	foundOrg := false
@@ -21234,7 +21239,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 					}
 
 					if param.Name == "url" {
-						action.Parameters[paramIndex].Value = apiUrl 
+						action.Parameters[paramIndex].Value = apiUrl
 						urlFound = true
 					} else if param.Name == "apikey" {
 						action.Parameters[paramIndex].Value = apiKey
@@ -21266,7 +21271,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 					workflow.OrgId = "INTERNAL"
 					workflow.ExecutingOrg = OrgMini{
 						Name: "INTERNAL",
-						Id: "INTERNAL",
+						Id:   "INTERNAL",
 					}
 
 					workflowExecution.Workflow = workflow
@@ -24138,17 +24143,17 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 									decision.RunDetails.Status = "RUNNING"
 									decision.Fields = append(decision.Fields, Valuereplace{
-										Key:    "approve",
-										Value:  fmt.Sprintf("Approved to continue at %s", time.Now().Format(time.RFC1123)),
+										Key:   "approve",
+										Value: fmt.Sprintf("Approved to continue at %s", time.Now().Format(time.RFC1123)),
 									})
 
 									fieldsChanged = true
 									cleanupFailures = true
-								} else if value == "false" { 
+								} else if value == "false" {
 									decision.RunDetails.Status = "FINISHED"
 									decision.Fields = append(decision.Fields, Valuereplace{
-										Key:    "approve",
-										Value:  fmt.Sprintf("Approval DENIED at %s. Should stop the agent.", time.Now().Unix()),
+										Key:   "approve",
+										Value: fmt.Sprintf("Approval DENIED at %s. Should stop the agent.", time.Now().Unix()),
 									})
 
 									fieldsChanged = true
@@ -24160,7 +24165,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								unmarshalledDecision.Decisions[decisionIndex] = decision
 								break
 							}
-
 
 							if findContinue {
 								// The only key we care about in this case
