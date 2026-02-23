@@ -294,7 +294,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		if value, found := requestCache.Get(name); found {
 			return value, nil
 		} else {
-			return "", errors.New(fmt.Sprintf("Failed getting ONPREM cache for %s", name))
+			return "", errors.New(fmt.Sprintf("Failed getting cache for %s", name))
 		}
 		//return "", errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
 	}
@@ -3413,7 +3413,9 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				return workflow, nil
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			if debug { 
+				log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			}
 		}
 	}
 
@@ -4019,7 +4021,7 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 				return curOrg, nil
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for org %s (1): %s", id, err)
 		}
 	}
 
@@ -4122,7 +4124,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				}
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for org %s (2): %s", id, err)
 		}
 	}
 
@@ -12807,7 +12809,7 @@ func GetOrgMoveCache(ctx context.Context, orgId string) (RegionChangeHistory, er
 				return attempt, nil
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for org %s (3): %s", orgId, err)
 		}
 	}
 

@@ -517,6 +517,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			workflow.Branches = append(workflow.Branches, newBranch)
 		}
 
+		// Replicator
 		for appIndex, appName := range strings.Split(appNames, ",") {
 			newAction := actionTemplate
 			newAction.ID = uuid.NewV4().String()

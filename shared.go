@@ -141,16 +141,24 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"http://localhost:3002",
 			"http://localhost:3000",
 
-			// For a frontend test project
+			// Shuffle support
 			"https://cases.shuffler.io",
 			"https://security.shuffler.io",
 			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
 			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
 
-			// Another frontend test
+			// tbd
 			"https://preview--shuffle-cases.lovable.app",
 			"https://9f29a11a-6489-4898-8044-ed7b8f848ef9.lovableproject.com",
 			"https://id-preview--9f29a11a-6489-4898-8044-ed7b8f848ef9.lovable.app",
+
+			// Support project
+			"https://support.shuffler.io",
+			"https://shuffle-support.lovable.app",
+			"https://shuffle-support.lovable.app/",
+			"https://05364669-00ea-43be-ae8f-8e333ccc870c.lovableproject.com",
+			"https://preview--shuffle-support.lovable.app",
+
 		}
 
 		if len(origin) > 0 {
