@@ -323,7 +323,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 	// Splitting into multiple cache items
 	//if project.Environment == "cloud" || len(memcached) > 0 {
 	if len(memcached) > 0 {
-		comparisonNumber := 50
+		comparisonNumber := 100
 		if len(data) > maxCacheSize*comparisonNumber {
 			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
 		}
