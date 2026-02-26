@@ -2241,6 +2241,88 @@ type StatisticsItem struct {
 	OrgId     string           `json:"org_id" datastore:"org_id"`
 }
 
+type OpenSearchNodeFSTotal struct {
+	TotalInBytes     int64 `json:"total_in_bytes"`
+	FreeInBytes      int64 `json:"free_in_bytes"`
+	AvailableInBytes int64 `json:"available_in_bytes"`
+}
+
+type OpenSearchNodeFS struct {
+	Total OpenSearchNodeFSTotal `json:"total"`
+}
+
+type OpenSearchLoadAverage struct {
+	OneM     float64 `json:"1m"`
+	FiveM    float64 `json:"5m"`
+	FifteenM float64 `json:"15m"`
+}
+
+type OpenSearchNodeOSCPU struct {
+	Percent     int                   `json:"percent"`
+	LoadAverage OpenSearchLoadAverage `json:"load_average"`
+}
+
+type OpenSearchNodeOS struct {
+	CPU OpenSearchNodeOSCPU `json:"cpu"`
+}
+
+type OpenSearchNodeJVMMemHeap struct {
+	UsedInBytes int64 `json:"heap_used_in_bytes"`
+	MaxInBytes  int64 `json:"heap_max_in_bytes"`
+	UsedPercent int   `json:"heap_used_percent"`
+}
+
+type OpenSearchNodeJVMMem struct {
+	HeapUsedPercent int   `json:"heap_used_percent"`
+	HeapUsedInBytes int64 `json:"heap_used_in_bytes"`
+	HeapMaxInBytes  int64 `json:"heap_max_in_bytes"`
+}
+
+type OpenSearchNodeJVM struct {
+	Mem OpenSearchNodeJVMMem `json:"mem"`
+}
+
+type OpenSearchThreadPoolStat struct {
+	Threads   int64 `json:"threads"`
+	Queue     int64 `json:"queue"`
+	Active    int64 `json:"active"`
+	Rejected  int64 `json:"rejected"`
+	Largest   int64 `json:"largest"`
+	Completed int64 `json:"completed"`
+}
+
+type OpenSearchNodeThreadPool struct {
+	Search OpenSearchThreadPoolStat `json:"search"`
+	Write  OpenSearchThreadPoolStat `json:"write"`
+}
+
+type OpenSearchNodeStat struct {
+	Name       string                   `json:"name"`
+	FS         OpenSearchNodeFS         `json:"fs"`
+	OS         OpenSearchNodeOS         `json:"os"`
+	JVM        OpenSearchNodeJVM        `json:"jvm"`
+	ThreadPool OpenSearchNodeThreadPool `json:"thread_pool"`
+}
+
+type OpenSearchNodesStatsResp struct {
+	ClusterName string                        `json:"cluster_name"`
+	Nodes       map[string]OpenSearchNodeStat `json:"nodes"`
+}
+
+type OpenSearchNodeOSInfo struct {
+	AllocatedProcessors int `json:"allocated_processors"`
+	AvailableProcessors int `json:"available_processors"`
+}
+
+type OpenSearchNodeInfo struct {
+	Name string               `json:"name"`
+	OS   OpenSearchNodeOSInfo `json:"os"`
+}
+
+type OpenSearchNodesInfoResp struct {
+	Nodes map[string]OpenSearchNodeInfo `json:"nodes"`
+}
+
 type HealthCheckSearchWrapper struct {
 	Took     int  `json:"took"`
 	TimedOut bool `json:"timed_out"`
@@ -4369,20 +4451,31 @@ type HealthCheck struct {
 	Apps      AppHealth      `json:"apps"`
 	Workflows WorkflowHealth `json:"workflows"`
 	//PythonApps    AppHealth                       `json:"python_apps"`
-	Datastore     DatastoreHealth                 `json:"datastore"`
-	FileOps       FileHealth                      `json:"fileops"`
-	OpensearchOps opensearchapi.ClusterHealthResp `json:"opensearch"`
+	Datastore       DatastoreHealth                 `json:"datastore"`
+	FileOps         FileHealth                      `json:"fileops"`
+	OpensearchOps   opensearchapi.ClusterHealthResp `json:"opensearch"`
+	OpensearchStats OpensearchStats                 `json:"opensearch_stats"`
 }
 
 type HealthCheckDB struct {
-	Success    bool                            `json:"success"`
-	Updated    int64                           `json:"updated"`
-	Workflows  WorkflowHealth                  `json:"workflows"`
-	Opensearch opensearchapi.ClusterHealthResp `json:"opnsearch"`
-	Datastore  DatastoreHealth                 `json:"datastore"`
-	FileOps    FileHealth                      `json:"fileops"`
-	Apps       AppHealth                       `json:"apps"`
-	ID         string                          `json:"id"`
+	Success         bool                            `json:"success"`
+	Updated         int64                           `json:"updated"`
+	Workflows       WorkflowHealth                  `json:"workflows"`
+	Opensearch      opensearchapi.ClusterHealthResp `json:"opnsearch"`
+	OpensearchStats OpensearchStats                 `json:"opensearch_stats"`
+	Datastore       DatastoreHealth                 `json:"datastore"`
+	FileOps         FileHealth                      `json:"fileops"`
+	Apps            AppHealth                       `json:"apps"`
+	ID              string                          `json:"id"`
+}
+
+type OpensearchStats struct {
+	DiskPercent   float64 `json:"disk_percent"`
+	HeapPercent   int     `json:"heap_percent"`
+	LastChecked   int64   `json:"last_checked"`
+	NodeCount     int     `json:"node_count"`
+	WorstDiskNode string  `json:"worst_disk_node"`
+	WorstHeapNode string  `json:"worst_heap_node"`
 }
 
 type NodeData struct {
