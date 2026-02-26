@@ -9123,14 +9123,18 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	for actionIndex, action := range workflow.Actions {
 		if strings.ToLower(action.Environment) == "cloud" && action.Environment != "cloud" {
+			if debug {
+				log.Printf("[DEBUG] Normalized action environment from '%s' to 'cloud' in workflow %s", action.Environment, workflow.ID)
+			}
 			workflow.Actions[actionIndex].Environment = "cloud"
-			log.Printf("[INFO] Normalized action environment from '%s' to 'cloud' in workflow %s", action.Environment, workflow.ID)
 		}
 	}
 	for triggerIndex, trigger := range workflow.Triggers {
 		if strings.ToLower(trigger.Environment) == "cloud" && trigger.Environment != "cloud" {
+			if debug {
+				log.Printf("[DEBUG] Normalized trigger environment from '%s' to 'cloud' in workflow %s", trigger.Environment, workflow.ID)
+			}
 			workflow.Triggers[triggerIndex].Environment = "cloud"
-			log.Printf("[INFO] Normalized trigger environment from '%s' to 'cloud' in workflow %s", trigger.Environment, workflow.ID)
 		}
 	}
 
