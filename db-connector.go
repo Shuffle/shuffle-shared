@@ -9131,6 +9131,11 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	if project.DbType == "opensearch" {
 		if len([]byte(workflow.Image)) > 32766 {
 			workflow.Image = ""
+			data, err = json.Marshal(workflow)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling in set workflow: %s", err)
+				return nil
+			}
 		}
 
 		err = indexEs(ctx, nameKey, id, data)
