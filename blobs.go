@@ -170,7 +170,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:  "cron",
-							Value: "0 0 * * *",
+							Value: "*/30 * * * *",
 						},
 						WorkflowAppActionParameter{
 							Name:  "execution_argument",
