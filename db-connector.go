@@ -3413,7 +3413,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				return workflow, nil
 			}
 		} else {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
 			}
 		}
@@ -9120,6 +9120,23 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	workflow = FixWorkflowPosition(ctx, workflow)
+
+	for actionIndex, action := range workflow.Actions {
+		if strings.ToLower(action.Environment) == "cloud" && action.Environment != "cloud" {
+			if debug {
+				log.Printf("[DEBUG] Normalized action environment from '%s' to 'cloud' in workflow %s", action.Environment, workflow.ID)
+			}
+			workflow.Actions[actionIndex].Environment = "cloud"
+		}
+	}
+	for triggerIndex, trigger := range workflow.Triggers {
+		if strings.ToLower(trigger.Environment) == "cloud" && trigger.Environment != "cloud" {
+			if debug {
+				log.Printf("[DEBUG] Normalized trigger environment from '%s' to 'cloud' in workflow %s", trigger.Environment, workflow.ID)
+			}
+			workflow.Triggers[triggerIndex].Environment = "cloud"
+		}
+	}
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflow)
