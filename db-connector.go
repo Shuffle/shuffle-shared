@@ -8,7 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 
-	//	"encoding/json"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
+	//"github.com/goccy/go-json"
 
 	runtimeDebug "runtime/debug"
 
@@ -2392,7 +2392,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &workflowApp)
+			err = json.Unmarshal(cacheData, workflowApp)
 			if err == nil {
 
 				// Grabbing extra files necessary
