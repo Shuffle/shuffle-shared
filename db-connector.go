@@ -8,7 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 
-	//	"encoding/json"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goccy/go-json"
+	//"github.com/goccy/go-json"
 
 	runtimeDebug "runtime/debug"
 
@@ -323,10 +323,10 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 	// Splitting into multiple cache items
 	//if project.Environment == "cloud" || len(memcached) > 0 {
 	if len(memcached) > 0 {
-		comparisonNumber := 50
-		if len(data) > maxCacheSize*comparisonNumber {
-			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
-		}
+	//	comparisonNumber := 100
+	//	if len(data) > maxCacheSize*comparisonNumber {
+	//		return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
+	//	}
 
 		loop := false
 		if len(data) > maxCacheSize {
@@ -2392,7 +2392,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &workflowApp)
+			err = json.Unmarshal(cacheData, workflowApp)
 			if err == nil {
 
 				// Grabbing extra files necessary
@@ -9131,6 +9131,11 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	if project.DbType == "opensearch" {
 		if len([]byte(workflow.Image)) > 32766 {
 			workflow.Image = ""
+			data, err = json.Marshal(workflow)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling in set workflow: %s", err)
+				return nil
+			}
 		}
 
 		err = indexEs(ctx, nameKey, id, data)
@@ -17489,149 +17494,6 @@ func SetSyncApikey(ctx context.Context, synckey *SyncKey) error {
 	}
 
 	return nil
-}
-
-// Used to cross-correlate data
-// Not YET doing proper ngram by breaking everything down, but it's easy to
-// Modify this into doing that as well
-
-// Issues:
-// Only does strings
-// Only does top-level in JSON (no recursion)
-func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, value string) error {
-	if len(orgId) == 0 || len(category) == 0 || len(datastoreKey) == 0 || len(value) == 0 {
-		return errors.New("Invalid parameters for cross-correlate ngrams. All parameters must be set. orgId, category, key, value")
-	}
-
-	// Skipping searchability for protected keys
-	if strings.ToLower(category) == "protected" {
-		return nil
-	}
-
-	// Random sleeptime between 0-1000ms because we're inside a goroutine
-	// and want to ensure there aren't a ton of concurrent writes to the datastore
-	time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
-
-	unmarshalled := map[string]interface{}{}
-	if err := json.Unmarshal([]byte(value), &unmarshalled); err != nil {
-		log.Printf("[WARNING] Failed unmarshalling value for cross-correlate ngrams: %s. Storing the key directly.", err)
-		unmarshalled = map[string]interface{}{
-			"key": value,
-		}
-	}
-
-	// Simple workaround for dates
-	// hardcoded for now just to remove certain things
-	skippableKeys := []string{"spec_version", "version", "pattern_type", "created", "edited", "creation"}
-	skippableValues := []string{"indicator", "stix"}
-	invalidStarts := []string{"[", "{", "2025", "2026", "2027", "2028", "2029", "2030"}
-
-	//for jsonKey, val := range unmarshalled {
-	amountAdded := 0
-	maxAmountToAdd := 5
-	for jsonKey, val := range unmarshalled {
-		if ArrayContains(skippableKeys, jsonKey) {
-			continue
-		}
-
-		// Only handle strings for now
-		if val == nil {
-			continue
-		}
-
-		if _, ok := val.(string); !ok {
-			// FIXME: Check here if it's a map, then recurse down
-			// to find more string
-			continue
-		}
-
-		parsedValue := val.(string)
-
-		// FIXME: Arbitrary limits
-		// About ngram: We will want to do additional splitting,
-		// but to start with, we just do the whole thing
-		if len(parsedValue) > 70 || len(parsedValue) < 2 {
-			continue
-		}
-
-		skip := false
-		for _, invalidStart := range invalidStarts {
-			if strings.HasPrefix(parsedValue, invalidStart) {
-				skip = true
-				break
-			}
-		}
-
-		if skip || ArrayContains(skippableValues, parsedValue) {
-			continue
-		}
-
-		// Make sure we don't add more than 5 items (for now)
-		if amountAdded > maxAmountToAdd {
-			break
-		}
-
-		parsedValue = strings.ToLower(strings.TrimSpace(
-			strings.ReplaceAll(
-				strings.ReplaceAll(
-					parsedValue, "\n", "",
-				), " ", "",
-			),
-		))
-
-		parsedCategory := strings.ToLower(strings.ReplaceAll(category, " ", "_"))
-
-		// Doing it WITHOUT the JSON key & Org, as we only want to partially cross-correlate to find items among each other
-		referenceKey := fmt.Sprintf("%s|%s", parsedCategory, datastoreKey)
-
-		// FIXME: May need to hash the parsedValue to make search work well
-		// as we are doing the full string right now
-		ngramSearchKey := fmt.Sprintf("%s_%s", orgId, parsedValue)
-		ngramItem, err := GetDatastoreNGramItem(ctx, ngramSearchKey)
-
-		// FIXME: Key may disappear/be overwritten if connectivity to backend fails briefly?
-		if err != nil || ngramItem == nil || ngramItem.Key == "" {
-			ngramItem = &NGramItem{
-				Key:   parsedValue,
-				OrgId: orgId,
-
-				Amount: 1,
-				Ref: []string{
-					referenceKey,
-				},
-			}
-
-			err = SetDatastoreNGramItem(ctx, ngramSearchKey, ngramItem)
-			if err != nil {
-				log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
-			}
-
-			amountAdded += 1
-			log.Printf("[DEBUG] Created new ngram item for %s with key '%s'", ngramSearchKey, parsedValue)
-			continue
-		}
-
-		if ArrayContains(ngramItem.Ref, referenceKey) {
-			continue
-		}
-
-		// Add the reference to the ngram item
-		amountAdded += 1
-		ngramItem.Ref = append(ngramItem.Ref, referenceKey)
-		ngramItem.Amount = len(ngramItem.Ref)
-
-		err = SetDatastoreNGramItem(ctx, ngramSearchKey, ngramItem)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
-		} else {
-			log.Printf("[DEBUG] Updated ngram item for %s with key %s", ngramSearchKey, parsedValue)
-		}
-
-		log.Println()
-	}
-
-	return nil
-
 }
 
 func SetDatastoreNGramItem(ctx context.Context, key string, ngramItem *NGramItem) error {

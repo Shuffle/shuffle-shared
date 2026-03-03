@@ -9435,13 +9435,18 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
-func CleanCreds(user *User) *User {
+func CleanCreds(user *User, currentUser User) *User {
 	user.Password = ""
 	user.ApiKey = ""
 	user.Session = ""
 	user.UsersLastSession = ""
 	user.VerificationToken = ""
 	user.ValidatedSessionOrgs = []string{}
+
+	if currentUser.SupportAccess {
+		return user
+	}
+
 	//user.Orgs = []string{}
 	handledOrgs := []string{}
 
@@ -9720,7 +9725,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !found {
-			cleanedUser := CleanCreds(&item)
+			cleanedUser := CleanCreds(&item, user)
 			deduplicatedUsers = append(deduplicatedUsers, *cleanedUser)
 		}
 	}

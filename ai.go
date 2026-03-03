@@ -1956,7 +1956,7 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 			},
 			MaxCompletionTokens: maxTokens,
 			Temperature:         0,
-			ReasoningEffort:     "low",
+			ReasoningEffort:     "medium",
 		}
 
 		output, err := RunAiQuery(systemMessage, userMessage, chatCompletion)
@@ -8548,6 +8548,13 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(http.StatusInternalServerError)
 		resp.Write([]byte(`{"success": false, "reason": "No workflow found for this ID"}`))
 		return
+	}
+
+
+	// Maps everything AROUND the usecase
+	err = HandleSingulWorkflowEnablement(ctx, *workflow, user, categoryAction)
+	if err != nil {
+		log.Printf("[ERROR] Failed handling Singul workflow enablement (%s) in GenerateSingulWorkflows: %s", categoryAction, err)
 	}
 
 	workflow.BackgroundProcessing = true
