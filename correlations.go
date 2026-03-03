@@ -139,7 +139,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 	// hardcoded for now just to remove certain things
 	skippableKeys := []string{"spec_version", "version", "pattern_type", "created", "edited", "creation"}
 	skippableValues := []string{"indicator", "stix", "active"}
-	invalidStarts := []string{"[", "{", "2025", "2026", "2027", "2028", "2029", "2030"}
+	invalidStarts := []string{"[", "{", "$", "202", "203", "204"} // Specific for timestamps
 
 	//for jsonKey, val := range unmarshalled {
 	amountAdded := 0
@@ -178,6 +178,10 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 		}
 
 		if skip || ArrayContains(skippableValues, parsedValue) {
+			continue
+		}
+
+		if strings.HasPrefix(parsedValue, "$") {
 			continue
 		}
 
