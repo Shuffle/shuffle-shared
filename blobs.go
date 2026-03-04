@@ -23,12 +23,89 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 	}
 
 	actionType := strings.ReplaceAll(strings.ToLower(categoryAction.Label), " ", "_")
-	if actionType == "ingest_tickets" {
+
+	if actionType == "forward_tickets" || actionType == "forward_incidents" {
+		categoryCheck := "shuffle-security_incidents"
+		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				categoryConfig = &DatastoreCategoryUpdate{
+					OrgId: user.ActiveOrg.Id,
+					Category: categoryCheck,
+					Automations: []DatastoreAutomation{},
+					Settings: DatastoreCategorySettings{},
+				}
+			} else {
+				return err
+			}
+		}
+
+		datastoreCategoryConfigEdited := false
+
+		foundRunWorkflow := DatastoreAutomation{
+			Name: "Run workflow",
+			Description: "Runs one or more workflows with the updated value as runtime argument",
+			Options: []DatastoreAutomationOption{
+				DatastoreAutomationOption{
+					Key: "workflow_id",
+					Value: workflow.ID,
+				},
+			},
+			Icon: "",
+			Enabled: true,
+		}
+
+		automationFound := false
+		if len(categoryConfig.Automations) > 0 {
+			for automationIndex, automation := range categoryConfig.Automations {
+				if automation.Name != "Run workflow" {
+					continue
+				}
+
+				//if datastoreCategoryConfigEdited { 
+				for optionIndex, option := range automation.Options {
+					if option.Key != "workflow_id" {
+						continue
+					}
+
+					if !strings.Contains(option.Value, workflow.ID) {
+						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = workflow.ID
+						datastoreCategoryConfigEdited = true
+					}
+
+					automationFound = true
+					break
+				}
+			}
+		}
+
+		if !automationFound {
+			categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
+			datastoreCategoryConfigEdited = true
+		}
+
+		if datastoreCategoryConfigEdited { 
+			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+			if err != nil {
+				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
+			}
+		}
+
+	} else if actionType == "ingest_tickets" {
 		// Enables the automation IF it is not already enabled
 		categoryCheck := "shuffle-security_incidents"
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
 		if err != nil {
-			return err
+			if strings.Contains(err.Error(), "not found") {
+				categoryConfig = &DatastoreCategoryUpdate{
+					OrgId: user.ActiveOrg.Id,
+					Category: categoryCheck,
+					Automations: []DatastoreAutomation{},
+					Settings: DatastoreCategorySettings{},
+				}
+			} else {
+				return err
+			}
 		}
 
 		datastoreCategoryConfigEdited := false
@@ -43,7 +120,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		automationEnabled := false
 		if len(categoryConfig.Automations) > 0 {
 			for _, automation := range categoryConfig.Automations {
-				if automation.Enabled {
+				if automation.Enabled && automation.Name != "Run workflow" && automation.Name != "Send to webhook" {
 					automationEnabled = true
 					break
 				}
@@ -195,6 +272,85 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
 
+	} else if parsedActiontype == "forward_tickets" || parsedActiontype == "forward_incidents" {
+		currentAction := WorkflowAppActionParameter{
+			Name:  "action",
+			Value: "Create ticket",
+			Options: []string{
+				"List tickets",
+				"Create ticket",
+				"Close ticket",
+				"Add comment",
+			},
+		}
+
+		actionName := "Cases"
+		defaultWorkflow := Workflow{
+			Name:        actionType,
+			Description: "Create tickets in different systems as to forward them",
+			OrgId:       orgId,
+			Start:       startActionId,
+			UsecaseIds:  []string{"forward"},
+			Tags:        []string{"forward", "automatic"},
+			Actions: []Action{
+				Action{
+					Name:        actionName,
+					AppID:       "integration",
+					AppName:     "Singul",
+					LargeImage:  getSingulLogo(),
+					ID:          startActionId,
+					AppVersion:  "1.0.0",
+					Environment: actionEnv,
+					Label:       currentAction.Value,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "app_name",
+							Value: "",
+						},
+						currentAction,
+						WorkflowAppActionParameter{
+							Name:      "fields",
+							Value:     "",
+							Multiline: true,
+						},
+					},
+				},
+			},
+			Triggers: []Trigger{
+				Trigger{
+					ID:          startTriggerId,
+					Name:        "Webhook",
+					TriggerType: "WEBHOOK",
+					Label:       "Ingest",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "url",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "tmp",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "auth_header",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "custom_response_body",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "await_response",
+							Value: "",
+						},
+					},
+				},
+			},
+		}
+
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
 	} else if parsedActiontype == "ingest_tickets" || parsedActiontype == "ingest_assets" || parsedActiontype == "ingest_users" {
 		actionName := "Cases"
 		currentAction := WorkflowAppActionParameter{

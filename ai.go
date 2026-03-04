@@ -2194,7 +2194,8 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 		relevancyOutput := findRelevantOutput(inputQuery, org, user)
 		if len(relevancyOutput) > 0 && !strings.Contains(relevancyOutput, "cannot be answered") && !strings.Contains(relevancyOutput, "does not require") && !(strings.HasPrefix(relevancyOutput, "{") && strings.HasSuffix(relevancyOutput, "}")) {
 			log.Printf("[INFO] Found relevant output for '%s': %s", inputQuery, relevancyOutput)
-			resp.WriteHeader(500)
+			//resp.WriteHeader(500)
+			resp.WriteHeader(200)
 			resp.Write([]byte(relevancyOutput))
 			return []byte(relevancyOutput), errors.New("Found relevant output")
 		}
@@ -8505,7 +8506,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		initialising = true
 	}
 
-	if categoryAction.ActionName == "remove" || categoryAction.ActionName == "disable" {
+	if categoryAction.ActionName == "remove" || categoryAction.ActionName == "disable" || categoryAction.ActionName == "stop" {
 		if workflowErr == nil && workflow.OrgId == user.ActiveOrg.Id {
 			// Delete the workflow
 			err = DeleteKey(ctx, "workflow", workflowId)
