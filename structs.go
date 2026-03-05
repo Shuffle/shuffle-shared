@@ -1248,6 +1248,7 @@ type SyncConfig struct {
 }
 
 type PaymentSubscription struct {
+	Id               string   `json:"id" datastore:"id"`
 	Active           bool     `json:"active" datastore:"active"`
 	Startdate        int64    `json:"startdate" datastore:"startdate"`
 	CancellationDate int64    `json:"cancellationdate" datastore:"cancellationdate"`

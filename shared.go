@@ -21,8 +21,10 @@ import (
 	"sync"
 
 	neturl "net/url"
+	"hash/fnv"
 	"path"
 	"sort"
+	"unicode"
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
@@ -141,16 +143,24 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"http://localhost:3002",
 			"http://localhost:3000",
 
-			// For a frontend test project
+			// Shuffle support
 			"https://cases.shuffler.io",
 			"https://security.shuffler.io",
 			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
 			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
 
-			// Another frontend test
+			// tbd
 			"https://preview--shuffle-cases.lovable.app",
 			"https://9f29a11a-6489-4898-8044-ed7b8f848ef9.lovableproject.com",
 			"https://id-preview--9f29a11a-6489-4898-8044-ed7b8f848ef9.lovable.app",
+
+			// Support project
+			"https://support.shuffler.io",
+			"https://shuffle-support.lovable.app",
+			"https://shuffle-support.lovable.app/",
+			"https://05364669-00ea-43be-ae8f-8e333ccc870c.lovableproject.com",
+			"https://preview--shuffle-support.lovable.app",
+
 		}
 
 		if len(origin) > 0 {
@@ -1105,7 +1115,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		//log.Printf("LIMIT: %s", org.SyncFeatures.AppExecutions.Limit)
 		orgChanged := false
 		if org.SyncFeatures.AppExecutions.Limit == 0 || org.SyncFeatures.AppExecutions.Limit == 1500 {
-			org.SyncFeatures.AppExecutions.Limit = 10000
+			org.SyncFeatures.AppExecutions.Limit = 2000
 			orgChanged = true
 		}
 
@@ -1153,10 +1163,32 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			org.SyncFeatures.MultiEnv.Usage = int64(len(envs))
 		}
 
+		// Backfill subscription IDs if any subscription is missing an ID
+		addSubId := false
+		for _, sub := range org.Subscriptions {
+			if sub.Id == "" {
+				addSubId = true
+				break
+			}
+		}
+
+		if addSubId {
+			for i := range org.Subscriptions {
+				if org.Subscriptions[i].Id == "" {
+					org.Subscriptions[i].Id = uuid.NewV4().String()
+				}
+			}
+			if err := SetOrg(ctx, *org, org.Id); err != nil {
+				log.Printf("[WARNING] Failed to backfill subscription IDs for org %s: %s", org.Id, err)
+			} else {
+				log.Printf("[INFO] Backfilled subscription IDs for org %s", org.Id)
+			}
+		}
+
 		if len(org.Subscriptions) == 0 && len(org.CreatorOrg) == 0 {
 			// Only when there is no subscription in the org and it's not a suborg :)
 			// Placeholder subscription that to add at very first time
-			base := buildBaseSubscription(*org, org.SyncFeatures.AppExecutions.Limit)
+			base := BuildBaseSubscription(*org, org.SyncFeatures.AppExecutions.Limit)
 			org.Subscriptions = append(org.Subscriptions, base)
 
 			if err := SetOrg(ctx, *org, org.Id); err != nil {
@@ -1164,7 +1196,50 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			} else {
 				log.Printf("[INFO] Added a base subscription (%s) for org %s", base.Name, org.Id)
 			}
-		} else if len(org.CreatorOrg) == 0 && project.Environment == "onprem" {
+		} else if len(org.CreatorOrg) == 0 && len(org.Subscriptions) >= 1 {
+			hasActivePaidSubscription := false
+			hasFreeSubscription := false
+
+			updateSub := false
+
+			for _, sub := range org.Subscriptions {
+				if sub.Active && sub.Amount != "0" {
+					hasActivePaidSubscription = true
+				}
+				if sub.Amount == "0" && sub.Reference == "" {
+					hasFreeSubscription = true
+				}
+			}
+
+			if hasActivePaidSubscription && hasFreeSubscription {
+				// Remove free subscriptions since user has active paid plan
+				var filteredSubs []PaymentSubscription
+				for _, sub := range org.Subscriptions {
+					if !(sub.Amount == "0" && sub.Reference == "") {
+						filteredSubs = append(filteredSubs, sub)
+					}
+				}
+				org.Subscriptions = filteredSubs
+				updateSub = true
+				log.Printf("[INFO] Removed free subscription for org %s (active paid subscription exists)", org.Id)
+			} else if !hasActivePaidSubscription && !hasFreeSubscription {
+				// No active paid subscription and no free plan, add one
+				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(*org, 2000))
+				updateSub = true
+				log.Printf("[INFO] Added free subscription for org %s (no active paid subscriptions found)", org.Id)
+			}
+
+			// Persist any subscription changes made above
+			if updateSub {
+				if err := SetOrg(ctx, *org, org.Id); err != nil {
+					log.Printf("[ERROR] Failed to persist subscription changes for org %s: %v", org.Id, err)
+				} else {
+					log.Printf("[DEBUG] Successfully persisted subscription changes for org %s", org.Id)
+				}
+			}
+		}
+
+		if len(org.CreatorOrg) == 0 && project.Environment == "onprem" {
 			// This is used to update the subscription for the onprem orgs
 			// That have cloud sync active
 			// Not a suborg
@@ -3317,6 +3392,87 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+// AutoRepairUserOrgLinks checks all child orgs of the user's active org's parent
+// and adds any missing orgs to user.Orgs where user exists in org.Users.
+// Should only be called from main region (shuffler). Only runs on cloud.
+// Uses cache to avoid running on every request (1 hour TTL).
+func AutoRepairUserOrgLinks(ctx context.Context, user *User) int {
+	// Only run on cloud environment
+	if project.Environment != "cloud" {
+		return 0
+	}
+
+	if user == nil || len(user.ActiveOrg.Id) == 0 {
+		return 0
+	}
+
+	// Skip if we've checked this user recently (1 hour cache)
+	cacheKey := fmt.Sprintf("orgrepair_%s", user.Id)
+	if _, err := GetCache(ctx, cacheKey); err == nil {
+		return 0
+	}
+
+	// Get the active org to find its parent
+	activeOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] AutoRepairUserOrgLinks: Failed to get active org %s: %s", user.ActiveOrg.Id, err)
+		return 0
+	}
+
+	// Determine parent org ID
+	parentOrgId := activeOrg.CreatorOrg
+	if len(parentOrgId) == 0 {
+		parentOrgId = activeOrg.Id // Active org is the parent
+	}
+
+	// Get all child orgs
+	childOrgs, err := GetAllChildOrgs(ctx, parentOrgId)
+	if err != nil {
+		log.Printf("[WARNING] AutoRepairUserOrgLinks: Failed to get child orgs for %s: %s", parentOrgId, err)
+		return 0
+	}
+
+	// Build set of orgs user already has
+	userOrgSet := make(map[string]bool)
+	for _, orgId := range user.Orgs {
+		userOrgSet[orgId] = true
+	}
+
+	repairCount := 0
+	for _, childOrg := range childOrgs {
+		// Skip if user already has this org
+		if userOrgSet[childOrg.Id] {
+			continue
+		}
+
+		// Check if user is in org.Users
+		for _, orgUser := range childOrg.Users {
+			if orgUser.Id == user.Id {
+				log.Printf("[INFO] Auto-repairing user<->org link: user %s (%s) found in org.Users for %s (%s) but missing from user.Orgs",
+					user.Username, user.Id, childOrg.Name, childOrg.Id)
+				user.Orgs = append(user.Orgs, childOrg.Id)
+				userOrgSet[childOrg.Id] = true
+				repairCount++
+				break
+			}
+		}
+	}
+
+	if repairCount > 0 {
+		err := SetUser(ctx, user, false)
+		if err != nil {
+			log.Printf("[ERROR] Failed saving auto-repaired user.Orgs for %s: %s", user.Username, err)
+			return 0
+		}
+		log.Printf("[INFO] Successfully auto-repaired %d org links for user %s", repairCount, user.Username)
+	}
+
+	// Cache for 1 hour to avoid checking on every request
+	SetCache(ctx, cacheKey, []byte("1"), 60)
+
+	return repairCount
+}
+
 func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (User, error) {
 	if request == nil {
 		return User{}, errors.New("No request given")
@@ -3423,9 +3579,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 			if !found {
 				// VERY specific override to allow ONLY support users in Shuffle to see info for an org to help them out.
-				// FIXME: Should this be allowed for API as well? May just be session based (?)
-				if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+				if project.Environment == "cloud" && userdata.Verified && userdata.Active && userdata.SupportAccess && strings.HasSuffix(userdata.Username, "@shuffler.io") {
 					found = true
+					log.Printf("[AUDIT] User %s (%s) is accessing org %s for support purposes. URL: %#v", userdata.Username, userdata.Id, org_id, request.URL.String())
 				}
 			}
 
@@ -9281,13 +9437,18 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
-func CleanCreds(user *User) *User {
+func CleanCreds(user *User, currentUser User) *User {
 	user.Password = ""
 	user.ApiKey = ""
 	user.Session = ""
 	user.UsersLastSession = ""
 	user.VerificationToken = ""
 	user.ValidatedSessionOrgs = []string{}
+
+	if currentUser.SupportAccess {
+		return user
+	}
+
 	//user.Orgs = []string{}
 	handledOrgs := []string{}
 
@@ -9566,7 +9727,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !found {
-			cleanedUser := CleanCreds(&item)
+			cleanedUser := CleanCreds(&item, user)
 			deduplicatedUsers = append(deduplicatedUsers, *cleanedUser)
 		}
 	}
@@ -11738,20 +11899,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		Mode    string `json:"mode"`
 	}
 
-	var tmpData ReturnData
-	err = json.Unmarshal(body, &tmpData)
-	if err != nil {
-		log.Printf("Failed unmarshalling test: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if tmpData.SSOTest || tmpData.SSO {
-		tmpData.SSOTest = true
-		tmpData.SSO = true
-	}
-
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
@@ -11763,6 +11910,25 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		fileId = location[4]
+	}
+
+	var tmpData ReturnData
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		if len(fileId) == 36 && strings.Count(fileId, "-") == 4 {
+			log.Printf("[DEBUG] Empty body in change org, using fileId from URL: %s", fileId)
+			tmpData.OrgId = fileId
+		} else {
+			log.Printf("[WARNING] Failed unmarshalling change org body: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	if tmpData.SSOTest || tmpData.SSO {
+		tmpData.SSOTest = true
+		tmpData.SSO = true
 	}
 
 	foundOrg := false
@@ -12417,7 +12583,7 @@ func getSignatureSample(org Org) PaymentSubscription {
 	return PaymentSubscription{}
 }
 
-func buildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription {
+func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription {
 
 	now := int64(time.Now().Unix())
 	log.Printf("[DEBUG] Building base subscription for org %s that has %d monthly exec limit", org.Id, monthlyExecLimit)
@@ -12456,7 +12622,7 @@ func buildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 				"15 Users",
 				"Select Datacenter Region",
 			}
-			amount = "32" // Just for placeholder
+			amount = fmt.Sprintf("%d", int64(((monthlyExecLimit-2000)/10000)*32)) // Calculate based on app runs: (paid_runs / 10k) * $32
 		} else if monthlyExecLimit >= 2000 && monthlyExecLimit < 12000 {
 			planName = "Free License"
 			supportLevel = "Community Support"
@@ -12488,6 +12654,7 @@ func buildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 	endDate := int64(firstNextMonth.Unix())
 
 	return PaymentSubscription{
+		Id:               uuid.NewV4().String(),
 		Active:           true,
 		Startdate:        now,
 		Enddate:          endDate,
@@ -12562,7 +12729,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 		CreatorConfig     string              `json:"creator_config" datastore:"creator_config"`
 		Subscription      PaymentSubscription `json:"subscription" datastore:"subscription"`
-		SubscriptionIndex int                 `json:"subscription_index" datastore:"subscription_index"`
+		SubscriptionIndex string              `json:"subscription_index" datastore:"subscription_index"`
 
 		SyncFeatures    SyncFeatures `json:"sync_features" datastore:"sync_features"`
 		Billing         Billing      `json:"billing" datastore:"billing"`
@@ -12656,16 +12823,24 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Allow editing a specific subscription card from UI except Eula and Reference
 	if tmpData.Editing == "subscription_update" {
-		idx := tmpData.SubscriptionIndex
-		if idx < 0 || idx >= len(org.Subscriptions) {
+		// Find subscription by ID (SubscriptionIndex now holds the ID string)
+		var idx int = -1
+		for i, sub := range org.Subscriptions {
+			if sub.Id == tmpData.SubscriptionIndex {
+				idx = i
+				break
+			}
+		}
+		if idx == -1 {
 			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "invalid subscription index"}`))
+			resp.Write([]byte(`{"success": false, "reason": "subscription not found by ID"}`))
 			return
 		}
 
 		// Preserve immutable fields
 		existing := org.Subscriptions[idx]
 		updated := tmpData.Subscription
+		updated.Id = existing.Id
 		updated.Eula = existing.Eula
 
 		// Do not overwrite existing EULA signature info if it's already signed
@@ -12677,11 +12852,40 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			updated.EulaSigned = true
 			updated.EulaSignedBy = user.Username
 		}
-		// Do not overwrite subscription reference number
-		updated.Reference = existing.Reference
 
 		// Apply the rest
 		org.Subscriptions[idx] = updated
+
+		// This is to set user in free plan is the current plan is Inactive by us
+		if len(org.CreatorOrg) == 0 {
+			hasActivePaidSubscription := false
+			hasFreeSubscription := false
+
+			for _, sub := range org.Subscriptions {
+				if sub.Active && sub.Amount != "0" {
+					hasActivePaidSubscription = true
+				}
+				if sub.Amount == "0" && sub.Reference == "" {
+					hasFreeSubscription = true
+				}
+			}
+
+			if hasActivePaidSubscription && hasFreeSubscription {
+				// Remove free subscriptions since user has active paid plan
+				var filteredSubs []PaymentSubscription
+				for _, sub := range org.Subscriptions {
+					if !(sub.Amount == "0" && sub.Reference == "") {
+						filteredSubs = append(filteredSubs, sub)
+					}
+				}
+				org.Subscriptions = filteredSubs
+				log.Printf("[INFO] Removed free subscription for org %s (active paid subscription exists)", org.Id)
+			} else if !hasActivePaidSubscription && !hasFreeSubscription {
+				// No active paid subscription and no free plan, add one
+				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(*org, 2000))
+				log.Printf("[INFO] Added free subscription for org %s (no active paid subscriptions found)", org.Id)
+			}
+		}
 
 		if err := SetOrg(ctx, *org, org.Id); err != nil {
 			log.Printf("[WARNING] Failed to update subscription for org %s: %s", org.Id, err)
@@ -21226,7 +21430,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 					}
 
 					if param.Name == "url" {
-						action.Parameters[paramIndex].Value = apiUrl 
+						action.Parameters[paramIndex].Value = apiUrl
 						urlFound = true
 					} else if param.Name == "apikey" {
 						action.Parameters[paramIndex].Value = apiKey
@@ -21258,7 +21462,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 					workflow.OrgId = "INTERNAL"
 					workflow.ExecutingOrg = OrgMini{
 						Name: "INTERNAL",
-						Id: "INTERNAL",
+						Id:   "INTERNAL",
 					}
 
 					workflowExecution.Workflow = workflow
@@ -24130,17 +24334,17 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 									decision.RunDetails.Status = "RUNNING"
 									decision.Fields = append(decision.Fields, Valuereplace{
-										Key:    "approve",
-										Value:  fmt.Sprintf("Approved to continue at %s", time.Now().Format(time.RFC1123)),
+										Key:   "approve",
+										Value: fmt.Sprintf("Approved to continue at %s", time.Now().Format(time.RFC1123)),
 									})
 
 									fieldsChanged = true
 									cleanupFailures = true
-								} else if value == "false" { 
+								} else if value == "false" {
 									decision.RunDetails.Status = "FINISHED"
 									decision.Fields = append(decision.Fields, Valuereplace{
-										Key:    "approve",
-										Value:  fmt.Sprintf("Approval DENIED at %s. Should stop the agent.", time.Now().Unix()),
+										Key:   "approve",
+										Value: fmt.Sprintf("Approval DENIED at %s. Should stop the agent.", time.Now().Unix()),
 									})
 
 									fieldsChanged = true
@@ -24152,7 +24356,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								unmarshalledDecision.Decisions[decisionIndex] = decision
 								break
 							}
-
 
 							if findContinue {
 								// The only key we care about in this case
@@ -34611,4 +34814,100 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 	}
 
 	return api
+}
+
+// FuzzyHashBody collapses tiny differences in numbers and short strings
+func FuzzyHashBody(body []byte) uint64 {
+	hasher := fnv.New64a()
+
+	i := 0
+	for i < len(body) {
+		b := body[i]
+
+		switch {
+		// Skip whitespace
+		case unicode.IsSpace(rune(b)):
+			i++
+
+		// Numbers → bucket as "NUM"
+		case b >= '0' && b <= '9':
+			hasher.Write([]byte("NUM"))
+			// skip the full number
+			for i < len(body) && body[i] >= '0' && body[i] <= '9' {
+				i++
+			}
+
+		// Letters → bucket as uppercase
+		case unicode.IsLetter(rune(b)):
+			start := i
+			for i < len(body) && unicode.IsLetter(rune(body[i])) {
+				i++
+			}
+			// convert to uppercase token
+			token := body[start:i]
+			for _, c := range token {
+				if c >= 'a' && c <= 'z' {
+					c = c - 'a' + 'A'
+				}
+				hasher.Write([]byte{byte(c)})
+			}
+
+		// Everything else → keep as-is
+		default:
+			hasher.Write([]byte{b})
+			i++
+		}
+	}
+
+	return hasher.Sum64()
+}
+
+// Checks whether e.g. a workflow is calling itself with VERY similar details.
+// URL MUST be identical, but body can vary slightly and still match
+func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byte) bool {
+	timestart := time.Now()
+	urlMd5 := md5.Sum([]byte(request.URL.String()))
+
+	// Hashes the body into "buckets" that look for slight similarities
+	hash1 := FuzzyHashBody(body)
+
+
+	fmt.Printf("Hash1: %064b\n", hash1)
+
+	cacheKey := fmt.Sprintf("%s_%s", urlMd5, hash1)
+	log.Printf("CACHEKEY: %s", cacheKey)
+	cache, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		log.Printf("ERR: %#v", err)
+
+		SetCache(ctx, cacheKey, []byte("1"), 1)
+		return false 
+	}
+
+	timeEnd := time.Now()
+	log.Printf("[DEBUG] Hashing and comparison took %s\n", timeEnd.Sub(timestart))
+
+	foundNumber := 0
+			
+	cacheData := string(cache.([]uint8))
+	//if n, err := strconv.Atoi(found.([]uint8)); err == nil {
+	if n, err := strconv.Atoi(cacheData); err == nil {
+		foundNumber = n
+	}
+
+	if foundNumber > 0 {
+		foundNumber += 1
+	} else {
+		foundNumber = 1
+	}
+
+	log.Printf("NUMBER: %d", foundNumber)
+
+	if foundNumber > 5 {
+		log.Printf("[WARNING] Detected potential recursion for URL %s. Hash: %d. Body: %s", request.URL.String(), hash1, string(body))
+		return true
+	}
+
+	SetCache(ctx, cacheKey, []byte(strconv.Itoa(foundNumber)), 1)
+	return false
 }
