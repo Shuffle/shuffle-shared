@@ -21,8 +21,10 @@ import (
 	"sync"
 
 	neturl "net/url"
+	"hash/fnv"
 	"path"
 	"sort"
+	"unicode"
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
@@ -3577,9 +3579,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 			if !found {
 				// VERY specific override to allow ONLY support users in Shuffle to see info for an org to help them out.
-				// FIXME: Should this be allowed for API as well? May just be session based (?)
-				if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+				if project.Environment == "cloud" && userdata.Verified && userdata.Active && userdata.SupportAccess && strings.HasSuffix(userdata.Username, "@shuffler.io") {
 					found = true
+					log.Printf("[AUDIT] User %s (%s) is accessing org %s for support purposes. URL: %#v", userdata.Username, userdata.Id, org_id, request.URL.String())
 				}
 			}
 
@@ -9435,13 +9437,18 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
-func CleanCreds(user *User) *User {
+func CleanCreds(user *User, currentUser User) *User {
 	user.Password = ""
 	user.ApiKey = ""
 	user.Session = ""
 	user.UsersLastSession = ""
 	user.VerificationToken = ""
 	user.ValidatedSessionOrgs = []string{}
+
+	if currentUser.SupportAccess {
+		return user
+	}
+
 	//user.Orgs = []string{}
 	handledOrgs := []string{}
 
@@ -9720,7 +9727,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !found {
-			cleanedUser := CleanCreds(&item)
+			cleanedUser := CleanCreds(&item, user)
 			deduplicatedUsers = append(deduplicatedUsers, *cleanedUser)
 		}
 	}
@@ -34800,4 +34807,100 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 	}
 
 	return api
+}
+
+// FuzzyHashBody collapses tiny differences in numbers and short strings
+func FuzzyHashBody(body []byte) uint64 {
+	hasher := fnv.New64a()
+
+	i := 0
+	for i < len(body) {
+		b := body[i]
+
+		switch {
+		// Skip whitespace
+		case unicode.IsSpace(rune(b)):
+			i++
+
+		// Numbers → bucket as "NUM"
+		case b >= '0' && b <= '9':
+			hasher.Write([]byte("NUM"))
+			// skip the full number
+			for i < len(body) && body[i] >= '0' && body[i] <= '9' {
+				i++
+			}
+
+		// Letters → bucket as uppercase
+		case unicode.IsLetter(rune(b)):
+			start := i
+			for i < len(body) && unicode.IsLetter(rune(body[i])) {
+				i++
+			}
+			// convert to uppercase token
+			token := body[start:i]
+			for _, c := range token {
+				if c >= 'a' && c <= 'z' {
+					c = c - 'a' + 'A'
+				}
+				hasher.Write([]byte{byte(c)})
+			}
+
+		// Everything else → keep as-is
+		default:
+			hasher.Write([]byte{b})
+			i++
+		}
+	}
+
+	return hasher.Sum64()
+}
+
+// Checks whether e.g. a workflow is calling itself with VERY similar details.
+// URL MUST be identical, but body can vary slightly and still match
+func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byte) bool {
+	timestart := time.Now()
+	urlMd5 := md5.Sum([]byte(request.URL.String()))
+
+	// Hashes the body into "buckets" that look for slight similarities
+	hash1 := FuzzyHashBody(body)
+
+
+	fmt.Printf("Hash1: %064b\n", hash1)
+
+	cacheKey := fmt.Sprintf("%s_%s", urlMd5, hash1)
+	log.Printf("CACHEKEY: %s", cacheKey)
+	cache, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		log.Printf("ERR: %#v", err)
+
+		SetCache(ctx, cacheKey, []byte("1"), 1)
+		return false 
+	}
+
+	timeEnd := time.Now()
+	log.Printf("[DEBUG] Hashing and comparison took %s\n", timeEnd.Sub(timestart))
+
+	foundNumber := 0
+			
+	cacheData := string(cache.([]uint8))
+	//if n, err := strconv.Atoi(found.([]uint8)); err == nil {
+	if n, err := strconv.Atoi(cacheData); err == nil {
+		foundNumber = n
+	}
+
+	if foundNumber > 0 {
+		foundNumber += 1
+	} else {
+		foundNumber = 1
+	}
+
+	log.Printf("NUMBER: %d", foundNumber)
+
+	if foundNumber > 5 {
+		log.Printf("[WARNING] Detected potential recursion for URL %s. Hash: %d. Body: %s", request.URL.String(), hash1, string(body))
+		return true
+	}
+
+	SetCache(ctx, cacheKey, []byte(strconv.Itoa(foundNumber)), 1)
+	return false
 }
