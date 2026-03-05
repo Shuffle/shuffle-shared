@@ -560,9 +560,6 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 		}
 
 		userApikey = exec.Authorization
-		if len(userApikey) > 0 {
-			usingExecutionAuth = true
-		}
 	}
 
 	if len(userApikey) == 0 {
