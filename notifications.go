@@ -541,7 +541,6 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 	// Find execution id
 	executionId := ""
 	userApikey := ""
-	usingExecutionAuth := false
 	if strings.Contains(referenceUrl, "execution_id") {
 		executionId = strings.Split(referenceUrl, "execution_id=")[1]
 		if len(executionId) == 0 {
