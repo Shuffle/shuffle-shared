@@ -11182,7 +11182,14 @@ func HandleDeleteUsersAccountPermanent(resp http.ResponseWriter, request *http.R
 		return
 	}
 
-	if (userInfo.Id != foundUser.Id) && !userInfo.SupportAccess {
+	if !userInfo.SupportAccess {
+		log.Printf("[INFO] Unauthorized user (%s) attempted to delete an account. Must be a user or have support access.", userInfo.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorize User. Must be a regular user or have support access"}`))
+		return
+	}
+
+	if userInfo.Id != foundUser.Id {
 		log.Printf("[INFO] Unauthorized user (%s) attempted to delete an account. Must be a user or have support access.", userInfo.Username)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Unauthorize User. Must be a regular user or have support access"}`))
