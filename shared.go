@@ -26479,7 +26479,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 						})
 					}
 
-					// FIXME: There used to be code here to stop the app, but for now we just continue with the old tokens
+					// FIXME: There used to be code here to stop the app, but for now we just continue with the old tokens, as it usually works.
 				}
 
 				allAuths[authIndex] = newAuth
