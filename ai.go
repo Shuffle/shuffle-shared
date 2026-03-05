@@ -2296,8 +2296,11 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 
 		// Parses the input and returns the category and action label
 		openaiClient := openai.NewClient(apiKey)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
 		openaiResp, err := openaiClient.CreateChatCompletion(
-			context.Background(),
+			ctx,
 			openai.ChatCompletionRequest{
 				Model: model,
 				Messages: []openai.ChatCompletionMessage{
