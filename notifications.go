@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -484,7 +485,13 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
-	b, err := json.Marshal(notification)
+	// The /workflows/{id}/execute endpoint accepts ExecutionRequest in the body.
+	// If we send notification.ExecutionId, it can be interpreted as the execution
+	// ID for the new run and overwrite the original failing execution.
+	payloadNotification := notification
+	payloadNotification.ExecutionId = ""
+
+	b, err := json.Marshal(payloadNotification)
 	if err != nil {
 		log.Printf("[DEBUG] Failed marshaling notification: %s", err)
 		return err
@@ -624,6 +631,126 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 	return nil
 }
 
+func getNotificationReferenceParam(referenceUrl, key string) string {
+	if len(referenceUrl) == 0 || len(key) == 0 {
+		return ""
+	}
+
+	parsedUrl, err := url.Parse(referenceUrl)
+	if err == nil {
+		value := parsedUrl.Query().Get(key)
+		if len(value) > 0 {
+			return value
+		}
+	}
+
+	prefix := fmt.Sprintf("%s=", key)
+	if !strings.Contains(referenceUrl, prefix) {
+		return ""
+	}
+
+	value := strings.Split(referenceUrl, prefix)[1]
+	if strings.Contains(value, "&") {
+		value = strings.Split(value, "&")[0]
+	}
+
+	return value
+}
+
+func getFailureReasonFromResult(result, description string) string {
+	if len(result) == 0 {
+		return description
+	}
+
+	resultCheck := ResultChecker{}
+	err := json.Unmarshal([]byte(result), &resultCheck)
+	if err == nil && len(resultCheck.Reason) > 0 {
+		return resultCheck.Reason
+	}
+
+	genericResult := map[string]interface{}{}
+	err = json.Unmarshal([]byte(result), &genericResult)
+	if err == nil {
+		reason, ok := genericResult["reason"].(string)
+		if ok && len(reason) > 0 {
+			return reason
+		}
+
+		errorValue, ok := genericResult["error"].(string)
+		if ok && len(errorValue) > 0 {
+			return errorValue
+		}
+	}
+
+	return description
+}
+
+func enrichNotificationFailureContext(ctx context.Context, referenceUrl, description string) NotificationFailureContext {
+	enriched := NotificationFailureContext{}
+	enriched.ExecutionId = getNotificationReferenceParam(referenceUrl, "execution_id")
+	enriched.NodeId = getNotificationReferenceParam(referenceUrl, "node")
+
+	if len(enriched.ExecutionId) == 0 {
+		return enriched
+	}
+
+	workflowExecution, err := GetWorkflowExecution(ctx, enriched.ExecutionId)
+	if err != nil {
+		log.Printf("[DEBUG] Failed loading execution %s for notification enrichment: %s", enriched.ExecutionId, err)
+		return enriched
+	}
+
+	enriched.WorkflowId = workflowExecution.WorkflowId
+	if len(workflowExecution.Workflow.ID) > 0 {
+		enriched.WorkflowId = workflowExecution.Workflow.ID
+	}
+
+	if len(enriched.NodeId) == 0 {
+		enriched.NodeId = workflowExecution.LastNode
+	}
+
+	if len(enriched.NodeId) == 0 {
+		enriched.FailureReason = description
+		return enriched
+	}
+
+	action := GetAction(*workflowExecution, enriched.NodeId, "")
+	if len(action.ID) > 0 {
+		enriched.NodeLabel = action.Label
+		enriched.ActionName = action.Name
+		enriched.AppName = action.AppName
+	}
+
+	_, actionResult := GetActionResult(ctx, *workflowExecution, enriched.NodeId)
+	if len(actionResult.Action.ID) > 0 {
+		enriched.NodeStatus = actionResult.Status
+
+		if len(enriched.NodeLabel) == 0 {
+			enriched.NodeLabel = actionResult.Action.Label
+		}
+
+		if len(enriched.ActionName) == 0 {
+			enriched.ActionName = actionResult.Action.Name
+		}
+
+		if len(enriched.AppName) == 0 {
+			enriched.AppName = actionResult.Action.AppName
+		}
+
+		enriched.FailureReason = getFailureReasonFromResult(actionResult.Result, description)
+	}
+
+	if len(enriched.FailureReason) == 0 {
+		enriched.FailureReason = description
+	}
+
+	if len(enriched.FailureReason) > 2000 {
+		enriched.FailureReason = enriched.FailureReason[:2000]
+	}
+
+	return enriched
+}
+
 // New fields:
 // Severities = LOW/MEDIUM/HIGH/CRITICAL
 // Origin = the source location
@@ -717,6 +844,8 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		return err
 	}
 
+	enrichedFailureContext := enrichNotificationFailureContext(ctx, referenceUrl, description)
+
 	generatedId := uuid.NewV4().String()
 	mainNotification := Notification{
 		Title:             title,
@@ -734,8 +863,16 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		Read:              false,
 		CreatedAt:         int64(time.Now().Unix()),
 		UpdatedAt:         int64(time.Now().Unix()),
-		Severity:			severity,
-		Origin:				origin,
+		ExecutionId:       enrichedFailureContext.ExecutionId,
+		WorkflowId:        enrichedFailureContext.WorkflowId,
+		NodeId:            enrichedFailureContext.NodeId,
+		NodeLabel:         enrichedFailureContext.NodeLabel,
+		ActionName:        enrichedFailureContext.ActionName,
+		AppName:           enrichedFailureContext.AppName,
+		NodeStatus:        enrichedFailureContext.NodeStatus,
+		FailureReason:     enrichedFailureContext.FailureReason,
+		Severity:          severity,
+		Origin:            origin,
 	}
 
 	selectedApikey := ""
@@ -806,6 +943,14 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			notification.Amount += 1
 			notification.Read = false
 			notification.ReferenceUrl = referenceUrl
+			notification.ExecutionId = mainNotification.ExecutionId
+			notification.WorkflowId = mainNotification.WorkflowId
+			notification.NodeId = mainNotification.NodeId
+			notification.NodeLabel = mainNotification.NodeLabel
+			notification.ActionName = mainNotification.ActionName
+			notification.AppName = mainNotification.AppName
+			notification.NodeStatus = mainNotification.NodeStatus
+			notification.FailureReason = mainNotification.FailureReason
 
 			// Added ignore as someone could want to never see a specific alert again due to e.g. expecting a 404 on purpose
 			if notification.Ignored {
@@ -946,7 +1091,8 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 			orgId = newOrgId
 		}
 
-		if len(orgId) > 0 && len(environment) > 0 && len(apikey) > 0 {
+		// Doesn't work ENV never have the auth
+		if len(orgId) > 0 && len(environment) > 0 && len(apikey) > 0 && false {
 			authHeaderParts := strings.Split(apikey, " ")
 			if len(authHeaderParts) != 2 {
 				log.Printf("[WARNING] Invalid authorization header in create notification api")
@@ -1108,7 +1254,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
-	
+
 	log.Printf("[DEBUG] User '%s' (%s) in org '%s' (%s) is creating notification '%s'", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id, notification.Title)
 	err = CreateOrgNotification(
 		ctx,
