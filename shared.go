@@ -34863,29 +34863,33 @@ func FuzzyHashBody(body []byte) uint64 {
 }
 
 // Checks whether e.g. a workflow is calling itself with VERY similar details.
-// URL MUST be identical, but body can vary slightly and still match
+// URL MUST be identical, but body can vary slightly and still match. 
+
+// Implementations (cloud):
+// - /workflow/{workflowId}/run
+// - /apps/{appId}/run
+// - /hooks/{webhookId} 
 func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byte) bool {
-	timestart := time.Now()
+	// May not have enough details to know without a body (?)
+	if len(body) == 0 {
+		return false
+	}
+
 	urlMd5 := md5.Sum([]byte(request.URL.String()))
 
 	// Hashes the body into "buckets" that look for slight similarities
+	// The main point is avoiding replicas with deviations like timestamps
 	hash1 := FuzzyHashBody(body)
 
 	cacheKey := fmt.Sprintf("%s_%s", urlMd5, hash1)
 	cache, err := GetCache(ctx, cacheKey)
 	if err != nil {
-		log.Printf("ERR: %#v", err)
-
 		SetCache(ctx, cacheKey, []byte("1"), 1)
 		return false 
 	}
 
-	timeEnd := time.Now()
-
 	foundNumber := 0
-			
 	cacheData := string(cache.([]uint8))
-	//if n, err := strconv.Atoi(found.([]uint8)); err == nil {
 	if n, err := strconv.Atoi(cacheData); err == nil {
 		foundNumber = n
 	}
@@ -34896,7 +34900,21 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 		foundNumber = 1
 	}
 
-	if foundNumber > 9 {
+	// This has monitoring on it and should NEVER happen ideally
+	maxRecursionDepthInt := 8
+	maxRecursionDepth := os.Getenv("SHUFFLE_MAX_RECURSION_DEPTH")
+	if maxRecursionDepth == "" {
+		maxRecursionDepthInt, err = strconv.Atoi(maxRecursionDepth)
+		if err != nil {
+			maxRecursionDepthInt = 8
+		}
+	}
+
+	if maxRecursionDepthInt < 5 {
+		maxRecursionDepthInt = 5
+	}
+
+	if foundNumber > maxRecursionDepthInt {
 		log.Printf("[ERROR] Detected potential recursion for URL %s. Hash: %d", request.URL.String(), hash1)
 		return true
 	}
