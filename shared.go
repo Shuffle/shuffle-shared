@@ -34900,20 +34900,22 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 		foundNumber = 1
 	}
 
-	// This has monitoring on it and should NEVER happen ideally
-	maxRecursionDepthInt := 8
+	// Controllable
+	defaultRecursionDepth := 5
+	maxRecursionDepthInt := defaultRecursionDepth
 	maxRecursionDepth := os.Getenv("SHUFFLE_MAX_RECURSION_DEPTH")
 	if maxRecursionDepth == "" {
 		maxRecursionDepthInt, err = strconv.Atoi(maxRecursionDepth)
 		if err != nil {
-			maxRecursionDepthInt = 8
+			maxRecursionDepthInt = defaultRecursionDepth
 		}
 	}
 
-	if maxRecursionDepthInt < 5 {
-		maxRecursionDepthInt = 5
+	if maxRecursionDepthInt < 3 {
+		maxRecursionDepthInt = 3
 	}
 
+	// This has monitoring on it and should ideally NEVER happen 
 	if foundNumber > maxRecursionDepthInt {
 		log.Printf("[ERROR] Detected potential recursion for URL %s. Hash: %d", request.URL.String(), hash1)
 		return true

@@ -409,7 +409,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 						currentAction,
 						WorkflowAppActionParameter{
 							Name:      "fields",
-							Value:     "",
+							Value:     "amount=10",
 							Multiline: true,
 						},
 					},
