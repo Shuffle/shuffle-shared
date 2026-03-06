@@ -5119,6 +5119,18 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 				}
 
 				handled = append(handled, workflowId)
+				formattedBodyStruct := ExecutionRequest{
+					ExecutionSource: fmt.Sprintf("datastore_%s_%s", cacheData.Category, cacheData.Key),
+					ExecutionArgument: string(marshalledBody),
+				}
+
+				marshalledFormattedBody, err := json.Marshal(formattedBodyStruct)
+				if err != nil {
+					log.Printf("[ERROR] Failed in marshalling data in 'run_workflow' datastore automation for workflow %s", workflowId)
+				} else {
+					marshalledBody = marshalledFormattedBody
+				}
+
 				go handleDatastoreAutomationWebhook(ctx, marshalledBody, cacheData, automation, fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), "run_workflow")
 			}
 
