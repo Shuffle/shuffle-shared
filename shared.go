@@ -34897,7 +34897,7 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 	}
 
 	if foundNumber > 9 {
-		log.Printf("[WARNING] Detected potential recursion for URL %s. Hash: %d", request.URL.String(), hash1)
+		log.Printf("[ERROR] Detected potential recursion for URL %s. Hash: %d", request.URL.String(), hash1)
 		return true
 	}
 
