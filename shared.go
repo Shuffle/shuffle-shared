@@ -34871,11 +34871,7 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 	// Hashes the body into "buckets" that look for slight similarities
 	hash1 := FuzzyHashBody(body)
 
-
-	fmt.Printf("Hash1: %064b\n", hash1)
-
 	cacheKey := fmt.Sprintf("%s_%s", urlMd5, hash1)
-	log.Printf("CACHEKEY: %s", cacheKey)
 	cache, err := GetCache(ctx, cacheKey)
 	if err != nil {
 		log.Printf("ERR: %#v", err)
@@ -34885,7 +34881,6 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 	}
 
 	timeEnd := time.Now()
-	log.Printf("[DEBUG] Hashing and comparison took %s\n", timeEnd.Sub(timestart))
 
 	foundNumber := 0
 			
@@ -34901,10 +34896,8 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 		foundNumber = 1
 	}
 
-	log.Printf("NUMBER: %d", foundNumber)
-
-	if foundNumber > 5 {
-		log.Printf("[WARNING] Detected potential recursion for URL %s. Hash: %d. Body: %s", request.URL.String(), hash1, string(body))
+	if foundNumber > 9 {
+		log.Printf("[WARNING] Detected potential recursion for URL %s. Hash: %d", request.URL.String(), hash1)
 		return true
 	}
 
