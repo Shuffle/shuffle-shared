@@ -25150,11 +25150,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	if !startnodeFound {
-		log.Printf("[ERROR][%s] Couldn't find startnode %s among %d actions in workflow '%s'. Remapping to %s", workflowExecution.ExecutionId, workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
-
 		if len(newStartnode) > 0 {
 			workflowExecution.Start = newStartnode
 		} else {
+			log.Printf("[ERROR][%s] Couldn't find startnode %s among %d actions in workflow '%s'. Remapping to %s", workflowExecution.ExecutionId, workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
+
 			return workflowExecution, ExecInfo{}, fmt.Sprintf("Startnode couldn't be found"), errors.New("Startnode isn't defined in this workflow..")
 		}
 	}
@@ -34695,7 +34695,11 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 			for actionIndex, action := range app.Actions {
 				//parsedActionName := fmt.Sprintf("%s_%s", method, action.Name)
 				parsedActionName := fmt.Sprintf("%s", action.Name)
-				//log.Printf("%s vs %s", parsedActionName, parsedOpId)
+
+				if !strings.HasPrefix(parsedActionName, method) {
+					parsedActionName = fmt.Sprintf("%s_%s", method, strings.ToLower(parsedActionName))
+				}
+
 				if parsedActionName != parsedOpId {
 					continue
 				}
