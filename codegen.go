@@ -4808,7 +4808,12 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	parsedOutput := map[string]interface{}{}
 	if err := json.Unmarshal([]byte(cacheData.Value), &parsedOutput); err != nil {
 		log.Printf("[ERROR] Failed to unmarshal cacheData.Value: %s", err)
+		parsedOutput = map[string]interface{}{}
 		parsedOutput["value"] = cacheData.Value
+	}
+
+	if parsedOutput == nil {
+		parsedOutput = map[string]interface{}{}
 	}
 
 	parsedOutput["shuffle_datastore"] = map[string]interface{}{
