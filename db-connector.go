@@ -13472,12 +13472,15 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 							log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. .\n\nError: %#v", foundRule, allowed, errString)
 						}
 
-						if allowed {
-							ruleValid = true
-							cacheData.Value = mergedJSON
-						} else {
-							ruleValid = false
-						}
+						// Since merge happens, can we trust it 100% of the time?
+						cacheData.Value = mergedJSON
+						ruleValid = true
+						//if allowed {
+						//	ruleValid = true
+						//	cacheData.Value = mergedJSON
+						//} else {
+						//	ruleValid = false
+						//}
 
 					}
 

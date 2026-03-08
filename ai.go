@@ -269,7 +269,6 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		AuthenticationId: auth.Id,
 		Fields:           []Valuereplace{},
 
-		SkipWorkflow:          true,
 		SkipOutputTranslation: true, // Manually done in the KMS case
 		Environment:           auth.Environment,
 	}

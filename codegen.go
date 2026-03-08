@@ -5095,10 +5095,6 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		log.Printf("RESP FOR RUNNING ENRICHMENT (%d): %s", resp.StatusCode, string(body))
 
 	} else if parsedName == "run_workflow" {
-		if debug {
-			log.Printf("[DEBUG] Running workflow %s for org %s", automation.Options[0].Value, cacheData.OrgId)
-		}
-
 		for _, option := range automation.Options {
 			if option.Key != "workflow_id" {
 				continue

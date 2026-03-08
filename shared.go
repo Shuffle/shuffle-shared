@@ -3556,7 +3556,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		if err != nil {
 			// Due to execution auth
 			if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") {
-				log.Printf("[WARNING] Apikey %s doesn't exist. URL: %#v: %s", apikey, request.URL.String(), err)
+				log.Printf("[WARNING] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
 			}
 
 			return User{}, err
@@ -20257,6 +20257,12 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	//for key, value := range data.Apps {
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
+
+	///api/v2/datastore/category/{category_key}/{key}
+	///api/v1/orgs/{orgId}/get_cache
+	///api/v1/get_cache
+	///api/v1/orgs/{orgId}/datastore/{cache_key}
+	///api/v1/orgs/{orgId}/cache/{cache_key}
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			log.Printf("[ERROR] Path too short: %d", len(location))
@@ -20353,9 +20359,8 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Use normal user auth
-
-		user, err := HandleApiAuthentication(resp, request)
-		if err != nil {
+		user, usererr := HandleApiAuthentication(resp, request)
+		if usererr != nil {
 			// Check if authorization query exists
 			if len(query.Get("authorization")) == 0 {
 				log.Printf("[INFO] Failed to authenticate user in GET cache key: %s", err)
@@ -20368,7 +20373,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 			user.ActiveOrg.Id = fileId
 		}
 
-		if user.ActiveOrg.Id != fileId {
+		if user.ActiveOrg.Id != fileId && len(fileId) == 36 {
 			log.Printf("[INFO] OrgId %s and %s don't match in get cache key list. Checking cache auth", user.ActiveOrg.Id, fileId)
 
 			requireCacheAuth = true
@@ -20381,8 +20386,20 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 			*/
 		}
 
+		// /api/v2/datastore/category/{category_key}/{key}
+		if tmpData.OrgId == "category" && len(location) == 7 {
+			tmpData.OrgId = user.ActiveOrg.Id
+			tmpData.Category = location[5]
+			tmpData.Key = location[6]
+
+			if strings.Contains(tmpData.Key, "?") {
+				tmpData.Key = strings.Split(tmpData.Key, "?")[0]
+			}
+		}
+
 		skipExecutionAuth = true
 	}
+
 
 	ctx := GetContext(request)
 	org, err := GetOrg(ctx, tmpData.OrgId)
@@ -20636,7 +20653,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Failed reading body in set cache: %s", err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading set datastore key body"}`))
 		return
 	}
 
@@ -21247,11 +21264,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				log.Printf("[DEBUG][%s] Found auth ID for single action: %s", workflowExecution.ExecutionId, action.AuthenticationId)
 			}
 
-			// FIXME: How do we decide what fields to replace?
-			// The problem now is that some auth fields are being set and others maybe are not
-			//for _, actionParam := range action.Parameters {
-			//	log.Printf("KEY: %s, VALUE: %s", actionParam.Name, actionParam.Value)
-			//}
 		} else {
 			authFields := 0
 			foundFields := []string{}
@@ -21396,7 +21408,94 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	// Fallback to inject AI creds if the user don't have any
-	if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
+	if len(workflowExecution.OrgId) > 0 && strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")  == "shuffle_datastore" && len(action.AuthenticationId) == 0 {
+		backendUrl := os.Getenv("BASE_URL")
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
+			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		}
+
+		if len(user.ApiKey) == 0 {
+			newUserInfo, err := GenerateApikey(ctx, user)
+			if err != nil {
+				log.Printf("[ERROR] Failed to realtime generate apikey for user %s: %s", user.Username, err)
+			} else {
+				user = newUserInfo
+			}
+		}
+
+		foundApikey := ""
+		if len(user.ApiKey) > 0 {
+			foundApikey = user.ApiKey
+		} else {
+			org, err := GetOrg(ctx, workflowExecution.OrgId) 
+			if err == nil { 
+				for _, curuser := range org.Users {
+					if len(curuser.ApiKey) > 0 {
+						foundApikey = curuser.ApiKey
+						break
+					}
+				}
+
+				if len(foundApikey) == 0 {
+					for _, curuser := range org.Users {
+						if curuser.Role == "admin" { 
+							newUserInfo, err := GenerateApikey(ctx, curuser)
+							if err == nil {
+								foundApikey = newUserInfo.ApiKey
+								break
+							}
+						}
+
+					}
+				}
+			} else {
+				if debug {
+					log.Printf("[ERROR] Bad org: %#v: %s", workflowExecution.OrgId)
+				}
+			}
+		}
+
+		apikeyFound := false
+		urlFound := false
+		orgIdFound := false
+		for paramIndex, param := range action.Parameters {
+			if param.Name == "apikey" {
+				action.Parameters[paramIndex].Value = foundApikey
+				apikeyFound = true 
+			} else if param.Name == "url" {
+				action.Parameters[paramIndex].Value = backendUrl
+				urlFound = true 
+			} else if param.Name == "orgid" {
+				action.Parameters[paramIndex].Value = workflowExecution.OrgId 
+				orgIdFound = true 
+			}
+		}
+
+		if !apikeyFound {
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name: "apikey",
+				Value: foundApikey,
+			})
+		}
+
+		if !urlFound {
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name: "url",
+				Value: backendUrl,
+			})
+		}
+
+		if !orgIdFound {
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name: "orgid",
+				Value:  workflowExecution.OrgId,
+			})
+		}
+
+		if debug { 
+			log.Printf("\n\n\n\nFOUND DATASTORE! URL: %s, APIKEY: %s, ORG: %s\n\n\n", backendUrl, foundApikey, workflowExecution.OrgId)
+		}
+	} else if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
 		// cloud => only do it on cloud location
 		// This prevents local users from being able to see it
 		if project.Environment != "cloud" || (project.Environment == "cloud" && action.Environment == "cloud") {
@@ -21472,6 +21571,16 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			}
 		}
 	}
+
+	/*
+	// Used for very deep recursion testing of specific injections
+	if debug {
+		log.Printf("APP: %s. Org: %#v", action.AppName, workflowExecution.OrgId)
+		if action.AppName != "AI Agent" && action.AppName != "openai" {
+			os.Exit(3)
+		}
+	}
+	*/
 
 	workflow.Actions = []Action{
 		action,

@@ -2232,8 +2232,6 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		Query:    decision.Reason,   // Add the reason field for LLM context
 
 		Fields: oldFields,
-
-		SkipWorkflow: true,
 	}
 
 	if strings.ToLower(decision.Action) == "api" {
