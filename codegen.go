@@ -4808,7 +4808,12 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	parsedOutput := map[string]interface{}{}
 	if err := json.Unmarshal([]byte(cacheData.Value), &parsedOutput); err != nil {
 		log.Printf("[ERROR] Failed to unmarshal cacheData.Value: %s", err)
+		parsedOutput = map[string]interface{}{}
 		parsedOutput["value"] = cacheData.Value
+	}
+
+	if parsedOutput == nil {
+		parsedOutput = map[string]interface{}{}
 	}
 
 	parsedOutput["shuffle_datastore"] = map[string]interface{}{
@@ -5095,10 +5100,6 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		log.Printf("RESP FOR RUNNING ENRICHMENT (%d): %s", resp.StatusCode, string(body))
 
 	} else if parsedName == "run_workflow" {
-		if debug {
-			log.Printf("[DEBUG] Running workflow %s for org %s", automation.Options[0].Value, cacheData.OrgId)
-		}
-
 		for _, option := range automation.Options {
 			if option.Key != "workflow_id" {
 				continue
@@ -5119,6 +5120,18 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 				}
 
 				handled = append(handled, workflowId)
+				formattedBodyStruct := ExecutionRequest{
+					ExecutionSource: fmt.Sprintf("datastore_%s_%s", cacheData.Category, cacheData.Key),
+					ExecutionArgument: string(marshalledBody),
+				}
+
+				marshalledFormattedBody, err := json.Marshal(formattedBodyStruct)
+				if err != nil {
+					log.Printf("[ERROR] Failed in marshalling data in 'run_workflow' datastore automation for workflow %s", workflowId)
+				} else {
+					marshalledBody = marshalledFormattedBody
+				}
+
 				go handleDatastoreAutomationWebhook(ctx, marshalledBody, cacheData, automation, fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), "run_workflow")
 			}
 

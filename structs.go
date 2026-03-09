@@ -1708,9 +1708,16 @@ type Notification struct {
 	Personal          bool     `json:"personal" datastore:"personal"`
 	Read              bool     `json:"read" datastore:"read"`
 
-	ModifiedBy  string `json:"modified_by" datastore:"modified_by"`
-	Ignored     bool   `json:"ignored" datastore:"ignored"`
-	ExecutionId string `json:"execution_id" datastore:"execution_id"`
+	ModifiedBy    string `json:"modified_by" datastore:"modified_by"`
+	Ignored       bool   `json:"ignored" datastore:"ignored"`
+	ExecutionId   string `json:"execution_id" datastore:"execution_id"`
+	WorkflowId    string `json:"workflow_id" datastore:"workflow_id"`
+	NodeId        string `json:"node_id" datastore:"node_id"`
+	NodeLabel     string `json:"node_label" datastore:"node_label"`
+	ActionName    string `json:"action_name" datastore:"action_name"`
+	AppName       string `json:"app_name" datastore:"app_name"`
+	NodeStatus    string `json:"node_status" datastore:"node_status"`
+	FailureReason string `json:"failure_reason" datastore:"failure_reason,noindex"`
 
 	Severity string `json:"severity" datastore:"severity"`
 	Origin   string `json:"origin" datastore:"origin"`
@@ -1724,6 +1731,17 @@ type NotificationCached struct {
 	LastNotificationAttempted string `json:"last_notification_attempted" datastore:"last_notification_attempted"`
 	OriginalNotification      string `json:"original_notification" datastore:"original_notification"`
 	Amount                    int64  `json:"amount" datastore:"amount"`
+}
+
+type NotificationFailureContext struct {
+	ExecutionId   string `json:"execution_id"`
+	WorkflowId    string `json:"workflow_id"`
+	NodeId        string `json:"node_id"`
+	NodeLabel     string `json:"node_label"`
+	ActionName    string `json:"action_name"`
+	AppName       string `json:"app_name"`
+	NodeStatus    string `json:"node_status"`
+	FailureReason string `json:"failure_reason"`
 }
 
 type File struct {
@@ -4171,12 +4189,14 @@ type CategoryAction struct {
 	Step                  int64  `json:"step"`                    // The step to use put it in a workflow if generated
 	Query                 string `json:"query,omitempty"`         // Due to the API being built around programmatic, and then with LLMs, this was added to make context possible between nodes when using Atomic Actions
 	DryRun                bool   `json:"dry_run"`                 // If true, it will not actually execute the action, but instead just build the workflow
-	SkipWorkflow          bool   `json:"skip_workflow"`           // If true, it will not put it in a workflow, but instead just execute it
 	SkipOutputTranslation bool   `json:"skip_output_translation"` // If true, it will not translate the output to the default format for the label
 	SkipAuthentication    bool   `json:"skip_authentication"`
 	Environment           string `json:"environment"` // The environment to use for the action (Orborus)
 	App                   string `jjson:"app"`        // The app to use for the action (Orborus)
 	Action                string `json:"action"`      // The action to use for the action (Orborus)
+
+	KeepWorkflow bool `json:"keep_workflow"` // Opposite, as we want the default to be false for Singul
+	//SkipWorkflow          bool   `json:"skip_workflow"`           // If true, it will not put it in a workflow, but instead just execute it
 }
 
 type LabelStruct struct {

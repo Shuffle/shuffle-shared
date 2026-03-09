@@ -269,7 +269,6 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		AuthenticationId: auth.Id,
 		Fields:           []Valuereplace{},
 
-		SkipWorkflow:          true,
 		SkipOutputTranslation: true, // Manually done in the KMS case
 		Environment:           auth.Environment,
 	}
@@ -800,7 +799,7 @@ END VALIDATION RULES
 ---
 CONSTRAINTS
 
-- If the path is wrong, change it to be relevant to the input data. It may be /api paths or entirely different
+- If the path is wrong, change it to be relevant to the input data. It may be /api paths or entirely different. Changing a 'get' to a 'list' or 'update' to 'get' is NEVER allowed except after 5 retries.
 - Do NOT add irrelevant headers or body fields
 - Do NOT add authentication-related headers. If they exist, remove them. 
 - MUST use keys present in original JSON
@@ -1151,7 +1150,7 @@ func getBadOutputString(action Action, appname, inputdata, outputBody string, st
 		outputParams = outputParams[:len(outputParams)-2]
 	}
 
-	outputData := fmt.Sprintf("Fields: %s\n\nHTTP Status: %d\nHTTP error: %s", outputParams, status, outputBody)
+	outputData := fmt.Sprintf("\nFields: %s\n\nHTTP Status: %d\nHTTP error: %s", outputParams, status, outputBody)
 
 	if debug {
 		log.Printf("[WARNING] Skipping automatic output formatting (bad output string). Is this necessary?")
@@ -1473,6 +1472,54 @@ func UploadParameterBase(ctx context.Context, fields []Valuereplace, orgId, appI
 	return nil
 }
 
+// Specially for headers
+func FixJSONNewlines(input string) string {
+	var out []byte
+
+	inString := false
+	escape := false
+
+	for i := 0; i < len(input); i++ {
+		c := input[i]
+
+		if inString {
+			if escape {
+				escape = false
+				out = append(out, c)
+				continue
+			}
+
+			if c == '\\' {
+				escape = true
+				out = append(out, c)
+				continue
+			}
+
+			if c == '"' {
+				inString = false
+				out = append(out, c)
+				continue
+			}
+
+			if c == '\n' {
+				out = append(out, '\\', 'n')
+				continue
+			}
+
+			out = append(out, c)
+			continue
+		}
+
+		if c == '"' {
+			inString = true
+		}
+
+		out = append(out, c)
+	}
+
+	return string(out)
+}
+
 func FixContentOutput(contentOutput string) string {
 	if strings.Contains(contentOutput, "```json") {
 		// Handle ```json
@@ -1532,6 +1579,7 @@ func FixContentOutput(contentOutput string) string {
 	//contentOutput = strings.ReplaceAll(contentOutput, "\\n", "\n")
 
 	// Attempts to balance it automatically
+	contentOutput = FixJSONNewlines(contentOutput)
 	contentOutput = balanceJSONLikeString(contentOutput)
 
 	// Indent it with marshalling
@@ -2296,8 +2344,11 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 
 		// Parses the input and returns the category and action label
 		openaiClient := openai.NewClient(apiKey)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
 		openaiResp, err := openaiClient.CreateChatCompletion(
-			context.Background(),
+			ctx,
 			openai.ChatCompletionRequest{
 				Model: model,
 				Messages: []openai.ChatCompletionMessage{
