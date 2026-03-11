@@ -12451,8 +12451,13 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Re-read from DB to avoid writing back stale cached user.Orgs
+	// (HandleApiAuthentication may have served a cached copy missing recent org additions)
+	freshUser, freshErr := GetUser(ctx, user.Id)
+	if freshErr == nil {
+		user = *freshUser
+	}
 	user.Orgs = append(user.Orgs, newOrg.Id)
-	//log.Printf("[INFO] Usr orgs: %s (%d)", user.Orgs, len(user.Orgs))
 	err = SetUser(ctx, &user, false)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating user when setting creating suborg: %s", err)

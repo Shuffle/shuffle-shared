@@ -323,10 +323,10 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 	// Splitting into multiple cache items
 	//if project.Environment == "cloud" || len(memcached) > 0 {
 	if len(memcached) > 0 {
-	//	comparisonNumber := 100
-	//	if len(data) > maxCacheSize*comparisonNumber {
-	//		return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
-	//	}
+		//	comparisonNumber := 100
+		//	if len(data) > maxCacheSize*comparisonNumber {
+		//		return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
+		//	}
 
 		loop := false
 		if len(data) > maxCacheSize {
@@ -3413,7 +3413,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				return workflow, nil
 			}
 		} else {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
 			}
 		}
@@ -5954,6 +5954,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	parsedKey := user.Id
 
 	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, user.ApiKey+user.ActiveOrg.Id)
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 	if updateOrg {
