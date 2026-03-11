@@ -1099,7 +1099,8 @@ func getOutlookFolders(client *http.Client) (OutlookFolders, error) {
 }
 
 func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth AppAuthenticationStorage) (AppAuthenticationStorage, error) {
-	transport := http.DefaultTransport.(*http.Transport)
+	// transport := http.DefaultTransport.(*http.Transport)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConnsPerHost = 100
 	transport.ResponseHeaderTimeout = time.Second * 10
 	transport.Proxy = nil
@@ -1290,8 +1291,8 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 
 func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationStorage, refresh bool) (AppAuthenticationStorage, error) {
 
-	//transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport := http.DefaultTransport.(*http.Transport)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// transport := http.DefaultTransport.(*http.Transport)
 	transport.MaxIdleConnsPerHost = 100
 	transport.ResponseHeaderTimeout = time.Second * 10
 	transport.Proxy = nil
