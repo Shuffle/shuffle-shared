@@ -31298,16 +31298,12 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	parentOrg.ChildOrgs = newChildOrg
-	allChildOrgs, err := GetAllChildOrgs(ctx, parentOrg.Id)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting all child orgs for parent org '%s': %s", parentOrg.Id, err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting all child orgs"}`))
-		return
-	}
 
-	parentOrg.SyncUsage.MultiTenant.Counter = int64(len(allChildOrgs)) + 1
-	parentOrg.SyncFeatures.MultiTenant.Usage = int64(len(allChildOrgs)) + 1
+	suborgCacheKey := fmt.Sprintf("%s_childorgs", parentOrg.Id)
+	DeleteCache(ctx, suborgCacheKey)
+	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", subOrg.Id))
+	parentOrg.SyncUsage.MultiTenant.Counter = int64(len(newChildOrg)) + 1
+	parentOrg.SyncFeatures.MultiTenant.Usage = int64(len(newChildOrg)) + 1
 
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
 	if err != nil {
@@ -31326,10 +31322,6 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		user.ActiveOrg.Id = currentActiveOrg.Id
 		user.ActiveOrg.Name = currentActiveOrg.Name
 	}
-
-	suborgCacheKey := fmt.Sprintf("%s_childorgs", parentOrg.Id)
-	DeleteCache(ctx, suborgCacheKey)
-	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", subOrg.Id))
 
 	err = SetUser(ctx, &user, true)
 	if err != nil {
