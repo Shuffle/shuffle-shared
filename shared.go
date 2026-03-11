@@ -33352,7 +33352,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	IncrementCache(ctx, exec.ExecutionOrg, "app_executions", amountFinished)
 
 	go RunCacheCleanup(ctx, *exec)
-	go RunIOCFinder(ctx, *exec)
+	//go RunIOCFinder(ctx, *exec)
 
 	//log.Printf("[DEBUG][%s] Running status fixing for workflow %#v to see if auth + workflow(s) are functional. Results: %d", exec.ExecutionId, exec.Workflow.ID, len(exec.Results))
 	orgId := exec.ExecutionOrg
