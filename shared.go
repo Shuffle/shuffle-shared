@@ -20,8 +20,8 @@ import (
 
 	"sync"
 
-	neturl "net/url"
 	"hash/fnv"
+	neturl "net/url"
 	"path"
 	"sort"
 	"unicode"
@@ -52,7 +52,7 @@ import (
 	"encoding/hex"
 
 	"encoding/json"
-//	"github.com/goccy/go-json"
+	//	"github.com/goccy/go-json"
 
 	"os/exec"
 	"runtime"
@@ -160,7 +160,6 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"https://shuffle-support.lovable.app/",
 			"https://05364669-00ea-43be-ae8f-8e333ccc870c.lovableproject.com",
 			"https://preview--shuffle-support.lovable.app",
-
 		}
 
 		if len(origin) > 0 {
@@ -12457,7 +12456,11 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	if freshErr == nil {
 		user = *freshUser
 	}
-	user.Orgs = append(user.Orgs, newOrg.Id)
+
+	if !ArrayContains(user.Orgs, newOrg.Id) {
+		user.Orgs = append(user.Orgs, newOrg.Id)
+	}
+
 	err = SetUser(ctx, &user, false)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating user when setting creating suborg: %s", err)
@@ -20405,7 +20408,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		skipExecutionAuth = true
 	}
 
-
 	ctx := GetContext(request)
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
@@ -21413,7 +21415,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	// Fallback to inject AI creds if the user don't have any
-	if len(workflowExecution.OrgId) > 0 && strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")  == "shuffle_datastore" && len(action.AuthenticationId) == 0 {
+	if len(workflowExecution.OrgId) > 0 && strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == "shuffle_datastore" && len(action.AuthenticationId) == 0 {
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -21432,8 +21434,8 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		if len(user.ApiKey) > 0 {
 			foundApikey = user.ApiKey
 		} else {
-			org, err := GetOrg(ctx, workflowExecution.OrgId) 
-			if err == nil { 
+			org, err := GetOrg(ctx, workflowExecution.OrgId)
+			if err == nil {
 				for _, curuser := range org.Users {
 					if len(curuser.ApiKey) > 0 {
 						foundApikey = curuser.ApiKey
@@ -21443,7 +21445,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 				if len(foundApikey) == 0 {
 					for _, curuser := range org.Users {
-						if curuser.Role == "admin" { 
+						if curuser.Role == "admin" {
 							newUserInfo, err := GenerateApikey(ctx, curuser)
 							if err == nil {
 								foundApikey = newUserInfo.ApiKey
@@ -21466,38 +21468,38 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		for paramIndex, param := range action.Parameters {
 			if param.Name == "apikey" {
 				action.Parameters[paramIndex].Value = foundApikey
-				apikeyFound = true 
+				apikeyFound = true
 			} else if param.Name == "url" {
 				action.Parameters[paramIndex].Value = backendUrl
-				urlFound = true 
+				urlFound = true
 			} else if param.Name == "orgid" {
-				action.Parameters[paramIndex].Value = workflowExecution.OrgId 
-				orgIdFound = true 
+				action.Parameters[paramIndex].Value = workflowExecution.OrgId
+				orgIdFound = true
 			}
 		}
 
 		if !apikeyFound {
 			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-				Name: "apikey",
+				Name:  "apikey",
 				Value: foundApikey,
 			})
 		}
 
 		if !urlFound {
 			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-				Name: "url",
+				Name:  "url",
 				Value: backendUrl,
 			})
 		}
 
 		if !orgIdFound {
 			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-				Name: "orgid",
-				Value:  workflowExecution.OrgId,
+				Name:  "orgid",
+				Value: workflowExecution.OrgId,
 			})
 		}
 
-		if debug { 
+		if debug {
 			log.Printf("\n\n\n\nFOUND DATASTORE! URL: %s, APIKEY: %s, ORG: %s\n\n\n", backendUrl, foundApikey, workflowExecution.OrgId)
 		}
 	} else if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
@@ -21578,13 +21580,13 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	/*
-	// Used for very deep recursion testing of specific injections
-	if debug {
-		log.Printf("APP: %s. Org: %#v", action.AppName, workflowExecution.OrgId)
-		if action.AppName != "AI Agent" && action.AppName != "openai" {
-			os.Exit(3)
+		// Used for very deep recursion testing of specific injections
+		if debug {
+			log.Printf("APP: %s. Org: %#v", action.AppName, workflowExecution.OrgId)
+			if action.AppName != "AI Agent" && action.AppName != "openai" {
+				os.Exit(3)
+			}
 		}
-	}
 	*/
 
 	workflow.Actions = []Action{
@@ -34981,12 +34983,12 @@ func FuzzyHashBody(body []byte) uint64 {
 }
 
 // Checks whether e.g. a workflow is calling itself with VERY similar details.
-// URL MUST be identical, but body can vary slightly and still match. 
+// URL MUST be identical, but body can vary slightly and still match.
 
 // Implementations (cloud):
 // - /workflow/{workflowId}/run
 // - /apps/{appId}/run
-// - /hooks/{webhookId} 
+// - /hooks/{webhookId}
 func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byte) bool {
 	// May not have enough details to know without a body (?)
 	if len(body) == 0 {
@@ -35003,7 +35005,7 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 	cache, err := GetCache(ctx, cacheKey)
 	if err != nil {
 		SetCache(ctx, cacheKey, []byte("1"), 1)
-		return false 
+		return false
 	}
 
 	foundNumber := 0
@@ -35033,7 +35035,7 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 		maxRecursionDepthInt = 3
 	}
 
-	// This has monitoring on it and should ideally NEVER happen 
+	// This has monitoring on it and should ideally NEVER happen
 	if foundNumber > maxRecursionDepthInt {
 		log.Printf("[ERROR] Detected potential recursion for URL %s. Hash: %d", request.URL.String(), hash1)
 		return true
