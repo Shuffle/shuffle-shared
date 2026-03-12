@@ -34838,7 +34838,7 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 
 				if len(openapiLabels) != len(action.CategoryLabel) {
 					if debug {
-						log.Printf("APP DIFF (%s): %#v vs %#v", app.ID, openapiLabels, action.CategoryLabel)
+						log.Printf("[DEBUG] APP DIFF (%s): %#v vs %#v", app.ID, openapiLabels, action.CategoryLabel)
 					}
 
 					seen := make(map[string]int)

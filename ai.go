@@ -3760,7 +3760,7 @@ func findActionByInput(inputQuery, actionLabel string, foundApp WorkflowApp) (st
 	return contentOutput, nil
 }
 
-// Context aware parameter mapping
+// Context aware parameter mapping per org-app-action
 func getSelectedAppParameters(ctx context.Context, user User, selectedAction WorkflowAppAction, foundApp WorkflowApp, appname, category, outputFormat string, httpOutput HTTPWrapper, input QueryInput) (WorkflowAppAction, error) {
 
 	inputQuery := input.Query
@@ -3988,7 +3988,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 			} else {
 				// Since we are trying to fill them in anyway :)
 				if len(sampleBody) == 0 {
-					log.Printf("[INFO] No matching body found for app %s with action %s. Err: %s", appname, selectedAction.Name, err)
+					log.Printf("[INFO] No matching body found for app %s with action %s. Err: %s. Body: '%s'", appname, selectedAction.Name, err, outputBody)
 					sampleBody = formattedFields
 				}
 			}
