@@ -1461,7 +1461,7 @@ func AddCustomAction(swagger *openapi3.Swagger, api WorkflowApp) (WorkflowAppAct
 		Description: "The body to use",
 		Multiline:   true,
 		Required:    false,
-		Example:     ``,
+		Example:     `{"username": "example_user", "email": "user@example.com"}`,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
