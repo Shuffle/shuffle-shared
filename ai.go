@@ -8944,11 +8944,30 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		if len(chatCompletion.Messages) == 0 {
 			return "", errors.New("No messages to send to OpenAI. Pass systemmessage, usermessage")
 		}
+	}
 
-		//log.Printf("\n\n\nGot %d messages in chat completion (%s)\n\n\n", len(chatCompletion.Messages), cachedChat)
+	// Gotta cut it back down, as it can get into 50+ etc
+	if len(chatCompletion.Messages) > 10 {
+		// Ensures we keep the system messages
+		newMessages := []openai.ChatCompletionMessage{
+			chatCompletion.Messages[0],
+			chatCompletion.Messages[1],
+			chatCompletion.Messages[2],
+		}
+
+		for messageIndex, chat := range chatCompletion.Messages {
+			if messageIndex > len(chatCompletion.Messages)-7 {
+				newMessages = append(newMessages, chat)
+			}
+		}
+
+		if len(newMessages) > 5 { 
+			chatCompletion.Messages = newMessages
+		}
 	}
 
 	if debug {
+
 		log.Printf("\n\n[DEBUG] Chatcompletion messages: %d\n\n", len(chatCompletion.Messages))
 	}
 
