@@ -17101,7 +17101,15 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		// Handle agent decisionmaking. Use the same
 		log.Printf("[INFO][%s] With the agent being finished, we are asking it whether it would like to do anything else", workflowExecution.ExecutionId)
 
-		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, actionResult.Action, true)
+		var originalAction Action
+		if foundActionResultIndex >= 0 && foundActionResultIndex < len(workflowExecution.Results) {
+			originalAction = workflowExecution.Results[foundActionResultIndex].Action
+		} else {
+			// Fallback in case of an issue
+			originalAction = actionResult.Action
+		}
+
+		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, originalAction, true)
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed handling agent execution start: %s", workflowExecution.ExecutionId, err)
 		}
@@ -21407,8 +21415,16 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		workflowExecution.OrgId = user.ActiveOrg.Id
 	}
 
+	formattedAppName := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
+
+	isInternalShuffleApp := false
+	switch formattedAppName {
+	case "shuffle_datastore", "shuffle_org_management", "shuffle_app_management", "shuffle_workflow_management":
+		isInternalShuffleApp = true
+	}
+
 	// Fallback to inject AI creds if the user don't have any
-	if len(workflowExecution.OrgId) > 0 && strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == "shuffle_datastore" && len(action.AuthenticationId) == 0 {
+	if len(workflowExecution.OrgId) > 0 && isInternalShuffleApp && len(action.AuthenticationId) == 0 {
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
