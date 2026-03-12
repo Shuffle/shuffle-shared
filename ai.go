@@ -7464,6 +7464,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 						decidedApps += lowername + ", "
 					}
+
+					//  Let's inject http.
+					if !strings.Contains(decidedApps, "http") {
+						decidedApps += "http, "
+					}
 				}
 
 				if len(decidedApps) > 0 {
@@ -8373,8 +8378,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			}
 		}
 
-		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status == "EXECUTING" {
-			log.Printf("[INFO][%s] AI Agent action %s finished.", execution.ExecutionId, startNode.ID)
+		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status != "ABORTED" && execution.Status != "FAILURE" {
+			log.Printf("[INFO][%s] AI Agent action %s finished. Execution status: %s", execution.ExecutionId, startNode.ID, execution.Status)
 			for resultIndex, result := range execution.Results {
 				if result.Action.ID != startNode.ID {
 					continue
@@ -8423,6 +8428,10 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				log.Printf("[ERROR][%s] AI Agent: Failed updating AI requests: %s", execution.ExecutionId, err)
 			}
 		}
+	}
+  
+	if createNextActions {
+		return startNode, nil
 	}
 
 	// 1. Map the response back
