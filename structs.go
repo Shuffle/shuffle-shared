@@ -1196,9 +1196,10 @@ type DatastoreKeyMini struct {
 }
 
 type CacheKeyDataMini struct {
-	Category string `json:"category" datastore:"category"`
-	Key      string `json:"key" datastore:"Key"`
-	Value    string `json:"value" datastore:"Value,noindex"`
+	Category           string `json:"category" datastore:"category"`
+	Key                string `json:"key" datastore:"Key"`
+	Value              string `json:"value" datastore:"Value,noindex"`
+	IgnoreSecurityRules bool   `json:"ignore_security_rules" datastore:"ignore_security_rules,noindex"`
 
 	OrgId              string   `json:"org_id,omitempty" datastore:"OrgId"`
 	ExecutionId        string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
@@ -1216,15 +1217,16 @@ type CacheKeyDataFallback struct {
 }
 
 type CacheKeyData struct {
-	Success       bool     `json:"success" datastore:"Success"`
-	WorkflowId    string   `json:"workflow_id," datastore:"WorkflowId"`
-	ExecutionId   string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
-	Authorization string   `json:"authorization,omitempty" datastore:"Authorization"`
-	OrgId         string   `json:"org_id,omitempty" datastore:"OrgId"`
-	Key           string   `json:"key" datastore:"Key"`
-	Value         string   `json:"value" datastore:"Value,noindex"`
-	Category      string   `json:"category" datastore:"category"`
-	Tags          []string `json:"tags,omitempty" datastore:"tags"`
+	Success            bool     `json:"success" datastore:"Success"`
+	WorkflowId         string   `json:"workflow_id," datastore:"WorkflowId"`
+	ExecutionId        string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	Authorization      string   `json:"authorization,omitempty" datastore:"Authorization"`
+	OrgId              string   `json:"org_id,omitempty" datastore:"OrgId"`
+	Key                string   `json:"key" datastore:"Key"`
+	Value              string   `json:"value" datastore:"Value,noindex"`
+	Category           string   `json:"category" datastore:"category"`
+	Tags               []string `json:"tags,omitempty" datastore:"tags"`
+	IgnoreSecurityRules bool     `json:"ignore_security_rules" datastore:"ignore_security_rules,noindex"`
 
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`

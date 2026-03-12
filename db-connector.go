@@ -13434,67 +13434,72 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 				// Compares old vs new, checks if allowed
 
-				categoryConfig, err := GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
-				if err != nil {
-					log.Printf("[WARNING] Failed getting category config for org %s and category %s: %s", orgId, mainCategory, err)
-				}
-
-				//if debug {
-				//	log.Printf("[DEBUG] RULECHECK %#v -> %#v", getCacheError, config.Created)
-				//}
-
-				ruleValid := true
-				for _, automation := range categoryConfig.Automations {
-					if !automation.Enabled {
-						continue
+				if cacheData.IgnoreSecurityRules {
+					//log.Printf("Ignoring security rules for %s", cacheData.Key)
+					//os.Exit(3)
+				} else {
+					categoryConfig, err := GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
+					if err != nil {
+						log.Printf("[WARNING] Failed getting category config for org %s and category %s: %s", orgId, mainCategory, err)
 					}
 
-					if automation.Name != "security_rules" && automation.Name != "Security Rules" {
-						continue
-					}
+					//if debug {
+					//	log.Printf("[DEBUG] RULECHECK %#v -> %#v", getCacheError, config.Created)
+					//}
 
-					foundRule := ""
-					for _, option := range automation.Options {
-						if option.Key == "rule" {
-							foundRule = option.Value
-							break
+					ruleValid := true
+					for _, automation := range categoryConfig.Automations {
+						if !automation.Enabled {
+							continue
 						}
-					}
 
-					if debug {
-						log.Printf("[DEBUG] FOUND SECURITY RULES AUTOMATION FOR ORG %s AND CATEGORY %s: %#v", cacheData.OrgId, mainCategory, foundRule)
-					}
+						if automation.Name != "security_rules" && automation.Name != "Security Rules" {
+							continue
+						}
 
-					if len(foundRule) > 5 {
-						oldDoc := config.Value
-						newDoc := cacheData.Value
-						mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
+						foundRule := ""
+						for _, option := range automation.Options {
+							if option.Key == "rule" {
+								foundRule = option.Value
+								break
+							}
+						}
+
 						if debug {
-							log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. .\n\nError: %#v", foundRule, allowed, errString)
+							log.Printf("[DEBUG] FOUND SECURITY RULES AUTOMATION FOR ORG %s AND CATEGORY %s: %#v", cacheData.OrgId, mainCategory, foundRule)
 						}
 
-						// Since merge happens, can we trust it 100% of the time?
-						cacheData.Value = mergedJSON
-						ruleValid = true
-						//if allowed {
-						//	ruleValid = true
-						//	cacheData.Value = mergedJSON
-						//} else {
-						//	ruleValid = false
-						//}
+						if len(foundRule) > 5 {
+							oldDoc := config.Value
+							newDoc := cacheData.Value
+							mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
+							if debug {
+								log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. .\n\nError: %#v", foundRule, allowed, errString)
+							}
 
+							// Since merge happens, can we trust it 100% of the time?
+							cacheData.Value = mergedJSON
+							ruleValid = true
+							//if allowed {
+							//	ruleValid = true
+							//	cacheData.Value = mergedJSON
+							//} else {
+							//	ruleValid = false
+							//}
+
+						}
+
+						break
 					}
 
-					break
-				}
+					if !ruleValid {
+						// Break out
+						if debug {
+							log.Printf("[WARNING] Rule is NOT valid! Skipping modification.")
+						}
 
-				if !ruleValid {
-					// Break out
-					if debug {
-						log.Printf("[WARNING] Rule is NOT valid! Skipping modification.")
+						return
 					}
-
-					return
 				}
 
 				cacheData.Created = config.Created
@@ -13518,6 +13523,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			if len(cacheData.Key) == 0 {
 				cacheData.Key = datastoreId
 			}
+
+			// Makes sure
+			cacheData.IgnoreSecurityRules = false
 
 			// Sets new keys in cache so they can be queried fast next time
 			marshalledEntry, err := json.Marshal(cacheData)

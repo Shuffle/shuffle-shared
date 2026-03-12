@@ -20933,7 +20933,15 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		Authorization:      tmpData.Authorization,
 		SuborgDistribution: tmpData.SuborgDistribution,
 		Tags:               tmpData.Tags,
+
+		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule. 
 	}
+
+	// If we want to only allow it for manual overrides
+	//if !user.SessionLogin { 
+	//	parsedKey.IgnoreSecurityRules = false
+	//}
+
 	existed, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{parsedKey})
 	if err != nil {
 		log.Printf("[ERROR] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
