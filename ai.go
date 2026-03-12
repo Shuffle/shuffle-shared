@@ -43,7 +43,6 @@ import (
 var standalone bool
 
 // var model = "gpt-5-mini"
-var maxTokens = 5000
 var model = "gpt-5-mini"
 //var model = "gpt-5.2-codex"
 
@@ -52,7 +51,7 @@ var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
 var docsVectorStoreID = os.Getenv("OPENAI_DOCS_VS_ID")
 var assistantModel = model
 
-var aiMaxTokens = 1024 // Default for on-prem
+var aiMaxTokens = 4096 // Controllable with AI_MAX_TOKENS env
 var aiReasoningEffort = ""
 
 func init() {
@@ -61,7 +60,11 @@ func init() {
 			aiMaxTokens = t
 		}
 	}
-	aiReasoningEffort = os.Getenv("AI_REASONING_EFFORT")
+
+	reasoningEffort := os.Getenv("AI_REASONING_EFFORT")
+	if reasoningEffort == "minimal" || reasoningEffort == "low" || reasoningEffort == "medium" || reasoningEffort == "high" { 
+		aiReasoningEffort = reasoningEffort
+	}
 }
 
 // Provide an incident triage and response plan for the reported incident finding. Make a short list of actions to perform in the following format: [{"title": "Title of the task", "category": "triage/containment/recovery/communication/documentation", "completed": false, "createdBy": "ai-agent@shuffler.io"}]. ONLY output as JSON array and nothing more. After the list is made, add these to the metadata.extensions.custom_attributes.tasks[] in the next action.
@@ -866,7 +869,7 @@ Input JSON Payload (ensure VALID JSON):
 				Content: inputData,
 			},
 		},
-		MaxCompletionTokens: maxTokens,
+		MaxCompletionTokens: aiMaxTokens,
 		Temperature:         0,
 		ReasoningEffort:     "low",
 	}
@@ -2002,7 +2005,7 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 					Content: userMessage,
 				},
 			},
-			MaxCompletionTokens: maxTokens,
+			MaxCompletionTokens: aiMaxTokens,
 			Temperature:         0,
 			ReasoningEffort:     "medium",
 		}
@@ -8875,7 +8878,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	chatCompletion := openai.ChatCompletionRequest{
 		Model:     model,
 		Messages:  []openai.ChatCompletionMessage{},
-		MaxTokens: maxTokens,
+		MaxTokens: aiMaxTokens,
 
 		// Move towards determinism
 		Temperature: 0,
@@ -8991,7 +8994,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 
 			if strings.Contains(err.Error(), "not supported MaxTokens") {
 				chatCompletion.MaxTokens = 0
-				chatCompletion.MaxCompletionTokens = maxTokens
+				chatCompletion.MaxCompletionTokens = aiMaxTokens
 				continue
 			} else if strings.Contains(err.Error(), "does not exist") {
 				if len(fallbackModel) == 0 {
@@ -10268,7 +10271,7 @@ No other formats are allowed. Just structured steps.
 Produce a minimal, correct, atomic plan for turning vague security workflows into structured actions. Do not overthink. Follow the format exactly, Including the headings.
 `, categoryString)
 
-	maxTokens := 5000
+	aiMaxTokens := 5000
 	var contentOutput string
 	var err error
 
@@ -10303,7 +10306,7 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 
 		if model == "o4-mini" || model == "gpt-5-mini" {
 			chatCompletion.MaxTokens = 0
-			chatCompletion.MaxCompletionTokens = maxTokens
+			chatCompletion.MaxCompletionTokens = aiMaxTokens
 		}
 
 		contentOutput, err = RunAiQuery("", "", chatCompletion)
