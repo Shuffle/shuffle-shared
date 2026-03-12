@@ -17836,7 +17836,15 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		// Handle agent decisionmaking. Use the same
 		log.Printf("[INFO][%s] With the agent being finished, we are asking it whether it would like to do anything else", workflowExecution.ExecutionId)
 
-		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, actionResult.Action, true)
+		var originalAction Action
+		if foundActionResultIndex >= 0 && foundActionResultIndex < len(workflowExecution.Results) {
+			originalAction = workflowExecution.Results[foundActionResultIndex].Action
+		} else {
+			// Fallback in case of an issue
+			originalAction = actionResult.Action
+		}
+
+		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, originalAction, true)
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed handling agent execution start: %s", workflowExecution.ExecutionId, err)
 		}
@@ -22324,6 +22332,14 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		workflow.ExecutingOrg = user.ActiveOrg
 		workflowExecution.ExecutionOrg = user.ActiveOrg.Id
 		workflowExecution.OrgId = user.ActiveOrg.Id
+	}
+
+	formattedAppName := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
+
+	isInternalShuffleApp := false
+	switch formattedAppName {
+	case "shuffle_datastore", "shuffle_org_management", "shuffle_app_management", "shuffle_workflow_management":
+		isInternalShuffleApp = true
 	}
 
 	if len(app.Name) == 0 && len(action.AppName) > 0 {
