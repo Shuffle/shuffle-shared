@@ -14561,6 +14561,14 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
+
+		// Used to cache pre-algolia lookup
+		unescaped, err := url.QueryUnescape(app.Name)
+		if err == nil {
+			encodedAppName := fmt.Sprintf("workflowapp_cache_%s", unescaped)
+			SetCache(context.Background(), encodedAppName, []byte(fileId), 86400)
+		}
+		//appIdCache, err := shuffle.GetCache(ctx, encodedAppName)
 	}
 
 	//log.Printf("[INFO] Successfully got app %s", fileId)

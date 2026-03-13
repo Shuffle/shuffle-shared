@@ -4118,7 +4118,7 @@ type CategoryAction struct {
 	OrgId         string `json:"org_id"`
 	WorkflowId    string `json:"workflow_id"` 	  // Forces it to use a specific workflow ID. This can be used to build multiple steps in the same workflow
 	ExecutionId   string `json:"execution_id"`    // Execution auth
-	AuthorizationId string `json:"authorization_id"`// Execution auth
+	Authorization string `json:"authorization"`// Execution auth
 }
 
 type LabelStruct struct {
