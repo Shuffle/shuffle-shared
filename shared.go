@@ -14537,7 +14537,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 				// Must be here to not override apps
-				go loadAppConfigFromMain(fileId)
+				go LoadAppConfigFromMain(fileId, false)
 				log.Printf("[DEBUG] Redirecting App load request '%s' to main site handler (shuffler.io)", fileId)
 				RedirectUserRequest(resp, request)
 				return

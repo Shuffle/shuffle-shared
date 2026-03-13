@@ -5118,3 +5118,10 @@ type OpensearchIndexConfig struct {
 type OpensearchIndexAliasConfig struct {
 	IsWriteIndex bool `json:"is_write_index,omitempty"`
 }
+
+// Only partial part of it 
+type AppBuildRequest struct {
+	Editing bool   `datastore:"editing"`
+	Id      string `datastore:"id"`
+	Image   string `datastore:"image"`
+}
