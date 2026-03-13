@@ -1,16 +1,16 @@
 package shuffle
 
 import (
-	"net/http"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
-	"encoding/json"
 	"log"
-	"strings"
-	"context"
-	"errors"
-	"time"
 	"math/rand"
+	"net/http"
+	"strings"
+	"time"
 )
 
 func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
@@ -35,7 +35,7 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	correlationData := CorrelationRequest{} 
+	correlationData := CorrelationRequest{}
 	err = json.Unmarshal(body, &correlationData)
 	if err != nil {
 		log.Printf("[WARNING] Failed to parse JSON in GetCorrelations: %s", err)
@@ -60,8 +60,8 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		searchKey := fmt.Sprintf("%s|%s", correlationData.Category, correlationData.Key)
 		availableTypes := []string{"datastore"}
-		if len(correlationData.Type) == 0 { 
-			correlationData.Type = "datastore" 
+		if len(correlationData.Type) == 0 {
+			correlationData.Type = "datastore"
 		}
 
 		if correlationData.Type == "datastore" {

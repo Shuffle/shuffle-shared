@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
-	"math"
 )
 
 const MaxDepth = 10
@@ -52,7 +52,7 @@ func evalPolicyRules(rules []Rule, oldDoc, newDoc map[string]any) (map[string]an
 			if r.Condition == "same_shape" && compareShape(oldDoc, newDoc) {
 				candidate = deepCopyMap(newDoc)
 				ruleMatched = true
-				break 
+				break
 			}
 		} else if r.Action == ActionMerge {
 			// Handle "merge" (implicit true) OR "merge if always"
@@ -78,7 +78,7 @@ func evalPolicyRules(rules []Rule, oldDoc, newDoc map[string]any) (map[string]an
 			break
 		}
 	}
-	
+
 	if hasPositiveRules && !ruleMatched {
 		return deepCopyMap(oldDoc), false, "no matching allow rule"
 	}
@@ -152,7 +152,9 @@ func mergeJSON(target, source map[string]any) map[string]any {
 }
 
 func isKeyedList(s []any) bool {
-	if len(s) == 0 { return false }
+	if len(s) == 0 {
+		return false
+	}
 	_, ok := getID(s[0])
 	return ok
 }
@@ -191,7 +193,7 @@ func normalizeID(v any) any {
 func mergeKeyedList(oldList, newList []any) []any {
 	// 1. Start with a COPY of the Old List (Preserve History)
 	result := make([]any, len(oldList))
-	
+
 	// Lookup Map: ID -> Index in Result
 	lookup := make(map[any]int)
 
@@ -205,7 +207,7 @@ func mergeKeyedList(oldList, newList []any) []any {
 	// 2. Merge in the New Items
 	for _, newItem := range newList {
 		newID, ok := getID(newItem)
-		
+
 		if ok {
 			if idx, found := lookup[newID]; found {
 				// UPDATE: Merge newItem into the existing result item
@@ -215,10 +217,10 @@ func mergeKeyedList(oldList, newList []any) []any {
 				continue
 			}
 		}
-		
+
 		// APPEND: It's new (or has no ID), so add it
 		result = append(result, deepCopy(newItem))
-		
+
 		// If it has an ID, add to lookup (handles duplicates in new list)
 		if ok {
 			lookup[newID] = len(result) - 1
@@ -235,18 +237,28 @@ func findDeletedField(oldVal, newVal any, currentPath string) string {
 	switch o := oldVal.(type) {
 	case map[string]any:
 		n, ok := newVal.(map[string]any)
-		if !ok { return currentPath }
+		if !ok {
+			return currentPath
+		}
 		for k, vOld := range o {
 			vNew, exists := n[k]
 			nextPath := k
-			if currentPath != "" { nextPath = currentPath + "." + k }
-			if !exists { return nextPath }
-			if path := findDeletedField(vOld, vNew, nextPath); path != "" { return path }
+			if currentPath != "" {
+				nextPath = currentPath + "." + k
+			}
+			if !exists {
+				return nextPath
+			}
+			if path := findDeletedField(vOld, vNew, nextPath); path != "" {
+				return path
+			}
 		}
 
 	case []any:
 		n, ok := newVal.([]any)
-		if !ok { return currentPath }
+		if !ok {
+			return currentPath
+		}
 
 		// KEYED MATCHING
 		if len(o) > 0 {
@@ -261,8 +273,10 @@ func findDeletedField(oldVal, newVal any, currentPath string) string {
 					id, _ := getID(oldItem)
 					newItem, found := newItemsByID[id]
 					nextPath := fmt.Sprintf("%s[id=%v]", currentPath, id)
-					
-					if !found { return nextPath } // ID missing
+
+					if !found {
+						return nextPath
+					} // ID missing
 					if path := findDeletedField(oldItem, newItem, nextPath); path != "" {
 						return path
 					}
@@ -273,29 +287,43 @@ func findDeletedField(oldVal, newVal any, currentPath string) string {
 
 		// POSITIONAL MATCHING
 		if len(n) < len(o) {
-			if currentPath == "" { return "[]" }
+			if currentPath == "" {
+				return "[]"
+			}
 			return fmt.Sprintf("%s[%d]", currentPath, len(n))
 		}
 		for i, vOld := range o {
-			if i >= len(n) { return fmt.Sprintf("%s[%d]", currentPath, i) }
+			if i >= len(n) {
+				return fmt.Sprintf("%s[%d]", currentPath, i)
+			}
 			vNew := n[i]
 			nextPath := fmt.Sprintf("[%d]", i)
-			if currentPath != "" { nextPath = fmt.Sprintf("%s[%d]", currentPath, i) }
-			if path := findDeletedField(vOld, vNew, nextPath); path != "" { return path }
+			if currentPath != "" {
+				nextPath = fmt.Sprintf("%s[%d]", currentPath, i)
+			}
+			if path := findDeletedField(vOld, vNew, nextPath); path != "" {
+				return path
+			}
 		}
 	}
 	return ""
 }
 
 func compareShape(a, b map[string]any) bool {
-	if len(a) != len(b) { return false }
+	if len(a) != len(b) {
+		return false
+	}
 	for k, vA := range a {
 		vB, ok := b[k]
-		if !ok { return false }
+		if !ok {
+			return false
+		}
 		mapA, aIsMap := vA.(map[string]any)
 		mapB, bIsMap := vB.(map[string]any)
 		if aIsMap && bIsMap {
-			if !compareShape(mapA, mapB) { return false }
+			if !compareShape(mapA, mapB) {
+				return false
+			}
 		} else if aIsMap != bIsMap {
 			return false
 		}
@@ -308,6 +336,7 @@ func compareShape(a, b map[string]any) bool {
 // ----------------------
 
 type NewAction string
+
 const (
 	ActionMerge     NewAction = "merge"
 	ActionOverwrite NewAction = "overwrite"
@@ -324,13 +353,17 @@ func parsePolicy(policy string) []Rule {
 	parts := strings.Split(policy, ";")
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		if p == "" { continue }
+		if p == "" {
+			continue
+		}
 		fields := strings.Fields(p)
 		if len(fields) == 1 {
 			rules = append(rules, Rule{Action: NewAction(strings.ToLower(fields[0])), Condition: "true"})
 			continue
 		}
-		if len(fields) < 3 || fields[1] != "if" { continue }
+		if len(fields) < 3 || fields[1] != "if" {
+			continue
+		}
 		rules = append(rules, Rule{Action: NewAction(strings.ToLower(fields[0])), Condition: strings.Join(fields[2:], " ")})
 	}
 	return rules
@@ -339,9 +372,13 @@ func parsePolicy(policy string) []Rule {
 func parseAllowedFields(cond string) []string {
 	start := strings.Index(cond, "[")
 	end := strings.LastIndex(cond, "]")
-	if start == -1 || end == -1 { return nil }
+	if start == -1 || end == -1 {
+		return nil
+	}
 	inner := cond[start+1 : end]
-	if strings.TrimSpace(inner) == "" { return nil }
+	if strings.TrimSpace(inner) == "" {
+		return nil
+	}
 	raw := strings.Split(inner, ",")
 	clean := make([]string, 0, len(raw))
 	for _, s := range raw {
@@ -352,19 +389,27 @@ func parseAllowedFields(cond string) []string {
 
 func deepCopy(v any) any {
 	switch val := v.(type) {
-	case map[string]any: return deepCopyMap(val)
+	case map[string]any:
+		return deepCopyMap(val)
 	case []any:
 		out := make([]any, len(val))
-		for i, item := range val { out[i] = deepCopy(item) }
+		for i, item := range val {
+			out[i] = deepCopy(item)
+		}
 		return out
-	default: return val
+	default:
+		return val
 	}
 }
 
 func deepCopyMap(m map[string]any) map[string]any {
-	if m == nil { return nil }
+	if m == nil {
+		return nil
+	}
 	out := make(map[string]any, len(m))
-	for k, v := range m { out[k] = deepCopy(v) }
+	for k, v := range m {
+		out[k] = deepCopy(v)
+	}
 	return out
 }
 
@@ -372,12 +417,16 @@ func marshalOrdered(v any) ([]byte, error) {
 	switch val := v.(type) {
 	case map[string]any:
 		keys := make([]string, 0, len(val))
-		for k := range val { keys = append(keys, k) }
+		for k := range val {
+			keys = append(keys, k)
+		}
 		sort.Strings(keys)
 		var buf bytes.Buffer
 		buf.WriteString("{")
 		for i, k := range keys {
-			if i > 0 { buf.WriteString(",") }
+			if i > 0 {
+				buf.WriteString(",")
+			}
 			b, _ := json.Marshal(k)
 			buf.Write(b)
 			buf.WriteString(":")
@@ -390,12 +439,15 @@ func marshalOrdered(v any) ([]byte, error) {
 		var buf bytes.Buffer
 		buf.WriteString("[")
 		for i, item := range val {
-			if i > 0 { buf.WriteString(",") }
+			if i > 0 {
+				buf.WriteString(",")
+			}
 			valBytes, _ := marshalOrdered(item)
 			buf.Write(valBytes)
 		}
 		buf.WriteString("]")
 		return buf.Bytes(), nil
-	default: return json.Marshal(v)
+	default:
+		return json.Marshal(v)
 	}
 }
