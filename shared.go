@@ -14566,16 +14566,12 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		unescaped, err := url.QueryUnescape(app.Name)
 		if err == nil {
 			encodedAppName := fmt.Sprintf("workflowapp_cache_%s", unescaped)
-			SetCache(context.Background(), encodedAppName, []byte(fileId), 86400)
+			
+			SetCache(context.Background(), encodedAppName, []byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, app.ID)), 86400)
 		}
-		//appIdCache, err := shuffle.GetCache(ctx, encodedAppName)
 	}
 
-	//log.Printf("[INFO] Successfully got app %s", fileId)
-
 	app.ReferenceUrl = ""
-
-	//app.Activate = true
 	data, err := json.Marshal(app)
 	if err != nil {
 		resp.WriteHeader(422)
