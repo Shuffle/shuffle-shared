@@ -9511,6 +9511,11 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 	env.Edited = timeNow
 
 	if debug {
+		// Skip update for cloud env due to it not being necessary past creation
+		//if env.Created != timeNow && (item.Name == "Cloud" || item.Type == "cloud") {
+		//	return nil
+		//}
+
 		log.Printf("[DEBUG] Setting environment %s (%s) for org '%s'. Checkin: %d", env.Name, env.Id, env.OrgId, env.Checkin)
 	}
 
