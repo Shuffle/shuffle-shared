@@ -14588,7 +14588,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			primarySlug := strings.ToLower(strings.ReplaceAll(unescapedName, " ", "_"))
 			primaryKey := fmt.Sprintf("workflowapp_cache_%s", primarySlug)
 			SetCache(context.Background(), primaryKey, cachePayload, 86400)
-			log.Printf("[INFO] App cache set: %s (%s)", primaryKey, app.ID)
 
 			// 2. Cache by search alias (e.g., "outlook") if provided by the frontend
 			aliasQuery := request.URL.Query().Get("alias")
@@ -14599,7 +14598,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 				// Only set if alias is different from the primary name
 				if aliasKey != primaryKey {
 					SetCache(context.Background(), aliasKey, cachePayload, 86400)
-					log.Printf("[INFO] App alias cache set: %s -> %s", aliasKey, app.ID)
 				}
 			}
 		}
