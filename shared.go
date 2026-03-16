@@ -1576,6 +1576,41 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	}
 	//}
 
+	nameFilter, nameFilterOk := request.URL.Query()["name"]
+	if nameFilterOk && len(nameFilter) > 0 && len(nameFilter[0]) > 0 {
+		filteredSubOrgs := []OrgMini{}
+		matchingOrgs := []Org{}
+
+		for _, subOrg := range subOrgs {
+			if subOrg.Name == nameFilter[0] {
+				fullOrg, err := GetOrg(ctx, subOrg.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting full org for %s: %s", subOrg.Id, err)
+					continue
+				}
+				matchingOrgs = append(matchingOrgs, *fullOrg)
+			}
+		}
+
+		if len(matchingOrgs) > 0 {
+			sort.Slice(matchingOrgs, func(i, j int) bool {
+				return matchingOrgs[i].Created > matchingOrgs[j].Created
+			})
+
+			latestOrg := matchingOrgs[0]
+			filteredSubOrgs = append(filteredSubOrgs, OrgMini{
+				Id:         latestOrg.Id,
+				Name:       latestOrg.Name,
+				Role:       latestOrg.Role,
+				CreatorOrg: latestOrg.CreatorOrg,
+				Image:      latestOrg.Image,
+				RegionUrl:  latestOrg.RegionUrl,
+			})
+		}
+
+		subOrgs = filteredSubOrgs
+	}
+
 	data := map[string]interface{}{
 		"subOrgs":   subOrgs,
 		"parentOrg": returnParent,
@@ -4883,6 +4918,428 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 	//var config configAuth
 
 	//log.Printf("Should set %s
+}
+
+func findAuthForApp(appId string, allAuths []AppAuthenticationStorage) string {
+	var activeAuth *AppAuthenticationStorage
+	var firstAuth *AppAuthenticationStorage
+
+	for i, auth := range allAuths {
+		if auth.App.ID != appId {
+			continue
+		}
+
+		if firstAuth == nil {
+			firstAuth = &allAuths[i]
+		}
+
+		if auth.Active {
+			activeAuth = &allAuths[i]
+			break
+		}
+	}
+
+	if activeAuth != nil {
+		return activeAuth.Id
+	}
+
+	if firstAuth != nil {
+		return firstAuth.Id
+	}
+
+	return ""
+}
+
+func SetAuthenticationConfigBatch(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in batch auth config: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User isn't admin during batch auth edit config")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Error with body read in batch auth config: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type configItem struct {
+		Id             string   `json:"id"`
+		SelectedSuborg []string `json:"selected_suborgs"`
+	}
+
+	type batchConfigAuth struct {
+		Action  string       `json:"action"`
+		Type    string       `json:"type"`
+		Configs []configItem `json:"configs"`
+	}
+
+	var config batchConfigAuth
+	err = json.Unmarshal(body, &config)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshaling batch auth config: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid request body"}`))
+		return
+	}
+
+	if config.Type != "auth_id" && config.Type != "app_id" {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Type must be either 'auth_id' or 'app_id'"}`))
+		return
+	}
+
+	if len(config.Configs) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No configs provided"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting org %s: %s", user.ActiveOrg.Id, err)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
+		return
+	}
+
+	if len(org.CreatorOrg) != 0 {
+		log.Printf("[INFO] Org %s has creator org %s, can't distribute", org.Id, org.CreatorOrg)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Can't distribute auth for suborgs"}`))
+		return
+	}
+
+	type resultItem struct {
+		Id      string `json:"id"`
+		AuthId  string `json:"auth_id,omitempty"`
+		Success bool   `json:"success"`
+		Reason  string `json:"reason,omitempty"`
+	}
+
+	type batchResponse struct {
+		Success bool         `json:"success"`
+		Results []resultItem `json:"results"`
+	}
+
+	results := []resultItem{}
+
+	authConfigsToProcess := []configItem{}
+	appIdToAuthIdMap := make(map[string]string)
+
+	if config.Type == "app_id" {
+		allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting all auths for org %s: %s", user.ActiveOrg.Id, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting auths"}`))
+			return
+		}
+
+		for _, appConfig := range config.Configs {
+			authId := findAuthForApp(appConfig.Id, allAuths)
+			if authId == "" {
+				result := resultItem{
+					Id:      appConfig.Id,
+					Success: false,
+					Reason:  "No auth found for app",
+				}
+				results = append(results, result)
+				continue
+			}
+
+			appIdToAuthIdMap[authId] = appConfig.Id
+
+			authConfigsToProcess = append(authConfigsToProcess, configItem{
+				Id:             authId,
+				SelectedSuborg: appConfig.SelectedSuborg,
+			})
+		}
+	} else {
+		authConfigsToProcess = config.Configs
+	}
+
+	if config.Action == "suborg_distribute" {
+		for _, authConfig := range authConfigsToProcess {
+			result := resultItem{
+				Id:      authConfig.Id,
+				Success: false,
+			}
+
+			if appId, exists := appIdToAuthIdMap[authConfig.Id]; exists {
+				result.Id = appId
+				result.AuthId = authConfig.Id
+			}
+
+			auth, err := GetWorkflowAppAuthDatastore(ctx, authConfig.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting auth %s: %s", authConfig.Id, err)
+				result.Reason = "Auth doesn't exist"
+				results = append(results, result)
+				continue
+			}
+
+			if auth.OrgId != user.ActiveOrg.Id {
+				log.Printf("[WARNING] User %s can't edit auth %s from org %s", user.Id, authConfig.Id, auth.OrgId)
+				result.Reason = "User can't edit this org"
+				results = append(results, result)
+				continue
+			}
+
+			if len(authConfig.SelectedSuborg) == 0 {
+				auth.SuborgDistribution = []string{}
+				auth.SuborgDistributed = false
+			} else {
+				auth.SuborgDistribution = authConfig.SelectedSuborg
+				auth.SuborgDistributed = false
+			}
+
+			err = SetWorkflowAppAuthDatastore(ctx, *auth, auth.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting auth %s for org %s: %s", authConfig.Id, org.Id, err)
+				result.Reason = "Failed updating auth"
+				results = append(results, result)
+				continue
+			}
+
+			result.Success = true
+			results = append(results, result)
+		}
+
+		for _, childOrg := range org.ChildOrgs {
+			nameKey := "workflowappauth"
+			cacheKey := fmt.Sprintf("%s_%s", nameKey, childOrg.Id)
+			DeleteCache(ctx, cacheKey)
+		}
+
+	} else {
+		log.Printf("[WARNING] Unknown batch auth change action %s", config.Action)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Unknown action: %s"}`, config.Action)))
+		return
+	}
+
+	responseData := batchResponse{
+		Success: true,
+		Results: results,
+	}
+
+	responseJson, err := json.Marshal(responseData)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshaling batch response: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed creating response"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(responseJson)
+}
+
+func DistributeWorkflowsBatch(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in batch workflow distribution: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User isn't admin during batch workflow distribution")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Error with body read in batch workflow distribution: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type workflowConfigItem struct {
+		WorkflowId string   `json:"workflow_id"`
+		SuborgIds  []string `json:"suborg_ids"`
+	}
+
+	type batchWorkflowDistribution struct {
+		Workflows []workflowConfigItem `json:"workflows"`
+	}
+
+	var config batchWorkflowDistribution
+	err = json.Unmarshal(body, &config)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshaling batch workflow distribution: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid request body"}`))
+		return
+	}
+
+	if len(config.Workflows) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No workflows provided"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting org %s: %s", user.ActiveOrg.Id, err)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
+		return
+	}
+
+	if len(org.CreatorOrg) != 0 {
+		log.Printf("[INFO] Org %s has creator org %s, can't distribute workflows", org.Id, org.CreatorOrg)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Can't distribute workflows from suborg"}`))
+		return
+	}
+
+	validSuborgIds := make(map[string]bool)
+	for _, childOrg := range org.ChildOrgs {
+		validSuborgIds[childOrg.Id] = true
+	}
+
+	type distributionResult struct {
+		SuborgId        string `json:"suborg_id"`
+		ChildWorkflowId string `json:"child_workflow_id,omitempty"`
+		Success         bool   `json:"success"`
+		Reason          string `json:"reason,omitempty"`
+	}
+
+	type workflowResult struct {
+		WorkflowId    string               `json:"workflow_id"`
+		Success       bool                 `json:"success"`
+		Distributions []distributionResult `json:"distributions"`
+	}
+
+	type batchResponse struct {
+		Success bool             `json:"success"`
+		Results []workflowResult `json:"results"`
+	}
+
+	results := []workflowResult{}
+
+	for _, workflowConfig := range config.Workflows {
+		result := workflowResult{
+			WorkflowId:    workflowConfig.WorkflowId,
+			Success:       false,
+			Distributions: []distributionResult{},
+		}
+
+		workflow, err := GetWorkflow(ctx, workflowConfig.WorkflowId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting workflow %s: %s", workflowConfig.WorkflowId, err)
+			result.Distributions = append(result.Distributions, distributionResult{
+				Success: false,
+				Reason:  "Workflow doesn't exist",
+			})
+			results = append(results, result)
+			continue
+		}
+
+		if workflow.OrgId != user.ActiveOrg.Id {
+			log.Printf("[WARNING] User %s can't distribute workflow %s from org %s", user.Id, workflowConfig.WorkflowId, workflow.OrgId)
+			result.Distributions = append(result.Distributions, distributionResult{
+				Success: false,
+				Reason:  "Workflow doesn't belong to your org",
+			})
+			results = append(results, result)
+			continue
+		}
+
+		if len(workflow.ParentWorkflowId) > 0 {
+			log.Printf("[WARNING] Workflow %s is a child workflow, can't distribute", workflowConfig.WorkflowId)
+			result.Distributions = append(result.Distributions, distributionResult{
+				Success: false,
+				Reason:  "Can't distribute child workflows",
+			})
+			results = append(results, result)
+			continue
+		}
+
+		allSuccess := true
+		for _, suborgId := range workflowConfig.SuborgIds {
+			distResult := distributionResult{
+				SuborgId: suborgId,
+				Success:  false,
+			}
+
+			if !validSuborgIds[suborgId] {
+				log.Printf("[WARNING] Suborg %s is not a child of org %s", suborgId, org.Id)
+				distResult.Reason = "Suborg doesn't belong to your org"
+				result.Distributions = append(result.Distributions, distResult)
+				allSuccess = false
+				continue
+			}
+
+			childWorkflow, err := GenerateWorkflowFromParent(ctx, *workflow, org.Id, suborgId)
+			if err != nil {
+				log.Printf("[ERROR] Failed generating child workflow for %s in suborg %s: %s", workflowConfig.WorkflowId, suborgId, err)
+				distResult.Reason = "Failed creating child workflow"
+				result.Distributions = append(result.Distributions, distResult)
+				allSuccess = false
+				continue
+			}
+
+			distResult.Success = true
+			distResult.ChildWorkflowId = childWorkflow.ID
+			result.Distributions = append(result.Distributions, distResult)
+		}
+
+		result.Success = allSuccess
+		results = append(results, result)
+	}
+
+	for _, childOrg := range org.ChildOrgs {
+		cacheKey := fmt.Sprintf("%s_workflows", childOrg.Id)
+		DeleteCache(ctx, cacheKey)
+	}
+
+	responseData := batchResponse{
+		Success: true,
+		Results: results,
+	}
+
+	responseJson, err := json.Marshal(responseData)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshaling batch workflow distribution response: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed creating response"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(responseJson)
 }
 
 func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
