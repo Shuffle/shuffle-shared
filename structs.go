@@ -1196,9 +1196,10 @@ type DatastoreKeyMini struct {
 }
 
 type CacheKeyDataMini struct {
-	Category string `json:"category" datastore:"category"`
-	Key      string `json:"key" datastore:"Key"`
-	Value    string `json:"value" datastore:"Value,noindex"`
+	Category            string `json:"category" datastore:"category"`
+	Key                 string `json:"key" datastore:"Key"`
+	Value               string `json:"value" datastore:"Value,noindex"`
+	IgnoreSecurityRules bool   `json:"ignore_security_rules" datastore:"ignore_security_rules,noindex"`
 
 	OrgId              string   `json:"org_id,omitempty" datastore:"OrgId"`
 	ExecutionId        string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
@@ -1216,15 +1217,16 @@ type CacheKeyDataFallback struct {
 }
 
 type CacheKeyData struct {
-	Success       bool     `json:"success" datastore:"Success"`
-	WorkflowId    string   `json:"workflow_id," datastore:"WorkflowId"`
-	ExecutionId   string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
-	Authorization string   `json:"authorization,omitempty" datastore:"Authorization"`
-	OrgId         string   `json:"org_id,omitempty" datastore:"OrgId"`
-	Key           string   `json:"key" datastore:"Key"`
-	Value         string   `json:"value" datastore:"Value,noindex"`
-	Category      string   `json:"category" datastore:"category"`
-	Tags          []string `json:"tags,omitempty" datastore:"tags"`
+	Success             bool     `json:"success" datastore:"Success"`
+	WorkflowId          string   `json:"workflow_id," datastore:"WorkflowId"`
+	ExecutionId         string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	Authorization       string   `json:"authorization,omitempty" datastore:"Authorization"`
+	OrgId               string   `json:"org_id,omitempty" datastore:"OrgId"`
+	Key                 string   `json:"key" datastore:"Key"`
+	Value               string   `json:"value" datastore:"Value,noindex"`
+	Category            string   `json:"category" datastore:"category"`
+	Tags                []string `json:"tags,omitempty" datastore:"tags"`
+	IgnoreSecurityRules bool     `json:"ignore_security_rules" datastore:"ignore_security_rules,noindex"`
 
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
@@ -4100,10 +4102,7 @@ type CategoryAction struct {
 	Category       string         `json:"category"`
 	OptionalFields []Valuereplace `json:"optional_fields"`
 
-	OrgId            string `json:"org_id"`
-	WorkflowId       string `json:"workflow_id"` // Forces it to use a specific workflow ID. This can be used to build multiple steps in the same workflow
-	AuthenticationId string `json:"authentication_id"`
-
+	AuthenticationId      string `json:"authentication_id"`       // Controls app authentication ID
 	Step                  int64  `json:"step"`                    // The step to use put it in a workflow if generated
 	Query                 string `json:"query,omitempty"`         // Due to the API being built around programmatic, and then with LLMs, this was added to make context possible between nodes when using Atomic Actions
 	DryRun                bool   `json:"dry_run"`                 // If true, it will not actually execute the action, but instead just build the workflow
@@ -4115,6 +4114,11 @@ type CategoryAction struct {
 
 	KeepWorkflow bool `json:"keep_workflow"` // Opposite, as we want the default to be false for Singul
 	//SkipWorkflow          bool   `json:"skip_workflow"`           // If true, it will not put it in a workflow, but instead just execute it
+
+	OrgId         string `json:"org_id"`
+	WorkflowId    string `json:"workflow_id"` 	  // Forces it to use a specific workflow ID. This can be used to build multiple steps in the same workflow
+	ExecutionId   string `json:"execution_id"`    // Execution auth
+	Authorization string `json:"authorization"`// Execution auth
 }
 
 type LabelStruct struct {
@@ -5115,4 +5119,11 @@ type OpensearchIndexConfig struct {
 
 type OpensearchIndexAliasConfig struct {
 	IsWriteIndex bool `json:"is_write_index,omitempty"`
+}
+
+// Only partial part of it
+type AppBuildRequest struct {
+	Editing bool   `datastore:"editing"`
+	Id      string `datastore:"id"`
+	Image   string `datastore:"image"`
 }

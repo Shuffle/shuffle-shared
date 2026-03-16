@@ -14537,7 +14537,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 				// Must be here to not override apps
-				go loadAppConfigFromMain(fileId)
+				go LoadAppConfigFromMain(fileId, false)
 				log.Printf("[DEBUG] Redirecting App load request '%s' to main site handler (shuffler.io)", fileId)
 				RedirectUserRequest(resp, request)
 				return
@@ -14561,13 +14561,49 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
+
+		unescapedName, err := url.QueryUnescape(app.Name)
+		if err == nil {
+			type AppCacheData struct {
+				Success     bool   `json:"success"`
+				ID          string `json:"id"`
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			}
+
+			cacheData := AppCacheData{
+				Success:     true,
+				ID:          app.ID,
+				Name:        app.Name,
+				Description: app.Description,
+			}
+
+			cachePayload, err := json.Marshal(cacheData)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling app cache payload: %s", err)
+				cachePayload = []byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, app.ID))
+			}
+
+			// 1. Cache by actual app name
+			primarySlug := strings.ToLower(strings.ReplaceAll(unescapedName, " ", "_"))
+			primaryKey := fmt.Sprintf("workflowapp_cache_%s", primarySlug)
+			SetCache(context.Background(), primaryKey, cachePayload, 86400)
+
+			// 2. Cache by search alias (e.g., "outlook") if provided by the frontend
+			aliasQuery := request.URL.Query().Get("alias")
+			if len(aliasQuery) > 0 {
+				aliasSlug := strings.ToLower(strings.ReplaceAll(aliasQuery, " ", "_"))
+				aliasKey := fmt.Sprintf("workflowapp_cache_%s", aliasSlug)
+
+				// Only set if alias is different from the primary name
+				if aliasKey != primaryKey {
+					SetCache(context.Background(), aliasKey, cachePayload, 86400)
+				}
+			}
+		}
 	}
 
-	//log.Printf("[INFO] Successfully got app %s", fileId)
-
 	app.ReferenceUrl = ""
-
-	//app.Activate = true
 	data, err := json.Marshal(app)
 	if err != nil {
 		resp.WriteHeader(422)
@@ -20933,7 +20969,15 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		Authorization:      tmpData.Authorization,
 		SuborgDistribution: tmpData.SuborgDistribution,
 		Tags:               tmpData.Tags,
+
+		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule. 
 	}
+
+	// If we want to only allow it for manual overrides
+	//if !user.SessionLogin { 
+	//	parsedKey.IgnoreSecurityRules = false
+	//}
+
 	existed, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{parsedKey})
 	if err != nil {
 		log.Printf("[ERROR] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
@@ -34830,7 +34874,7 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 
 				if len(openapiLabels) != len(action.CategoryLabel) {
 					if debug {
-						log.Printf("APP DIFF (%s): %#v vs %#v", app.ID, openapiLabels, action.CategoryLabel)
+						log.Printf("[DEBUG] APP DIFF (%s): %#v vs %#v", app.ID, openapiLabels, action.CategoryLabel)
 					}
 
 					seen := make(map[string]int)

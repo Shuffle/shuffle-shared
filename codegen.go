@@ -5152,3 +5152,199 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 func PushTarStreamToRegistry(r io.Reader, refStr string) error {
 	return nil
 }
+
+// Primarily used for cross-region app propagation of public apps on first run
+// Also used to rebuild apps when necessary IF buildApp = true is passed.
+func LoadAppConfigFromMain(fileId string, buildApp bool) {
+	// Send request to /api/v1/apps/{fileId}/config
+	// Parse out the config and add it to the database
+	ctx := context.Background()
+
+	app, err := GetApp(ctx, fileId, User{}, false)
+	if err == nil && len(app.Name) > 0 && len(app.ID) > 0 {
+		log.Printf("[INFO] Found app %s (%s) for config loading. Running cross-region DOWNLOAD shuffler.io->local if it's generated==false (python). Actions: %d. Generated: %t", app.Name, app.ID, len(app.Actions), app.Generated)
+		//if len(app.Actions) > 0 {
+		//	return
+		//}
+
+		// Python apps can't be distributed this easily (sadly)
+		if !app.Generated {
+			return
+		}
+	}
+
+	app.ID = fileId
+
+	backendHost := fmt.Sprintf("https://shuffler.io")
+	appApi := fmt.Sprintf("%s/api/v1/apps/%s/config", backendHost, fileId)
+	if buildApp { 
+		if os.Getenv("BASE_URL") != "" {
+			backendHost = os.Getenv("BASE_URL")
+		}
+
+		if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+			backendHost = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		}
+
+		// Check cache if it happened recently JUST IN CASE
+		// Done per region
+		appApi = fmt.Sprintf("%s/api/v1/apps/%s/config", backendHost, fileId)
+		_, err := GetCache(ctx, appApi)
+		if err == nil {
+			return 
+		}
+
+		SetCache(ctx, appApi, []byte("1"), 60)	
+		log.Printf("[WARNING] Auto-rebuilding app with ID %s. This is primarily when custom_action does not exist for generated apps (old apps)", appApi)
+	}
+
+	client := &http.Client{}
+	req, err := http.NewRequest(
+		"GET",
+		appApi,
+		nil,
+	)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed creating request for app config: %s", err)
+		return
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting app config: %s", err)
+		return
+	}
+
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading app config: %s", err)
+		return
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed getting app config for ID %s: %d. Body: %s", fileId, resp.StatusCode, string(body))
+		return
+	}
+
+	newApp := AppParser{}
+	err = json.Unmarshal(body, &newApp)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshaling app config: %s", err)
+		return
+	}
+
+	//log.Printf("[INFO] Got app config: %s", string(body))
+	if !newApp.Success {
+		log.Printf("[ERROR] No success in app config for id %s", fileId)
+		return
+	}
+
+	if len(newApp.App) == 0 {
+		log.Printf("[ERROR] No app found for id %s", app.ID)
+	} else {
+
+		err = json.Unmarshal(newApp.App, &app)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshaling app for id %s: %s", app.ID, err)
+			return
+		}
+
+		err = SetWorkflowAppDatastore(ctx, *app, app.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed saving app for id %s: %s", app.ID, err)
+		}
+	}
+
+	if len(newApp.OpenAPI) > 0 || buildApp {
+		// Save the data to the database with the ParsedOpenApi struct
+		parsedOpenApi := ParsedOpenApi{}
+		err = json.Unmarshal(newApp.OpenAPI, &parsedOpenApi)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshaling openapi for id %s: %s", app.ID, err)
+			return
+		}
+
+		err = SetOpenApiDatastore(ctx, parsedOpenApi.ID, parsedOpenApi)
+		if err != nil {
+			log.Printf("[ERROR] Failed saving openapi for id %s: %s", app.ID, err)
+		}
+
+		// Run verify openapi here to make sure we send the correct request
+		actualOpenApi := &openapi3.Swagger{}
+		err = json.Unmarshal([]byte(parsedOpenApi.Body), &actualOpenApi)
+		if err != nil { 
+			log.Printf("[ERROR] Problem with openapi3 mapping pre rebuild for %s: %s", parsedOpenApi.ID, err)
+		}
+
+		parsedOpenApiBody, err := json.Marshal(actualOpenApi)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshalling %s", parsedOpenApi.ID)
+			return
+		}
+
+		if buildApp {
+			// Only partial part of it 
+			//type Test struct {
+			//	Editing bool   `datastore:"editing"`
+			//	Id      string `datastore:"id"`
+			//	Image   string `datastore:"image"`
+			//}
+
+			// easiest way to force a rebuild by injecting 2 fields
+			parsedOpenApiBody = []byte(strings.TrimSuffix(string(parsedOpenApiBody), "}"))
+			parsedOpenApiBody = []byte(fmt.Sprintf(`%s, "id": "%s", "editing": true}`, string(parsedOpenApiBody), string(parsedOpenApi.ID)))
+
+			log.Printf("\n\n\nNew body: %s\n\n", string(parsedOpenApiBody))
+		}
+
+		baseurl := "http://localhost:5002"
+		if os.Getenv("BASE_URL") != "" {
+			baseurl = os.Getenv("BASE_URL")
+		}
+
+		if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+			baseurl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		}
+
+		fullUrl := fmt.Sprintf("%s/api/v1/verify_swagger", baseurl)
+		req, err := http.NewRequest(
+			"POST",
+			fullUrl,
+			bytes.NewBuffer(parsedOpenApiBody),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Failed creating request for openapi verification: %s", err)
+			return
+		}
+
+		if len(os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")) > 0 {
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")))
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[ERROR] Failed verifying openapi: %s", err)
+			return
+		}
+
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			log.Printf("[ERROR] Failed building openapi for ID %s: %d", fileId, resp.StatusCode)
+			return
+		}
+
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading openapi verification: %s", err)
+			return
+		}
+
+		log.Printf("[INFO] OpenAPI build: %s", string(body))
+	} else {
+		log.Printf("[ERROR] No openapi found for id %s", app.ID)
+	} 
+}
