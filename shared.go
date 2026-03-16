@@ -14562,12 +14562,44 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		// Used to cache pre-algolia lookup
-		unescaped, err := url.QueryUnescape(app.Name)
+		unescapedName, err := url.QueryUnescape(app.Name)
 		if err == nil {
-			encodedAppName := fmt.Sprintf("workflowapp_cache_%s", unescaped)
-			
-			SetCache(context.Background(), encodedAppName, []byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, app.ID)), 86400)
+			type AppCacheData struct {
+				Success     bool   `json:"success"`
+				ID          string `json:"id"`
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			}
+
+			cacheData := AppCacheData{
+				Success:     true,
+				ID:          app.ID,
+				Name:        app.Name,
+				Description: app.Description,
+			}
+
+			cachePayload, err := json.Marshal(cacheData)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling app cache payload: %s", err)
+				cachePayload = []byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, app.ID))
+			}
+
+			// 1. Cache by actual app name
+			primarySlug := strings.ToLower(strings.ReplaceAll(unescapedName, " ", "_"))
+			primaryKey := fmt.Sprintf("workflowapp_cache_%s", primarySlug)
+			SetCache(context.Background(), primaryKey, cachePayload, 86400)
+
+			// 2. Cache by search alias (e.g., "outlook") if provided by the frontend
+			aliasQuery := request.URL.Query().Get("alias")
+			if len(aliasQuery) > 0 {
+				aliasSlug := strings.ToLower(strings.ReplaceAll(aliasQuery, " ", "_"))
+				aliasKey := fmt.Sprintf("workflowapp_cache_%s", aliasSlug)
+
+				// Only set if alias is different from the primary name
+				if aliasKey != primaryKey {
+					SetCache(context.Background(), aliasKey, cachePayload, 86400)
+				}
+			}
 		}
 	}
 
