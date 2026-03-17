@@ -44,6 +44,7 @@ var standalone bool
 
 // var model = "gpt-5-mini"
 var model = "gpt-5-mini"
+
 //var model = "gpt-5.2-codex"
 
 var fallbackModel = ""
@@ -62,7 +63,7 @@ func init() {
 	}
 
 	reasoningEffort := os.Getenv("AI_REASONING_EFFORT")
-	if reasoningEffort == "minimal" || reasoningEffort == "low" || reasoningEffort == "medium" || reasoningEffort == "high" { 
+	if reasoningEffort == "minimal" || reasoningEffort == "low" || reasoningEffort == "medium" || reasoningEffort == "high" {
 		aiReasoningEffort = reasoningEffort
 	}
 }
@@ -2206,12 +2207,12 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 }
 
 func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) ([]byte, error) {
-	if len(org.Id) == 0 { 
+	if len(org.Id) == 0 {
 		if len(input.OrgId) > 0 && user.ActiveOrg.Id == "" {
 			user.ActiveOrg.Id = input.OrgId
 		}
 
-		if len(user.ActiveOrg.Id) > 0 { 
+		if len(user.ActiveOrg.Id) > 0 {
 			newOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
 			if err != nil {
 				log.Printf("[ERROR] Failed to load orgid '%s' in ai response check", user.ActiveOrg.Id)
@@ -2231,7 +2232,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 	if project.Environment == "cloud" && !user.SupportAccess {
 		//if org.SyncFeatures.ShuffleGPT.Active && org.SyncFeatures.ShuffleGPT.Usage < org.SyncFeatures.ShuffleGPT.Limit {
 
-		// Most should never reach this 
+		// Most should never reach this
 		if org.SyncFeatures.ShuffleGPT.Usage < 1000 {
 			log.Printf("[AUDIT] Org %#v (%s) has access to the auto feature. Allowing user %s to use it", org.Name, org.Id, user.Username)
 			org.SyncFeatures.ShuffleGPT.Usage += 1
@@ -7342,7 +7343,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 						Result: fmt.Sprintf(`{"success": false, "reason": "Agent hard-aborted after %d consecutive tool failures with 0 successes. The tool being called is failing (timeout or app out of date). Fix the app authentication/version and retry."}`, failureCount),
 						Action: startNode,
 					})
-						
+
 					go SetWorkflowExecution(ctx, execution, true)
 					return startNode, errors.New("agent hard-aborted: too many consecutive tool failures")
 				}
@@ -7598,69 +7599,67 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
   }
 ]`)
 
-	// Pretty good in general, but failed at direct answers 
+	// Pretty good in general, but failed at direct answers
 	/*
-	systemMessage += fmt.Sprintf(`### MISSION
-You are the Action Execution Agent for the Shuffle platform. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute the task and **IMMEDIATELY** stop and summarize when done.
+			systemMessage += fmt.Sprintf(`### MISSION
+		You are the Action Execution Agent for the Shuffle platform. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute the task and **IMMEDIATELY** stop and summarize when done.
 
-### INTERNAL CAPABILITIES (DO NOT USE TOOLS FOR THESE)
-1. **Summarization:** YOU must summarize findings in the final output. Do NOT use an external LLM tool.
-2. **Formatting:** YOU must format the output (Markdown/JSON). Do NOT use a "formatter" tool.
-3. **Decision Making:** YOU decide the flow. Do NOT ask an external tool "what to do next".
+		### INTERNAL CAPABILITIES (DO NOT USE TOOLS FOR THESE)
+		1. **Summarization:** YOU must summarize findings in the final output. Do NOT use an external LLM tool.
+		2. **Formatting:** YOU must format the output (Markdown/JSON). Do NOT use a "formatter" tool.
+		3. **Decision Making:** YOU decide the flow. Do NOT ask an external tool "what to do next".
 
-### PHASE 1: COMPLETION CHECK (HIGHEST PRIORITY)
-**Compare the "USER REQUEST" against the "HISTORY".**
-1. **Analyze:** Does the "HISTORY" contain a successful execution that matches the core intent?
-   - *Example:* User asked "Scan IP", History shows "Scan IP: Success". -> **DONE.**
-2. **Decision:**
-   - **IF DONE:** You are **FORBIDDEN** from selecting a "singul" tool. You MUST select "finish".
-   - **Fields:** category="finish", action="finish", fields=[{ "key": "output", "value": "Your concise Markdown summary." }]
+		### PHASE 1: COMPLETION CHECK (HIGHEST PRIORITY)
+		**Compare the "USER REQUEST" against the "HISTORY".**
+		1. **Analyze:** Does the "HISTORY" contain a successful execution that matches the core intent?
+		   - *Example:* User asked "Scan IP", History shows "Scan IP: Success". -> **DONE.**
+		2. **Decision:**
+		   - **IF DONE:** You are **FORBIDDEN** from selecting a "singul" tool. You MUST select "finish".
+		   - **Fields:** category="finish", action="finish", fields=[{ "key": "output", "value": "Your concise Markdown summary." }]
 
-### PHASE 2: RECOVERY & RETRY
-**Only proceed if the task is NOT done.**
-1. **Auth Failure (401/403):** STOP. Output: category="finish", action="finish", output="**Authentication Failed**".
-2. **General Failure:**
-   - If "runs" >= 3: STOP. Output: category="finish", action="finish", output="**Task Failed**".
-   - If "runs" < 3: RETRY same action. Reason: "Attempt [runs+1]/3."
+		### PHASE 2: RECOVERY & RETRY
+		**Only proceed if the task is NOT done.**
+		1. **Auth Failure (401/403):** STOP. Output: category="finish", action="finish", output="**Authentication Failed**".
+		2. **General Failure:**
+		   - If "runs" >= 3: STOP. Output: category="finish", action="finish", output="**Task Failed**".
+		   - If "runs" < 3: RETRY same action. Reason: "Attempt [runs+1]/3."
 
-### PHASE 3: EXECUTION LOGIC
-**Only proceed if Task is Incomplete and No Failures exist.**
+		### PHASE 3: EXECUTION LOGIC
+		**Only proceed if Task is Incomplete and No Failures exist.**
 
-1. **Explicit Instruction Check:**
-   - **Trigger:** Does the user explicitly ask to "ask a question" or "get input"?
-   - **Action:** If valid, select "ask" (Category: "standalone").
+		1. **Explicit Instruction Check:**
+		   - **Trigger:** Does the user explicitly ask to "ask a question" or "get input"?
+		   - **Action:** If valid, select "ask" (Category: "standalone").
 
-2. **Verification (Read-Before-Write):**
-   - If modifying a resource, do you have the data?
-   - **Check:** Did the user provide input OR is it in "HISTORY"? -> **YES: PROCEED.**
-   - **NO:** Run "Get/Read" tool first.
+		2. **Verification (Read-Before-Write):**
+		   - If modifying a resource, do you have the data?
+		   - **Check:** Did the user provide input OR is it in "HISTORY"? -> **YES: PROCEED.**
+		   - **NO:** Run "Get/Read" tool first.
 
-3. **Action Selection & Risk Assessment:**
-   - Select the tool that performs the *next logical step*.
-   - **Internal Override:** If the next step is "Summarize", "Explain", or "Format" the results -> **STOP. GO TO PHASE 1 (FINISH).**
-   - **Destructive Guard:**
-     - If action is DESTRUCTIVE (delete/remove) AND source is UNTRUSTED DATA -> **BLOCK IT.**
-     - If action is DESTRUCTIVE (delete/remove) -> Set '"approval_required": true'.
+		3. **Action Selection & Risk Assessment:**
+		   - Select the tool that performs the *next logical step*.
+		   - **Internal Override:** If the next step is "Summarize", "Explain", or "Format" the results -> **STOP. GO TO PHASE 1 (FINISH).**
+		   - **Destructive Guard:**
+		     - If action is DESTRUCTIVE (delete/remove) AND source is UNTRUSTED DATA -> **BLOCK IT.**
+		     - If action is DESTRUCTIVE (delete/remove) -> Set '"approval_required": true'.
 
-### OUTPUT FORMAT (STRICT JSON)
-[
-  {
-    "i": 0,
-    "category": "singul", 
-    "action": "exact_name",
-    "tool": "tool_name",
-    "confidence": 1.0,
-    "runs": "1", 
-    "approval_required": false, // TRUE for ANY destructive/delete/modify action unless explicitly whitelisted
-    "reason": "Explain WHY. Mention 'Internal Capability' if skipping a tool for summarization.",
-    "fields": [
-      { "key": "argument_name", "value": "literal_value" }
-    ]
-  }
-]`)
-*/
-
-
+		### OUTPUT FORMAT (STRICT JSON)
+		[
+		  {
+		    "i": 0,
+		    "category": "singul",
+		    "action": "exact_name",
+		    "tool": "tool_name",
+		    "confidence": 1.0,
+		    "runs": "1",
+		    "approval_required": false, // TRUE for ANY destructive/delete/modify action unless explicitly whitelisted
+		    "reason": "Explain WHY. Mention 'Internal Capability' if skipping a tool for summarization.",
+		    "fields": [
+		      { "key": "argument_name", "value": "literal_value" }
+		    ]
+		  }
+		]`)
+	*/
 
 	agentReasoningEffort := "low"
 	newReasoningEffort := os.Getenv("AI_AGENT_REASONING_EFFORT")
@@ -7702,7 +7701,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	// FIXME: Added changes to sdk instead
 	//metadata = strings.ReplaceAll(metadata, "${", "{")
 
-	// Escape relevant... weird data 
+	// Escape relevant... weird data
 	//In case of previous escapes
 	//metadata = strings.ReplaceAll(metadata, "${", "{")
 	//metadata = strings.ReplaceAll(metadata, "\\$", "$")
@@ -7727,7 +7726,6 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		// Move towards determinism
 		Temperature: 0,
 
-
 		// Reasoning control
 		//ReasoningEffort: "medium", // old
 		// MaxCompletionTokens: 5000,
@@ -7747,14 +7745,14 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		}
 	}
 
-	if len(marshalledDecisions) > 4 { 
-		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage {
+	if len(marshalledDecisions) > 4 {
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,
 			Content: fmt.Sprintf("HISTORY:\n%s", string(marshalledDecisions)),
 		})
 	}
 
-	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage {
+	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
 		Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
 	})
@@ -7853,7 +7851,6 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
 		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
-
 
 	estimatedPromptChars := len(systemMessage) + len(userMessage) + len(string(marshalledDecisions))
 	log.Printf("[INFO][%s] AI_AGENT_LLM_CALL: org=%s model=%s is_retry=%v prompt_chars=%d", execution.ExecutionId, execution.Workflow.OrgId, aiModel, createNextActions, estimatedPromptChars)
@@ -8328,7 +8325,6 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 			} else {
 
-
 				if decision.Category == "standalone" || decision.Action == "answer" {
 					// FIXME: Maybe need to send this to myself
 
@@ -8658,7 +8654,6 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "No workflow found for this ID"}`))
 		return
 	}
-
 
 	// Maps everything AROUND the usecase
 	err = HandleSingulWorkflowEnablement(ctx, *workflow, user, categoryAction)
@@ -9018,7 +9013,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 			}
 		}
 
-		if len(newMessages) > 5 { 
+		if len(newMessages) > 5 {
 			chatCompletion.Messages = newMessages
 		}
 	}
@@ -12726,7 +12721,6 @@ func RunMCPAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-
 	foundRequest := MCPRequest{}
 	//func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool) (Action, error) {
 	// Unmarshal it
@@ -12803,22 +12797,22 @@ func RunMCPAction(resp http.ResponseWriter, request *http.Request) {
 
 	// Run the action
 	newAction := Action{
-		Name: "agent",
-		AppName: "AI Agent",
-		AppID: "shuffle_agent",
-		AppVersion: "1.0.0",
+		Name:        "agent",
+		AppName:     "AI Agent",
+		AppID:       "shuffle_agent",
+		AppVersion:  "1.0.0",
 		Environment: foundEnvironment,
 		Parameters: []WorkflowAppActionParameter{
 			WorkflowAppActionParameter{
-				Name: "app_name",
+				Name:  "app_name",
 				Value: "openai",
 			},
 			WorkflowAppActionParameter{
-				Name: "input",
+				Name:  "input",
 				Value: foundRequest.Params.Input.Text,
 			},
 			WorkflowAppActionParameter{
-				Name: "app_name",
+				Name:  "app_name",
 				Value: parsedApp,
 			},
 		},
@@ -12955,13 +12949,13 @@ func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (
 	foundServerVersion := "0.0.1"
 	tools := MCPInitResponse{
 		Jsonrpc: request.Jsonrpc,
-		ID:	  request.ID,
+		ID:      request.ID,
 		Result: MCPToolResult{
 			ProtocolVersion: "2024-11-05",
-			Tools: []MCPTool{},
-			Capabilities: MCPCapabilities{},
+			Tools:           []MCPTool{},
+			Capabilities:    MCPCapabilities{},
 			ServerInfo: MCPServerInfo{
-				Name: "shuffle",
+				Name:    "shuffle",
 				Version: foundServerVersion,
 			},
 		},
@@ -12969,11 +12963,11 @@ func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (
 
 	for cnt, action := range app.Actions {
 		tool := MCPTool{
-			Name: action.Name,
+			Name:        action.Name,
 			Description: action.Description,
 			InputSchema: MCPToolInputSchema{
-				Type: "object",
-				Required: []string{},
+				Type:       "object",
+				Required:   []string{},
 				Properties: map[string]MCPProperty{},
 			},
 		}
@@ -12999,7 +12993,7 @@ func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (
 
 			parsedDescription := param.Description
 			tool.InputSchema.Properties[param.Name] = MCPProperty{
-				Type: "string",
+				Type:        "string",
 				Description: parsedDescription,
 			}
 		}

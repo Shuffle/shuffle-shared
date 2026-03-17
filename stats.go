@@ -661,7 +661,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 
 	org := &Org{}
 	ctx := GetContext(request)
-	if orgId == "public" { 
+	if orgId == "public" {
 		if user.SupportAccess {
 			log.Printf("[AUDIT] User %s (%s) is getting org stats for PUBLIC org %s with support access", user.Username, user.Id, orgId)
 		}
@@ -879,7 +879,6 @@ func HandleAppendStatistics(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Cache incremented by %d"}`, inputData.Value)))
 }
-
 
 // Rudementary caching system. WILL go wrong at times without sharding.
 // It's only good for the user in cloud, hence wont bother for a while

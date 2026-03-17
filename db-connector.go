@@ -889,7 +889,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 				return workflowExecution, nil
 			} else {
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG] Failed mapping workflowexecution cache for '%s': %s", id, err)
 				}
 			}
@@ -1000,7 +1000,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		newexecution, err := json.Marshal(workflowExecution)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling execution: %s", err)
-			return workflowExecution, getErr 
+			return workflowExecution, getErr
 		}
 
 		err = SetCache(ctx, id, newexecution, 30)
@@ -1009,7 +1009,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 	}
 
-	return workflowExecution, getErr 
+	return workflowExecution, getErr
 }
 
 func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string) (*WorkflowExecution, error) {
@@ -10453,8 +10453,8 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		userData, err := json.Marshal(users)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
-			if len(users) > 0 { 
-				return users[0], nil 
+			if len(users) > 0 {
+				return users[0], nil
 			} else {
 				return User{}, err
 			}

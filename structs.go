@@ -1195,7 +1195,7 @@ type DatastoreKeyMini struct {
 	Existed bool   `json:"existed" datastore:"existed"` // If the key existed before the update
 }
 
-// Not sure how this is mini anymore (: 
+// Not sure how this is mini anymore (:
 type CacheKeyDataMini struct {
 	Category            string `json:"category" datastore:"category"`
 	Key                 string `json:"key" datastore:"Key"`
@@ -1261,7 +1261,6 @@ type RemoteWorkflowInfo struct {
 	ExistsInOrg   bool   `json:"exists_in_org"`
 	OrgWorkflowId string `json:"org_workflow_id"`
 }
-
 
 type PaymentSubscription struct {
 	Id               string   `json:"id" datastore:"id"`

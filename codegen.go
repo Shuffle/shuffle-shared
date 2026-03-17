@@ -5182,7 +5182,7 @@ func LoadAppConfigFromMain(fileId string, buildApp bool) {
 
 	backendHost := fmt.Sprintf("https://shuffler.io")
 	appApi := fmt.Sprintf("%s/api/v1/apps/%s/config", backendHost, fileId)
-	if buildApp { 
+	if buildApp {
 		if os.Getenv("BASE_URL") != "" {
 			backendHost = os.Getenv("BASE_URL")
 		}
@@ -5196,10 +5196,10 @@ func LoadAppConfigFromMain(fileId string, buildApp bool) {
 		appApi = fmt.Sprintf("%s/api/v1/apps/%s/config", backendHost, fileId)
 		_, err := GetCache(ctx, appApi)
 		if err == nil {
-			return 
+			return
 		}
 
-		SetCache(ctx, appApi, []byte("1"), 60)	
+		SetCache(ctx, appApi, []byte("1"), 60)
 		log.Printf("[WARNING] Auto-rebuilding app with ID %s. This is primarily when custom_action does not exist for generated apps (old apps)", appApi)
 	}
 
@@ -5279,7 +5279,7 @@ func LoadAppConfigFromMain(fileId string, buildApp bool) {
 		// Run verify openapi here to make sure we send the correct request
 		actualOpenApi := &openapi3.Swagger{}
 		err = json.Unmarshal([]byte(parsedOpenApi.Body), &actualOpenApi)
-		if err != nil { 
+		if err != nil {
 			log.Printf("[ERROR] Problem with openapi3 mapping pre rebuild for %s: %s", parsedOpenApi.ID, err)
 		}
 
@@ -5290,7 +5290,7 @@ func LoadAppConfigFromMain(fileId string, buildApp bool) {
 		}
 
 		if buildApp {
-			// Only partial part of it 
+			// Only partial part of it
 			//type Test struct {
 			//	Editing bool   `datastore:"editing"`
 			//	Id      string `datastore:"id"`
@@ -5351,5 +5351,5 @@ func LoadAppConfigFromMain(fileId string, buildApp bool) {
 		log.Printf("[INFO] OpenAPI build: %s", string(body))
 	} else {
 		log.Printf("[ERROR] No openapi found for id %s", app.ID)
-	} 
+	}
 }
