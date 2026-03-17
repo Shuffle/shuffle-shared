@@ -1136,6 +1136,12 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
+		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
+		if org.SyncUsage.MultiTenant.Counter != int64(len(org.ChildOrgs)+1) {
+			org.SyncUsage.MultiTenant.Counter = int64(len(org.ChildOrgs) + 1)
+			orgChanged = true
+		}
+
 		if len(org.CreatorOrg) == 0 {
 			allChildOrgs, err := GetAllChildOrgs(ctx, org.Id)
 			if err == nil {
@@ -1146,7 +1152,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 							Id:         child.Id,
 							Name:       child.Name,
 							CreatorOrg: child.CreatorOrg,
-							Image:      child.Image,
+							Image:      "",
 							RegionUrl:  child.RegionUrl,
 						})
 					}
@@ -1155,12 +1161,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 					org.SyncUsage.MultiTenant.Counter = int64(len(allChildOrgsMini) + 1)
 					orgChanged = true
 				}
-			}
-		} else {
-			org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
-			if org.SyncUsage.MultiTenant.Counter != int64(len(org.ChildOrgs)+1) {
-				org.SyncUsage.MultiTenant.Counter = int64(len(org.ChildOrgs) + 1)
-				orgChanged = true
 			}
 		}
 
