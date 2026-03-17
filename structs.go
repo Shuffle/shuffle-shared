@@ -4116,9 +4116,9 @@ type CategoryAction struct {
 	//SkipWorkflow          bool   `json:"skip_workflow"`           // If true, it will not put it in a workflow, but instead just execute it
 
 	OrgId         string `json:"org_id"`
-	WorkflowId    string `json:"workflow_id"` 	  // Forces it to use a specific workflow ID. This can be used to build multiple steps in the same workflow
-	ExecutionId   string `json:"execution_id"`    // Execution auth
-	Authorization string `json:"authorization"`// Execution auth
+	WorkflowId    string `json:"workflow_id"`   // Forces it to use a specific workflow ID. This can be used to build multiple steps in the same workflow
+	ExecutionId   string `json:"execution_id"`  // Execution auth
+	Authorization string `json:"authorization"` // Execution auth
 }
 
 type LabelStruct struct {

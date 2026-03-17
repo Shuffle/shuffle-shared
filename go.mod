@@ -1,6 +1,6 @@
 module github.com/shuffle/shuffle-shared
 
-go 1.24.0
+go 1.25.7
 
 //replace github.com/frikky/kin-openapi => ../kin-openapi
 //replace github.com/shuffle/opensearch-go => ../opensearch-go

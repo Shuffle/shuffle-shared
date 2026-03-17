@@ -20970,11 +20970,11 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		SuborgDistribution: tmpData.SuborgDistribution,
 		Tags:               tmpData.Tags,
 
-		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule. 
+		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule.
 	}
 
 	// If we want to only allow it for manual overrides
-	//if !user.SessionLogin { 
+	//if !user.SessionLogin {
 	//	parsedKey.IgnoreSecurityRules = false
 	//}
 

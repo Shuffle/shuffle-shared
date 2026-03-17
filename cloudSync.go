@@ -1380,7 +1380,6 @@ func CreateFs(basepath, pathname string) (billy.Filesystem, error) {
 	return fs, err
 }
 
-
 // Also deactivates. It's a toggle for off and on.
 func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -2032,7 +2031,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		for _, field := range parsedFields {
 			if strings.ToLower(field.Key) == "url" && field.Value != "" {
 				urlValue = strings.TrimSpace(field.Value)
-				continue 
+				continue
 			}
 			newFields = append(newFields, field)
 		}
@@ -2083,9 +2082,9 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	}
 
 	parsedAction := CategoryAction{
-		AppName:  decision.Tool,
-		Label:    decision.Action,
-		Query:    decision.Reason,   // Add the reason field for LLM context
+		AppName: decision.Tool,
+		Label:   decision.Action,
+		Query:   decision.Reason, // Add the reason field for LLM context
 
 		Fields: oldFields,
 	}

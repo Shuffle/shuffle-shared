@@ -1581,7 +1581,7 @@ func UploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 			file.ReferenceFileId = outputFile.Id
 		}
 	} else {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] No similar file found with md5 %s. Original Md5: %s", md5, file.OriginalMd5sum)
 		}
 
@@ -1657,7 +1657,7 @@ func UploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 	file.FileSize = int64(len(contents))
 	file.ContentType = http.DetectContentType(contents)
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] MD5 for file %s (%s) is %s Type: %s and size: %d", file.Filename, file.Id, file.Md5sum, file.ContentType, file.FileSize)
 	}
 
