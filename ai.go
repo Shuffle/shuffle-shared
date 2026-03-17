@@ -430,7 +430,7 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig, paramNa
 	}
 
 	// Added a filename_prefix to know which field each belongs to
-	schemalessOutput, err := schemaless.Translate(ctx, "get_kms_key", marshalledBody, authConfig, fmt.Sprintf("filename_prefix:%s-", paramName))
+	schemalessOutput, _, err := schemaless.Translate(ctx, "get_kms_key", marshalledBody, authConfig, fmt.Sprintf("filename_prefix:%s-", paramName))
 	if err != nil {
 		log.Printf("[ERROR] Failed to translate KMS response (2): %s", err)
 		return string(fullBody), err
