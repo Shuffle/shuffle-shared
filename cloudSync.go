@@ -1380,7 +1380,6 @@ func CreateFs(basepath, pathname string) (billy.Filesystem, error) {
 	return fs, err
 }
 
-
 // Also deactivates. It's a toggle for off and on.
 func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
