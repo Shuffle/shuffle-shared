@@ -14587,7 +14587,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			// 1. Cache by actual app name
 			primarySlug := strings.ToLower(strings.ReplaceAll(unescapedName, " ", "_"))
 			primaryKey := fmt.Sprintf("workflowapp_cache_%s", primarySlug)
-			SetCache(context.Background(), primaryKey, cachePayload, 86400)
+			SetCache(context.Background(), primaryKey, cachePayload, 10080)
 
 			// 2. Cache by search alias (e.g., "outlook") if provided by the frontend
 			aliasQuery := request.URL.Query().Get("alias")
@@ -14597,7 +14597,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 				// Only set if alias is different from the primary name
 				if aliasKey != primaryKey {
-					SetCache(context.Background(), aliasKey, cachePayload, 86400)
+					SetCache(context.Background(), aliasKey, cachePayload, 10080)
 				}
 			}
 		}
@@ -20970,11 +20970,11 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		SuborgDistribution: tmpData.SuborgDistribution,
 		Tags:               tmpData.Tags,
 
-		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule. 
+		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule.
 	}
 
 	// If we want to only allow it for manual overrides
-	//if !user.SessionLogin { 
+	//if !user.SessionLogin {
 	//	parsedKey.IgnoreSecurityRules = false
 	//}
 
