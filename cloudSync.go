@@ -892,7 +892,8 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	}
 
 	if org.Billing.AppRunsHardLimit > 0 && orgStats.MonthlyAppExecutions > org.Billing.AppRunsHardLimit {
-		return org, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the app runs hard limit (%d/%d)", org.Name, org.Id, orgStats.MonthlyAppExecutions, org.Billing.AppRunsHardLimit))
+		//log.Printf("[WARNING] Hard limit reached for org %s (%s) during exec start", org.Name, org.Id)
+		return org, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the app runs hard limit (%d/%d). Your Parent organization can control this.", org.Name, org.Id, orgStats.MonthlyAppExecutions, org.Billing.AppRunsHardLimit))
 	}
 
 	validationOrg := org
@@ -927,7 +928,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
 	if validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
-		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
+		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d) - Only Shuffle Support can control this metric.", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
 	}
 
 	// Allows partners and POV users to run workflows without limits

@@ -4780,8 +4780,13 @@ func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte
 
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		log.Printf("[ERROR] Webhook request to %s failed with status code %d", parsedUrl, resp.StatusCode)
-		return errors.New(fmt.Sprintf("Webhook request failed with status code %d. Body: %s", resp.StatusCode, body))
+		if runType == "run_workflow" {
+			log.Printf("[ERROR] Datastore Automation: Workflow Run request to %s failed with status code %d", parsedUrl, resp.StatusCode)
+			return errors.New(fmt.Sprintf("Workflow Run request failed with status code %d. Body: %s", resp.StatusCode, body))
+		} else {
+			log.Printf("[ERROR] Datastore Automation: Webhook request to %s failed with status code %d", parsedUrl, resp.StatusCode)
+			return errors.New(fmt.Sprintf("Webhook request failed with status code %d. Body: %s", resp.StatusCode, body))
+		}
 	}
 
 	return nil

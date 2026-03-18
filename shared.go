@@ -31039,6 +31039,79 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	return org, orgUpdated
 }
 
+func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Removed check here as it may be a public workflow
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		//log.Printf("[AUDIT] Api authentication failed in getting workflow revisions: %s. Continuing because it may be public.", err)
+		log.Printf("[AUDIT] Api authentication failed in getting workflow revisions: %s. ", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var category string
+	var key string
+	if location[1] == "api" {
+		if len(location) <= 6 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		category = location[4]
+		key = location[5]
+	}
+
+	if len(category) == 0 || len(key) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Category or Key is empty"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	datastoreKeys, err := GetDatastoreRevisions(ctx, key, category, user.ActiveOrg.Id) 
+	if err != nil { 
+		log.Printf("[WARNING] Failed loading key revisions for %s (%s).", key, category)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
+		return
+	}
+
+	// Check workflow.Sharing == private / public / org  too
+
+	parsedKeys := []CacheKeyData{}
+	for _, key := range datastoreKeys {
+		if key.OrgId != user.ActiveOrg.Id { 
+			continue
+		}
+
+		if key.Category != category {
+			continue
+		}
+
+		parsedKeys = append(parsedKeys, key)
+	}
+
+	body, err := json.Marshal(parsedKeys)
+	if err != nil {
+		log.Printf("[WARNING] Failed datastore key revision GET marshalling: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(body)
+}
+
 func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
