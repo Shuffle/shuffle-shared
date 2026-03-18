@@ -13967,6 +13967,242 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	return existingInfo, nil
 }
 
+func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]CacheKeyData, error) {
+	if len(orgId) == 0 {
+		return []CacheKeyData, errors.New("Org ID required for revisions") 
+	}
+
+	var datastoreKeys []CacheKeyData
+	var err error
+
+	amount := 50 
+	if amount <= 0 {
+		amount = 50
+	}
+
+	if amount >= 200 {
+		amount = 200
+	}
+
+	key = url.QueryEscape(cacheId)
+	if len(key) > 127 {
+		key = key[:127]
+	}
+
+	category = url.QueryEscape(category)
+	if len(category) > 127 {
+		category = category[:127]
+	}
+
+	nameKey := "org_cache_revisions"
+	cacheKey := fmt.Sprintf("%s_%s_%d", nameKey, key, category, orgId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &datastoreKeys)
+			if err == nil {
+
+				sort.Slice(datastoreKeys, func(i, j int) bool {
+					return datastoreKeys[i].Edited > datastoreKeys[j].Edited
+				})
+
+				return datastoreKeys, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+		}
+	}
+
+	//log.Printf("[AUDIT] Getting workflow revisions for workflow %s.", originalId)
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": amount,
+			"sort": map[string]interface{}{
+				"edited": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"key": key,
+							},
+						},
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"org_id": orgId,
+							},
+						},
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"category": category,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return datastoreKeys, err
+		}
+
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    &buf,
+			Params: opensearchapi.SearchParams{
+				TrackTotalHits: true,
+			},
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return datastoreKeys, nil
+			}
+
+			log.Printf("[ERROR] Error getting response from Opensearch (Get datastoreKeys2 - revisions): %s", err)
+			return datastoreKeys, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return datastoreKeys, nil
+		}
+
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return datastoreKeys, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return datastoreKeys, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return datastoreKeys, err
+		}
+
+		wrapped := CacheKeySearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil && len(wrapped.Hits.Hits) == 0 {
+			return datastoreKeys, err
+		}
+
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.Key != key {
+				continue
+			}
+
+			datastoreKeys = append(datastoreKeys, hit.Source)
+		}
+	} else {
+		queryAmount := 20
+		if amount < queryAmount {
+			queryAmount = amount
+		}
+
+		query := datastore.NewQuery(nameKey).Filter("Key =", key).Filter("category =", category).Filter("OrgId =", orgId).Limit(queryAmount)
+		query = query.Order("-edited")
+
+		iterCount := 0
+
+		cursorStr := ""
+		for {
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerData := CacheKeyData{}
+				_, err := it.Next(&innerData)
+				if err != nil {
+					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					} else {
+						log.Printf("[WARNING] Datastore revision iterator issue: %s", err)
+						break
+					}
+				}
+
+				iterCount++
+				datastoreKeys = append(datastoreKeys, innerData)
+				if iterCount >= amount {
+					break
+				}
+			}
+
+			if iterCount >= amount {
+				break
+			}
+
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("[ERROR] Problem with cursor: %s", err)
+				break
+			} else {
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+			}
+		}
+	}
+
+	// Sort by edited
+	sort.Slice(datastoreKeys, func(i, j int) bool {
+		return datastoreKeys[i].Edited > datastoreKeys[j].Edited
+	})
+
+	// Deduplicate based on edited time
+	filtered := []CacheKeyData{}
+	handled := []string{}
+	for _, datastoreKey := range datastoreKeys {
+		if ArrayContains(handled, fmt.Sprintf("%d", datastoreKey.Edited)) {
+			continue
+		}
+
+		handled = append(handled, fmt.Sprintf("%d", datastoreKey.Edited))
+		filtered = append(filtered, datastoreKey)
+	}
+
+	// Set cache
+	if project.CacheDb {
+		cacheData, err := json.Marshal(datastoreKeys)
+		if err != nil {
+			return datastoreKeys, nil
+		}
+
+		err = SetCache(ctx, cacheKey, cacheData, 60)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting cache for workflow revisions: %s (not critical)", err)
+		}
+	}
+
+	return datastoreKeys, nil
+}
+
 func SetDatastoreKeyRevision(ctx context.Context, cacheData CacheKeyData) error {
 	nameKey := "org_cache_revisions"
 	timeNow := int64(time.Now().Unix())

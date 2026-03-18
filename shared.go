@@ -1137,10 +1137,31 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
 		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
-
 		if org.SyncUsage.MultiTenant.Counter != int64(len(org.ChildOrgs)+1) {
 			org.SyncUsage.MultiTenant.Counter = int64(len(org.ChildOrgs) + 1)
 			orgChanged = true
+		}
+
+		if len(org.CreatorOrg) == 0 {
+			allChildOrgs, err := GetAllChildOrgs(ctx, org.Id)
+			if err == nil {
+				if len(allChildOrgs) != len(org.ChildOrgs) {
+					allChildOrgsMini := []OrgMini{}
+					for _, child := range allChildOrgs {
+						allChildOrgsMini = append(allChildOrgsMini, OrgMini{
+							Id:         child.Id,
+							Name:       child.Name,
+							CreatorOrg: child.CreatorOrg,
+							Image:      "",
+							RegionUrl:  child.RegionUrl,
+						})
+					}
+					org.ChildOrgs = allChildOrgsMini
+					org.SyncFeatures.MultiTenant.Usage = int64(len(allChildOrgsMini) + 1)
+					org.SyncUsage.MultiTenant.Counter = int64(len(allChildOrgsMini) + 1)
+					orgChanged = true
+				}
+			}
 		}
 
 		if orgChanged {
@@ -27168,6 +27189,425 @@ func loadGithubWorkflows(url, username, password, userId, branch, orgId string) 
 	return nil
 }
 
+// RemoteWorkflowInfo holds metadata for a workflow found in a remote git repo.
+type RemoteWorkflowInfo struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	FolderName    string `json:"folder_name"`
+	UpdatedAt     int64  `json:"updated_at"`
+	FilePath      string `json:"file_path"`
+	ExistsInOrg   bool   `json:"exists_in_org"`
+	OrgWorkflowId string `json:"org_workflow_id"`
+}
+
+// listGithubWorkflowsInfo clones a git repo and returns metadata for each workflow JSON found.
+// It also checks whether each workflow ID already exists in the given org.
+func listGithubWorkflowsInfo(url, username, password, branch, orgId string) ([]RemoteWorkflowInfo, error) {
+	fs := memfs.New()
+
+	targetPath := ""
+	specificFile := ""
+	if strings.Contains(url, "dev.azure.com") {
+		if strings.Contains(url, "?path=") {
+			parts := strings.Split(url, "?path=")
+			if len(parts) == 2 {
+				targetPath = parts[1]
+				decodedPath, err := neturl.QueryUnescape(targetPath)
+				if err == nil {
+					targetPath = decodedPath
+				}
+				targetPath = strings.TrimPrefix(targetPath, "/")
+				if strings.HasSuffix(strings.ToLower(targetPath), ".json") {
+					specificFile = path.Base(targetPath)
+					targetPath = path.Dir(targetPath)
+					if targetPath == "." {
+						targetPath = ""
+					}
+				}
+				url = parts[0]
+			}
+		}
+	}
+
+	if strings.Contains(url, "github.com") && strings.Contains(url, "/blob/") {
+		parts := strings.SplitN(url, "/blob/", 2)
+		if len(parts) == 2 {
+			baseURL := parts[0]
+			remainder := parts[1]
+			pathParts := strings.SplitN(remainder, "/", 2)
+			if len(pathParts) >= 1 {
+				if len(branch) == 0 || branch == "main" || branch == "master" {
+					branch = pathParts[0]
+				}
+				if len(pathParts) == 2 {
+					targetPath = pathParts[1]
+					if strings.HasSuffix(strings.ToLower(targetPath), ".json") {
+						specificFile = path.Base(targetPath)
+						targetPath = path.Dir(targetPath)
+						if targetPath == "." {
+							targetPath = ""
+						}
+					}
+				}
+			}
+			url = baseURL + ".git"
+		}
+	}
+
+	cloneOptions := &git.CloneOptions{URL: url}
+	if len(username) > 0 && len(password) > 0 {
+		cloneOptions.Auth = &http2.BasicAuth{Username: username, Password: password}
+	} else {
+		org, err := GetOrg(context.Background(), orgId)
+		if err == nil && len(org.Defaults.WorkflowUploadUsername) > 0 && len(org.Defaults.WorkflowUploadToken) > 0 {
+			cloneOptions.Auth = &http2.BasicAuth{
+				Username: org.Defaults.WorkflowUploadUsername,
+				Password: org.Defaults.WorkflowUploadToken,
+			}
+		}
+	}
+
+	if len(branch) > 0 && branch != "main" && branch != "master" {
+		cloneOptions.ReferenceName = plumbing.ReferenceName(branch)
+	}
+
+	cloneOptions = CheckGitProxy(cloneOptions)
+
+	isAzureDevOps := strings.Contains(url, "dev.azure.com")
+	if isAzureDevOps {
+		transport.UnsupportedCapabilities = []capability.Capability{
+			capability.ThinPack,
+		}
+	}
+
+	storer := memory.NewStorage()
+	_, err := git.Clone(storer, fs, cloneOptions)
+	if err != nil {
+		log.Printf("[INFO] Failed cloning repo %s for list: %s", url, err)
+		return nil, err
+	}
+
+	searchPath := "/"
+	if targetPath != "" {
+		searchPath = "/" + targetPath
+	}
+
+	dir, err := fs.ReadDir(searchPath)
+	if err != nil {
+		searchPath = strings.TrimPrefix(searchPath, "/")
+		if searchPath == "" {
+			searchPath = "."
+		}
+		dir, err = fs.ReadDir(searchPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	extraPath := ""
+	if targetPath != "" {
+		extraPath = strings.ReplaceAll(targetPath, "\\", "/")
+		if !strings.HasSuffix(extraPath, "/") {
+			extraPath += "/"
+		}
+	}
+
+	// Collect all remote workflow infos.
+	// Must be an initialized (non-nil) slice so it serializes as [] not null.
+	remoteInfos := make([]RemoteWorkflowInfo, 0)
+	collectWorkflowInfos(fs, dir, extraPath, specificFile, &remoteInfos)
+
+	// Mark whether remote workflows already exist in this org.
+	ctx := context.Background()
+	for i := range remoteInfos {
+		existing, err := GetWorkflow(ctx, remoteInfos[i].ID, true)
+		if err != nil || existing == nil || existing.ID == "" {
+			continue
+		}
+
+		if existing.OrgId == orgId {
+			remoteInfos[i].ExistsInOrg = true
+			remoteInfos[i].OrgWorkflowId = existing.ID
+		}
+	}
+
+	log.Printf("[INFO] listGithubWorkflowsInfo: found %d workflows in remote repo", len(remoteInfos))
+	return remoteInfos, nil
+}
+
+// collectWorkflowInfos recursively walks the billy filesystem and collects RemoteWorkflowInfo for each .json file.
+func collectWorkflowInfos(fs billy.Filesystem, dir []os.FileInfo, extra string, onlyname string, infos *[]RemoteWorkflowInfo) {
+	for _, file := range dir {
+		filename := file.Name()
+		if len(onlyname) > 0 && filename != onlyname {
+			continue
+		}
+
+		fullPath := fmt.Sprintf("%s%s", extra, filename)
+		fi, err := fs.Stat(fullPath)
+		if err != nil {
+			continue
+		}
+
+		switch mode := fi.Mode(); {
+		case mode.IsDir():
+			tmpExtra := fmt.Sprintf("%s%s/", extra, fi.Name())
+			subDir, err := fs.ReadDir(tmpExtra)
+			if err != nil {
+				continue
+			}
+			collectWorkflowInfos(fs, subDir, tmpExtra, "", infos)
+		case mode.IsRegular():
+			if !strings.HasSuffix(strings.ToLower(filename), ".json") {
+				continue
+			}
+			filePath := fmt.Sprintf("%s%s", extra, fi.Name())
+			f, err := fs.Open(filePath)
+			if err != nil {
+				continue
+			}
+			data, err := ioutil.ReadAll(f)
+			if err != nil {
+				continue
+			}
+			var wf Workflow
+			if err := json.Unmarshal(data, &wf); err != nil || wf.ID == "" || wf.Name == "" {
+				continue
+			}
+			folderName := strings.TrimSuffix(extra, "/")
+			if idx := strings.LastIndex(folderName, "/"); idx >= 0 {
+				folderName = folderName[idx+1:]
+			}
+			*infos = append(*infos, RemoteWorkflowInfo{
+				ID:         wf.ID,
+				Name:       wf.Name,
+				FolderName: folderName,
+				UpdatedAt:  wf.Edited,
+				FilePath:   filePath,
+			})
+		}
+	}
+}
+
+// importSingleRemoteWorkflow imports or syncs a single workflow from a git repo by its original ID.
+// If syncToId is non-empty, the existing workflow with that ID is updated (synced).
+// Otherwise a new workflow is created (imported).
+func importSingleRemoteWorkflow(url, username, password, branch, originalWorkflowId, syncToId, userId, orgId string) error {
+	fs := memfs.New()
+
+	targetPath := ""
+	if strings.Contains(url, "dev.azure.com") {
+		if strings.Contains(url, "?path=") {
+			parts := strings.Split(url, "?path=")
+			if len(parts) == 2 {
+				targetPath = parts[1]
+				if d, err := neturl.QueryUnescape(targetPath); err == nil {
+					targetPath = d
+				}
+				targetPath = strings.TrimPrefix(targetPath, "/")
+				if strings.HasSuffix(strings.ToLower(targetPath), ".json") {
+					targetPath = path.Dir(targetPath)
+					if targetPath == "." {
+						targetPath = ""
+					}
+				}
+				url = parts[0]
+			}
+		}
+	}
+
+	if strings.Contains(url, "github.com") && strings.Contains(url, "/blob/") {
+		parts := strings.SplitN(url, "/blob/", 2)
+		if len(parts) == 2 {
+			baseURL := parts[0]
+			remainder := parts[1]
+			pathParts := strings.SplitN(remainder, "/", 2)
+			if len(pathParts) >= 1 {
+				if len(branch) == 0 || branch == "main" || branch == "master" {
+					branch = pathParts[0]
+				}
+				if len(pathParts) == 2 {
+					rp := pathParts[1]
+					if strings.HasSuffix(strings.ToLower(rp), ".json") {
+						rp = path.Dir(rp)
+						if rp == "." {
+							rp = ""
+						}
+					}
+					targetPath = rp
+				}
+			}
+			url = baseURL + ".git"
+		}
+	}
+
+	cloneOptions := &git.CloneOptions{URL: url}
+	if len(username) > 0 && len(password) > 0 {
+		cloneOptions.Auth = &http2.BasicAuth{Username: username, Password: password}
+	} else {
+		org, err := GetOrg(context.Background(), orgId)
+		if err == nil && len(org.Defaults.WorkflowUploadUsername) > 0 && len(org.Defaults.WorkflowUploadToken) > 0 {
+			cloneOptions.Auth = &http2.BasicAuth{
+				Username: org.Defaults.WorkflowUploadUsername,
+				Password: org.Defaults.WorkflowUploadToken,
+			}
+		}
+	}
+
+	if len(branch) > 0 && branch != "main" && branch != "master" {
+		cloneOptions.ReferenceName = plumbing.ReferenceName(branch)
+	}
+
+	cloneOptions = CheckGitProxy(cloneOptions)
+
+	isAzureDevOps := strings.Contains(url, "dev.azure.com")
+	if isAzureDevOps {
+		transport.UnsupportedCapabilities = []capability.Capability{
+			capability.ThinPack,
+		}
+	}
+
+	storer := memory.NewStorage()
+	_, err := git.Clone(storer, fs, cloneOptions)
+	if err != nil {
+		return err
+	}
+
+	searchPath := "/"
+	if targetPath != "" {
+		searchPath = "/" + targetPath
+	}
+
+	dir, err := fs.ReadDir(searchPath)
+	if err != nil {
+		searchPath = strings.TrimPrefix(searchPath, "/")
+		if searchPath == "" {
+			searchPath = "."
+		}
+		dir, err = fs.ReadDir(searchPath)
+		if err != nil {
+			return err
+		}
+	}
+
+	extraPath := ""
+	if targetPath != "" {
+		extraPath = strings.ReplaceAll(targetPath, "\\", "/")
+		if !strings.HasSuffix(extraPath, "/") {
+			extraPath += "/"
+		}
+	}
+
+	return findAndProcessSingleWorkflow(fs, dir, extraPath, originalWorkflowId, syncToId, userId, orgId)
+}
+
+// findAndProcessSingleWorkflow walks the FS looking for the workflow with the given original ID.
+func findAndProcessSingleWorkflow(fs billy.Filesystem, dir []os.FileInfo, extra, originalWorkflowId, syncToId, userId, orgId string) error {
+	for _, file := range dir {
+		filename := file.Name()
+		fullPath := fmt.Sprintf("%s%s", extra, filename)
+		fi, err := fs.Stat(fullPath)
+		if err != nil {
+			continue
+		}
+
+		switch mode := fi.Mode(); {
+		case mode.IsDir():
+			tmpExtra := fmt.Sprintf("%s%s/", extra, fi.Name())
+			subDir, err := fs.ReadDir(tmpExtra)
+			if err != nil {
+				continue
+			}
+			if err := findAndProcessSingleWorkflow(fs, subDir, tmpExtra, originalWorkflowId, syncToId, userId, orgId); err == nil {
+				return nil // found and processed
+			}
+		case mode.IsRegular():
+			if !strings.HasSuffix(strings.ToLower(filename), ".json") {
+				continue
+			}
+			filePath := fmt.Sprintf("%s%s", extra, fi.Name())
+			f, err := fs.Open(filePath)
+			if err != nil {
+				continue
+			}
+			data, err := ioutil.ReadAll(f)
+			if err != nil {
+				continue
+			}
+			var wf Workflow
+			if err := json.Unmarshal(data, &wf); err != nil {
+				continue
+			}
+			if wf.ID != originalWorkflowId {
+				continue
+			}
+
+			ctx := context.Background()
+
+			if syncToId != "" {
+				// Sync: update the existing org workflow with the remote content
+				existing, err := GetWorkflow(ctx, syncToId)
+				if err != nil || existing == nil {
+					return fmt.Errorf("could not find org workflow %s to sync: %v", syncToId, err)
+				}
+				if existing.ID == "" {
+					return fmt.Errorf("could not find org workflow %s to sync", syncToId)
+				}
+				if existing.OrgId != orgId {
+					return fmt.Errorf("workflow %s is not in your active org and cannot be synced", syncToId)
+				}
+				// Preserve org ownership, update content
+				wf.ID = existing.ID
+				wf.Owner = existing.Owner
+				wf.OrgId = existing.OrgId
+				wf.ExecutingOrg = existing.ExecutingOrg
+				wf.Org = existing.Org
+				wf.IsValid = existing.IsValid
+				log.Printf("[INFO] Syncing remote workflow '%s' into org workflow %s", wf.Name, syncToId)
+				return SetWorkflow(ctx, wf, wf.ID)
+			}
+
+			// Import: create new workflow
+			wf.ID = originalWorkflowId
+			existing, err := GetWorkflow(ctx, wf.ID, true)
+			if err == nil && existing != nil && existing.ID != "" {
+				if existing.OrgId == orgId {
+					return fmt.Errorf("workflow with id %s already exists in your org; use sync to update it", wf.ID)
+				}
+
+				return fmt.Errorf("workflow with id %s already exists in another org and cannot be imported with the same id", wf.ID)
+			}
+			wf.Owner = userId
+			wf.OrgId = orgId
+			wf.ExecutingOrg = OrgMini{Id: orgId}
+			wf.Org = append(wf.Org, OrgMini{Id: orgId})
+			wf.IsValid = false
+			wf.Errors = []string{"Imported, not locally saved. Save before using."}
+
+			// Restore app images
+			workflowapps, err := GetAllWorkflowApps(ctx, 1000, 0)
+			if err == nil {
+				for actionIndex, action := range wf.Actions {
+					if action.AppID == "" {
+						continue
+					}
+					for _, app := range workflowapps {
+						if (app.ID == action.AppID || app.Name == action.AppName) && app.AppVersion == action.AppVersion {
+							wf.Actions[actionIndex].LargeImage = app.LargeImage
+							wf.Actions[actionIndex].SmallImage = app.LargeImage
+							break
+						}
+					}
+				}
+			}
+
+			log.Printf("[INFO] Importing remote workflow '%s' as new workflow %s", wf.Name, wf.ID)
+			return SetWorkflow(ctx, wf, wf.ID)
+		}
+	}
+	return fmt.Errorf("workflow with id %s not found in remote repo", originalWorkflowId)
+}
+
 func LoadSpecificWorkflows(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -27201,12 +27641,14 @@ func LoadSpecificWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	// Field1 & 2 can be a lot of things..
 	type tmpStruct struct {
-		URL      string `json:"url"`
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Branch   string `json:"branch"`
+		URL                string `json:"url"`
+		Username           string `json:"username"`
+		Password           string `json:"password"`
+		Branch             string `json:"branch"`
+		ListOnly           bool   `json:"list_only"`
+		OriginalWorkflowId string `json:"original_workflow_id"`
+		SyncToId           string `json:"sync_to_id"`
 	}
-	//log.Printf("Body: %s", string(body))
 
 	var tmpBody tmpStruct
 	err = json.Unmarshal(body, &tmpBody)
@@ -27217,7 +27659,51 @@ func LoadSpecificWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Field3 = branch
+	// Mode 1: list_only – return metadata for all workflows in the repo without importing
+	if tmpBody.ListOnly {
+		infos, err := listGithubWorkflowsInfo(tmpBody.URL, tmpBody.Username, tmpBody.Password, tmpBody.Branch, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] listGithubWorkflowsInfo failed: %s", err)
+			type errResp struct {
+				Success bool   `json:"success"`
+				Reason  string `json:"reason"`
+			}
+			out, _ := json.Marshal(errResp{Success: false, Reason: err.Error()})
+			resp.WriteHeader(400)
+			resp.Write(out)
+			return
+		}
+
+		type listResp struct {
+			Success   bool                 `json:"success"`
+			Workflows []RemoteWorkflowInfo `json:"workflows"`
+		}
+		out, _ := json.Marshal(listResp{Success: true, Workflows: infos})
+		resp.WriteHeader(200)
+		resp.Write(out)
+		return
+	}
+
+	// Mode 2: single workflow import or sync
+	if tmpBody.OriginalWorkflowId != "" {
+		err = importSingleRemoteWorkflow(tmpBody.URL, tmpBody.Username, tmpBody.Password, tmpBody.Branch, tmpBody.OriginalWorkflowId, tmpBody.SyncToId, user.Id, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] importSingleRemoteWorkflow failed: %s", err)
+			type errResp struct {
+				Success bool   `json:"success"`
+				Reason  string `json:"reason"`
+			}
+			out, _ := json.Marshal(errResp{Success: false, Reason: err.Error()})
+			resp.WriteHeader(400)
+			resp.Write(out)
+			return
+		}
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true}`))
+		return
+	}
+
+	// Mode 3: original bulk import
 	err = loadGithubWorkflows(tmpBody.URL, tmpBody.Username, tmpBody.Password, user.Id, tmpBody.Branch, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("Failed to update workflows: %s", err)
@@ -31070,6 +31556,79 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	}
 
 	return org, orgUpdated
+}
+
+func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Removed check here as it may be a public workflow
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		//log.Printf("[AUDIT] Api authentication failed in getting workflow revisions: %s. Continuing because it may be public.", err)
+		log.Printf("[AUDIT] Api authentication failed in getting workflow revisions: %s. ", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var category string
+	var key string
+	if location[1] == "api" {
+		if len(location) <= 6 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		category = location[4]
+		key = location[5]
+	}
+
+	if len(category) == 0 || len(key) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Category or Key is empty"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	datastoreKeys, err := GetDatastoreRevisions(ctx, key, category, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed loading key revisions for %s (%s).", key, category)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
+		return
+	}
+
+	// Check workflow.Sharing == private / public / org  too
+
+	parsedKeys := []CacheKeyData{}
+	for _, key := range datastoreKeys {
+		if key.OrgId != user.ActiveOrg.Id {
+			continue
+		}
+
+		if key.Category != category {
+			continue
+		}
+
+		parsedKeys = append(parsedKeys, key)
+	}
+
+	body, err := json.Marshal(parsedKeys)
+	if err != nil {
+		log.Printf("[WARNING] Failed datastore key revision GET marshalling: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(body)
 }
 
 func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {

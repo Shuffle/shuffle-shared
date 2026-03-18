@@ -852,7 +852,9 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	HealthCheck.Success = platformHealth.Success
 	HealthCheck.Updated = platformHealth.Updated
 	HealthCheck.Workflows = platformHealth.Workflows
-
+	HealthCheck.Datastore = platformHealth.Datastore
+	HealthCheck.FileOps = platformHealth.FileOps
+	HealthCheck.Apps = platformHealth.Apps
 	// Add to database
 	err = SetPlatformHealth(ctx, HealthCheck)
 	if err != nil {
