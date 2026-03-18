@@ -1137,10 +1137,31 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
 		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
-
 		if org.SyncUsage.MultiTenant.Counter != int64(len(org.ChildOrgs)+1) {
 			org.SyncUsage.MultiTenant.Counter = int64(len(org.ChildOrgs) + 1)
 			orgChanged = true
+		}
+
+		if len(org.CreatorOrg) == 0 {
+			allChildOrgs, err := GetAllChildOrgs(ctx, org.Id)
+			if err == nil {
+				if len(allChildOrgs) != len(org.ChildOrgs) {
+					allChildOrgsMini := []OrgMini{}
+					for _, child := range allChildOrgs {
+						allChildOrgsMini = append(allChildOrgsMini, OrgMini{
+							Id:         child.Id,
+							Name:       child.Name,
+							CreatorOrg: child.CreatorOrg,
+							Image:      "",
+							RegionUrl:  child.RegionUrl,
+						})
+					}
+					org.ChildOrgs = allChildOrgsMini
+					org.SyncFeatures.MultiTenant.Usage = int64(len(allChildOrgsMini) + 1)
+					org.SyncUsage.MultiTenant.Counter = int64(len(allChildOrgsMini) + 1)
+					orgChanged = true
+				}
+			}
 		}
 
 		if orgChanged {
@@ -14562,13 +14583,46 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		// Used to cache pre-algolia lookup
-		unescaped, err := url.QueryUnescape(app.Name)
-		if err == nil {
-			encodedAppName := fmt.Sprintf("workflowapp_cache_%s", unescaped)
-			
-			SetCache(context.Background(), encodedAppName, []byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, app.ID)), 86400)
-		}
+		// Not setting right now
+		// unescapedName, err := url.QueryUnescape(app.Name)
+		// if err == nil {
+		// 	type AppCacheData struct {
+		// 		Success     bool   `json:"success"`
+		// 		ID          string `json:"id"`
+		// 		Name        string `json:"name"`
+		// 		Description string `json:"description"`
+		// 	}
+
+		// 	cacheData := AppCacheData{
+		// 		Success:     true,
+		// 		ID:          app.ID,
+		// 		Name:        app.Name,
+		// 		Description: app.Description,
+		// 	}
+
+		// 	cachePayload, err := json.Marshal(cacheData)
+		// 	if err != nil {
+		// 		log.Printf("[WARNING] Failed marshalling app cache payload: %s", err)
+		// 		cachePayload = []byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, app.ID))
+		// 	}
+
+		// 	// 1. Cache by actual app name
+		// 	primarySlug := strings.ToLower(strings.ReplaceAll(unescapedName, " ", "_"))
+		// 	primaryKey := fmt.Sprintf("workflowapp_cache_%s", primarySlug)
+		// 	SetCache(context.Background(), primaryKey, cachePayload, 10080)
+
+		// 	// 2. Cache by search alias (e.g., "outlook") if provided by the frontend
+		// 	aliasQuery := request.URL.Query().Get("alias")
+		// 	if len(aliasQuery) > 0 {
+		// 		aliasSlug := strings.ToLower(strings.ReplaceAll(aliasQuery, " ", "_"))
+		// 		aliasKey := fmt.Sprintf("workflowapp_cache_%s", aliasSlug)
+
+		// 		// Only set if alias is different from the primary name
+		// 		if aliasKey != primaryKey {
+		// 			SetCache(context.Background(), aliasKey, cachePayload, 10080)
+		// 		}
+		// 	}
+		// }
 	}
 
 	app.ReferenceUrl = ""
@@ -20938,11 +20992,11 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		SuborgDistribution: tmpData.SuborgDistribution,
 		Tags:               tmpData.Tags,
 
-		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule. 
+		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule.
 	}
 
 	// If we want to only allow it for manual overrides
-	//if !user.SessionLogin { 
+	//if !user.SessionLogin {
 	//	parsedKey.IgnoreSecurityRules = false
 	//}
 
