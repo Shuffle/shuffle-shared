@@ -906,29 +906,42 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		})
 
 		if err != nil {
-			log.Printf("[WARNING][%s] Error for %s: %s", workflowExecution.ExecutionId, cacheKey, err)
-			return workflowExecution, err
+			if strings.Contains(err.Error(), "has more than one index associated with it") {
+				fallbackExec, fallbackErr := getWorkflowExecutionByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
+				if fallbackErr != nil {
+					log.Printf("[WARNING][%s] Error for %s: %s", workflowExecution.ExecutionId, cacheKey, err)
+					log.Printf("[WARNING][%s] WorkflowExecution alias fallback failed for %s: %s", workflowExecution.ExecutionId, cacheKey, fallbackErr)
+					return workflowExecution, fallbackErr
+				}
+
+				workflowExecution = fallbackExec
+			} else {
+				log.Printf("[WARNING][%s] Error for %s: %s", workflowExecution.ExecutionId, cacheKey, err)
+				return workflowExecution, err
+			}
 		}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return workflowExecution, errors.New("execution doesn't exist")
-		}
+		if err == nil {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if res.StatusCode == 404 {
+				return workflowExecution, errors.New("execution doesn't exist")
+			}
 
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return workflowExecution, err
-		}
+			respBody, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				return workflowExecution, err
+			}
 
-		wrapped := ExecWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		//err = gojson.Unmarshal(respBody, &wrapped)
-		if err != nil && len(wrapped.Source.ExecutionId) == 0 {
-			return workflowExecution, err
-		}
+			wrapped := ExecWrapper{}
+			err = json.Unmarshal(respBody, &wrapped)
+			//err = gojson.Unmarshal(respBody, &wrapped)
+			if err != nil && len(wrapped.Source.ExecutionId) == 0 {
+				return workflowExecution, err
+			}
 
-		workflowExecution = &wrapped.Source
+			workflowExecution = &wrapped.Source
+		}
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
@@ -993,6 +1006,62 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	}
 
 	return workflowExecution, nil
+}
+
+func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string) (*WorkflowExecution, error) {
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"size": 1,
+		"query": map[string]interface{}{
+			"ids": map[string]interface{}{
+				"values": []string{id},
+			},
+		},
+	}
+
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return nil, err
+	}
+
+	resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+		Indices: []string{aliasName},
+		Body:    &buf,
+		Params: opensearchapi.SearchParams{
+			TrackTotalHits: true,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	res := resp.Inspect().Response
+	defer res.Body.Close()
+
+	if res.StatusCode == 404 {
+		return nil, errors.New("execution doesn't exist")
+	}
+
+	respBody, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if res.StatusCode != 200 && res.StatusCode != 201 {
+		return nil, fmt.Errorf("failed workflowexecution alias lookup. status=%d body=%s", res.StatusCode, string(respBody))
+	}
+
+	wrapped := ExecutionSearchWrapper{}
+	err = json.Unmarshal(respBody, &wrapped)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(wrapped.Hits.Hits) == 0 {
+		return nil, errors.New("execution doesn't exist")
+	}
+
+	found := wrapped.Hits.Hits[0].Source
+	return &found, nil
 }
 
 func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...int) error {
@@ -3442,28 +3511,41 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 			DocumentID: id,
 		})
 		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
-			return workflow, err
+			if strings.Contains(err.Error(), "has more than one index associated with it") {
+				fallbackWorkflow, fallbackErr := getWorkflowByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
+				if fallbackErr != nil {
+					log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+					log.Printf("[WARNING] Workflow alias fallback failed for %s: %s", cacheKey, fallbackErr)
+					return workflow, fallbackErr
+				}
+
+				workflow = fallbackWorkflow
+			} else {
+				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+				return workflow, err
+			}
 		}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return workflow, errors.New("Workflow doesn't exist")
-		}
+		if err == nil {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if res.StatusCode == 404 {
+				return workflow, errors.New("Workflow doesn't exist")
+			}
 
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return workflow, err
-		}
+			respBody, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				return workflow, err
+			}
 
-		wrapped := WorkflowWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return workflow, err
-		}
+			wrapped := WorkflowWrapper{}
+			err = json.Unmarshal(respBody, &wrapped)
+			if err != nil {
+				return workflow, err
+			}
 
-		workflow = &wrapped.Source
+			workflow = &wrapped.Source
+		}
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
@@ -3557,6 +3639,60 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 	}
 
 	return workflow, nil
+}
+
+func getWorkflowByAliasSearch(ctx context.Context, aliasName, id string) (*Workflow, error) {
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"size": 1,
+		"query": map[string]interface{}{
+			"ids": map[string]interface{}{
+				"values": []string{id},
+			},
+		},
+	}
+
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return nil, err
+	}
+
+	resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+		Indices: []string{aliasName},
+		Body:    &buf,
+		Params:  opensearchapi.SearchParams{TrackTotalHits: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	res := resp.Inspect().Response
+	defer res.Body.Close()
+
+	if res.StatusCode == 404 {
+		return nil, errors.New("Workflow doesn't exist")
+	}
+
+	respBody, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if res.StatusCode != 200 && res.StatusCode != 201 {
+		return nil, fmt.Errorf("failed workflow alias lookup. status=%d body=%s", res.StatusCode, string(respBody))
+	}
+
+	wrapped := WorkflowSearchWrapper{}
+	err = json.Unmarshal(respBody, &wrapped)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(wrapped.Hits.Hits) == 0 {
+		return nil, errors.New("Workflow doesn't exist")
+	}
+
+	found := wrapped.Hits.Hits[0].Source
+	return &found, nil
 }
 
 func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error) {
@@ -4966,6 +5102,16 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "has more than one index associated with it") {
+				deleteErr := deleteDocumentByQueryAcrossAlias(ctx, strings.ToLower(GetESIndexPrefix(entity)), value)
+				if deleteErr == nil {
+					return nil
+				}
+
+				log.Printf("[WARNING] Fallback delete by query failed for %s/%s: %s", entity, value, deleteErr)
+				return deleteErr
+			}
+
 			if strings.Contains(err.Error(), "not_found") {
 				return nil
 			}
@@ -5004,6 +5150,51 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 			log.Printf("[WARNING] Error deleting %s from %s: %s", value, entity, err)
 			return err
 		}
+	}
+
+	return nil
+}
+
+func deleteDocumentByQueryAcrossAlias(ctx context.Context, aliasName, documentID string) error {
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"ids": map[string]interface{}{
+				"values": []string{documentID},
+			},
+		},
+	}
+
+	queryBytes, err := json.Marshal(query)
+	if err != nil {
+		return err
+	}
+
+	resp, err := project.Es.Document.DeleteByQuery(ctx, opensearchapi.DocumentDeleteByQueryReq{
+		Indices: []string{aliasName},
+		Body:    bytes.NewReader(queryBytes),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not_found") {
+			return nil
+		}
+
+		return err
+	}
+
+	res := resp.Inspect().Response
+	defer res.Body.Close()
+
+	if res.StatusCode == 404 {
+		return nil
+	}
+
+	if res.IsError() {
+		responseData, readErr := ioutil.ReadAll(res.Body)
+		if readErr != nil {
+			return readErr
+		}
+
+		return fmt.Errorf("delete by query failed with status %d: %s", res.StatusCode, string(responseData))
 	}
 
 	return nil
@@ -14514,28 +14705,40 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 			DocumentID: id,
 		})
 		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
-			return cacheData, err
+			if strings.Contains(err.Error(), "has more than one index associated with it") {
+				fallbackData, fallbackErr := getCacheKeyByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
+				if fallbackErr == nil {
+					cacheData = fallbackData
+				} else {
+					log.Printf("[WARNING] Alias search fallback failed for %s: %s", cacheKey, fallbackErr)
+					return cacheData, fallbackErr
+				}
+			} else {
+				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+				return cacheData, err
+			}
 		}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return cacheData, errors.New("Key doesn't exist")
-		}
+		if err == nil {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if res.StatusCode == 404 {
+				return cacheData, errors.New("Key doesn't exist")
+			}
 
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return cacheData, err
-		}
+			respBody, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				return cacheData, err
+			}
 
-		wrapped := CacheKeyWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return cacheData, err
-		}
+			wrapped := CacheKeyWrapper{}
+			err = json.Unmarshal(respBody, &wrapped)
+			if err != nil {
+				return cacheData, err
+			}
 
-		cacheData = &wrapped.Source
+			cacheData = &wrapped.Source
+		}
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
@@ -14630,6 +14833,67 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	}
 
 	return cacheData, nil
+}
+
+func getCacheKeyByAliasSearch(ctx context.Context, aliasName, id string) (*CacheKeyData, error) {
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"size": 1,
+		"sort": map[string]interface{}{
+			"edited": map[string]interface{}{
+				"order": "desc",
+			},
+		},
+		"query": map[string]interface{}{
+			"ids": map[string]interface{}{
+				"values": []string{id},
+			},
+		},
+	}
+
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return nil, err
+	}
+
+	resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+		Indices: []string{aliasName},
+		Body:    &buf,
+		Params: opensearchapi.SearchParams{
+			TrackTotalHits: true,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	res := resp.Inspect().Response
+	defer res.Body.Close()
+
+	if res.StatusCode == 404 {
+		return nil, errors.New("Key doesn't exist")
+	}
+
+	respBody, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if res.StatusCode != 200 && res.StatusCode != 201 {
+		return nil, fmt.Errorf("failed alias fallback lookup. status=%d body=%s", res.StatusCode, string(respBody))
+	}
+
+	wrapped := CacheKeySearchWrapper{}
+	err = json.Unmarshal(respBody, &wrapped)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(wrapped.Hits.Hits) == 0 {
+		return nil, errors.New("Key doesn't exist")
+	}
+
+	item := wrapped.Hits.Hits[0].Source
+	return &item, nil
 }
 
 var retryCount int
