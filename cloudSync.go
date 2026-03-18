@@ -2384,6 +2384,16 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 // 2. Taking the result and sending (?) it back
 // 3. Ensuring cache for an action is kept up to date
 func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput, decision AgentDecision) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[ERROR] AI_AGENT_PANIC: execution_id=%s decision_id=%s panic=%v", execution.ExecutionId, decision.RunDetails.Id, r)
+
+			// Mark decision as failed so agent doesn't get stuck
+			decision.RunDetails.Status = "FAILURE"
+			decision.RunDetails.CompletedAt = time.Now().Unix()
+			decision.RunDetails.RawResponse = fmt.Sprintf("PANIC: %v", r)
+		}
+	}()
 
 	// Check if it's already ran or not
 	ctx := context.Background()
@@ -2414,7 +2424,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 
-	go SetCache(ctx, decisionId, marshalledDecision, 60)
+	go SetCache(ctx, decisionId, marshalledDecision, 300)
 
 	if decision.Action == "user_input" || decision.Action == "answer" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" || decision.Category == "standalone" {
 	} else {
@@ -2452,7 +2462,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling completed decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 
-	go SetCache(ctx, decisionId, marshalledDecision, 60)
+	go SetCache(ctx, decisionId, marshalledDecision, 300)
 
 	// 1. Send an /api/v1/streams request? Due to concurrency, I think this is the only way (?)
 	// 2. On the streams API, make sure to:

@@ -17152,6 +17152,10 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		SetCache(ctx, cacheKey, []byte("1"), 1)
 	}
 
+	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
+		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s status=%s", workflowExecution.ExecutionId, status)
+	}
+
 	//log.Printf("[INFO][%s] Sending self-request for Agent Result '%s'. Status: %s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
 	fixedActionResult := AgentOutput{}
 	err = json.Unmarshal([]byte(actionResult.Result), &fixedActionResult)
