@@ -9120,6 +9120,8 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 		workflow.Created = timeNow
 	}
 
+	trimOversizedWorkflowImages(&workflow)
+
 	// Tet ID to be an md5 for name+ID+action+triggers+variables
 	// this makes sure overwrites don't happen, and duplicates aren't kept
 	// json marshal actions
@@ -9329,6 +9331,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	workflow = FixWorkflowPosition(ctx, workflow)
+	trimOversizedWorkflowImages(&workflow)
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflow)
@@ -9338,15 +9341,6 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	if project.DbType == "opensearch" {
-		if len([]byte(workflow.Image)) > 32766 {
-			workflow.Image = ""
-			data, err = json.Marshal(workflow)
-			if err != nil {
-				log.Printf("[WARNING] Failed marshalling in set workflow: %s", err)
-				return nil
-			}
-		}
-
 		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
 			return err
@@ -9427,6 +9421,53 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	return nil
+}
+
+func trimOversizedWorkflowImages(workflow *Workflow) {
+	if workflow == nil {
+		return
+	}
+
+	if len(workflow.Image) > 32766 {
+		workflow.Image = ""
+	}
+
+	for index := range workflow.Actions {
+		if shouldStripWorkflowImage(workflow.Actions[index].LargeImage) {
+			workflow.Actions[index].LargeImage = ""
+		}
+
+		if shouldStripWorkflowImage(workflow.Actions[index].SmallImage) {
+			workflow.Actions[index].SmallImage = ""
+		}
+	}
+
+	for index := range workflow.Triggers {
+		if shouldStripWorkflowImage(workflow.Triggers[index].LargeImage) {
+			workflow.Triggers[index].LargeImage = ""
+		}
+
+		if shouldStripWorkflowImage(workflow.Triggers[index].SmallImage) {
+			workflow.Triggers[index].SmallImage = ""
+		}
+	}
+}
+
+func shouldStripWorkflowImage(value string) bool {
+	if value == "" {
+		return false
+	}
+
+	if len(value) > 32766 {
+		return true
+	}
+
+	trimmed := strings.TrimSpace(strings.ToLower(value))
+	if strings.HasPrefix(trimmed, "data:image/") {
+		return true
+	}
+
+	return false
 }
 
 func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthenticationStorage, id string) error {
@@ -9821,6 +9862,10 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "status: 404") || strings.Contains(err.Error(), "not_found") {
+				return &ScheduleOld{}, errors.New("Schedule doesn't exist")
+			}
+
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &ScheduleOld{}, err
 		}
