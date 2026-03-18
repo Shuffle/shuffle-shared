@@ -14,6 +14,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -3488,384 +3489,362 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 		return result, errors.New(result.Reason)
 	}
 
-	prefix := strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_OPENSEARCH_INDEX_PREFIX")))
-	if prefix == "" {
-		result.Success = true
-		result.Reason = "No index prefix configured"
-		return result, nil
-	}
-
-	opensearchUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
+	opensearchUrl := strings.TrimRight(os.Getenv("SHUFFLE_OPENSEARCH_URL"), "/")
 	if len(opensearchUrl) == 0 {
 		opensearchUrl = "https://shuffle-opensearch:9200"
 	}
 
 	foundClient := project.Es
-	aliasReq, err := http.NewRequest("GET", fmt.Sprintf("%s/_aliases", opensearchUrl), nil)
+	allIndices, err := getOpensearchIndices(foundClient, opensearchUrl)
 	if err != nil {
 		return result, err
 	}
 
-	aliasResp, err := foundClient.Client.Transport.Perform(aliasReq)
+	aliasInfo, err := getOpensearchAliases(foundClient, opensearchUrl)
 	if err != nil {
 		return result, err
+	}
+
+	prefix := strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_OPENSEARCH_INDEX_PREFIX")))
+	baseIndexes := GetOpensearchBaseIndexes()
+
+	for _, baseIndex := range baseIndexes {
+		expectedAlias := strings.ToLower(GetESIndexPrefix(baseIndex))
+		doubleAlias := ""
+		if prefix != "" {
+			doubleAlias = fmt.Sprintf("%s_%s", prefix, expectedAlias)
+		}
+
+		if ArrayContains(allIndices, expectedAlias) {
+			result.Skipped = append(result.Skipped, fmt.Sprintf("%s (concrete index name collision)", expectedAlias))
+			continue
+		}
+
+		targetIndices, writeIndex := selectOpensearchAliasTargets(expectedAlias, doubleAlias, aliasInfo, allIndices)
+		if len(targetIndices) == 0 {
+			newIndex := fmt.Sprintf("%s-000001", expectedAlias)
+			if !ArrayContains(allIndices, newIndex) {
+				if err := createOpensearchIndex(foundClient, opensearchUrl, newIndex); err != nil {
+					return result, err
+				}
+				result.Created = append(result.Created, newIndex)
+				allIndices = append(allIndices, newIndex)
+			}
+
+			targetIndices = []string{newIndex}
+			writeIndex = newIndex
+		}
+
+		actions := []OpensearchAliasAction{}
+		for _, indexName := range targetIndices {
+			current, hasCurrent := aliasInfo[indexName][expectedAlias]
+			desiredWrite := indexName == writeIndex
+
+			if hasCurrent {
+				if current.IsWriteIndex != desiredWrite {
+					actions = append(actions, OpensearchAliasAction{
+						Remove: &OpensearchAliasActionTarget{Index: indexName, Alias: expectedAlias},
+					})
+					actions = append(actions, OpensearchAliasAction{
+						Add: &OpensearchAliasActionTarget{Index: indexName, Alias: expectedAlias, IsWriteIndex: &desiredWrite},
+					})
+				}
+			} else {
+				actions = append(actions, OpensearchAliasAction{
+					Add: &OpensearchAliasActionTarget{Index: indexName, Alias: expectedAlias, IsWriteIndex: &desiredWrite},
+				})
+			}
+
+			if doubleAlias != "" {
+				doubleAliasState, hasDoubleAlias := aliasInfo[indexName][doubleAlias]
+				if hasDoubleAlias && doubleAliasState.Present {
+					actions = append(actions, OpensearchAliasAction{
+						Remove: &OpensearchAliasActionTarget{Index: indexName, Alias: doubleAlias},
+					})
+				}
+			}
+		}
+
+		if len(actions) > 0 {
+			if err := updateOpensearchAliases(foundClient, opensearchUrl, actions); err != nil {
+				return result, err
+			}
+			result.AliasUpdates = append(result.AliasUpdates, fmt.Sprintf("%s -> %s", expectedAlias, writeIndex))
+		}
+
+		result.WriteIndexUpdates = append(result.WriteIndexUpdates, fmt.Sprintf("%s -> %s", expectedAlias, writeIndex))
+	}
+
+	result.Success = true
+	result.Reason = "Opensearch alias and index state repaired without data reindexing"
+	return result, nil
+}
+
+type opensearchAliasState struct {
+	Present      bool
+	IsWriteIndex bool
+}
+
+func getOpensearchAliases(foundClient opensearchapi.Client, opensearchUrl string) (map[string]map[string]opensearchAliasState, error) {
+	aliasReq, err := http.NewRequest("GET", fmt.Sprintf("%s/_aliases", opensearchUrl), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	aliasResp, err := foundClient.Client.Transport.Perform(aliasReq)
+	if err != nil {
+		return nil, err
 	}
 
 	aliasBody, err := io.ReadAll(aliasResp.Body)
 	if err != nil {
 		aliasResp.Body.Close()
-		return result, err
+		return nil, err
 	}
 	aliasResp.Body.Close()
 
 	if aliasResp.StatusCode >= 300 {
-		return result, fmt.Errorf("failed reading opensearch aliases: %s", string(aliasBody))
+		return nil, fmt.Errorf("failed reading opensearch aliases: %s", string(aliasBody))
 	}
 
-	aliasInfo := OpensearchAliasResponse{}
-
-	if err := json.Unmarshal(aliasBody, &aliasInfo); err != nil {
-		return result, err
+	rawAliasInfo := OpensearchAliasResponse{}
+	if err := json.Unmarshal(aliasBody, &rawAliasInfo); err != nil {
+		return nil, err
 	}
 
-	aliasToIndices := map[string][]string{}
-	indexNames := []string{}
-	for indexName, info := range aliasInfo {
-		indexNames = append(indexNames, indexName)
-		for aliasName := range info.Aliases {
-			aliasToIndices[aliasName] = append(aliasToIndices[aliasName], indexName)
+	aliasInfo := map[string]map[string]opensearchAliasState{}
+	type aliasDetails struct {
+		IsWriteIndex bool `json:"is_write_index,omitempty"`
+	}
+
+	for indexName, aliasEntry := range rawAliasInfo {
+		aliasInfo[indexName] = map[string]opensearchAliasState{}
+		for aliasName, aliasRaw := range aliasEntry.Aliases {
+			details := aliasDetails{}
+			_ = json.Unmarshal(aliasRaw, &details)
+			aliasInfo[indexName][aliasName] = opensearchAliasState{Present: true, IsWriteIndex: details.IsWriteIndex}
 		}
 	}
 
-	baseIndexes := []string{
-		"workflowexecution",
-		"datastore_ngram",
-		"org_cache",
-		"org_cache_revisions",
-		"notifications",
-		"shuffle_logs",
-		"environments",
-		"org_statistics",
-		"workflowapp",
-		"workflow",
-		"workflow_revisions",
+	return aliasInfo, nil
+}
+
+func getOpensearchIndices(foundClient opensearchapi.Client, opensearchUrl string) ([]string, error) {
+	indicesReq, err := http.NewRequest("GET", fmt.Sprintf("%s/_cat/indices?format=json&h=index", opensearchUrl), nil)
+	if err != nil {
+		return nil, err
 	}
 
-	for _, baseIndex := range baseIndexes {
-		expectedAlias := strings.ToLower(GetESIndexPrefix(baseIndex))
-		doubleAlias := strings.ToLower(fmt.Sprintf("%s_%s", prefix, expectedAlias))
+	indicesResp, err := foundClient.Client.Transport.Perform(indicesReq)
+	if err != nil {
+		return nil, err
+	}
 
-		candidateIndices := []string{}
-		if aliasIndices, ok := aliasToIndices[doubleAlias]; ok {
-			candidateIndices = append(candidateIndices, aliasIndices...)
+	indicesBody, err := io.ReadAll(indicesResp.Body)
+	if err != nil {
+		indicesResp.Body.Close()
+		return nil, err
+	}
+	indicesResp.Body.Close()
+
+	if indicesResp.StatusCode >= 300 {
+		return nil, fmt.Errorf("failed reading opensearch indices: %s", string(indicesBody))
+	}
+
+	type indexItem struct {
+		Index string `json:"index"`
+	}
+
+	parsedIndices := []indexItem{}
+	if err := json.Unmarshal(indicesBody, &parsedIndices); err != nil {
+		return nil, err
+	}
+
+	indices := []string{}
+	for _, item := range parsedIndices {
+		if strings.TrimSpace(item.Index) != "" {
+			indices = append(indices, item.Index)
 		}
+	}
 
-		if len(candidateIndices) == 0 {
-			for _, indexName := range indexNames {
-				if indexName == doubleAlias || strings.HasPrefix(indexName, doubleAlias+"-") {
-					candidateIndices = append(candidateIndices, indexName)
-				}
-			}
+	return indices, nil
+}
+
+func selectOpensearchAliasTargets(expectedAlias, doubleAlias string, aliasInfo map[string]map[string]opensearchAliasState, allIndices []string) ([]string, string) {
+	candidateMap := map[string]bool{}
+
+	for indexName, aliases := range aliasInfo {
+		if aliases[expectedAlias].Present {
+			candidateMap[indexName] = true
 		}
+		if doubleAlias != "" && aliases[doubleAlias].Present {
+			candidateMap[indexName] = true
+		}
+	}
 
-		if len(candidateIndices) == 0 {
-			result.Skipped = append(result.Skipped, expectedAlias)
+	for _, indexName := range allIndices {
+		if indexName == expectedAlias || strings.HasPrefix(indexName, expectedAlias+"-") {
+			candidateMap[indexName] = true
 			continue
 		}
 
-		for _, indexName := range candidateIndices {
-			newIndex := strings.Replace(indexName, doubleAlias, expectedAlias, 1)
-			if newIndex == indexName {
-				result.Skipped = append(result.Skipped, indexName)
-				continue
-			}
-
-			existsReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s", opensearchUrl, newIndex), nil)
-			if err != nil {
-				return result, err
-			}
-
-			existsResp, err := foundClient.Client.Transport.Perform(existsReq)
-			if err != nil {
-				return result, err
-			}
-			existsBody, err := io.ReadAll(existsResp.Body)
-			if err != nil {
-				existsResp.Body.Close()
-				return result, err
-			}
-			existsResp.Body.Close()
-
-			if existsResp.StatusCode == 404 {
-				indexConfig := OpensearchIndexConfig{}
-				if customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG"); len(customConfig) > 0 {
-					if err := json.Unmarshal([]byte(customConfig), &indexConfig); err != nil {
-						return result, fmt.Errorf("invalid OPENSEARCH_INDEX_CONFIG: %w", err)
-					}
-					if len(indexConfig.Aliases) > 0 {
-						indexConfig.Aliases = nil
-					}
-				}
-
-				if len(indexConfig.Aliases) == 0 && len(indexConfig.Settings) == 0 && len(indexConfig.Mappings) == 0 {
-					indexConfig = OpensearchIndexConfig{
-						Settings: map[string]interface{}{
-							"number_of_shards":   3,
-							"number_of_replicas": 1,
-							"refresh_interval":   "30s",
-						},
-					}
-
-					sourceMappings := map[string]interface{}{}
-					mappingReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_mapping", opensearchUrl, indexName), nil)
-					if err == nil {
-						mappingResp, err := foundClient.Client.Transport.Perform(mappingReq)
-						if err == nil {
-							mappingBody, err := io.ReadAll(mappingResp.Body)
-							if err == nil {
-								mappingResp.Body.Close()
-								mappingInfo := map[string]struct {
-									Mappings map[string]interface{} `json:"mappings"`
-								}{}
-								if err := json.Unmarshal(mappingBody, &mappingInfo); err == nil {
-									if info, ok := mappingInfo[indexName]; ok && len(info.Mappings) > 0 {
-										sourceMappings = info.Mappings
-									}
-								}
-							} else {
-								mappingResp.Body.Close()
-							}
-						}
-					}
-
-					if len(sourceMappings) > 0 {
-						indexConfig.Mappings = sourceMappings
-					} else {
-						indexConfig.Mappings = map[string]interface{}{
-							"dynamic_templates": []map[string]interface{}{
-								{
-									"strings_as_keywords": map[string]interface{}{
-										"match_mapping_type": "string",
-										"mapping": map[string]interface{}{
-											"type": "keyword",
-										},
-									},
-								},
-							},
-						}
-					}
-				}
-
-				indexConfigJson, err := json.Marshal(indexConfig)
-				if err != nil {
-					return result, err
-				}
-
-				createReq, err := http.NewRequest("PUT", fmt.Sprintf("%s/%s", opensearchUrl, newIndex), bytes.NewBuffer(indexConfigJson))
-				if err != nil {
-					return result, err
-				}
-				createReq.Header.Set("Content-Type", "application/json")
-
-				createResp, err := foundClient.Client.Transport.Perform(createReq)
-				if err != nil {
-					return result, err
-				}
-
-				createRespBody, err := io.ReadAll(createResp.Body)
-				if err != nil {
-					createResp.Body.Close()
-					return result, err
-				}
-				createResp.Body.Close()
-
-				if createResp.StatusCode >= 300 {
-					return result, fmt.Errorf("failed creating index %s: %s", newIndex, string(createRespBody))
-				}
-			} else if existsResp.StatusCode >= 300 {
-				return result, fmt.Errorf("failed checking index %s: %s", newIndex, string(existsBody))
-			}
-
-			sourceCountReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_count", opensearchUrl, indexName), nil)
-			if err != nil {
-				return result, err
-			}
-
-			sourceCountResp, err := foundClient.Client.Transport.Perform(sourceCountReq)
-			if err != nil {
-				return result, err
-			}
-
-			sourceCountBody, err := io.ReadAll(sourceCountResp.Body)
-			if err != nil {
-				sourceCountResp.Body.Close()
-				return result, err
-			}
-			sourceCountResp.Body.Close()
-
-			if sourceCountResp.StatusCode >= 300 {
-				return result, fmt.Errorf("failed counting source index %s: %s", indexName, string(sourceCountBody))
-			}
-
-			var sourceCount struct {
-				Count int64 `json:"count"`
-			}
-			if err := json.Unmarshal(sourceCountBody, &sourceCount); err != nil {
-				return result, err
-			}
-
-			reindexPayload := map[string]interface{}{
-				"source": map[string]interface{}{
-					"index": indexName,
-				},
-				"dest": map[string]interface{}{
-					"index": newIndex,
-				},
-			}
-
-			if batchSizeStr := os.Getenv("OPENSEARCH_REINDEX_BATCH_SIZE"); batchSizeStr != "" {
-				if batchSize, err := strconv.Atoi(batchSizeStr); err == nil && batchSize > 0 {
-					reindexPayload["source"].(map[string]interface{})["size"] = batchSize
-				}
-			}
-
-			if slicesStr := os.Getenv("OPENSEARCH_REINDEX_SLICES"); slicesStr != "" {
-				if slices, err := strconv.Atoi(slicesStr); err == nil && slices > 0 {
-					reindexPayload["slices"] = slices
-				}
-			}
-
-			reindexBody, err := json.Marshal(reindexPayload)
-			if err != nil {
-				return result, err
-			}
-
-			reindexUrl := fmt.Sprintf("%s/_reindex?wait_for_completion=true", opensearchUrl)
-			if scroll := strings.TrimSpace(os.Getenv("OPENSEARCH_REINDEX_SCROLL")); scroll != "" {
-				reindexUrl = fmt.Sprintf("%s&scroll=%s", reindexUrl, scroll)
-			}
-			if rps := strings.TrimSpace(os.Getenv("OPENSEARCH_REINDEX_RPS")); rps != "" {
-				reindexUrl = fmt.Sprintf("%s&requests_per_second=%s", reindexUrl, rps)
-			}
-
-			reindexReq, err := http.NewRequest("POST", reindexUrl, bytes.NewBuffer(reindexBody))
-			if err != nil {
-				return result, err
-			}
-			reindexReq.Header.Set("Content-Type", "application/json")
-
-			reindexResp, err := foundClient.Client.Transport.Perform(reindexReq)
-			if err != nil {
-				return result, err
-			}
-
-			reindexBodyResp, err := io.ReadAll(reindexResp.Body)
-			if err != nil {
-				reindexResp.Body.Close()
-				return result, err
-			}
-			reindexResp.Body.Close()
-
-			if reindexResp.StatusCode >= 300 {
-				return result, fmt.Errorf("failed reindexing %s -> %s: %s", indexName, newIndex, string(reindexBodyResp))
-			}
-
-			targetCountReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_count", opensearchUrl, newIndex), nil)
-			if err != nil {
-				return result, err
-			}
-
-			targetCountResp, err := foundClient.Client.Transport.Perform(targetCountReq)
-			if err != nil {
-				return result, err
-			}
-
-			targetCountBody, err := io.ReadAll(targetCountResp.Body)
-			if err != nil {
-				targetCountResp.Body.Close()
-				return result, err
-			}
-			targetCountResp.Body.Close()
-
-			if targetCountResp.StatusCode >= 300 {
-				return result, fmt.Errorf("failed counting target index %s: %s", newIndex, string(targetCountBody))
-			}
-
-			var targetCount struct {
-				Count int64 `json:"count"`
-			}
-			if err := json.Unmarshal(targetCountBody, &targetCount); err != nil {
-				return result, err
-			}
-
-			result.Counts = append(result.Counts, OpensearchPrefixFixCountSnapshot{
-				SourceIndex: indexName,
-				TargetIndex: newIndex,
-				SourceDocs:  sourceCount.Count,
-				TargetDocs:  targetCount.Count,
-			})
-
-			result.Reindexed = append(result.Reindexed, fmt.Sprintf("%s -> %s", indexName, newIndex))
-
-			aliasActionsList := []OpensearchAliasAction{}
-			if aliasIndices, ok := aliasToIndices[expectedAlias]; ok {
-				for _, aliasIndex := range aliasIndices {
-					if aliasIndex == newIndex {
-						continue
-					}
-					aliasActionsList = append(aliasActionsList, OpensearchAliasAction{
-						Remove: &OpensearchAliasActionTarget{Index: aliasIndex, Alias: expectedAlias},
-					})
-				}
-			}
-
-			aliasActionsList = append(aliasActionsList, OpensearchAliasAction{
-				Remove: &OpensearchAliasActionTarget{Index: indexName, Alias: doubleAlias},
-			})
-
-			isWriteIndex := true
-			aliasActionsList = append(aliasActionsList, OpensearchAliasAction{
-				Add: &OpensearchAliasActionTarget{Index: newIndex, Alias: expectedAlias, IsWriteIndex: &isWriteIndex},
-			})
-
-			aliasActions := OpensearchAliasActionsRequest{
-				Actions: aliasActionsList,
-			}
-
-			aliasBody, err := json.Marshal(aliasActions)
-			if err != nil {
-				return result, err
-			}
-
-			aliasReq, err := http.NewRequest("POST", fmt.Sprintf("%s/_aliases", opensearchUrl), bytes.NewBuffer(aliasBody))
-			if err != nil {
-				return result, err
-			}
-			aliasReq.Header.Set("Content-Type", "application/json")
-
-			aliasResp, err := foundClient.Client.Transport.Perform(aliasReq)
-			if err != nil {
-				return result, err
-			}
-
-			aliasRespBody, err := io.ReadAll(aliasResp.Body)
-			if err != nil {
-				aliasResp.Body.Close()
-				return result, err
-			}
-			aliasResp.Body.Close()
-
-			if aliasResp.StatusCode >= 300 {
-				return result, fmt.Errorf("failed updating aliases for %s: %s", newIndex, string(aliasRespBody))
-			}
-
-			result.AliasUpdates = append(result.AliasUpdates, fmt.Sprintf("%s -> %s", expectedAlias, newIndex))
+		if doubleAlias != "" && (indexName == doubleAlias || strings.HasPrefix(indexName, doubleAlias+"-")) {
+			candidateMap[indexName] = true
 		}
 	}
 
-	result.Success = true
-	result.Reason = "Opensearch indices reindexed with single prefix"
-	return result, nil
+	targetIndices := []string{}
+	for indexName := range candidateMap {
+		targetIndices = append(targetIndices, indexName)
+	}
+
+	if len(targetIndices) == 0 {
+		return targetIndices, ""
+	}
+
+	sort.Slice(targetIndices, func(i, j int) bool {
+		gi := getOpensearchGeneration(targetIndices[i])
+		gj := getOpensearchGeneration(targetIndices[j])
+		if gi == gj {
+			return targetIndices[i] > targetIndices[j]
+		}
+		return gi > gj
+	})
+
+	writeIndex := ""
+	for _, indexName := range targetIndices {
+		if aliasInfo[indexName][expectedAlias].IsWriteIndex {
+			writeIndex = indexName
+			break
+		}
+	}
+
+	if writeIndex == "" {
+		for _, indexName := range targetIndices {
+			if indexName == expectedAlias || strings.HasPrefix(indexName, expectedAlias+"-") {
+				writeIndex = indexName
+				break
+			}
+		}
+	}
+
+	if writeIndex == "" {
+		writeIndex = targetIndices[0]
+	}
+
+	return targetIndices, writeIndex
+}
+
+func getOpensearchGeneration(indexName string) int {
+	parts := strings.Split(indexName, "-")
+	if len(parts) < 2 {
+		return 0
+	}
+
+	generation := parts[len(parts)-1]
+	value, err := strconv.Atoi(generation)
+	if err != nil {
+		return 0
+	}
+
+	return value
+}
+
+func createOpensearchIndex(foundClient opensearchapi.Client, opensearchUrl, indexName string) error {
+	indexConfig := OpensearchIndexConfig{}
+	customConfig := strings.TrimSpace(os.Getenv("OPENSEARCH_INDEX_CONFIG"))
+	if customConfig != "" {
+		if err := json.Unmarshal([]byte(customConfig), &indexConfig); err != nil {
+			return fmt.Errorf("invalid OPENSEARCH_INDEX_CONFIG: %w", err)
+		}
+
+		if len(indexConfig.Aliases) > 0 {
+			indexConfig.Aliases = nil
+		}
+	}
+
+	if len(indexConfig.Settings) == 0 && len(indexConfig.Mappings) == 0 {
+		indexConfig = OpensearchIndexConfig{
+			Settings: map[string]interface{}{
+				"number_of_shards":   3,
+				"number_of_replicas": 1,
+				"refresh_interval":   "30s",
+			},
+			Mappings: map[string]interface{}{
+				"dynamic_templates": []map[string]interface{}{
+					{
+						"strings_as_keywords": map[string]interface{}{
+							"match_mapping_type": "string",
+							"mapping": map[string]interface{}{
+								"type": "keyword",
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	indexConfigJson, err := json.Marshal(indexConfig)
+	if err != nil {
+		return err
+	}
+
+	createReq, err := http.NewRequest("PUT", fmt.Sprintf("%s/%s", opensearchUrl, indexName), bytes.NewBuffer(indexConfigJson))
+	if err != nil {
+		return err
+	}
+	createReq.Header.Set("Content-Type", "application/json")
+
+	createResp, err := foundClient.Client.Transport.Perform(createReq)
+	if err != nil {
+		return err
+	}
+
+	createRespBody, err := io.ReadAll(createResp.Body)
+	if err != nil {
+		createResp.Body.Close()
+		return err
+	}
+	createResp.Body.Close()
+
+	if createResp.StatusCode >= 300 {
+		return fmt.Errorf("failed creating index %s: %s", indexName, string(createRespBody))
+	}
+
+	return nil
+}
+
+func updateOpensearchAliases(foundClient opensearchapi.Client, opensearchUrl string, actions []OpensearchAliasAction) error {
+	aliasActions := OpensearchAliasActionsRequest{Actions: actions}
+	aliasBody, err := json.Marshal(aliasActions)
+	if err != nil {
+		return err
+	}
+
+	aliasReq, err := http.NewRequest("POST", fmt.Sprintf("%s/_aliases", opensearchUrl), bytes.NewBuffer(aliasBody))
+	if err != nil {
+		return err
+	}
+	aliasReq.Header.Set("Content-Type", "application/json")
+
+	aliasResp, err := foundClient.Client.Transport.Perform(aliasReq)
+	if err != nil {
+		return err
+	}
+
+	aliasRespBody, err := io.ReadAll(aliasResp.Body)
+	if err != nil {
+		aliasResp.Body.Close()
+		return err
+	}
+	aliasResp.Body.Close()
+
+	if aliasResp.StatusCode >= 300 {
+		return fmt.Errorf("failed updating aliases: %s", string(aliasRespBody))
+	}
+
+	return nil
 }
 
 func HandleFixOpensearchPrefix(resp http.ResponseWriter, request *http.Request) {

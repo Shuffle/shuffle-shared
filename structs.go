@@ -4107,6 +4107,7 @@ type CategoryAction struct {
 	Step                  int64  `json:"step"`                    // The step to use put it in a workflow if generated
 	Query                 string `json:"query,omitempty"`         // Due to the API being built around programmatic, and then with LLMs, this was added to make context possible between nodes when using Atomic Actions
 	DryRun                bool   `json:"dry_run"`                 // If true, it will not actually execute the action, but instead just build the workflow
+	KeepWorkflow          bool   `json:"keep_workflow"`           // If true, keep generated workflow references when executing category actions
 	SkipWorkflow          bool   `json:"skip_workflow"`           // If true, it will not put it in a workflow, but instead just execute it
 	SkipOutputTranslation bool   `json:"skip_output_translation"` // If true, it will not translate the output to the default format for the label
 	SkipAuthentication    bool   `json:"skip_authentication"`
@@ -5048,12 +5049,14 @@ type MCPToolInputSchema struct {
 }
 
 type OpensearchPrefixFixResult struct {
-	Success      bool                               `json:"success"`
-	Reason       string                             `json:"reason,omitempty"`
-	Reindexed    []string                           `json:"reindexed,omitempty"`
-	AliasUpdates []string                           `json:"alias_updates,omitempty"`
-	Skipped      []string                           `json:"skipped,omitempty"`
-	Counts       []OpensearchPrefixFixCountSnapshot `json:"counts,omitempty"`
+	Success           bool                               `json:"success"`
+	Reason            string                             `json:"reason,omitempty"`
+	Created           []string                           `json:"created,omitempty"`
+	WriteIndexUpdates []string                           `json:"write_index_updates,omitempty"`
+	Reindexed         []string                           `json:"reindexed,omitempty"`
+	AliasUpdates      []string                           `json:"alias_updates,omitempty"`
+	Skipped           []string                           `json:"skipped,omitempty"`
+	Counts            []OpensearchPrefixFixCountSnapshot `json:"counts,omitempty"`
 }
 
 type OpensearchPrefixFixCountSnapshot struct {

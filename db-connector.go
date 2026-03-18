@@ -85,6 +85,23 @@ func GetESIndexPrefix(index string) string {
 	return index
 }
 
+func GetOpensearchBaseIndexes() []string {
+	return []string{
+		"workflowexecution",
+		"datastore_ngram",
+		"org_cache",
+		"org_cache_revisions",
+		"notifications",
+		"shuffle_logs",
+		"environments",
+		"org_statistics",
+		"workflowapp",
+		"workflow",
+		"workflow_revisions",
+		"datastore_category",
+	}
+}
+
 func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error {
 	nameKey := "org_statistics"
 
@@ -323,10 +340,10 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 	// Splitting into multiple cache items
 	//if project.Environment == "cloud" || len(memcached) > 0 {
 	if len(memcached) > 0 {
-	//	comparisonNumber := 100
-	//	if len(data) > maxCacheSize*comparisonNumber {
-	//		return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
-	//	}
+		//	comparisonNumber := 100
+		//	if len(data) > maxCacheSize*comparisonNumber {
+		//		return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
+		//	}
 
 		loop := false
 		if len(data) > maxCacheSize {
@@ -3413,7 +3430,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				return workflow, nil
 			}
 		} else {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
 			}
 		}
@@ -17846,19 +17863,14 @@ func InitOpensearchIndexes() {
 	log.Printf("[INFO] Configuring Opensearch indexes for scaling")
 
 	ctx := context.Background()
-	relevantScaleIndexes := []string{
-		GetESIndexPrefix("workflowexecution"),
-		GetESIndexPrefix("datastore_ngram"),
-		GetESIndexPrefix("org_cache"),
-		GetESIndexPrefix("org_cache_revisions"),
-		GetESIndexPrefix("notifications"),
-		GetESIndexPrefix("shuffle_logs"),
-		GetESIndexPrefix("environments"),
-		GetESIndexPrefix("org_statistics"),
-		GetESIndexPrefix("workflowapp"),
-		GetESIndexPrefix("workflow"),
-		GetESIndexPrefix("workflow_revisions"),
-		GetESIndexPrefix("datastore_category"),
+	opensearchUrl := strings.TrimRight(os.Getenv("SHUFFLE_OPENSEARCH_URL"), "/")
+	if len(opensearchUrl) == 0 {
+		opensearchUrl = "https://shuffle-opensearch:9200"
+	}
+
+	relevantScaleIndexes := []string{}
+	for _, baseIndex := range GetOpensearchBaseIndexes() {
+		relevantScaleIndexes = append(relevantScaleIndexes, GetESIndexPrefix(baseIndex))
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")
@@ -17881,6 +17893,33 @@ func InitOpensearchIndexes() {
 		}
 
 		log.Printf("[DEBUG] Using custom rollover config for relevant scale indexes: %s", customRollover)
+	}
+
+	rolloverConfig := []byte(fmt.Sprintf(`{
+		"conditions": {
+			"max_age": "90d",
+			"max_size": "40gb",
+			"max_docs": 1000000
+		}
+	}`))
+
+	if len(customRollover) > 0 {
+		rolloverConfig = []byte(customRollover)
+	}
+
+	ismEnabled := strings.ToLower(strings.TrimSpace(os.Getenv("OPENSEARCH_USE_ISM_ROLLOVER"))) != "false"
+	ismPolicyName := strings.TrimSpace(os.Getenv("OPENSEARCH_ISM_POLICY_NAME"))
+	if ismPolicyName == "" {
+		ismPolicyName = "shuffle-rollover"
+	}
+
+	ismReady := false
+	if ismEnabled {
+		var err error
+		ismReady, err = ensureOpensearchISMRolloverPolicy(ctx, opensearchUrl, relevantScaleIndexes, rolloverConfig, ismPolicyName)
+		if err != nil {
+			log.Printf("[WARNING] Failed ensuring ISM rollover policy '%s': %s", ismPolicyName, err)
+		}
 	}
 
 	for _, index := range relevantScaleIndexes {
@@ -17938,9 +17977,10 @@ func InitOpensearchIndexes() {
 		}
 
 		index = strings.ToLower(index)
+		initialIndexName := fmt.Sprintf("%s-000001", index)
+		indexConfig = ensureOpensearchIndexRolloverAlias(indexConfig, index)
 		// Directly try to force create it. Opensearch throws a 400 if it fails.
 
-		initialIndexName := fmt.Sprintf("%s-000001", index)
 		resp, err := project.Es.Indices.Create(ctx, opensearchapi.IndicesCreateReq{
 			Index: initialIndexName,
 			Body:  bytes.NewReader(indexConfig),
@@ -17994,17 +18034,16 @@ func InitOpensearchIndexes() {
 			}
 		}
 
-		// Define rollover mechanism
-		rolloverConfig := []byte(fmt.Sprintf(`{
-			"conditions": {
-				"max_age": "90d",
-				"max_size": "40gb",
-				"max_docs": 1000000
+		if ismReady {
+			if err := ensureOpensearchIndexRolloverAliasSetting(ctx, opensearchUrl, initialIndexName, index); err != nil {
+				log.Printf("[WARNING] Failed ensuring rollover_alias on index %s: %s", initialIndexName, err)
 			}
-		}`))
 
-		if len(customRollover) > 0 {
-			rolloverConfig = []byte(customRollover)
+			if err := ensureOpensearchIndexISMPolicy(ctx, opensearchUrl, initialIndexName, ismPolicyName); err != nil {
+				log.Printf("[WARNING] Failed attaching ISM policy '%s' to %s: %s", ismPolicyName, initialIndexName, err)
+			}
+
+			continue
 		}
 
 		rolloverResp, err := project.Es.Indices.Rollover(ctx, opensearchapi.IndicesRolloverReq{
@@ -18030,4 +18069,211 @@ func InitOpensearchIndexes() {
 
 	}
 
+}
+
+func ensureOpensearchIndexRolloverAlias(indexConfig []byte, alias string) []byte {
+	unmarshalled := map[string]interface{}{}
+	if err := json.Unmarshal(indexConfig, &unmarshalled); err != nil {
+		return indexConfig
+	}
+
+	settings, ok := unmarshalled["settings"].(map[string]interface{})
+	if !ok || settings == nil {
+		settings = map[string]interface{}{}
+	}
+
+	settings["plugins.index_state_management.rollover_alias"] = alias
+	unmarshalled["settings"] = settings
+
+	updated, err := json.Marshal(unmarshalled)
+	if err != nil {
+		return indexConfig
+	}
+
+	return updated
+}
+
+func getOpensearchISMRolloverConditions(rolloverConfig []byte) map[string]interface{} {
+	defaultConditions := map[string]interface{}{
+		"min_index_age": "90d",
+		"min_size":      "40gb",
+		"min_doc_count": 1000000,
+	}
+
+	parsed := struct {
+		Conditions map[string]interface{} `json:"conditions"`
+	}{}
+
+	if err := json.Unmarshal(rolloverConfig, &parsed); err != nil {
+		return defaultConditions
+	}
+
+	if len(parsed.Conditions) == 0 {
+		return defaultConditions
+	}
+
+	conditions := map[string]interface{}{}
+	if value, ok := parsed.Conditions["min_index_age"]; ok {
+		conditions["min_index_age"] = value
+	} else if value, ok := parsed.Conditions["max_age"]; ok {
+		conditions["min_index_age"] = value
+	}
+
+	if value, ok := parsed.Conditions["min_size"]; ok {
+		conditions["min_size"] = value
+	} else if value, ok := parsed.Conditions["max_size"]; ok {
+		conditions["min_size"] = value
+	}
+
+	if value, ok := parsed.Conditions["min_doc_count"]; ok {
+		conditions["min_doc_count"] = value
+	} else if value, ok := parsed.Conditions["max_docs"]; ok {
+		conditions["min_doc_count"] = value
+	}
+
+	if len(conditions) == 0 {
+		return defaultConditions
+	}
+
+	return conditions
+}
+
+func ensureOpensearchISMRolloverPolicy(ctx context.Context, opensearchUrl string, aliases []string, rolloverConfig []byte, policyName string) (bool, error) {
+	conditions := getOpensearchISMRolloverConditions(rolloverConfig)
+
+	patterns := []string{}
+	for _, alias := range aliases {
+		patterns = append(patterns, fmt.Sprintf("%s-*", alias))
+	}
+
+	policyBody := map[string]interface{}{
+		"policy": map[string]interface{}{
+			"description":   "Shuffle rollover policy",
+			"default_state": "hot",
+			"states": []map[string]interface{}{
+				{
+					"name": "hot",
+					"actions": []map[string]interface{}{
+						{
+							"rollover": conditions,
+						},
+					},
+					"transitions": []interface{}{},
+				},
+			},
+			"ism_template": []map[string]interface{}{
+				{
+					"index_patterns": patterns,
+					"priority":       100,
+				},
+			},
+		},
+	}
+
+	policyData, err := json.Marshal(policyBody)
+	if err != nil {
+		return false, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/_plugins/_ism/policies/%s", opensearchUrl, policyName), bytes.NewReader(policyData))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := project.Es.Client.Transport.Perform(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		if resp.StatusCode == 404 || resp.StatusCode == 400 {
+			if strings.Contains(strings.ToLower(string(body)), "_plugins/_ism") || strings.Contains(strings.ToLower(string(body)), "no handler found") {
+				log.Printf("[INFO] ISM plugin not available. Falling back to direct rollover")
+				return false, nil
+			}
+		}
+
+		return false, fmt.Errorf("status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	log.Printf("[INFO] Ensured ISM rollover policy '%s' for %d index patterns", policyName, len(patterns))
+	return true, nil
+}
+
+func ensureOpensearchIndexRolloverAliasSetting(ctx context.Context, opensearchUrl, indexName, alias string) error {
+	settingsBody := map[string]interface{}{
+		"index": map[string]interface{}{
+			"plugins.index_state_management.rollover_alias": alias,
+		},
+	}
+
+	body, err := json.Marshal(settingsBody)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/%s/_settings", opensearchUrl, indexName), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := project.Es.Client.Transport.Perform(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		if resp.StatusCode == 404 && strings.Contains(strings.ToLower(string(respBody)), "index_not_found_exception") {
+			return nil
+		}
+
+		return fmt.Errorf("status: %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+func ensureOpensearchIndexISMPolicy(ctx context.Context, opensearchUrl, indexName, policyName string) error {
+	policyBody := map[string]interface{}{
+		"policy_id": policyName,
+	}
+
+	body, err := json.Marshal(policyBody)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/_plugins/_ism/add/%s", opensearchUrl, indexName), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := project.Es.Client.Transport.Perform(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		lowerResp := strings.ToLower(string(respBody))
+		if strings.Contains(lowerResp, "already has a policy") {
+			return nil
+		}
+
+		if resp.StatusCode == 404 && strings.Contains(lowerResp, "index_not_found_exception") {
+			return nil
+		}
+
+		return fmt.Errorf("status: %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
 }
