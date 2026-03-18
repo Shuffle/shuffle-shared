@@ -5133,7 +5133,7 @@ func SetAuthenticationConfigBatch(resp http.ResponseWriter, request *http.Reques
 	} else {
 		log.Printf("[WARNING] Unknown batch auth change action %s", config.Action)
 		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Unknown action: %s"}`, config.Action)))
+		resp.Write([]byte(`{"success": false, "reason": "Invalid action provided"}`))
 		return
 	}
 
