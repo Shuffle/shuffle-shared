@@ -1796,7 +1796,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						continue
 					} else if decision.RunDetails.Status == "FAILURE" {
-						//finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						failedFound = true
 						continue
 					} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
@@ -1809,8 +1809,11 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
 							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
 							mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
-						}
 
+							// Count this as finished + failed so recovery triggers in the same Fixexecution run
+							finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+							failedFound = true
+						}
 					} else {
 						if decision.RunDetails.CompletedAt > 0 {
 							if debug {
@@ -1912,7 +1915,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 						}()
 					} else {
-						log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found, marking as WAITING.", workflowExecution.ExecutionId, action.ID)
+						log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found. Re-invoking agent to finalize (failedFound: %t).", workflowExecution.ExecutionId, action.ID, failedFound)
 
 						mappedOutput.Status = "RUNNING"
 						mappedOutput.CompletedAt = 0
@@ -1922,10 +1925,16 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							workflowExecution.Status = "EXECUTING"
 						}
 
-						// To ensure the execution is actually updated
+						// Re-invoke the agent so the LLM can see the failure and produce a proper "finish" decision.
+
+						capturedExec := workflowExecution
+						capturedAction := action
 						go func() {
-							time.Sleep(1 * time.Second)
-							sendAgentActionSelfRequest("WAITING", workflowExecution, workflowExecution.Results[resultIndex])
+							time.Sleep(2 * time.Second)
+							_, err := HandleAiAgentExecutionStart(capturedExec, capturedAction, true)
+							if err != nil {
+								log.Printf("[ERROR][%s] Failed re-invoking agent after decisions completed for action %s: %s", capturedExec.ExecutionId, capturedAction.ID, err)
+							}
 						}()
 					}
 				} else if (result.Status == "" || result.Status == "WAITING") && mappedOutput.Status == "FINISHED" {
