@@ -3507,6 +3507,34 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 
 	prefix := strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_OPENSEARCH_INDEX_PREFIX")))
 	baseIndexes := GetOpensearchBaseIndexes()
+	expectedAliases := []string{}
+	for _, baseIndex := range baseIndexes {
+		expectedAliases = append(expectedAliases, strings.ToLower(GetESIndexPrefix(baseIndex)))
+	}
+
+	rolloverConfig := []byte(fmt.Sprintf(`{
+		"conditions": {
+			"max_age": "90d",
+			"max_size": "40gb",
+			"max_docs": 1000000
+		}
+	}`))
+
+	customRollover := os.Getenv("OPENSEARCH_INDEX_ROLLOVER")
+	if len(customRollover) > 0 {
+		checkValidJson := map[string]interface{}{}
+		if err := json.Unmarshal([]byte(customRollover), &checkValidJson); err != nil {
+			log.Printf("[ERROR] Invalid JSON in OPENSEARCH_INDEX_ROLLOVER: %s", err)
+		} else {
+			rolloverConfig = []byte(customRollover)
+		}
+	}
+
+	ismEnabled := strings.ToLower(strings.TrimSpace(os.Getenv("OPENSEARCH_USE_ISM_ROLLOVER"))) != "false"
+	ismPolicyName := strings.TrimSpace(os.Getenv("OPENSEARCH_ISM_POLICY_NAME"))
+	if ismPolicyName == "" {
+		ismPolicyName = "shuffle-rollover"
+	}
 
 	for _, baseIndex := range baseIndexes {
 		expectedAlias := strings.ToLower(GetESIndexPrefix(baseIndex))
@@ -3516,8 +3544,28 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 		}
 
 		if ArrayContains(allIndices, expectedAlias) {
-			result.Skipped = append(result.Skipped, fmt.Sprintf("%s (concrete index name collision)", expectedAlias))
-			continue
+			targetIndex := fmt.Sprintf("%s-000001", expectedAlias)
+			taskID, err := handleAliasCollisionMigration(foundClient, opensearchUrl, expectedAlias, targetIndex)
+			if err != nil {
+				result.Skipped = append(result.Skipped, fmt.Sprintf("%s (collision repair failed: %s)", expectedAlias, err))
+				continue
+			}
+
+			if taskID != "" {
+				result.MigrationTasks = append(result.MigrationTasks, fmt.Sprintf("%s -> %s (task=%s)", expectedAlias, targetIndex, taskID))
+				result.Skipped = append(result.Skipped, fmt.Sprintf("%s (collision migration in progress)", expectedAlias))
+				continue
+			}
+
+			allIndices, err = getOpensearchIndices(foundClient, opensearchUrl)
+			if err != nil {
+				return result, err
+			}
+
+			aliasInfo, err = getOpensearchAliases(foundClient, opensearchUrl)
+			if err != nil {
+				return result, err
+			}
 		}
 
 		targetIndices, writeIndex := selectOpensearchAliasTargets(expectedAlias, doubleAlias, aliasInfo, allIndices)
@@ -3575,9 +3623,288 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 		result.WriteIndexUpdates = append(result.WriteIndexUpdates, fmt.Sprintf("%s -> %s", expectedAlias, writeIndex))
 	}
 
-	result.Success = true
-	result.Reason = "Opensearch alias and index state repaired without data reindexing"
+	verifiedAliasInfo, err := getOpensearchAliases(foundClient, opensearchUrl)
+	if err != nil {
+		return result, err
+	}
+
+	result.ExpectedAliases = len(expectedAliases)
+	result.FoundAliases = 0
+	for _, aliasName := range expectedAliases {
+		indices := []string{}
+		writeIndices := []string{}
+		for indexName, aliases := range verifiedAliasInfo {
+			state, ok := aliases[aliasName]
+			if !ok || !state.Present {
+				continue
+			}
+
+			indices = append(indices, indexName)
+			if state.IsWriteIndex {
+				writeIndices = append(writeIndices, indexName)
+			}
+		}
+
+		if len(indices) == 0 {
+			result.MissingAliases = append(result.MissingAliases, aliasName)
+			continue
+		}
+
+		result.FoundAliases++
+		if len(writeIndices) != 1 {
+			result.InvalidWriteAlias = append(result.InvalidWriteAlias, fmt.Sprintf("%s (write_indices=%d)", aliasName, len(writeIndices)))
+			continue
+		}
+
+		sorted := append([]string{}, indices...)
+		sort.Slice(sorted, func(i, j int) bool {
+			gi := getOpensearchGeneration(sorted[i])
+			gj := getOpensearchGeneration(sorted[j])
+			if gi == gj {
+				return sorted[i] > sorted[j]
+			}
+			return gi > gj
+		})
+
+		latest := sorted[0]
+		if writeIndices[0] != latest {
+			result.InvalidWriteAlias = append(result.InvalidWriteAlias, fmt.Sprintf("%s (write=%s latest=%s)", aliasName, writeIndices[0], latest))
+		}
+	}
+
+	if len(result.MissingAliases) > 0 || len(result.InvalidWriteAlias) > 0 || result.FoundAliases != result.ExpectedAliases {
+		result.Success = false
+		result.Reason = "Opensearch alias verification failed after repair"
+		log.Printf("[WARNING] %s. expected_aliases=%d found_aliases=%d missing=%d invalid_write=%d", result.Reason, result.ExpectedAliases, result.FoundAliases, len(result.MissingAliases), len(result.InvalidWriteAlias))
+	} else {
+		result.Success = true
+		result.Reason = "Opensearch alias and index state repaired without data reindexing"
+	}
+
+	if ismEnabled {
+		ismReady, ismErr := ensureOpensearchISMRolloverPolicy(ctx, opensearchUrl, expectedAliases, rolloverConfig, ismPolicyName)
+		if ismErr != nil {
+			log.Printf("[WARNING] Failed ensuring ISM rollover policy '%s' in prefix fix: %s", ismPolicyName, ismErr)
+		} else if ismReady {
+			for _, aliasName := range expectedAliases {
+				for indexName, aliases := range verifiedAliasInfo {
+					state, ok := aliases[aliasName]
+					if !ok || !state.Present {
+						continue
+					}
+
+					if err := ensureOpensearchIndexRolloverAliasSetting(ctx, opensearchUrl, indexName, aliasName); err != nil {
+						log.Printf("[WARNING] Failed ensuring rollover alias on %s for alias %s: %s", indexName, aliasName, err)
+						continue
+					}
+
+					if err := ensureOpensearchIndexISMPolicy(ctx, opensearchUrl, indexName, ismPolicyName); err != nil {
+						log.Printf("[WARNING] Failed attaching ISM policy '%s' to %s: %s", ismPolicyName, indexName, err)
+					}
+				}
+			}
+		}
+	}
+
 	return result, nil
+}
+
+func handleAliasCollisionMigration(foundClient opensearchapi.Client, opensearchUrl, sourceIndex, targetIndex string) (string, error) {
+	targetExists, err := checkOpensearchIndexExists(foundClient, opensearchUrl, targetIndex)
+	if err != nil {
+		return "", err
+	}
+
+	if !targetExists {
+		if err := createOpensearchIndex(foundClient, opensearchUrl, targetIndex); err != nil {
+			return "", err
+		}
+	}
+
+	sourceCount, err := getOpensearchIndexCount(foundClient, opensearchUrl, sourceIndex)
+	if err != nil {
+		return "", err
+	}
+
+	targetCount, err := getOpensearchIndexCount(foundClient, opensearchUrl, targetIndex)
+	if err != nil {
+		return "", err
+	}
+
+	if sourceCount > 0 && targetCount < sourceCount {
+		taskID, err := startOpensearchReindexTask(foundClient, opensearchUrl, sourceIndex, targetIndex)
+		if err != nil {
+			return "", err
+		}
+
+		return taskID, nil
+	}
+
+	if sourceCount > targetCount {
+		return "", fmt.Errorf("target count %d is lower than source count %d", targetCount, sourceCount)
+	}
+
+	if err := deleteOpensearchIndex(foundClient, opensearchUrl, sourceIndex); err != nil {
+		return "", err
+	}
+
+	isWrite := true
+	actions := []OpensearchAliasAction{
+		{
+			Add: &OpensearchAliasActionTarget{Index: targetIndex, Alias: sourceIndex, IsWriteIndex: &isWrite},
+		},
+	}
+
+	if err := updateOpensearchAliases(foundClient, opensearchUrl, actions); err != nil {
+		return "", err
+	}
+
+	return "", nil
+}
+
+func checkOpensearchIndexExists(foundClient opensearchapi.Client, opensearchUrl, indexName string) (bool, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/%s", opensearchUrl, indexName), nil)
+	if err != nil {
+		return false, err
+	}
+
+	resp, err := foundClient.Client.Transport.Perform(req)
+	if err != nil {
+		return false, err
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return false, readErr
+	}
+
+	if resp.StatusCode == 404 {
+		return false, nil
+	}
+
+	if resp.StatusCode >= 300 {
+		return false, fmt.Errorf("failed checking index %s: %s", indexName, string(body))
+	}
+
+	return true, nil
+}
+
+func getOpensearchIndexCount(foundClient opensearchapi.Client, opensearchUrl, indexName string) (int64, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_count", opensearchUrl, indexName), nil)
+	if err != nil {
+		return 0, err
+	}
+
+	resp, err := foundClient.Client.Transport.Perform(req)
+	if err != nil {
+		return 0, err
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return 0, readErr
+	}
+
+	if resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("failed counting index %s: %s", indexName, string(body))
+	}
+
+	parsed := struct {
+		Count int64 `json:"count"`
+	}{}
+
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return 0, err
+	}
+
+	return parsed.Count, nil
+}
+
+func startOpensearchReindexTask(foundClient opensearchapi.Client, opensearchUrl, sourceIndex, targetIndex string) (string, error) {
+	payload := map[string]interface{}{
+		"source": map[string]interface{}{
+			"index": sourceIndex,
+		},
+		"dest": map[string]interface{}{
+			"index": targetIndex,
+		},
+		"conflicts": "proceed",
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/_reindex?wait_for_completion=false", opensearchUrl), bytes.NewBuffer(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := foundClient.Client.Transport.Perform(req)
+	if err != nil {
+		return "", err
+	}
+
+	respBody, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return "", readErr
+	}
+
+	if resp.StatusCode >= 300 {
+		lowerBody := strings.ToLower(string(respBody))
+		if strings.Contains(lowerBody, "resource_already_exists_exception") {
+			return "", nil
+		}
+
+		return "", fmt.Errorf("failed starting reindex %s -> %s: %s", sourceIndex, targetIndex, string(respBody))
+	}
+
+	parsed := struct {
+		Task string `json:"task"`
+	}{}
+
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", err
+	}
+
+	if strings.TrimSpace(parsed.Task) == "" {
+		return "", fmt.Errorf("reindex task missing in response")
+	}
+
+	return parsed.Task, nil
+}
+
+func deleteOpensearchIndex(foundClient opensearchapi.Client, opensearchUrl, indexName string) error {
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/%s", opensearchUrl, indexName), nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := foundClient.Client.Transport.Perform(req)
+	if err != nil {
+		return err
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return readErr
+	}
+
+	if resp.StatusCode == 404 {
+		return nil
+	}
+
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("failed deleting index %s: %s", indexName, string(body))
+	}
+
+	return nil
 }
 
 type opensearchAliasState struct {
@@ -3713,18 +4040,9 @@ func selectOpensearchAliasTargets(expectedAlias, doubleAlias string, aliasInfo m
 
 	writeIndex := ""
 	for _, indexName := range targetIndices {
-		if aliasInfo[indexName][expectedAlias].IsWriteIndex {
+		if indexName == expectedAlias || strings.HasPrefix(indexName, expectedAlias+"-") {
 			writeIndex = indexName
 			break
-		}
-	}
-
-	if writeIndex == "" {
-		for _, indexName := range targetIndices {
-			if indexName == expectedAlias || strings.HasPrefix(indexName, expectedAlias+"-") {
-				writeIndex = indexName
-				break
-			}
 		}
 	}
 

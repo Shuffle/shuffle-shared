@@ -17939,6 +17939,14 @@ func InitOpensearchIndexes() {
 		}
 	}
 
+	if fixResult, fixErr := FixOpensearchIndexPrefix(ctx); fixErr != nil {
+		log.Printf("[WARNING] Prefix repair before init failed: %s", fixErr)
+	} else if !fixResult.Success {
+		log.Printf("[WARNING] Prefix repair before init completed with verification warnings: %s", fixResult.Reason)
+	} else {
+		log.Printf("[INFO] Prefix repair before init: expected aliases=%d found=%d", fixResult.ExpectedAliases, fixResult.FoundAliases)
+	}
+
 	for _, index := range relevantScaleIndexes {
 		indexConfig := []byte(fmt.Sprintf(`{
 			"aliases": {
@@ -18084,6 +18092,14 @@ func InitOpensearchIndexes() {
 			log.Printf("[INFO] Rollover executed successfully for %s", index)
 		}
 
+	}
+
+	if fixResult, fixErr := FixOpensearchIndexPrefix(ctx); fixErr != nil {
+		log.Printf("[WARNING] Alias verification after init failed: %s", fixErr)
+	} else if !fixResult.Success {
+		log.Printf("[WARNING] Alias verification after init completed with warnings: %s", fixResult.Reason)
+	} else {
+		log.Printf("[INFO] Alias verification after init passed: expected aliases=%d found=%d", fixResult.ExpectedAliases, fixResult.FoundAliases)
 	}
 
 }
