@@ -14160,13 +14160,13 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]CacheKeyData, error) {
 	if len(orgId) == 0 {
-		return []CacheKeyData, errors.New("Org ID required for revisions") 
+		return []CacheKeyData{}, errors.New("Org ID required for revisions")
 	}
 
 	var datastoreKeys []CacheKeyData
 	var err error
 
-	amount := 50 
+	amount := 50
 	if amount <= 0 {
 		amount = 50
 	}
@@ -14175,7 +14175,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 		amount = 200
 	}
 
-	key = url.QueryEscape(cacheId)
+	key = url.QueryEscape(key)
 	if len(key) > 127 {
 		key = key[:127]
 	}
@@ -14186,7 +14186,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 	}
 
 	nameKey := "org_cache_revisions"
-	cacheKey := fmt.Sprintf("%s_%s_%d", nameKey, key, category, orgId)
+	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, key, category, orgId)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
