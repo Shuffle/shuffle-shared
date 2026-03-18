@@ -20,8 +20,8 @@ import (
 
 	"sync"
 
-	neturl "net/url"
 	"hash/fnv"
+	neturl "net/url"
 	"path"
 	"sort"
 	"unicode"
@@ -51,8 +51,8 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 
-	//	"encoding/json"
-	"github.com/goccy/go-json"
+	"encoding/json"
+	//	"github.com/goccy/go-json"
 
 	"os/exec"
 	"runtime"
@@ -160,7 +160,6 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"https://shuffle-support.lovable.app/",
 			"https://05364669-00ea-43be-ae8f-8e333ccc870c.lovableproject.com",
 			"https://preview--shuffle-support.lovable.app",
-
 		}
 
 		if len(origin) > 0 {
@@ -3556,7 +3555,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		if err != nil {
 			// Due to execution auth
 			if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") {
-				log.Printf("[WARNING] Apikey %s doesn't exist. URL: %#v: %s", apikey, request.URL.String(), err)
+				log.Printf("[WARNING] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
 			}
 
 			return User{}, err
@@ -11182,14 +11181,7 @@ func HandleDeleteUsersAccountPermanent(resp http.ResponseWriter, request *http.R
 		return
 	}
 
-	if !userInfo.SupportAccess {
-		log.Printf("[INFO] Unauthorized user (%s) attempted to delete an account. Must be a user or have support access.", userInfo.Username)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Unauthorize User. Must be a regular user or have support access"}`))
-		return
-	}
-
-	if userInfo.Id != foundUser.Id {
+	if (userInfo.Id != foundUser.Id) && !userInfo.SupportAccess {
 		log.Printf("[INFO] Unauthorized user (%s) attempted to delete an account. Must be a user or have support access.", userInfo.Username)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Unauthorize User. Must be a regular user or have support access"}`))
@@ -12451,8 +12443,17 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	user.Orgs = append(user.Orgs, newOrg.Id)
-	//log.Printf("[INFO] Usr orgs: %s (%d)", user.Orgs, len(user.Orgs))
+	// Re-read from DB to avoid writing back stale cached user.Orgs
+	// (HandleApiAuthentication may have served a cached copy missing recent org additions)
+	freshUser, freshErr := GetUser(ctx, user.Id)
+	if freshErr == nil {
+		user = *freshUser
+	}
+
+	if !ArrayContains(user.Orgs, newOrg.Id) {
+		user.Orgs = append(user.Orgs, newOrg.Id)
+	}
+
 	err = SetUser(ctx, &user, false)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating user when setting creating suborg: %s", err)
@@ -14536,7 +14537,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 				// Must be here to not override apps
-				go loadAppConfigFromMain(fileId)
+				go LoadAppConfigFromMain(fileId, false)
 				log.Printf("[DEBUG] Redirecting App load request '%s' to main site handler (shuffler.io)", fileId)
 				RedirectUserRequest(resp, request)
 				return
@@ -14560,13 +14561,50 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
+
+		// Not setting right now
+		// unescapedName, err := url.QueryUnescape(app.Name)
+		// if err == nil {
+		// 	type AppCacheData struct {
+		// 		Success     bool   `json:"success"`
+		// 		ID          string `json:"id"`
+		// 		Name        string `json:"name"`
+		// 		Description string `json:"description"`
+		// 	}
+
+		// 	cacheData := AppCacheData{
+		// 		Success:     true,
+		// 		ID:          app.ID,
+		// 		Name:        app.Name,
+		// 		Description: app.Description,
+		// 	}
+
+		// 	cachePayload, err := json.Marshal(cacheData)
+		// 	if err != nil {
+		// 		log.Printf("[WARNING] Failed marshalling app cache payload: %s", err)
+		// 		cachePayload = []byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, app.ID))
+		// 	}
+
+		// 	// 1. Cache by actual app name
+		// 	primarySlug := strings.ToLower(strings.ReplaceAll(unescapedName, " ", "_"))
+		// 	primaryKey := fmt.Sprintf("workflowapp_cache_%s", primarySlug)
+		// 	SetCache(context.Background(), primaryKey, cachePayload, 10080)
+
+		// 	// 2. Cache by search alias (e.g., "outlook") if provided by the frontend
+		// 	aliasQuery := request.URL.Query().Get("alias")
+		// 	if len(aliasQuery) > 0 {
+		// 		aliasSlug := strings.ToLower(strings.ReplaceAll(aliasQuery, " ", "_"))
+		// 		aliasKey := fmt.Sprintf("workflowapp_cache_%s", aliasSlug)
+
+		// 		// Only set if alias is different from the primary name
+		// 		if aliasKey != primaryKey {
+		// 			SetCache(context.Background(), aliasKey, cachePayload, 10080)
+		// 		}
+		// 	}
+		// }
 	}
 
-	//log.Printf("[INFO] Successfully got app %s", fileId)
-
 	app.ReferenceUrl = ""
-
-	//app.Activate = true
 	data, err := json.Marshal(app)
 	if err != nil {
 		resp.WriteHeader(422)
@@ -20257,6 +20295,12 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	//for key, value := range data.Apps {
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
+
+	///api/v2/datastore/category/{category_key}/{key}
+	///api/v1/orgs/{orgId}/get_cache
+	///api/v1/get_cache
+	///api/v1/orgs/{orgId}/datastore/{cache_key}
+	///api/v1/orgs/{orgId}/cache/{cache_key}
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			log.Printf("[ERROR] Path too short: %d", len(location))
@@ -20353,9 +20397,8 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Use normal user auth
-
-		user, err := HandleApiAuthentication(resp, request)
-		if err != nil {
+		user, usererr := HandleApiAuthentication(resp, request)
+		if usererr != nil {
 			// Check if authorization query exists
 			if len(query.Get("authorization")) == 0 {
 				log.Printf("[INFO] Failed to authenticate user in GET cache key: %s", err)
@@ -20368,7 +20411,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 			user.ActiveOrg.Id = fileId
 		}
 
-		if user.ActiveOrg.Id != fileId {
+		if user.ActiveOrg.Id != fileId && len(fileId) == 36 {
 			log.Printf("[INFO] OrgId %s and %s don't match in get cache key list. Checking cache auth", user.ActiveOrg.Id, fileId)
 
 			requireCacheAuth = true
@@ -20379,6 +20422,17 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 				resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
 				return
 			*/
+		}
+
+		// /api/v2/datastore/category/{category_key}/{key}
+		if tmpData.OrgId == "category" && len(location) == 7 {
+			tmpData.OrgId = user.ActiveOrg.Id
+			tmpData.Category = location[5]
+			tmpData.Key = location[6]
+
+			if strings.Contains(tmpData.Key, "?") {
+				tmpData.Key = strings.Split(tmpData.Key, "?")[0]
+			}
 		}
 
 		skipExecutionAuth = true
@@ -20636,7 +20690,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Failed reading body in set cache: %s", err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading set datastore key body"}`))
 		return
 	}
 
@@ -20916,7 +20970,15 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		Authorization:      tmpData.Authorization,
 		SuborgDistribution: tmpData.SuborgDistribution,
 		Tags:               tmpData.Tags,
+
+		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule.
 	}
+
+	// If we want to only allow it for manual overrides
+	//if !user.SessionLogin {
+	//	parsedKey.IgnoreSecurityRules = false
+	//}
+
 	existed, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{parsedKey})
 	if err != nil {
 		log.Printf("[ERROR] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
@@ -21247,11 +21309,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				log.Printf("[DEBUG][%s] Found auth ID for single action: %s", workflowExecution.ExecutionId, action.AuthenticationId)
 			}
 
-			// FIXME: How do we decide what fields to replace?
-			// The problem now is that some auth fields are being set and others maybe are not
-			//for _, actionParam := range action.Parameters {
-			//	log.Printf("KEY: %s, VALUE: %s", actionParam.Name, actionParam.Value)
-			//}
 		} else {
 			authFields := 0
 			foundFields := []string{}
@@ -21396,7 +21453,94 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	// Fallback to inject AI creds if the user don't have any
-	if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
+	if len(workflowExecution.OrgId) > 0 && strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == "shuffle_datastore" && len(action.AuthenticationId) == 0 {
+		backendUrl := os.Getenv("BASE_URL")
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
+			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		}
+
+		if len(user.ApiKey) == 0 {
+			newUserInfo, err := GenerateApikey(ctx, user)
+			if err != nil {
+				log.Printf("[ERROR] Failed to realtime generate apikey for user %s: %s", user.Username, err)
+			} else {
+				user = newUserInfo
+			}
+		}
+
+		foundApikey := ""
+		if len(user.ApiKey) > 0 {
+			foundApikey = user.ApiKey
+		} else {
+			org, err := GetOrg(ctx, workflowExecution.OrgId)
+			if err == nil {
+				for _, curuser := range org.Users {
+					if len(curuser.ApiKey) > 0 {
+						foundApikey = curuser.ApiKey
+						break
+					}
+				}
+
+				if len(foundApikey) == 0 {
+					for _, curuser := range org.Users {
+						if curuser.Role == "admin" {
+							newUserInfo, err := GenerateApikey(ctx, curuser)
+							if err == nil {
+								foundApikey = newUserInfo.ApiKey
+								break
+							}
+						}
+
+					}
+				}
+			} else {
+				if debug {
+					log.Printf("[ERROR] Bad org: %#v: %s", workflowExecution.OrgId)
+				}
+			}
+		}
+
+		apikeyFound := false
+		urlFound := false
+		orgIdFound := false
+		for paramIndex, param := range action.Parameters {
+			if param.Name == "apikey" {
+				action.Parameters[paramIndex].Value = foundApikey
+				apikeyFound = true
+			} else if param.Name == "url" {
+				action.Parameters[paramIndex].Value = backendUrl
+				urlFound = true
+			} else if param.Name == "orgid" {
+				action.Parameters[paramIndex].Value = workflowExecution.OrgId
+				orgIdFound = true
+			}
+		}
+
+		if !apikeyFound {
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "apikey",
+				Value: foundApikey,
+			})
+		}
+
+		if !urlFound {
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "url",
+				Value: backendUrl,
+			})
+		}
+
+		if !orgIdFound {
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "orgid",
+				Value: workflowExecution.OrgId,
+			})
+		}
+
+		if debug {
+			log.Printf("\n\n\n\nFOUND DATASTORE! URL: %s, APIKEY: %s, ORG: %s\n\n\n", backendUrl, foundApikey, workflowExecution.OrgId)
+		}
+	} else if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
 		// cloud => only do it on cloud location
 		// This prevents local users from being able to see it
 		if project.Environment != "cloud" || (project.Environment == "cloud" && action.Environment == "cloud") {
@@ -21472,6 +21616,16 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			}
 		}
 	}
+
+	/*
+		// Used for very deep recursion testing of specific injections
+		if debug {
+			log.Printf("APP: %s. Org: %#v", action.AppName, workflowExecution.OrgId)
+			if action.AppName != "AI Agent" && action.AppName != "openai" {
+				os.Exit(3)
+			}
+		}
+	*/
 
 	workflow.Actions = []Action{
 		action,
@@ -25150,11 +25304,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	if !startnodeFound {
-		log.Printf("[ERROR][%s] Couldn't find startnode %s among %d actions in workflow '%s'. Remapping to %s", workflowExecution.ExecutionId, workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
-
 		if len(newStartnode) > 0 {
 			workflowExecution.Start = newStartnode
 		} else {
+			log.Printf("[ERROR][%s] Couldn't find startnode %s among %d actions in workflow '%s'. Remapping to %s", workflowExecution.ExecutionId, workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
+
 			return workflowExecution, ExecInfo{}, fmt.Sprintf("Startnode couldn't be found"), errors.New("Startnode isn't defined in this workflow..")
 		}
 	}
@@ -26479,7 +26633,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 						})
 					}
 
-					// FIXME: There used to be code here to stop the app, but for now we just continue with the old tokens
+					// FIXME: There used to be code here to stop the app, but for now we just continue with the old tokens, as it usually works.
 				}
 
 				allAuths[authIndex] = newAuth
@@ -31189,16 +31343,12 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	parentOrg.ChildOrgs = newChildOrg
-	allChildOrgs, err := GetAllChildOrgs(ctx, parentOrg.Id)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting all child orgs for parent org '%s': %s", parentOrg.Id, err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting all child orgs"}`))
-		return
-	}
 
-	parentOrg.SyncUsage.MultiTenant.Counter = int64(len(allChildOrgs)) + 1
-	parentOrg.SyncFeatures.MultiTenant.Usage = int64(len(allChildOrgs)) + 1
+	suborgCacheKey := fmt.Sprintf("%s_childorgs", parentOrg.Id)
+	DeleteCache(ctx, suborgCacheKey)
+	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", subOrg.Id))
+	parentOrg.SyncUsage.MultiTenant.Counter = int64(len(newChildOrg)) + 1
+	parentOrg.SyncFeatures.MultiTenant.Usage = int64(len(newChildOrg)) + 1
 
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
 	if err != nil {
@@ -31217,10 +31367,6 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		user.ActiveOrg.Id = currentActiveOrg.Id
 		user.ActiveOrg.Name = currentActiveOrg.Name
 	}
-
-	suborgCacheKey := fmt.Sprintf("%s_childorgs", parentOrg.Id)
-	DeleteCache(ctx, suborgCacheKey)
-	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", subOrg.Id))
 
 	err = SetUser(ctx, &user, true)
 	if err != nil {
@@ -33251,7 +33397,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	IncrementCache(ctx, exec.ExecutionOrg, "app_executions", amountFinished)
 
 	go RunCacheCleanup(ctx, *exec)
-	go RunIOCFinder(ctx, *exec)
+	//go RunIOCFinder(ctx, *exec)
 
 	//log.Printf("[DEBUG][%s] Running status fixing for workflow %#v to see if auth + workflow(s) are functional. Results: %d", exec.ExecutionId, exec.Workflow.ID, len(exec.Results))
 	orgId := exec.ExecutionOrg
@@ -34695,7 +34841,11 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 			for actionIndex, action := range app.Actions {
 				//parsedActionName := fmt.Sprintf("%s_%s", method, action.Name)
 				parsedActionName := fmt.Sprintf("%s", action.Name)
-				//log.Printf("%s vs %s", parsedActionName, parsedOpId)
+
+				if !strings.HasPrefix(parsedActionName, method) {
+					parsedActionName = fmt.Sprintf("%s_%s", method, strings.ToLower(parsedActionName))
+				}
+
 				if parsedActionName != parsedOpId {
 					continue
 				}
@@ -34725,7 +34875,7 @@ func syncAppContentLabels(ctx context.Context, id string, api *ParsedOpenApi) *P
 
 				if len(openapiLabels) != len(action.CategoryLabel) {
 					if debug {
-						log.Printf("APP DIFF (%s): %#v vs %#v", app.ID, openapiLabels, action.CategoryLabel)
+						log.Printf("[DEBUG] APP DIFF (%s): %#v vs %#v", app.ID, openapiLabels, action.CategoryLabel)
 					}
 
 					seen := make(map[string]int)
@@ -34863,34 +35013,33 @@ func FuzzyHashBody(body []byte) uint64 {
 }
 
 // Checks whether e.g. a workflow is calling itself with VERY similar details.
-// URL MUST be identical, but body can vary slightly and still match
+// URL MUST be identical, but body can vary slightly and still match.
+
+// Implementations (cloud):
+// - /workflow/{workflowId}/run
+// - /apps/{appId}/run
+// - /hooks/{webhookId}
 func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byte) bool {
-	timestart := time.Now()
+	// May not have enough details to know without a body (?)
+	if len(body) == 0 {
+		return false
+	}
+
 	urlMd5 := md5.Sum([]byte(request.URL.String()))
 
 	// Hashes the body into "buckets" that look for slight similarities
+	// The main point is avoiding replicas with deviations like timestamps
 	hash1 := FuzzyHashBody(body)
 
-
-	fmt.Printf("Hash1: %064b\n", hash1)
-
 	cacheKey := fmt.Sprintf("%s_%s", urlMd5, hash1)
-	log.Printf("CACHEKEY: %s", cacheKey)
 	cache, err := GetCache(ctx, cacheKey)
 	if err != nil {
-		log.Printf("ERR: %#v", err)
-
 		SetCache(ctx, cacheKey, []byte("1"), 1)
-		return false 
+		return false
 	}
 
-	timeEnd := time.Now()
-	log.Printf("[DEBUG] Hashing and comparison took %s\n", timeEnd.Sub(timestart))
-
 	foundNumber := 0
-			
 	cacheData := string(cache.([]uint8))
-	//if n, err := strconv.Atoi(found.([]uint8)); err == nil {
 	if n, err := strconv.Atoi(cacheData); err == nil {
 		foundNumber = n
 	}
@@ -34901,10 +35050,24 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 		foundNumber = 1
 	}
 
-	log.Printf("NUMBER: %d", foundNumber)
+	// Controllable
+	defaultRecursionDepth := 5
+	maxRecursionDepthInt := defaultRecursionDepth
+	maxRecursionDepth := os.Getenv("SHUFFLE_MAX_RECURSION_DEPTH")
+	if maxRecursionDepth == "" {
+		maxRecursionDepthInt, err = strconv.Atoi(maxRecursionDepth)
+		if err != nil {
+			maxRecursionDepthInt = defaultRecursionDepth
+		}
+	}
 
-	if foundNumber > 5 {
-		log.Printf("[WARNING] Detected potential recursion for URL %s. Hash: %d. Body: %s", request.URL.String(), hash1, string(body))
+	if maxRecursionDepthInt < 3 {
+		maxRecursionDepthInt = 3
+	}
+
+	// This has monitoring on it and should ideally NEVER happen
+	if foundNumber > maxRecursionDepthInt {
+		log.Printf("[ERROR] Detected potential recursion for URL %s. Hash: %d", request.URL.String(), hash1)
 		return true
 	}
 

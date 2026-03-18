@@ -263,10 +263,10 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 
 	err = SetDetectionOrborusRequest(ctx, user.ActiveOrg.Id, execType, file.Filename, "SIGMA", "SHUFFLE_DISCOVER")
 	if err != nil {
-		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		log.Printf("[ERROR] Failed setting workflow queue for env %s (6): %s", "SIGMA", err)
+		//resp.WriteHeader(500)
+		//resp.Write([]byte(`{"success": false}`))
+		//return
 	}
 
 	resp.WriteHeader(200)
@@ -343,10 +343,10 @@ func HandleFolderToggle(resp http.ResponseWriter, request *http.Request) {
 
 	err = SetDetectionOrborusRequest(ctx, user.ActiveOrg.Id, execType, "", "SIGMA", "SHUFFLE_DISCOVER")
 	if err != nil {
-		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		log.Printf("[ERROR] Failed setting workflow queue for env (4): %s", err)
+		//resp.WriteHeader(500)
+		//resp.Write([]byte(`{"success": false}`))
+		//return
 	}
 
 	resp.WriteHeader(200)
@@ -611,7 +611,7 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 				return
 			}
 
-			log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+			log.Printf("[ERROR] Failed setting workflow queue for env (5): %s", err)
 			if strings.Contains(strings.ToLower(err.Error()), "no valid environments") {
 				resp.WriteHeader(400)
 				resp.Write([]byte(`{"success": false, "reason": "No valid environments found. Go to /admin?tab=environments to create one.", "action": "environment_create"}`))

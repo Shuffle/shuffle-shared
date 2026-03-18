@@ -43,7 +43,6 @@ import (
 var standalone bool
 
 // var model = "gpt-5-mini"
-var maxTokens = 5000
 var model = "gpt-5-mini"
 //var model = "gpt-5.2-codex"
 
@@ -52,7 +51,7 @@ var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
 var docsVectorStoreID = os.Getenv("OPENAI_DOCS_VS_ID")
 var assistantModel = model
 
-var aiMaxTokens = 1024 // Default for on-prem
+var aiMaxTokens = 4096 // Controllable with AI_MAX_TOKENS env
 var aiReasoningEffort = ""
 
 func init() {
@@ -61,7 +60,11 @@ func init() {
 			aiMaxTokens = t
 		}
 	}
-	aiReasoningEffort = os.Getenv("AI_REASONING_EFFORT")
+
+	reasoningEffort := os.Getenv("AI_REASONING_EFFORT")
+	if reasoningEffort == "minimal" || reasoningEffort == "low" || reasoningEffort == "medium" || reasoningEffort == "high" { 
+		aiReasoningEffort = reasoningEffort
+	}
 }
 
 // Provide an incident triage and response plan for the reported incident finding. Make a short list of actions to perform in the following format: [{"title": "Title of the task", "category": "triage/containment/recovery/communication/documentation", "completed": false, "createdBy": "ai-agent@shuffler.io"}]. ONLY output as JSON array and nothing more. After the list is made, add these to the metadata.extensions.custom_attributes.tasks[] in the next action.
@@ -269,7 +272,6 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		AuthenticationId: auth.Id,
 		Fields:           []Valuereplace{},
 
-		SkipWorkflow:          true,
 		SkipOutputTranslation: true, // Manually done in the KMS case
 		Environment:           auth.Environment,
 	}
@@ -427,7 +429,7 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig, paramNa
 	}
 
 	// Added a filename_prefix to know which field each belongs to
-	schemalessOutput, err := schemaless.Translate(ctx, "get_kms_key", marshalledBody, authConfig, fmt.Sprintf("filename_prefix:%s-", paramName))
+	schemalessOutput, _, err := schemaless.Translate(ctx, "get_kms_key", marshalledBody, authConfig, fmt.Sprintf("filename_prefix:%s-", paramName))
 	if err != nil {
 		log.Printf("[ERROR] Failed to translate KMS response (2): %s", err)
 		return string(fullBody), err
@@ -800,7 +802,7 @@ END VALIDATION RULES
 ---
 CONSTRAINTS
 
-- If the path is wrong, change it to be relevant to the input data. It may be /api paths or entirely different
+- If the path is wrong, change it to be relevant to the input data. It may be /api paths or entirely different. Changing a 'get' to a 'list' or 'update' to 'get' is NEVER allowed except after 5 retries.
 - Do NOT add irrelevant headers or body fields
 - Do NOT add authentication-related headers. If they exist, remove them. 
 - MUST use keys present in original JSON
@@ -867,7 +869,7 @@ Input JSON Payload (ensure VALID JSON):
 				Content: inputData,
 			},
 		},
-		MaxCompletionTokens: maxTokens,
+		MaxCompletionTokens: aiMaxTokens,
 		Temperature:         0,
 		ReasoningEffort:     "low",
 	}
@@ -1151,7 +1153,7 @@ func getBadOutputString(action Action, appname, inputdata, outputBody string, st
 		outputParams = outputParams[:len(outputParams)-2]
 	}
 
-	outputData := fmt.Sprintf("Fields: %s\n\nHTTP Status: %d\nHTTP error: %s", outputParams, status, outputBody)
+	outputData := fmt.Sprintf("\nFields: %s\n\nHTTP Status: %d\nHTTP error: %s", outputParams, status, outputBody)
 
 	if debug {
 		log.Printf("[WARNING] Skipping automatic output formatting (bad output string). Is this necessary?")
@@ -1473,6 +1475,54 @@ func UploadParameterBase(ctx context.Context, fields []Valuereplace, orgId, appI
 	return nil
 }
 
+// Specially for headers
+func FixJSONNewlines(input string) string {
+	var out []byte
+
+	inString := false
+	escape := false
+
+	for i := 0; i < len(input); i++ {
+		c := input[i]
+
+		if inString {
+			if escape {
+				escape = false
+				out = append(out, c)
+				continue
+			}
+
+			if c == '\\' {
+				escape = true
+				out = append(out, c)
+				continue
+			}
+
+			if c == '"' {
+				inString = false
+				out = append(out, c)
+				continue
+			}
+
+			if c == '\n' {
+				out = append(out, '\\', 'n')
+				continue
+			}
+
+			out = append(out, c)
+			continue
+		}
+
+		if c == '"' {
+			inString = true
+		}
+
+		out = append(out, c)
+	}
+
+	return string(out)
+}
+
 func FixContentOutput(contentOutput string) string {
 	if strings.Contains(contentOutput, "```json") {
 		// Handle ```json
@@ -1532,6 +1582,7 @@ func FixContentOutput(contentOutput string) string {
 	//contentOutput = strings.ReplaceAll(contentOutput, "\\n", "\n")
 
 	// Attempts to balance it automatically
+	contentOutput = FixJSONNewlines(contentOutput)
 	contentOutput = balanceJSONLikeString(contentOutput)
 
 	// Indent it with marshalling
@@ -1954,7 +2005,7 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 					Content: userMessage,
 				},
 			},
-			MaxCompletionTokens: maxTokens,
+			MaxCompletionTokens: aiMaxTokens,
 			Temperature:         0,
 			ReasoningEffort:     "medium",
 		}
@@ -2155,6 +2206,21 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 }
 
 func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) ([]byte, error) {
+	if len(org.Id) == 0 { 
+		if len(input.OrgId) > 0 && user.ActiveOrg.Id == "" {
+			user.ActiveOrg.Id = input.OrgId
+		}
+
+		if len(user.ActiveOrg.Id) > 0 { 
+			newOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed to load orgid '%s' in ai response check", user.ActiveOrg.Id)
+			} else {
+				org = *newOrg
+			}
+		}
+	}
+
 	standalone := false
 	standaloneEnv := os.Getenv("STANDALONE")
 	if standaloneEnv == "true" {
@@ -2164,7 +2230,9 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 	respBody := []byte{}
 	if project.Environment == "cloud" && !user.SupportAccess {
 		//if org.SyncFeatures.ShuffleGPT.Active && org.SyncFeatures.ShuffleGPT.Usage < org.SyncFeatures.ShuffleGPT.Limit {
-		if org.SyncFeatures.ShuffleGPT.Usage < 100 {
+
+		// Most should never reach this 
+		if org.SyncFeatures.ShuffleGPT.Usage < 1000 {
 			log.Printf("[AUDIT] Org %#v (%s) has access to the auto feature. Allowing user %s to use it", org.Name, org.Id, user.Username)
 			org.SyncFeatures.ShuffleGPT.Usage += 1
 
@@ -2296,8 +2364,11 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 
 		// Parses the input and returns the category and action label
 		openaiClient := openai.NewClient(apiKey)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
 		openaiResp, err := openaiClient.CreateChatCompletion(
-			context.Background(),
+			ctx,
 			openai.ChatCompletionRequest{
 				Model: model,
 				Messages: []openai.ChatCompletionMessage{
@@ -3706,7 +3777,7 @@ func findActionByInput(inputQuery, actionLabel string, foundApp WorkflowApp) (st
 	return contentOutput, nil
 }
 
-// Context aware parameter mapping
+// Context aware parameter mapping per org-app-action
 func getSelectedAppParameters(ctx context.Context, user User, selectedAction WorkflowAppAction, foundApp WorkflowApp, appname, category, outputFormat string, httpOutput HTTPWrapper, input QueryInput) (WorkflowAppAction, error) {
 
 	inputQuery := input.Query
@@ -3934,7 +4005,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 			} else {
 				// Since we are trying to fill them in anyway :)
 				if len(sampleBody) == 0 {
-					log.Printf("[INFO] No matching body found for app %s with action %s. Err: %s", appname, selectedAction.Name, err)
+					log.Printf("[INFO] No matching body found for app %s with action %s. Err: %s. Body: '%s'", appname, selectedAction.Name, err, outputBody)
 					sampleBody = formattedFields
 				}
 			}
@@ -8824,7 +8895,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	chatCompletion := openai.ChatCompletionRequest{
 		Model:     model,
 		Messages:  []openai.ChatCompletionMessage{},
-		MaxTokens: maxTokens,
+		MaxTokens: aiMaxTokens,
 
 		// Move towards determinism
 		Temperature: 0,
@@ -8893,11 +8964,30 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		if len(chatCompletion.Messages) == 0 {
 			return "", errors.New("No messages to send to OpenAI. Pass systemmessage, usermessage")
 		}
+	}
 
-		//log.Printf("\n\n\nGot %d messages in chat completion (%s)\n\n\n", len(chatCompletion.Messages), cachedChat)
+	// Gotta cut it back down, as it can get into 50+ etc
+	if len(chatCompletion.Messages) > 10 {
+		// Ensures we keep the system messages
+		newMessages := []openai.ChatCompletionMessage{
+			chatCompletion.Messages[0],
+			chatCompletion.Messages[1],
+			chatCompletion.Messages[2],
+		}
+
+		for messageIndex, chat := range chatCompletion.Messages {
+			if messageIndex > len(chatCompletion.Messages)-7 {
+				newMessages = append(newMessages, chat)
+			}
+		}
+
+		if len(newMessages) > 5 { 
+			chatCompletion.Messages = newMessages
+		}
 	}
 
 	if debug {
+
 		log.Printf("\n\n[DEBUG] Chatcompletion messages: %d\n\n", len(chatCompletion.Messages))
 	}
 
@@ -8921,7 +9011,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 
 			if strings.Contains(err.Error(), "not supported MaxTokens") {
 				chatCompletion.MaxTokens = 0
-				chatCompletion.MaxCompletionTokens = maxTokens
+				chatCompletion.MaxCompletionTokens = aiMaxTokens
 				continue
 			} else if strings.Contains(err.Error(), "does not exist") {
 				if len(fallbackModel) == 0 {
@@ -10198,7 +10288,7 @@ No other formats are allowed. Just structured steps.
 Produce a minimal, correct, atomic plan for turning vague security workflows into structured actions. Do not overthink. Follow the format exactly, Including the headings.
 `, categoryString)
 
-	maxTokens := 5000
+	aiMaxTokens := 5000
 	var contentOutput string
 	var err error
 
@@ -10233,7 +10323,7 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 
 		if model == "o4-mini" || model == "gpt-5-mini" {
 			chatCompletion.MaxTokens = 0
-			chatCompletion.MaxCompletionTokens = maxTokens
+			chatCompletion.MaxCompletionTokens = aiMaxTokens
 		}
 
 		contentOutput, err = RunAiQuery("", "", chatCompletion)

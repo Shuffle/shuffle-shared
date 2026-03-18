@@ -132,7 +132,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		}
 
 		// send the request
-		client := &http.Client{}
+		client := &http.Client{Timeout: 60 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[ERROR] Failed sending HTTP request: %s", err)
@@ -205,7 +205,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{}
+	client = &http.Client{Timeout: 60 * time.Second}
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending the app validate HTTP request: %s", err)
@@ -290,7 +290,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{}
+	client = &http.Client{Timeout: 60 * time.Second}
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check app verify HTTP request: %s", err)
@@ -337,7 +337,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{}
+	client = &http.Client{Timeout: 60 * time.Second}
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check app read HTTP request: %s", err)
@@ -401,7 +401,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{}
+	client = &http.Client{Timeout: 60 * time.Second}
 	resp, err = client.Do(req)
 
 	if err != nil {
@@ -459,7 +459,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{}
+	client = &http.Client{Timeout: 60 * time.Second}
 	resp, err = client.Do(req)
 
 	if err != nil {
@@ -1070,7 +1070,7 @@ func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string, orgId strin
 	req.Header.Set("Org-Id", orgId)
 
 	// send the request
-	client := &http.Client{}
+	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 
 	if err != nil {
@@ -1277,7 +1277,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 
 	// send the request
 	startTime := time.Now()
-	client := &http.Client{}
+	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check HTTP request: %s", err)
@@ -1514,7 +1514,7 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 60 * time.Second}
 	res, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending request to app upload: %s", err)
@@ -1581,7 +1581,7 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{}
+	client = &http.Client{Timeout: 60 * time.Second}
 	resp, err = client.Do(req)
 
 	if err != nil {
@@ -1695,7 +1695,7 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{}
+	client = &http.Client{Timeout: 60 * time.Second}
 	resp, err = client.Do(req)
 
 	if err != nil {
@@ -1786,7 +1786,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 
 	log.Printf("[DEBUG] Ops dashboard user found. Setting up ops workflow")
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 60 * time.Second}
 	body := GetWorkflowTest()
 	if project.Environment == "cloud" {
 		// url := "https://shuffler.io/api/v1/workflows/602c7cf5-500e-4bd1-8a97-aa5bc8a554e6"
@@ -1998,7 +1998,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	req.Body = ioutil.NopCloser(bytes.NewBuffer(workflowDataJSON))
 
 	// send the request
-	client = &http.Client{}
+	client = &http.Client{Timeout: 60 * time.Second}
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending HTTP request: %s", err)
