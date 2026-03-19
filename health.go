@@ -319,6 +319,11 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		return appHealth, err
 	}
 
+	if !validatedResp.Success {
+		log.Printf("[ERROR] verify_openapi returned success=false for app health check (id: %s)", validatedResp.ID)
+		return appHealth, errors.New("verify_openapi returned success=false")
+	}
+
 	id = validatedResp.ID
 	// Verify that the app was created
 	// Make a request to /api/v1/apps/<id>/config
@@ -336,7 +341,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
+	client = &http.Client{Timeout: 120 * time.Second}
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check app read HTTP request: %s", err)
@@ -385,61 +390,41 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	executeBodyJSON, err := json.Marshal(executeBody)
 	if err != nil {
-		log.Printf("[ERROR] Failed marshalling app run JSON data: %s", err)
-		return appHealth, err
+		log.Printf("[WARNING] Failed marshalling app run JSON data: %s", err)
+	} else {
+		req, err = http.NewRequest("POST", url, bytes.NewBuffer(executeBodyJSON))
+		if err != nil {
+			log.Printf("[WARNING] Failed creating HTTP for app run request: %s", err)
+		} else {
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+
+			client = &http.Client{Timeout: 120 * time.Second}
+			resp, err = client.Do(req)
+			if err != nil {
+				log.Printf("[ERROR] Failed sending health check app run HTTP request: %s", err)
+			} else {
+				defer resp.Body.Close()
+				respBody, err = ioutil.ReadAll(resp.Body)
+				if err != nil {
+					log.Printf("[WARNING] Failed reading HTTP for app run response body: %s", err)
+				} else if resp.StatusCode != 200 {
+					log.Printf("[ERROR] Failed running app in app health check. Status: %d. Body: %s", resp.StatusCode, respBody)
+				} else {
+					var runResponse executionResult
+					if err = json.Unmarshal(respBody, &runResponse); err != nil {
+						log.Printf("[WARNING] Failed unmarshalling generic run JSON data: %s", err)
+					} else if !runResponse.Success {
+						log.Printf("[WARNING] Running returned false for app health check")
+					} else {
+						appHealth.Result = runResponse.Result
+						appHealth.ExecutionID = runResponse.ID
+						appHealth.Run = true
+					}
+				}
+			}
+		}
 	}
-
-	req, err = http.NewRequest("POST", url, bytes.NewBuffer(executeBodyJSON))
-	if err != nil {
-		log.Printf("[ERROR] Failed creating HTTP for app run request: %s", err)
-		return appHealth, err
-	}
-
-	// set the headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
-	resp, err = client.Do(req)
-
-	if err != nil {
-		log.Printf("[ERROR] Failed sending health check app run HTTP request: %s", err)
-		return appHealth, err
-	}
-
-	respBody, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[ERROR] Failed reading HTTP for app run response body: %s", err)
-		return appHealth, err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed running app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		log.Printf("[ERROR] The response body was: %s", respBody)
-		return appHealth, err
-	}
-
-	// Unmarshal the JSON data into a Workflow instance
-	var runResponse executionResult
-
-	err = json.Unmarshal(respBody, &runResponse)
-
-	if err != nil {
-		log.Printf("[ERROR] Failed unmarshalling generic run JSON data: %s", err)
-		return appHealth, err
-	}
-
-	if runResponse.Success == false {
-		log.Printf("[ERROR] Running returned false for app health check: %s", err)
-		return appHealth, err
-	}
-
-	appHealth.Result = runResponse.Result
-	appHealth.ExecutionID = runResponse.ID
-	appHealth.Run = true
 
 	// 4. Delete App
 	// 4.1 call /api/v1/apps/<id> DELETE
@@ -478,6 +463,23 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		}
 
 		return appHealth, err
+	}
+
+	respBodyDel, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading HTTP for app delete response body: %s", err)
+		return appHealth, err
+	}
+
+	var deleteResponse genericResp
+	if err = json.Unmarshal(respBodyDel, &deleteResponse); err != nil {
+		log.Printf("[ERROR] Failed unmarshalling app delete response JSON: %s", err)
+		return appHealth, err
+	}
+
+	if !deleteResponse.Success {
+		log.Printf("[ERROR] App delete returned success=false for app health check (id: %s)", id)
+		return appHealth, errors.New("app delete returned success=false")
 	}
 
 	appHealth.Delete = true
@@ -1542,6 +1544,11 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 		return appHealth, errors.New("Failed to unmarshal response")
 	}
 
+	if !appData.Success {
+		log.Printf("[ERROR] App upload returned success=false for ops app health check")
+		return appHealth, errors.New("app upload returned success=false")
+	}
+
 	appHealth.Create = true
 	appHealth.AppId = appData.Id
 
@@ -1567,148 +1574,144 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 
 	executeBodyJSON, err := json.Marshal(executeBody)
 	if err != nil {
-		log.Printf("[ERROR] Failed marshalling app run JSON data: %s", err)
-		return appHealth, errors.New("Failed marshalling app run JSON data")
+		log.Printf("[WARNING] Failed marshalling app run JSON data, skipping execute: %s", err)
+	} else {
+		execReq, execReqErr := http.NewRequest("POST", executeUrl, bytes.NewBuffer(executeBodyJSON))
+		if execReqErr != nil {
+			log.Printf("[WARNING] Failed creating HTTP for app run request, skipping execute: %s", execReqErr)
+		} else {
+			execReq.Header.Set("Content-Type", "application/json")
+			execReq.Header.Set("Authorization", "Bearer "+apiKey)
+
+			execClient := &http.Client{Timeout: 120 * time.Second}
+			execResp, execErr := execClient.Do(execReq)
+			if execErr != nil {
+				log.Printf("[WARNING] Failed sending health check app run HTTP request, skipping execute: %s", execErr)
+			} else {
+				defer execResp.Body.Close()
+
+				appExecuteData, readErr := io.ReadAll(execResp.Body)
+				if readErr != nil {
+					log.Printf("[WARNING] Failed to read app execution data, skipping poll: %s", readErr)
+				} else if execResp.StatusCode != 200 {
+					log.Printf("[WARNING] App execute returned HTTP %d, skipping poll. Body: %s", execResp.StatusCode, appExecuteData)
+				} else {
+					var executionData SingleResult
+					if unmarshalErr := json.Unmarshal(appExecuteData, &executionData); unmarshalErr != nil {
+						log.Printf("[WARNING] Failed to unmarshal single app result, skipping poll: %s", unmarshalErr)
+					} else {
+						appHealth.Run = true
+						appHealth.ExecutionID = executionData.Id
+
+						// Poll for the execution result.
+						runCount := 0
+						for executionData.Result == "" {
+							if runCount > 5 {
+								log.Printf("[WARNING] Timed out polling app execution result after %d attempts", runCount)
+								break
+							}
+
+							pollReq, pollReqErr := http.NewRequest("POST", baseUrl+"/api/v1/streams/results", nil)
+							if pollReqErr != nil {
+								log.Printf("[WARNING] Failed creating poll HTTP request: %s", pollReqErr)
+								break
+							}
+
+							pollReq.Header.Set("Content-Type", "application/json")
+							pollReq.Header.Set("Authorization", "Bearer "+apiKey)
+							pollReq.Header.Set("Org-Id", orgId)
+
+							reqBody := map[string]string{"execution_id": executionData.Id, "authorization": executionData.Authorization}
+							reqBodyJson, _ := json.Marshal(reqBody)
+							pollReq.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyJson))
+
+							pollClient := &http.Client{Timeout: 120 * time.Second}
+							pollResp, pollErr := pollClient.Do(pollReq)
+							if pollErr != nil {
+								log.Printf("[WARNING] Failed sending poll HTTP request: %s", pollErr)
+								break
+							}
+
+							pollBody, pollReadErr := ioutil.ReadAll(pollResp.Body)
+							pollResp.Body.Close()
+							if pollReadErr != nil {
+								log.Printf("[WARNING] Failed reading poll response body: %s", pollReadErr)
+								break
+							}
+
+							if pollResp.StatusCode != 200 {
+								log.Printf("[WARNING] Poll returned HTTP %d, stopping poll", pollResp.StatusCode)
+								break
+							}
+
+							var executionResults WorkflowExecution
+							if pollUnmarshalErr := json.Unmarshal(pollBody, &executionResults); pollUnmarshalErr != nil {
+								log.Printf("[WARNING] Failed unmarshalling poll response: %s", pollUnmarshalErr)
+								break
+							}
+
+							if executionResults.Status != "EXECUTING" {
+								log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, executionResults.ExecutionId)
+							}
+
+							if executionResults.Status == "FINISHED" {
+								log.Printf("[DEBUG] Workflow Health execution is finished, checking results")
+								executionData.Result = executionResults.Result
+								appHealth.Validate = executionResults.Workflow.Validated
+							}
+
+							time.Sleep(2 * time.Second)
+							runCount++
+						}
+
+						appHealth.Result = executionData.Result
+					}
+				}
+			}
+		}
 	}
 
-	req, err = http.NewRequest("POST", executeUrl, bytes.NewBuffer(executeBodyJSON))
-	if err != nil {
-		log.Printf("[ERROR] Failed creating HTTP for app run request: %s", err)
-		return appHealth, errors.New("Failed to create HTTP for app run")
+	// Always attempt to delete the app regardless of execute/poll outcome.
+	delUrl := baseUrl + "/api/v1/apps/" + appData.Id
+	log.Printf("[DEBUG] Deleting app with URL %s", delUrl)
+
+	delReq, delReqErr := http.NewRequest("DELETE", delUrl, nil)
+	if delReqErr != nil {
+		log.Printf("[ERROR] Failed creating HTTP for app delete request: %s", delReqErr)
+		return appHealth, delReqErr
 	}
 
-	// set the headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	delReq.Header.Set("Content-Type", "application/json")
+	delReq.Header.Set("Authorization", "Bearer "+apiKey)
 
-	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
-	resp, err = client.Do(req)
+	delClient := &http.Client{Timeout: 60 * time.Second}
+	delResp, delErr := delClient.Do(delReq)
+	if delErr != nil {
+		log.Printf("[ERROR] Failed sending health check app delete HTTP request: %s", delErr)
+		return appHealth, delErr
+	}
+	defer delResp.Body.Close()
 
-	if err != nil {
-		log.Printf("[ERROR] Failed sending health check app run HTTP request: %s", err)
-		return appHealth, errors.New("Failed sending HTTP request")
+	delBody, delReadErr := ioutil.ReadAll(delResp.Body)
+	if delReadErr != nil {
+		log.Printf("[ERROR] Failed reading app delete response body: %s", delReadErr)
+		return appHealth, delReadErr
 	}
 
-	defer resp.Body.Close()
-
-	appExecuteData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[ERROR] Failed to read app execution data")
-		return appHealth, err
+	if delResp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed deleting app in app health check. Status: %d, Body: %s", delResp.StatusCode, delBody)
+		return appHealth, errors.New("app delete returned non-200 status")
 	}
 
-	var executionData SingleResult
-
-	err = json.Unmarshal(appExecuteData, &executionData)
-	if err != nil {
-		log.Printf("[ERROR] Failed to unmarshal single app result")
-		return appHealth, errors.New("Failed to unmarshal")
+	var deleteResponse genericResp
+	if delUnmarshalErr := json.Unmarshal(delBody, &deleteResponse); delUnmarshalErr != nil {
+		log.Printf("[ERROR] Failed unmarshalling app delete response JSON: %s", delUnmarshalErr)
+		return appHealth, delUnmarshalErr
 	}
 
-	appHealth.Run = true
-	appHealth.ExecutionID = executionData.Id
-
-	runCount := 0
-	for executionData.Result == "" {
-		if runCount > 5 {
-			return appHealth, errors.New("Failed to get app execution result")
-		}
-
-		url := baseUrl + "/api/v1/streams/results"
-		req, err := http.NewRequest("POST", url, nil)
-		if err != nil {
-			log.Printf("[ERROR] Failed creating HTTP request: %s", err)
-			return appHealth, errors.New("Failed creating HTTP request")
-		}
-
-		// set the headers
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-		req.Header.Set("Org-Id", orgId)
-
-		// convert the body to JSON
-		reqBody := map[string]string{"execution_id": executionData.Id, "authorization": executionData.Authorization}
-		reqBodyJson, err := json.Marshal(reqBody)
-
-		// set the body
-		req.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyJson))
-
-		// send the request
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[ERROR] Failed sending HTTP request: %s", err)
-			return appHealth, err
-		}
-
-		defer resp.Body.Close()
-
-		if resp.StatusCode != 200 {
-			log.Printf("[ERROR] Failed checking results for the workflow: %s. The status code was: %d", err, resp.StatusCode)
-			return appHealth, err
-		}
-
-		respBody, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
-			return appHealth, err
-		}
-
-		// Unmarshal the JSON data into a Workflow instance
-		var executionResults WorkflowExecution
-		err = json.Unmarshal(respBody, &executionResults)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
-			return appHealth, err
-		}
-
-		if executionResults.Status != "EXECUTING" {
-			log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, executionResults.ExecutionId)
-		}
-
-		if executionResults.Status == "FINISHED" {
-			log.Printf("[DEBUG] Workflow Health exeution is finished, checking it's results")
-			executionData.Result = executionResults.Result
-			appHealth.Validate = executionResults.Workflow.Validated
-		}
-
-		time.Sleep(2 * time.Second)
-		runCount += 1
-	}
-
-	appHealth.Result = executionData.Result
-
-	// Delete the app
-	url := baseUrl + "/api/v1/apps/" + appData.Id
-
-	log.Printf("[DEBUG] Deleting app with URL %s", url)
-
-	req, err = http.NewRequest("DELETE", url, nil)
-	if err != nil {
-		log.Printf("[ERROR] Failed creating HTTP for app delete request: %s", err)
-		return appHealth, err
-	}
-
-	// set the headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
-	resp, err = client.Do(req)
-
-	if err != nil {
-		log.Printf("[ERROR] Failed sending health check app delete HTTP request: %s", err)
-		return appHealth, err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed deleting app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		return appHealth, err
+	if !deleteResponse.Success {
+		log.Printf("[ERROR] App delete returned success=false for ops app health check (id: %s)", appData.Id)
+		return appHealth, errors.New("app delete returned success=false")
 	}
 
 	appHealth.Delete = true
