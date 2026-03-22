@@ -1137,10 +1137,31 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
 		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
-
 		if org.SyncUsage.MultiTenant.Counter != int64(len(org.ChildOrgs)+1) {
 			org.SyncUsage.MultiTenant.Counter = int64(len(org.ChildOrgs) + 1)
 			orgChanged = true
+		}
+
+		if len(org.CreatorOrg) == 0 {
+			allChildOrgs, err := GetAllChildOrgs(ctx, org.Id)
+			if err == nil {
+				if len(allChildOrgs) != len(org.ChildOrgs) {
+					allChildOrgsMini := []OrgMini{}
+					for _, child := range allChildOrgs {
+						allChildOrgsMini = append(allChildOrgsMini, OrgMini{
+							Id:         child.Id,
+							Name:       child.Name,
+							CreatorOrg: child.CreatorOrg,
+							Image:      "",
+							RegionUrl:  child.RegionUrl,
+						})
+					}
+					org.ChildOrgs = allChildOrgsMini
+					org.SyncFeatures.MultiTenant.Usage = int64(len(allChildOrgsMini) + 1)
+					org.SyncUsage.MultiTenant.Counter = int64(len(allChildOrgsMini) + 1)
+					orgChanged = true
+				}
+			}
 		}
 
 		if orgChanged {
@@ -14994,7 +15015,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 				// Must be here to not override apps
-				go loadAppConfigFromMain(fileId)
+				go LoadAppConfigFromMain(fileId, false)
 				log.Printf("[DEBUG] Redirecting App load request '%s' to main site handler (shuffler.io)", fileId)
 				RedirectUserRequest(resp, request)
 				return
@@ -15018,13 +15039,50 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
+
+		// Not setting right now
+		// unescapedName, err := url.QueryUnescape(app.Name)
+		// if err == nil {
+		// 	type AppCacheData struct {
+		// 		Success     bool   `json:"success"`
+		// 		ID          string `json:"id"`
+		// 		Name        string `json:"name"`
+		// 		Description string `json:"description"`
+		// 	}
+
+		// 	cacheData := AppCacheData{
+		// 		Success:     true,
+		// 		ID:          app.ID,
+		// 		Name:        app.Name,
+		// 		Description: app.Description,
+		// 	}
+
+		// 	cachePayload, err := json.Marshal(cacheData)
+		// 	if err != nil {
+		// 		log.Printf("[WARNING] Failed marshalling app cache payload: %s", err)
+		// 		cachePayload = []byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, app.ID))
+		// 	}
+
+		// 	// 1. Cache by actual app name
+		// 	primarySlug := strings.ToLower(strings.ReplaceAll(unescapedName, " ", "_"))
+		// 	primaryKey := fmt.Sprintf("workflowapp_cache_%s", primarySlug)
+		// 	SetCache(context.Background(), primaryKey, cachePayload, 10080)
+
+		// 	// 2. Cache by search alias (e.g., "outlook") if provided by the frontend
+		// 	aliasQuery := request.URL.Query().Get("alias")
+		// 	if len(aliasQuery) > 0 {
+		// 		aliasSlug := strings.ToLower(strings.ReplaceAll(aliasQuery, " ", "_"))
+		// 		aliasKey := fmt.Sprintf("workflowapp_cache_%s", aliasSlug)
+
+		// 		// Only set if alias is different from the primary name
+		// 		if aliasKey != primaryKey {
+		// 			SetCache(context.Background(), aliasKey, cachePayload, 10080)
+		// 		}
+		// 	}
+		// }
 	}
 
-	//log.Printf("[INFO] Successfully got app %s", fileId)
-
 	app.ReferenceUrl = ""
-
-	//app.Activate = true
 	data, err := json.Marshal(app)
 	if err != nil {
 		resp.WriteHeader(422)
@@ -21395,11 +21453,11 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		SuborgDistribution: tmpData.SuborgDistribution,
 		Tags:               tmpData.Tags,
 
-		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule. 
+		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule.
 	}
 
 	// If we want to only allow it for manual overrides
-	//if !user.SessionLogin { 
+	//if !user.SessionLogin {
 	//	parsedKey.IgnoreSecurityRules = false
 	//}
 
@@ -31494,6 +31552,79 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	}
 
 	return org, orgUpdated
+}
+
+func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Removed check here as it may be a public workflow
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		//log.Printf("[AUDIT] Api authentication failed in getting workflow revisions: %s. Continuing because it may be public.", err)
+		log.Printf("[AUDIT] Api authentication failed in getting workflow revisions: %s. ", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var category string
+	var key string
+	if location[1] == "api" {
+		if len(location) <= 6 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		category = location[4]
+		key = location[5]
+	}
+
+	if len(category) == 0 || len(key) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Category or Key is empty"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	datastoreKeys, err := GetDatastoreRevisions(ctx, key, category, user.ActiveOrg.Id) 
+	if err != nil { 
+		log.Printf("[WARNING] Failed loading key revisions for %s (%s).", key, category)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
+		return
+	}
+
+	// Check workflow.Sharing == private / public / org  too
+
+	parsedKeys := []CacheKeyData{}
+	for _, key := range datastoreKeys {
+		if key.OrgId != user.ActiveOrg.Id { 
+			continue
+		}
+
+		if key.Category != category {
+			continue
+		}
+
+		parsedKeys = append(parsedKeys, key)
+	}
+
+	body, err := json.Marshal(parsedKeys)
+	if err != nil {
+		log.Printf("[WARNING] Failed datastore key revision GET marshalling: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(body)
 }
 
 func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {

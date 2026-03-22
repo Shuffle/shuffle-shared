@@ -851,7 +851,9 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	HealthCheck.Success = platformHealth.Success
 	HealthCheck.Updated = platformHealth.Updated
 	HealthCheck.Workflows = platformHealth.Workflows
-
+	HealthCheck.Datastore = platformHealth.Datastore
+	HealthCheck.FileOps = platformHealth.FileOps
+	HealthCheck.Apps = platformHealth.Apps
 	// Add to database
 	err = SetPlatformHealth(ctx, HealthCheck)
 	if err != nil {
@@ -2049,9 +2051,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 		Result: "",
 		Delete: false,
 	}
-
-	// create datastore entry
-	PAYLOAD := `{"key": "SHUFFLE_HEALTH_CHECK", "value": "yesy", "category": "SHUFFLE_HEALTH_CHECK"}`
+	PAYLOAD := `{"key": "SHUFFLE_HEALTH_CHECK", "value": "yesy", "category": "SHUFFLE_HEALTH_CHECK", "org_id": "` + orgId + `"}`
 	url := fmt.Sprintf("%s/api/v1/orgs/%s/set_cache", baseUrl, orgId)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
@@ -2061,17 +2061,33 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 
 	req.Header.Set("Authorization", "Bearer "+apikey)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Org-Id", orgId)
 
 	// Follow proxy and stuff
 	client := GetExternalClient(baseUrl)
 	resp, err := client.Do(req)
-	resp.Body.Close()
 	if err != nil {
 		log.Printf("[ERROR] Failed to send request (%s) for set_cache %s", url, err)
 		return datastoreHealth, err
 	}
 
+	createBody, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		log.Printf("[ERROR] Failed to read set_cache response body: %s", readErr)
+		return datastoreHealth, readErr
+	}
+
+	var createResult struct {
+		Success bool `json:"success"`
+	}
+	if jsonErr := json.Unmarshal(createBody, &createResult); jsonErr != nil || !createResult.Success || resp.StatusCode != 200 {
+		log.Printf("[ERROR] set_cache health check failed. Status: %d, body: %s", resp.StatusCode, string(createBody))
+		return datastoreHealth, fmt.Errorf("set_cache failed with status %d", resp.StatusCode)
+	}
+
 	datastoreHealth.Create = true
+
 	//read datastore entry
 	PAYLOAD = fmt.Sprintf(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK"}`, orgId)
 	url = fmt.Sprintf("%s/api/v1/orgs/%s/get_cache", baseUrl, orgId)
@@ -2083,6 +2099,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 
 	req.Header.Set("Authorization", "Bearer "+apikey)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Org-Id", orgId)
 
 	resp, err = client.Do(req)
 	if err != nil {
@@ -2091,16 +2108,25 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	}
 
 	dataStoreValue, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
 	if err != nil {
 		log.Printf("[ERROR] Failed to read datastore return value: %s", err)
+		return datastoreHealth, err
+	}
+
+	var readResult struct {
+		Success bool `json:"success"`
+	}
+	if jsonErr := json.Unmarshal(dataStoreValue, &readResult); jsonErr != nil || !readResult.Success || resp.StatusCode != 200 {
+		log.Printf("[ERROR] get_cache health check failed. Status: %d, body: %s", resp.StatusCode, string(dataStoreValue))
+		return datastoreHealth, fmt.Errorf("get_cache failed with status %d", resp.StatusCode)
 	}
 
 	datastoreHealth.Result = string(dataStoreValue)
-	resp.Body.Close()
 	datastoreHealth.Read = true
 
 	// Delete
-	PAYLOAD = fmt.Sprintf(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK"}`, orgId)
+	PAYLOAD = fmt.Sprintf(`{"org_id": "%s", "key": "SHUFFLE_HEALTH_CHECK", "category": "SHUFFLE_HEALTH_CHECK"}`, orgId)
 	url = fmt.Sprintf("%s/api/v1/orgs/%s/delete_cache", baseUrl, orgId)
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
@@ -2110,11 +2136,27 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 
 	req.Header.Set("Authorization", "Bearer "+apikey)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Org-Id", orgId)
 
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send request to delete_key: %s", err)
 		return datastoreHealth, err
+	}
+
+	deleteBody, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		log.Printf("[ERROR] Failed to read delete_cache response body: %s", readErr)
+		return datastoreHealth, readErr
+	}
+
+	var deleteResult struct {
+		Success bool `json:"success"`
+	}
+	if jsonErr := json.Unmarshal(deleteBody, &deleteResult); jsonErr != nil || !deleteResult.Success || resp.StatusCode != 200 {
+		log.Printf("[ERROR] delete_cache health check failed. Status: %d, body: %s", resp.StatusCode, string(deleteBody))
+		return datastoreHealth, fmt.Errorf("delete_cache failed with status %d", resp.StatusCode)
 	}
 
 	datastoreHealth.Delete = true
@@ -2149,6 +2191,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 
 	req.Header.Set("Authorization", "Bearer "+apikey)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Org-Id", orgId)
 
 	var fileRespStruct struct {
 		Success bool   `json:"success"`
@@ -2157,22 +2200,21 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 
 	client := GetExternalClient(baseUrl)
 	resp, err := client.Do(req)
-	defer resp.Body.Close()
 	if err != nil {
-		log.Printf("[ERROR] Failed to send request (%s) for set_cache %s", url, err)
+		log.Printf("[ERROR] Failed to send request (%s) for create file: %s", url, err)
 		return fileHealth, err
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[ERROR] Failed to read response body")
-		return fileHealth, err
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		log.Printf("[ERROR] Failed to read create file response body: %s", readErr)
+		return fileHealth, readErr
 	}
 
-	err = json.Unmarshal(body, &fileRespStruct)
-	if err != nil {
-		log.Printf("[ERROR] Failed to unmarshal response")
-		return fileHealth, err
+	if err := json.Unmarshal(body, &fileRespStruct); err != nil || !fileRespStruct.Success || resp.StatusCode != 200 || len(fileRespStruct.Id) == 0 {
+		log.Printf("[ERROR] create file health check failed. Status: %d, body: %s", resp.StatusCode, string(body))
+		return fileHealth, fmt.Errorf("create file failed with status %d", resp.StatusCode)
 	}
 
 	fileHealth.Create = true
@@ -2210,22 +2252,32 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 
 	req.Header.Set("Authorization", "Bearer "+apikey)
 	req.Header.Set("Content-Type", w.FormDataContentType())
+	req.Header.Set("Org-Id", orgId)
 	uploadResp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Upload request failed: %s", err)
 		return fileHealth, err
 	}
 
-	defer uploadResp.Body.Close()
-	if uploadResp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed to upload file, not 200 status code")
-		return fileHealth, fmt.Errorf("upload failed for file")
+	uploadBody, readErr := io.ReadAll(uploadResp.Body)
+	uploadResp.Body.Close()
+	if readErr != nil {
+		log.Printf("[ERROR] Failed to read upload response body: %s", readErr)
+		return fileHealth, readErr
 	}
 
-	log.Printf("[INFO] Filed uploaded successfully to %s", url)
+	var uploadResult struct {
+		Success bool `json:"success"`
+	}
+	if jsonErr := json.Unmarshal(uploadBody, &uploadResult); jsonErr != nil || !uploadResult.Success || uploadResp.StatusCode != 200 {
+		log.Printf("[ERROR] upload file health check failed. Status: %d, body: %s", uploadResp.StatusCode, string(uploadBody))
+		return fileHealth, fmt.Errorf("upload failed with status %d", uploadResp.StatusCode)
+	}
+
+	// log.Printf("[INFO] Filed uploaded successfully to %s", url)
 	fileHealth.FileId = fileRespStruct.Id
 	fileHealth.Upload = true
-	//Delete file
+	// //Delete file
 	url = fmt.Sprintf("%s/api/v1/files/%s?remove_metadata=true", baseUrl, fileRespStruct.Id)
 	req, err = http.NewRequest("DELETE", url, nil)
 	if err != nil {
@@ -2234,16 +2286,27 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	}
 
 	req.Header.Set("Authorization", "Bearer "+apikey)
+	req.Header.Set("Org-Id", orgId)
+
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send delete request: %s", err)
 		return fileHealth, err
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed to delete file, not 200 status code")
-		return fileHealth, fmt.Errorf("delete failed for file")
+	deleteBody, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		log.Printf("[ERROR] Failed to read delete response body: %s", readErr)
+		return fileHealth, readErr
+	}
+
+	var deleteResult struct {
+		Success bool `json:"success"`
+	}
+	if jsonErr := json.Unmarshal(deleteBody, &deleteResult); jsonErr != nil || !deleteResult.Success || resp.StatusCode != 200 {
+		log.Printf("[ERROR] delete file health check failed. Status: %d, body: %s", resp.StatusCode, string(deleteBody))
+		return fileHealth, fmt.Errorf("delete failed with status %d", resp.StatusCode)
 	}
 
 	log.Printf("[INFO] File %s deleted successfully with metadata.", fileRespStruct.Id)

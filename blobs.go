@@ -24,6 +24,8 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 	actionType := strings.ReplaceAll(strings.ToLower(categoryAction.Label), " ", "_")
 
+	log.Printf("\n\nACTIONTYPE: %#v\n\n", actionType)
+
 	if actionType == "forward_tickets" || actionType == "forward_incidents" {
 		categoryCheck := "shuffle-security_incidents"
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
@@ -58,24 +60,38 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		automationFound := false
 		if len(categoryConfig.Automations) > 0 {
 			for automationIndex, automation := range categoryConfig.Automations {
-				if automation.Name != "Run workflow" {
+				if strings.ToLower(automation.Name) != "run workflow" {
 					continue
 				}
 
-				//if datastoreCategoryConfigEdited { 
+				automationFound = true
+
+				workflowIdFound := false
 				for optionIndex, option := range automation.Options {
 					if option.Key != "workflow_id" {
 						continue
 					}
 
-					if !strings.Contains(option.Value, workflow.ID) {
-						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = workflow.ID
-						datastoreCategoryConfigEdited = true
+					if debug { 
+						log.Printf("[DEBUG] VALUE: %#v", option.Value)
 					}
 
-					automationFound = true
+					workflowIdFound = true 
+
+					if !strings.Contains(option.Value, workflow.ID) {
+						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+					}
+
 					break
 				}
+
+				if !workflowIdFound {
+					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+				}
+
+				datastoreCategoryConfigEdited = true
+				categoryConfig.Automations[automationIndex].Enabled = true
+				break
 			}
 		}
 
@@ -134,7 +150,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				Options: []DatastoreAutomationOption{
 					DatastoreAutomationOption{
 						Key: "action",
-		                Value: "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'.   Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Some incidents are duds and should be closed quickly. Others are important ones. Others are missing important details. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.   If the incident has RELEVANT tasks that are not finished, modify them if necessary. Change the \"severity\" at the same time if relevant. When done, ALWAYS make sure the \"status\" is inProgress.",
+		                Value: "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'.   Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Some incidents are duds and should be closed quickly. Others are important ones. Others are missing important details. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.   If the incident has RELEVANT tasks that are not finished, modify them if necessary. Change the \"severity\" to info/low/medium/high/critical if relevant. When done, ALWAYS make sure the \"status\" is inProgress.",
 						Disabled: false,
 					},
 					DatastoreAutomationOption{
@@ -310,18 +326,19 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 						currentAction,
 						WorkflowAppActionParameter{
 							Name:      "fields",
-							Value:     "",
+							Value:     "data=$exec",
 							Multiline: true,
 						},
 					},
 				},
 			},
+			/*
 			Triggers: []Trigger{
 				Trigger{
 					ID:          startTriggerId,
 					Name:        "Webhook",
 					TriggerType: "WEBHOOK",
-					Label:       "Ingest",
+					Label:       "Forwarding webhook",
 					Environment: triggerEnv,
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
@@ -347,6 +364,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					},
 				},
 			},
+			*/
 		}
 
 		workflow = defaultWorkflow
@@ -736,7 +754,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 	//os.Exit(3)
 	//}
 
-	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && len(workflow.Triggers) == 1 && workflow.Triggers[0].TriggerType == "SCHEDULE" {
+	//if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && len(workflow.Triggers) == 1 && workflow.Triggers[0].TriggerType == "SCHEDULE" {
+	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") {
 		actionTemplate := workflow.Actions[0]
 
 		// Pre-defining it with a startnode that does nothing
