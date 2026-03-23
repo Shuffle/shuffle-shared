@@ -24900,7 +24900,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if allowContinuation == false {
-				newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceNode)
+				newExecId := fmt.Sprintf("%s_%s_subflowcheck", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceNode)
 				cache, err := GetCache(ctx, newExecId)
 				if err == nil {
 					cacheData := []byte(cache.([]uint8))
@@ -31762,8 +31762,8 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 
-	datastoreKeys, err := GetDatastoreRevisions(ctx, key, category, user.ActiveOrg.Id) 
-	if err != nil { 
+	datastoreKeys, err := GetDatastoreRevisions(ctx, key, category, user.ActiveOrg.Id)
+	if err != nil {
 		log.Printf("[WARNING] Failed loading key revisions for %s (%s).", key, category)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
@@ -31774,7 +31774,7 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 
 	parsedKeys := []CacheKeyData{}
 	for _, key := range datastoreKeys {
-		if key.OrgId != user.ActiveOrg.Id { 
+		if key.OrgId != user.ActiveOrg.Id {
 			continue
 		}
 
