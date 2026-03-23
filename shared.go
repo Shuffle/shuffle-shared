@@ -24899,8 +24899,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				log.Printf("[INFO][%s]Is this a loop? %v", workflowExecution.ExecutionId, allowContinuation)
 			}
 
-			if allowContinuation == false && len(workflowExecution.ExecutionId) > 0 {
-				newExecId := fmt.Sprintf("%s_%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionId, workflowExecution.ExecutionSourceNode)
+			if allowContinuation == false {
+				newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceNode)
 				cache, err := GetCache(ctx, newExecId)
 				if err == nil {
 					cacheData := []byte(cache.([]uint8))
