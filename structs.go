@@ -4403,6 +4403,7 @@ type HealthCheckDB struct {
 	Success    bool                            `json:"success"`
 	Updated    int64                           `json:"updated"`
 	Workflows  WorkflowHealth                  `json:"workflows"`
+	Agents     AgentHealth                     `json:"agents"`
 	Opensearch opensearchapi.ClusterHealthResp `json:"opnsearch"`
 	Datastore  DatastoreHealth                 `json:"datastore"`
 	FileOps    FileHealth                      `json:"fileops"`
