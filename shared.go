@@ -27317,6 +27317,31 @@ func listGithubWorkflowsInfo(url, username, password, branch, orgId string) ([]R
 	remoteInfos := make([]RemoteWorkflowInfo, 0)
 	collectWorkflowInfos(fs, dir, extraPath, specificFile, &remoteInfos)
 
+	// Deduplicate by workflow ID, keeping the entry with the most recent UpdatedAt
+	seenIds := make(map[string]int) // id -> index in dedupInfos
+	dedupInfos := make([]RemoteWorkflowInfo, 0, len(remoteInfos))
+	for _, info := range remoteInfos {
+		if existingIdx, seen := seenIds[info.ID]; seen {
+			if info.UpdatedAt > dedupInfos[existingIdx].UpdatedAt {
+				dedupInfos[existingIdx] = info
+			}
+		} else {
+			seenIds[info.ID] = len(dedupInfos)
+			dedupInfos = append(dedupInfos, info)
+		}
+	}
+	remoteInfos = dedupInfos
+
+	// Check which workflows already exist in this org
+	ctx := context.Background()
+	for i, info := range remoteInfos {
+		existing, err := GetWorkflow(ctx, info.ID)
+		if err == nil && existing != nil && existing.OrgId == orgId {
+			remoteInfos[i].ExistsInOrg = true
+			remoteInfos[i].OrgWorkflowId = existing.ID
+		}
+	}
+
 	log.Printf("[INFO] listGithubWorkflowsInfo: found %d workflows in remote repo", len(remoteInfos))
 	return remoteInfos, nil
 }
@@ -27547,8 +27572,8 @@ func findAndProcessSingleWorkflow(fs billy.Filesystem, dir []os.FileInfo, extra,
 				return SetWorkflow(ctx, wf, wf.ID)
 			}
 
-			// Import: create new workflow
-			wf.ID = uuid.NewV4().String()
+			// Import: preserve the original workflow ID embedded in the repo JSON file.
+			// Do NOT generate a new UUID — the ID from the file is the canonical identifier.
 			wf.Owner = userId
 			wf.OrgId = orgId
 			wf.ExecutingOrg = OrgMini{Id: orgId}
@@ -27650,7 +27675,17 @@ func LoadSpecificWorkflows(resp http.ResponseWriter, request *http.Request) {
 			Success   bool                 `json:"success"`
 			Workflows []RemoteWorkflowInfo `json:"workflows"`
 		}
-		out, _ := json.Marshal(listResp{Success: true, Workflows: infos})
+
+		// Filter out all workflow with name "Ops Dashboard Workflow" skip this workflows are those are health workflows
+		filteredInfos := []RemoteWorkflowInfo{}
+		for _, info := range infos {
+			if info.Name == "Ops Dashboard Workflow" {
+				continue
+			}
+			filteredInfos = append(filteredInfos, info)
+		}
+
+		out, _ := json.Marshal(listResp{Success: true, Workflows: filteredInfos})
 		resp.WriteHeader(200)
 		resp.Write(out)
 		return
@@ -27758,7 +27793,8 @@ func iterateWorkflowGithubFolders(fs billy.Filesystem, dir []os.FileInfo, extra 
 					workflow.Owner = userId
 				}
 
-				workflow.ID = uuid.NewV4().String()
+				// Preserve the original workflow ID from the repo JSON file.
+				// Do NOT generate a new UUID — the ID from the file is the canonical identifier.
 				workflow.OrgId = orgId
 				workflow.ExecutingOrg = OrgMini{
 					Id: orgId,
