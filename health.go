@@ -79,6 +79,45 @@ func base64StringToString(base64String string) (string, error) {
 	return string(decoded), nil
 }
 
+// executeAppRunRequest POSTs an app-execute request and returns the parsed result.
+// Extracted to avoid a deeply-nested if/else pyramid at the call site.
+func executeAppRunRequest(url, apiKey string, executeBody WorkflowAppAction) (executionResult, error) {
+	b, err := json.Marshal(executeBody)
+	if err != nil {
+		return executionResult{}, fmt.Errorf("marshal execute body: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(b))
+	if err != nil {
+		return executionResult{}, fmt.Errorf("build execute request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := (&http.Client{Timeout: 120 * time.Second}).Do(req)
+	if err != nil {
+		return executionResult{}, fmt.Errorf("send execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return executionResult{}, fmt.Errorf("read execute response: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return executionResult{}, fmt.Errorf("execute request status %d: %s", resp.StatusCode, body)
+	}
+
+	var result executionResult
+	if err = json.Unmarshal(body, &result); err != nil {
+		return executionResult{}, fmt.Errorf("unmarshal execute response: %w", err)
+	}
+	if !result.Success {
+		return executionResult{}, errors.New("app run returned success=false")
+	}
+	return result, nil
+}
+
 func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	log.Printf("[DEBUG] Running app health check")
 	appHealth := AppHealth{
@@ -289,7 +328,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
+	client = &http.Client{Timeout: 180 * time.Second}
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check app verify HTTP request: %s", err)
@@ -388,42 +427,13 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		},
 	}
 
-	executeBodyJSON, err := json.Marshal(executeBody)
-	if err != nil {
-		log.Printf("[WARNING] Failed marshalling app run JSON data: %s", err)
+	runResult, runErr := executeAppRunRequest(url, apiKey, executeBody)
+	if runErr != nil {
+		log.Printf("[WARNING] App run health check failed: %s", runErr)
 	} else {
-		req, err = http.NewRequest("POST", url, bytes.NewBuffer(executeBodyJSON))
-		if err != nil {
-			log.Printf("[WARNING] Failed creating HTTP for app run request: %s", err)
-		} else {
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer "+apiKey)
-
-			client = &http.Client{Timeout: 120 * time.Second}
-			resp, err = client.Do(req)
-			if err != nil {
-				log.Printf("[ERROR] Failed sending health check app run HTTP request: %s", err)
-			} else {
-				defer resp.Body.Close()
-				respBody, err = ioutil.ReadAll(resp.Body)
-				if err != nil {
-					log.Printf("[WARNING] Failed reading HTTP for app run response body: %s", err)
-				} else if resp.StatusCode != 200 {
-					log.Printf("[ERROR] Failed running app in app health check. Status: %d. Body: %s", resp.StatusCode, respBody)
-				} else {
-					var runResponse executionResult
-					if err = json.Unmarshal(respBody, &runResponse); err != nil {
-						log.Printf("[WARNING] Failed unmarshalling generic run JSON data: %s", err)
-					} else if !runResponse.Success {
-						log.Printf("[WARNING] Running returned false for app health check")
-					} else {
-						appHealth.Result = runResponse.Result
-						appHealth.ExecutionID = runResponse.ID
-						appHealth.Run = true
-					}
-				}
-			}
-		}
+		appHealth.Result = runResult.Result
+		appHealth.ExecutionID = runResult.ID
+		appHealth.Run = true
 	}
 
 	// 4. Delete App
@@ -1445,6 +1455,40 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	return workflowHealth, nil
 }
 
+func executeAppUploadRunRequest(url, apiKey string, executeBody WorkflowAppAction) (SingleResult, error) {
+	b, err := json.Marshal(executeBody)
+	if err != nil {
+		return SingleResult{}, fmt.Errorf("marshal execute body: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(b))
+	if err != nil {
+		return SingleResult{}, fmt.Errorf("build execute request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := (&http.Client{Timeout: 120 * time.Second}).Do(req)
+	if err != nil {
+		return SingleResult{}, fmt.Errorf("send execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return SingleResult{}, fmt.Errorf("read execute response: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return SingleResult{}, fmt.Errorf("execute request status %d: %s", resp.StatusCode, body)
+	}
+
+	var result SingleResult
+	if err = json.Unmarshal(body, &result); err != nil {
+		return SingleResult{}, fmt.Errorf("unmarshal execute response: %w", err)
+	}
+	return result, nil
+}
+
 func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 	appHealth := AppHealth{
 		Create:      false,
@@ -1555,6 +1599,7 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 	// wait 5 second before execution
 	time.Sleep(5 * time.Second)
 
+	// Execute and poll — failures are non-fatal so we always reach the delete step.
 	executeUrl := baseUrl + "/api/v1/apps/" + appData.Id + "/run"
 
 	var executeBody WorkflowAppAction
@@ -1572,103 +1617,75 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 		},
 	}
 
-	executeBodyJSON, err := json.Marshal(executeBody)
-	if err != nil {
-		log.Printf("[WARNING] Failed marshalling app run JSON data, skipping execute: %s", err)
+	executionData, execErr := executeAppUploadRunRequest(executeUrl, apiKey, executeBody)
+	if execErr != nil {
+		log.Printf("[WARNING] App execute failed, skipping poll: %s", execErr)
 	} else {
-		execReq, execReqErr := http.NewRequest("POST", executeUrl, bytes.NewBuffer(executeBodyJSON))
-		if execReqErr != nil {
-			log.Printf("[WARNING] Failed creating HTTP for app run request, skipping execute: %s", execReqErr)
-		} else {
-			execReq.Header.Set("Content-Type", "application/json")
-			execReq.Header.Set("Authorization", "Bearer "+apiKey)
+		appHealth.Run = true
+		appHealth.ExecutionID = executionData.Id
 
-			execClient := &http.Client{Timeout: 120 * time.Second}
-			execResp, execErr := execClient.Do(execReq)
-			if execErr != nil {
-				log.Printf("[WARNING] Failed sending health check app run HTTP request, skipping execute: %s", execErr)
-			} else {
-				defer execResp.Body.Close()
-
-				appExecuteData, readErr := io.ReadAll(execResp.Body)
-				if readErr != nil {
-					log.Printf("[WARNING] Failed to read app execution data, skipping poll: %s", readErr)
-				} else if execResp.StatusCode != 200 {
-					log.Printf("[WARNING] App execute returned HTTP %d, skipping poll. Body: %s", execResp.StatusCode, appExecuteData)
-				} else {
-					var executionData SingleResult
-					if unmarshalErr := json.Unmarshal(appExecuteData, &executionData); unmarshalErr != nil {
-						log.Printf("[WARNING] Failed to unmarshal single app result, skipping poll: %s", unmarshalErr)
-					} else {
-						appHealth.Run = true
-						appHealth.ExecutionID = executionData.Id
-
-						// Poll for the execution result.
-						runCount := 0
-						for executionData.Result == "" {
-							if runCount > 5 {
-								log.Printf("[WARNING] Timed out polling app execution result after %d attempts", runCount)
-								break
-							}
-
-							pollReq, pollReqErr := http.NewRequest("POST", baseUrl+"/api/v1/streams/results", nil)
-							if pollReqErr != nil {
-								log.Printf("[WARNING] Failed creating poll HTTP request: %s", pollReqErr)
-								break
-							}
-
-							pollReq.Header.Set("Content-Type", "application/json")
-							pollReq.Header.Set("Authorization", "Bearer "+apiKey)
-							pollReq.Header.Set("Org-Id", orgId)
-
-							reqBody := map[string]string{"execution_id": executionData.Id, "authorization": executionData.Authorization}
-							reqBodyJson, _ := json.Marshal(reqBody)
-							pollReq.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyJson))
-
-							pollClient := &http.Client{Timeout: 120 * time.Second}
-							pollResp, pollErr := pollClient.Do(pollReq)
-							if pollErr != nil {
-								log.Printf("[WARNING] Failed sending poll HTTP request: %s", pollErr)
-								break
-							}
-
-							pollBody, pollReadErr := ioutil.ReadAll(pollResp.Body)
-							pollResp.Body.Close()
-							if pollReadErr != nil {
-								log.Printf("[WARNING] Failed reading poll response body: %s", pollReadErr)
-								break
-							}
-
-							if pollResp.StatusCode != 200 {
-								log.Printf("[WARNING] Poll returned HTTP %d, stopping poll", pollResp.StatusCode)
-								break
-							}
-
-							var executionResults WorkflowExecution
-							if pollUnmarshalErr := json.Unmarshal(pollBody, &executionResults); pollUnmarshalErr != nil {
-								log.Printf("[WARNING] Failed unmarshalling poll response: %s", pollUnmarshalErr)
-								break
-							}
-
-							if executionResults.Status != "EXECUTING" {
-								log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, executionResults.ExecutionId)
-							}
-
-							if executionResults.Status == "FINISHED" {
-								log.Printf("[DEBUG] Workflow Health execution is finished, checking results")
-								executionData.Result = executionResults.Result
-								appHealth.Validate = executionResults.Workflow.Validated
-							}
-
-							time.Sleep(2 * time.Second)
-							runCount++
-						}
-
-						appHealth.Result = executionData.Result
-					}
-				}
+		// Poll for the execution result.
+		runCount := 0
+		for executionData.Result == "" {
+			if runCount > 5 {
+				log.Printf("[WARNING] Timed out polling app execution result after %d attempts", runCount)
+				break
 			}
+
+			pollReq, pollReqErr := http.NewRequest("POST", baseUrl+"/api/v1/streams/results", nil)
+			if pollReqErr != nil {
+				log.Printf("[WARNING] Failed creating poll HTTP request: %s", pollReqErr)
+				break
+			}
+
+			pollReq.Header.Set("Content-Type", "application/json")
+			pollReq.Header.Set("Authorization", "Bearer "+apiKey)
+			pollReq.Header.Set("Org-Id", orgId)
+
+			reqBody := map[string]string{"execution_id": executionData.Id, "authorization": executionData.Authorization}
+			reqBodyJson, _ := json.Marshal(reqBody)
+			pollReq.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyJson))
+
+			pollClient := &http.Client{Timeout: 120 * time.Second}
+			pollResp, pollErr := pollClient.Do(pollReq)
+			if pollErr != nil {
+				log.Printf("[WARNING] Failed sending poll HTTP request: %s", pollErr)
+				break
+			}
+
+			pollBody, pollReadErr := ioutil.ReadAll(pollResp.Body)
+			pollResp.Body.Close()
+			if pollReadErr != nil {
+				log.Printf("[WARNING] Failed reading poll response body: %s", pollReadErr)
+				break
+			}
+
+			if pollResp.StatusCode != 200 {
+				log.Printf("[WARNING] Poll returned HTTP %d, stopping poll", pollResp.StatusCode)
+				break
+			}
+
+			var executionResults WorkflowExecution
+			if pollUnmarshalErr := json.Unmarshal(pollBody, &executionResults); pollUnmarshalErr != nil {
+				log.Printf("[WARNING] Failed unmarshalling poll response: %s", pollUnmarshalErr)
+				break
+			}
+
+			if executionResults.Status != "EXECUTING" {
+				log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, executionResults.ExecutionId)
+			}
+
+			if executionResults.Status == "FINISHED" {
+				log.Printf("[DEBUG] Workflow Health execution is finished, checking results")
+				executionData.Result = executionResults.Result
+				appHealth.Validate = executionResults.Workflow.Validated
+			}
+
+			time.Sleep(2 * time.Second)
+			runCount++
 		}
+
+		appHealth.Result = executionData.Result
 	}
 
 	// Always attempt to delete the app regardless of execute/poll outcome.

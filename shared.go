@@ -29,6 +29,7 @@ import (
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
 	"google.golang.org/api/cloudfunctions/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 
 	scheduler "cloud.google.com/go/scheduler/apiv1"
@@ -11521,7 +11522,8 @@ func deleteGCPCloudFunction(ctx context.Context, app *WorkflowApp, functionName 
 	_, err = cloudfunctions.NewProjectsLocationsFunctionsService(service).Delete(functionPath).Do()
 	if err != nil {
 		// 404 means the function was never deployed or was already deleted — not an error.
-		if strings.Contains(err.Error(), "404") || strings.Contains(strings.ToLower(err.Error()), "not found") {
+		var apiErr *googleapi.Error
+		if errors.As(err, &apiErr) && apiErr.Code == 404 {
 			log.Printf("[INFO] Cloud Function '%s' not found (already deleted or never deployed) for app %s (%s)", functionPath, app.Name, app.ID)
 			return nil
 		}
@@ -11535,12 +11537,17 @@ func deleteGCPCloudFunction(ctx context.Context, app *WorkflowApp, functionName 
 // deleteAppBucketFiles deletes all GCS bucket objects that were written during
 // verifySwagger for the given app:
 //
-//   - generated_cloudfunctions/{identifier}.zip
+//   - generated_cloudfunctions/{functionName}.zip
 //   - generated_apps/{title}_{md5}/*
 //   - extra_specs/{app.ID}
 //
-// md5Hash is the last 32 hex chars of functionName and uniquely identifies the build.
-func deleteAppBucketFiles(ctx context.Context, app *WorkflowApp, md5Hash string) {
+// functionName is the lowercase identifier ("{title}-{md5}") extracted from app.ReferenceUrl.
+func deleteAppBucketFiles(ctx context.Context, app *WorkflowApp, functionName string) {
+	if len(functionName) == 0 {
+		log.Printf("[WARNING] Empty functionName for bucket cleanup of app %s (%s), skipping", app.Name, app.ID)
+		return
+	}
+
 	bucketName := fmt.Sprintf("%s.appspot.com", gceProject)
 	storageClient, err := storage.NewClient(ctx)
 	if err != nil {
@@ -11551,22 +11558,32 @@ func deleteAppBucketFiles(ctx context.Context, app *WorkflowApp, md5Hash string)
 
 	bucket := storageClient.Bucket(bucketName)
 
-	// Delete objects under generated_cloudfunctions/ and generated_apps/ whose
-	// names contain the MD5 hash — handles case differences between identifier
-	// (mixed case, used for filenames) and functionName (always lowercase).
-	for _, prefix := range []string{"generated_cloudfunctions/", "generated_apps/"} {
-		it := bucket.Objects(ctx, &storage.Query{Prefix: prefix})
+	// Delete generated_cloudfunctions/{functionName}.zip directly — no listing needed.
+	cfPath := fmt.Sprintf("generated_cloudfunctions/%s.zip", functionName)
+	if delErr := bucket.Object(cfPath).Delete(ctx); delErr != nil {
+		if !errors.Is(delErr, storage.ErrObjectNotExist) {
+			log.Printf("[WARNING] Failed to delete bucket object '%s' for app %s (%s): %s", cfPath, app.Name, app.ID, delErr)
+		}
+	} else {
+		log.Printf("[INFO] Deleted bucket object '%s' for app %s (%s)", cfPath, app.Name, app.ID)
+	}
+
+	// Delete all files under generated_apps/{title}_{md5}/ using an exact prefix so we
+	// only list this app's directory rather than the entire generated_apps/ tree.
+	// functionName = "{title}-{md5}" — strip the trailing "-{32-char md5}" to get title.
+	if len(functionName) >= 33 {
+		title := functionName[:len(functionName)-33]
+		md5Hash := functionName[len(functionName)-32:]
+		appsPrefix := fmt.Sprintf("generated_apps/%s_%s/", title, md5Hash)
+		it := bucket.Objects(ctx, &storage.Query{Prefix: appsPrefix})
 		for {
 			attrs, iterErr := it.Next()
 			if iterErr == iterator.Done {
 				break
 			}
 			if iterErr != nil {
-				log.Printf("[WARNING] Failed iterating bucket objects with prefix '%s' for app %s (%s): %s", prefix, app.Name, app.ID, iterErr)
+				log.Printf("[WARNING] Failed iterating bucket objects with prefix '%s' for app %s (%s): %s", appsPrefix, app.Name, app.ID, iterErr)
 				break
-			}
-			if !strings.Contains(strings.ToLower(attrs.Name), md5Hash) {
-				continue
 			}
 			if delErr := bucket.Object(attrs.Name).Delete(ctx); delErr != nil {
 				log.Printf("[WARNING] Failed to delete bucket object '%s' for app %s (%s): %s", attrs.Name, app.Name, app.ID, delErr)
@@ -11579,7 +11596,7 @@ func deleteAppBucketFiles(ctx context.Context, app *WorkflowApp, md5Hash string)
 	// Delete extra_specs/{app.ID} — used when app data is too large for datastore.
 	extraSpecsPath := fmt.Sprintf("extra_specs/%s", app.ID)
 	if delErr := bucket.Object(extraSpecsPath).Delete(ctx); delErr != nil {
-		if !strings.Contains(delErr.Error(), "doesn't exist") && !strings.Contains(delErr.Error(), "no such object") {
+		if !errors.Is(delErr, storage.ErrObjectNotExist) {
 			log.Printf("[WARNING] Failed to delete bucket object '%s' for app %s (%s): %s", extraSpecsPath, app.Name, app.ID, delErr)
 		}
 	} else {
@@ -11614,24 +11631,7 @@ func deleteAppCloudResources(ctx context.Context, app *WorkflowApp) error {
 		log.Printf("[WARNING] Cloud Function deletion failed for app %s (%s), continuing with bucket cleanup: %s", app.Name, app.ID, err)
 	}
 
-	// Extract the MD5 hash from the tail of the function name and clean up bucket files.
-	if len(functionName) >= 33 {
-		candidate := functionName[len(functionName)-32:]
-		valid := true
-		for _, c := range candidate {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-				valid = false
-				break
-			}
-		}
-		if valid {
-			deleteAppBucketFiles(ctx, app, candidate)
-		} else {
-			log.Printf("[WARNING] Could not extract MD5 from function name '%s' for app %s (%s), skipping bucket cleanup", functionName, app.Name, app.ID)
-		}
-	} else {
-		log.Printf("[WARNING] Function name '%s' too short to contain MD5 for app %s (%s), skipping bucket cleanup", functionName, app.Name, app.ID)
-	}
+	deleteAppBucketFiles(ctx, app, functionName)
 
 	return nil
 }
@@ -11722,8 +11722,22 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	if len(app.ReferenceUrl) > 0 && project.Environment == "cloud" {
 		appCopy := *app
 		go func() {
-			if err := deleteAppCloudResources(context.Background(), &appCopy); err != nil {
-				log.Printf("[WARNING] Background GCP cleanup failed for app %s (%s): %s", appCopy.Name, appCopy.ID, err)
+			const maxAttempts = 3
+			baseDelay := 2 * time.Second
+			for attempt := 1; attempt <= maxAttempts; attempt++ {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				err := deleteAppCloudResources(ctx, &appCopy)
+				cancel()
+				if err == nil {
+					return
+				}
+				if attempt == maxAttempts {
+					log.Printf("[WARNING] Background GCP cleanup failed for app %s (%s) after %d attempts: %s", appCopy.Name, appCopy.ID, maxAttempts, err)
+					return
+				}
+				log.Printf("[WARNING] Background GCP cleanup attempt %d/%d failed for app %s (%s): %s — retrying in %s", attempt, maxAttempts, appCopy.Name, appCopy.ID, err, baseDelay)
+				time.Sleep(baseDelay)
+				baseDelay *= 2
 			}
 		}()
 	}
