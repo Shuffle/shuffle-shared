@@ -28,9 +28,13 @@ import (
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
+	"google.golang.org/api/cloudfunctions/v1"
+	"google.golang.org/api/googleapi"
+	"google.golang.org/api/iterator"
 
 	scheduler "cloud.google.com/go/scheduler/apiv1"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
+	"cloud.google.com/go/storage"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	http2 "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -11954,6 +11958,141 @@ func deactivateApp(ctx context.Context, user User, app *WorkflowApp) error {
 	return nil
 }
 
+// deleteGCPCloudFunction deletes the GCP Cloud Function associated with the app.
+// functionName must be the lowercase function name extracted from app.ReferenceUrl.
+// Uses Application Default Credentials — same as deployCloudFunctionPython.
+func deleteGCPCloudFunction(ctx context.Context, app *WorkflowApp, functionName string) error {
+	region := os.Getenv("SHUFFLE_GCE_LOCATION")
+	if len(region) == 0 {
+		region = "europe-west2"
+	}
+	if len(gceProject) == 0 {
+		return fmt.Errorf("SHUFFLE_GCEPROJECT not set; cannot delete Cloud Function for app %s (%s)", app.Name, app.ID)
+	}
+
+	service, err := cloudfunctions.NewService(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create Cloud Functions service for app %s (%s): %w", app.Name, app.ID, err)
+	}
+
+	functionPath := fmt.Sprintf("projects/%s/locations/%s/functions/%s", gceProject, region, functionName)
+	_, err = cloudfunctions.NewProjectsLocationsFunctionsService(service).Delete(functionPath).Do()
+	if err != nil {
+		// 404 means the function was never deployed or was already deleted — not an error.
+		var apiErr *googleapi.Error
+		if errors.As(err, &apiErr) && apiErr.Code == 404 {
+			log.Printf("[INFO] Cloud Function '%s' not found (already deleted or never deployed) for app %s (%s)", functionPath, app.Name, app.ID)
+			return nil
+		}
+		return fmt.Errorf("failed to delete Cloud Function '%s' for app %s (%s): %w", functionPath, app.Name, app.ID, err)
+	}
+
+	log.Printf("[INFO] Deleted Cloud Function '%s' for app %s (%s)", functionPath, app.Name, app.ID)
+	return nil
+}
+
+// deleteAppBucketFiles deletes all GCS bucket objects that were written during
+// verifySwagger for the given app:
+//
+//   - generated_cloudfunctions/{functionName}.zip
+//   - generated_apps/{title}_{md5}/*
+//   - extra_specs/{app.ID}
+//
+// functionName is the lowercase identifier ("{title}-{md5}") extracted from app.ReferenceUrl.
+func deleteAppBucketFiles(ctx context.Context, app *WorkflowApp, functionName string) {
+	if len(functionName) == 0 {
+		log.Printf("[WARNING] Empty functionName for bucket cleanup of app %s (%s), skipping", app.Name, app.ID)
+		return
+	}
+
+	bucketName := fmt.Sprintf("%s.appspot.com", gceProject)
+	storageClient, err := storage.NewClient(ctx)
+	if err != nil {
+		log.Printf("[WARNING] Failed to create storage client for bucket cleanup of app %s (%s): %s", app.Name, app.ID, err)
+		return
+	}
+	defer storageClient.Close()
+
+	bucket := storageClient.Bucket(bucketName)
+
+	// Delete generated_cloudfunctions/{functionName}.zip directly — no listing needed.
+	cfPath := fmt.Sprintf("generated_cloudfunctions/%s.zip", functionName)
+	if delErr := bucket.Object(cfPath).Delete(ctx); delErr != nil {
+		if !errors.Is(delErr, storage.ErrObjectNotExist) {
+			log.Printf("[WARNING] Failed to delete bucket object '%s' for app %s (%s): %s", cfPath, app.Name, app.ID, delErr)
+		}
+	} else {
+		log.Printf("[INFO] Deleted bucket object '%s' for app %s (%s)", cfPath, app.Name, app.ID)
+	}
+
+	// Delete all files under generated_apps/{title}_{md5}/ using an exact prefix so we
+	// only list this app's directory rather than the entire generated_apps/ tree.
+	// functionName = "{title}-{md5}" — strip the trailing "-{32-char md5}" to get title.
+	if len(functionName) >= 33 {
+		title := functionName[:len(functionName)-33]
+		md5Hash := functionName[len(functionName)-32:]
+		appsPrefix := fmt.Sprintf("generated_apps/%s_%s/", title, md5Hash)
+		it := bucket.Objects(ctx, &storage.Query{Prefix: appsPrefix})
+		for {
+			attrs, iterErr := it.Next()
+			if iterErr == iterator.Done {
+				break
+			}
+			if iterErr != nil {
+				log.Printf("[WARNING] Failed iterating bucket objects with prefix '%s' for app %s (%s): %s", appsPrefix, app.Name, app.ID, iterErr)
+				break
+			}
+			if delErr := bucket.Object(attrs.Name).Delete(ctx); delErr != nil {
+				log.Printf("[WARNING] Failed to delete bucket object '%s' for app %s (%s): %s", attrs.Name, app.Name, app.ID, delErr)
+			} else {
+				log.Printf("[INFO] Deleted bucket object '%s' for app %s (%s)", attrs.Name, app.Name, app.ID)
+			}
+		}
+	}
+
+	// Delete extra_specs/{app.ID} — used when app data is too large for datastore.
+	extraSpecsPath := fmt.Sprintf("extra_specs/%s", app.ID)
+	if delErr := bucket.Object(extraSpecsPath).Delete(ctx); delErr != nil {
+		if !errors.Is(delErr, storage.ErrObjectNotExist) {
+			log.Printf("[WARNING] Failed to delete bucket object '%s' for app %s (%s): %s", extraSpecsPath, app.Name, app.ID, delErr)
+		}
+	} else {
+		log.Printf("[INFO] Deleted bucket object '%s' for app %s (%s)", extraSpecsPath, app.Name, app.ID)
+	}
+}
+
+// deleteAppCloudResources is the entry point called from DeleteWorkflowApp.
+// It parses the app's ReferenceUrl, then delegates to deleteGCPCloudFunction
+// and deleteAppBucketFiles.
+func deleteAppCloudResources(ctx context.Context, app *WorkflowApp) error {
+	if !strings.Contains(app.ReferenceUrl, "cloudfunctions.net") {
+		log.Printf("[DEBUG] App %s (%s) has no Cloud Function URL, skipping GCP cleanup", app.Name, app.ID)
+		return nil
+	}
+
+	parsedURL, err := url.Parse(app.ReferenceUrl)
+	if err != nil {
+		return fmt.Errorf("failed to parse Cloud Function URL '%s' for app %s (%s): %w", app.ReferenceUrl, app.Name, app.ID, err)
+	}
+
+	pathParts := strings.Split(strings.TrimPrefix(parsedURL.Path, "/"), "/")
+	if len(pathParts) == 0 || pathParts[0] == "" {
+		return fmt.Errorf("could not extract function name from URL path '%s' for app %s (%s)", parsedURL.Path, app.Name, app.ID)
+	}
+	// functionName is strings.ToLower(identifier) where identifier = "{title}-{md5}".
+	// The MD5 (32 hex chars) is always the last 32 chars of functionName.
+	functionName := strings.ToLower(pathParts[0])
+
+	// Always attempt bucket cleanup even if the Cloud Function is already gone or fails to delete.
+	if err := deleteGCPCloudFunction(ctx, app, functionName); err != nil {
+		log.Printf("[WARNING] Cloud Function deletion failed for app %s (%s), continuing with bucket cleanup: %s", app.Name, app.ID, err)
+	}
+
+	deleteAppBucketFiles(ctx, app, functionName)
+
+	return nil
+}
+
 func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -12035,6 +12174,29 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Can't delete public apps. Unpublish. Contact support@shuffler.io if you encounter any problem."}`))
 		return
+	}
+
+	if len(app.ReferenceUrl) > 0 && project.Environment == "cloud" {
+		appCopy := *app
+		go func() {
+			const maxAttempts = 3
+			baseDelay := 2 * time.Second
+			for attempt := 1; attempt <= maxAttempts; attempt++ {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				err := deleteAppCloudResources(ctx, &appCopy)
+				cancel()
+				if err == nil {
+					return
+				}
+				if attempt == maxAttempts {
+					log.Printf("[WARNING] Background GCP cleanup failed for app %s (%s) after %d attempts: %s", appCopy.Name, appCopy.ID, maxAttempts, err)
+					return
+				}
+				log.Printf("[WARNING] Background GCP cleanup attempt %d/%d failed for app %s (%s): %s — retrying in %s", attempt, maxAttempts, appCopy.Name, appCopy.ID, err, baseDelay)
+				time.Sleep(baseDelay)
+				baseDelay *= 2
+			}
+		}()
 	}
 
 	// Not really deleting it, just removing from user cache
