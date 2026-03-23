@@ -27065,8 +27065,12 @@ func loadGithubWorkflows(url, username, password, userId, branch, orgId string) 
 	}
 
 	// Handle GitHub-specific file URLs
-	if strings.Contains(url, "github.com") && strings.Contains(url, "/blob/") {
-		parts := strings.SplitN(url, "/blob/", 2)
+	if strings.Contains(url, "github.com") && (strings.Contains(url, "/blob/") || strings.Contains(url, "/tree/")) {
+		separator := "/blob/"
+		if strings.Contains(url, "/tree/") {
+			separator = "/tree/"
+		}
+		parts := strings.SplitN(url, separator, 2)
 		if len(parts) == 2 {
 			baseURL := parts[0]
 			remainder := parts[1]
@@ -27189,17 +27193,6 @@ func loadGithubWorkflows(url, username, password, userId, branch, orgId string) 
 	return nil
 }
 
-// RemoteWorkflowInfo holds metadata for a workflow found in a remote git repo.
-type RemoteWorkflowInfo struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	FolderName    string `json:"folder_name"`
-	UpdatedAt     int64  `json:"updated_at"`
-	FilePath      string `json:"file_path"`
-	ExistsInOrg   bool   `json:"exists_in_org"`
-	OrgWorkflowId string `json:"org_workflow_id"`
-}
-
 // listGithubWorkflowsInfo clones a git repo and returns metadata for each workflow JSON found.
 // It also checks whether each workflow ID already exists in the given org.
 func listGithubWorkflowsInfo(url, username, password, branch, orgId string) ([]RemoteWorkflowInfo, error) {
@@ -27229,8 +27222,12 @@ func listGithubWorkflowsInfo(url, username, password, branch, orgId string) ([]R
 		}
 	}
 
-	if strings.Contains(url, "github.com") && strings.Contains(url, "/blob/") {
-		parts := strings.SplitN(url, "/blob/", 2)
+	if strings.Contains(url, "github.com") && (strings.Contains(url, "/blob/") || strings.Contains(url, "/tree/")) {
+		separator := "/blob/"
+		if strings.Contains(url, "/tree/") {
+			separator = "/tree/"
+		}
+		parts := strings.SplitN(url, separator, 2)
 		if len(parts) == 2 {
 			baseURL := parts[0]
 			remainder := parts[1]
@@ -27427,8 +27424,12 @@ func importSingleRemoteWorkflow(url, username, password, branch, originalWorkflo
 		}
 	}
 
-	if strings.Contains(url, "github.com") && strings.Contains(url, "/blob/") {
-		parts := strings.SplitN(url, "/blob/", 2)
+	if strings.Contains(url, "github.com") && (strings.Contains(url, "/blob/") || strings.Contains(url, "/tree/")) {
+		separator := "/blob/"
+		if strings.Contains(url, "/tree/") {
+			separator = "/tree/"
+		}
+		parts := strings.SplitN(url, separator, 2)
 		if len(parts) == 2 {
 			baseURL := parts[0]
 			remainder := parts[1]
