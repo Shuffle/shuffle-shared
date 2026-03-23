@@ -724,7 +724,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 	// Use channel for getting RunOpsWorkflow function results
 	workflowHealthChannel := make(chan WorkflowHealth)
-	errorChannel := make(chan error, 6)
+	errorChannel := make(chan error, 7)
 	go func() {
 		if debug {
 			log.Printf("[DEBUG] Running workflowHealthChannel goroutine")
@@ -738,6 +738,24 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		workflowHealthChannel <- workflowHealth
+		errorChannel <- err
+	}()
+
+	// Agent health check
+	agentHealthChannel := make(chan AgentHealth)
+	go func() {
+		if debug {
+			log.Printf("[DEBUG] Running agentHealthChannel goroutine")
+		}
+
+		agentHealth, err := RunOpsAgent(apiKey, orgId, "")
+		if err != nil {
+			if project.Environment == "cloud" {
+				log.Printf("[ERROR] Failed agent health check: %s", err)
+			}
+		}
+
+		agentHealthChannel <- agentHealth
 		errorChannel <- err
 	}()
 
@@ -815,6 +833,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	platformHealth.FileOps = <-fileHealthChannel
 	platformHealth.Apps = <-openapiAppHealthChannel
 	platformHealth.Workflows = <-workflowHealthChannel
+	platformHealth.Agents = <-agentHealthChannel
 	err = <-errorChannel
 
 	if project.Environment != "cloud" {
@@ -840,7 +859,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if platformHealth.Workflows.Create == true && platformHealth.Workflows.Delete == true && platformHealth.Workflows.Run == true && platformHealth.Workflows.RunFinished == true && platformHealth.Workflows.RunStatus == "FINISHED" {
+	if platformHealth.Workflows.Create == true && platformHealth.Workflows.Delete == true && platformHealth.Workflows.Run == true && platformHealth.Workflows.RunFinished == true && platformHealth.Workflows.RunStatus == "FINISHED" && platformHealth.Agents.Run == true && platformHealth.Agents.RunFinished == true && platformHealth.Agents.RunStatus == "FINISHED" && platformHealth.Agents.LLMCallSuccess == true {
 		log.Printf("[DEBUG] Platform health check successful! All necessary values are true.")
 		platformHealth.Success = true
 	}
@@ -854,6 +873,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	HealthCheck.Datastore = platformHealth.Datastore
 	HealthCheck.FileOps = platformHealth.FileOps
 	HealthCheck.Apps = platformHealth.Apps
+	HealthCheck.Agents = platformHealth.Agents
 	// Add to database
 	err = SetPlatformHealth(ctx, HealthCheck)
 	if err != nil {
@@ -4388,87 +4408,4 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 	}
 
 	return agentHealth, nil
-}
-
-// TestRunOpsAgent is a temporary test endpoint to verify agent health check works
-//
-// TO USE THIS:
-//  1. Add this line to your router/main file where other endpoints are registered:
-//     http.HandleFunc("/api/v1/test/agent-health", TestRunOpsAgent)
-//
-// 2. Restart your server
-//
-// 3. Run: curl http://localhost:5001/api/v1/test/agent-health
-//
-// DELETE THIS BEFORE MERGING TO PRODUCTION
-func TestRunOpsAgent(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	ctx := GetContext(request)
-
-	// Get API key and org ID
-	apiKey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
-	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
-
-	if project.Environment == "onprem" && (len(apiKey) == 0 || len(orgId) == 0) {
-		org, err := GetFirstOrg(ctx)
-		if err != nil {
-			log.Printf("[ERROR] Failed getting first org: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Set up a user and org first!"}`))
-			return
-		}
-
-		for _, user := range org.Users {
-			user, err := GetUser(ctx, user.Id)
-			if err != nil || user.Id == "" {
-				continue
-			}
-
-			if user.Role == "admin" && len(user.ApiKey) > 0 {
-				apiKey = user.ApiKey
-				break
-			}
-		}
-
-		if apiKey == "" {
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "No admin user found!"}`))
-			return
-		}
-
-		orgId = org.Id
-	}
-
-	log.Printf("[TEST] Running agent health check for org %s", orgId)
-
-	// Run the agent health check
-	agentHealth, err := RunOpsAgent(apiKey, orgId, "")
-	if err != nil {
-		log.Printf("[TEST] Agent health check failed: %s", err)
-	}
-
-	// Return the result
-	result := map[string]interface{}{
-		"success":      err == nil,
-		"agent_health": agentHealth,
-	}
-
-	if err != nil {
-		result["error"] = err.Error()
-	}
-
-	resultJson, err := json.Marshal(result)
-	if err != nil {
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal result"}`))
-		return
-	}
-
-	resp.Header().Set("Content-Type", "application/json")
-	resp.WriteHeader(200)
-	resp.Write(resultJson)
 }
