@@ -7656,6 +7656,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 	}
 
+	log.Printf("[INFO] AI_AGENT_START: execution_id=%s org_id=%s input_length=%d", execution.ExecutionId, execution.ExecutionOrg, len(userMessage))
+
 	// Set model based on environment
 	aiModel := "gpt-5-mini"
 	newAiModel := os.Getenv("AI_MODEL")
@@ -7848,7 +7850,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 	newresp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[ERROR] AI Agent: Failed sending request during LLM setup: %s", err)
+		log.Printf("[ERROR] AI_AGENT_LLM_FAILURE: execution_id=%s error=%s", execution.ExecutionId, strings.Replace(err.Error(), `"`, `\"`, -1))
 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
@@ -8392,6 +8394,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				SetWorkflowExecution(ctx, execution, true)
 			}
 		}
+
+		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s status=%s duration=%ds decisions=%d", execution.ExecutionId, agentOutput.Status, time.Now().Unix()-agentOutput.StartedAt, len(agentOutput.Decisions))
 
 		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status == "EXECUTING" {
 			log.Printf("[INFO][%s] AI Agent action %s finished.", execution.ExecutionId, startNode.ID)
