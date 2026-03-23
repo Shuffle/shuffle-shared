@@ -24733,6 +24733,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			// FIXME: Is execution ID missing?
 
+			if debug {
+				log.Printf("[INFO][%s]Is this a loop? %v", workflowExecution.ExecutionId, allowContinuation)
+			}
+
 			if allowContinuation == false && len(workflowExecution.ExecutionId) > 0 {
 				newExecId := fmt.Sprintf("%s_%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionId, workflowExecution.ExecutionSourceNode)
 				cache, err := GetCache(ctx, newExecId)
@@ -24749,6 +24753,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					return workflowExecution, ExecInfo{}, fmt.Sprintf("Subflow for %s has already been executed", newExecId), errors.New(fmt.Sprintf("Subflow for %s has already been executed", newExecId))
+				} else {
+					if debug {
+						log.Printf("[ERROR] Failed to find cache for %s %s %s", workflowExecution.ExecutionParent, workflowExecution.ExecutionId, workflowExecution.ExecutionSourceNode)
+					}
 				}
 
 				cacheData := []byte("1")
