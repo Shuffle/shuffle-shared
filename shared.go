@@ -27317,20 +27317,6 @@ func listGithubWorkflowsInfo(url, username, password, branch, orgId string) ([]R
 	remoteInfos := make([]RemoteWorkflowInfo, 0)
 	collectWorkflowInfos(fs, dir, extraPath, specificFile, &remoteInfos)
 
-	// Mark whether remote workflows already exist in this org.
-	ctx := context.Background()
-	for i := range remoteInfos {
-		existing, err := GetWorkflow(ctx, remoteInfos[i].ID, true)
-		if err != nil || existing == nil || existing.ID == "" {
-			continue
-		}
-
-		if existing.OrgId == orgId {
-			remoteInfos[i].ExistsInOrg = true
-			remoteInfos[i].OrgWorkflowId = existing.ID
-		}
-	}
-
 	log.Printf("[INFO] listGithubWorkflowsInfo: found %d workflows in remote repo", len(remoteInfos))
 	return remoteInfos, nil
 }
@@ -27550,12 +27536,6 @@ func findAndProcessSingleWorkflow(fs billy.Filesystem, dir []os.FileInfo, extra,
 				if err != nil || existing == nil {
 					return fmt.Errorf("could not find org workflow %s to sync: %v", syncToId, err)
 				}
-				if existing.ID == "" {
-					return fmt.Errorf("could not find org workflow %s to sync", syncToId)
-				}
-				if existing.OrgId != orgId {
-					return fmt.Errorf("workflow %s is not in your active org and cannot be synced", syncToId)
-				}
 				// Preserve org ownership, update content
 				wf.ID = existing.ID
 				wf.Owner = existing.Owner
@@ -27568,15 +27548,7 @@ func findAndProcessSingleWorkflow(fs billy.Filesystem, dir []os.FileInfo, extra,
 			}
 
 			// Import: create new workflow
-			wf.ID = originalWorkflowId
-			existing, err := GetWorkflow(ctx, wf.ID, true)
-			if err == nil && existing != nil && existing.ID != "" {
-				if existing.OrgId == orgId {
-					return fmt.Errorf("workflow with id %s already exists in your org; use sync to update it", wf.ID)
-				}
-
-				return fmt.Errorf("workflow with id %s already exists in another org and cannot be imported with the same id", wf.ID)
-			}
+			wf.ID = uuid.NewV4().String()
 			wf.Owner = userId
 			wf.OrgId = orgId
 			wf.ExecutingOrg = OrgMini{Id: orgId}
@@ -31596,8 +31568,8 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 
-	datastoreKeys, err := GetDatastoreRevisions(ctx, key, category, user.ActiveOrg.Id)
-	if err != nil {
+	datastoreKeys, err := GetDatastoreRevisions(ctx, key, category, user.ActiveOrg.Id) 
+	if err != nil { 
 		log.Printf("[WARNING] Failed loading key revisions for %s (%s).", key, category)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
@@ -31608,7 +31580,7 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 
 	parsedKeys := []CacheKeyData{}
 	for _, key := range datastoreKeys {
-		if key.OrgId != user.ActiveOrg.Id {
+		if key.OrgId != user.ActiveOrg.Id { 
 			continue
 		}
 
