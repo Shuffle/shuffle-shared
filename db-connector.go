@@ -889,7 +889,9 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 				return workflowExecution, nil
 			} else {
-				//log.Printf("[WARNING] Failed getting workflowexecution: %s", err)
+				if debug { 
+					log.Printf("[DEBUG] Failed mapping workflowexecution cache for '%s': %s", id, err)
+				}
 			}
 		} else {
 		}
@@ -899,6 +901,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		return workflowExecution, errors.New("ExecutionId doesn't exist in cache")
 	}
 
+	var getErr error = nil
 	if project.DbType == "opensearch" {
 		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
 			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
@@ -944,11 +947,11 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
-		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
-			if strings.Contains(err.Error(), `cannot load field`) {
-				err = nil
+		if getErr = project.Dbclient.Get(ctx, key, workflowExecution); getErr != nil {
+			if strings.Contains(getErr.Error(), `cannot load field`) {
+				getErr = nil
 			} else {
-				return workflowExecution, err
+				//return workflowExecution, err
 			}
 		}
 
@@ -959,6 +962,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				Result: workflowExecution.ExecutionArgument,
 				Action: Action{ID: "execution_argument"},
 			}
+
 			newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
 			if err != nil {
 				log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (4)", err)
@@ -996,7 +1000,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		newexecution, err := json.Marshal(workflowExecution)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling execution: %s", err)
-			return workflowExecution, nil
+			return workflowExecution, getErr 
 		}
 
 		err = SetCache(ctx, id, newexecution, 30)
@@ -1005,7 +1009,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 	}
 
-	return workflowExecution, nil
+	return workflowExecution, getErr 
 }
 
 func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string) (*WorkflowExecution, error) {
