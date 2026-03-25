@@ -14208,11 +14208,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]CacheKeyData, error) {
 	var datastoreKeys []CacheKeyData
 	if len(orgId) == 0 {
-<<<<<<< opensearch-upgrade
-		return []CacheKeyData{}, errors.New("Org ID required for revisions")
-=======
-		return datastoreKeys, errors.New("Org ID required for revisions") 
->>>>>>> main
+		return datastoreKeys, errors.New("Org ID required for revisions")
 	}
 
 	var err error
