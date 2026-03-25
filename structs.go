@@ -5068,12 +5068,19 @@ type MCPToolInputSchema struct {
 }
 
 type OpensearchPrefixFixResult struct {
-	Success      bool                               `json:"success"`
-	Reason       string                             `json:"reason,omitempty"`
-	Reindexed    []string                           `json:"reindexed,omitempty"`
-	AliasUpdates []string                           `json:"alias_updates,omitempty"`
-	Skipped      []string                           `json:"skipped,omitempty"`
-	Counts       []OpensearchPrefixFixCountSnapshot `json:"counts,omitempty"`
+	Success           bool                               `json:"success"`
+	Reason            string                             `json:"reason,omitempty"`
+	ExpectedAliases   int                                `json:"expected_aliases,omitempty"`
+	FoundAliases      int                                `json:"found_aliases,omitempty"`
+	MissingAliases    []string                           `json:"missing_aliases,omitempty"`
+	InvalidWriteAlias []string                           `json:"invalid_write_aliases,omitempty"`
+	MigrationTasks    []string                           `json:"migration_tasks,omitempty"`
+	Created           []string                           `json:"created,omitempty"`
+	WriteIndexUpdates []string                           `json:"write_index_updates,omitempty"`
+	Reindexed         []string                           `json:"reindexed,omitempty"`
+	AliasUpdates      []string                           `json:"alias_updates,omitempty"`
+	Skipped           []string                           `json:"skipped,omitempty"`
+	Counts            []OpensearchPrefixFixCountSnapshot `json:"counts,omitempty"`
 }
 
 type OpensearchPrefixFixCountSnapshot struct {
