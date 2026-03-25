@@ -1251,6 +1251,18 @@ type SyncConfig struct {
 	AppBackup      bool `json:"app_backup" datastore:"app_backup"`
 }
 
+// RemoteWorkflowInfo holds metadata for a workflow found in a remote git repo.
+type RemoteWorkflowInfo struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	FolderName    string `json:"folder_name"`
+	UpdatedAt     int64  `json:"updated_at"`
+	FilePath      string `json:"file_path"`
+	ExistsInOrg   bool   `json:"exists_in_org"`
+	OrgWorkflowId string `json:"org_workflow_id"`
+}
+
+
 type PaymentSubscription struct {
 	Id               string   `json:"id" datastore:"id"`
 	Active           bool     `json:"active" datastore:"active"`
