@@ -170,7 +170,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		}
 
 		// send the request
-		client := &http.Client{Timeout: 60 * time.Second}
+		client := &http.Client{Timeout: 180 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[ERROR] Failed sending HTTP request: %s", err)
@@ -243,7 +243,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
+	client = &http.Client{Timeout: 180 * time.Second}
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending the app validate HTTP request: %s", err)
@@ -380,7 +380,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{Timeout: 120 * time.Second}
+	client = &http.Client{Timeout: 180 * time.Second}
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check app read HTTP request: %s", err)
@@ -453,7 +453,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
+	client = &http.Client{Timeout: 180 * time.Second}
 	resp, err = client.Do(req)
 
 	if err != nil {
