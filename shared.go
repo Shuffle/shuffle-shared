@@ -26963,7 +26963,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 			ctx,
 			fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
 			fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
-			fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+			fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, action.ID),
 			workflowExecution.ExecutionOrg,
 			true,
 			"HIGH",
@@ -27117,7 +27117,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 					ctx,
 					fmt.Sprintf("Failed to refresh Oauth2 tokens for auth '%s'. Did the credentials change?", curAuth.Label),
 					fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
-					fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, action.ID),
 					workflowExecution.ExecutionOrg,
 					true,
 					"HIGH",
@@ -27219,7 +27219,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 						ctx,
 						fmt.Sprintf("Failed to refresh Oauth2 tokens for app '%s'", curAuth.Label),
 						fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
-						fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+						fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, action.ID),
 						workflowExecution.ExecutionOrg,
 						true,
 						"HIGH",
@@ -32224,9 +32224,9 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 		parsedKeys = append(parsedKeys, key)
 	}
 
-	if len(toDelete) > 0 && debug { 
+	if len(toDelete) > 0 && debug {
 		log.Printf("\n\n[DEBUG] Deleting %d old datastore revisions %s\n\n", len(toDelete))
-	}	
+	}
 
 	nameKey := "org_cache_revisions"
 	for _, cacheData := range toDelete {
