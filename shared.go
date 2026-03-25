@@ -28,9 +28,13 @@ import (
 
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
+	"google.golang.org/api/cloudfunctions/v1"
+	"google.golang.org/api/googleapi"
+	"google.golang.org/api/iterator"
 
 	scheduler "cloud.google.com/go/scheduler/apiv1"
 	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
+	"cloud.google.com/go/storage"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	http2 "github.com/go-git/go-git/v5/plumbing/transport/http"
@@ -1596,6 +1600,41 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		RegionUrl:  parentOrg.RegionUrl,
 	}
 	//}
+
+	nameFilter, nameFilterOk := request.URL.Query()["name"]
+	if nameFilterOk && len(nameFilter) > 0 && len(nameFilter[0]) > 0 {
+		filteredSubOrgs := []OrgMini{}
+		matchingOrgs := []Org{}
+
+		for _, subOrg := range subOrgs {
+			if subOrg.Name == nameFilter[0] {
+				fullOrg, err := GetOrg(ctx, subOrg.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting full org for %s: %s", subOrg.Id, err)
+					continue
+				}
+				matchingOrgs = append(matchingOrgs, *fullOrg)
+			}
+		}
+
+		if len(matchingOrgs) > 0 {
+			sort.Slice(matchingOrgs, func(i, j int) bool {
+				return matchingOrgs[i].Created > matchingOrgs[j].Created
+			})
+
+			latestOrg := matchingOrgs[0]
+			filteredSubOrgs = append(filteredSubOrgs, OrgMini{
+				Id:         latestOrg.Id,
+				Name:       latestOrg.Name,
+				Role:       latestOrg.Role,
+				CreatorOrg: latestOrg.CreatorOrg,
+				Image:      latestOrg.Image,
+				RegionUrl:  latestOrg.RegionUrl,
+			})
+		}
+
+		subOrgs = filteredSubOrgs
+	}
 
 	data := map[string]interface{}{
 		"subOrgs":   subOrgs,
@@ -4904,6 +4943,428 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 	//var config configAuth
 
 	//log.Printf("Should set %s
+}
+
+func findAuthForApp(appId string, allAuths []AppAuthenticationStorage) string {
+	var activeAuth *AppAuthenticationStorage
+	var firstAuth *AppAuthenticationStorage
+
+	for i, auth := range allAuths {
+		if auth.App.ID != appId {
+			continue
+		}
+
+		if firstAuth == nil {
+			firstAuth = &allAuths[i]
+		}
+
+		if auth.Active {
+			activeAuth = &allAuths[i]
+			break
+		}
+	}
+
+	if activeAuth != nil {
+		return activeAuth.Id
+	}
+
+	if firstAuth != nil {
+		return firstAuth.Id
+	}
+
+	return ""
+}
+
+func SetAuthenticationConfigBatch(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in batch auth config: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User isn't admin during batch auth edit config")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Error with body read in batch auth config: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type configItem struct {
+		Id             string   `json:"id"`
+		SelectedSuborg []string `json:"selected_suborgs"`
+	}
+
+	type batchConfigAuth struct {
+		Action  string       `json:"action"`
+		Type    string       `json:"type"`
+		Configs []configItem `json:"configs"`
+	}
+
+	var config batchConfigAuth
+	err = json.Unmarshal(body, &config)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshaling batch auth config: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid request body"}`))
+		return
+	}
+
+	if config.Type != "auth_id" && config.Type != "app_id" {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Type must be either 'auth_id' or 'app_id'"}`))
+		return
+	}
+
+	if len(config.Configs) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No configs provided"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting org %s: %s", user.ActiveOrg.Id, err)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
+		return
+	}
+
+	if len(org.CreatorOrg) != 0 {
+		log.Printf("[INFO] Org %s has creator org %s, can't distribute", org.Id, org.CreatorOrg)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Can't distribute auth for suborgs"}`))
+		return
+	}
+
+	type resultItem struct {
+		Id      string `json:"id"`
+		AuthId  string `json:"auth_id,omitempty"`
+		Success bool   `json:"success"`
+		Reason  string `json:"reason,omitempty"`
+	}
+
+	type batchResponse struct {
+		Success bool         `json:"success"`
+		Results []resultItem `json:"results"`
+	}
+
+	results := []resultItem{}
+
+	authConfigsToProcess := []configItem{}
+	appIdToAuthIdMap := make(map[string]string)
+
+	if config.Type == "app_id" {
+		allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting all auths for org %s: %s", user.ActiveOrg.Id, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting auths"}`))
+			return
+		}
+
+		for _, appConfig := range config.Configs {
+			authId := findAuthForApp(appConfig.Id, allAuths)
+			if authId == "" {
+				result := resultItem{
+					Id:      appConfig.Id,
+					Success: false,
+					Reason:  "No auth found for app",
+				}
+				results = append(results, result)
+				continue
+			}
+
+			appIdToAuthIdMap[authId] = appConfig.Id
+
+			authConfigsToProcess = append(authConfigsToProcess, configItem{
+				Id:             authId,
+				SelectedSuborg: appConfig.SelectedSuborg,
+			})
+		}
+	} else {
+		authConfigsToProcess = config.Configs
+	}
+
+	if config.Action == "suborg_distribute" {
+		for _, authConfig := range authConfigsToProcess {
+			result := resultItem{
+				Id:      authConfig.Id,
+				Success: false,
+			}
+
+			if appId, exists := appIdToAuthIdMap[authConfig.Id]; exists {
+				result.Id = appId
+				result.AuthId = authConfig.Id
+			}
+
+			auth, err := GetWorkflowAppAuthDatastore(ctx, authConfig.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting auth %s: %s", authConfig.Id, err)
+				result.Reason = "Auth doesn't exist"
+				results = append(results, result)
+				continue
+			}
+
+			if auth.OrgId != user.ActiveOrg.Id {
+				log.Printf("[WARNING] User %s can't edit auth %s from org %s", user.Id, authConfig.Id, auth.OrgId)
+				result.Reason = "User can't edit this org"
+				results = append(results, result)
+				continue
+			}
+
+			if len(authConfig.SelectedSuborg) == 0 {
+				auth.SuborgDistribution = []string{}
+				auth.SuborgDistributed = false
+			} else {
+				auth.SuborgDistribution = authConfig.SelectedSuborg
+				auth.SuborgDistributed = false
+			}
+
+			err = SetWorkflowAppAuthDatastore(ctx, *auth, auth.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting auth %s for org %s: %s", authConfig.Id, org.Id, err)
+				result.Reason = "Failed updating auth"
+				results = append(results, result)
+				continue
+			}
+
+			result.Success = true
+			results = append(results, result)
+		}
+
+		for _, childOrg := range org.ChildOrgs {
+			nameKey := "workflowappauth"
+			cacheKey := fmt.Sprintf("%s_%s", nameKey, childOrg.Id)
+			DeleteCache(ctx, cacheKey)
+		}
+
+	} else {
+		log.Printf("[WARNING] Unknown batch auth change action %s", config.Action)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid action provided"}`))
+		return
+	}
+
+	responseData := batchResponse{
+		Success: true,
+		Results: results,
+	}
+
+	responseJson, err := json.Marshal(responseData)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshaling batch response: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed creating response"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(responseJson)
+}
+
+func DistributeWorkflowsBatch(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in batch workflow distribution: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User isn't admin during batch workflow distribution")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Error with body read in batch workflow distribution: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type workflowConfigItem struct {
+		WorkflowId string   `json:"workflow_id"`
+		SuborgIds  []string `json:"suborg_ids"`
+	}
+
+	type batchWorkflowDistribution struct {
+		Workflows []workflowConfigItem `json:"workflows"`
+	}
+
+	var config batchWorkflowDistribution
+	err = json.Unmarshal(body, &config)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshaling batch workflow distribution: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid request body"}`))
+		return
+	}
+
+	if len(config.Workflows) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No workflows provided"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting org %s: %s", user.ActiveOrg.Id, err)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
+		return
+	}
+
+	if len(org.CreatorOrg) != 0 {
+		log.Printf("[INFO] Org %s has creator org %s, can't distribute workflows", org.Id, org.CreatorOrg)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Can't distribute workflows from suborg"}`))
+		return
+	}
+
+	validSuborgIds := make(map[string]bool)
+	for _, childOrg := range org.ChildOrgs {
+		validSuborgIds[childOrg.Id] = true
+	}
+
+	type distributionResult struct {
+		SuborgId        string `json:"suborg_id"`
+		ChildWorkflowId string `json:"child_workflow_id,omitempty"`
+		Success         bool   `json:"success"`
+		Reason          string `json:"reason,omitempty"`
+	}
+
+	type workflowResult struct {
+		WorkflowId    string               `json:"workflow_id"`
+		Success       bool                 `json:"success"`
+		Distributions []distributionResult `json:"distributions"`
+	}
+
+	type batchResponse struct {
+		Success bool             `json:"success"`
+		Results []workflowResult `json:"results"`
+	}
+
+	results := []workflowResult{}
+
+	for _, workflowConfig := range config.Workflows {
+		result := workflowResult{
+			WorkflowId:    workflowConfig.WorkflowId,
+			Success:       false,
+			Distributions: []distributionResult{},
+		}
+
+		workflow, err := GetWorkflow(ctx, workflowConfig.WorkflowId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting workflow %s: %s", workflowConfig.WorkflowId, err)
+			result.Distributions = append(result.Distributions, distributionResult{
+				Success: false,
+				Reason:  "Workflow doesn't exist",
+			})
+			results = append(results, result)
+			continue
+		}
+
+		if workflow.OrgId != user.ActiveOrg.Id {
+			log.Printf("[WARNING] User %s can't distribute workflow %s from org %s", user.Id, workflowConfig.WorkflowId, workflow.OrgId)
+			result.Distributions = append(result.Distributions, distributionResult{
+				Success: false,
+				Reason:  "Workflow doesn't belong to your org",
+			})
+			results = append(results, result)
+			continue
+		}
+
+		if len(workflow.ParentWorkflowId) > 0 {
+			log.Printf("[WARNING] Workflow %s is a child workflow, can't distribute", workflowConfig.WorkflowId)
+			result.Distributions = append(result.Distributions, distributionResult{
+				Success: false,
+				Reason:  "Can't distribute child workflows",
+			})
+			results = append(results, result)
+			continue
+		}
+
+		allSuccess := true
+		for _, suborgId := range workflowConfig.SuborgIds {
+			distResult := distributionResult{
+				SuborgId: suborgId,
+				Success:  false,
+			}
+
+			if !validSuborgIds[suborgId] {
+				log.Printf("[WARNING] Suborg %s is not a child of org %s", suborgId, org.Id)
+				distResult.Reason = "Suborg doesn't belong to your org"
+				result.Distributions = append(result.Distributions, distResult)
+				allSuccess = false
+				continue
+			}
+
+			childWorkflow, err := GenerateWorkflowFromParent(ctx, *workflow, org.Id, suborgId)
+			if err != nil {
+				log.Printf("[ERROR] Failed generating child workflow for %s in suborg %s: %s", workflowConfig.WorkflowId, suborgId, err)
+				distResult.Reason = "Failed creating child workflow"
+				result.Distributions = append(result.Distributions, distResult)
+				allSuccess = false
+				continue
+			}
+
+			distResult.Success = true
+			distResult.ChildWorkflowId = childWorkflow.ID
+			result.Distributions = append(result.Distributions, distResult)
+		}
+
+		result.Success = allSuccess
+		results = append(results, result)
+	}
+
+	for _, childOrg := range org.ChildOrgs {
+		cacheKey := fmt.Sprintf("%s_workflows", childOrg.Id)
+		DeleteCache(ctx, cacheKey)
+	}
+
+	responseData := batchResponse{
+		Success: true,
+		Results: results,
+	}
+
+	responseJson, err := json.Marshal(responseData)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshaling batch workflow distribution response: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed creating response"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(responseJson)
 }
 
 func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
@@ -11497,6 +11958,141 @@ func deactivateApp(ctx context.Context, user User, app *WorkflowApp) error {
 	return nil
 }
 
+// deleteGCPCloudFunction deletes the GCP Cloud Function associated with the app.
+// functionName must be the lowercase function name extracted from app.ReferenceUrl.
+// Uses Application Default Credentials — same as deployCloudFunctionPython.
+func deleteGCPCloudFunction(ctx context.Context, app *WorkflowApp, functionName string) error {
+	region := os.Getenv("SHUFFLE_GCE_LOCATION")
+	if len(region) == 0 {
+		region = "europe-west2"
+	}
+	if len(gceProject) == 0 {
+		return fmt.Errorf("SHUFFLE_GCEPROJECT not set; cannot delete Cloud Function for app %s (%s)", app.Name, app.ID)
+	}
+
+	service, err := cloudfunctions.NewService(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create Cloud Functions service for app %s (%s): %w", app.Name, app.ID, err)
+	}
+
+	functionPath := fmt.Sprintf("projects/%s/locations/%s/functions/%s", gceProject, region, functionName)
+	_, err = cloudfunctions.NewProjectsLocationsFunctionsService(service).Delete(functionPath).Do()
+	if err != nil {
+		// 404 means the function was never deployed or was already deleted — not an error.
+		var apiErr *googleapi.Error
+		if errors.As(err, &apiErr) && apiErr.Code == 404 {
+			log.Printf("[INFO] Cloud Function '%s' not found (already deleted or never deployed) for app %s (%s)", functionPath, app.Name, app.ID)
+			return nil
+		}
+		return fmt.Errorf("failed to delete Cloud Function '%s' for app %s (%s): %w", functionPath, app.Name, app.ID, err)
+	}
+
+	log.Printf("[INFO] Deleted Cloud Function '%s' for app %s (%s)", functionPath, app.Name, app.ID)
+	return nil
+}
+
+// deleteAppBucketFiles deletes all GCS bucket objects that were written during
+// verifySwagger for the given app:
+//
+//   - generated_cloudfunctions/{functionName}.zip
+//   - generated_apps/{title}_{md5}/*
+//   - extra_specs/{app.ID}
+//
+// functionName is the lowercase identifier ("{title}-{md5}") extracted from app.ReferenceUrl.
+func deleteAppBucketFiles(ctx context.Context, app *WorkflowApp, functionName string) {
+	if len(functionName) == 0 {
+		log.Printf("[WARNING] Empty functionName for bucket cleanup of app %s (%s), skipping", app.Name, app.ID)
+		return
+	}
+
+	bucketName := fmt.Sprintf("%s.appspot.com", gceProject)
+	storageClient, err := storage.NewClient(ctx)
+	if err != nil {
+		log.Printf("[WARNING] Failed to create storage client for bucket cleanup of app %s (%s): %s", app.Name, app.ID, err)
+		return
+	}
+	defer storageClient.Close()
+
+	bucket := storageClient.Bucket(bucketName)
+
+	// Delete generated_cloudfunctions/{functionName}.zip directly — no listing needed.
+	cfPath := fmt.Sprintf("generated_cloudfunctions/%s.zip", functionName)
+	if delErr := bucket.Object(cfPath).Delete(ctx); delErr != nil {
+		if !errors.Is(delErr, storage.ErrObjectNotExist) {
+			log.Printf("[WARNING] Failed to delete bucket object '%s' for app %s (%s): %s", cfPath, app.Name, app.ID, delErr)
+		}
+	} else {
+		log.Printf("[INFO] Deleted bucket object '%s' for app %s (%s)", cfPath, app.Name, app.ID)
+	}
+
+	// Delete all files under generated_apps/{title}_{md5}/ using an exact prefix so we
+	// only list this app's directory rather than the entire generated_apps/ tree.
+	// functionName = "{title}-{md5}" — strip the trailing "-{32-char md5}" to get title.
+	if len(functionName) >= 33 {
+		title := functionName[:len(functionName)-33]
+		md5Hash := functionName[len(functionName)-32:]
+		appsPrefix := fmt.Sprintf("generated_apps/%s_%s/", title, md5Hash)
+		it := bucket.Objects(ctx, &storage.Query{Prefix: appsPrefix})
+		for {
+			attrs, iterErr := it.Next()
+			if iterErr == iterator.Done {
+				break
+			}
+			if iterErr != nil {
+				log.Printf("[WARNING] Failed iterating bucket objects with prefix '%s' for app %s (%s): %s", appsPrefix, app.Name, app.ID, iterErr)
+				break
+			}
+			if delErr := bucket.Object(attrs.Name).Delete(ctx); delErr != nil {
+				log.Printf("[WARNING] Failed to delete bucket object '%s' for app %s (%s): %s", attrs.Name, app.Name, app.ID, delErr)
+			} else {
+				log.Printf("[INFO] Deleted bucket object '%s' for app %s (%s)", attrs.Name, app.Name, app.ID)
+			}
+		}
+	}
+
+	// Delete extra_specs/{app.ID} — used when app data is too large for datastore.
+	extraSpecsPath := fmt.Sprintf("extra_specs/%s", app.ID)
+	if delErr := bucket.Object(extraSpecsPath).Delete(ctx); delErr != nil {
+		if !errors.Is(delErr, storage.ErrObjectNotExist) {
+			log.Printf("[WARNING] Failed to delete bucket object '%s' for app %s (%s): %s", extraSpecsPath, app.Name, app.ID, delErr)
+		}
+	} else {
+		log.Printf("[INFO] Deleted bucket object '%s' for app %s (%s)", extraSpecsPath, app.Name, app.ID)
+	}
+}
+
+// deleteAppCloudResources is the entry point called from DeleteWorkflowApp.
+// It parses the app's ReferenceUrl, then delegates to deleteGCPCloudFunction
+// and deleteAppBucketFiles.
+func deleteAppCloudResources(ctx context.Context, app *WorkflowApp) error {
+	if !strings.Contains(app.ReferenceUrl, "cloudfunctions.net") {
+		log.Printf("[DEBUG] App %s (%s) has no Cloud Function URL, skipping GCP cleanup", app.Name, app.ID)
+		return nil
+	}
+
+	parsedURL, err := url.Parse(app.ReferenceUrl)
+	if err != nil {
+		return fmt.Errorf("failed to parse Cloud Function URL '%s' for app %s (%s): %w", app.ReferenceUrl, app.Name, app.ID, err)
+	}
+
+	pathParts := strings.Split(strings.TrimPrefix(parsedURL.Path, "/"), "/")
+	if len(pathParts) == 0 || pathParts[0] == "" {
+		return fmt.Errorf("could not extract function name from URL path '%s' for app %s (%s)", parsedURL.Path, app.Name, app.ID)
+	}
+	// functionName is strings.ToLower(identifier) where identifier = "{title}-{md5}".
+	// The MD5 (32 hex chars) is always the last 32 chars of functionName.
+	functionName := strings.ToLower(pathParts[0])
+
+	// Always attempt bucket cleanup even if the Cloud Function is already gone or fails to delete.
+	if err := deleteGCPCloudFunction(ctx, app, functionName); err != nil {
+		log.Printf("[WARNING] Cloud Function deletion failed for app %s (%s), continuing with bucket cleanup: %s", app.Name, app.ID, err)
+	}
+
+	deleteAppBucketFiles(ctx, app, functionName)
+
+	return nil
+}
+
 func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -11578,6 +12174,29 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Can't delete public apps. Unpublish. Contact support@shuffler.io if you encounter any problem."}`))
 		return
+	}
+
+	if len(app.ReferenceUrl) > 0 && project.Environment == "cloud" {
+		appCopy := *app
+		go func() {
+			const maxAttempts = 3
+			baseDelay := 2 * time.Second
+			for attempt := 1; attempt <= maxAttempts; attempt++ {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				err := deleteAppCloudResources(ctx, &appCopy)
+				cancel()
+				if err == nil {
+					return
+				}
+				if attempt == maxAttempts {
+					log.Printf("[WARNING] Background GCP cleanup failed for app %s (%s) after %d attempts: %s", appCopy.Name, appCopy.ID, maxAttempts, err)
+					return
+				}
+				log.Printf("[WARNING] Background GCP cleanup attempt %d/%d failed for app %s (%s): %s — retrying in %s", attempt, maxAttempts, appCopy.Name, appCopy.ID, err, baseDelay)
+				time.Sleep(baseDelay)
+				baseDelay *= 2
+			}
+		}()
 	}
 
 	// Not really deleting it, just removing from user cache
@@ -11680,7 +12299,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if tmpData.OrgId != fileId {
-		log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
+		log.Printf("[INFO] OrgId %s and %s don't match (key value check)", tmpData.OrgId, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "Organization ID's don't match"}`))
 		return
@@ -14583,46 +15202,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		// Not setting right now
-		// unescapedName, err := url.QueryUnescape(app.Name)
-		// if err == nil {
-		// 	type AppCacheData struct {
-		// 		Success     bool   `json:"success"`
-		// 		ID          string `json:"id"`
-		// 		Name        string `json:"name"`
-		// 		Description string `json:"description"`
-		// 	}
-
-		// 	cacheData := AppCacheData{
-		// 		Success:     true,
-		// 		ID:          app.ID,
-		// 		Name:        app.Name,
-		// 		Description: app.Description,
-		// 	}
-
-		// 	cachePayload, err := json.Marshal(cacheData)
-		// 	if err != nil {
-		// 		log.Printf("[WARNING] Failed marshalling app cache payload: %s", err)
-		// 		cachePayload = []byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, app.ID))
-		// 	}
-
-		// 	// 1. Cache by actual app name
-		// 	primarySlug := strings.ToLower(strings.ReplaceAll(unescapedName, " ", "_"))
-		// 	primaryKey := fmt.Sprintf("workflowapp_cache_%s", primarySlug)
-		// 	SetCache(context.Background(), primaryKey, cachePayload, 10080)
-
-		// 	// 2. Cache by search alias (e.g., "outlook") if provided by the frontend
-		// 	aliasQuery := request.URL.Query().Get("alias")
-		// 	if len(aliasQuery) > 0 {
-		// 		aliasSlug := strings.ToLower(strings.ReplaceAll(aliasQuery, " ", "_"))
-		// 		aliasKey := fmt.Sprintf("workflowapp_cache_%s", aliasSlug)
-
-		// 		// Only set if alias is different from the primary name
-		// 		if aliasKey != primaryKey {
-		// 			SetCache(context.Background(), aliasKey, cachePayload, 10080)
-		// 		}
-		// 	}
-		// }
 	}
 
 	app.ReferenceUrl = ""
@@ -16751,6 +17330,10 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		return nil
 	} else {
 		SetCache(ctx, cacheKey, []byte("1"), 1)
+	}
+
+	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
+		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s status=%s", workflowExecution.ExecutionId, status)
 	}
 
 	//log.Printf("[INFO][%s] Sending self-request for Agent Result '%s'. Status: %s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
@@ -20047,7 +20630,7 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	if orgId != user.ActiveOrg.Id {
-		log.Printf("[INFO] OrgId %s and %s don't match", orgId, user.ActiveOrg.Id)
+		log.Printf("[INFO] OrgId '%s' and %s don't match (delete cache key)", orgId, user.ActiveOrg.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
 		return
@@ -20797,14 +21380,10 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 	mainCategory := ""
 	for itemIndex, _ := range tmpData {
+		tmpData[itemIndex].UpdatedBy = user.Username
 		tmpData[itemIndex].OrgId = user.ActiveOrg.Id
 
 		mainCategory = tmpData[itemIndex].Category
-		if len(user.ActiveOrg.Id) == 0 {
-			break
-		}
-
-		tmpData[itemIndex].OrgId = user.ActiveOrg.Id
 		if strings.ToLower(tmpData[itemIndex].Category) == "default" {
 			tmpData[itemIndex].Category = ""
 		}
@@ -20986,19 +21565,19 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		Category:           tmpData.Category,
 		Key:                tmpData.Key,
 		Value:              tmpData.Value,
-		OrgId:              tmpData.OrgId,
 		ExecutionId:        tmpData.ExecutionId,
 		Authorization:      tmpData.Authorization,
 		SuborgDistribution: tmpData.SuborgDistribution,
 		Tags:               tmpData.Tags,
 
 		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule.
+		OrgId:               user.ActiveOrg.Id,
+		UpdatedBy:           user.Username,
 	}
 
-	// If we want to only allow it for manual overrides
-	//if !user.SessionLogin {
-	//	parsedKey.IgnoreSecurityRules = false
-	//}
+	if len(user.ActiveOrg.Id) == 0 {
+		parsedKey.OrgId = tmpData.OrgId
+	}
 
 	existed, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{parsedKey})
 	if err != nil {
@@ -24272,8 +24851,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			// FIXME: Is execution ID missing?
 
-			if allowContinuation == false && len(workflowExecution.ExecutionId) > 0 {
-				newExecId := fmt.Sprintf("%s_%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionId, workflowExecution.ExecutionSourceNode)
+			if debug {
+				log.Printf("[INFO][%s]Is this a loop? %v", workflowExecution.ExecutionId, allowContinuation)
+			}
+
+			if allowContinuation == false {
+				newExecId := fmt.Sprintf("%s_%s_subflowcheck", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceNode)
 				cache, err := GetCache(ctx, newExecId)
 				if err == nil {
 					cacheData := []byte(cache.([]uint8))
@@ -24288,6 +24871,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					return workflowExecution, ExecInfo{}, fmt.Sprintf("Subflow for %s has already been executed", newExecId), errors.New(fmt.Sprintf("Subflow for %s has already been executed", newExecId))
+				} else {
+					if debug {
+						log.Printf("[ERROR] Failed to find cache for %s %s %s", workflowExecution.ExecutionParent, workflowExecution.ExecutionId, workflowExecution.ExecutionSourceNode)
+					}
 				}
 
 				cacheData := []byte("1")
@@ -27065,8 +27652,12 @@ func loadGithubWorkflows(url, username, password, userId, branch, orgId string) 
 	}
 
 	// Handle GitHub-specific file URLs
-	if strings.Contains(url, "github.com") && strings.Contains(url, "/blob/") {
-		parts := strings.SplitN(url, "/blob/", 2)
+	if strings.Contains(url, "github.com") && (strings.Contains(url, "/blob/") || strings.Contains(url, "/tree/")) {
+		separator := "/blob/"
+		if strings.Contains(url, "/tree/") {
+			separator = "/tree/"
+		}
+		parts := strings.SplitN(url, separator, 2)
 		if len(parts) == 2 {
 			baseURL := parts[0]
 			remainder := parts[1]
@@ -27189,17 +27780,6 @@ func loadGithubWorkflows(url, username, password, userId, branch, orgId string) 
 	return nil
 }
 
-// RemoteWorkflowInfo holds metadata for a workflow found in a remote git repo.
-type RemoteWorkflowInfo struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	FolderName    string `json:"folder_name"`
-	UpdatedAt     int64  `json:"updated_at"`
-	FilePath      string `json:"file_path"`
-	ExistsInOrg   bool   `json:"exists_in_org"`
-	OrgWorkflowId string `json:"org_workflow_id"`
-}
-
 // listGithubWorkflowsInfo clones a git repo and returns metadata for each workflow JSON found.
 // It also checks whether each workflow ID already exists in the given org.
 func listGithubWorkflowsInfo(url, username, password, branch, orgId string) ([]RemoteWorkflowInfo, error) {
@@ -27229,8 +27809,12 @@ func listGithubWorkflowsInfo(url, username, password, branch, orgId string) ([]R
 		}
 	}
 
-	if strings.Contains(url, "github.com") && strings.Contains(url, "/blob/") {
-		parts := strings.SplitN(url, "/blob/", 2)
+	if strings.Contains(url, "github.com") && (strings.Contains(url, "/blob/") || strings.Contains(url, "/tree/")) {
+		separator := "/blob/"
+		if strings.Contains(url, "/tree/") {
+			separator = "/tree/"
+		}
+		parts := strings.SplitN(url, separator, 2)
 		if len(parts) == 2 {
 			baseURL := parts[0]
 			remainder := parts[1]
@@ -27317,15 +27901,26 @@ func listGithubWorkflowsInfo(url, username, password, branch, orgId string) ([]R
 	remoteInfos := make([]RemoteWorkflowInfo, 0)
 	collectWorkflowInfos(fs, dir, extraPath, specificFile, &remoteInfos)
 
-	// Mark whether remote workflows already exist in this org.
-	ctx := context.Background()
-	for i := range remoteInfos {
-		existing, err := GetWorkflow(ctx, remoteInfos[i].ID, true)
-		if err != nil || existing == nil || existing.ID == "" {
-			continue
+	// Deduplicate by workflow ID, keeping the entry with the most recent UpdatedAt
+	seenIds := make(map[string]int) // id -> index in dedupInfos
+	dedupInfos := make([]RemoteWorkflowInfo, 0, len(remoteInfos))
+	for _, info := range remoteInfos {
+		if existingIdx, seen := seenIds[info.ID]; seen {
+			if info.UpdatedAt > dedupInfos[existingIdx].UpdatedAt {
+				dedupInfos[existingIdx] = info
+			}
+		} else {
+			seenIds[info.ID] = len(dedupInfos)
+			dedupInfos = append(dedupInfos, info)
 		}
+	}
+	remoteInfos = dedupInfos
 
-		if existing.OrgId == orgId {
+	// Check which workflows already exist in this org
+	ctx := context.Background()
+	for i, info := range remoteInfos {
+		existing, err := GetWorkflow(ctx, info.ID)
+		if err == nil && existing != nil && existing.OrgId == orgId {
 			remoteInfos[i].ExistsInOrg = true
 			remoteInfos[i].OrgWorkflowId = existing.ID
 		}
@@ -27416,8 +28011,12 @@ func importSingleRemoteWorkflow(url, username, password, branch, originalWorkflo
 		}
 	}
 
-	if strings.Contains(url, "github.com") && strings.Contains(url, "/blob/") {
-		parts := strings.SplitN(url, "/blob/", 2)
+	if strings.Contains(url, "github.com") && (strings.Contains(url, "/blob/") || strings.Contains(url, "/tree/")) {
+		separator := "/blob/"
+		if strings.Contains(url, "/tree/") {
+			separator = "/tree/"
+		}
+		parts := strings.SplitN(url, separator, 2)
 		if len(parts) == 2 {
 			baseURL := parts[0]
 			remainder := parts[1]
@@ -27550,12 +28149,6 @@ func findAndProcessSingleWorkflow(fs billy.Filesystem, dir []os.FileInfo, extra,
 				if err != nil || existing == nil {
 					return fmt.Errorf("could not find org workflow %s to sync: %v", syncToId, err)
 				}
-				if existing.ID == "" {
-					return fmt.Errorf("could not find org workflow %s to sync", syncToId)
-				}
-				if existing.OrgId != orgId {
-					return fmt.Errorf("workflow %s is not in your active org and cannot be synced", syncToId)
-				}
 				// Preserve org ownership, update content
 				wf.ID = existing.ID
 				wf.Owner = existing.Owner
@@ -27567,16 +28160,8 @@ func findAndProcessSingleWorkflow(fs billy.Filesystem, dir []os.FileInfo, extra,
 				return SetWorkflow(ctx, wf, wf.ID)
 			}
 
-			// Import: create new workflow
-			wf.ID = originalWorkflowId
-			existing, err := GetWorkflow(ctx, wf.ID, true)
-			if err == nil && existing != nil && existing.ID != "" {
-				if existing.OrgId == orgId {
-					return fmt.Errorf("workflow with id %s already exists in your org; use sync to update it", wf.ID)
-				}
-
-				return fmt.Errorf("workflow with id %s already exists in another org and cannot be imported with the same id", wf.ID)
-			}
+			// Import: preserve the original workflow ID embedded in the repo JSON file.
+			// Do NOT generate a new UUID — the ID from the file is the canonical identifier.
 			wf.Owner = userId
 			wf.OrgId = orgId
 			wf.ExecutingOrg = OrgMini{Id: orgId}
@@ -27678,7 +28263,17 @@ func LoadSpecificWorkflows(resp http.ResponseWriter, request *http.Request) {
 			Success   bool                 `json:"success"`
 			Workflows []RemoteWorkflowInfo `json:"workflows"`
 		}
-		out, _ := json.Marshal(listResp{Success: true, Workflows: infos})
+
+		// Filter out all workflow with name "Ops Dashboard Workflow" skip this workflows are those are health workflows
+		filteredInfos := []RemoteWorkflowInfo{}
+		for _, info := range infos {
+			if info.Name == "Ops Dashboard Workflow" {
+				continue
+			}
+			filteredInfos = append(filteredInfos, info)
+		}
+
+		out, _ := json.Marshal(listResp{Success: true, Workflows: filteredInfos})
 		resp.WriteHeader(200)
 		resp.Write(out)
 		return
@@ -27786,7 +28381,8 @@ func iterateWorkflowGithubFolders(fs billy.Filesystem, dir []os.FileInfo, extra 
 					workflow.Owner = userId
 				}
 
-				workflow.ID = uuid.NewV4().String()
+				// Preserve the original workflow ID from the repo JSON file.
+				// Do NOT generate a new UUID — the ID from the file is the canonical identifier.
 				workflow.OrgId = orgId
 				workflow.ExecutingOrg = OrgMini{
 					Id: orgId,
@@ -31579,13 +32175,13 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 	var key string
 	if location[1] == "api" {
 		if len(location) <= 6 {
-			resp.WriteHeader(401)
+			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
 
-		category = location[4]
-		key = location[5]
+		category = location[5]
+		key = location[6]
 	}
 
 	if len(category) == 0 || len(key) == 0 {
@@ -31604,9 +32200,10 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Check workflow.Sharing == private / public / org  too
-
 	parsedKeys := []CacheKeyData{}
+	toDelete := []CacheKeyData{}
+
+	cutoff := time.Now().AddDate(0, 0, -30)
 	for _, key := range datastoreKeys {
 		if key.OrgId != user.ActiveOrg.Id {
 			continue
@@ -31616,7 +32213,36 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		editedTime := time.Unix(key.Edited, 0)
+		if editedTime.Before(cutoff) {
+			toDelete = append(toDelete, key)
+			continue
+		}
+
 		parsedKeys = append(parsedKeys, key)
+	}
+
+	if len(toDelete) > 0 && debug { 
+		log.Printf("\n\n[DEBUG] Deleting %d old datastore revisions %s\n\n", len(toDelete))
+	}	
+
+	nameKey := "org_cache_revisions"
+	for _, cacheData := range toDelete {
+		cacheData.RevisionId = uuid.NewV4().String()
+		cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+		if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+			cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
+		}
+
+		cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.RevisionId)
+
+		// URL encode
+		cacheId = url.QueryEscape(cacheId)
+		if len(cacheId) > 127 {
+			cacheId = cacheId[:127]
+		}
+
+		go DeleteKey(context.Background(), nameKey, cacheId)
 	}
 
 	body, err := json.Marshal(parsedKeys)

@@ -7261,19 +7261,19 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 
 			hasFailure := false
-			for _, mappedDecision := range mappedResult.Decisions {
+			failureCount := 0
+			successCount := 0
+
+			for i, mappedDecision := range mappedResult.Decisions {
 				if mappedDecision.RunDetails.Status == "FAILURE" {
 					// Overrides as to get the correct index
 					if lastFinishedIndex < mappedDecision.I {
 						lastFinishedIndex = mappedDecision.I
 					}
-
 					hasFailure = true
-				}
-
-				if mappedDecision.RunDetails.Status != "FINISHED" && mappedDecision.RunDetails.Status != "SUCCESS" {
-					//log.Printf("[DEBUG][%s] SKIPPING decision index %d (%s) with status %s", execution.ExecutionId, mappedDecision.I, mappedDecision.RunDetails.Id, mappedDecision.RunDetails.Status)
-					//continue
+					failureCount++
+				} else if mappedDecision.RunDetails.Status == "FINISHED" || mappedDecision.RunDetails.Status == "SUCCESS" {
+					successCount++
 				}
 
 				if mappedDecision.I > lastFinishedIndex {
@@ -7290,23 +7290,33 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					}
 				}
 
-				//if len(mappedDecision.RunDetails.Output) > 5000 {
-				//	mappedDecision.RunDetails.Output = mappedDecision.RunDetails.Output[:5000] + "..."
-				//}
-
-				// Truncating, as most valuable details at at first anyway
+				// Truncating, as most valuable details are at the start anyway
 				if len(mappedDecision.RunDetails.RawResponse) > 5000 {
 					mappedDecision.RunDetails.RawResponse = mappedDecision.RunDetails.RawResponse[:5000] + "..."
 				}
 
-				relevantDecisions = append(relevantDecisions, mappedDecision)
+				// Count how many times this exact action+tool combination has failed.
+				if mappedDecision.RunDetails.Status == "FAILURE" {
+					runsForThisDecision := 0
+					for _, otherDecision := range mappedResult.Decisions {
+						if otherDecision.Action == mappedDecision.Action &&
+							otherDecision.Tool == mappedDecision.Tool &&
+							otherDecision.RunDetails.Status == "FAILURE" {
+							runsForThisDecision++
+						}
+					}
+					mappedResult.Decisions[i].Runs = fmt.Sprintf("%d", runsForThisDecision)
+				}
+
+				relevantDecisions = append(relevantDecisions, mappedResult.Decisions[i])
 			}
 
-			// FIXME: We're not really using this properly anymore huh
-			//marshalledDecisions, err = json.MarshalIndent(relevantDecisions, "", "  ")
+			log.Printf("[INFO][%s] AI_AGENT: org=%s decisions_total=%d failures=%d successes=%d last_index=%d",
+				execution.ExecutionId, execution.Workflow.OrgId, len(mappedResult.Decisions), failureCount, successCount, lastFinishedIndex)
+
 			marshalledDecisions, err = json.Marshal(relevantDecisions)
 			if err != nil {
-				log.Printf("[ERROR][%s] AI Agent: Failed marshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
+				log.Printf("[ERROR][%s] AI Agent: Failed marshalling decisions for action %s: %s", execution.ExecutionId, startNode.ID, err)
 				break
 			}
 
@@ -7320,6 +7330,23 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 			if hasFailure {
 				log.Printf("[WARNING][%s] AI Agent: Detected failure in previous decisions. Last finished index: %d", execution.ExecutionId, lastFinishedIndex)
+
+				// HARD ABORT — code-side enforcement regardless of LLM behavior.
+				const maxAgentFailureRounds = 5
+				if successCount == 0 && failureCount >= maxAgentFailureRounds {
+					log.Printf("[ERROR][%s] AI_AGENT_HARD_ABORT: failure_count=%d success_count=%d org=%s action=%s — aborting without LLM call, fix failing tool",
+						execution.ExecutionId, failureCount, successCount, execution.Workflow.OrgId, startNode.ID)
+					execution.Status = "ABORTED"
+					execution.Results = append(execution.Results, ActionResult{
+						Status: "ABORTED",
+						Result: fmt.Sprintf(`{"success": false, "reason": "Agent hard-aborted after %d consecutive tool failures with 0 successes. The tool being called is failing (timeout or app out of date). Fix the app authentication/version and retry."}`, failureCount),
+						Action: startNode,
+					})
+						
+					go SetWorkflowExecution(ctx, execution, true)
+					return startNode, errors.New("agent hard-aborted: too many consecutive tool failures")
+				}
+
 				userMessage += "\n\nSome of the previous decisions failed. Finalise the agent.\n\n"
 			}
 		}
@@ -7656,6 +7683,10 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 	}
 
+	if !createNextActions {
+		log.Printf("[INFO] AI_AGENT_START: execution_id=%s org_id=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, len(userMessage))
+	}
+
 	// Set model based on environment
 	aiModel := "gpt-5-mini"
 	newAiModel := os.Getenv("AI_MODEL")
@@ -7823,6 +7854,10 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
+
+	estimatedPromptChars := len(systemMessage) + len(userMessage) + len(string(marshalledDecisions))
+	log.Printf("[INFO][%s] AI_AGENT_LLM_CALL: org=%s model=%s is_retry=%v prompt_chars=%d", execution.ExecutionId, execution.Workflow.OrgId, aiModel, createNextActions, estimatedPromptChars)
+
 	fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization)
 	client := GetExternalClient(fullUrl)
 	client.Timeout = time.Minute * 3
@@ -7848,7 +7883,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 	newresp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[ERROR] AI Agent: Failed sending request during LLM setup: %s", err)
+		log.Printf("[ERROR] AI_AGENT_LLM_FAILURE: execution_id=%s error=%s", execution.ExecutionId, strings.Replace(err.Error(), `"`, `\"`, -1))
 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
@@ -8392,6 +8427,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				SetWorkflowExecution(ctx, execution, true)
 			}
 		}
+
+		//log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s status=%s duration=%ds decisions=%d", execution.ExecutionId, agentOutput.Status, time.Now().Unix()-agentOutput.StartedAt, len(agentOutput.Decisions))
 
 		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status == "EXECUTING" {
 			log.Printf("[INFO][%s] AI Agent action %s finished.", execution.ExecutionId, startNode.ID)
