@@ -9462,11 +9462,6 @@ func shouldStripWorkflowImage(value string) bool {
 		return true
 	}
 
-	trimmed := strings.TrimSpace(strings.ToLower(value))
-	if strings.HasPrefix(trimmed, "data:image/") {
-		return true
-	}
-
 	return false
 }
 
