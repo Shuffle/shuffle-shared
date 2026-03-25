@@ -1017,6 +1017,20 @@ func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string
 				"values": []string{id},
 			},
 		},
+		"sort": []map[string]interface{}{
+			{
+				"edited": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
+			{
+				"created": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
+		},
 	}
 
 	if err := json.NewEncoder(&buf).Encode(query); err != nil {
@@ -2504,33 +2518,98 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	}
 
 	if project.DbType == "opensearch" {
+		indexAlias := strings.ToLower(GetESIndexPrefix(nameKey))
 		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			Index:      indexAlias,
 			DocumentID: id,
 		})
 		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
-			return workflowApp, err
-		}
+			if strings.Contains(err.Error(), "has more than one index associated with it") {
+				var buf bytes.Buffer
+				query := map[string]interface{}{
+					"size": 1,
+					"query": map[string]interface{}{
+						"ids": map[string]interface{}{
+							"values": []string{id},
+						},
+					},
+					"sort": []map[string]interface{}{
+						{
+							"edited": map[string]interface{}{
+								"order":         "desc",
+								"unmapped_type": "long",
+							},
+						},
+						{
+							"created": map[string]interface{}{
+								"order":         "desc",
+								"unmapped_type": "long",
+							},
+						},
+					},
+				}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return workflowApp, errors.New("App doesn't exist")
-		}
+				if err := json.NewEncoder(&buf).Encode(query); err != nil {
+					return workflowApp, err
+				}
 
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return workflowApp, err
-		}
+				searchResp, serr := project.Es.Search(ctx, &opensearchapi.SearchReq{
+					Indices: []string{indexAlias},
+					Body:    &buf,
+				})
+				if serr != nil {
+					return workflowApp, serr
+				}
 
-		wrapped := AppWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return workflowApp, err
-		}
+				searchRes := searchResp.Inspect().Response
+				defer searchRes.Body.Close()
+				searchBody, serr := ioutil.ReadAll(searchRes.Body)
+				if serr != nil {
+					return workflowApp, serr
+				}
 
-		workflowApp = &wrapped.Source
+				if searchRes.StatusCode != 200 && searchRes.StatusCode != 201 {
+					return workflowApp, errors.New(fmt.Sprintf("Bad statuscode: %d, error: %s", searchRes.StatusCode, string(searchBody)))
+				}
+
+				wrappedSearch := AppSearchWrapper{}
+				if serr := json.Unmarshal(searchBody, &wrappedSearch); serr != nil {
+					return workflowApp, serr
+				}
+
+				if len(wrappedSearch.Hits.Hits) == 0 {
+					return workflowApp, errors.New("App doesn't exist")
+				}
+
+				workflowApp = &wrappedSearch.Hits.Hits[0].Source
+			} else {
+				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+				return workflowApp, err
+			}
+		} else {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if res.StatusCode == 404 {
+				return workflowApp, errors.New("App doesn't exist")
+			}
+
+			respBody, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				return workflowApp, err
+			}
+
+			if res.StatusCode != 200 && res.StatusCode != 201 {
+				return workflowApp, errors.New(fmt.Sprintf("Bad statuscode: %d, error: %s", res.StatusCode, string(respBody)))
+			}
+
+			wrapped := AppWrapper{}
+			err = json.Unmarshal(respBody, &wrapped)
+			if err != nil {
+				return workflowApp, err
+			}
+
+			workflowApp = &wrapped.Source
+		}
 	} else {
 		//log.Printf("[DEBUG] Getting app from datastore for ID %s", id)
 
@@ -2568,7 +2647,6 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 			}
 		}
 	}
-
 	if project.CacheDb {
 		data, err := json.Marshal(workflowApp)
 		if err != nil {
@@ -3648,6 +3726,20 @@ func getWorkflowByAliasSearch(ctx context.Context, aliasName, id string) (*Workf
 		"query": map[string]interface{}{
 			"ids": map[string]interface{}{
 				"values": []string{id},
+			},
+		},
+		"sort": []map[string]interface{}{
+			{
+				"edited": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
+			{
+				"created": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
 			},
 		},
 	}
@@ -13969,8 +14061,6 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			UpdateDetectionStats(context.Background(), cacheData)
 		}
 	}
-
-
 
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
