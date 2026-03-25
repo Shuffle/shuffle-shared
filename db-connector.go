@@ -3406,7 +3406,8 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &orgs)
-			if err == nil && len(orgs) > 0 {
+			//if err == nil && len(orgs) > 0 {
+			if err == nil {
 				return orgs, nil
 			}
 		} else {
@@ -3496,12 +3497,11 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
 		if err != nil {
 			if !strings.Contains(err.Error(), `cannot load field`) {
-				return orgs, err
 			}
 		}
 	}
 
-	if project.CacheDb && len(orgs) > 0 {
+	if project.CacheDb {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(orgs)
 		if err != nil {
@@ -3509,7 +3509,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 			return orgs, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, data, 10)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getworkflow '%s': %s", cacheKey, err)
 		}
