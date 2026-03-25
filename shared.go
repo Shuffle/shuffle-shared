@@ -22097,7 +22097,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				}
 			} else {
 				if debug {
-					log.Printf("[ERROR] Bad org: %#v: %s", workflowExecution.OrgId)
+					log.Printf("[ERROR] Bad org issue: '%s'", workflowExecution.OrgId)
 				}
 			}
 		}
@@ -23392,8 +23392,8 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 	}
 
 	if len(execution.ExecutionId) == 0 {
-		log.Printf("[ERROR] No execution id provided to validate new worker")
-		return errors.New("No execution id provided to validate new worker")
+		//log.Printf("[ERROR] No execution id provided to validate new worker")
+		return errors.New("No execution id provided to validate new worker (2)")
 	}
 
 	baseExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)
@@ -25108,7 +25108,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									decision.RunDetails.Status = "FINISHED"
 									decision.Fields = append(decision.Fields, Valuereplace{
 										Key:   "approve",
-										Value: fmt.Sprintf("Approval DENIED at %s. Should stop the agent.", time.Now().Unix()),
+										Value: fmt.Sprintf("Approval DENIED at %d. Should stop the agent.", time.Now().Unix()),
 									})
 
 									fieldsChanged = true
@@ -25917,7 +25917,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		if len(newStartnode) > 0 {
 			workflowExecution.Start = newStartnode
 		} else {
-			log.Printf("[ERROR][%s] Couldn't find startnode %s among %d actions in workflow '%s'. Remapping to %s", workflowExecution.ExecutionId, workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
+			log.Printf("[WARNING][%s] Couldn't find startnode %s among %d actions in workflow '%s'. Remapping to %s", workflowExecution.ExecutionId, workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
 
 			return workflowExecution, ExecInfo{}, fmt.Sprintf("Startnode couldn't be found"), errors.New("Startnode isn't defined in this workflow..")
 		}
@@ -32225,7 +32225,7 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(toDelete) > 0 && debug {
-		log.Printf("\n\n[DEBUG] Deleting %d old datastore revisions %s\n\n", len(toDelete))
+		log.Printf("[DEBUG] Deleting %d old datastore revisions\n\n", len(toDelete))
 	}
 
 	nameKey := "org_cache_revisions"
@@ -36218,7 +36218,8 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 	// The main point is avoiding replicas with deviations like timestamps
 	hash1 := FuzzyHashBody(body)
 
-	cacheKey := fmt.Sprintf("%s_%s", urlMd5, hash1)
+	//cacheKey := fmt.Sprintf("%s_%s", urlMd5, hash1)
+	cacheKey := fmt.Sprintf("hash_%s_%d", urlMd5, hash1)
 	cache, err := GetCache(ctx, cacheKey)
 	if err != nil {
 		SetCache(ctx, cacheKey, []byte("1"), 1)
