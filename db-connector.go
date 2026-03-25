@@ -3246,7 +3246,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 				return orgs, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for workflow (7): %s", err)
 		}
 	}
 
@@ -3414,7 +3414,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 			}
 		} else {
 			if debug {
-				log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+				log.Printf("[DEBUG] Failed getting cache for workflow (2): %s", err)
 			}
 		}
 	}
@@ -3679,16 +3679,15 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		maxAmount = 250
 	}
 
-	cacheKey := fmt.Sprintf("%s_workflows", user.ActiveOrg.Id)
-	if maxAmount != 250 {
-		if project.CacheDb {
-			cache, err := GetCache(ctx, cacheKey)
+	cacheKey := fmt.Sprintf("%s_%s_workflows", cursor, user.ActiveOrg.Id)
+	//if maxAmount != 250 {
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &workflows)
 			if err == nil {
-				cacheData := []byte(cache.([]uint8))
-				err = json.Unmarshal(cacheData, &workflows)
-				if err == nil {
-					return workflows, nil
-				}
+				return workflows, nil
 			}
 		}
 	}
@@ -3990,17 +3989,15 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		return fixedWorkflows[i].Edited > fixedWorkflows[j].Edited
 	})
 
-	if maxAmount != 250 {
-		if project.CacheDb {
-			newjson, err := json.Marshal(fixedWorkflows)
-			if err != nil {
-				return fixedWorkflows, nil
-			}
+	if project.CacheDb {
+		newjson, err := json.Marshal(fixedWorkflows)
+		if err != nil {
+			return fixedWorkflows, nil
+		}
 
-			err = SetCache(ctx, cacheKey, newjson, 60)
-			if err != nil {
-				log.Printf("[WARNING] Failed updating workflow cache: %s", err)
-			}
+		err = SetCache(ctx, cacheKey, newjson, 5)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating workflow cache: %s", err)
 		}
 	}
 
@@ -6457,6 +6454,20 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		_, err := project.Dbclient.GetAll(ctx, q, &allworkflowappAuths)
 		if err != nil && len(allworkflowappAuths) == 0 {
 			if !strings.Contains(err.Error(), `cannot load field`) {
+
+				if project.CacheDb {
+					data, err := json.Marshal(allworkflowappAuths)
+					if err != nil {
+						log.Printf("[WARNING] Failed marshalling get app auth (2): %s", err)
+						return allworkflowappAuths, nil
+					}
+
+					err = SetCache(ctx, cacheKey, data, 10)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating get app auth cache (2): %s", err)
+					}
+				}
+
 				return allworkflowappAuths, err
 			}
 		}
@@ -6637,12 +6648,25 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			environments = append(environments, hit.Source)
 		}
 	} else {
-		//log.Printf("\n\nQuerying ALL for org %s\n\n", orgId)
 		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(10)
-		//q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Filter("archived =", false).Limit(10)
 		_, err := project.Dbclient.GetAll(ctx, q, &environments)
 		if err != nil && len(environments) == 0 {
 			if !strings.Contains(err.Error(), `cannot load field`) {
+
+				if project.CacheDb {
+					log.Printf("[INFO] Setting empty cache for environments in org %s", orgId)
+					data, err := json.Marshal(environments)
+					if err != nil {
+						log.Printf("[WARNING] Failed marshalling environment cache (2): %s", err)
+						return environments, nil
+					}
+
+					err = SetCache(ctx, cacheKey, data, 60)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating environment cache (2): %s", err)
+					}
+				}
+
 				return []Environment{}, err
 			}
 		}
@@ -8478,7 +8502,7 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 				return workflows, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for workflow (3): %s", err)
 		}
 	}
 
@@ -8682,7 +8706,7 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 				return workflows, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for workflow (4): %s", err)
 		}
 	}
 
@@ -9973,9 +9997,23 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 }
 
 func GetApikey(ctx context.Context, apikey string) (User, error) {
+
 	// Query for the specific API-key in users
 	nameKey := "Users"
+
 	var users []User
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &users)
+			if err == nil {
+				return User{}, errors.New("No apikey found") 
+			}
+		}
+	}
+
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -10061,8 +10099,25 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		if err != nil && len(users) == 0 {
 			if !strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[WARNING] Error getting apikey: %s", err)
+				//return User{}, err
+			}
+		}
+	}
+
+	if project.CacheDb {
+		userData, err := json.Marshal(users)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
+			if len(users) > 0 { 
+				return users[0], nil 
+			} else {
 				return User{}, err
 			}
+		}
+
+		err = SetCache(ctx, cacheKey, userData, 10)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -10767,6 +10822,17 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 
 		if err != nil && len(notifications) == 0 {
+			data, err := json.Marshal(notifications)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling notification cache (2): %s", err)
+				return notifications, nil
+			}
+
+			err = SetCache(ctx, cacheKey, data, 5)
+			if err != nil {
+				log.Printf("[ERROR] Failed updating notification cache (2): %s", err)
+			}
+
 			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
 				q = q.Limit(50)
 				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
@@ -11971,7 +12037,8 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &executions)
-			if err == nil && len(executions) > 0 {
+			//if err == nil && len(executions) > 0 {
+			if err == nil {
 				return executions, "", nil
 			}
 		}
@@ -13995,7 +14062,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 				return datastoreKeys, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for workflow (5): %s", err)
 		}
 	}
 
@@ -14524,7 +14591,17 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
-			//log.Printf("[WARNING]: Failed getting cache key %s: %s", id, err)
+			if project.CacheDb {
+				data, err := json.Marshal(cacheData)
+				if err != nil {
+					log.Printf("[ERROR] Failed marshalling in getcachekey (2): %s", err)
+				} else {
+					err = SetCache(ctx, cacheKey, data, 30)
+					if err != nil {
+						log.Printf("[ERROR] Failed setting cache for get cache key (2): %s", err)
+					}
+				}
+			}
 
 			if strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[ERROR] Error in cache key loading. Migrating org cache to new handler (3): %s", err)
@@ -14562,7 +14639,21 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 					_, err := project.Dbclient.GetAll(ctx, query, &cacheKeys)
 					if err != nil {
 						if !strings.Contains(err.Error(), `cannot load field`) {
-							log.Printf("[WARNING] Failed getting cacheKey (1) %s: %s", newId, err)
+							log.Printf("[WARNING] Failed getting cacheKey (2) %s: %s", newId, err)
+
+							if project.CacheDb {
+								data, err := json.Marshal(cacheData)
+								if err != nil {
+									log.Printf("[WARNING] Failed marshalling in getcachekey (3): %s", err)
+									return cacheData, nil
+								}
+
+								err = SetCache(ctx, cacheKey, data, 30)
+								if err != nil {
+									log.Printf("[WARNING] Failed setting cache for get cache key (3): %s", err)
+								}
+							}
+
 							return cacheData, err
 						}
 					}
@@ -15426,7 +15517,8 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	// Find cache and return instantly
 	cacheKeys := []CacheKeyData{}
-	if project.CacheDb && category == "protected" {
+	//if project.CacheDb && category == "protected" {
+	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
@@ -15737,8 +15829,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	}
 
 	// Only cache if NO cursor at all.
-	// Otherwise we need to track and clean up all cursors
-	//if project.CacheDb && len(inputcursor) == 0 {
+	// Otherwise we need to track and clean up all cursors(?)
 	if project.CacheDb {
 		newcache, err := json.Marshal(cacheKeys)
 		if err != nil {
@@ -15746,7 +15837,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			return cacheKeys, cursor, nil
 		}
 
-		err = SetCache(ctx, cacheKey, newcache, 10)
+		err = SetCache(ctx, cacheKey, newcache, 5)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating cache keys cache: %s", err)
 		}
@@ -16385,7 +16476,7 @@ func GetSuggestion(ctx context.Context, id string) (*Suggestion, error) {
 				return suggestion, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for workflow (6): %s", err)
 		}
 	}
 

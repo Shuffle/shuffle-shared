@@ -6388,6 +6388,8 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 func GenerateApikey(ctx context.Context, userInfo User) (User, error) {
 	// Generate UUID
 	// Set uuid to apikey in backend (update)
+	DeleteCache(ctx, fmt.Sprintf("Users_%s", userInfo.ApiKey))
+
 	userInfo.ApiKey = uuid.NewV4().String()
 	err := SetApikey(ctx, userInfo)
 	if err != nil {
