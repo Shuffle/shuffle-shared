@@ -1195,6 +1195,7 @@ type DatastoreKeyMini struct {
 	Existed bool   `json:"existed" datastore:"existed"` // If the key existed before the update
 }
 
+// Not sure how this is mini anymore (: 
 type CacheKeyDataMini struct {
 	Category            string `json:"category" datastore:"category"`
 	Key                 string `json:"key" datastore:"Key"`
@@ -1217,7 +1218,7 @@ type CacheKeyDataFallback struct {
 }
 
 type CacheKeyData struct {
-	Success             bool     `json:"success" datastore:"Success"`
+	Success             bool     `json:"success,omitempty" datastore:"Success"`
 	WorkflowId          string   `json:"workflow_id," datastore:"WorkflowId"`
 	ExecutionId         string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
 	Authorization       string   `json:"authorization,omitempty" datastore:"Authorization"`
@@ -1226,7 +1227,7 @@ type CacheKeyData struct {
 	Value               string   `json:"value" datastore:"Value,noindex"`
 	Category            string   `json:"category" datastore:"category"`
 	Tags                []string `json:"tags,omitempty" datastore:"tags"`
-	IgnoreSecurityRules bool     `json:"ignore_security_rules" datastore:"ignore_security_rules,noindex"`
+	IgnoreSecurityRules bool     `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"`
 
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
@@ -1238,6 +1239,7 @@ type CacheKeyData struct {
 	PublicAuthorization string   `json:"public_authorization,omitempty" datastore:"PublicAuthorization"` // Used for public authorization
 	SuborgDistribution  []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 	RevisionId          string   `json:"revision_id" datastore:"revision_id"`
+	UpdatedBy           string   `json:"updated_by" datastore:"updated_by"`
 }
 
 type SyncConfig struct {
@@ -4116,9 +4118,9 @@ type CategoryAction struct {
 	//SkipWorkflow          bool   `json:"skip_workflow"`           // If true, it will not put it in a workflow, but instead just execute it
 
 	OrgId         string `json:"org_id"`
-	WorkflowId    string `json:"workflow_id"` 	  // Forces it to use a specific workflow ID. This can be used to build multiple steps in the same workflow
-	ExecutionId   string `json:"execution_id"`    // Execution auth
-	Authorization string `json:"authorization"`// Execution auth
+	WorkflowId    string `json:"workflow_id"`   // Forces it to use a specific workflow ID. This can be used to build multiple steps in the same workflow
+	ExecutionId   string `json:"execution_id"`  // Execution auth
+	Authorization string `json:"authorization"` // Execution auth
 }
 
 type LabelStruct struct {

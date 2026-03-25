@@ -23,9 +23,6 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 	}
 
 	actionType := strings.ReplaceAll(strings.ToLower(categoryAction.Label), " ", "_")
-
-	log.Printf("\n\nACTIONTYPE: %#v\n\n", actionType)
-
 	if actionType == "forward_tickets" || actionType == "forward_incidents" {
 		categoryCheck := "shuffle-security_incidents"
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)

@@ -11680,7 +11680,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if tmpData.OrgId != fileId {
-		log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
+		log.Printf("[INFO] OrgId %s and %s don't match (key value check)", tmpData.OrgId, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "Organization ID's don't match"}`))
 		return
@@ -20047,7 +20047,7 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	if orgId != user.ActiveOrg.Id {
-		log.Printf("[INFO] OrgId %s and %s don't match", orgId, user.ActiveOrg.Id)
+		log.Printf("[INFO] OrgId '%s' and %s don't match (delete cache key)", orgId, user.ActiveOrg.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
 		return
@@ -20797,14 +20797,10 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 	mainCategory := ""
 	for itemIndex, _ := range tmpData {
+		tmpData[itemIndex].UpdatedBy = user.Username
 		tmpData[itemIndex].OrgId = user.ActiveOrg.Id
 
 		mainCategory = tmpData[itemIndex].Category
-		if len(user.ActiveOrg.Id) == 0 {
-			break
-		}
-
-		tmpData[itemIndex].OrgId = user.ActiveOrg.Id
 		if strings.ToLower(tmpData[itemIndex].Category) == "default" {
 			tmpData[itemIndex].Category = ""
 		}
@@ -20986,19 +20982,19 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		Category:           tmpData.Category,
 		Key:                tmpData.Key,
 		Value:              tmpData.Value,
-		OrgId:              tmpData.OrgId,
 		ExecutionId:        tmpData.ExecutionId,
 		Authorization:      tmpData.Authorization,
 		SuborgDistribution: tmpData.SuborgDistribution,
 		Tags:               tmpData.Tags,
 
 		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule.
+		OrgId:               user.ActiveOrg.Id,
+		UpdatedBy:           user.Username,
 	}
 
-	// If we want to only allow it for manual overrides
-	//if !user.SessionLogin {
-	//	parsedKey.IgnoreSecurityRules = false
-	//}
+	if len(user.ActiveOrg.Id) == 0 {
+		parsedKey.OrgId = tmpData.OrgId
+	}
 
 	existed, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{parsedKey})
 	if err != nil {
@@ -31114,13 +31110,13 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 	var key string
 	if location[1] == "api" {
 		if len(location) <= 6 {
-			resp.WriteHeader(401)
+			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
 
-		category = location[4]
-		key = location[5]
+		category = location[5]
+		key = location[6]
 	}
 
 	if len(category) == 0 || len(key) == 0 {
@@ -31131,19 +31127,20 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 
-	datastoreKeys, err := GetDatastoreRevisions(ctx, key, category, user.ActiveOrg.Id) 
-	if err != nil { 
+	datastoreKeys, err := GetDatastoreRevisions(ctx, key, category, user.ActiveOrg.Id)
+	if err != nil {
 		log.Printf("[WARNING] Failed loading key revisions for %s (%s).", key, category)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
 		return
 	}
 
-	// Check workflow.Sharing == private / public / org  too
-
 	parsedKeys := []CacheKeyData{}
+	toDelete := []CacheKeyData{}
+
+	cutoff := time.Now().AddDate(0, 0, -30)
 	for _, key := range datastoreKeys {
-		if key.OrgId != user.ActiveOrg.Id { 
+		if key.OrgId != user.ActiveOrg.Id {
 			continue
 		}
 
@@ -31151,7 +31148,36 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		editedTime := time.Unix(key.Edited, 0)
+		if editedTime.Before(cutoff) {
+			toDelete = append(toDelete, key)
+			continue
+		}
+
 		parsedKeys = append(parsedKeys, key)
+	}
+
+	if len(toDelete) > 0 && debug { 
+		log.Printf("\n\n[DEBUG] Deleting %d old datastore revisions %s\n\n", len(toDelete))
+	}	
+
+	nameKey := "org_cache_revisions"
+	for _, cacheData := range toDelete {
+		cacheData.RevisionId = uuid.NewV4().String()
+		cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+		if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+			cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
+		}
+
+		cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.RevisionId)
+
+		// URL encode
+		cacheId = url.QueryEscape(cacheId)
+		if len(cacheId) > 127 {
+			cacheId = cacheId[:127]
+		}
+
+		go DeleteKey(context.Background(), nameKey, cacheId)
 	}
 
 	body, err := json.Marshal(parsedKeys)

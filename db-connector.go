@@ -3908,7 +3908,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 
 					} else {
 						if !strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
-							log.Printf("[WARNING] Workflow iterator issue: %s", err)
+							//log.Printf("[WARNING] Workflow iterator issue: %s", err)
 						}
 
 						break
@@ -13722,6 +13722,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 	}
 
+
+
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -13951,11 +13953,11 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 }
 
 func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]CacheKeyData, error) {
+	var datastoreKeys []CacheKeyData
 	if len(orgId) == 0 {
-		return []CacheKeyData, errors.New("Org ID required for revisions") 
+		return datastoreKeys, errors.New("Org ID required for revisions") 
 	}
 
-	var datastoreKeys []CacheKeyData
 	var err error
 
 	amount := 50 
@@ -13967,7 +13969,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 		amount = 200
 	}
 
-	key = url.QueryEscape(cacheId)
+	key = url.QueryEscape(key)
 	if len(key) > 127 {
 		key = key[:127]
 	}
@@ -13978,7 +13980,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 	}
 
 	nameKey := "org_cache_revisions"
-	cacheKey := fmt.Sprintf("%s_%s_%d", nameKey, key, category, orgId)
+	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, key, category, orgId)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -14101,7 +14103,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 		}
 
 		query := datastore.NewQuery(nameKey).Filter("Key =", key).Filter("category =", category).Filter("OrgId =", orgId).Limit(queryAmount)
-		query = query.Order("-edited")
+		query = query.Order("-Edited")
 
 		iterCount := 0
 
@@ -14115,7 +14117,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 					} else {
-						log.Printf("[WARNING] Datastore revision iterator issue: %s", err)
+						//log.Printf("[ERROR] Datastore revision iterator issue: %s", err)
 						break
 					}
 				}
@@ -14132,14 +14134,14 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 			}
 
 			if err != iterator.Done {
-				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//log.Printf("[INFO] Failed fetching datastore revisions: %v", err)
 				//break
 			}
 
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("[ERROR] Problem with cursor: %s", err)
+				log.Printf("[ERROR] Problem with datastore revisions cursor: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -14177,7 +14179,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 			return datastoreKeys, nil
 		}
 
-		err = SetCache(ctx, cacheKey, cacheData, 60)
+		err = SetCache(ctx, cacheKey, cacheData, 2)
 		if err != nil {
 			log.Printf("[ERROR] Failed setting cache for workflow revisions: %s (not critical)", err)
 		}
