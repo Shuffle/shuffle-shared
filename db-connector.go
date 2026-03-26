@@ -10352,8 +10352,8 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &users)
-			if err == nil {
-				return User{}, errors.New("No apikey found") 
+			if err == nil && len(users) > 0 {
+				return users[0], nil
 			}
 		}
 	}
