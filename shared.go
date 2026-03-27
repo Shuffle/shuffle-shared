@@ -16855,22 +16855,39 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		var subflowDataLoop []SubflowData
 		err = json.Unmarshal([]byte(foundResult.Result), &subflowDataLoop)
 		if err == nil {
+			updatedResult := false
 			for subflowIndex, subflowData := range subflowDataLoop {
-				if subflowData.ExecutionId == executionParent {
+				if subflowData.ExecutionId == subflowExecutionId {
 					log.Printf("[DEBUG][%s] Updating execution Id %s with subflow info", subflowExecutionId, subflowData.ExecutionId)
 					subflowDataLoop[subflowIndex].Result = returnValue
+					subflowDataLoop[subflowIndex].ResultSet = true
+					updatedResult = true
 				}
 			}
 
-			//foundResult.ExecutionId = executionParent
-			//foundResult.Authorization = parentAuth
-			resultData, err = json.Marshal(subflowDataLoop)
-			if err != nil {
-				log.Printf("[WARNING] Failed updating resultData (4): %s", err)
-				return err
-			}
+			if updatedResult {
+				parsedActionValue, err := json.Marshal(subflowDataLoop)
+				if err != nil {
+					log.Printf("[WARNING] Failed updating resultData (4): %s", err)
+					return err
+				}
 
-			sendRequest = true
+				timeNow := time.Now().Unix()
+				foundResult.StartedAt = timeNow
+				foundResult.CompletedAt = timeNow
+				foundResult.Authorization = parentAuth
+				foundResult.ExecutionId = executionParent
+				foundResult.Result = string(parsedActionValue)
+				foundResult.Status = "SUCCESS"
+
+				resultData, err = json.Marshal(foundResult)
+				if err != nil {
+					log.Printf("[ERROR][%s] Failed updating resultData (4.1): %s", subflowExecutionId, err)
+					return err
+				}
+
+				sendRequest = true
+			}
 		} else {
 			// In here maning no-loop?
 			/*
@@ -18844,23 +18861,30 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			go SetCache(ctx, newCacheKey, []byte(actionResult.Result), 35)
 
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
-				log.Printf("[INFO][%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem", workflowExecution.ExecutionId, len(workflowExecution.Results))
+				log.Printf("[INFO][%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO WAITING. Results: %d. Trying to find subexec in cache onprem", workflowExecution.ExecutionId, len(workflowExecution.Results))
 
-				// Finding the result, and removing it if it exists. "Sinkholing"
-				workflowExecution.Status = "EXECUTING"
-				newResults := []ActionResult{}
-				for _, result := range workflowExecution.Results {
-					if result.Action.ID == actionResult.Action.ID {
-						continue
-					}
-
-					newResults = append(newResults, result)
+				// Normalise the initial subflow execution response into a canonical
+				// pending payload so the regular WAITING recheck path can resolve it.
+				baseResultData, err := json.Marshal([]SubflowData{subflowData})
+				if err != nil {
+					log.Printf("[ERROR][%s] Failed marshalling pending subflow result: %s", workflowExecution.ExecutionId, err)
+					return &workflowExecution, dbSave, nil
 				}
 
-				workflowExecution.Results = newResults
+				actionResult.Status = "WAITING"
+				actionResult.Result = string(baseResultData)
+				actionResult.CompletedAt = 0
+				workflowExecution.Status = "EXECUTING"
+
+				for resultIndex, result := range workflowExecution.Results {
+					if result.Action.ID == actionResult.Action.ID {
+						workflowExecution.Results[resultIndex] = actionResult
+						break
+					}
+				}
 
 				// Returning as we are waiting for the subflow to finish
-				return &workflowExecution, dbSave, nil
+				return &workflowExecution, true, nil
 
 			} else {
 				var subflowDataList []SubflowData
