@@ -16543,7 +16543,38 @@ func CheckUsername(Username string) error {
 // This should happen locally.. Meaning, polling may be stupid.
 // Let's do it anyway, since it seems like the best way to scale
 // without remoting problems and the like.
+func normalizeSubflowResultValue(returnValue string) string {
+	normalized := strings.TrimSpace(returnValue)
+	if len(normalized) == 0 {
+		return returnValue
+	}
+
+	// Child executions sometimes return JSON wrapped in one or more string
+	// layers. Unwrap those layers before storing the result on the parent.
+	for i := 0; i < 2; i++ {
+		var decoded string
+		if err := json.Unmarshal([]byte(normalized), &decoded); err != nil {
+			break
+		}
+
+		normalized = strings.TrimSpace(decoded)
+		if len(normalized) == 0 {
+			return decoded
+		}
+	}
+
+	if json.Valid([]byte(normalized)) {
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, []byte(normalized)); err == nil {
+			return compact.String()
+		}
+	}
+
+	return normalized
+}
+
 func updateExecutionParent(ctx context.Context, executionParent, returnValue, parentAuth, parentNode, subflowExecutionId string) error {
+	returnValue = normalizeSubflowResultValue(returnValue)
 
 	// Was an error here. Now defined to run with http://shuffle-backend:5001 by default
 	backendUrl := os.Getenv("BASE_URL")
@@ -32978,7 +33009,7 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 			cacheData := []byte(cache.([]uint8))
 			//log.Printf("[DEBUG] Cachedata for other subflow: '%s'", string(cacheData))
 			if len(cacheData) > 0 {
-				res.Result = string(cacheData)
+				res.Result = normalizeSubflowResultValue(string(cacheData))
 				res.ResultSet = true
 				finishedSubflows += 1
 			} else {
@@ -33009,23 +33040,23 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 					}
 
 					if len(foundResult.Result) > 0 {
-						res.Result = foundResult.Result
+						res.Result = normalizeSubflowResultValue(foundResult.Result)
 					}
 
 					if len(res.Result) == 0 || subflowExecution.Status == "ABORTED" {
 						// Find the last result and use that
-						res.Result = subflowExecution.Workflow.DefaultReturnValue
+						res.Result = normalizeSubflowResultValue(subflowExecution.Workflow.DefaultReturnValue)
 					}
 
 					if len(subflowExecution.Result) > 0 {
-						res.Result = subflowExecution.Result
+						res.Result = normalizeSubflowResultValue(subflowExecution.Result)
 					}
 
 					res.ResultSet = true
 					finishedSubflows += 1
 
 					if len(res.Result) > 0 {
-						SetCache(ctx, subflowResultCacheId, []byte(subflowExecution.Result), 60)
+						SetCache(ctx, subflowResultCacheId, []byte(res.Result), 60)
 					}
 				}
 			}
