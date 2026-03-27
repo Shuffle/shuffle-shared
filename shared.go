@@ -18611,6 +18611,16 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 
+		if found {
+			existingStatus := workflowExecution.Results[outerindex].Status
+			if actionResult.Action.AppName == "shuffle-subflow" &&
+				(existingStatus == "SUCCESS" || existingStatus == "FAILURE" || existingStatus == "ABORTED") &&
+				(actionResult.Status == "WAITING" || actionResult.Status == "EXECUTING") {
+				log.Printf("[INFO][%s] Ignoring stale subflow status regression for %s (%s): %s -> %s", workflowExecution.ExecutionId, actionResult.Action.Label, actionResult.Action.ID, existingStatus, actionResult.Status)
+				skip = true
+			}
+		}
+
 		if skip {
 			//log.Printf("[DEBUG] Both results are %s. Skipping this node", item.Status)
 		} else if found {
