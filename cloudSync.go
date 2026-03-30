@@ -2307,6 +2307,13 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		} else {
 			decision.RunDetails.Status = "FINISHED"
 		}
+
+		// Log individual tool execution result
+		duration := int64(0)
+		if decision.RunDetails.CompletedAt > 0 && decision.RunDetails.StartedAt > 0 {
+			duration = decision.RunDetails.CompletedAt - decision.RunDetails.StartedAt
+		}
+		log.Printf("[INFO][%s] AI_AGENT_TOOL: org=%s tool=%s action=%s status=%s duration=%ds", execution.ExecutionId, execution.Workflow.OrgId, decision.Tool, decision.Action, decision.RunDetails.Status, duration)
 	}
 
 	// 1. Send this back as a result for an action
