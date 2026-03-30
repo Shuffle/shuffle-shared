@@ -4768,7 +4768,7 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 	userInfo := fmt.Sprintf("%s The API field to fill in is '%s', but do NOT add '%s', 'action' or 'app' as a keys.", inputdata, fieldName, fieldName)
 	//if len(body) > 0 {
 	if len(inputdata) > 200 {
-		fmt.Sprintf(`Use JSON keys from the sources as additional context, and add values from it in the format '{{label.key.subkey}}' if it has no list, else '{{label.key[].subkey}}'. Example: the response of label 'shuffle tools 1' is '{"name": {"firstname": "", "lastname": ""}}' and you are looking for a lastname, then you get {{shuffle_tools_1.name.lastname}}. Don't randomly make fields empty for no reason. Add keys and values to ensure ALL input fields are included.`)
+		//fmt.Sprintf(`Use JSON keys from the sources as additional context, and add values from it in the format '{{label.key.subkey}}' if it has no list, else '{{label.key[].subkey}}'. Example: the response of label 'shuffle tools 1' is '{"name": {"firstname": "", "lastname": ""}}' and you are looking for a lastname, then you get {{shuffle_tools_1.name.lastname}}. Don't randomly make fields empty for no reason. Add keys and values to ensure ALL input fields are included.`)
 
 		userInfo += fmt.Sprintf(`Below is the %s you should add to or modify for API '%s' in app '%s'. \n%s`, fieldName, actionName, strings.ReplaceAll(appname, "_", " "), body)
 	}
@@ -8750,7 +8750,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	// Maps everything AROUND the usecase
 	err = HandleSingulWorkflowEnablement(ctx, *workflow, user, categoryAction)
 	if err != nil {
-		log.Printf("[ERROR] Failed handling Singul workflow enablement (%s) in GenerateSingulWorkflows: %s", categoryAction, err)
+		log.Printf("[ERROR] Failed handling Singul workflow enablement (%s) in GenerateSingulWorkflows: %s", categoryAction.Label, err)
 	}
 
 	workflow.BackgroundProcessing = true

@@ -6388,6 +6388,8 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 func GenerateApikey(ctx context.Context, userInfo User) (User, error) {
 	// Generate UUID
 	// Set uuid to apikey in backend (update)
+	DeleteCache(ctx, fmt.Sprintf("Users_%s", userInfo.ApiKey))
+
 	userInfo.ApiKey = uuid.NewV4().String()
 	err := SetApikey(ctx, userInfo)
 	if err != nil {
@@ -12299,7 +12301,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if tmpData.OrgId != fileId {
-		log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
+		log.Printf("[INFO] OrgId %s and %s don't match (key value check)", tmpData.OrgId, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "Organization ID's don't match"}`))
 		return
@@ -15202,46 +15204,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		// Not setting right now
-		// unescapedName, err := url.QueryUnescape(app.Name)
-		// if err == nil {
-		// 	type AppCacheData struct {
-		// 		Success     bool   `json:"success"`
-		// 		ID          string `json:"id"`
-		// 		Name        string `json:"name"`
-		// 		Description string `json:"description"`
-		// 	}
-
-		// 	cacheData := AppCacheData{
-		// 		Success:     true,
-		// 		ID:          app.ID,
-		// 		Name:        app.Name,
-		// 		Description: app.Description,
-		// 	}
-
-		// 	cachePayload, err := json.Marshal(cacheData)
-		// 	if err != nil {
-		// 		log.Printf("[WARNING] Failed marshalling app cache payload: %s", err)
-		// 		cachePayload = []byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, app.ID))
-		// 	}
-
-		// 	// 1. Cache by actual app name
-		// 	primarySlug := strings.ToLower(strings.ReplaceAll(unescapedName, " ", "_"))
-		// 	primaryKey := fmt.Sprintf("workflowapp_cache_%s", primarySlug)
-		// 	SetCache(context.Background(), primaryKey, cachePayload, 10080)
-
-		// 	// 2. Cache by search alias (e.g., "outlook") if provided by the frontend
-		// 	aliasQuery := request.URL.Query().Get("alias")
-		// 	if len(aliasQuery) > 0 {
-		// 		aliasSlug := strings.ToLower(strings.ReplaceAll(aliasQuery, " ", "_"))
-		// 		aliasKey := fmt.Sprintf("workflowapp_cache_%s", aliasSlug)
-
-		// 		// Only set if alias is different from the primary name
-		// 		if aliasKey != primaryKey {
-		// 			SetCache(context.Background(), aliasKey, cachePayload, 10080)
-		// 		}
-		// 	}
-		// }
 	}
 
 	app.ReferenceUrl = ""
@@ -20678,7 +20640,7 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	if orgId != user.ActiveOrg.Id {
-		log.Printf("[INFO] OrgId %s and %s don't match", orgId, user.ActiveOrg.Id)
+		log.Printf("[INFO] OrgId '%s' and %s don't match (delete cache key)", orgId, user.ActiveOrg.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
 		return
@@ -21428,14 +21390,10 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 	mainCategory := ""
 	for itemIndex, _ := range tmpData {
+		tmpData[itemIndex].UpdatedBy = user.Username
 		tmpData[itemIndex].OrgId = user.ActiveOrg.Id
 
 		mainCategory = tmpData[itemIndex].Category
-		if len(user.ActiveOrg.Id) == 0 {
-			break
-		}
-
-		tmpData[itemIndex].OrgId = user.ActiveOrg.Id
 		if strings.ToLower(tmpData[itemIndex].Category) == "default" {
 			tmpData[itemIndex].Category = ""
 		}
@@ -21617,19 +21575,19 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		Category:           tmpData.Category,
 		Key:                tmpData.Key,
 		Value:              tmpData.Value,
-		OrgId:              tmpData.OrgId,
 		ExecutionId:        tmpData.ExecutionId,
 		Authorization:      tmpData.Authorization,
 		SuborgDistribution: tmpData.SuborgDistribution,
 		Tags:               tmpData.Tags,
 
 		IgnoreSecurityRules: tmpData.IgnoreSecurityRules, // Makes sure we don't stop manual requests even if security rules exist. Basically a rule.
+		OrgId:               user.ActiveOrg.Id,
+		UpdatedBy:           user.Username,
 	}
 
-	// If we want to only allow it for manual overrides
-	//if !user.SessionLogin {
-	//	parsedKey.IgnoreSecurityRules = false
-	//}
+	if len(user.ActiveOrg.Id) == 0 {
+		parsedKey.OrgId = tmpData.OrgId
+	}
 
 	existed, err := SetDatastoreKeyBulk(ctx, []CacheKeyData{parsedKey})
 	if err != nil {
@@ -22147,7 +22105,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				}
 			} else {
 				if debug {
-					log.Printf("[ERROR] Bad org: %#v: %s", workflowExecution.OrgId)
+					log.Printf("[ERROR] Bad org issue: '%s'", workflowExecution.OrgId)
 				}
 			}
 		}
@@ -23442,8 +23400,8 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 	}
 
 	if len(execution.ExecutionId) == 0 {
-		log.Printf("[ERROR] No execution id provided to validate new worker")
-		return errors.New("No execution id provided to validate new worker")
+		//log.Printf("[ERROR] No execution id provided to validate new worker")
+		return errors.New("No execution id provided to validate new worker (2)")
 	}
 
 	baseExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)
@@ -25158,7 +25116,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									decision.RunDetails.Status = "FINISHED"
 									decision.Fields = append(decision.Fields, Valuereplace{
 										Key:   "approve",
-										Value: fmt.Sprintf("Approval DENIED at %s. Should stop the agent.", time.Now().Unix()),
+										Value: fmt.Sprintf("Approval DENIED at %d. Should stop the agent.", time.Now().Unix()),
 									})
 
 									fieldsChanged = true
@@ -25967,7 +25925,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		if len(newStartnode) > 0 {
 			workflowExecution.Start = newStartnode
 		} else {
-			log.Printf("[ERROR][%s] Couldn't find startnode %s among %d actions in workflow '%s'. Remapping to %s", workflowExecution.ExecutionId, workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
+			log.Printf("[WARNING][%s] Couldn't find startnode %s among %d actions in workflow '%s'. Remapping to %s", workflowExecution.ExecutionId, workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
 
 			return workflowExecution, ExecInfo{}, fmt.Sprintf("Startnode couldn't be found"), errors.New("Startnode isn't defined in this workflow..")
 		}
@@ -27013,7 +26971,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 			ctx,
 			fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
 			fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
-			fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+			fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, action.ID),
 			workflowExecution.ExecutionOrg,
 			true,
 			"HIGH",
@@ -27167,7 +27125,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 					ctx,
 					fmt.Sprintf("Failed to refresh Oauth2 tokens for auth '%s'. Did the credentials change?", curAuth.Label),
 					fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
-					fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, action.ID),
 					workflowExecution.ExecutionOrg,
 					true,
 					"HIGH",
@@ -27269,7 +27227,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 						ctx,
 						fmt.Sprintf("Failed to refresh Oauth2 tokens for app '%s'", curAuth.Label),
 						fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
-						fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+						fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, action.ID),
 						workflowExecution.ExecutionOrg,
 						true,
 						"HIGH",
@@ -27704,8 +27662,12 @@ func loadGithubWorkflows(url, username, password, userId, branch, orgId string) 
 	}
 
 	// Handle GitHub-specific file URLs
-	if strings.Contains(url, "github.com") && strings.Contains(url, "/blob/") {
-		parts := strings.SplitN(url, "/blob/", 2)
+	if strings.Contains(url, "github.com") && (strings.Contains(url, "/blob/") || strings.Contains(url, "/tree/")) {
+		separator := "/blob/"
+		if strings.Contains(url, "/tree/") {
+			separator = "/tree/"
+		}
+		parts := strings.SplitN(url, separator, 2)
 		if len(parts) == 2 {
 			baseURL := parts[0]
 			remainder := parts[1]
@@ -27828,6 +27790,419 @@ func loadGithubWorkflows(url, username, password, userId, branch, orgId string) 
 	return nil
 }
 
+// listGithubWorkflowsInfo clones a git repo and returns metadata for each workflow JSON found.
+// It also checks whether each workflow ID already exists in the given org.
+func listGithubWorkflowsInfo(url, username, password, branch, orgId string) ([]RemoteWorkflowInfo, error) {
+	fs := memfs.New()
+
+	targetPath := ""
+	specificFile := ""
+	if strings.Contains(url, "dev.azure.com") {
+		if strings.Contains(url, "?path=") {
+			parts := strings.Split(url, "?path=")
+			if len(parts) == 2 {
+				targetPath = parts[1]
+				decodedPath, err := neturl.QueryUnescape(targetPath)
+				if err == nil {
+					targetPath = decodedPath
+				}
+				targetPath = strings.TrimPrefix(targetPath, "/")
+				if strings.HasSuffix(strings.ToLower(targetPath), ".json") {
+					specificFile = path.Base(targetPath)
+					targetPath = path.Dir(targetPath)
+					if targetPath == "." {
+						targetPath = ""
+					}
+				}
+				url = parts[0]
+			}
+		}
+	}
+
+	if strings.Contains(url, "github.com") && (strings.Contains(url, "/blob/") || strings.Contains(url, "/tree/")) {
+		separator := "/blob/"
+		if strings.Contains(url, "/tree/") {
+			separator = "/tree/"
+		}
+		parts := strings.SplitN(url, separator, 2)
+		if len(parts) == 2 {
+			baseURL := parts[0]
+			remainder := parts[1]
+			pathParts := strings.SplitN(remainder, "/", 2)
+			if len(pathParts) >= 1 {
+				if len(branch) == 0 || branch == "main" || branch == "master" {
+					branch = pathParts[0]
+				}
+				if len(pathParts) == 2 {
+					targetPath = pathParts[1]
+					if strings.HasSuffix(strings.ToLower(targetPath), ".json") {
+						specificFile = path.Base(targetPath)
+						targetPath = path.Dir(targetPath)
+						if targetPath == "." {
+							targetPath = ""
+						}
+					}
+				}
+			}
+			url = baseURL + ".git"
+		}
+	}
+
+	cloneOptions := &git.CloneOptions{URL: url}
+	if len(username) > 0 && len(password) > 0 {
+		cloneOptions.Auth = &http2.BasicAuth{Username: username, Password: password}
+	} else {
+		org, err := GetOrg(context.Background(), orgId)
+		if err == nil && len(org.Defaults.WorkflowUploadUsername) > 0 && len(org.Defaults.WorkflowUploadToken) > 0 {
+			cloneOptions.Auth = &http2.BasicAuth{
+				Username: org.Defaults.WorkflowUploadUsername,
+				Password: org.Defaults.WorkflowUploadToken,
+			}
+		}
+	}
+
+	if len(branch) > 0 && branch != "main" && branch != "master" {
+		cloneOptions.ReferenceName = plumbing.ReferenceName(branch)
+	}
+
+	cloneOptions = CheckGitProxy(cloneOptions)
+
+	isAzureDevOps := strings.Contains(url, "dev.azure.com")
+	if isAzureDevOps {
+		transport.UnsupportedCapabilities = []capability.Capability{
+			capability.ThinPack,
+		}
+	}
+
+	storer := memory.NewStorage()
+	_, err := git.Clone(storer, fs, cloneOptions)
+	if err != nil {
+		log.Printf("[INFO] Failed cloning repo %s for list: %s", url, err)
+		return nil, err
+	}
+
+	searchPath := "/"
+	if targetPath != "" {
+		searchPath = "/" + targetPath
+	}
+
+	dir, err := fs.ReadDir(searchPath)
+	if err != nil {
+		searchPath = strings.TrimPrefix(searchPath, "/")
+		if searchPath == "" {
+			searchPath = "."
+		}
+		dir, err = fs.ReadDir(searchPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	extraPath := ""
+	if targetPath != "" {
+		extraPath = strings.ReplaceAll(targetPath, "\\", "/")
+		if !strings.HasSuffix(extraPath, "/") {
+			extraPath += "/"
+		}
+	}
+
+	// Collect all remote workflow infos.
+	// Must be an initialized (non-nil) slice so it serializes as [] not null.
+	remoteInfos := make([]RemoteWorkflowInfo, 0)
+	collectWorkflowInfos(fs, dir, extraPath, specificFile, &remoteInfos)
+
+	// Deduplicate by workflow ID, keeping the entry with the most recent UpdatedAt
+	seenIds := make(map[string]int) // id -> index in dedupInfos
+	dedupInfos := make([]RemoteWorkflowInfo, 0, len(remoteInfos))
+	for _, info := range remoteInfos {
+		if existingIdx, seen := seenIds[info.ID]; seen {
+			if info.UpdatedAt > dedupInfos[existingIdx].UpdatedAt {
+				dedupInfos[existingIdx] = info
+			}
+		} else {
+			seenIds[info.ID] = len(dedupInfos)
+			dedupInfos = append(dedupInfos, info)
+		}
+	}
+	remoteInfos = dedupInfos
+
+	// Check which workflows already exist in this org
+	ctx := context.Background()
+	for i, info := range remoteInfos {
+		existing, err := GetWorkflow(ctx, info.ID)
+		if err == nil && existing != nil && existing.OrgId == orgId {
+			remoteInfos[i].ExistsInOrg = true
+			remoteInfos[i].OrgWorkflowId = existing.ID
+		}
+	}
+
+	log.Printf("[INFO] listGithubWorkflowsInfo: found %d workflows in remote repo", len(remoteInfos))
+	return remoteInfos, nil
+}
+
+// collectWorkflowInfos recursively walks the billy filesystem and collects RemoteWorkflowInfo for each .json file.
+func collectWorkflowInfos(fs billy.Filesystem, dir []os.FileInfo, extra string, onlyname string, infos *[]RemoteWorkflowInfo) {
+	for _, file := range dir {
+		filename := file.Name()
+		if len(onlyname) > 0 && filename != onlyname {
+			continue
+		}
+
+		fullPath := fmt.Sprintf("%s%s", extra, filename)
+		fi, err := fs.Stat(fullPath)
+		if err != nil {
+			continue
+		}
+
+		switch mode := fi.Mode(); {
+		case mode.IsDir():
+			tmpExtra := fmt.Sprintf("%s%s/", extra, fi.Name())
+			subDir, err := fs.ReadDir(tmpExtra)
+			if err != nil {
+				continue
+			}
+			collectWorkflowInfos(fs, subDir, tmpExtra, "", infos)
+		case mode.IsRegular():
+			if !strings.HasSuffix(strings.ToLower(filename), ".json") {
+				continue
+			}
+			filePath := fmt.Sprintf("%s%s", extra, fi.Name())
+			f, err := fs.Open(filePath)
+			if err != nil {
+				continue
+			}
+			data, err := ioutil.ReadAll(f)
+			if err != nil {
+				continue
+			}
+			var wf Workflow
+			if err := json.Unmarshal(data, &wf); err != nil || wf.ID == "" || wf.Name == "" {
+				continue
+			}
+			folderName := strings.TrimSuffix(extra, "/")
+			if idx := strings.LastIndex(folderName, "/"); idx >= 0 {
+				folderName = folderName[idx+1:]
+			}
+			*infos = append(*infos, RemoteWorkflowInfo{
+				ID:         wf.ID,
+				Name:       wf.Name,
+				FolderName: folderName,
+				UpdatedAt:  wf.Edited,
+				FilePath:   filePath,
+			})
+		}
+	}
+}
+
+// importSingleRemoteWorkflow imports or syncs a single workflow from a git repo by its original ID.
+// If syncToId is non-empty, the existing workflow with that ID is updated (synced).
+// Otherwise a new workflow is created (imported).
+func importSingleRemoteWorkflow(url, username, password, branch, originalWorkflowId, syncToId, userId, orgId string) error {
+	fs := memfs.New()
+
+	targetPath := ""
+	if strings.Contains(url, "dev.azure.com") {
+		if strings.Contains(url, "?path=") {
+			parts := strings.Split(url, "?path=")
+			if len(parts) == 2 {
+				targetPath = parts[1]
+				if d, err := neturl.QueryUnescape(targetPath); err == nil {
+					targetPath = d
+				}
+				targetPath = strings.TrimPrefix(targetPath, "/")
+				if strings.HasSuffix(strings.ToLower(targetPath), ".json") {
+					targetPath = path.Dir(targetPath)
+					if targetPath == "." {
+						targetPath = ""
+					}
+				}
+				url = parts[0]
+			}
+		}
+	}
+
+	if strings.Contains(url, "github.com") && (strings.Contains(url, "/blob/") || strings.Contains(url, "/tree/")) {
+		separator := "/blob/"
+		if strings.Contains(url, "/tree/") {
+			separator = "/tree/"
+		}
+		parts := strings.SplitN(url, separator, 2)
+		if len(parts) == 2 {
+			baseURL := parts[0]
+			remainder := parts[1]
+			pathParts := strings.SplitN(remainder, "/", 2)
+			if len(pathParts) >= 1 {
+				if len(branch) == 0 || branch == "main" || branch == "master" {
+					branch = pathParts[0]
+				}
+				if len(pathParts) == 2 {
+					rp := pathParts[1]
+					if strings.HasSuffix(strings.ToLower(rp), ".json") {
+						rp = path.Dir(rp)
+						if rp == "." {
+							rp = ""
+						}
+					}
+					targetPath = rp
+				}
+			}
+			url = baseURL + ".git"
+		}
+	}
+
+	cloneOptions := &git.CloneOptions{URL: url}
+	if len(username) > 0 && len(password) > 0 {
+		cloneOptions.Auth = &http2.BasicAuth{Username: username, Password: password}
+	} else {
+		org, err := GetOrg(context.Background(), orgId)
+		if err == nil && len(org.Defaults.WorkflowUploadUsername) > 0 && len(org.Defaults.WorkflowUploadToken) > 0 {
+			cloneOptions.Auth = &http2.BasicAuth{
+				Username: org.Defaults.WorkflowUploadUsername,
+				Password: org.Defaults.WorkflowUploadToken,
+			}
+		}
+	}
+
+	if len(branch) > 0 && branch != "main" && branch != "master" {
+		cloneOptions.ReferenceName = plumbing.ReferenceName(branch)
+	}
+
+	cloneOptions = CheckGitProxy(cloneOptions)
+
+	isAzureDevOps := strings.Contains(url, "dev.azure.com")
+	if isAzureDevOps {
+		transport.UnsupportedCapabilities = []capability.Capability{
+			capability.ThinPack,
+		}
+	}
+
+	storer := memory.NewStorage()
+	_, err := git.Clone(storer, fs, cloneOptions)
+	if err != nil {
+		return err
+	}
+
+	searchPath := "/"
+	if targetPath != "" {
+		searchPath = "/" + targetPath
+	}
+
+	dir, err := fs.ReadDir(searchPath)
+	if err != nil {
+		searchPath = strings.TrimPrefix(searchPath, "/")
+		if searchPath == "" {
+			searchPath = "."
+		}
+		dir, err = fs.ReadDir(searchPath)
+		if err != nil {
+			return err
+		}
+	}
+
+	extraPath := ""
+	if targetPath != "" {
+		extraPath = strings.ReplaceAll(targetPath, "\\", "/")
+		if !strings.HasSuffix(extraPath, "/") {
+			extraPath += "/"
+		}
+	}
+
+	return findAndProcessSingleWorkflow(fs, dir, extraPath, originalWorkflowId, syncToId, userId, orgId)
+}
+
+// findAndProcessSingleWorkflow walks the FS looking for the workflow with the given original ID.
+func findAndProcessSingleWorkflow(fs billy.Filesystem, dir []os.FileInfo, extra, originalWorkflowId, syncToId, userId, orgId string) error {
+	for _, file := range dir {
+		filename := file.Name()
+		fullPath := fmt.Sprintf("%s%s", extra, filename)
+		fi, err := fs.Stat(fullPath)
+		if err != nil {
+			continue
+		}
+
+		switch mode := fi.Mode(); {
+		case mode.IsDir():
+			tmpExtra := fmt.Sprintf("%s%s/", extra, fi.Name())
+			subDir, err := fs.ReadDir(tmpExtra)
+			if err != nil {
+				continue
+			}
+			if err := findAndProcessSingleWorkflow(fs, subDir, tmpExtra, originalWorkflowId, syncToId, userId, orgId); err == nil {
+				return nil // found and processed
+			}
+		case mode.IsRegular():
+			if !strings.HasSuffix(strings.ToLower(filename), ".json") {
+				continue
+			}
+			filePath := fmt.Sprintf("%s%s", extra, fi.Name())
+			f, err := fs.Open(filePath)
+			if err != nil {
+				continue
+			}
+			data, err := ioutil.ReadAll(f)
+			if err != nil {
+				continue
+			}
+			var wf Workflow
+			if err := json.Unmarshal(data, &wf); err != nil {
+				continue
+			}
+			if wf.ID != originalWorkflowId {
+				continue
+			}
+
+			ctx := context.Background()
+
+			if syncToId != "" {
+				// Sync: update the existing org workflow with the remote content
+				existing, err := GetWorkflow(ctx, syncToId)
+				if err != nil || existing == nil {
+					return fmt.Errorf("could not find org workflow %s to sync: %v", syncToId, err)
+				}
+				// Preserve org ownership, update content
+				wf.ID = existing.ID
+				wf.Owner = existing.Owner
+				wf.OrgId = existing.OrgId
+				wf.ExecutingOrg = existing.ExecutingOrg
+				wf.Org = existing.Org
+				wf.IsValid = existing.IsValid
+				log.Printf("[INFO] Syncing remote workflow '%s' into org workflow %s", wf.Name, syncToId)
+				return SetWorkflow(ctx, wf, wf.ID)
+			}
+
+			// Import: preserve the original workflow ID embedded in the repo JSON file.
+			// Do NOT generate a new UUID — the ID from the file is the canonical identifier.
+			wf.Owner = userId
+			wf.OrgId = orgId
+			wf.ExecutingOrg = OrgMini{Id: orgId}
+			wf.Org = append(wf.Org, OrgMini{Id: orgId})
+			wf.IsValid = false
+			wf.Errors = []string{"Imported, not locally saved. Save before using."}
+
+			// Restore app images
+			workflowapps, err := GetAllWorkflowApps(ctx, 1000, 0)
+			if err == nil {
+				for actionIndex, action := range wf.Actions {
+					if action.AppID == "" {
+						continue
+					}
+					for _, app := range workflowapps {
+						if (app.ID == action.AppID || app.Name == action.AppName) && app.AppVersion == action.AppVersion {
+							wf.Actions[actionIndex].LargeImage = app.LargeImage
+							wf.Actions[actionIndex].SmallImage = app.LargeImage
+							break
+						}
+					}
+				}
+			}
+
+			log.Printf("[INFO] Importing remote workflow '%s' as new workflow %s", wf.Name, wf.ID)
+			return SetWorkflow(ctx, wf, wf.ID)
+		}
+	}
+	return fmt.Errorf("workflow with id %s not found in remote repo", originalWorkflowId)
+}
+
 func LoadSpecificWorkflows(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -27861,12 +28236,14 @@ func LoadSpecificWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	// Field1 & 2 can be a lot of things..
 	type tmpStruct struct {
-		URL      string `json:"url"`
-		Username string `json:"username"`
-		Password string `json:"password"`
-		Branch   string `json:"branch"`
+		URL                string `json:"url"`
+		Username           string `json:"username"`
+		Password           string `json:"password"`
+		Branch             string `json:"branch"`
+		ListOnly           bool   `json:"list_only"`
+		OriginalWorkflowId string `json:"original_workflow_id"`
+		SyncToId           string `json:"sync_to_id"`
 	}
-	//log.Printf("Body: %s", string(body))
 
 	var tmpBody tmpStruct
 	err = json.Unmarshal(body, &tmpBody)
@@ -27877,7 +28254,61 @@ func LoadSpecificWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Field3 = branch
+	// Mode 1: list_only – return metadata for all workflows in the repo without importing
+	if tmpBody.ListOnly {
+		infos, err := listGithubWorkflowsInfo(tmpBody.URL, tmpBody.Username, tmpBody.Password, tmpBody.Branch, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] listGithubWorkflowsInfo failed: %s", err)
+			type errResp struct {
+				Success bool   `json:"success"`
+				Reason  string `json:"reason"`
+			}
+			out, _ := json.Marshal(errResp{Success: false, Reason: err.Error()})
+			resp.WriteHeader(400)
+			resp.Write(out)
+			return
+		}
+
+		type listResp struct {
+			Success   bool                 `json:"success"`
+			Workflows []RemoteWorkflowInfo `json:"workflows"`
+		}
+
+		// Filter out all workflow with name "Ops Dashboard Workflow" skip this workflows are those are health workflows
+		filteredInfos := []RemoteWorkflowInfo{}
+		for _, info := range infos {
+			if info.Name == "Ops Dashboard Workflow" {
+				continue
+			}
+			filteredInfos = append(filteredInfos, info)
+		}
+
+		out, _ := json.Marshal(listResp{Success: true, Workflows: filteredInfos})
+		resp.WriteHeader(200)
+		resp.Write(out)
+		return
+	}
+
+	// Mode 2: single workflow import or sync
+	if tmpBody.OriginalWorkflowId != "" {
+		err = importSingleRemoteWorkflow(tmpBody.URL, tmpBody.Username, tmpBody.Password, tmpBody.Branch, tmpBody.OriginalWorkflowId, tmpBody.SyncToId, user.Id, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] importSingleRemoteWorkflow failed: %s", err)
+			type errResp struct {
+				Success bool   `json:"success"`
+				Reason  string `json:"reason"`
+			}
+			out, _ := json.Marshal(errResp{Success: false, Reason: err.Error()})
+			resp.WriteHeader(400)
+			resp.Write(out)
+			return
+		}
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true}`))
+		return
+	}
+
+	// Mode 3: original bulk import
 	err = loadGithubWorkflows(tmpBody.URL, tmpBody.Username, tmpBody.Password, user.Id, tmpBody.Branch, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("Failed to update workflows: %s", err)
@@ -27960,7 +28391,8 @@ func iterateWorkflowGithubFolders(fs billy.Filesystem, dir []os.FileInfo, extra 
 					workflow.Owner = userId
 				}
 
-				workflow.ID = uuid.NewV4().String()
+				// Preserve the original workflow ID from the repo JSON file.
+				// Do NOT generate a new UUID — the ID from the file is the canonical identifier.
 				workflow.OrgId = orgId
 				workflow.ExecutingOrg = OrgMini{
 					Id: orgId,
@@ -31753,13 +32185,13 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 	var key string
 	if location[1] == "api" {
 		if len(location) <= 6 {
-			resp.WriteHeader(401)
+			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
 
-		category = location[4]
-		key = location[5]
+		category = location[5]
+		key = location[6]
 	}
 
 	if len(category) == 0 || len(key) == 0 {
@@ -31778,9 +32210,10 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Check workflow.Sharing == private / public / org  too
-
 	parsedKeys := []CacheKeyData{}
+	toDelete := []CacheKeyData{}
+
+	cutoff := time.Now().AddDate(0, 0, -30)
 	for _, key := range datastoreKeys {
 		if key.OrgId != user.ActiveOrg.Id {
 			continue
@@ -31790,7 +32223,36 @@ func GetDatastoreKeyRevisions(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		editedTime := time.Unix(key.Edited, 0)
+		if editedTime.Before(cutoff) {
+			toDelete = append(toDelete, key)
+			continue
+		}
+
 		parsedKeys = append(parsedKeys, key)
+	}
+
+	if len(toDelete) > 0 && debug {
+		log.Printf("[DEBUG] Deleting %d old datastore revisions\n\n", len(toDelete))
+	}
+
+	nameKey := "org_cache_revisions"
+	for _, cacheData := range toDelete {
+		cacheData.RevisionId = uuid.NewV4().String()
+		cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+		if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+			cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
+		}
+
+		cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.RevisionId)
+
+		// URL encode
+		cacheId = url.QueryEscape(cacheId)
+		if len(cacheId) > 127 {
+			cacheId = cacheId[:127]
+		}
+
+		go DeleteKey(context.Background(), nameKey, cacheId)
 	}
 
 	body, err := json.Marshal(parsedKeys)
@@ -35764,7 +36226,8 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 	// The main point is avoiding replicas with deviations like timestamps
 	hash1 := FuzzyHashBody(body)
 
-	cacheKey := fmt.Sprintf("%s_%s", urlMd5, hash1)
+	//cacheKey := fmt.Sprintf("%s_%s", urlMd5, hash1)
+	cacheKey := fmt.Sprintf("hash_%s_%d", urlMd5, hash1)
 	cache, err := GetCache(ctx, cacheKey)
 	if err != nil {
 		SetCache(ctx, cacheKey, []byte("1"), 1)
