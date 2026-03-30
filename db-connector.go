@@ -6314,6 +6314,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	DeleteCache(ctx, user.ApiKey)
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+	DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("user_%s", parsedKey)
 
