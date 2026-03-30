@@ -7041,6 +7041,51 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 	return contentOutput
 }
 
+// abortAgentExecution is the single, canonical way to terminate an agent run early.
+// Callers must return immediately after this call.
+func abortAgentExecution(ctx context.Context, execution WorkflowExecution, startNode Action, base AgentOutput, abortLabel, reason string) (Action, error) {
+	agentOutput := base
+	agentOutput.Status = "FINISHED" // Use FINISHED so system treats it as complete
+	agentOutput.Error = reason
+	agentOutput.CompletedAt = time.Now().Unix()
+
+	marshalledOutput, marshalErr := json.Marshal(agentOutput)
+	if marshalErr != nil {
+		log.Printf("[ERROR][%s] abortAgentExecution: failed marshalling AgentOutput: %s", execution.ExecutionId, marshalErr)
+		marshalledOutput = []byte(`{"status":"FINISHED","error":"marshal error"}`)
+	}
+
+	log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q",
+		execution.ExecutionId, execution.Workflow.OrgId, abortLabel,
+		len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
+
+	abortResult := ActionResult{
+		Status:      "SUCCESS", // Use SUCCESS so Fixexecution handles it cleanly
+		Result:      string(marshalledOutput),
+		Action:      startNode,
+		StartedAt:   time.Now().UnixMicro(),
+		CompletedAt: time.Now().UnixMicro(),
+	}
+
+	// Replace existing result for this node rather than appending,
+	// so Fixexecution's dedup always sees the abort — not an older RUNNING entry.
+	replaced := false
+	for i, r := range execution.Results {
+		if r.Action.ID == startNode.ID {
+			execution.Results[i] = abortResult
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		execution.Results = append(execution.Results, abortResult)
+	}
+
+	execution.Status = "FINISHED" // Mark execution as finished so it stops processing
+	go SetWorkflowExecution(ctx, execution, true)
+	return startNode, errors.New(reason)
+}
+
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool) (Action, error) {
@@ -7060,7 +7105,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	// Metadata = org-specific context
 	// This e.g. makes "me" mean "users in my org" and such
 	metadata := ""
-	metadata += fmt.Sprintf("Current time: %s\n", time.Now().Format(time.RFC3339))
 	if len(execution.Workflow.UpdatedBy) > 0 {
 		metadata += fmt.Sprintf("Current user: %s\n", execution.Workflow.UpdatedBy)
 	}
@@ -7114,6 +7158,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	decidedApps := []string{}
 	specificAppMetadata := ""
+	failureInjection := ""
 	memorizationEngine := "shuffle_db"
 	for _, param := range startNode.Parameters {
 		if param.Name == "app_name" {
@@ -7124,11 +7169,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		}
 
 		if param.Name == "input" {
-			if createNextActions == false {
-				userMessage = param.Value
-			} else {
-				userMessage = fmt.Sprintf("Original input: '%s'", param.Value)
-			}
+			userMessage = param.Value
 		}
 
 		if param.Name == "action" {
@@ -7325,29 +7366,20 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			//}
 
 			if len(userMessage) == 0 && len(oldAgentOutput.OriginalInput) > 0 {
-				userMessage = fmt.Sprintf("Original input: '%s'", oldAgentOutput.OriginalInput)
+				userMessage = oldAgentOutput.OriginalInput
 			}
 
 			if hasFailure {
 				log.Printf("[WARNING][%s] AI Agent: Detected failure in previous decisions. Last finished index: %d", execution.ExecutionId, lastFinishedIndex)
 
 				// HARD ABORT — code-side enforcement regardless of LLM behavior.
-				const maxAgentFailureRounds = 5
+				const maxAgentFailureRounds = 4
 				if successCount == 0 && failureCount >= maxAgentFailureRounds {
-					log.Printf("[ERROR][%s] AI_AGENT_HARD_ABORT: failure_count=%d success_count=%d org=%s action=%s — aborting without LLM call, fix failing tool",
-						execution.ExecutionId, failureCount, successCount, execution.Workflow.OrgId, startNode.ID)
-					execution.Status = "ABORTED"
-					execution.Results = append(execution.Results, ActionResult{
-						Status: "ABORTED",
-						Result: fmt.Sprintf(`{"success": false, "reason": "Agent hard-aborted after %d consecutive tool failures with 0 successes. The tool being called is failing (timeout or app out of date). Fix the app authentication/version and retry."}`, failureCount),
-						Action: startNode,
-					})
-						
-					go SetWorkflowExecution(ctx, execution, true)
-					return startNode, errors.New("agent hard-aborted: too many consecutive tool failures")
+					// oldAgentOutput carries the real decisions/token data for the audit log
+					return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "hard_abort_tool_failures", fmt.Sprintf("Agent hard-aborted after %d consecutive tool failures with 0 successes. The tool being called is failing (timeout or app out of date). Fix the app authentication/version and retry.", failureCount))
 				}
 
-				userMessage += "\n\nSome of the previous decisions failed. Finalise the agent.\n\n"
+				failureInjection = "\n\nSome of the previous decisions failed. Finalise the agent.\n\n"
 			}
 		}
 	}
@@ -7683,8 +7715,14 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 	}
 
+	// Track who initiated this agent (for audit trail)
+	initiatedBy := execution.Workflow.UpdatedBy
+	if len(initiatedBy) == 0 {
+		initiatedBy = "system"
+	}
+
 	if !createNextActions {
-		log.Printf("[INFO] AI_AGENT_START: execution_id=%s org_id=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, len(userMessage))
+		log.Printf("[INFO] AI_AGENT_START: execution_id=%s org=%s user=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, initiatedBy, len(userMessage))
 	}
 
 	// Set model based on environment
@@ -7747,6 +7785,11 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		}
 	}
 
+	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
+	})
+
 	if len(marshalledDecisions) > 4 { 
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage {
 			Role:    openai.ChatMessageRoleUser,
@@ -7754,12 +7797,33 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		})
 	}
 
-	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage {
+	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
-		Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
+		Content: fmt.Sprintf("Current time: %s\n", time.Now().Format(time.RFC3339)),
 	})
 
-	initialAgentRequestBody, err := json.MarshalIndent(completionRequest, "", "  ")
+	if failureInjection != "" {
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: failureInjection,
+		})
+	}
+    
+	// Let's try to make the prompt cache key sticky
+	type ExtendedRequest struct {
+		openai.ChatCompletionRequest
+		PromptCacheKey       string `json:"prompt_cache_key,omitempty"`
+		PromptCacheRetention string `json:"prompt_cache_retention,omitempty"`
+	}
+
+	extendedReq := ExtendedRequest{
+		ChatCompletionRequest: completionRequest,
+		PromptCacheKey:        execution.ExecutionId,
+		PromptCacheRetention:  "24h",
+	}
+
+	initialAgentRequestBody, err := json.MarshalIndent(extendedReq, "", "  ")
+
 	if err != nil {
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling input for action %s: %s", execution.ExecutionId, startNode.ID, err)
 
@@ -7854,9 +7918,27 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
+	// Check org-level monthly token limit BEFORE each LLM call
+	if project.Environment == "cloud" && len(execution.Workflow.OrgId) > 0 {
+		orgStats, err := GetOrgStatistics(ctx, execution.Workflow.OrgId)
+		monthlyTokensUsed := int64(0)
+		if err == nil && orgStats != nil {
+			monthlyTokensUsed = orgStats.MonthlyAgentTokens
+		}
 
-	estimatedPromptChars := len(systemMessage) + len(userMessage) + len(string(marshalledDecisions))
-	log.Printf("[INFO][%s] AI_AGENT_LLM_CALL: org=%s model=%s is_retry=%v prompt_chars=%d", execution.ExecutionId, execution.Workflow.OrgId, aiModel, createNextActions, estimatedPromptChars)
+		tokenLimit := int64(10_000_000) // Default: 10M tokens per month
+		fullOrg, err := GetOrg(ctx, execution.Workflow.OrgId)
+		if err == nil && fullOrg != nil {
+			if fullOrg.SyncFeatures.AgentTokens.Active && fullOrg.SyncFeatures.AgentTokens.Limit > 0 {
+				tokenLimit = fullOrg.SyncFeatures.AgentTokens.Limit
+			}
+		}
+
+		if monthlyTokensUsed >= tokenLimit {
+			log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: org=%s tokens_used=%d token_limit=%d", execution.ExecutionId, execution.Workflow.OrgId, monthlyTokensUsed, tokenLimit)
+			return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("Organization exceeded monthly token limit (%d/%d total tokens). Limit resets monthly.", monthlyTokensUsed, tokenLimit))
+		}
+	}
 
 	fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization)
 	client := GetExternalClient(fullUrl)
@@ -7868,32 +7950,14 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	)
 
 	if err != nil {
-		log.Printf("[ERROR] AI Agent: Failed creating request during LLM setup: %s", err)
-
-		execution.Status = "ABORTED"
-		execution.Results = append(execution.Results, ActionResult{
-			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (7): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
-			Action: startNode,
-		})
-		go SetWorkflowExecution(ctx, execution, true)
-
-		return startNode, err
+		log.Printf("[ERROR][%s] AI Agent: Failed creating request during LLM setup: %s", execution.ExecutionId, err)
+		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
 	}
 
 	newresp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[ERROR] AI_AGENT_LLM_FAILURE: execution_id=%s error=%s", execution.ExecutionId, strings.Replace(err.Error(), `"`, `\"`, -1))
-
-		execution.Status = "ABORTED"
-		execution.Results = append(execution.Results, ActionResult{
-			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent after %d seconds (8): %s"}`, int(client.Timeout.Seconds()), strings.Replace(err.Error(), `"`, `\"`, -1)),
-			Action: startNode,
-		})
-		go SetWorkflowExecution(ctx, execution, true)
-
-		return startNode, err
+		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error=%s", execution.ExecutionId, execution.Workflow.OrgId, strings.Replace(err.Error(), `"`, `\"`, -1))
+		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_http_failure", fmt.Sprintf("LLM call failed after %ds: %s", int(client.Timeout.Seconds()), err.Error()))
 	}
 
 	log.Printf("[INFO][%s] Started AI Agent action %s with app %s. Waiting for results...", execution.ExecutionId, startNode.ID, appname)
@@ -7909,17 +7973,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	defer newresp.Body.Close()
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
-		log.Printf("[ERROR] AI Agent: Failed reading response from sending request for stream during SKIPPED user input: %s", err)
-
-		execution.Status = "ABORTED"
-		execution.Results = append(execution.Results, ActionResult{
-			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (9): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
-			Action: startNode,
-		})
-		go SetWorkflowExecution(ctx, execution, true)
-
-		return startNode, err
+		log.Printf("[ERROR][%s] AI Agent: Failed reading response body from LLM: %s", execution.ExecutionId, err)
+		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_body_read_failed", fmt.Sprintf("Failed to read LLM response body: %s", err.Error()))
 	}
 
 	// Maps OpenAI -> Result struct so we can handle it
@@ -8054,6 +8109,22 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				log.Printf("[DEBUG] Found choices string (2) in AI Agent response - len: %d: %s", len(choicesString), choicesString)
 			}
 
+			// Track token usage
+			if openaiOutput.Usage.TotalTokens > 0 {
+				cachedTokens := 0
+				if openaiOutput.Usage.PromptTokensDetails != nil {
+					cachedTokens = openaiOutput.Usage.PromptTokensDetails.CachedTokens
+				}
+
+				if project.Environment == "cloud" && len(execution.Workflow.OrgId) > 0 {
+					go func() {
+						time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
+						IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_tokens", int(openaiOutput.Usage.TotalTokens))
+					}()
+					log.Printf("[AUDIT][%s] Incremented agent tokens for org %s: +%d tokens (prompt=%d, completion=%d, cached=%d)", execution.ExecutionId, execution.Workflow.OrgId, openaiOutput.Usage.TotalTokens, openaiOutput.Usage.PromptTokens, openaiOutput.Usage.CompletionTokens, cachedTokens)
+				}
+			}
+
 			// Handles reasoning models for Refusal control edgecases
 			// Not always sure why this is happening
 			if len(choicesString) == 0 && len(openaiOutput.Choices[0].Message.Refusal) > 0 {
@@ -8141,6 +8212,13 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			if oldAgentOutput.Status != "" {
 				agentOutput = oldAgentOutput
 				agentOutput.Status = "RUNNING"
+				agentOutput.LLMCallCount += 1
+				// Accumulate token usage
+				if openaiOutput.Usage.TotalTokens > 0 {
+					agentOutput.TotalTokens += int64(openaiOutput.Usage.TotalTokens)
+					agentOutput.PromptTokens += int64(openaiOutput.Usage.PromptTokens)
+					agentOutput.CompletionTokens += int64(openaiOutput.Usage.CompletionTokens)
+				}
 			}
 
 			if debug {
@@ -8217,6 +8295,14 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		if !createNextActions {
 			if len(mappedDecisions) == 0 {
 				agentOutput.DecisionString = decisionString
+			}
+
+			// Initialize tracking on first call
+			agentOutput.LLMCallCount = 1
+			if openaiOutput.Usage.TotalTokens > 0 {
+				agentOutput.TotalTokens = int64(openaiOutput.Usage.TotalTokens)
+				agentOutput.PromptTokens = int64(openaiOutput.Usage.PromptTokens)
+				agentOutput.CompletionTokens = int64(openaiOutput.Usage.CompletionTokens)
 			}
 
 			// Ensures we track them along the way
@@ -8431,7 +8517,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		//log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s status=%s duration=%ds decisions=%d", execution.ExecutionId, agentOutput.Status, time.Now().Unix()-agentOutput.StartedAt, len(agentOutput.Decisions))
 
 		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status == "EXECUTING" {
-			log.Printf("[INFO][%s] AI Agent action %s finished.", execution.ExecutionId, startNode.ID)
+			duration := agentOutput.CompletedAt - agentOutput.StartedAt
+			log.Printf("[INFO][%s] AI_AGENT_COMPLETE: org=%s duration=%ds decisions=%d llm_calls=%d total_tokens=%d status=SUCCESS", execution.ExecutionId, execution.Workflow.OrgId, duration, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens)
 			for resultIndex, result := range execution.Results {
 				if result.Action.ID != startNode.ID {
 					continue
