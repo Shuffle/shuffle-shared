@@ -7086,6 +7086,56 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 	return startNode, errors.New(reason)
 }
 
+func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, fullOrg *Org, tokenLimit, monthlyTokensUsed int64) {
+	cacheKey := fmt.Sprintf("alert_agent_tokens_%s_%s", execution.Workflow.OrgId, time.Now().Format("2006-01-02"))
+	_, errCache := GetCache(ctx, cacheKey)
+	if errCache == nil {
+		return // Already sent today
+	}
+
+	// Not found in cache, set it and send email
+	_ = SetCache(ctx, cacheKey, []byte("sent"), 86400) 
+
+	admins := []string{}
+	orgName := execution.Workflow.OrgId
+	if fullOrg != nil {
+		orgName = fullOrg.Name
+		for _, user := range fullOrg.Users {
+			if user.Role == "admin" {
+				admins = append(admins, user.Username)
+			}
+		}
+	}
+
+	if len(admins) == 0 {
+		admins = append(admins, "support@shuffler.io")
+	} else {
+		if !ArrayContains(admins, "support@shuffler.io") {
+			admins = append(admins, "support@shuffler.io")
+		}
+	}
+
+	subject := fmt.Sprintf("AI Agent Token Limit Exceeded for Org %s", orgName)
+	message := fmt.Sprintf(`Dear Team,
+
+	Your organization <strong>%s</strong> (ID: %s) has exceeded the monthly AI Agent token limit of <strong>%d</strong> tokens.
+
+	<strong>Current usage:</strong> %d tokens.
+	
+	As a result, your AI Agent runs will be temporarily blocked until the start of the next billing cycle.
+	If you need to increase your token limit, please reach out to us at <a href="mailto:support@shuffler.io">support@shuffler.io</a>.
+	
+	Best regards, 
+	The Shuffler Team`, orgName, execution.Workflow.OrgId, tokenLimit, monthlyTokensUsed)
+
+	errMail := sendMailSendgrid(admins, subject, message, false, []string{})
+	if errMail != nil {
+		log.Printf("[ERROR] Failed sending AI token limit alert email to %v for org %s: %s", admins, execution.Workflow.OrgId, errMail)
+	} else {
+		log.Printf("[INFO] Sent AI token limit alert email to %v of org %s", admins, execution.Workflow.OrgId)
+	}
+}
+
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool) (Action, error) {
@@ -7935,7 +7985,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		}
 
 		if monthlyTokensUsed >= tokenLimit {
-			log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: org=%s tokens_used=%d token_limit=%d", execution.ExecutionId, execution.Workflow.OrgId, monthlyTokensUsed, tokenLimit)
+			log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: org=%s monthly_tokens_used=%d token_limit=%d", execution.ExecutionId, execution.Workflow.OrgId, monthlyTokensUsed, tokenLimit)
+			go sendAITokenLimitAlert(ctx, execution, fullOrg, tokenLimit, monthlyTokensUsed)
 			return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("Organization exceeded monthly token limit (%d/%d total tokens). Limit resets monthly.", monthlyTokensUsed, tokenLimit))
 		}
 	}
