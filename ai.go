@@ -18,7 +18,6 @@ import (
 	"os"
 	"reflect"
 	"regexp"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -7321,36 +7320,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 			if hasFailure {
 				log.Printf("[WARNING][%s] AI Agent: Detected failure in previous decisions. Last finished index: %d", execution.ExecutionId, lastFinishedIndex)
-
-				// SPIKE FIX: Abort if ALL decisions have failed and retries exceeded.
-				// Root cause of the March 20th $12 OpenAI spike:
-				// Shuffle_Datastore app was out of date + HTTP timeouts on categories/run.
-				// Every failure caused HandleAiAgentExecutionStart to call OpenAI again
-				// with a BIGGER prompt (history grows), looping 14 times per execution.
-				// With hundreds of executions this burned 50M tokens in one day.
-				const maxAgentFailureRetries = 5
-				failureCount := 0
-				successCount := 0
-				for _, d := range mappedResult.Decisions {
-					if d.RunDetails.Status == "FAILURE" {
-						failureCount++
-					} else if d.RunDetails.Status == "FINISHED" || d.RunDetails.Status == "SUCCESS" {
-						successCount++
-					}
-				}
-
-				if successCount == 0 && failureCount >= maxAgentFailureRetries {
-					log.Printf("[ERROR][%s] AI Agent: ABORTING — %d consecutive decision failures, 0 successes. Not calling LLM again to prevent runaway token usage. Fix the failing tool/app auth then retry.", execution.ExecutionId, failureCount)
-					execution.Status = "ABORTED"
-					execution.Results = append(execution.Results, ActionResult{
-						Status: "ABORTED",
-						Result: fmt.Sprintf(`{"success": false, "reason": "Agent aborted after %d consecutive tool failures with no successes. The tools being called are failing (timeout or app out of date). Fix the app authentication/version and retry."}`, failureCount),
-						Action: startNode,
-					})
-					go SetWorkflowExecution(ctx, execution, true)
-					return startNode, errors.New("agent aborted: too many consecutive tool failures")
-				}
-
 				userMessage += "\n\nSome of the previous decisions failed. Finalise the agent.\n\n"
 			}
 		}
@@ -7773,21 +7742,6 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		return startNode, err
 	}
-
-	// [AGENT_CALL TRACKING] Log every agent LLM call before dispatch.
-	// The agent does NOT go through RunAiQuery — it calls the OpenAI app action directly.
-	// This is the call source responsible for "default" service tier traffic in OpenAI billing.
-	// Grep GCP logs for "[AGENT_CALL]" to trace agent token usage per org/execution.
-	estimatedPromptChars := len(systemMessage) + len(userMessage) + len(string(marshalledDecisions))
-	log.Printf("[AGENT_CALL] org=%s execution=%s model=%s prompt_chars_estimate=%d has_history=%v is_createNext=%v max_completion_tokens=%d",
-		execution.Workflow.OrgId,
-		execution.ExecutionId,
-		aiModel,
-		estimatedPromptChars,
-		len(marshalledDecisions) > 4,
-		createNextActions,
-		completionRequest.MaxCompletionTokens,
-	)
 
 	//go executeSpecificCloudApp(ctx, execution.ExecutionId, execution.Authorization, urls, startNode)
 	if !runOpenaiRequest {
@@ -9084,30 +9038,6 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 			// Failover to refusal
 			contentOutput = openaiResp.Choices[0].Message.Refusal
 		}
-
-		// [TOKEN TRACKING] Log token usage for every successful OpenAI call.
-		// This is the primary signal for investigating consumption spikes.
-		// Search GCP logs for "[USAGE]" to find which org/caller used the most tokens.
-		callerFunc := "unknown"
-		if pc, _, _, ok := runtime.Caller(1); ok {
-			if fn := runtime.FuncForPC(pc); fn != nil {
-				// Get just the function name without the full package path
-				fullName := fn.Name()
-				if idx := strings.LastIndex(fullName, "."); idx >= 0 {
-					callerFunc = fullName[idx+1:]
-				} else {
-					callerFunc = fullName
-				}
-			}
-		}
-
-		log.Printf("[USAGE] model=%s prompt_tokens=%d completion_tokens=%d total_tokens=%d caller=%s",
-			openaiResp.Model,
-			openaiResp.Usage.PromptTokens,
-			openaiResp.Usage.CompletionTokens,
-			openaiResp.Usage.TotalTokens,
-			callerFunc,
-		)
 
 		break
 	}
