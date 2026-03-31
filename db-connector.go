@@ -1160,7 +1160,11 @@ func archiveOldStatsToGCSBucket(ctx context.Context, orgId string, stats *Execut
 	}
 
 	// Deduplicate by date; new overflow entries win on conflict.
-	dateMap := make(map[string]DailyStatistics, len(existingStats)+len(overflowStats))
+	dateMapCap := len(existingStats)
+	if len(overflowStats) > dateMapCap {
+		dateMapCap = len(overflowStats)
+	}
+	dateMap := make(map[string]DailyStatistics, dateMapCap)
 	for _, d := range existingStats {
 		dateMap[d.Date.UTC().Format("2006-01-02")] = d
 	}

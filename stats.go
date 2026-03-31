@@ -733,7 +733,11 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		if len(gcsStats) > 0 {
 			log.Printf("[DEBUG] HandleGetStatistics: merging %d GCS overflow entries for org %s", len(gcsStats), orgId)
 			// Deduplicate by date; Datastore entries win on conflict.
-			dateMap := make(map[string]DailyStatistics, len(gcsStats)+len(info.DailyStatistics))
+			dateMapCap := len(gcsStats)
+			if len(info.DailyStatistics) > dateMapCap {
+				dateMapCap = len(info.DailyStatistics)
+			}
+			dateMap := make(map[string]DailyStatistics, dateMapCap)
 			for _, d := range gcsStats {
 				dateMap[d.Date.UTC().Format("2006-01-02")] = d
 			}
