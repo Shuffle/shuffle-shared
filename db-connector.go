@@ -6431,7 +6431,11 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	DeleteCache(ctx, user.ApiKey)
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
-	DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
+	err = DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
+	if err != nil {
+		log.Printf("[ERROR] Failed to delete cache for user apikey %s", err)
+	}
+
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("user_%s", parsedKey)
 
@@ -10471,6 +10475,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &users)
 			if err == nil && len(users) > 0 {
+				log.Printf("[DEBUG] Found user apikey cache %s", cacheKey)
 				return users[0], nil
 			}
 		}
