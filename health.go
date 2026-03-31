@@ -158,6 +158,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		err = json.Unmarshal([]byte(config), &app)
 		if err != nil {
 			log.Printf("[ERROR] Failed unmarshalling health app config blob: %s", err)
+			appHealth.Error.Read = fmt.Sprintf("failed to parse static app config: %s", err)
 			return appHealth, err
 		}
 	} else {
@@ -167,6 +168,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		req, err = http.NewRequest("GET", url, nil)
 		if err != nil {
 			log.Printf("[ERROR] Failed creating HTTP request: %s", err)
+			appHealth.Error.Read = fmt.Sprintf("failed to create config fetch request: %s", err)
 			return appHealth, err
 		}
 
@@ -175,19 +177,22 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[ERROR] Failed sending HTTP request: %s", err)
+			appHealth.Error.Read = fmt.Sprintf("config fetch request failed: %s", err)
 			return appHealth, err
 		}
 
 		defer resp.Body.Close()
 
-		if resp.StatusCode != 200 {
-			log.Printf("[ERROR] Failed getting health check app: %s. The status code was: %d", err, resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading config fetch response body: %s", err)
+			appHealth.Error.Read = fmt.Sprintf("failed to read config response: %s", err)
 			return appHealth, err
 		}
 
-		respBody, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed readin while getting HTTP response body: %s", err)
+		if resp.StatusCode != 200 {
+			log.Printf("[ERROR] Failed getting health check app: HTTP %d, body: %s", resp.StatusCode, string(respBody))
+			appHealth.Error.Read = fmt.Sprintf("config fetch returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 			return appHealth, err
 		}
 
@@ -195,12 +200,14 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		err = json.Unmarshal([]byte(respBody), &app)
 		if err != nil {
 			log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
+			appHealth.Error.Read = fmt.Sprintf("failed to parse config response: %s", err)
 			return appHealth, err
 		}
 	}
 
 	if app.Success == false {
 		log.Printf("[ERROR] Reading returned false for app health check: %s", err)
+		appHealth.Error.Read = "app config returned success=false"
 		return appHealth, err
 	}
 
@@ -211,6 +218,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	openapiString, err := base64StringToString(app.OpenAPI)
 	if err != nil {
 		log.Printf("[ERROR] Failed converting openapi base64 to string in app health check: %s", err)
+		appHealth.Error.Validate = fmt.Sprintf("base64 decode of openapi failed: %s", err)
 		return appHealth, err
 	}
 
@@ -224,6 +232,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	err = json.Unmarshal([]byte(openapiString), &openApiData)
 	if err != nil {
 		log.Printf("Error in unm %s", err)
+		appHealth.Error.Validate = fmt.Sprintf("failed to parse openapi data: %s", err)
 		return appHealth, err
 	}
 
@@ -236,6 +245,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(openapiString)))
 	if err != nil {
 		log.Printf("[ERROR] Failed creating HTTP for app validate request: %s", err)
+		appHealth.Error.Validate = fmt.Sprintf("failed to create validate_openapi request: %s", err)
 		return appHealth, err
 	}
 
@@ -248,26 +258,22 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending the app validate HTTP request: %s", err)
+		appHealth.Error.Validate = fmt.Sprintf("validate_openapi request failed: %s", err)
 		return appHealth, err
 	}
 
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed validating app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		respBodyErr, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
-		} else {
-			log.Printf("[ERROR] Ops dashboard app deleting Response: %s", respBodyErr)
-		}
-
-		return appHealth, err
-	}
-
 	respBody, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed reading HTTP for app validate response body: %s", err)
+		appHealth.Error.Validate = fmt.Sprintf("failed to read validate_openapi response: %s", err)
+		return appHealth, err
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed validating app in app health check: HTTP %d, body: %s", resp.StatusCode, string(respBody))
+		appHealth.Error.Validate = fmt.Sprintf("validate_openapi returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		return appHealth, err
 	}
 
@@ -277,11 +283,13 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	err = json.Unmarshal(respBody, &validateResponse)
 	if err != nil {
 		log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
+		appHealth.Error.Validate = fmt.Sprintf("failed to parse validate_openapi response: %s", err)
 		return appHealth, err
 	}
 
 	if validateResponse.Success == false {
 		log.Printf("[ERROR] Validating returned false for app health check: %s", err)
+		appHealth.Error.Validate = "validate_openapi returned success=false"
 		return appHealth, err
 	}
 
@@ -315,12 +323,14 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	newOpenapi, err := json.Marshal(data)
 	if err != nil {
 		log.Printf("[ERROR] Failed to edit app data. Did we change the specs?")
+		appHealth.Error.Create = fmt.Sprintf("failed to build verify_openapi request body: %s", err)
 		return appHealth, err
 	}
 
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer(newOpenapi))
 	if err != nil {
 		log.Printf("[ERROR] Failed creating app check HTTP for app verify request: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("failed to create verify_openapi request: %s", err)
 		return appHealth, err
 	}
 
@@ -333,20 +343,22 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check app verify HTTP request: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("verify_openapi request failed: %s", err)
 		return appHealth, err
 	}
 
 	respBody, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed reading HTTP for app verify response body: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("failed to read verify_openapi response: %s", err)
 		return appHealth, err
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed verifying app in app health check: %s.", err)
-		log.Printf("[ERROR] The status code was: %d with response %s", resp.StatusCode, respBody)
+		log.Printf("[ERROR] Failed verifying app in app health check: HTTP %d, body: %s", resp.StatusCode, string(respBody))
+		appHealth.Error.Create = fmt.Sprintf("verify_openapi returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		return appHealth, err
 	}
 
@@ -356,11 +368,13 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	err = json.Unmarshal(respBody, &validatedResp)
 	if err != nil {
 		log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("failed to parse verify_openapi response: %s", err)
 		return appHealth, err
 	}
 
 	if !validatedResp.Success {
 		log.Printf("[ERROR] verify_openapi returned success=false for app health check (id: %s)", validatedResp.ID)
+		appHealth.Error.Create = "verify_openapi returned success=false"
 		return appHealth, errors.New("verify_openapi returned success=false")
 	}
 
@@ -374,6 +388,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req, err = http.NewRequest("GET", url, nil)
 	if err != nil {
 		log.Printf("[ERROR] Failed creating HTTP for app read request: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("failed to create app config request: %s", err)
 		return appHealth, err
 	}
 
@@ -385,6 +400,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check app read HTTP request: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("app config request failed: %s", err)
 		return appHealth, err
 	}
 
@@ -393,12 +409,13 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	body, err := io.ReadAll(resp.Body) // Read response body
 	if err != nil {
 		log.Printf("[ERROR] Failed reading response body: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("failed to read app config response: %s", err)
 		return appHealth, err
 	}
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed reading app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		log.Printf("[ERROR] The response body was: %s", body)
+		log.Printf("[ERROR] Failed reading app in app health check: HTTP %d, body: %s", resp.StatusCode, string(body))
+		appHealth.Error.Create = fmt.Sprintf("app config check returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 		return appHealth, err
 	}
 
@@ -431,6 +448,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	runResult, runErr := executeAppRunRequest(url, apiKey, executeBody)
 	if runErr != nil {
 		log.Printf("[WARNING] App run health check failed: %s", runErr)
+		appHealth.Error.Run = fmt.Sprintf("app execution failed: %s", runErr)
 	} else {
 		appHealth.Result = runResult.Result
 		appHealth.ExecutionID = runResult.ID
@@ -446,6 +464,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req, err = http.NewRequest("DELETE", url, nil)
 	if err != nil {
 		log.Printf("[ERROR] Failed creating HTTP for app delete request: %s", err)
+		appHealth.Error.Delete = fmt.Sprintf("failed to create delete request: %s", err)
 		return appHealth, err
 	}
 
@@ -459,37 +478,40 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check app delete HTTP request: %s", err)
+		appHealth.Error.Delete = fmt.Sprintf("delete request failed: %s", err)
 		return appHealth, err
 	}
 
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed deleting app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		respBodyErr, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
-		} else {
-			log.Printf("[ERROR] Ops dashboard app deleting Response: %s", respBodyErr)
-		}
-
+	respBodyDel, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading app delete response body: %s", err)
+		appHealth.Error.Delete = fmt.Sprintf("failed to read delete response: %s", err)
 		return appHealth, err
 	}
 
-	respBodyDel, err := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed deleting app in app health check: HTTP %d, body: %s", resp.StatusCode, string(respBodyDel))
+		appHealth.Error.Delete = fmt.Sprintf("app delete returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBodyDel)))
+		return appHealth, err
+	}
 	if err != nil {
 		log.Printf("[ERROR] Failed reading HTTP for app delete response body: %s", err)
+		appHealth.Error.Delete = fmt.Sprintf("failed to read delete response: %s", err)
 		return appHealth, err
 	}
 
 	var deleteResponse genericResp
 	if err = json.Unmarshal(respBodyDel, &deleteResponse); err != nil {
 		log.Printf("[ERROR] Failed unmarshalling app delete response JSON: %s", err)
+		appHealth.Error.Delete = fmt.Sprintf("failed to parse delete response: %s", err)
 		return appHealth, err
 	}
 
 	if !deleteResponse.Success {
 		log.Printf("[ERROR] App delete returned success=false for app health check (id: %s)", id)
+		appHealth.Error.Delete = "app delete returned success=false"
 		return appHealth, errors.New("app delete returned success=false")
 	}
 
@@ -1084,7 +1106,7 @@ func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string, orgId strin
 	req.Header.Set("Org-Id", orgId)
 
 	// send the request
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 180 * time.Second}
 	resp, err := client.Do(req)
 
 	if err != nil {
@@ -1243,26 +1265,31 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		// if error string contains "High number of requests. Try again later", skip this run
 		if strings.Contains(err.Error(), "High number of requests. Try again later") {
 			log.Printf("[DEBUG] High number of requests sent to the backend. Skipping this run.")
+			workflowHealth.Error.Create = fmt.Sprintf("High number of requests sent to the backend. Try again later. Error details: %s", err)
 			return workflowHealth, err
 		}
 
 		if strings.Contains(err.Error(), "Unauthorized user saving ops workflow") {
 			log.Printf("[DEBUG] Unauthorized user saving the ops workflow. Skipping this run.")
+			workflowHealth.Error.Create = fmt.Sprintf("Unauthorized user saving ops workflow. Error details: %s", err)
 			return workflowHealth, err
 		}
 
 		log.Printf("[ERROR] Failed creating Health check workflow: %s", err)
+		workflowHealth.Error.Create = fmt.Sprintf("workflow init failed: %s", err)
 		return workflowHealth, err
 	}
 
 	if len(opsWorkflowID) == 0 {
 		log.Printf("[ERROR] Failed creating Health check workflow. Exiting..")
+		workflowHealth.Error.Create = "workflow init returned empty ID"
 		return workflowHealth, err
 	}
 
 	workflowPtr, err := GetWorkflow(ctx, opsWorkflowID)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting Health check workflow: %s", err)
+		workflowHealth.Error.Create = fmt.Sprintf("failed to fetch created workflow: %s", err)
 		return workflowHealth, err
 	}
 
@@ -1295,43 +1322,22 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check HTTP request: %s", err)
+		workflowHealth.Error.Run = fmt.Sprintf("execute HTTP request failed: %s", err)
 		return workflowHealth, err
 	}
 
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed running health check workflow: %s. The status code is %d", id, resp.StatusCode)
-
-		// print the response body
-		respBodyErr, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed reading health check HTTP response body: %s", err)
-		} else {
-			if strings.Contains(string(respBodyErr), "illegal_argument_exception") {
-			} else {
-				log.Printf("[ERROR] Health check running Workflow Response: %s", respBodyErr)
-			}
-		}
-
-		/*
-			if project.Environment == "onprem" {
-				//log.Printf("Trying to fix opensearch mappings")
-				//err = fixOpensearch()
-				//if err != nil {
-				//	log.Printf("[ERROR] Failed fixing opensearch mappings: %s", err)
-				//} else {
-				//	log.Printf("[DEBUG] Fixed opensearch mappings successfully! Maybe try ops dashboard again?")
-				//}
-			}
-		*/
-		// return workflowHealth, err
-	}
-
 	respBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
+		workflowHealth.Error.Run = fmt.Sprintf("execute response read failed: %s", err)
 		return workflowHealth, err
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed running health check workflow %s: HTTP %d, body: %s", id, resp.StatusCode, string(respBody))
+		workflowHealth.Error.Run = fmt.Sprintf("workflow execute returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
 	// Unmarshal the JSON data into a Workflow instance
@@ -1374,19 +1380,22 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[ERROR] Failed sending HTTP request: %s", err)
+			workflowHealth.Error.RunFinished = fmt.Sprintf("polling request failed: %s", err)
 			return workflowHealth, err
 		}
 
 		defer resp.Body.Close()
 
-		if resp.StatusCode != 200 {
-			log.Printf("[ERROR] Failed checking results for the workflow: %s. The status code was: %d", err, resp.StatusCode)
-			return workflowHealth, err
-		}
-
 		respBody, err = ioutil.ReadAll(resp.Body)
 		if err != nil {
 			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
+			workflowHealth.Error.RunFinished = fmt.Sprintf("polling response read failed: %s", err)
+			return workflowHealth, err
+		}
+
+		if resp.StatusCode != 200 {
+			log.Printf("[ERROR] Failed checking results for the workflow: HTTP %d, body: %s", resp.StatusCode, string(respBody))
+			workflowHealth.Error.RunFinished = fmt.Sprintf("polling returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 			return workflowHealth, err
 		}
 
@@ -1396,6 +1405,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 
 		if err != nil {
 			log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
+			workflowHealth.Error.RunFinished = fmt.Sprintf("failed to parse polling response: %s", err)
 			return workflowHealth, err
 		}
 
@@ -1425,6 +1435,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 			}
 
 			workflowHealth.RunStatus = "ABANDONED_BY_HEALTHCHECK"
+			workflowHealth.Error.RunFinished = "timeout: workflow did not finish within 10 minutes"
 
 			return workflowHealth, errors.New("Timeout reached for workflow health check")
 		default:
@@ -1440,6 +1451,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		err = deleteOpsWorkflow(workflowHealth, apiKey, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed deleting workflow: %s", err)
+			workflowHealth.Error.Delete = fmt.Sprintf("workflow delete failed: %s", err)
 		} else {
 			//log.Printf("[DEBUG] Deleted ops workflow successfully!")
 			workflowHealth.Delete = true
@@ -1511,6 +1523,17 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed to download app zip from %s, status: %d", appZipUrl, resp.StatusCode)
+		return appHealth, fmt.Errorf("Failed to download app zip, got status %d", resp.StatusCode)
+	}
+
+	zipBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read app zip body: %s", err)
+		return appHealth, errors.New("Failed to read app zip body")
+	}
+
 	pr, pw := io.Pipe()
 	writer := multipart.NewWriter(pw)
 
@@ -1524,7 +1547,7 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 			return
 		}
 
-		_, err = io.Copy(part, resp.Body)
+		_, err = io.Copy(part, bytes.NewReader(zipBytes))
 		if err != nil {
 			log.Printf("[ERROR] Failed to stream file: %s", err)
 			return
@@ -1562,7 +1585,7 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 180 * time.Second}
 	res, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending request to app upload: %s", err)
@@ -1702,7 +1725,7 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 	delReq.Header.Set("Content-Type", "application/json")
 	delReq.Header.Set("Authorization", "Bearer "+apiKey)
 
-	delClient := &http.Client{Timeout: 60 * time.Second}
+	delClient := &http.Client{Timeout: 180 * time.Second}
 	delResp, delErr := delClient.Do(delReq)
 	if delErr != nil {
 		log.Printf("[ERROR] Failed sending health check app delete HTTP request: %s", delErr)
@@ -2077,6 +2100,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
 		log.Printf("[ERROR] Failed to create request (%s) for set_cache %s", url, err)
+		datastoreHealth.Error.Create = fmt.Sprintf("failed to create set_cache request: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2089,6 +2113,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send request (%s) for set_cache %s", url, err)
+		datastoreHealth.Error.Create = fmt.Sprintf("set_cache request failed: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2096,6 +2121,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	resp.Body.Close()
 	if readErr != nil {
 		log.Printf("[ERROR] Failed to read set_cache response body: %s", readErr)
+		datastoreHealth.Error.Create = fmt.Sprintf("failed to read set_cache response: %s", readErr)
 		return datastoreHealth, readErr
 	}
 
@@ -2104,6 +2130,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	}
 	if jsonErr := json.Unmarshal(createBody, &createResult); jsonErr != nil || !createResult.Success || resp.StatusCode != 200 {
 		log.Printf("[ERROR] set_cache health check failed. Status: %d, body: %s", resp.StatusCode, string(createBody))
+		datastoreHealth.Error.Create = fmt.Sprintf("set_cache failed with HTTP %d: %s", resp.StatusCode, string(createBody))
 		return datastoreHealth, fmt.Errorf("set_cache failed with status %d", resp.StatusCode)
 	}
 
@@ -2115,6 +2142,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
 		log.Printf("[ERROR] Failed to create request (%s) for get_cache: %s", url, err)
+		datastoreHealth.Error.Read = fmt.Sprintf("failed to create get_cache request: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2125,6 +2153,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send request to get_cache: %s", err)
+		datastoreHealth.Error.Read = fmt.Sprintf("get_cache request failed: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2132,6 +2161,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	resp.Body.Close()
 	if err != nil {
 		log.Printf("[ERROR] Failed to read datastore return value: %s", err)
+		datastoreHealth.Error.Read = fmt.Sprintf("failed to read get_cache response: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2140,6 +2170,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	}
 	if jsonErr := json.Unmarshal(dataStoreValue, &readResult); jsonErr != nil || !readResult.Success || resp.StatusCode != 200 {
 		log.Printf("[ERROR] get_cache health check failed. Status: %d, body: %s", resp.StatusCode, string(dataStoreValue))
+		datastoreHealth.Error.Read = fmt.Sprintf("get_cache failed with HTTP %d: %s", resp.StatusCode, string(dataStoreValue))
 		return datastoreHealth, fmt.Errorf("get_cache failed with status %d", resp.StatusCode)
 	}
 
@@ -2152,6 +2183,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
 		log.Printf("[ERROR] Failed to create request (%s) for delete_key: %s", url, err)
+		datastoreHealth.Error.Delete = fmt.Sprintf("failed to create delete_cache request: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2162,6 +2194,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send request to delete_key: %s", err)
+		datastoreHealth.Error.Delete = fmt.Sprintf("delete_cache request failed: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2169,6 +2202,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	resp.Body.Close()
 	if readErr != nil {
 		log.Printf("[ERROR] Failed to read delete_cache response body: %s", readErr)
+		datastoreHealth.Error.Delete = fmt.Sprintf("failed to read delete_cache response: %s", readErr)
 		return datastoreHealth, readErr
 	}
 
@@ -2177,6 +2211,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	}
 	if jsonErr := json.Unmarshal(deleteBody, &deleteResult); jsonErr != nil || !deleteResult.Success || resp.StatusCode != 200 {
 		log.Printf("[ERROR] delete_cache health check failed. Status: %d, body: %s", resp.StatusCode, string(deleteBody))
+		datastoreHealth.Error.Delete = fmt.Sprintf("delete_cache failed with HTTP %d: %s", resp.StatusCode, string(deleteBody))
 		return datastoreHealth, fmt.Errorf("delete_cache failed with status %d", resp.StatusCode)
 	}
 
@@ -2207,6 +2242,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
 		log.Printf("[ERROR] Failed to create new request for create file(%s): %s", url, err)
+		fileHealth.Error.Create = fmt.Sprintf("failed to create file request: %s", err)
 		return fileHealth, err
 	}
 
@@ -2223,6 +2259,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send request (%s) for create file: %s", url, err)
+		fileHealth.Error.Create = fmt.Sprintf("create file request failed: %s", err)
 		return fileHealth, err
 	}
 
@@ -2230,11 +2267,13 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	resp.Body.Close()
 	if readErr != nil {
 		log.Printf("[ERROR] Failed to read create file response body: %s", readErr)
+		fileHealth.Error.Create = fmt.Sprintf("failed to read create file response: %s", readErr)
 		return fileHealth, readErr
 	}
 
 	if err := json.Unmarshal(body, &fileRespStruct); err != nil || !fileRespStruct.Success || resp.StatusCode != 200 || len(fileRespStruct.Id) == 0 {
 		log.Printf("[ERROR] create file health check failed. Status: %d, body: %s", resp.StatusCode, string(body))
+		fileHealth.Error.Create = fmt.Sprintf("create file failed with HTTP %d: %s", resp.StatusCode, string(body))
 		return fileHealth, fmt.Errorf("create file failed with status %d", resp.StatusCode)
 	}
 
@@ -2246,6 +2285,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	resp, err = http.Get(remoteUrl)
 	if err != nil {
 		log.Printf("[ERROR] Failed to fetch remote file: %s", err)
+		fileHealth.Error.Upload = fmt.Sprintf("failed to fetch remote file for upload: %s", err)
 		return fileHealth, err
 	}
 
@@ -2256,11 +2296,13 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	formFile, err := w.CreateFormFile("shuffle_file", "file.txt")
 	if err != nil {
 		log.Printf("[ERROR] Failed to create form file: %s", err)
+		fileHealth.Error.Upload = fmt.Sprintf("failed to create multipart form: %s", err)
 		return fileHealth, err
 	}
 
 	if _, err := io.Copy(formFile, resp.Body); err != nil {
 		log.Printf("[ERROR] Failed to copy remote file to form: %s", err)
+		fileHealth.Error.Upload = fmt.Sprintf("failed to copy file content to form: %s", err)
 		return fileHealth, err
 	}
 
@@ -2268,6 +2310,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	req, err = http.NewRequest("POST", url, &buf)
 	if err != nil {
 		log.Printf("[ERROR] Failed to create upload request: %s", err)
+		fileHealth.Error.Upload = fmt.Sprintf("failed to create upload request: %s", err)
 		return fileHealth, err
 	}
 
@@ -2277,6 +2320,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	uploadResp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Upload request failed: %s", err)
+		fileHealth.Error.Upload = fmt.Sprintf("upload request failed: %s", err)
 		return fileHealth, err
 	}
 
@@ -2284,6 +2328,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	uploadResp.Body.Close()
 	if readErr != nil {
 		log.Printf("[ERROR] Failed to read upload response body: %s", readErr)
+		fileHealth.Error.Upload = fmt.Sprintf("failed to read upload response: %s", readErr)
 		return fileHealth, readErr
 	}
 
@@ -2292,6 +2337,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	}
 	if jsonErr := json.Unmarshal(uploadBody, &uploadResult); jsonErr != nil || !uploadResult.Success || uploadResp.StatusCode != 200 {
 		log.Printf("[ERROR] upload file health check failed. Status: %d, body: %s", uploadResp.StatusCode, string(uploadBody))
+		fileHealth.Error.Upload = fmt.Sprintf("upload failed with HTTP %d: %s", uploadResp.StatusCode, string(uploadBody))
 		return fileHealth, fmt.Errorf("upload failed with status %d", uploadResp.StatusCode)
 	}
 
@@ -2303,6 +2349,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	req, err = http.NewRequest("DELETE", url, nil)
 	if err != nil {
 		log.Printf("[ERROR] Failed to create delete request: %s", err)
+		fileHealth.Error.Delete = fmt.Sprintf("failed to create file delete request: %s", err)
 		return fileHealth, err
 	}
 
@@ -2312,6 +2359,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send delete request: %s", err)
+		fileHealth.Error.Delete = fmt.Sprintf("file delete request failed: %s", err)
 		return fileHealth, err
 	}
 
@@ -2319,6 +2367,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	resp.Body.Close()
 	if readErr != nil {
 		log.Printf("[ERROR] Failed to read delete response body: %s", readErr)
+		fileHealth.Error.Delete = fmt.Sprintf("failed to read file delete response: %s", readErr)
 		return fileHealth, readErr
 	}
 
@@ -2327,6 +2376,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	}
 	if jsonErr := json.Unmarshal(deleteBody, &deleteResult); jsonErr != nil || !deleteResult.Success || resp.StatusCode != 200 {
 		log.Printf("[ERROR] delete file health check failed. Status: %d, body: %s", resp.StatusCode, string(deleteBody))
+		fileHealth.Error.Delete = fmt.Sprintf("file delete failed with HTTP %d: %s", resp.StatusCode, string(deleteBody))
 		return fileHealth, fmt.Errorf("delete failed with status %d", resp.StatusCode)
 	}
 
