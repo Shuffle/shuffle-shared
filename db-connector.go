@@ -10468,18 +10468,18 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	nameKey := "Users"
 
 	var users []User
-	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
-	if project.CacheDb {
-		cache, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &users)
-			if err == nil && len(users) > 0 {
-				log.Printf("[DEBUG] Found user apikey cache %s", cacheKey)
-				return users[0], nil
-			}
-		}
-	}
+//	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
+//	if project.CacheDb {
+//		cache, err := GetCache(ctx, cacheKey)
+//		if err == nil {
+//			cacheData := []byte(cache.([]uint8))
+//			err = json.Unmarshal(cacheData, &users)
+//			if err == nil && len(users) > 0 {
+//				log.Printf("[DEBUG] Found user apikey cache %s", cacheKey)
+//				return users[0], nil
+//			}
+//		}
+//	}
 
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -10571,22 +10571,22 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		}
 	}
 
-	if project.CacheDb {
-		userData, err := json.Marshal(users)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
-			if len(users) > 0 { 
-				return users[0], nil 
-			} else {
-				return User{}, err
-			}
-		}
-
-		err = SetCache(ctx, cacheKey, userData, 10)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
-		}
-	}
+//	if project.CacheDb {
+//		userData, err := json.Marshal(users)
+//		if err != nil {
+//			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
+//			if len(users) > 0 { 
+//				return users[0], nil 
+//			} else {
+//				return User{}, err
+//			}
+//		}
+//
+//		err = SetCache(ctx, cacheKey, userData, 10)
+//		if err != nil {
+//			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
+//		}
+//	}
 
 	if len(users) == 0 {
 		return User{}, errors.New("No users found for this apikey (2)")
