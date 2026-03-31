@@ -1492,6 +1492,14 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalAgentTokens += int64(increment)
 		orgStatistics.MonthlyAgentTokens += int64(increment)
 		orgStatistics.DailyAgentTokens += int64(increment)
+	} else if dataType == "agent_input_tokens" {
+		orgStatistics.TotalAgentInputTokens += int64(increment)
+		orgStatistics.MonthlyAgentInputTokens += int64(increment)
+		orgStatistics.DailyAgentInputTokens += int64(increment)
+	} else if dataType == "agent_output_tokens" {
+		orgStatistics.TotalAgentOutputTokens += int64(increment)
+		orgStatistics.MonthlyAgentOutputTokens += int64(increment)
+		orgStatistics.DailyAgentOutputTokens += int64(increment)
 	} else {
 		//log.Printf("\n\n[ERROR] Unknown data type in stats increment for org %s: %s. Appending to custom list.\n\n", orgStatistics.OrgId, dataType)
 		appendCustom = true

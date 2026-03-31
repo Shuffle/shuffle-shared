@@ -438,6 +438,8 @@ type ExecutionInfo struct {
 	TotalAIUsage                    int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
 	TotalAgentExecutions            int64 `json:"total_agent_executions" datastore:"total_agent_executions"`
 	TotalAgentTokens                int64 `json:"total_agent_tokens" datastore:"total_agent_tokens"`
+	TotalAgentInputTokens           int64 `json:"total_agent_input_tokens" datastore:"total_agent_input_tokens"`
+	TotalAgentOutputTokens          int64 `json:"total_agent_output_tokens" datastore:"total_agent_output_tokens"`
 	TotalChildWorkflowExecutions    int64 `json:"total_child_workflow_executions" datastore:"total_child_workflow_executions"`
 
 	MonthlyApiUsage                   int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
@@ -455,6 +457,8 @@ type ExecutionInfo struct {
 	MonthlyAIUsage                    int64 `json:"monthly_ai_executions,omitempty" datastore:"monthly_ai_executions"`
 	MonthlyAgentExecutions            int64 `json:"monthly_agent_executions,omitempty" datastore:"monthly_agent_executions"`
 	MonthlyAgentTokens                int64 `json:"monthly_agent_tokens,omitempty" datastore:"monthly_agent_tokens"`
+	MonthlyAgentInputTokens           int64 `json:"monthly_agent_input_tokens,omitempty" datastore:"monthly_agent_input_tokens"`
+	MonthlyAgentOutputTokens          int64 `json:"monthly_agent_output_tokens,omitempty" datastore:"monthly_agent_output_tokens"`
 
 	WeeklyAppExecutions              int64 `json:"weekly_app_executions,omitempty" datastore:"weekly_app_executions"`
 	WeeklyChildAppExecutions         int64 `json:"weekly_child_app_executions,omitempty" datastore:"weekly_child_app_executions"`
@@ -483,6 +487,8 @@ type ExecutionInfo struct {
 	DailyAIUsage                    int64 `json:"daily_ai_executions" datastore:"daily_ai_executions"`
 	DailyAgentExecutions            int64 `json:"daily_agent_executions" datastore:"daily_agent_executions"`
 	DailyAgentTokens                int64 `json:"daily_agent_tokens" datastore:"daily_agent_tokens"`
+	DailyAgentInputTokens           int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
+	DailyAgentOutputTokens          int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`
 
 	HourlyAppExecutions              int64 `json:"hourly_app_executions,omitempty" datastore:"hourly_app_executions"`
 	HourlyChildAppExecutions         int64 `json:"hourly_child_app_executions,omitempty" datastore:"hourly_child_app_executions"`

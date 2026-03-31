@@ -7045,9 +7045,46 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 // Callers must return immediately after this call.
 func abortAgentExecution(ctx context.Context, execution WorkflowExecution, startNode Action, base AgentOutput, abortLabel, reason string) (Action, error) {
 	agentOutput := base
-	agentOutput.Status = "FINISHED" // Use FINISHED so system treats it as complete
+	agentOutput.Status = "FINISHED"
 	agentOutput.Error = reason
 	agentOutput.CompletedAt = time.Now().Unix()
+
+	lastDecisionIsFinish := false
+	if len(agentOutput.Decisions) > 0 {
+		last := agentOutput.Decisions[len(agentOutput.Decisions)-1]
+		if last.Action == "finish" || last.Category == "finish" {
+			lastDecisionIsFinish = true
+			// update the reason on the existing finish so it explains the abort
+			agentOutput.Decisions[len(agentOutput.Decisions)-1].Reason = reason
+			agentOutput.Decisions[len(agentOutput.Decisions)-1].RunDetails.Status = "FINISHED"
+		}
+	}
+
+	if !lastDecisionIsFinish {
+		nextIndex := len(agentOutput.Decisions)
+		b := make([]byte, 6)
+		finishId := fmt.Sprintf("abort_%s", abortLabel)
+		if _, randErr := rand.Read(b); randErr == nil {
+			finishId = base64.RawURLEncoding.EncodeToString(b)
+		}
+		syntheticFinish := AgentDecision{
+			I:        nextIndex,
+			Action:   "finish",
+			Category: "finish",
+			Reason:   reason,
+			Fields: []Valuereplace{
+				{Key: "output", Value: reason},
+			},
+			RunDetails: AgentDecisionRunDetails{
+				Id:          finishId,
+				Status:      "FINISHED",
+				StartedAt:   agentOutput.CompletedAt,
+				CompletedAt: agentOutput.CompletedAt,
+			},
+		}
+		agentOutput.Decisions = append(agentOutput.Decisions, syntheticFinish)
+	}
+	agentOutput.Output = reason
 
 	marshalledOutput, marshalErr := json.Marshal(agentOutput)
 	if marshalErr != nil {
@@ -7060,7 +7097,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
 
 	abortResult := ActionResult{
-		Status:      "SUCCESS", // Use SUCCESS so Fixexecution handles it cleanly
+		Status:      "SUCCESS",
 		Result:      string(marshalledOutput),
 		Action:      startNode,
 		StartedAt:   time.Now().UnixMicro(),
@@ -7081,21 +7118,12 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		execution.Results = append(execution.Results, abortResult)
 	}
 
-	execution.Status = "FINISHED" // Mark execution as finished so it stops processing
+	execution.Status = "FINISHED"
 	go SetWorkflowExecution(ctx, execution, true)
 	return startNode, errors.New(reason)
 }
 
 func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, fullOrg *Org, tokenLimit, monthlyTokensUsed int64) {
-	cacheKey := fmt.Sprintf("alert_agent_tokens_%s_%s", execution.Workflow.OrgId, time.Now().Format("2006-01-02"))
-	_, errCache := GetCache(ctx, cacheKey)
-	if errCache == nil {
-		return // Already sent today
-	}
-
-	// Not found in cache, set it and send email
-	_ = SetCache(ctx, cacheKey, []byte("sent"), 86400) 
-
 	admins := []string{}
 	orgName := execution.Workflow.OrgId
 	if fullOrg != nil {
@@ -7113,6 +7141,12 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 		if !ArrayContains(admins, "support@shuffler.io") {
 			admins = append(admins, "support@shuffler.io")
 		}
+	}
+
+	cacheKey := generateAlertCacheKey(execution.Workflow.OrgId, "agent_token_limit_exceeded", admins)
+	if !checkAndSetAlertCache(ctx, cacheKey) {
+		log.Printf("[DEBUG] Skipping duplicate AI token limit alert for org %s - already sent recently", execution.Workflow.OrgId)
+		return
 	}
 
 	subject := fmt.Sprintf("AI Agent Token Limit Exceeded for Org %s", orgName)
@@ -7968,23 +8002,24 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
-	// Check org-level monthly token limit BEFORE each LLM call
-	if project.Environment == "cloud" && len(execution.Workflow.OrgId) > 0 {
-		orgStats, err := GetOrgStatistics(ctx, execution.Workflow.OrgId)
+	if len(execution.Workflow.OrgId) > 0 {
+		orgStats, statsErr := GetOrgStatistics(ctx, execution.Workflow.OrgId)
 		monthlyTokensUsed := int64(0)
-		if err == nil && orgStats != nil {
+		if statsErr == nil && orgStats != nil {
 			monthlyTokensUsed = orgStats.MonthlyAgentTokens
 		}
 
-		tokenLimit := int64(10_000_000) // Default: 10M tokens per month
-		fullOrg, err := GetOrg(ctx, execution.Workflow.OrgId)
-		if err == nil && fullOrg != nil {
-			if fullOrg.SyncFeatures.AgentTokens.Active && fullOrg.SyncFeatures.AgentTokens.Limit > 0 {
-				tokenLimit = fullOrg.SyncFeatures.AgentTokens.Limit
-			}
+		fullOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId)
+
+		tokenLimit := int64(0)
+		if project.Environment == "cloud" {
+			tokenLimit = int64(1_000_000)
+		}
+		if orgErr == nil && fullOrg != nil && fullOrg.SyncFeatures.AgentTokens.Active && fullOrg.SyncFeatures.AgentTokens.Limit > 0 {
+			tokenLimit = fullOrg.SyncFeatures.AgentTokens.Limit
 		}
 
-		if monthlyTokensUsed >= tokenLimit {
+		if tokenLimit > 0 && monthlyTokensUsed >= tokenLimit {
 			log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: org=%s monthly_tokens_used=%d token_limit=%d", execution.ExecutionId, execution.Workflow.OrgId, monthlyTokensUsed, tokenLimit)
 			go sendAITokenLimitAlert(ctx, execution, fullOrg, tokenLimit, monthlyTokensUsed)
 			return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("Organization exceeded monthly token limit (%d/%d total tokens). Limit resets monthly.", monthlyTokensUsed, tokenLimit))
@@ -8160,20 +8195,27 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				log.Printf("[DEBUG] Found choices string (2) in AI Agent response - len: %d: %s", len(choicesString), choicesString)
 			}
 
-			// Track token usage
-			if openaiOutput.Usage.TotalTokens > 0 {
+			if openaiOutput.Usage.TotalTokens > 0 && len(execution.Workflow.OrgId) > 0 {
 				cachedTokens := 0
 				if openaiOutput.Usage.PromptTokensDetails != nil {
 					cachedTokens = openaiOutput.Usage.PromptTokensDetails.CachedTokens
 				}
 
-				if project.Environment == "cloud" && len(execution.Workflow.OrgId) > 0 {
-					go func() {
-						time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
-						IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_tokens", int(openaiOutput.Usage.TotalTokens))
-					}()
-					log.Printf("[AUDIT][%s] Incremented agent tokens for org %s: +%d tokens (prompt=%d, completion=%d, cached=%d)", execution.ExecutionId, execution.Workflow.OrgId, openaiOutput.Usage.TotalTokens, openaiOutput.Usage.PromptTokens, openaiOutput.Usage.CompletionTokens, cachedTokens)
-				}
+				inputTokens := int(openaiOutput.Usage.PromptTokens)
+				outputTokens := int(openaiOutput.Usage.CompletionTokens)
+				totalTokens := int(openaiOutput.Usage.TotalTokens)
+
+				go func() {
+					time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
+					IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_tokens", totalTokens)
+					if inputTokens > 0 {
+						IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_input_tokens", inputTokens)
+					}
+					if outputTokens > 0 {
+						IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_output_tokens", outputTokens)
+					}
+				}()
+				log.Printf("[AUDIT][%s] Incremented AI Agent usage for org=%s total=%d input=%d output=%d cached=%d", execution.ExecutionId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens)
 			}
 
 			// Handles reasoning models for Refusal control edgecases
