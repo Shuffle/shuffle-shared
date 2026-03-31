@@ -67,6 +67,15 @@ func init() {
 	}
 }
 
+func EstimatePromptTokens(messages []openai.ChatCompletionMessage) int64 {
+	totalChars := int64(0)
+	for _, msg := range messages {
+		totalChars += int64(len(msg.Content))
+	}
+	
+	return (totalChars + 3) / 4
+}
+
 // Provide an incident triage and response plan for the reported incident finding. Make a short list of actions to perform in the following format: [{"title": "Title of the task", "category": "triage/containment/recovery/communication/documentation", "completed": false, "createdBy": "ai-agent@shuffler.io"}]. ONLY output as JSON array and nothing more. After the list is made, add these to the metadata.extensions.custom_attributes.tasks[] in the next action.
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
@@ -8013,16 +8022,21 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		tokenLimit := int64(0)
 		if project.Environment == "cloud" {
-			tokenLimit = int64(1_000_000)
+			tokenLimit = int64(10_000_000)
 		}
 		if orgErr == nil && fullOrg != nil && fullOrg.SyncFeatures.AgentTokens.Active && fullOrg.SyncFeatures.AgentTokens.Limit > 0 {
 			tokenLimit = fullOrg.SyncFeatures.AgentTokens.Limit
 		}
 
-		if tokenLimit > 0 && monthlyTokensUsed >= tokenLimit {
-			log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: org=%s monthly_tokens_used=%d token_limit=%d", execution.ExecutionId, execution.Workflow.OrgId, monthlyTokensUsed, tokenLimit)
-			go sendAITokenLimitAlert(ctx, execution, fullOrg, tokenLimit, monthlyTokensUsed)
-			return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("Organization exceeded monthly token limit (%d/%d total tokens). Limit resets monthly.", monthlyTokensUsed, tokenLimit))
+		if tokenLimit > 0 {
+			estimatedCurrentTokens := EstimatePromptTokens(completionRequest.Messages)
+			totalTokensAfterRequest := monthlyTokensUsed + estimatedCurrentTokens
+
+			if totalTokensAfterRequest > tokenLimit {
+				log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: org=%s monthly_used=%d estimated_current=%d total_would_be=%d limit=%d", execution.ExecutionId, execution.Workflow.OrgId, monthlyTokensUsed, estimatedCurrentTokens, totalTokensAfterRequest, tokenLimit)
+				go sendAITokenLimitAlert(ctx, execution, fullOrg, tokenLimit, monthlyTokensUsed)
+				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("Would exceed token limit: %d + %d > %d", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit))
+			}
 		}
 	}
 
