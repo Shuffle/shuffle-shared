@@ -10468,6 +10468,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	nameKey := "Users"
 
 	var users []User
+
 //	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
 //	if project.CacheDb {
 //		cache, err := GetCache(ctx, cacheKey)
@@ -10480,6 +10481,8 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 //			}
 //		}
 //	}
+
+	log.Printf("[DEUBG] Looking for the API Key pass the cache check %s", project.DbType)
 
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -10570,6 +10573,8 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			}
 		}
 	}
+
+	log.Printf("[DEBUG] Moving away from getapikey %v", users[0])
 
 //	if project.CacheDb {
 //		userData, err := json.Marshal(users)
