@@ -12495,6 +12495,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
+			DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
 			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
@@ -12504,6 +12505,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
 			DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
 			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
@@ -12796,6 +12798,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+	DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
 	DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
 	DeleteCache(ctx, user.Session)
 
