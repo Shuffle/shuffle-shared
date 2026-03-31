@@ -10482,7 +10482,9 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 //		}
 //	}
 
-	log.Printf("[DEUBG] Looking for the API Key pass the cache check %s", project.DbType)
+	if (debug) {
+		log.Printf("[DEUBG] Looking for the API Key pass the cache check %s", project.DbType)
+	}
 
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -10575,7 +10577,9 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	}
 
 	if len(users) != 0 {
-		log.Printf("[DEBUG] Moving away from getapikey %v", users[0])
+		if (debug) {
+			log.Printf("[DEBUG] Moving away from getapikey %v", users[0])
+		}
 	}
 
 //	if project.CacheDb {
