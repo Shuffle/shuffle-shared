@@ -709,6 +709,49 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		info.OrgName = org.Name
 	}
 
+	// Sideload GCS overflow stats (entries >60 days old archived from Datastore), cached 30 min.
+	if project.Environment == "cloud" && len(orgFileBucket) > 0 {
+		var gcsStats []DailyStatistics
+		gcsCacheKey := fmt.Sprintf("gcs_stats_%s", orgId)
+
+		if cached, cacheErr := GetCache(ctx, gcsCacheKey); cacheErr == nil {
+			_ = json.Unmarshal([]byte(cached.([]uint8)), &gcsStats)
+		} else {
+			bucketPath := fmt.Sprintf("org_statistics/%s/stats.json", orgId)
+			obj := project.StorageClient.Bucket(orgFileBucket).Object(bucketPath)
+			if gcsReader, gcsErr := obj.NewReader(ctx); gcsErr == nil {
+				gcsBytes, readErr := ioutil.ReadAll(gcsReader)
+				gcsReader.Close()
+				if readErr == nil && len(gcsBytes) > 0 {
+					if unmarshalErr := json.Unmarshal(gcsBytes, &gcsStats); unmarshalErr == nil {
+						_ = SetCache(ctx, gcsCacheKey, gcsBytes, 30)
+					}
+				}
+			}
+		}
+
+		if len(gcsStats) > 0 {
+			log.Printf("[DEBUG] HandleGetStatistics: merging %d GCS overflow entries for org %s", len(gcsStats), orgId)
+			// Deduplicate by date; Datastore entries win on conflict.
+			dateMapCap := len(gcsStats)
+			if len(info.DailyStatistics) > dateMapCap {
+				dateMapCap = len(info.DailyStatistics)
+			}
+			dateMap := make(map[string]DailyStatistics, dateMapCap)
+			for _, d := range gcsStats {
+				dateMap[d.Date.UTC().Format("2006-01-02")] = d
+			}
+			for _, d := range info.DailyStatistics {
+				dateMap[d.Date.UTC().Format("2006-01-02")] = d
+			}
+			merged := make([]DailyStatistics, 0, len(dateMap))
+			for _, d := range dateMap {
+				merged = append(merged, d)
+			}
+			info.DailyStatistics = merged
+		}
+	}
+
 	// Sideload app runs, workflow runs and subflow runs (just in case)
 	// This makes numbers accurate even when less than  dbDumpInterval
 	key := fmt.Sprintf("cache_%s_app_executions", orgId)

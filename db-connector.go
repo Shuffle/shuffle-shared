@@ -154,9 +154,32 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 		}
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
-		if _, err := project.Dbclient.Put(ctx, key, &stats); err != nil {
-			log.Printf("[ERROR] Failed adding stats with ID %s: %s", id, err)
-			return err
+		if _, putErr := project.Dbclient.Put(ctx, key, &stats); putErr != nil {
+			log.Printf("[ERROR] Failed adding stats with ID %s: %s", id, putErr)
+
+			if strings.Contains(fmt.Sprintf("%s", putErr), "entity is too big") {
+				log.Printf("[WARNING] SetOrgStatistics: entity too big for org %s – archiving to GCS and trimming", id)
+
+				if archiveErr := archiveOldStatsToGCSBucket(ctx, id, &stats); archiveErr != nil {
+					log.Printf("[WARNING] SetOrgStatistics: GCS archive failed for org %s: %s – trimming anyway", id, archiveErr)
+				}
+
+				if len(stats.DailyStatistics) > 60 {
+					sort.Slice(stats.DailyStatistics, func(a, b int) bool {
+						return stats.DailyStatistics[a].Date.Before(stats.DailyStatistics[b].Date)
+					})
+					stats.DailyStatistics = stats.DailyStatistics[len(stats.DailyStatistics)-60:]
+				}
+
+				if _, retryErr := project.Dbclient.Put(ctx, key, &stats); retryErr != nil {
+					log.Printf("[ERROR] SetOrgStatistics: retry put failed for org %s: %s", id, retryErr)
+					return retryErr
+				}
+
+				log.Printf("[INFO] SetOrgStatistics: saved trimmed stats (last 60 days) for org %s", id)
+			} else {
+				return putErr
+			}
 		}
 
 	}
@@ -1080,6 +1103,100 @@ func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string
 
 	found := wrapped.Hits.Hits[0].Source
 	return &found, nil
+}
+
+// archiveOldStatsToGCSBucket offloads DailyStatistics entries older than 60 days to a GCS
+// bucket so they are not lost when the Datastore entity grows too large.
+//
+// Bucket : shuffle_org_files
+// Object : org_statistics/{orgId}/stats.json
+func archiveOldStatsToGCSBucket(ctx context.Context, orgId string, stats *ExecutionInfo) error {
+	if project.Environment != "cloud" {
+		return nil
+	}
+
+	if len(orgId) == 0 {
+		return errors.New("archiveOldStatsToGCSBucket: orgId must not be empty")
+	}
+
+	// Skip if a concurrent archive is already running for this org.
+	archiveCacheKey := fmt.Sprintf("gcs_archive_%s", orgId)
+	if cacheVal, cacheErr := GetCache(ctx, archiveCacheKey); cacheErr == nil {
+		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: skipping org %s – archive in progress (key=%s val=%v)", orgId, archiveCacheKey, cacheVal)
+		return nil
+	} else {
+		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: proceeding for org %s (key=%s not set)", orgId, archiveCacheKey)
+	}
+	_ = SetCache(ctx, archiveCacheKey, []byte("1"), 5)
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -60)
+	overflowStats := []DailyStatistics{}
+	for _, d := range stats.DailyStatistics {
+		if d.Date.UTC().Before(cutoff) {
+			overflowStats = append(overflowStats, d)
+		}
+	}
+
+	if len(overflowStats) == 0 {
+		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: no entries older than 60 days for org %s", orgId)
+		return nil
+	}
+
+	bucketPath := fmt.Sprintf("org_statistics/%s/stats.json", orgId)
+	obj := project.StorageClient.Bucket(orgFileBucket).Object(bucketPath)
+
+	// Read existing GCS file to merge without losing older entries.
+	existingStats := []DailyStatistics{}
+	reader, readerErr := obj.NewReader(ctx)
+	if readerErr == nil {
+		existingBytes, readErr := ioutil.ReadAll(reader)
+		reader.Close()
+		if readErr == nil && len(existingBytes) > 0 {
+			if unmarshalErr := json.Unmarshal(existingBytes, &existingStats); unmarshalErr != nil {
+				log.Printf("[WARNING] archiveOldStatsToGCSBucket: could not parse existing GCS stats for org %s (will overwrite): %s", orgId, unmarshalErr)
+				existingStats = []DailyStatistics{}
+			}
+		}
+	}
+
+	// Deduplicate by date; new overflow entries win on conflict.
+	dateMapCap := len(existingStats)
+	if len(overflowStats) > dateMapCap {
+		dateMapCap = len(overflowStats)
+	}
+	dateMap := make(map[string]DailyStatistics, dateMapCap)
+	for _, d := range existingStats {
+		dateMap[d.Date.UTC().Format("2006-01-02")] = d
+	}
+	for _, d := range overflowStats {
+		dateMap[d.Date.UTC().Format("2006-01-02")] = d
+	}
+
+	merged := make([]DailyStatistics, 0, len(dateMap))
+	for _, d := range dateMap {
+		merged = append(merged, d)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].Date.Before(merged[j].Date)
+	})
+
+	mergedBytes, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("archiveOldStatsToGCSBucket: failed to marshal overflow stats for org %s: %w", orgId, err)
+	}
+
+	gcsWriter := obj.NewWriter(ctx)
+	if _, writeErr := gcsWriter.Write(mergedBytes); writeErr != nil {
+		_ = gcsWriter.Close()
+		return fmt.Errorf("archiveOldStatsToGCSBucket: failed to write to GCS for org %s: %w", orgId, writeErr)
+	}
+	if closeErr := gcsWriter.Close(); closeErr != nil {
+		return fmt.Errorf("archiveOldStatsToGCSBucket: failed to close GCS writer for org %s: %w", orgId, closeErr)
+	}
+
+	log.Printf("[INFO] archiveOldStatsToGCSBucket: archived %d entries (>60 days old) to %s/%s for org %s",
+		len(overflowStats), orgFileBucket, bucketPath, orgId)
+	return nil
 }
 
 func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...int) error {
@@ -6314,6 +6431,11 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	DeleteCache(ctx, user.ApiKey)
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+	err = DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
+	if err != nil {
+		log.Printf("[ERROR] Failed to delete cache for user apikey %s", err)
+	}
+
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("user_%s", parsedKey)
 
@@ -10346,16 +10468,22 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	nameKey := "Users"
 
 	var users []User
-	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
-	if project.CacheDb {
-		cache, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &users)
-			if err == nil && len(users) > 0 {
-				return users[0], nil
-			}
-		}
+
+//	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
+//	if project.CacheDb {
+//		cache, err := GetCache(ctx, cacheKey)
+//		if err == nil {
+//			cacheData := []byte(cache.([]uint8))
+//			err = json.Unmarshal(cacheData, &users)
+//			if err == nil && len(users) > 0 {
+//				log.Printf("[DEBUG] Found user apikey cache %s", cacheKey)
+//				return users[0], nil
+//			}
+//		}
+//	}
+
+	if (debug) {
+		log.Printf("[DEUBG] Looking for the API Key pass the cache check %s", project.DbType)
 	}
 
 	if project.DbType == "opensearch" {
@@ -10448,22 +10576,28 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		}
 	}
 
-	if project.CacheDb {
-		userData, err := json.Marshal(users)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
-			if len(users) > 0 { 
-				return users[0], nil 
-			} else {
-				return User{}, err
-			}
-		}
-
-		err = SetCache(ctx, cacheKey, userData, 10)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
+	if len(users) != 0 {
+		if (debug) {
+			log.Printf("[DEBUG] Moving away from getapikey %v", users[0])
 		}
 	}
+
+//	if project.CacheDb {
+//		userData, err := json.Marshal(users)
+//		if err != nil {
+//			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
+//			if len(users) > 0 { 
+//				return users[0], nil 
+//			} else {
+//				return User{}, err
+//			}
+//		}
+//
+//		err = SetCache(ctx, cacheKey, userData, 10)
+//		if err != nil {
+//			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
+//		}
+//	}
 
 	if len(users) == 0 {
 		return User{}, errors.New("No users found for this apikey (2)")
