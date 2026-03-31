@@ -4347,28 +4347,51 @@ type GCPIncident struct {
 }
 
 type AppHealth struct {
-	Create      bool   `json:"create"`
-	Run         bool   `json:"run"`
-	Delete      bool   `json:"delete"`
-	Validate    bool   `json:"validate"`
-	AppId       string `json:"app_id"`
-	Read        bool   `json:"read"`
-	Result      string `json:"result"`
-	ExecutionID string `json:"execution_id"`
+	Create      bool        `json:"create"`
+	Run         bool        `json:"run"`
+	Delete      bool        `json:"delete"`
+	Validate    bool        `json:"validate"`
+	AppId       string      `json:"app_id"`
+	Read        bool        `json:"read"`
+	Result      string      `json:"result"`
+	ExecutionID string      `json:"execution_id"`
+	Error       AppOpsError `json:"error"`
+}
+
+type AppOpsError struct {
+	Create   string `json:"create"`
+	Run      string `json:"run"`
+	Delete   string `json:"delete"`
+	Validate string `json:"validate"`
+	Read     string `json:"read"`
 }
 
 type DatastoreHealth struct {
-	Create bool   `json:"create"`
-	Read   bool   `json:"read"`
-	Result string `json:"result"`
-	Delete bool   `json:"delete"`
+	Create bool              `json:"create"`
+	Read   bool              `json:"read"`
+	Result string            `json:"result"`
+	Delete bool              `json:"delete"`
+	Error  DatastoreOpsError `json:"error"`
+}
+
+type DatastoreOpsError struct {
+	Create string `json:"create"`
+	Read   string `json:"read"`
+	Delete string `json:"delete"`
 }
 
 type FileHealth struct {
-	Create bool   `json:"create"`
-	FileId string `json:"fileId"`
-	Upload bool   `json:"get_file"`
-	Delete bool   `json:"delete"`
+	Create bool         `json:"create"`
+	FileId string       `json:"fileId"`
+	Upload bool         `json:"get_file"`
+	Delete bool         `json:"delete"`
+	Error  FileOpsError `json:"error"`
+}
+
+type FileOpsError struct {
+	Create string `json:"create"`
+	Upload string `json:"upload"`
+	Delete string `json:"delete"`
 }
 
 type WorkflowHealth struct {
@@ -4377,12 +4400,21 @@ type WorkflowHealth struct {
 	BackendVersion string `json:"backend_version"`
 	RunFinished    bool   `json:"run_finished"`
 	// NOTE: This does not represent the actual time execution took, it includes the time took to send an API request for the exeution + get back the results for every action.
-	ExecutionTook      float64 `json:"execution_took"`
-	RunStatus          string  `json:"run_status"`
-	Delete             bool    `json:"delete"`
-	ExecutionId        string  `json:"execution_id"`
-	WorkflowId         string  `json:"workflow_id"`
-	WorkflowValidation bool    `json:"workflow_validation"`
+	ExecutionTook      float64          `json:"execution_took"`
+	RunStatus          string           `json:"run_status"`
+	Delete             bool             `json:"delete"`
+	ExecutionId        string           `json:"execution_id"`
+	WorkflowId         string           `json:"workflow_id"`
+	WorkflowValidation bool             `json:"workflow_validation"`
+	Error              WorkflowOpsError `json:"error"`
+}
+
+type WorkflowOpsError struct {
+	Create             string `json:"create"`
+	Run                string `json:"run"`
+	Delete             string `json:"delete"`
+	RunFinished        string `json:"run_finished"`
+	WorkflowValidation string `json:"workflow_validation"`
 }
 
 type RegionChangeHistory struct {
