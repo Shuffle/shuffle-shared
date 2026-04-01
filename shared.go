@@ -1004,6 +1004,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("Org loaded 1")
+
 	// clean getOrg invites
 	org.Invites = []string{}
 
@@ -1025,6 +1027,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 		SetOrg(ctx, *org, org.Id)
 	}
+
+	log.Printf("Org loaded 2")
 
 	admin := false
 	if user.SupportAccess == true {
@@ -1086,6 +1090,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	log.Printf("Org loaded 3")
+
 	if !admin {
 		org.Defaults = Defaults{}
 		// Clean sensitive SSO fields instead of clearing entire config
@@ -1146,8 +1152,9 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			orgChanged = true
 		}
 
+		log.Printf("Org loaded 3.0")
 		if len(org.CreatorOrg) == 0 {
-			allChildOrgs, err := GetAllChildOrgs(ctx, org.Id)
+			allChildOrgs, _, err := GetAllChildOrgs(ctx, org.Id)
 			if err == nil {
 				if len(allChildOrgs) != len(org.ChildOrgs) {
 					allChildOrgsMini := []OrgMini{}
@@ -1168,6 +1175,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
+		log.Printf("Org loaded 3.1")
 		if orgChanged {
 			log.Printf("[DEBUG] Org features for %s (%s) changed. Updating.", org.Name, org.Id)
 			err = SetOrg(ctx, *org, org.Id)
@@ -1176,17 +1184,20 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
+		log.Printf("Org loaded 3.2")
 		info, err := GetOrgStatistics(ctx, fileId)
 		if err == nil {
 			org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		}
 
+		log.Printf("Org loaded 3.3")
 		envs, err := GetEnvironments(ctx, fileId)
 		if err == nil {
 			//log.Printf("Envs: %s", len(envs))
 			org.SyncFeatures.MultiEnv.Usage = int64(len(envs))
 		}
 
+		log.Printf("Org loaded 3.4")
 		// Backfill subscription IDs if any subscription is missing an ID
 		addSubId := false
 		for _, sub := range org.Subscriptions {
@@ -1284,6 +1295,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	log.Printf("Org loaded 4")
+
 	if project.Environment == "onprem" {
 
 		statistics, err := GetOrgStatistics(ctx, org.Id)
@@ -1349,6 +1362,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	wg.Wait()
 	close(ch)
 
+	log.Printf("Org loaded 5")
+
 	for suborg := range ch {
 		if suborg.CreatorOrg == org.Id {
 			suborg.Image = ""
@@ -1362,7 +1377,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	if user.SupportAccess {
 		// send all suborgs for support users
 		org.ChildOrgs = []OrgMini{}
-		allChildOrgs, err := GetAllChildOrgs(ctx, org.Id)
+		allChildOrgs, _, err := GetAllChildOrgs(ctx, org.Id)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting child orgs for %s: %s", org.Id, err)
 		} else {
@@ -1521,8 +1536,14 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	cursor := ""
+	cursorList, cursorOk := request.URL.Query()["cursor"]
+	if cursorOk && len(cursorList) > 0 {
+		cursor = cursorList[0]
+	}
+
 	isSupportOrAdmin := user.SupportAccess || isParentAdmin
-	childorgs, err := GetAllChildOrgs(ctx, parentOrg.Id)
+	childorgs, outputCursor, err := GetAllChildOrgs(ctx, parentOrg.Id, cursor)
 	if err != nil || len(childorgs) == 0 {
 		if len(childorgs) != 0 {
 			log.Printf("[ERROR] Failed getting child orgs for %s. Got %d: %s", parentOrg.Id, len(childorgs), err)
@@ -1638,6 +1659,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 
 	data := map[string]interface{}{
 		"subOrgs":   subOrgs,
+		"cursor":    outputCursor,
 		"parentOrg": returnParent,
 	}
 
@@ -3485,7 +3507,7 @@ func AutoRepairUserOrgLinks(ctx context.Context, user *User) int {
 	}
 
 	// Get all child orgs
-	childOrgs, err := GetAllChildOrgs(ctx, parentOrgId)
+	childOrgs, _, err := GetAllChildOrgs(ctx, parentOrgId)
 	if err != nil {
 		log.Printf("[WARNING] AutoRepairUserOrgLinks: Failed to get child orgs for %s: %s", parentOrgId, err)
 		return 0
@@ -12967,7 +12989,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		//log.Printf("MULTITENANT USAGE: %d / %d. Active: %#v", parentOrg.SyncUsage.MultiTenant.Counter, parentOrg.SyncFeatures.MultiTenant.Limit, parentOrg.SyncFeatures.MultiTenant.Active)
 
-		childOrgs, err := GetAllChildOrgs(ctx, user.ActiveOrg.Id)
+		childOrgs, _, err := GetAllChildOrgs(ctx, user.ActiveOrg.Id)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting child orgs for %s: %s", user.ActiveOrg.Id, err)
 		}
@@ -21129,7 +21151,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		// Doing a last resort search, e.g. to handle spaces and the like
 		limit := 50
 		// HOT FIX FOR UJIMA ALERT
-		if (os.Getenv("SHUFFLE_GCEPROJECT") == "shuffle-europe-west3") {
+		if os.Getenv("SHUFFLE_GCEPROJECT") == "shuffle-europe-west3" {
 			limit = 2000
 		}
 
@@ -21946,7 +21968,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 			// Usually url
 			if authFields <= 2 && app.Generated {
-				// These are ok to append no matter what due to 
+				// These are ok to append no matter what due to
 				// cleanup happening in the app run itself anyway. AKA kwargs
 				// that are unnecessary are not being used
 				if !ArrayContains(foundFields, "apikey") {
@@ -22087,7 +22109,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		app.ID = action.AppID
 	}
 
-	// Fallback to inject creds if the user don't have any. This is for internal + 
+	// Fallback to inject creds if the user don't have any. This is for internal +
 	// AI oriented APIs only. Check IsShuffleApp() for details
 	isShuffleApp := IsShuffleApp(app)
 	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 {
@@ -22122,7 +22144,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 						continue
 					}
 
-					if curuser.Role == "admin" { 
+					if curuser.Role == "admin" {
 						selectedUser = user
 					}
 
@@ -22134,7 +22156,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 				// In case of further user-issues...
 				if len(foundApikey) == 0 {
-					if len(selectedUser.ApiKey) > 0 { 
+					if len(selectedUser.ApiKey) > 0 {
 						foundApikey = selectedUser.ApiKey
 					} else {
 						newUserInfo, err := GenerateApikey(ctx, *selectedUser)
@@ -22182,9 +22204,9 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 		if !urlFound {
 			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-				Name:  "url",
-				Value: backendUrl,
-				Example: backendUrl, 
+				Name:    "url",
+				Value:   backendUrl,
+				Example: backendUrl,
 			})
 		}
 
@@ -22208,7 +22230,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			log.Printf("\n\n\n\nFOUND SHUFFLE APP (%s)! URL: %s, APIKEY: %s, ORG: %s\n\n\n", app.Name, backendUrl, foundApikey, workflowExecution.OrgId)
 		}
 
-	// Custom AI injection when necessary
+		// Custom AI injection when necessary
 	} else if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
 		// cloud => only do it on cloud location
 		// This prevents local users from being able to see it
@@ -22286,17 +22308,17 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 	}
 
-	// Used for very deep recursion testing of specific injections - e.g. for 
+	// Used for very deep recursion testing of specific injections - e.g. for
 	// agents -> singul -> agents -> singul -> app
 	/*
-	if debug {
-		log.Printf("APP: %s. Org: %#v", action.AppName, workflowExecution.OrgId)
-		marshalledActions, _ := json.MarshalIndent(action.Parameters, "", "  ")
-		log.Printf("ACTION PARAMS:\n%s", string(marshalledActions))
-		if action.AppName != "AI Agent" && action.AppName != "openai" {
-			//os.Exit(3)
+		if debug {
+			log.Printf("APP: %s. Org: %#v", action.AppName, workflowExecution.OrgId)
+			marshalledActions, _ := json.MarshalIndent(action.Parameters, "", "  ")
+			log.Printf("ACTION PARAMS:\n%s", string(marshalledActions))
+			if action.AppName != "AI Agent" && action.AppName != "openai" {
+				//os.Exit(3)
+			}
 		}
-	}
 	*/
 
 	workflow.Actions = []Action{
@@ -32812,7 +32834,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 
 	//Get workflow run for all subgs of current org where the user is a member
 	if search.SuborgRuns == true {
-		suborgs, err := GetAllChildOrgs(ctx, user.ActiveOrg.Id)
+		suborgs, _, err := GetAllChildOrgs(ctx, user.ActiveOrg.Id)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting suborgs for org %s: %s", user.ActiveOrg.Id, err)
 			resp.WriteHeader(400)
