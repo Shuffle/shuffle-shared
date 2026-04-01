@@ -216,16 +216,39 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	curType := ""
+	typeList, typeOk := request.URL.Query()["origin"]
+	if typeOk && len(typeList) > 0 {
+		curType = typeList[0]
+	} else {
+		typeList, typeOk = request.URL.Query()["type"]
+		if typeOk && len(typeList) > 0 {
+			curType = typeList[0]
+		}
+	}
+
+	status := ""
+	statusList, statusOk = request.URL.Query()["status"]
+	if statusOk && len(statusList) > 0 {
+		status = strings.ToLower(statusList[0])
+	}
+
 	//log.Printf("[AUDIT] Got %d notifications for org %s (%s)", len(notifications), user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	newNotifications := []Notification{}
 	for _, notification := range notifications {
 		// Check how long ago?
-		//if notification.Read {
-		//	continue
-		//}
+		if notification.Read {
+			if status == "unread" || status == "open" {
+				continue
+			}
+		}
 
 		if notification.Personal {
+			continue
+		}
+
+		if len(curType) > 0 && curType != notification.Origin {
 			continue
 		}
 

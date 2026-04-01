@@ -1369,7 +1369,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			}
 
 			if _, err = tx.Commit(); err != nil {
-				log.Printf("[ERROR] Failed commiting stats: %s", err)
+				log.Printf("[ERROR] Failed commiting stats for %s: %s", orgStatistics.OrgId, err)
 				if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
 					concurrentTxn = true
 					errMsg = fmt.Sprintf("%s", err)
@@ -3517,6 +3517,7 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 	return count, nil
 }
 
+// Doesn't get ALL anymore. Max 100 by default (cloud)
 func GetAllChildOrgs(ctx context.Context, orgId string, cursorInput ...string) ([]Org, string, error) {
 	cursor := ""
 	if len(cursorInput) > 0 { 
@@ -3657,7 +3658,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string, cursorInput ...string) (
 				}
 
 				if debug { 
-					log.Printf("ORGS: %d", len(orgs))
+					log.Printf("[DEBUG] SUBORG LOADER: %d", len(orgs))
 				}
 
 				iterCount++
