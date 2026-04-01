@@ -8463,6 +8463,27 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			// Handles approvals
 			if decision.ApprovalRequired && decision.Action != "ask" && decision.Action != "question" && (decision.Category == "singul" || decision.Category == "standalone") && (decision.RunDetails.Status == "" || decision.RunDetails.Status == "RUNNING") {
 				log.Printf("[DEBUG] Decision %d requires approval. SHOULD mark as waiting for approval (not implemented)...", decision.I)
+
+				if agentOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
+
+					mappedDecision := agentOutput.Decisions[decisionIndex]
+
+					err = CreateOrgNotification(
+						ctx,
+						fmt.Sprintf("Agent - approval required for '%s'", mappedDecision.Tool),
+						fmt.Sprintf("Approval required during agent run."), 
+						fmt.Sprintf("/forms/%s?authorization=%s&reference_execution=%s&source_node=%s&decision_id=%s&backend_url=%s", execution.WorkflowId, execution.Authorization, execution.ExecutionId, startNode.ID, mappedDecision.RunDetails.Id, backendUrl),
+						execution.ExecutionOrg,
+						false,
+						"LOW",
+						"agent_approval",
+					)
+
+					if err != nil {
+						log.Printf("[ERROR][%s] Failed creating notification for ask input", execution.ExecutionId)
+					}
+				}
+
 				decision.RunDetails.StartedAt = time.Now().Unix()
 				decision.RunDetails.Status = "WAITING"
 
@@ -8527,7 +8548,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 						fmt.Sprintf("/forms/%s?authorization=%s&reference_execution=%s&source_node=%s&decision_id=%s&backend_url=%s", execution.WorkflowId, execution.Authorization, execution.ExecutionId, startNode.ID, mappedDecision.RunDetails.Id, backendUrl),
 						execution.ExecutionOrg,
 						false,
-						"MEDIUM",
+						"LOW",
 						"agent_question",
 					)
 
