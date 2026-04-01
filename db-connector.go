@@ -3627,7 +3627,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string, cursorInput ...string) (
 		//}
 
 		maxAmount := 100 
-		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(1)
+		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(100)
 
 		if cursor != "" {
 			outputcursor, err := datastore.DecodeCursor(cursor)

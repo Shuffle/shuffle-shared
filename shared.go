@@ -1004,8 +1004,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("Org loaded 1")
-
 	// clean getOrg invites
 	org.Invites = []string{}
 
@@ -1027,8 +1025,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 		SetOrg(ctx, *org, org.Id)
 	}
-
-	log.Printf("Org loaded 2")
 
 	admin := false
 	if user.SupportAccess == true {
@@ -1090,8 +1086,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("Org loaded 3")
-
 	if !admin {
 		org.Defaults = Defaults{}
 		// Clean sensitive SSO fields instead of clearing entire config
@@ -1152,7 +1146,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			orgChanged = true
 		}
 
-		log.Printf("Org loaded 3.0")
 		if len(org.CreatorOrg) == 0 {
 			allChildOrgs, _, err := GetAllChildOrgs(ctx, org.Id)
 			if err == nil {
@@ -1175,7 +1168,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		log.Printf("Org loaded 3.1")
 		if orgChanged {
 			log.Printf("[DEBUG] Org features for %s (%s) changed. Updating.", org.Name, org.Id)
 			err = SetOrg(ctx, *org, org.Id)
@@ -1184,20 +1176,17 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		log.Printf("Org loaded 3.2")
 		info, err := GetOrgStatistics(ctx, fileId)
 		if err == nil {
 			org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		}
 
-		log.Printf("Org loaded 3.3")
 		envs, err := GetEnvironments(ctx, fileId)
 		if err == nil {
 			//log.Printf("Envs: %s", len(envs))
 			org.SyncFeatures.MultiEnv.Usage = int64(len(envs))
 		}
 
-		log.Printf("Org loaded 3.4")
 		// Backfill subscription IDs if any subscription is missing an ID
 		addSubId := false
 		for _, sub := range org.Subscriptions {
@@ -1295,8 +1284,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("Org loaded 4")
-
 	if project.Environment == "onprem" {
 
 		statistics, err := GetOrgStatistics(ctx, org.Id)
@@ -1361,8 +1348,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 	wg.Wait()
 	close(ch)
-
-	log.Printf("Org loaded 5")
 
 	for suborg := range ch {
 		if suborg.CreatorOrg == org.Id {
