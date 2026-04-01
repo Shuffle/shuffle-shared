@@ -3688,6 +3688,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string, cursorInput ...string) (
 			}
 
 			if iterCount >= maxAmount {
+				cursor = fmt.Sprintf("%s", nextCursor)
 				break
 			}
 		}
