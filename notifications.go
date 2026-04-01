@@ -227,8 +227,14 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	severity := ""
+	severityList, severityOk := request.URL.Query()["severity"]
+	if severityOk && len(severityList) > 0 {
+		severity = strings.ToLower(severityList[0])
+	}
+
 	status := ""
-	statusList, statusOk = request.URL.Query()["status"]
+	statusList, statusOk := request.URL.Query()["status"]
 	if statusOk && len(statusList) > 0 {
 		status = strings.ToLower(statusList[0])
 	}
@@ -245,6 +251,10 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if notification.Personal {
+			continue
+		}
+
+		if len(severity) > 0 && notification.Severity != severity {
 			continue
 		}
 
