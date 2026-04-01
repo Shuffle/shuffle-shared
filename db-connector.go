@@ -15163,6 +15163,13 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 								cacheData = &cacheKey
 								break
 							}
+							
+							for _, subOrg := range cacheKey.SuborgDistribution {
+								if subOrg == orgId {
+									cacheData = &cacheKey
+									break
+								}
+							}
 						}
 
 						if cacheData.Key == "" {
