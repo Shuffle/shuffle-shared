@@ -6386,6 +6386,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 }
 
 func GenerateApikey(ctx context.Context, userInfo User) (User, error) {
+	if len(userInfo.Username) == 0 || len(userInfo.Id) == 0 {
+		return userInfo, fmt.Errorf("User ID and username are required to generate API key")
+	}
+
 	// Generate UUID
 	// Set uuid to apikey in backend (update)
 	DeleteCache(ctx, fmt.Sprintf("Users_%s", userInfo.ApiKey))
@@ -6398,7 +6402,7 @@ func GenerateApikey(ctx context.Context, userInfo User) (User, error) {
 	}
 
 	// Updating user
-	log.Printf("[INFO] Adding apikey to user %s", userInfo.Username)
+	log.Printf("[INFO] Adding apikey to user '%s'", userInfo.Username)
 	err = SetUser(ctx, &userInfo, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating users' apikey: %s", err)
@@ -20662,7 +20666,7 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	cacheData, err := GetDatastoreKey(ctx, cacheId, "")
 	if err != nil || cacheData.Key == "" {
-		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (delete)", cacheId, orgId)
+		log.Printf("[WARNING] Failed to GET datastore key '%s' for org %s (delete)", cacheId, orgId)
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get key. Does it exist?", "extra": "%s"}`, cacheData.Key)))
 		return
@@ -21019,7 +21023,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		if usererr != nil {
 			// Check if authorization query exists
 			if len(query.Get("authorization")) == 0 {
-				log.Printf("[INFO] Failed to authenticate user in GET cache key: %s", err)
+				log.Printf("[INFO] Failed to authenticate user in GET datastore key: %s", err)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false, "reason": "No authorization provided"}`))
 				return
@@ -21121,7 +21125,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err != nil {
-		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (get)", tmpData.Key, tmpData.OrgId)
+		log.Printf("[WARNING] Failed to GET datastore key '%s' for org %s (get)", tmpData.Key, tmpData.OrgId)
 		// Doing a last resort search, e.g. to handle spaces and the like
 		allkeys, _, err := GetAllCacheKeys(ctx, org.Id, "", 150, "")
 		if err == nil {
@@ -21142,14 +21146,14 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if cacheData.Key == "" {
-				log.Printf("[WARNING] Failed to GET cache key %s for org %s (get)", tmpData.Key, tmpData.OrgId)
+				log.Printf("[WARNING] Failed to GET datastore key %s for org %s (get)", tmpData.Key, tmpData.OrgId)
 				resp.WriteHeader(400)
 				resp.Write([]byte(`{"success": false, "reason": "Failed authentication or key doesn't exist"}`))
 				return
 			}
 
 		} else {
-			log.Printf("[WARNING][%s] Failed to GET cache key %s for org %s (get)", executionId, tmpData.Key, tmpData.OrgId)
+			log.Printf("[WARNING][%s] Failed to GET datastore key %s for org %s (get)", executionId, tmpData.Key, tmpData.OrgId)
 			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false, "reason": "Failed authentication or key doesn't exist"}`))
 			return
@@ -22086,7 +22090,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 		}
 
-		if len(user.ApiKey) == 0 {
+		if len(user.ApiKey) == 0 && len(user.Username) > 0 && len(user.Id) > 0 {
 			newUserInfo, err := GenerateApikey(ctx, user)
 			if err != nil {
 				log.Printf("[ERROR] Failed to realtime generate apikey for user %s: %s", user.Username, err)
@@ -22112,22 +22116,31 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 						continue
 					}
 
+					if curuser.Role == "admin" { 
+						selectedUser = user
+					}
+
 					if len(user.ApiKey) > 0 {
-						foundApikey = curuser.ApiKey
+						foundApikey = user.ApiKey
 						break
-					} else {
-						if curuser.Role == "admin" { 
-							selectedUser = user
-						}
 					}
 				}
 
-				if len(selectedUser.ApiKey) == 0 {
-					newUserInfo, err := GenerateApikey(ctx, *selectedUser)
-					if err != nil {
-						log.Printf("[ERROR] Failed generating apikey for %s (%s)", selectedUser.Username, selectedUser.Id)
+				if debug { 
+					log.Printf("\n\n\nFOCUS ON USER: %s (%s) => apikey: %s\n\n\n ", selectedUser.Username, selectedUser.Id, selectedUser.ApiKey)
+				}
+
+				// In case of further user-issues...
+				if len(foundApikey) == 0 {
+					if len(selectedUser.ApiKey) > 0 { 
+						foundApikey = selectedUser.ApiKey
 					} else {
-						foundApikey = newUserInfo.ApiKey
+						newUserInfo, err := GenerateApikey(ctx, *selectedUser)
+						if err != nil {
+							log.Printf("[ERROR] Failed generating apikey for %s (%s)", selectedUser.Username, selectedUser.Id)
+						} else {
+							foundApikey = newUserInfo.ApiKey
+						}
 					}
 				}
 			} else {
@@ -22148,6 +22161,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				apikeyFound = true
 			} else if param.Name == "url" {
 				action.Parameters[paramIndex].Value = backendUrl
+				action.Parameters[paramIndex].Example = backendUrl
 				urlFound = true
 			} else if param.Name == "orgid" {
 				action.Parameters[paramIndex].Value = workflowExecution.OrgId
@@ -22168,6 +22182,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
 				Name:  "url",
 				Value: backendUrl,
+				Example: backendUrl, 
 			})
 		}
 

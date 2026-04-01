@@ -6375,6 +6375,11 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	DeleteCache(ctx, user.ApiKey+user.ActiveOrg.Id)
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+
+	if len(user.Username) == 0 {
+		log.Printf("[ERROR] Setting user without username: %s. Is this expected?", user.Id) 
+	}
+
 	if updateOrg {
 		user = fixUserOrg(ctx, user)
 	}
@@ -10601,6 +10606,12 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 	if len(users) == 0 {
 		return User{}, errors.New("No users found for this apikey (2)")
+	}
+
+	for _, user := range users {
+		if len(user.Username) > 0 && len(user.Id) > 0 { 
+			return user, nil
+		}
 	}
 
 	return users[0], nil
@@ -15127,7 +15138,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 					_, err := project.Dbclient.GetAll(ctx, query, &cacheKeys)
 					if err != nil {
 						if !strings.Contains(err.Error(), `cannot load field`) {
-							log.Printf("[WARNING] Failed getting cacheKey (2) %s: %s", newId, err)
+							log.Printf("[WARNING] Failed getting datastoreKey (2) %s: %s", newId, err)
 
 							if project.CacheDb {
 								data, err := json.Marshal(cacheData)
@@ -15158,7 +15169,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 							return cacheData, errors.New("Key doesn't exist")
 						}
 					} else {
-						log.Printf("[WARNING] Failed getting cacheKey '%s': %s", newId, err)
+						log.Printf("[WARNING] Failed getting datastoreKey '%s': %s", newId, err)
 
 						return cacheData, errors.New("Key doesn't exist")
 					}
