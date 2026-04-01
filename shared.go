@@ -16855,9 +16855,10 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		// 3. If possible, loop through and find the one matching SubflowData.ExecutionId with "executionParent"
 		// 4. If it's matching, update ONLY that one.
 
+		// Why are we unmarshling it as array if not loop? It could cause inconsistency
 		var subflowDataLoop []SubflowData
 		err = json.Unmarshal([]byte(foundResult.Result), &subflowDataLoop)
-		if err == nil {
+		if err == nil && len(subflowDataLoop) > 1 {
 			for subflowIndex, subflowData := range subflowDataLoop {
 				if subflowData.ExecutionId == executionParent {
 					log.Printf("[DEBUG][%s] Updating execution Id %s with subflow info", subflowExecutionId, subflowData.ExecutionId)
