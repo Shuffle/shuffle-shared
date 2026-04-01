@@ -21125,11 +21125,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err != nil {
-<<<<<<< HEAD
-		log.Printf("[WARNING] Failed to GET datastore key '%s' for org %s (get)", tmpData.Key, tmpData.OrgId)
-=======
 		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (get) and cacheId %s", tmpData.Key, tmpData.OrgId, cacheId)
->>>>>>> acedc22 (fix: hot fix for cache lookup)
 		// Doing a last resort search, e.g. to handle spaces and the like
 		limit := 50
 		// HOT FIX FOR UJIMA ALERT
