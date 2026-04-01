@@ -22126,10 +22126,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 					}
 				}
 
-				if debug { 
-					log.Printf("\n\n\nFOCUS ON USER: %s (%s) => apikey: %s\n\n\n ", selectedUser.Username, selectedUser.Id, selectedUser.ApiKey)
-				}
-
 				// In case of further user-issues...
 				if len(foundApikey) == 0 {
 					if len(selectedUser.ApiKey) > 0 { 
@@ -36280,7 +36276,7 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 		return false
 	}
 
-	urlMd5 := md5.Sum([]byte(request.URL.String()))
+	urlMd5 := Md5sum([]byte(request.URL.String()))
 
 	// Hashes the body into "buckets" that look for slight similarities
 	// The main point is avoiding replicas with deviations like timestamps
