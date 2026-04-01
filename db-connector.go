@@ -3662,13 +3662,9 @@ func GetAllChildOrgs(ctx context.Context, orgId string, cursorInput ...string) (
 
 				iterCount++
 				orgs = append(orgs, innerOrg)
-				if iterCount >= 500 {
+				if iterCount >= maxAmount {
 					break
 				}
-			}
-
-			if iterCount >= maxAmount {
-				break
 			}
 
 			if err != iterator.Done {
@@ -3690,8 +3686,11 @@ func GetAllChildOrgs(ctx context.Context, orgId string, cursorInput ...string) (
 				cursor = nextStr
 				query = query.Start(nextCursor)
 			}
+
+			if iterCount >= maxAmount {
+				break
+			}
 		}
-		log.Printf("Post running creator org search for %s", orgId)
 	}
 
 	if project.CacheDb {
