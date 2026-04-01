@@ -4924,7 +4924,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 				},
 			}
 
-			option.Value += fmt.Sprintf("\n%s", cacheData.Value)
+			// option.Value += fmt.Sprintf("\n%s", cacheData.Value)
 			parsedParams = append(parsedParams, map[string]string{
 				"name":  "input",
 				"value": fmt.Sprintf("TASK: %s\nKey: %s\nCategory: %s\n\nUNTRUSTED DATA:\n%s", option.Value, cacheData.Key, cacheData.Category, cacheData.Value),

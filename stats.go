@@ -15,7 +15,7 @@ import (
 	"net/http"
 
 	gomemcache "github.com/bradfitz/gomemcache/memcache"
-	"github.com/satori/go.uuid"
+	uuid "github.com/satori/go.uuid"
 )
 
 // FIXME: There is some issue when going past 0x9 (>0xA) with how
@@ -1395,6 +1395,8 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyOnpremExecutions = 0
 		executionInfo.MonthlyApiUsage = 0
 		executionInfo.MonthlyAIUsage = 0
+		executionInfo.MonthlyAgentExecutions = 0
+		executionInfo.MonthlyAgentTokens = 0
 		executionInfo.LastMonthlyResetMonth = currentMonth
 		executionInfo.LastUsageAlertThreshold = 0
 
@@ -1525,6 +1527,22 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalAIUsage += int64(increment)
 		orgStatistics.MonthlyAIUsage += int64(increment)
 		orgStatistics.DailyAIUsage += int64(increment)
+	} else if dataType == "agent_executions" {
+		orgStatistics.TotalAgentExecutions += int64(increment)
+		orgStatistics.MonthlyAgentExecutions += int64(increment)
+		orgStatistics.DailyAgentExecutions += int64(increment)
+	} else if dataType == "agent_tokens" {
+		orgStatistics.TotalAgentTokens += int64(increment)
+		orgStatistics.MonthlyAgentTokens += int64(increment)
+		orgStatistics.DailyAgentTokens += int64(increment)
+	} else if dataType == "agent_input_tokens" {
+		orgStatistics.TotalAgentInputTokens += int64(increment)
+		orgStatistics.MonthlyAgentInputTokens += int64(increment)
+		orgStatistics.DailyAgentInputTokens += int64(increment)
+	} else if dataType == "agent_output_tokens" {
+		orgStatistics.TotalAgentOutputTokens += int64(increment)
+		orgStatistics.MonthlyAgentOutputTokens += int64(increment)
+		orgStatistics.DailyAgentOutputTokens += int64(increment)
 	} else {
 		//log.Printf("\n\n[ERROR] Unknown data type in stats increment for org %s: %s. Appending to custom list.\n\n", orgStatistics.OrgId, dataType)
 		appendCustom = true
