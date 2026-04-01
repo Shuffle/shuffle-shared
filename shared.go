@@ -21935,7 +21935,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			}
 
 			// Usually url
-			if authFields <= 2 {
+			if authFields <= 2 && app.Generated {
+				// These are ok to append no matter what due to 
+				// cleanup happening in the app run itself anyway. AKA kwargs
+				// that are unnecessary are not being used
 				if !ArrayContains(foundFields, "apikey") {
 					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
 						Name:          "apikey",
@@ -22074,15 +22077,9 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		app.ID = action.AppID
 	}
 
+	// Fallback to inject creds if the user don't have any. This is for internal + 
+	// AI oriented APIs only. Check IsShuffleApp() for details
 	isShuffleApp := IsShuffleApp(app)
-
-	log.Printf("\n\nIN SINGLE ACTION. App: '%s'. Is shuffle app? %t. Generated? %t. OrgId: %s. AuthId: %s\n\n", app.Name, isShuffleApp, app.Generated, workflowExecution.OrgId, action.AuthenticationId)
-	if debug && app.Name != "AI Agent" && app.Name != "OpenAI" {
-		os.Exit(3)
-	}
-
-
-	// Fallback to inject AI creds if the user don't have any
 	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 {
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
@@ -22104,28 +22101,38 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		} else {
 			org, err := GetOrg(ctx, workflowExecution.OrgId)
 			if err == nil {
+				selectedUser := &User{}
 				for _, curuser := range org.Users {
-					if len(curuser.ApiKey) > 0 {
+					if len(curuser.Username) == 0 || len(curuser.Id) == 0 {
+						continue
+					}
+
+					user, err := GetUser(ctx, curuser.Id)
+					if err != nil {
+						continue
+					}
+
+					if len(user.ApiKey) > 0 {
 						foundApikey = curuser.ApiKey
 						break
+					} else {
+						if curuser.Role == "admin" { 
+							selectedUser = user
+						}
 					}
 				}
 
-				if len(foundApikey) == 0 {
-					for _, curuser := range org.Users {
-						if curuser.Role == "admin" {
-							newUserInfo, err := GenerateApikey(ctx, curuser)
-							if err == nil {
-								foundApikey = newUserInfo.ApiKey
-								break
-							}
-						}
-
+				if len(selectedUser.ApiKey) == 0 {
+					newUserInfo, err := GenerateApikey(ctx, *selectedUser)
+					if err != nil {
+						log.Printf("[ERROR] Failed generating apikey for %s (%s)", selectedUser.Username, selectedUser.Id)
+					} else {
+						foundApikey = newUserInfo.ApiKey
 					}
 				}
 			} else {
 				if debug {
-					log.Printf("[ERROR] Bad org issue: '%s'", workflowExecution.OrgId)
+					log.Printf("[ERROR] Bad org issue in auto-auth mapping: '%s'", workflowExecution.OrgId)
 				}
 			}
 		}
@@ -22133,6 +22140,8 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		apikeyFound := false
 		urlFound := false
 		orgIdFound := false
+
+		headerIndex := -1
 		for paramIndex, param := range action.Parameters {
 			if param.Name == "apikey" {
 				action.Parameters[paramIndex].Value = foundApikey
@@ -22143,6 +22152,8 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			} else if param.Name == "orgid" {
 				action.Parameters[paramIndex].Value = workflowExecution.OrgId
 				orgIdFound = true
+			} else if param.Name == "headers" {
+				headerIndex = paramIndex
 			}
 		}
 
@@ -22165,6 +22176,15 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				Name:  "orgid",
 				Value: workflowExecution.OrgId,
 			})
+		}
+
+		if headerIndex == -1 && len(workflowExecution.OrgId) > 0 {
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "headers",
+				Value: fmt.Sprintf("Org-Id: %s", workflowExecution.OrgId),
+			})
+		} else {
+			action.Parameters[headerIndex].Value = fmt.Sprintf("%s\nOrg-Id: %s", action.Parameters[headerIndex].Value, workflowExecution.OrgId)
 		}
 
 		if debug {
@@ -22249,15 +22269,15 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 	}
 
-	/*
-		// Used for very deep recursion testing of specific injections
-		if debug {
-			log.Printf("APP: %s. Org: %#v", action.AppName, workflowExecution.OrgId)
-			if action.AppName != "AI Agent" && action.AppName != "openai" {
-				os.Exit(3)
-			}
+	// Used for very deep recursion testing of specific injections
+	if debug {
+		log.Printf("APP: %s. Org: %#v", action.AppName, workflowExecution.OrgId)
+		marshalledActions, _ := json.MarshalIndent(action.Parameters, "", "  ")
+		log.Printf("ACTION PARAMS:\n%s", string(marshalledActions))
+		if action.AppName != "AI Agent" && action.AppName != "openai" {
+			//os.Exit(3)
 		}
-	*/
+	}
 
 	workflow.Actions = []Action{
 		action,
