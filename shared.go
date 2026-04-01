@@ -22058,8 +22058,24 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		workflowExecution.OrgId = user.ActiveOrg.Id
 	}
 
+	if len(app.Name) == 0 && len(action.AppName) > 0 {
+		app.Name = action.AppName
+	}
+
+	if len(app.ID) == 0 && len(action.AppID) > 0 {
+		app.ID = action.AppID
+	}
+
+	isShuffleApp := IsShuffleApp(app)
+
+	log.Printf("\n\nIN SINGLE ACTION. App: '%s'. Is shuffle app? %t. Generated? %t. OrgId: %s. AuthId: %s\n\n", app.Name, isShuffleApp, app.Generated, workflowExecution.OrgId, action.AuthenticationId)
+	if debug && app.Name != "AI Agent" && app.Name != "OpenAI" {
+		os.Exit(3)
+	}
+
+
 	// Fallback to inject AI creds if the user don't have any
-	if len(workflowExecution.OrgId) > 0 && strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == "shuffle_datastore" && len(action.AuthenticationId) == 0 {
+	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 {
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -22144,8 +22160,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 		if debug {
-			log.Printf("\n\n\n\nFOUND DATASTORE! URL: %s, APIKEY: %s, ORG: %s\n\n\n", backendUrl, foundApikey, workflowExecution.OrgId)
+			log.Printf("\n\n\n\nFOUND SHUFFLE APP (%s)! URL: %s, APIKEY: %s, ORG: %s\n\n\n", app.Name, backendUrl, foundApikey, workflowExecution.OrgId)
 		}
+
+	// Custom AI injection when necessary
 	} else if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
 		// cloud => only do it on cloud location
 		// This prevents local users from being able to see it

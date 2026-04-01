@@ -17,6 +17,34 @@ import (
 )
 
 
+// Internal auth mapping. Makes sure we don't need auth for them 
+// as they can just use internal APIs
+func IsShuffleApp(app WorkflowApp) bool {
+	parsedAppname := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
+
+	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows"}
+	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72"}
+
+	isShuffleApp := false
+	if project.Environment == "cloud" && len(app.ID) > 0 { 
+		for _, appId := range skipAuthAppIds {
+			if app.ID == appId {
+				isShuffleApp = true
+				break
+			}
+		}
+	} else {
+		for _, appname := range skipAuthAppnames {
+			if parsedAppname == appname {
+				isShuffleApp = true
+				break
+			}
+		}
+	}
+
+	return isShuffleApp
+}
+
 func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user User, categoryAction CategoryAction) error {
 	if len(user.ActiveOrg.Id) == 0 {
 		return errors.New("Organization ID is empty. Can't generate workflow.")
