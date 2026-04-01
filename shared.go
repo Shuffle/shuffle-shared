@@ -22284,7 +22284,9 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 	}
 
-	// Used for very deep recursion testing of specific injections
+	// Used for very deep recursion testing of specific injections - e.g. for 
+	// agents -> singul -> agents -> singul -> app
+	/*
 	if debug {
 		log.Printf("APP: %s. Org: %#v", action.AppName, workflowExecution.OrgId)
 		marshalledActions, _ := json.MarshalIndent(action.Parameters, "", "  ")
@@ -22293,6 +22295,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			//os.Exit(3)
 		}
 	}
+	*/
 
 	workflow.Actions = []Action{
 		action,
