@@ -21125,9 +21125,15 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err != nil {
-		log.Printf("[WARNING] Failed to GET datastore key '%s' for org %s (get)", tmpData.Key, tmpData.OrgId)
+		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (get) and cacheId %s", tmpData.Key, tmpData.OrgId, cacheId)
 		// Doing a last resort search, e.g. to handle spaces and the like
-		allkeys, _, err := GetAllCacheKeys(ctx, org.Id, "", 150, "")
+		limit := 50
+		// HOT FIX FOR UJIMA ALERT
+		if (os.Getenv("SHUFFLE_GCEPROJECT") == "shuffle-europe-west3") {
+			limit = 2000
+		}
+
+		allkeys, _, err := GetAllCacheKeys(ctx, org.Id, "", limit, "")
 		if err == nil {
 			cacheData = &CacheKeyData{}
 			searchkey := strings.ReplaceAll(strings.Trim(strings.ToLower(tmpData.Key), " "), " ", "_")
