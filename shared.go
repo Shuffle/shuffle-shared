@@ -22334,13 +22334,13 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		workflowExecution.OrgId = user.ActiveOrg.Id
 	}
 
-	formattedAppName := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
+	// formattedAppName := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
 
-	isInternalShuffleApp := false
-	switch formattedAppName {
-	case "shuffle_datastore", "shuffle_org_management", "shuffle_app_management", "shuffle_workflow_management":
-		isInternalShuffleApp = true
-	}
+	// isInternalShuffleApp := false
+	// switch formattedAppName {
+	// case "shuffle_datastore", "shuffle_org_management", "shuffle_app_management", "shuffle_workflow_management":
+	// 	isInternalShuffleApp = true
+	// }
 
 	if len(app.Name) == 0 && len(action.AppName) > 0 {
 		app.Name = action.AppName
