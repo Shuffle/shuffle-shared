@@ -1369,7 +1369,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			}
 
 			if _, err = tx.Commit(); err != nil {
-				log.Printf("[ERROR] Failed commiting stats: %s", err)
+				log.Printf("[ERROR] Failed commiting stats for %s: %s", orgStatistics.OrgId, err)
 				if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
 					concurrentTxn = true
 					errMsg = fmt.Sprintf("%s", err)
@@ -3526,11 +3526,17 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 	return count, nil
 }
 
-func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
+// Doesn't get ALL anymore. Max 100 by default (cloud)
+func GetAllChildOrgs(ctx context.Context, orgId string, cursorInput ...string) ([]Org, string, error) {
+	cursor := ""
+	if len(cursorInput) > 0 { 
+		cursor = cursorInput[0]
+	}
+
 	orgs := []Org{}
 	nameKey := "Organizations"
 
-	cacheKey := fmt.Sprintf("%s_childorgs", orgId)
+	cacheKey := fmt.Sprintf("%s_%s_childorgs", orgId, cursor)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -3538,7 +3544,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 			err = json.Unmarshal(cacheData, &orgs)
 			//if err == nil && len(orgs) > 0 {
 			if err == nil {
-				return orgs, nil
+				return orgs, cursor, nil
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for workflow (7): %s", err)
@@ -3558,7 +3564,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find user query: %s", err)
-			return orgs, err
+			return orgs, cursor, err
 		}
 
 		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
@@ -3571,24 +3577,24 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 
 		if err != nil {
 			if strings.Contains(err.Error(), "index_not_found_exception") {
-				return orgs, nil
+				return orgs, cursor, nil
 			}
 
 			log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
-			return orgs, err
+			return orgs, cursor, err
 		}
 
 		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
-			return orgs, nil
+			return orgs, cursor, nil
 		}
 
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
 				log.Printf("[WARNING] Error parsing the response body: %s", err)
-				return orgs, err
+				return orgs, cursor, err
 			} else {
 				// Print the response status and error information.
 				log.Printf("[%s] %s: %s",
@@ -3600,18 +3606,18 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return orgs, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+			return orgs, cursor, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
-			return orgs, err
+			return orgs, cursor, err
 		}
 
 		wrapped := OrgSearchWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
 		if err != nil {
-			return orgs, err
+			return orgs, cursor, err
 		}
 
 		for _, hit := range wrapped.Hits.Hits {
@@ -3623,10 +3629,77 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		}
 	} else {
 		// Cloud database
-		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(400)
-		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
-		if err != nil {
-			if !strings.Contains(err.Error(), `cannot load field`) {
+		//log.Printf("Pre running creator org search for %s", orgId)
+		//_, err := project.Dbclient.GetAll(ctx, query, &orgs)
+		//if err != nil {
+		//	if !strings.Contains(err.Error(), `cannot load field`) {
+		//	}
+		//}
+
+		maxAmount := 100 
+		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(100)
+
+		if cursor != "" {
+			outputcursor, err := datastore.DecodeCursor(cursor)
+			if err != nil {
+				log.Printf("[ERROR] Error decoding cursor in creator org load: %s", err)
+				//return orgs, "", err 
+			}
+
+			query = query.Start(outputcursor)
+		}
+
+		iterCount := 0
+		//cursorStr := ""
+		var err error
+		for {
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerOrg := Org{}
+				_, err = it.Next(&innerOrg)
+				if err != nil {
+					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					} else {
+						//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+						break
+					}
+				}
+
+				if debug { 
+					log.Printf("[DEBUG] SUBORG LOADER: %d", len(orgs))
+				}
+
+				iterCount++
+				orgs = append(orgs, innerOrg)
+				if iterCount >= maxAmount {
+					break
+				}
+			}
+
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("[ERROR] Problem with cursor (childorg): %s", err)
+				break
+			} else {
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursor == nextStr {
+					break
+				}
+
+				cursor = nextStr
+				query = query.Start(nextCursor)
+			}
+
+			if iterCount >= maxAmount {
+				cursor = fmt.Sprintf("%s", nextCursor)
+				break
 			}
 		}
 	}
@@ -3636,7 +3709,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		data, err := json.Marshal(orgs)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in getchildorgs: %s", err)
-			return orgs, nil
+			return orgs, cursor, nil
 		}
 
 		err = SetCache(ctx, cacheKey, data, 10)
@@ -3645,7 +3718,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		}
 	}
 
-	return orgs, nil
+	return orgs, cursor, nil
 }
 
 func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow, error) {
@@ -10497,7 +10570,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 //	}
 
 	if (debug) {
-		log.Printf("[DEUBG] Looking for the API Key pass the cache check %s", project.DbType)
+		log.Printf("[DEBUG] Looking for the API Key pass the cache check %s", project.DbType)
 	}
 
 	if project.DbType == "opensearch" {
