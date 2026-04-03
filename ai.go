@@ -7101,9 +7101,13 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		marshalledOutput = []byte(`{"status":"FINISHED","error":"marshal error"}`)
 	}
 
-	log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q",
-		execution.ExecutionId, execution.Workflow.OrgId, abortLabel,
-		len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
+	log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q", execution.ExecutionId, execution.Workflow.OrgId, abortLabel, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
+
+	abortDuration := int64(0)
+	if agentOutput.StartedAt > 0 && agentOutput.CompletedAt > agentOutput.StartedAt {
+		abortDuration = agentOutput.CompletedAt - agentOutput.StartedAt
+	}
+	log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=%ds decisions=%d llm_calls=%d tokens_used=%d reason=%q", execution.ExecutionId, execution.Workflow.OrgId, abortDuration, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
 
 	abortResult := ActionResult{
 		Status:      "SUCCESS",
@@ -7235,6 +7239,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				Action: startNode,
 			})
 			go SetWorkflowExecution(ctx, execution, true)
+			log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "missing_onprem_ai_config")
 			return startNode, err
 		}
 	}
@@ -7809,7 +7814,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
-
+		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "no_user_message")
 		return startNode, errors.New("No user message/input found for AI Agent start")
 
 	}
@@ -7933,7 +7938,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
-
+		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "marshal_request_body_failed")
 		return startNode, err
 	}
 
@@ -7949,7 +7954,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
-
+		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "unsupported_app_not_openai")
 		return startNode, errors.New("Unhandled Singul BODY for OpenAI agent (first request)")
 	}
 
@@ -8003,7 +8008,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
-
+		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "marshal_ai_action_failed")
 		return startNode, err
 	}
 
@@ -8151,12 +8156,13 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				Action: startNode,
 			})
 			go SetWorkflowExecution(ctx, execution, true)
-
+			log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "llm_response_unmarshal_failed")
 			return startNode, err
 		}
 
 		if outputMap.Status != 200 {
 			log.Printf("[ERROR][%s] AI Agent: Failed to run AI agent with status code %d", execution.ExecutionId, outputMap.Status)
+			// Don't log AI_AGENT_LLM_FAILURE here yet - wait to see if we can parse the error details below
 			//return startNode, errors.New(fmt.Sprintf("Failed to run AI agent with status code %d", outputMap.Status))
 		}
 
@@ -8168,6 +8174,9 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			log.Printf("[ERROR][%s] AI Agent: Failed to convert body to MAP in AI Agent response. Raw response: %s", execution.ExecutionId, string(resultMapping.Result))
 
 			choicesString = fmt.Sprintf("LLM Response Error: %s", string(resultMapping.Result))
+
+			// Log LLM failure for body parsing error
+			log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=body_parse_error raw_response=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, string(resultMapping.Result))
 		} else {
 			bodyString, err = json.Marshal(bodyMap)
 			if err != nil {
@@ -8180,7 +8189,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 					Action: startNode,
 				})
 				go SetWorkflowExecution(ctx, execution, true)
-
+				log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "llm_body_marshal_failed")
 				return startNode, err
 			}
 		}
@@ -8205,9 +8214,15 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				choicesString = fmt.Sprintf("LLM Error: %s", newOutput.Error.Message)
 
 				resultMapping.Status = "FAILURE"
+
+				// Log LLM failure with details
+				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
 			} else {
 				log.Printf("[ERROR][%s] AI Agent: No choices, nor error found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
 				resultMapping.Status = "FAILURE"
+
+				// Log LLM failure for unknown error format
+				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=unknown_format raw_response=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, string(bodyString))
 			}
 		} else {
 			choicesString = openaiOutput.Choices[0].Message.Content
@@ -8281,10 +8296,63 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
 				if err != nil {
 					log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling decisions in AI Agent response (2): %s. String: %s", execution.ExecutionId, err, decisionString)
-					resultMapping.Status = "FAILURE"
 
-					// Updating the OUTPUT in some way to help the user a bit.
-					errorMessage = fmt.Sprintf("The output from the LLM had no decisions. See the raw decisions tring for the response. Contact support@shuffler.io if you think this is wrong.")
+					// FALLBACK: LLM returned raw content instead of agent decisions
+					// Wrap it in a proper finish decision structure
+					log.Printf("[INFO][%s] AI Agent: Applying fallback - wrapping raw LLM content in finish decision", execution.ExecutionId)
+
+					var rawContent interface{}
+					jsonErr := json.Unmarshal([]byte(decisionString), &rawContent)
+					outputValue := ""
+					if jsonErr == nil {
+						// It's valid JSON, wrap it in {"reply": ...}
+						wrappedContent := map[string]interface{}{
+							"reply": rawContent,
+						}
+						wrappedBytes, _ := json.Marshal(wrappedContent)
+						outputValue = string(wrappedBytes)
+					} else {
+						// Not valid JSON, wrap the raw string
+						wrappedContent := map[string]interface{}{
+							"reply": decisionString,
+						}
+						wrappedBytes, _ := json.Marshal(wrappedContent)
+						outputValue = string(wrappedBytes)
+					}
+
+					// Create a proper finish decision
+					b := make([]byte, 6)
+					_, randErr := rand.Read(b)
+					if randErr != nil {
+						log.Printf("[ERROR][%s] AI Agent: Failed generating random string for fallback decision", execution.ExecutionId)
+					}
+
+					fallbackDecision := AgentDecision{
+						I:                lastFinishedIndex,
+						Category:         "finish",
+						Action:           "finish",
+						Tool:             "core",
+						Confidence:       1.0,
+						Runs:             "1",
+						ApprovalRequired: false,
+						Reason:           "LLM returned unexpected format - applied fallback wrapping",
+						Fields: []Valuereplace{
+							{
+								Key:   "output",
+								Value: outputValue,
+							},
+						},
+						RunDetails: AgentDecisionRunDetails{
+							Id:          base64.RawURLEncoding.EncodeToString(b),
+							Status:      "",
+							StartedAt:   0,
+							CompletedAt: 0,
+						},
+					}
+
+					mappedDecisions = []AgentDecision{fallbackDecision}
+					resultMapping.Status = ""
+					log.Printf("[INFO][%s] AI Agent: Fallback applied successfully - created finish decision with wrapped content", execution.ExecutionId)
 				}
 			}
 		}
@@ -8637,6 +8705,44 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		if !decisionActionRan {
 			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Marking the agent as FAILURE.", execution.ExecutionId)
+
+			// Properly mark the agent as failed
+			agentOutput.Status = "FAILURE"
+			agentOutput.CompletedAt = time.Now().Unix()
+
+			sentFailure := false
+			// Update the result status - finds the existing node entry in execution.Results
+			for resultIndex, result := range execution.Results {
+				if result.Action.ID != startNode.ID {
+					continue
+				}
+
+				execution.Results[resultIndex].Status = "FAILURE"
+				execution.Results[resultIndex].CompletedAt = agentOutput.CompletedAt
+
+				marshalledAgentOutput, err := json.Marshal(agentOutput)
+				if err != nil {
+					log.Printf("[ERROR] AI Agent: Failed marshalling agent output for FAILURE: %s", err)
+				} else {
+					execution.Results[resultIndex].Result = string(marshalledAgentOutput)
+					resultMapping.Result = string(marshalledAgentOutput)
+				}
+
+				log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for FAILURE on agent action %s", execution.ExecutionId, startNode.ID)
+				go sendAgentActionSelfRequest("FAILURE", execution, execution.Results[resultIndex])
+				sentFailure = true
+				break
+			}
+
+			if !sentFailure {
+				log.Printf("[WARNING][%s] AI Agent: No result entry found in execution.Results, using resultMapping fallback", execution.ExecutionId)
+				fallbackOutput, merr := json.Marshal(agentOutput)
+				if merr == nil {
+					resultMapping.Status = "FAILURE"
+					resultMapping.Result = string(fallbackOutput)
+				}
+				go sendAgentActionSelfRequest("FAILURE", execution, resultMapping)
+			}
 		}
 
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
@@ -8680,8 +8786,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		//log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s status=%s duration=%ds decisions=%d", execution.ExecutionId, agentOutput.Status, time.Now().Unix()-agentOutput.StartedAt, len(agentOutput.Decisions))
 
 		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status != "ABORTED" && execution.Status != "FAILURE" {
-			duration := agentOutput.CompletedAt - agentOutput.StartedAt
-			log.Printf("[INFO][%s] AI_AGENT_COMPLETE: org=%s duration=%ds decisions=%d llm_calls=%d total_tokens=%d status=SUCCESS", execution.ExecutionId, execution.Workflow.OrgId, duration, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens)
+
+			foundResult := false
 			for resultIndex, result := range execution.Results {
 				if result.Action.ID != startNode.ID {
 					continue
@@ -8691,12 +8797,22 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				execution.Results[resultIndex].CompletedAt = agentOutput.CompletedAt
 				log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for agent action %s", execution.ExecutionId, startNode.ID)
 				go sendAgentActionSelfRequest("SUCCESS", execution, execution.Results[resultIndex])
+				foundResult = true
 				break
+			}
+
+			if !foundResult {
+				log.Printf("[DEBUG][%s] Result not found in execution.Results, using resultMapping for sendAgentActionSelfRequest", execution.ExecutionId)
+				resultMapping.Status = "SUCCESS"
+				resultMapping.CompletedAt = agentOutput.CompletedAt
+				go sendAgentActionSelfRequest("SUCCESS", execution, resultMapping)
 			}
 		}
 
 	} else {
-		log.Printf("[ERROR] AI Agent: No result found in AI agent response. Status: %d. Body: %s", newresp.StatusCode, string(body))
+		// LLM returned an empty result body — this is a failure
+		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Empty result body from LLM response (status %d). Aborting agent.", execution.ExecutionId, newresp.StatusCode)
+		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "empty_llm_result", fmt.Sprintf("LLM returned empty response body with HTTP status %d", newresp.StatusCode))
 	}
 
 	if memorizationEngine == "shuffle_db" {
