@@ -17346,7 +17346,11 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 		return nil
 	} else {
-		SetCache(ctx, cacheKey, []byte("1"), 1)
+		var cacheTTL int32 = 1 // 1 minute for non-terminal statuses
+		if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
+			cacheTTL = 1440 // 24 hours — execution outcome is permanent
+		}
+		SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
 	}
 
 	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
