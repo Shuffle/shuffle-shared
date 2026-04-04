@@ -7054,7 +7054,7 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 // Callers must return immediately after this call.
 func abortAgentExecution(ctx context.Context, execution WorkflowExecution, startNode Action, base AgentOutput, abortLabel, reason string) (Action, error) {
 	agentOutput := base
-	agentOutput.Status = "FINISHED"
+	agentOutput.Status = "ABORTED"
 	agentOutput.Error = reason
 	agentOutput.CompletedAt = time.Now().Unix()
 
@@ -7098,19 +7098,13 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 	marshalledOutput, marshalErr := json.Marshal(agentOutput)
 	if marshalErr != nil {
 		log.Printf("[ERROR][%s] abortAgentExecution: failed marshalling AgentOutput: %s", execution.ExecutionId, marshalErr)
-		marshalledOutput = []byte(`{"status":"FINISHED","error":"marshal error"}`)
+		marshalledOutput = []byte(`{"status":"ABORTED","error":"marshal error"}`)
 	}
 
-	log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q", execution.ExecutionId, execution.Workflow.OrgId, abortLabel, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
-
-	abortDuration := int64(0)
-	if agentOutput.StartedAt > 0 && agentOutput.CompletedAt > agentOutput.StartedAt {
-		abortDuration = agentOutput.CompletedAt - agentOutput.StartedAt
-	}
-	log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=%ds decisions=%d llm_calls=%d tokens_used=%d reason=%q", execution.ExecutionId, execution.Workflow.OrgId, abortDuration, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
+	// log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q", execution.ExecutionId, execution.Workflow.OrgId, abortLabel, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
 
 	abortResult := ActionResult{
-		Status:      "SUCCESS",
+		Status:      "ABORTED",
 		Result:      string(marshalledOutput),
 		Action:      startNode,
 		StartedAt:   time.Now().UnixMilli(),
@@ -7131,8 +7125,11 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		execution.Results = append(execution.Results, abortResult)
 	}
 
-	execution.Status = "FINISHED"
+	execution.Status = "ABORTED"
+
+	go sendAgentActionSelfRequest("ABORTED", execution, abortResult)
 	go SetWorkflowExecution(ctx, execution, true)
+
 	return startNode, errors.New(reason)
 }
 
@@ -7231,16 +7228,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			err := errors.New("AI Configuration Error: AI_MODEL or OPENAI_MODEL environment variable must be set for On-Premise AI Agent execution.")
 			log.Printf("[ERROR] %v", err)
 
-			execution.Status = "ABORTED"
-			execution.Results = append(execution.Results, ActionResult{
-				Status: "ABORTED",
-				Result: fmt.Sprintf(`{"success": false, "reason": "%s"}`, err.Error()),
-				Action: startNode,
-			})
-
-			go SetWorkflowExecution(ctx, execution, true)
-			log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "missing_onprem_ai_config")
-			return startNode, err
+			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "missing_onprem_ai_config", err.Error())
 		}
 	}
 
@@ -7450,8 +7438,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				relevantDecisions = append(relevantDecisions, mappedResult.Decisions[i])
 			}
 
-			log.Printf("[INFO][%s] AI_AGENT: org=%s decisions_total=%d failures=%d successes=%d last_index=%d",
-				execution.ExecutionId, execution.Workflow.OrgId, len(mappedResult.Decisions), failureCount, successCount, lastFinishedIndex)
+			log.Printf("[INFO][%s] AI_AGENT: org=%s decisions_total=%d failures=%d successes=%d last_index=%d", execution.ExecutionId, execution.Workflow.OrgId, len(mappedResult.Decisions), failureCount, successCount, lastFinishedIndex)
 
 			marshalledDecisions, err = json.Marshal(relevantDecisions)
 			if err != nil {
@@ -7835,15 +7822,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 	if len(userMessage) == 0 {
 		log.Printf("[ERROR][%s] AI Agent: No user message/input found for action %s", execution.ExecutionId, startNode.ID)
-		execution.Results = append(execution.Results, ActionResult{
-			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (3): No input provided."}`),
-			Action: startNode,
-		})
-		go SetWorkflowExecution(ctx, execution, true)
-		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "no_user_message")
-		return startNode, errors.New("No user message/input found for AI Agent start")
-
+		return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "no_user_message", "No user message/input found for AI Agent start")
 	}
 
 	// Track who initiated this agent (for audit trail)
@@ -7954,32 +7933,14 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 	if err != nil {
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling input for action %s: %s", execution.ExecutionId, startNode.ID, err)
-
-		execution.Status = "ABORTED"
-		execution.Results = append(execution.Results, ActionResult{
-			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (4): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
-			Action: startNode,
-		})
-		go SetWorkflowExecution(ctx, execution, true)
-		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "marshal_request_body_failed")
-		return startNode, err
+		return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "marshal_request_body_failed", fmt.Sprintf("Failed to start AI Agent (4): %s", err.Error()))
 	}
 
 	//go executeSpecificCloudApp(ctx, execution.ExecutionId, execution.Authorization, urls, startNode)
 	if !runOpenaiRequest {
-
+		
 		log.Printf("[ERROR] AI Agent: Unhandled Singul BODY for OpenAI agent (first request): %s. AI APPNAME (can't be empty): %#v", string(initialAgentRequestBody), appname)
-
-		execution.Status = "ABORTED"
-		execution.Results = append(execution.Results, ActionResult{
-			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (5): Failed initial AI request. Contact support@shuffler.io if this persists."}`),
-			Action: startNode,
-		})
-		go SetWorkflowExecution(ctx, execution, true)
-		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "unsupported_app_not_openai")
-		return startNode, errors.New("Unhandled Singul BODY for OpenAI agent (first request)")
+		return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "unsupported_app_not_openai", "Failed to start AI Agent (5): Failed initial AI request. Contact support@shuffler.io if this persists.")
 	}
 
 	if debug {
@@ -8027,16 +7988,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	marshalledAction, err := json.Marshal(aiNode)
 	if err != nil {
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling action for AI Agent (first agent request): %s", execution.ExecutionId, err)
-
-		execution.Status = "ABORTED"
-		execution.Results = append(execution.Results, ActionResult{
-			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (6): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
-			Action: startNode,
-		})
-		go SetWorkflowExecution(ctx, execution, true)
-		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "marshal_ai_action_failed")
-		return startNode, err
+		return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "marshal_ai_action_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 	}
 
 	// Self-request starts here!
@@ -8088,7 +8040,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	)
 
 	if err != nil {
-		log.Printf("[ERROR][%s] AI Agent: Failed creating request during LLM setup: %s", execution.ExecutionId, err)
+		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed creating request during LLM setup: %s", execution.ExecutionId, err)
 		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
 	}
 
@@ -8177,17 +8129,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		outputMap := HTTPOutput{}
 		err = json.Unmarshal([]byte(resultMapping.Result), &outputMap)
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent (3): Failed unmarshalling response from sending request for stream during SKIPPED user input: %s. Body: %s", execution.ExecutionId, err, string(resultMapping.Result))
-
-			execution.Status = "ABORTED"
-			execution.Results = append(execution.Results, ActionResult{
-				Status: "ABORTED",
-				Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (1): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
-				Action: startNode,
-			})
-			go SetWorkflowExecution(ctx, execution, true)
-			log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "llm_response_unmarshal_failed")
-			return startNode, err
+			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling response from sending request for stream during SKIPPED user input: %s. Body: %s", execution.ExecutionId, err, string(resultMapping.Result))
+			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "llm_response_unmarshal_failed", fmt.Sprintf("Failed to start AI Agent (1): %s", err.Error()))
 		}
 
 		if outputMap.Status != 200 {
@@ -8212,16 +8155,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			bodyString, err = json.Marshal(bodyMap)
 			if err != nil {
 				log.Printf("[ERROR] AI Agent: Failed marshalling body to string in AI Agent response: %s", err)
-
-				execution.Status = "ABORTED"
-				execution.Results = append(execution.Results, ActionResult{
-					Status: "ABORTED",
-					Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (3): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
-					Action: startNode,
-				})
-				go SetWorkflowExecution(ctx, execution, true)
-				log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=ABORTED duration=0s decisions=0 llm_calls=0 tokens_used=0 reason=%q", execution.ExecutionId, execution.Workflow.OrgId, "llm_body_marshal_failed")
-				return startNode, err
+				return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "llm_body_marshal_failed", fmt.Sprintf("Failed to start AI Agent (3): %s", err.Error()))
 			}
 		}
 
@@ -8244,12 +8178,13 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			newOutput := openai.ErrorResponse{}
 			err = json.Unmarshal(bodyString, &newOutput)
 			if err == nil && len(newOutput.Error.Message) > 0 {
-				choicesString = fmt.Sprintf("LLM Error: %s", newOutput.Error.Message)
+				// choicesString = fmt.Sprintf("LLM Error: %s", newOutput.Error.Message)
 
-				resultMapping.Status = "FAILURE"
-
-				// Log LLM failure with details
+				// resultMapping.Status = "FAILURE"
+				// LLM returned a proper error (401 invalid key, 429 rate limit, 500 server error, etc.)
+				// Abort 
 				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
+				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_http_error", fmt.Sprintf("LLM error (HTTP %d %s): %s", outputMap.Status, newOutput.Error.Type, newOutput.Error.Message))
 			} else {
 				log.Printf("[ERROR][%s] AI Agent: No choices, nor error found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
 				resultMapping.Status = "FAILURE"
@@ -8803,10 +8738,14 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			}
 
 			if !foundResult {
-				log.Printf("[DEBUG][%s] Result not found in execution.Results, using resultMapping for sendAgentActionSelfRequest", execution.ExecutionId)
-				resultMapping.Status = "SUCCESS"
-				resultMapping.CompletedAt = agentOutput.CompletedAt
-				go sendAgentActionSelfRequest("SUCCESS", execution, resultMapping)
+				// duration := int64(0)
+				// if agentOutput.StartedAt > 0 && agentOutput.CompletedAt > 0 {
+				// 	duration = agentOutput.CompletedAt - agentOutput.StartedAt
+				// } else if agentOutput.StartedAt > 0 {
+				// 	duration = time.Now().Unix() - agentOutput.StartedAt
+				// }
+
+				// log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=SUCCESS duration=%ds decisions=%d llm_calls=%d tokens_used=%d", execution.ExecutionId, execution.Workflow.OrgId, duration, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens)
 			}
 		}
 
@@ -8848,7 +8787,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			}
 		}
 	}
-  
+
 	if createNextActions {
 		return startNode, nil
 	}
@@ -9033,7 +8972,6 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "No workflow found for this ID"}`))
 		return
 	}
-
 
 	// Maps everything AROUND the usecase
 	err = HandleSingulWorkflowEnablement(ctx, *workflow, user, categoryAction)
