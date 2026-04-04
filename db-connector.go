@@ -2366,7 +2366,12 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 		for _, result := range workflowExecution.Results {
 			if result.Status == "FAILURE" || result.Status == "ABORTED" {
-				log.Printf("[DEBUG][%s] Setting execution to aborted because of result %s (%s) with status '%s'. Should update execution parent if it exists (not implemented).", workflowExecution.ExecutionId, result.Action.Name, result.Action.ID, result.Status)
+				// Only log once per execution to avoid spam
+				cacheKey := fmt.Sprintf("abort_log_%s", workflowExecution.ExecutionId)
+				if _, err := GetCache(ctx, cacheKey); err != nil {
+					log.Printf("[DEBUG][%s] Setting execution to aborted because of result %s (%s) with status '%s'. Should update execution parent if it exists (not implemented).", workflowExecution.ExecutionId, result.Action.Name, result.Action.ID, result.Status)
+					SetCache(ctx, cacheKey, []byte("logged"), 5) // 5 minute TTL
+				}
 
 				workflowExecution.Status = "ABORTED"
 				dbsave = true
