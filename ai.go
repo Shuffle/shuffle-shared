@@ -8182,7 +8182,6 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 				// resultMapping.Status = "FAILURE"
 				// LLM returned a proper error (401 invalid key, 429 rate limit, 500 server error, etc.)
-				// Abort 
 				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
 				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_http_error", fmt.Sprintf("LLM error (HTTP %d %s): %s", outputMap.Status, newOutput.Error.Type, newOutput.Error.Message))
 			} else {
