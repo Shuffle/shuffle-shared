@@ -8150,7 +8150,6 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 				// resultMapping.Status = "FAILURE"
 				// LLM returned a proper error (401 invalid key, 429 rate limit, 500 server error, etc.)
-				// Abort 
 				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
 				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_http_error", fmt.Sprintf("LLM error (HTTP %d %s): %s", outputMap.Status, newOutput.Error.Type, newOutput.Error.Message))
 			} else {
@@ -8224,72 +8223,69 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		errorMessage := ""
 		err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
-
-			if len(mappedDecisions) == 0 {
-				decisionString = strings.Replace(decisionString, `\"`, `"`, -1)
-
-				err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
-				if err != nil {
-					log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling decisions in AI Agent response (2): %s. String: %s", execution.ExecutionId, err, decisionString)
-
-					// FALLBACK: LLM returned raw content instead of agent decisions (HTTP 200 but non-JSON output).
-					// Wrap it as a finish decision so the workflow completes cleanly.
-					log.Printf("[INFO][%s] AI Agent: Applying fallback - wrapping raw LLM content in finish decision", execution.ExecutionId)
-
-					var rawContent interface{}
-					jsonErr := json.Unmarshal([]byte(decisionString), &rawContent)
-					outputValue := ""
-					if jsonErr == nil {
-						// It's valid JSON, wrap it in {"reply": ...}
-						wrappedContent := map[string]interface{}{
-							"reply": rawContent,
-						}
-						wrappedBytes, _ := json.Marshal(wrappedContent)
-						outputValue = string(wrappedBytes)
-					} else {
-						// Not valid JSON, wrap the raw string
-						wrappedContent := map[string]interface{}{
-							"reply": decisionString,
-						}
-						wrappedBytes, _ := json.Marshal(wrappedContent)
-						outputValue = string(wrappedBytes)
-					}
-
-					// Create a proper finish decision
-					b := make([]byte, 6)
-					_, randErr := rand.Read(b)
-					if randErr != nil {
-						log.Printf("[ERROR][%s] AI Agent: Failed generating random string for fallback decision", execution.ExecutionId)
-					}
-
-					fallbackDecision := AgentDecision{
-						I:                lastFinishedIndex,
-						Category:         "finish",
-						Action:           "finish",
-						Tool:             "core",
-						Confidence:       1.0,
-						Runs:             "1",
-						ApprovalRequired: false,
-						Reason:           "LLM returned unexpected format - applied fallback wrapping",
-						Fields: []Valuereplace{
-							{
-								Key:   "output",
-								Value: outputValue,
-							},
-						},
-						RunDetails: AgentDecisionRunDetails{
-							Id:          base64.RawURLEncoding.EncodeToString(b),
-							Status:      "",
-							StartedAt:   0,
-							CompletedAt: 0,
-						},
-					}
-
-					mappedDecisions = []AgentDecision{fallbackDecision}
-					resultMapping.Status = ""
-					log.Printf("[INFO][%s] AI Agent: Fallback applied successfully - created finish decision with wrapped content", execution.ExecutionId)
+			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling decisions: %s", execution.ExecutionId, err)
+			
+			recovered := false
+			if outputMap.Status >= 200 && outputMap.Status < 300 {
+				fixedString := strings.Replace(decisionString, `\"`, `"`, -1)
+				if json.Unmarshal([]byte(fixedString), &mappedDecisions) == nil {
+					log.Printf("[INFO][%s] AI Agent: Recovered by fixing escaped quotes", execution.ExecutionId)
+					recovered = true
 				}
+
+				if !recovered {
+					balanced := balanceJSONLikeString(decisionString)
+					if json.Unmarshal([]byte(balanced), &mappedDecisions) == nil {
+						log.Printf("[INFO][%s] AI Agent: Recovered by balancing JSON", execution.ExecutionId)
+						recovered = true
+					}
+				}
+			}
+
+			if !recovered {
+				isErrorResponse := outputMap.Status < 200 || outputMap.Status >= 300
+				reason := "LLM returned unexpected format"
+				if isErrorResponse {
+					reason = fmt.Sprintf("LLM error (HTTP %d)", outputMap.Status)
+				}
+
+				log.Printf("[INFO][%s] AI Agent: Wrapping response as finish decision - %s", execution.ExecutionId, reason)
+
+				// Wrap content as valid JSON output
+				var outputValue string
+				var rawContent interface{}
+				if json.Unmarshal([]byte(decisionString), &rawContent) == nil {
+					wrapped, _ := json.Marshal(map[string]interface{}{"reply": rawContent})
+					outputValue = string(wrapped)
+				} else {
+					wrapped, _ := json.Marshal(map[string]interface{}{"reply": decisionString})
+					outputValue = string(wrapped)
+				}
+
+				b := make([]byte, 6)
+				rand.Read(b)
+
+				mappedDecisions = []AgentDecision{{
+					I:                lastFinishedIndex,
+					Category:         "finish",
+					Action:           "finish",
+					Tool:             "core",
+					Confidence:       1.0,
+					Runs:             "1",
+					ApprovalRequired: false,
+					Reason:           reason,
+					Fields: []Valuereplace{{
+						Key:   "output",
+						Value: outputValue,
+					}},
+					RunDetails: AgentDecisionRunDetails{
+						Id:          base64.RawURLEncoding.EncodeToString(b),
+						Status:      "",
+						StartedAt:   0,
+						CompletedAt: 0,
+					},
+				}}
+				resultMapping.Status = ""
 			}
 		}
 
