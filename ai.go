@@ -13146,7 +13146,7 @@ func RunMCPAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	workflowExecution, err := PrepareSingleAction(ctx, user, "agent", marshalledAction, false, "RunMCPAction", "",  "")
+	workflowExecution, err := PrepareSingleAction(ctx, user, "agent", marshalledAction, false, "")
 	if fileId == "agent_starter" {
 		log.Printf("[INFO] Returning early for agent_starter single action execution: %s", workflowExecution.ExecutionId)
 		resp.WriteHeader(200)
