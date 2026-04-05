@@ -7182,7 +7182,7 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
-func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, caller string, traceID string) (Action, error) {
+func HandleAiAgentExecutionStart(ctx context.Context, execution WorkflowExecution, startNode Action, createNextActions bool) (Action, error) {
 
 	aiStarttime := time.Now().Unix()
 	// A handler to ensure we ALWAYS focus on next actions if a node starts late
@@ -7221,7 +7221,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		execution.Workflow.OrgId = execution.ExecutionOrg
 	}
 
-	ctx := context.Background()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// Validate On-Prem Configuration immediately
 	if project.Environment != "cloud" {
@@ -7806,6 +7808,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	}
 
 	if !createNextActions {
+		caller, _ := ctx.Value("caller").(string)
+    	traceID, _ := ctx.Value("trace_id").(string)
 		if strings.TrimSpace(caller) == "" {
 			log.Printf("ERROR[%s] AI agent: No caller function info provided for AI agent, aborting the request ...", execution.ExecutionId)
 			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "no_caller_info", "No caller function info provided for AI Agent start")
