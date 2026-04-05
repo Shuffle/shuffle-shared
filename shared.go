@@ -17600,6 +17600,8 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		log.Printf("[DEBUG][%s] Got decision ID '%s' for agent '%s'. Ref: %s", workflowExecution.ExecutionId, decisionId, actionResult.Action.ID, actionResult.Status)
 	}
 
+	ctx := context.Background()
+
 	foundActionResultIndex := -1
 	for actionIndex, result := range workflowExecution.Results {
 		if result.Action.ID == actionResult.Action.ID {
@@ -17823,7 +17825,6 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
 		}
 
-		ctx := context.Background()
 		agentRequestMemory, err := GetDatastoreKey(ctx, requestKey, "agent_requests")
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed to find request memory for updates", actionResult.ExecutionId)
@@ -17848,7 +17849,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			originalAction = actionResult.Action
 		}
 
-		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, originalAction, true, "handleAgentDecisionStreamResult", "")
+		returnAction, err := HandleAiAgentExecutionStart(ctx, workflowExecution, originalAction, true)
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed handling agent execution start: %s", workflowExecution.ExecutionId, err)
 		}
@@ -21810,9 +21811,12 @@ func CheckHookAuth(request *http.Request, auth string) error {
 }
 
 // Body = The action body received from the user to test.
-func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user User, appId string, body []byte, runValidationAction bool, caller string, traceID string, decision ...string) (WorkflowExecution, error) {
+func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
 
 	workflowExecution := WorkflowExecution{}
+	if ctx == nil {
+        ctx = context.Background() 
+    }
 
 	var action Action
 	err := json.Unmarshal(body, &action)
@@ -21877,7 +21881,10 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				}
 			}
 
-			action, err := HandleAiAgentExecutionStart(exec, action, false, caller, traceID)
+			caller, _ := ctx.Value("caller").(string)
+    		traceID, _ := ctx.Value("trace_id").(string)
+
+			action, err := HandleAiAgentExecutionStart(ctx, exec, action, false)
 			if err != nil {
 				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
 			}
