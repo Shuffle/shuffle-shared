@@ -17407,6 +17407,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 	// Check if the request has been sent already (just in case)
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
+	// cacheKey := fmt.Sprintf("agent_request_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID)
 	_, err := GetCache(ctx, cacheKey)
 	if err == nil {
 		//if debug {
@@ -17420,6 +17421,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 			cacheTTL = 1440 // 24 hours — execution outcome is permanent
 		}
 		SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
+		// SetCache(ctx, cacheKey, []byte(status), cacheTTL)
 	}
 
 	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
