@@ -14758,7 +14758,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 					// Run the automation
 					// This should make a notification if it fails
 					go func(cacheData CacheKeyData, automation DatastoreAutomation) {
-						err := handleRunDatastoreAutomation(cacheData, automation)
+						err := handleRunDatastoreAutomation(ctx, cacheData, automation)
 						if err != nil {
 							log.Printf("[ERROR] Failed running automation %s for cache key %s: %s", automation.Name, cacheData.Key, err)
 
@@ -15267,7 +15267,7 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 				// Run the automation
 				// This should make a notification if it fails
 				go func(cacheData CacheKeyData, automation DatastoreAutomation) {
-					err := handleRunDatastoreAutomation(cacheData, automation)
+					err := handleRunDatastoreAutomation(ctx, cacheData, automation)
 					if err != nil {
 						log.Printf("[ERROR] Failed running automation %s for cache key %s: %s", automation.Name, cacheData.Key, err)
 
