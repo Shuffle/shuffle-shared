@@ -17848,7 +17848,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			originalAction = actionResult.Action
 		}
 
-		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, originalAction, true)
+		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, originalAction, true, "handleAgentDecisionStreamResult", "")
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed handling agent execution start: %s", workflowExecution.ExecutionId, err)
 		}
@@ -21810,7 +21810,7 @@ func CheckHookAuth(request *http.Request, auth string) error {
 }
 
 // Body = The action body received from the user to test.
-func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
+func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user User, appId string, body []byte, runValidationAction bool, caller string, traceID string, decision ...string) (WorkflowExecution, error) {
 
 	workflowExecution := WorkflowExecution{}
 
@@ -21877,13 +21877,14 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				}
 			}
 
-			action, err := HandleAiAgentExecutionStart(exec, action, false)
+			action, err := HandleAiAgentExecutionStart(exec, action, false, caller, traceID)
 			if err != nil {
 				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
 			}
 			exec.Workflow.Actions[0] = action
 
 			newExec, err := GetWorkflowExecution(ctx, exec.ExecutionId)
+			log.Printf("[INFO][%s] AI Agent: %s Started standalone for org %s, execution id %s, workflow %s, with trace-id %s", exec.ExecutionId, caller, user.ActiveOrg.Id, exec.ExecutionId, exec.WorkflowId, traceID)
 			if err != nil {
 				log.Printf("[ERROR] Failed to get workflow execution after starting agent: %s", err)
 			} else {

@@ -7182,7 +7182,8 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
-func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool) (Action, error) {
+func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, caller string, traceID string) (Action, error) {
+
 	aiStarttime := time.Now().Unix()
 	// A handler to ensure we ALWAYS focus on next actions if a node starts late
 	// or is missing context, but has previous decisions
@@ -7832,7 +7833,12 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	}
 
 	if !createNextActions {
-		log.Printf("[INFO] AI_AGENT_START: execution_id=%s org=%s user=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, initiatedBy, len(userMessage))
+		if strings.TrimSpace(caller) == "" {
+			log.Printf("ERROR[%s] AI agent: No caller function info provided for AI agent, aborting the request ...", execution.ExecutionId)
+			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "no_caller_info", "No caller function info provided for AI Agent start")
+		}
+
+		log.Printf("[INFO][%s] AI_AGENT_START: org=%s workflow=%s user=%s caller=%s trace-id=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, execution.WorkflowId, initiatedBy, caller, traceID, len(userMessage))
 	}
 
 	// Set model based on environment
@@ -13144,7 +13150,7 @@ func RunMCPAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	workflowExecution, err := PrepareSingleAction(ctx, request, user, "agent", marshalledAction, false, "")
+	workflowExecution, err := PrepareSingleAction(ctx, request, user, "agent", marshalledAction, false, "RunMCPAction", "",  "")
 	if fileId == "agent_starter" {
 		log.Printf("[INFO] Returning early for agent_starter single action execution: %s", workflowExecution.ExecutionId)
 		resp.WriteHeader(200)
