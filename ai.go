@@ -8553,11 +8553,14 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 						question = mappedDecision.Fields[0].Value
 					}
 
+					// Escape single quotes to prevent quote injection
+					safeQuestion := strings.ReplaceAll(question, "'", "\\'")
+
 					err = CreateOrgNotification(
 						ctx,
-						fmt.Sprintf("Agent - input required: '%s'", question),
-						fmt.Sprintf("Input required during agent run."), 
-						fmt.Sprintf("/forms/%s?authorization=%s&reference_execution=%s&source_node=%s&decision_id=%s&backend_url=%s", execution.WorkflowId, execution.Authorization, execution.ExecutionId, startNode.ID, mappedDecision.RunDetails.Id, backendUrl),
+						fmt.Sprintf("Agent - input required: '%s'", safeQuestion),
+						fmt.Sprintf("Input required during agent run."),
+						fmt.Sprintf("/forms/%s?authorization=%s&reference_execution=%s&source_node=%s&decision_id=%s&backend_url=%s", execution.WorkflowId, url.QueryEscape(execution.Authorization), execution.ExecutionId, startNode.ID, mappedDecision.RunDetails.Id, url.QueryEscape(backendUrl)),
 						execution.ExecutionOrg,
 						false,
 						"LOW",
