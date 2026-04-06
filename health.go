@@ -745,13 +745,13 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	agentHealthChannel := make(chan AgentHealth)
 	go func() {
 		if debug {
-			log.Printf("[DEBUG] Running agentHealthChannel goroutine")
+			log.Printf("[DEBUG] Health check Running agentHealthChannel goroutine")
 		}
 
 		agentHealth, err := RunOpsAgent(apiKey, orgId, "")
 		if err != nil {
 			if project.Environment == "cloud" {
-				log.Printf("[ERROR] Failed agent health check: %s", err)
+				log.Printf("[ERROR] Health check failed for the agent: %s", err)
 			}
 		}
 
@@ -4284,7 +4284,7 @@ func startAgentExecution(baseUrl, apiKey, orgId string) (agentStartResult, error
 		return agentStartResult{}, errors.New("agent start returned success=false or empty execution ID")
 	}
 
-	log.Printf("[DEBUG] Agent execution started with ID: %s", parsed.ExecutionId)
+	log.Printf("[DEBUG] Health check for Agent execution started with ID: %s", parsed.ExecutionId)
 	return agentStartResult{
 		ExecutionId:   parsed.ExecutionId,
 		Authorization: parsed.Authorization,
@@ -4361,7 +4361,7 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 
 	startResult, err := startAgentExecution(baseUrl, apiKey, orgId)
 	if err != nil {
-		log.Printf("[ERROR] startAgentExecution: %s", err)
+		log.Printf("[ERROR] Health check failed for startAgentExecution: %s", err)
 		return agentHealth, err
 	}
 
@@ -4373,13 +4373,13 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 	for !agentHealth.RunFinished {
 		execution, err := fetchAgentExecutionResults(baseUrl, apiKey, orgId, startResult.ExecutionId, startResult.Authorization)
 		if err != nil {
-			log.Printf("[ERROR] fetchAgentExecutionResults: %s", err)
+			log.Printf("[ERROR] Health check failed in fetchAgentExecutionResults: %s", err)
 			return agentHealth, err
 		}
 
 		// Update run status whenever the execution is no longer EXECUTING.
 		if execution.Status != "EXECUTING" {
-			log.Printf("[DEBUG] Agent execution status: %s (ID: %s)", execution.Status, agentHealth.ExecutionId)
+			log.Printf("[DEBUG] Health check for Agent execution status: %s (ID: %s)", execution.Status, agentHealth.ExecutionId)
 			agentHealth.RunFinished = true
 			agentHealth.RunStatus = execution.Status
 		}
@@ -4389,11 +4389,11 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 			agentHealth.AgentStatus = agentOutput.Status
 			agentHealth.AgentDecisionCount = len(agentOutput.Decisions)
 			agentHealth.LLMCallSuccess = true
-			log.Printf("[DEBUG] Agent made %d decisions, LLM call successful", len(agentOutput.Decisions))
+			log.Printf("[DEBUG] Health check for Agent made %d decisions, LLM call successful", len(agentOutput.Decisions))
 		}
 
 		if execution.Status == "FINISHED" {
-			log.Printf("[DEBUG] Agent execution finished successfully")
+			log.Printf("[DEBUG] Health check for Agent execution finished successfully")
 			agentHealth.ExecutionTook = time.Since(startTime).Seconds()
 		}
 
