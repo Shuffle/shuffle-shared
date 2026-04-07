@@ -20896,6 +20896,14 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, cacheId))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, url.QueryEscape(cacheId)))
 
+	normalizedCategory := strings.ReplaceAll(strings.ToLower(tmpData.Category), " ", "_")
+	if normalizedCategory == "default" {
+		normalizedCategory = ""
+	}
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s", entity, org.Id, normalizedCategory))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_", entity, org.Id))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s", entity, org.Id))
+
 	result := ResultChecker{
 		Success: true,
 		Reason:  fmt.Sprintf("Key '%s' deleted", tmpData.Key),
