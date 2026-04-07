@@ -12699,7 +12699,10 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] OpenID login for %s", org.Id)
 			redirectKey = "SSO_REDIRECT"
 
-			baseSSOUrl = GetOpenIdUrl(request, *org)
+			baseSSOUrl, err = GetOpenIdUrl(request, *org, user, "")
+			if err != nil {
+				log.Printf("[ERROR] Failed getting OpenID URL for org %s: %s", org.Id, err)
+			}
 		}
 
 		if skipSSO || len(baseSSOUrl) == 0 {
@@ -15399,65 +15402,137 @@ func verifier() (*CodeVerifier, error) {
 	return CreateCodeVerifierFromBytes(b)
 }
 
-func GetOpenIdUrl(request *http.Request, org Org) string {
+// GetOpenIdUrl generates an OpenID Connect authorization URL.
+// On cloud: supports mode-based flows (login vs setup), stores PKCE verifier on user.
+// On-prem: original logic with form_post support when client_secret exists.
+// The user and mode params are only used on cloud — on-prem callers can pass User{} and "".
+func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (string, error) {
+	if project.Environment == "cloud" {
+		return getOpenIdUrlCloud(request, org, user, mode)
+	}
+	return getOpenIdUrlOnPrem(request, org)
+}
+
+func getOpenIdUrlOnPrem(request *http.Request, org Org) (string, error) {
 	baseSSOUrl := org.SSOConfig.OpenIdAuthorization
 
 	codeChallenge := uuid.NewV4().String()
-	//h.Write([]byte(v.Value))
 	verifier, verifiererr := verifier()
 	if verifiererr == nil {
 		codeChallenge = verifier.Value
 	}
 
-	//log.Printf("[DEBUG] Got challenge value %s (pre state)", codeChallenge)
-
-	// https://192.168.55.222:3443/api/v1/login_openid
-	//location := strings.Split(request.URL.String(), "/")
-	//redirectUrl := url.QueryEscape("http://localhost:5001/api/v1/login_openid")
 	redirectUrl := url.QueryEscape(fmt.Sprintf("http://%s/api/v1/login_openid", request.Host))
-	if project.Environment == "cloud" {
-		redirectUrl = url.QueryEscape(fmt.Sprintf("https://shuffler.io/api/v1/login_openid"))
-	}
 
-	//Redirect url for onprem
-	if project.Environment != "cloud" && strings.Contains(request.Host, "shuffle-backend") && !strings.Contains(os.Getenv("BASE_URL"), "shuffle-backend") {
+	if strings.Contains(request.Host, "shuffle-backend") && !strings.Contains(os.Getenv("BASE_URL"), "shuffle-backend") {
 		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("BASE_URL")))
 	} else {
-		//check if base url exist if exist then assign the base url. This is for local testing when request.Host is is not "shuffle-backend"
-		if project.Environment != "cloud" && len(os.Getenv("BASE_URL")) > 0 {
+		if len(os.Getenv("BASE_URL")) > 0 {
 			redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("BASE_URL")))
-		} else if project.Environment != "cloud" {
-			//if base url not exist then assign hardcoded url for the onprem, user should not reach here but in case not set the base url hardcode it.
+		} else {
 			redirectUrl = url.QueryEscape(fmt.Sprintf("http://localhost:5001/api/v1/login_openid"))
 		}
 	}
 
-	//In any case redirect url should not be the SSO_REDIRECT_URL as it is the frontend url where user will be redirected after login.
-	if project.Environment != "cloud" && len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+	if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
 		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("SSO_REDIRECT_URL")))
 	}
 
 	state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
 
-	// has to happen after initial value is stored
 	if verifiererr == nil {
 		codeChallenge = verifier.CodeChallengeS256()
 	}
 
 	if len(org.SSOConfig.OpenIdClientSecret) > 0 {
-
-		//baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid&redirect_uri=%s&state=%s&client_secret=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, org.SSOConfig.OpenIdClientSecret)
 		state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&redirect=%s&challenge=%s", org.Id, redirectUrl, org.SSOConfig.OpenIdClientSecret)))
 		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=id_token&scope=openid email&redirect_uri=%s&state=%s&response_mode=form_post&nonce=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, state)
-		//baseSSOUrl += fmt.Sprintf("&client_secret=%s", org.SSOConfig.OpenIdClientSecret)
 	} else {
 		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid email&redirect_uri=%s&state=%s&code_challenge_method=S256&code_challenge=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, codeChallenge)
 	}
 
-	return baseSSOUrl
+	return baseSSOUrl, nil
 }
 
-/*
+func getOpenIdUrlCloud(request *http.Request, org Org, user User, mode string) (string, error) {
+	baseSSOUrl := org.SSOConfig.OpenIdAuthorization
+
+	signIn := mode == "signin" || mode == "login"
+
+	verifier, verifiererr := verifier()
+	if verifiererr != nil {
+		return "", verifiererr
+	}
+
+	codeChallenge := verifier.CodeChallengeS256()
+
+	if !signIn {
+		user.InitSSOInfos()
+
+		existingSSOInfo, _ := user.GetSSOInfo(org.Id)
+		user.SetSSOInfo(org.Id, SSOInfo{
+			Sub:             existingSSOInfo.Sub,
+			ClientID:        org.SSOConfig.OpenIdClientId,
+			CodeVerifier:    verifier.Value,
+			ChallengeExpiry: time.Now().Add(60 * time.Minute),
+		})
+
+		ctx := context.Background()
+		err := SetUser(ctx, &user, true)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		log.Printf("[DEBUG] Generating SSO login link for all non-logged in users using the org")
+	}
+
+	baseUrl := "https://shuffler.io"
+	if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+		baseUrl = os.Getenv("SSO_REDIRECT_URL")
+	}
+	redirectUrl := url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", baseUrl))
+
+	state := ""
+	if !signIn {
+		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
+	} else {
+		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&mode=login&redirect=%s", org.Id, redirectUrl)))
+	}
+
+	isMicrosoft := strings.Contains(org.SSOConfig.OpenIdAuthorization, "login.microsoftonline.com")
+
+	scopes := []string{"openid", "email"}
+	if isMicrosoft {
+		scopes = append(scopes, "User.Read")
+	}
+
+	usePKCE := !signIn
+
+	params := url.Values{}
+	params.Set("client_id", org.SSOConfig.OpenIdClientId)
+	params.Set("response_type", "code")
+	params.Set("scope", strings.Join(scopes, " "))
+	params.Set("state", state)
+	params.Set("redirect_uri", redirectUrl)
+
+	if usePKCE {
+		params.Set("code_challenge_method", "S256")
+		params.Set("code_challenge", codeChallenge)
+	}
+
+	paramString := ""
+	for key, value := range params {
+		paramString += fmt.Sprintf("%s=%s&", key, value[0])
+	}
+	paramString = strings.TrimSuffix(paramString, "&")
+
+	baseSSOUrl = baseSSOUrl + "?" + paramString
+
+	log.Printf("[DEBUG] Generated SSO URL: %s", baseSSOUrl)
+
+	return baseSSOUrl, nil
+}
+
 func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -15604,7 +15679,56 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 	}
 
 	if existingUser.Id != "" {
-		if existingUser.ProvisionedByOrg == org.Id {
+		provisionedByParent := ""
+		if existingUser.ProvisionedByOrg != org.Id {
+			provOrg, err := GetOrg(ctx, existingUser.ProvisionedByOrg)
+			if err == nil {
+				provisionedByParent = provOrg.CreatorOrg
+				if len(provisionedByParent) == 0 {
+					provisionedByParent = provOrg.Id
+				}
+			}
+		}
+
+		if existingUser.ProvisionedByOrg == org.Id || provisionedByParent == validationOrg.Id {
+			// If user is from a sibling org, add them to this org
+			if existingUser.ProvisionedByOrg != org.Id {
+				foundInOrg := false
+				for _, userOrg := range existingUser.Orgs {
+					if userOrg == org.Id {
+						foundInOrg = true
+						break
+					}
+				}
+
+				if !foundInOrg {
+					existingUser.Orgs = append(existingUser.Orgs, org.Id)
+					org.Users = append(org.Users, User{
+						Id:       existingUser.Id,
+						Username: existingUser.Username,
+						Role:     "user",
+					})
+
+					err = SetUser(ctx, existingUser, true)
+					if err != nil {
+						log.Printf("[ERROR] Failed to add user %s to org %s: %s", existingUser.Id, org.Id, err)
+						resp.WriteHeader(500)
+						resp.Write([]byte(`{"success": false, "reason": "Failed to add user to organization"}`))
+						return
+					}
+
+					err = SetOrg(ctx, *org, org.Id)
+					if err != nil {
+						log.Printf("[ERROR] Failed to update org %s after adding user: %s", org.Id, err)
+						resp.WriteHeader(500)
+						resp.Write([]byte(`{"success": false, "reason": "Failed to update organization"}`))
+						return
+					}
+
+					log.Printf("[AUDIT] Added user %s to sibling org %s (originally provisioned by %s)", existingUser.Username, org.Id, existingUser.ProvisionedByOrg)
+				}
+			}
+
 			existingUser.InitSSOInfos()
 			ssoInfo, exists := existingUser.GetSSOInfo(org.Id)
 
@@ -15710,7 +15834,6 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 		"user_id": "%s",
 	}`, ssoUrl, newUser.Id)))
 }
-*/
 
 func GetRequestIp(r *http.Request) string {
 	// Check the actual IP that is inbound
@@ -16010,7 +16133,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[INFO] OpenID login for %s", org.Id)
 				redirectKey = "SSO_REDIRECT"
 
-				baseSSOUrl = GetOpenIdUrl(request, *org)
+				baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata, "signin")
+				if err != nil {
+					log.Printf("[ERROR] Failed getting OpenID URL for org %s: %s", org.Id, err)
+				}
 			}
 
 			if !orgFound && len(baseSSOUrl) > 0 {
@@ -23821,6 +23947,802 @@ func fixCertificate(parsedX509Key string) string {
 	return parsedX509Key
 }
 
+// handleOpenIdCloud handles the OpenID Connect callback for cloud environments.
+// Supports mode-based flows (login vs setup/registration), PKCE verification,
+// proper OIDC token verification, and SSO identity validation.
+func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
+	ctx := GetContext(request)
+
+	codeChallenge := ""
+	foundMode := ""
+
+	openidUser := OpenidUserinfo{}
+	org := &Org{}
+	code := request.URL.Query().Get("code")
+	if len(code) == 0 {
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must enable PKCE to use shuffle SSO"}`)))
+		resp.WriteHeader(401)
+		return
+	}
+
+	state := request.URL.Query().Get("state")
+	if len(state) == 0 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No state specified"}`)))
+		return
+	}
+
+	stateBase, err := base64.StdEncoding.DecodeString(state)
+	if err != nil {
+		log.Printf("[ERROR] Failed base64 decode OpenID state: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed base64 decoding of state"}`)))
+		return
+	}
+
+	log.Printf("State: %s", stateBase)
+	foundOrg := ""
+	foundRedir := ""
+	foundChallenge := ""
+	stateSplit := strings.Split(string(stateBase), "&")
+	for _, innerstate := range stateSplit {
+		itemsplit := strings.Split(innerstate, "=")
+		if len(itemsplit) <= 1 {
+			log.Printf("[WARNING] No key:value: %s", innerstate)
+			continue
+		}
+
+		if itemsplit[0] == "org" {
+			foundOrg = strings.TrimSpace(itemsplit[1])
+		}
+
+		if itemsplit[0] == "redirect" {
+			foundRedir = strings.TrimSpace(itemsplit[1])
+		}
+
+		if itemsplit[0] == "challenge" {
+			foundChallenge = strings.TrimSpace(itemsplit[1])
+		}
+
+		if itemsplit[0] == "mode" {
+			foundMode = strings.TrimSpace(itemsplit[1])
+		}
+	}
+
+	log.Printf("challenge: %s", foundChallenge)
+	log.Printf("code sent: %s", code)
+	log.Printf("mode: %s", foundMode)
+
+	if len(foundOrg) == 0 {
+		log.Printf("[ERROR] No org specified in state")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No org specified in state"}`)))
+		return
+	}
+
+	org, err = GetOrg(ctx, foundOrg)
+	if err != nil {
+		log.Printf("[WARNING] Error getting org in OpenID: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Couldn't find the org for sign-in in Shuffle"}`))
+		return
+	}
+
+	clientId := org.SSOConfig.OpenIdClientId
+	tokenUrl := org.SSOConfig.OpenIdToken
+	if len(tokenUrl) == 0 {
+		log.Printf("[ERROR] No token URL specified for OpenID. OrgID: %s", foundOrg)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No token URL specified in org %s. Please make sure to specify a token URL in the /admin panel in Shuffle for OpenID Connect"}`, foundOrg)))
+		return
+	}
+
+	// Handle login mode (no PKCE) vs registration mode (with PKCE)
+	var foundVerifier string
+	if foundMode == "login" {
+		log.Printf("[INFO] Login mode detected, skipping PKCE verification")
+		foundVerifier = "login_mode"
+	} else {
+		log.Printf("[DEBUG] Searching %d org users for PKCE verifier matching challenge %s", len(org.Users), foundChallenge)
+		for _, userInOrg := range org.Users {
+			fullUser, err := GetUser(ctx, userInOrg.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed to load user %s in org %s during PKCE search: %s", userInOrg.Id, org.Id, err)
+				continue
+			}
+			ssoInfo, exists := fullUser.GetSSOInfo(org.Id)
+			if !exists {
+				log.Printf("[DEBUG] User %s (%s) has no SSOInfo for org %s", fullUser.Username, fullUser.Id, org.Id)
+				continue
+			}
+			if ssoInfo.CodeVerifier == "" {
+				log.Printf("[DEBUG] User %s (%s) has SSOInfo but empty CodeVerifier", fullUser.Username, fullUser.Id)
+				continue
+			}
+			verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
+			computed := verifierObj.CodeChallengeS256()
+			log.Printf("[DEBUG] User %s (%s): stored verifier hash=%s, expected=%s, match=%t", fullUser.Username, fullUser.Id, computed, foundChallenge, computed == foundChallenge)
+			if computed == foundChallenge {
+				foundVerifier = ssoInfo.CodeVerifier
+				break
+			}
+		}
+
+		if foundVerifier == "" {
+			log.Printf("[ERROR] No verifier found for challenge %s in org %s (searched %d users)", foundChallenge, org.Id, len(org.Users))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Invalid PKCE challenge"}`))
+			return
+		}
+	}
+
+	verifierToUse := foundVerifier
+	if foundMode == "login" {
+		verifierToUse = ""
+	}
+
+	body, err := RunOpenidLogin(ctx, clientId, tokenUrl, foundRedir, code, verifierToUse, org.SSOConfig.OpenIdClientSecret)
+	if err != nil {
+		log.Printf("[WARNING] Error with body read of OpenID Connect: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	codeChallenge = foundChallenge
+
+	openid := OpenidResp{}
+	err = json.Unmarshal(body, &openid)
+	if err != nil {
+		log.Printf("[WARNING] Error in Openid marshal: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Fetch userinfo using well-known discovery
+	// Derive issuer from authorization URL by stripping the path
+	parsedAuthUrl, parseErr := url.Parse(org.SSOConfig.OpenIdAuthorization)
+	if parseErr != nil {
+		log.Printf("[ERROR] Invalid OpenIdAuthorization URL: %s", parseErr)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid SSO configuration"}`))
+		return
+	}
+
+	// For Okta-style URLs, issuer includes /oauth2/default; for Auth0/others, it's just the origin
+	issuer := fmt.Sprintf("%s://%s", parsedAuthUrl.Scheme, parsedAuthUrl.Host)
+	if strings.Contains(parsedAuthUrl.Path, "/oauth2/") {
+		// Okta: https://dev-xxx.okta.com/oauth2/default/v1/authorize → issuer is https://dev-xxx.okta.com/oauth2/default
+		parts := strings.Split(parsedAuthUrl.Path, "/oauth2/")
+		if len(parts) > 1 {
+			oauthPath := strings.Split(parts[1], "/")
+			issuer = fmt.Sprintf("%s://%s/oauth2/%s", parsedAuthUrl.Scheme, parsedAuthUrl.Host, oauthPath[0])
+		}
+	}
+	userInfo, err := fetchUserInfoFromToken(ctx, openid.AccessToken, issuer, org.SSOConfig.OpenIdAuthorization)
+	if err != nil {
+		log.Printf("[ERROR] Failed to fetch userinfo: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to fetch user information"}`))
+		return
+	}
+
+	body, err = json.Marshal(userInfo)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal userinfo: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to process user information"}`))
+		return
+	}
+
+	log.Printf("[DEBUG] OpenID userinfo response: %s", string(body))
+
+	err = json.Unmarshal(body, &openidUser)
+	if err != nil {
+		log.Printf("[WARNING] Error in Openid marshal (2): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Extract roles from ID token using proper JWT verification
+	if openid.IdToken != "" && org.SSOConfig.OpenIdClientId != "" {
+		extractedRoles, err := ExtractRolesFromIdToken(ctx, openid.IdToken, issuer, org.SSOConfig.OpenIdClientId)
+		if err != nil {
+			log.Printf("[WARNING] Failed to extract roles from ID token: %s", err)
+		} else if len(extractedRoles) > 0 {
+			log.Printf("[DEBUG] Extracted roles from ID token: %v", extractedRoles)
+			openidUser.Roles = extractedRoles
+		}
+	}
+
+	if len(openidUser.Sub) == 0 && len(openidUser.Email) == 0 {
+		log.Printf("[WARNING] No user found in openid login (2)")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	userName := strings.ToLower(strings.TrimSpace(openidUser.Email))
+	if !strings.Contains(userName, "@") {
+		log.Printf("[ERROR] Bad username, but allowing due to OpenID: %s. Full Subject: %#v", userName, openidUser)
+	}
+
+	redirectUrl := "https://shuffler.io/workflows"
+
+	if len(userName) == 0 {
+		log.Printf("[ERROR] Username (%v) is empty in OpenID login for org: %v", userName, org.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Username is empty"}`))
+		return
+	}
+
+	// Login mode: skip code challenge validation
+	if foundMode != "login" && len(codeChallenge) == 0 {
+		log.Printf("[ERROR] Code challenge (%v) is empty in OpenID login for org: %v", codeChallenge, org.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Code challenge is empty"}`))
+		return
+	}
+
+	// Generated user lookup
+	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
+	if err == nil && len(users) > 0 {
+		for _, user := range users {
+			if user.GeneratedUsername == userName {
+				foundOrgInUser := false
+				for _, userOrg := range user.Orgs {
+					if userOrg == org.Id {
+						foundOrgInUser = true
+						break
+					}
+				}
+
+				foundUserInOrg := false
+				for _, usr := range org.Users {
+					if usr.Id == user.Id {
+						foundUserInOrg = true
+						break
+					}
+				}
+
+				// don't be confused. "AutoProvision" acts like "DisableAutoProvision"
+				if (!foundOrgInUser || !foundUserInOrg) && org.SSOConfig.AutoProvision {
+					log.Printf("[WARNING] User %s (%s) is not in org %s (%s). Please contact the administrator - (1)", user.Username, user.Id, org.Name, org.Id)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
+					return
+				} else if !foundOrgInUser || !foundUserInOrg {
+					log.Printf("[INFO] User %s (%s) is not in org %s (%s). Auto-provisioning is enabled. Adding user to org - (1)", user.Username, user.Id, org.Name, org.Id)
+					if !foundOrgInUser {
+						user.Orgs = append(user.Orgs, org.Id)
+					}
+					if !foundUserInOrg {
+						org.Users = append(org.Users, user)
+					}
+				} else {
+					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login! - (1)", user.Username, user.Id, userName)
+				}
+
+				if org.SSOConfig.RoleRequired {
+					foundRole := false
+					for _, role := range openidUser.Roles {
+						if role == "shuffle-admin" || role == "shuffle-user" || role == "shuffle-org-reader" {
+							foundRole = true
+						}
+					}
+
+					if !foundRole {
+						log.Printf("[WARNING] User %s (%s) role is missing in respone for org %s (%s). Please contact the administrator - (1)", user.Username, user.Id, org.Name, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Role detail is missing. Please contact the administrator of org."}`)))
+						return
+					}
+				}
+
+				role := user.Role
+				roleChange := false
+				if len(openidUser.Roles) > 0 {
+					for _, newRole := range openidUser.Roles {
+						if newRole == "shuffle-admin" {
+							role = "admin"
+							user.Role = "admin"
+							roleChange = true
+							break
+						}
+						if newRole == "shuffle-user" {
+							role = "user"
+							user.Role = "user"
+							roleChange = true
+							break
+						}
+						if newRole == "shuffle-org-reader" {
+							role = "org-reader"
+							user.Role = "org-reader"
+							roleChange = true
+							break
+						}
+					}
+				}
+
+				user.ActiveOrg = OrgMini{
+					Name: org.Name,
+					Id:   org.Id,
+					Role: role,
+				}
+
+				// SSO validation
+				ssoErrors := []string{}
+				if foundMode != "login" {
+					user.InitSSOInfos()
+					ssoInfo, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						ssoErrors = append(ssoErrors, "no_sso_info_for_org")
+					} else {
+						if ssoInfo.ClientID != org.SSOConfig.OpenIdClientId {
+							ssoErrors = append(ssoErrors, "client mismatch")
+						}
+						if ssoInfo.CodeVerifier == "" {
+							ssoErrors = append(ssoErrors, "no code verifier stored")
+						} else {
+							verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
+							expectedChallenge := verifierObj.CodeChallengeS256()
+							if expectedChallenge != codeChallenge {
+								log.Printf("[WARNING] Challenge mismatch for user %s. Expected: %s, Got: %s", user.Id, expectedChallenge, codeChallenge)
+								ssoErrors = append(ssoErrors, "challenge mismatch")
+							} else {
+								log.Printf("[INFO] Challenge verified for user %s. %s == %s", user.Id, expectedChallenge, codeChallenge)
+							}
+						}
+						if time.Now().After(ssoInfo.ChallengeExpiry) {
+							ssoErrors = append(ssoErrors, "challenge expired")
+						}
+					}
+
+					if len(ssoErrors) > 0 {
+						log.Printf("[WARNING] SSO validation failed for user %s: %s -- (1)", user.Id, strings.Join(ssoErrors, ", "))
+						if exists {
+							ssoInfo.CodeVerifier = ""
+							ssoInfo.ChallengeExpiry = time.Time{}
+							user.SetSSOInfo(org.Id, ssoInfo)
+							SetUser(ctx, &user, false)
+						}
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO validation failed"}`))
+						return
+					}
+				} else {
+					// Login mode: validate complete SSO identity match
+					user.InitSSOInfos()
+					_, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						log.Printf("[ERROR] No SSO info found for user %s in org %s", user.Id, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO info not found"}`))
+						return
+					}
+
+					validatedUser, err := FindUserBySSOIdentity(ctx, openidUser.Sub, org.SSOConfig.OpenIdClientId, org.Id, openidUser.Email)
+					if err != nil {
+						log.Printf("[ERROR] SSO identity validation failed: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity validation failed"}`))
+						return
+					}
+
+					if validatedUser.Id != user.Id {
+						log.Printf("[ERROR] SSO identity validation returned different user. Expected: %s, Got: %s", user.Id, validatedUser.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity mismatch"}`))
+						return
+					}
+
+					log.Printf("[INFO] Login mode: Complete SSO identity validated for user %s", user.Id)
+				}
+
+				// Update SSO info
+				orgSSOInfo, _ := user.GetSSOInfo(org.Id)
+				if foundMode != "login" {
+					orgSSOInfo.CodeVerifier = ""
+					orgSSOInfo.ChallengeExpiry = time.Time{}
+
+					currentClientID := org.SSOConfig.OpenIdClientId
+					var existingSubForClient string
+					for _, ssoInfo := range user.SSOInfos {
+						if ssoInfo.ClientID == currentClientID && ssoInfo.Sub != "" && ssoInfo.OrgID != org.Id {
+							existingSubForClient = ssoInfo.Sub
+							break
+						}
+					}
+
+					if existingSubForClient != "" && existingSubForClient != openidUser.Sub {
+						log.Printf("[ERROR] User %s attempted to use Sub %s with client ID %s, but already has Sub %s for this client ID", user.Id, openidUser.Sub, currentClientID, existingSubForClient)
+						resp.WriteHeader(409)
+						resp.Write([]byte(`{"success": false, "reason": "You must use the same SSO account that you first registered with for this SSO provider"}`))
+						return
+					}
+
+					if orgSSOInfo.Sub == "" {
+						orgSSOInfo.Sub = openidUser.Sub
+						log.Printf("[INFO] Initial SSO binding for user %s to sub %s in org %s with client ID %s", user.Id, openidUser.Sub, org.Id, currentClientID)
+					} else if orgSSOInfo.Sub != openidUser.Sub {
+						log.Printf("[WARNING] Sub changed for user %s in org %s: %s -> %s", user.Id, org.Id, orgSSOInfo.Sub, openidUser.Sub)
+					}
+
+					orgSSOInfo.ClientID = org.SSOConfig.OpenIdClientId
+					user.SetSSOInfo(org.Id, orgSSOInfo)
+					log.Printf("[INFO] SSO info updated for user %s", user.Id)
+				} else {
+					log.Printf("[INFO] Login mode: skipping SSO info update for user %s", user.Id)
+				}
+
+				// Session management
+				expiration := time.Now().Add(8 * time.Hour)
+				if len(user.Session) == 0 {
+					log.Printf("[INFO] User does NOT have session - creating - (1)")
+					sessionToken := uuid.NewV4().String()
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
+					http.SetCookie(resp, newCookie)
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+					user.Session = sessionToken
+				} else {
+					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (1)", userName)
+					sessionToken := user.Session
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
+					http.SetCookie(resp, newCookie)
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+				}
+
+				user.LoginInfo = append(user.LoginInfo, LoginInfo{
+					IP:        GetRequestIp(request),
+					Timestamp: time.Now().Unix(),
+				})
+				user.UsersLastSession = user.Session
+
+				err = SetUser(ctx, &user, true)
+				if err != nil {
+					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "Failed user update during session storage (2)"}`))
+					return
+				}
+
+				if roleChange {
+					for i, usr := range org.Users {
+						if usr.Id == user.Id {
+							org.Users[i].Role = role
+							break
+						}
+					}
+				}
+
+				if !foundUserInOrg || roleChange {
+					err = SetOrg(ctx, *org, org.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating org when setting user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "Failed org update during user storage (2)"}`))
+						return
+					}
+				}
+
+				http.Redirect(resp, request, redirectUrl+"?type=sso_login", http.StatusSeeOther)
+				return
+			}
+		}
+	}
+
+	// Normal user lookup
+	users, err = FindUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
+	if err == nil && len(users) > 0 {
+		for _, user := range users {
+			if user.Username == userName {
+				foundOrgInUser := false
+				for _, userOrg := range user.Orgs {
+					if userOrg == org.Id {
+						foundOrgInUser = true
+						break
+					}
+				}
+
+				foundUserInOrg := false
+				for _, usr := range org.Users {
+					if usr.Id == user.Id {
+						foundUserInOrg = true
+						break
+					}
+				}
+
+				if (!foundOrgInUser || !foundUserInOrg) && org.SSOConfig.AutoProvision {
+					log.Printf("[WARNING] User %s (%s) is not in org %s (%s). Please contact the administrator - (2)", user.Username, user.Id, org.Name, org.Id)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
+					return
+				} else if !foundOrgInUser || !foundUserInOrg {
+					log.Printf("[INFO] User %s (%s) is not in org %s (%s). Auto-provisioning is enabled. Adding user to org - (2)", user.Username, user.Id, org.Name, org.Id)
+					if !foundOrgInUser {
+						user.Orgs = append(user.Orgs, org.Id)
+					}
+					if !foundUserInOrg {
+						org.Users = append(org.Users, user)
+					}
+				} else {
+					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s", user.Username, user.Id, userName)
+				}
+
+				if org.SSOConfig.RoleRequired {
+					foundRole := false
+					for _, role := range openidUser.Roles {
+						if role == "shuffle-admin" || role == "shuffle-user" || role == "shuffle-org-reader" {
+							foundRole = true
+						}
+					}
+
+					if !foundRole {
+						log.Printf("[WARNING] User %s (%s) role is missing in respone for org %s (%s). Please contact the administrator - (2)", user.Username, user.Id, org.Name, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Role detail is missing. Please contact the administrator of org."}`)))
+						return
+					}
+				}
+
+				role := user.Role
+				roleChange := false
+				if len(openidUser.Roles) > 0 {
+					for _, newRole := range openidUser.Roles {
+						if newRole == "shuffle-admin" {
+							role = "admin"
+							user.Role = "admin"
+							roleChange = true
+							break
+						}
+						if newRole == "shuffle-user" {
+							role = "user"
+							user.Role = "user"
+							roleChange = true
+							break
+						}
+						if newRole == "shuffle-org-reader" {
+							role = "org-reader"
+							user.Role = "org-reader"
+							roleChange = true
+							break
+						}
+					}
+				}
+
+				user.ActiveOrg = OrgMini{
+					Name: org.Name,
+					Id:   org.Id,
+					Role: role,
+				}
+
+				// SSO validation
+				ssoErrors := []string{}
+				if foundMode != "login" {
+					user.InitSSOInfos()
+					ssoInfo, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						ssoErrors = append(ssoErrors, "no_sso_info_for_org")
+					} else {
+						if ssoInfo.ClientID != org.SSOConfig.OpenIdClientId {
+							ssoErrors = append(ssoErrors, "client mismatch")
+						}
+						if ssoInfo.CodeVerifier == "" {
+							ssoErrors = append(ssoErrors, "no code verifier stored")
+						} else {
+							verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
+							expectedChallenge := verifierObj.CodeChallengeS256()
+							if expectedChallenge != codeChallenge {
+								log.Printf("[DEBUG] Challenge mismatch for user %s: expected %s, got %s", user.Id, expectedChallenge, codeChallenge)
+								ssoErrors = append(ssoErrors, "challenge mismatch")
+							}
+						}
+						if time.Now().After(ssoInfo.ChallengeExpiry) {
+							ssoErrors = append(ssoErrors, "challenge expired")
+						}
+					}
+
+					if len(ssoErrors) > 0 {
+						log.Printf("[WARNING] SSO validation failed for user %s: %s -- (2)", user.Id, strings.Join(ssoErrors, ", "))
+						if exists {
+							ssoInfo.CodeVerifier = ""
+							ssoInfo.ChallengeExpiry = time.Time{}
+							user.SetSSOInfo(org.Id, ssoInfo)
+							SetUser(ctx, &user, false)
+						}
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO validation failed"}`))
+						return
+					}
+				} else {
+					user.InitSSOInfos()
+					_, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						log.Printf("[ERROR] No SSO info found for user %s in org %s", user.Id, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO info not found"}`))
+						return
+					}
+
+					validatedUser, err := FindUserBySSOIdentity(ctx, openidUser.Sub, org.SSOConfig.OpenIdClientId, org.Id, openidUser.Email)
+					if err != nil {
+						log.Printf("[ERROR] SSO identity validation failed: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity validation failed"}`))
+						return
+					}
+
+					if validatedUser.Id != user.Id {
+						log.Printf("[ERROR] SSO identity validation returned different user. Expected: %s, Got: %s", user.Id, validatedUser.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity mismatch"}`))
+						return
+					}
+
+					log.Printf("[INFO] Login mode: Complete SSO identity validated for user %s", user.Id)
+				}
+
+				// Update SSO info
+				orgSSOInfo, _ := user.GetSSOInfo(org.Id)
+				orgSSOInfo.CodeVerifier = ""
+				orgSSOInfo.ChallengeExpiry = time.Time{}
+
+				currentClientID := org.SSOConfig.OpenIdClientId
+				var existingSubForClient string
+				for _, ssoInfo := range user.SSOInfos {
+					if ssoInfo.ClientID == currentClientID && ssoInfo.Sub != "" && ssoInfo.OrgID != org.Id {
+						existingSubForClient = ssoInfo.Sub
+						break
+					}
+				}
+
+				if existingSubForClient != "" && existingSubForClient != openidUser.Sub {
+					log.Printf("[ERROR] User %s attempted to use Sub %s with client ID %s, but already has Sub %s for this client ID", user.Id, openidUser.Sub, currentClientID, existingSubForClient)
+					resp.WriteHeader(409)
+					resp.Write([]byte(`{"success": false, "reason": "You must use the same SSO account that you first registered with for this SSO provider"}`))
+					return
+				}
+
+				if orgSSOInfo.Sub == "" {
+					orgSSOInfo.Sub = openidUser.Sub
+					log.Printf("[INFO] Initial SSO binding for user %s to sub %s in org %s", user.Id, openidUser.Sub, org.Id)
+				} else if orgSSOInfo.Sub != openidUser.Sub {
+					log.Printf("[WARNING] Sub changed for user %s in org %s: %s -> %s", user.Id, org.Id, orgSSOInfo.Sub, openidUser.Sub)
+				}
+
+				user.SetSSOInfo(org.Id, orgSSOInfo)
+
+				// Session management
+				expiration := time.Now().Add(8 * time.Hour)
+				if len(user.Session) == 0 {
+					log.Printf("[INFO] User does NOT have session - creating - (2)")
+					sessionToken := uuid.NewV4().String()
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
+					http.SetCookie(resp, newCookie)
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+					user.Session = sessionToken
+				} else {
+					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
+					sessionToken := user.Session
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
+					http.SetCookie(resp, newCookie)
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+				}
+
+				user.LoginInfo = append(user.LoginInfo, LoginInfo{
+					IP:        GetRequestIp(request),
+					Timestamp: time.Now().Unix(),
+				})
+				user.UsersLastSession = user.Session
+
+				err = SetUser(ctx, &user, true)
+				if err != nil {
+					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "Failed user update during session storage (2)"}`))
+					return
+				}
+
+				if roleChange {
+					for i, usr := range org.Users {
+						if usr.Id == user.Id {
+							org.Users[i].Role = role
+							break
+						}
+					}
+				}
+
+				if !foundUserInOrg || roleChange {
+					err = SetOrg(ctx, *org, org.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating org when setting session: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "Failed org update during session storage (2)"}`))
+						return
+					}
+				}
+
+				http.Redirect(resp, request, redirectUrl+"?type=sso_login", http.StatusSeeOther)
+				return
+			}
+		}
+	}
+
+	// New user creation is disabled on cloud
+	if len(org.Id) == 0 {
+		log.Printf("[WARNING] Failed finding a valid org (default) without suborgs during SSO setup")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding valid SSO auto org"}`)))
+		return
+	}
+
+	if org.SSOConfig.AutoProvision {
+		log.Printf("[INFO] Auto-provisioning user is not allow for org %s (%s) - can not add new user %s - (3)", org.Name, org.Id, userName)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
+		return
+	}
+
+	if org.SSOConfig.RoleRequired {
+		foundRole := false
+		for _, role := range openidUser.Roles {
+			if role == "shuffle-admin" || role == "shuffle-user" || role == "shuffle-org-reader" {
+				foundRole = true
+			}
+		}
+
+		if !foundRole {
+			log.Printf("[WARNING] Role is missing in respone for username %s. Please contact the administrator - (3)", userName)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Role detail is missing. Please contact the administrator of org."}`)))
+			return
+		}
+	}
+
+	log.Printf("[AUDIT] Disabled new user creation")
+	resp.WriteHeader(http.StatusForbidden)
+	resp.Write([]byte(`{"success": false, "reason": "New user creation is disabled"}`))
+	return
+}
+
 // Example implementation of SSO, including a redirect for the user etc
 // Should make this stuff only possible after login
 func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
@@ -23829,10 +24751,12 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//https://dev-18062475.okta.com/oauth2/default/v1/authorize?client_id=oa3romteykJ2aMgx5d7&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
-	// http://localhost:5001/api/v1/login_openid#id_token=asdasd&session_state=asde9d78d8-6535-45fe-848d-0efa9f119595
+	if project.Environment == "cloud" {
+		handleOpenIdCloud(resp, request)
+		return
+	}
 
-	//code -> Token
+	// On-prem path below
 	ctx := GetContext(request)
 
 	skipValidation := false

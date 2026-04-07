@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/go-querystring/query"
 	"golang.org/x/oauth2"
 
@@ -37,7 +38,6 @@ import (
 
 var handledIds []string
 
-/*
 func fetchUserInfoFromToken(ctx context.Context, accessToken string, issuer string, openIdAuthUrl string) (map[string]interface{}, error) {
 	// Get well-known config to find userinfo endpoint
 	config, err := fetchWellKnownConfig(ctx, issuer, openIdAuthUrl)
@@ -101,7 +101,6 @@ func fetchUserInfoFromToken(ctx context.Context, accessToken string, issuer stri
 
 	return userInfo, nil
 }
-*/
 
 func GetOutlookAttachmentList(client *http.Client, emailId string) (MailDataOutlookList, error) {
 	requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/messages/%s/attachments", emailId)
@@ -814,12 +813,13 @@ func (v *CodeVerifier) CodeChallengeS256() string {
 
 // https://dev-18062.okta.com/oauth2/default/v1/authorize?client_id=0oa3&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
 func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, codeChallenge, clientSecret string) ([]byte, error) {
-	if len(codeChallenge) == 0 {
-		return []byte{}, errors.New("code challenge is required")
+	client := &http.Client{}
+	data := fmt.Sprintf("client_id=%s&grant_type=authorization_code&redirect_uri=%s&code=%s", clientId, redirectUri, code)
+
+	if len(codeChallenge) > 0 {
+		data += fmt.Sprintf("&code_verifier=%s", codeChallenge)
 	}
 
-	client := &http.Client{}
-	data := fmt.Sprintf("client_id=%s&grant_type=authorization_code&redirect_uri=%s&code=%s&code_verifier=%s", clientId, redirectUri, code, codeChallenge)
 	if len(clientSecret) > 0 {
 		data += fmt.Sprintf("&client_secret=%s", clientSecret)
 	}
@@ -846,7 +846,12 @@ func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, c
 		return []byte{}, err
 	}
 
-	log.Printf("OpenID return BODY: %s", body)
+	log.Printf("OpenID return BODY: %s (status: %d)", body, res.StatusCode)
+
+	if res.StatusCode >= 400 {
+		log.Printf("[WARNING] OpenID returned %d with body: %s", res.StatusCode, body)
+		return []byte{}, fmt.Errorf("OpenID token request failed with status %d: %s", res.StatusCode, body)
+	}
 
 	return body, nil
 }
@@ -1711,7 +1716,6 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	return appAuth, nil
 }
 
-/*
 func fetchWellKnownConfig(ctx context.Context, issuer string, openIdAuthUrl string) (map[string]interface{}, error) {
 	// Clean issuer URL and construct well-known endpoint
 	issuer = strings.TrimSuffix(issuer, "/")
@@ -1748,9 +1752,21 @@ func fetchWellKnownConfig(ctx context.Context, issuer string, openIdAuthUrl stri
 	return config, nil
 }
 
+// IdTokenClaims represents the claims extracted from a verified ID token
+type IdTokenClaims struct {
+	Sub           string   `json:"sub"`
+	Email         string   `json:"email"`
+	EmailVerified bool     `json:"email_verified"`
+	Roles         []string `json:"roles"`
+	Groups        []string `json:"groups"`
+	RealmAccess   struct {
+		Roles []string `json:"roles"`
+	} `json:"realm_access"` // Keycloak format
+}
+
 // VerifyIdTokenWithOIDC verifies an ID token using the go-oidc library and extracts claims
 // This performs proper signature verification via JWKS, expiry check, issuer and audience validation
-func VerifyIdTokenWithOIDC(ctx context.Context, idToken string, issuer string, clientID string) (*OpenidUserinfo, error) {
+func VerifyIdTokenWithOIDC(ctx context.Context, idToken string, issuer string, clientID string) (*IdTokenClaims, error) {
 	if idToken == "" {
 		return nil, fmt.Errorf("id token is empty")
 	}
@@ -1779,7 +1795,7 @@ func VerifyIdTokenWithOIDC(ctx context.Context, idToken string, issuer string, c
 	}
 
 	// Extract claims
-	var claims OpenidUserinfo
+	var claims IdTokenClaims
 	if err := token.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("failed to extract claims from ID token: %w", err)
 	}
@@ -1819,7 +1835,6 @@ func ExtractRolesFromIdToken(ctx context.Context, idToken string, issuer string,
 
 	return roles, nil
 }
-*/
 
 func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 	// Check org in nonce -> check if ID points back to an org
