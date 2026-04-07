@@ -5145,3 +5145,15 @@ type AgentHealth struct {
 	AgentDecisionCount int     `json:"agent_decision_count"` // Number of decisions made by the agent
 	LLMCallSuccess     bool    `json:"llm_call_success"`     // Whether the LLM call succeeded
 }
+
+type WttrResponse struct {
+	CurrentCondition []struct {
+		TempC string `json:"temp_C"`
+	} `json:"current_condition"`
+}
+
+type Parsed struct {
+	Success       bool   `json:"success"`
+	ExecutionId   string `json:"execution_id"`
+	Authorization string `json:"authorization"`
+}
