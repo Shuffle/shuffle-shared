@@ -3074,7 +3074,7 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &files)
-			if err == nil {
+			if err == nil || len(files) > 0 {
 				return files, nil
 			}
 		} else {
@@ -3184,7 +3184,7 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 		if err != nil {
 			if !strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
-				return files, err
+				//return files, err
 			}
 		} else {
 			//log.Printf("[INFO] Got %d files for md5: %s", len(files), md5)
@@ -3195,8 +3195,6 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 				}
 			}
 
-			//log.Printf("[INFO] Got %d PARSD files for md5: %s", len(parsedFiles), md5)
-
 			if len(parsedFiles) == 0 {
 				return parsedFiles, errors.New(fmt.Sprintf("No file found for md5: %s", md5))
 				//log.Printf("[INFO] Couldn't find file with md5 %s for org %s", md5, orgId)
@@ -3205,8 +3203,6 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 			files = parsedFiles
 		}
 	}
-
-	//log.Printf("[DEBUG] Got hit: %s", file)
 
 	if project.CacheDb {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
@@ -6868,7 +6864,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &allworkflowappAuths)
-			if err == nil {
+			if err == nil || len(allworkflowappAuths) > 0 {
 				return allworkflowappAuths, nil
 			}
 		} else {

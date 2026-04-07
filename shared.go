@@ -20381,10 +20381,36 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 
 	if orgId != user.ActiveOrg.Id {
 		if !categoryConfig.Settings.Public {
-			log.Printf("[AUDIT] User %s (%s) tried to list cache keys for org %s without access", user.Username, user.Id, orgId)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "This category is no longer public."}`))
-			return
+			sourceExecution, sourceExecutionOk := request.URL.Query()["execution_id"]
+			sourceAuth, sourceAuthOk := request.URL.Query()["authorization"]
+			if !sourceAuthOk || !sourceExecutionOk {
+				log.Printf("[AUDIT] User %s (%s) tried to list cache keys for org %s without access", user.Username, user.Id, orgId)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "This category is no longer public."}`))
+				return
+			}
+
+			foundExec, err := GetWorkflowExecution(ctx, sourceExecution[0])
+			if err != nil {
+				log.Printf("[WARNING] Failed getting exec during cache set: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "No permission to get execution (2)"}`))
+				return
+			}
+
+			if sourceAuth[0] != foundExec.Authorization {
+				log.Printf("[INFO] Execution auth %s and %s don't match", foundExec.Authorization, sourceAuth[0])
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Failed authentication (3)"}`))
+				return
+			}
+
+			if len(foundExec.ExecutionOrg) == 0 {
+				log.Printf("[WARNING] Execution %s doesn't have an org set", foundExec.ExecutionId)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Failed authentication (4)"}`))
+				return
+			}
 		}
 
 		// Cleanup just in case

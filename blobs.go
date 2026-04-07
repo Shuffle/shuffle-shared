@@ -2425,6 +2425,7 @@ for content in input_data:
         "urls": [content["url"]],
       }
 
+uploaded = {}
 for k, v in all_items.items():
     new_list = []
 
@@ -2445,13 +2446,16 @@ for k, v in all_items.items():
         })
 
         cnt += 1
-        #if cnt == 100:
-        #    break
+        if cnt >= 100:
+            break
 
     if len(new_list) > 0:
         ret = requests.post(upload_url, json=new_list, headers=parsed_headers)
         print(ret.text)
         print(ret.status_code)
+		uploaded["ioc_" + k] = len(new_list)
+
+print(json.dumps(uploaded))
 	`, marshaledRegexes, timestampFormat, timestampFormat, timestampFormat2, timestampFormat2)
 }
 
