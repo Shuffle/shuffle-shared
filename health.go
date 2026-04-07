@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"math"
 
 	"github.com/goccy/go-json"
 
@@ -4239,7 +4240,7 @@ func startAgentExecution(baseUrl, apiKey, orgId string) (agentStartResult, error
 	requestBody := map[string]interface{}{
 		"params": map[string]interface{}{
 			"input": map[string]string{
-				"text": "Answer this simple question: What is 2 + 2? Just respond with the number.",
+				"text": "Get the current weather of new york using https://wttr.in/New+York api and just output the current weather temperature without any commentary, just output the number in celcius and dont include the decimals, use action as custom_action, tool as api and category as singul keep the url as it and not needed for any other hallucinated params or headers, just include the url as is and the method name which is GET.",
 			},
 		},
 	}
@@ -4274,11 +4275,8 @@ func startAgentExecution(baseUrl, apiKey, orgId string) (agentStartResult, error
 		return agentStartResult{}, fmt.Errorf("agent start failed with status %d", resp.StatusCode)
 	}
 
-	var parsed struct {
-		Success       bool   `json:"success"`
-		ExecutionId   string `json:"execution_id"`
-		Authorization string `json:"authorization"`
-	}
+	parsed := Parsed{}
+
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return agentStartResult{}, fmt.Errorf("failed parsing agent start response: %w", err)
 	}
@@ -4381,18 +4379,38 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 		}
 
 		// Update run status whenever the execution is no longer EXECUTING.
-		if execution.Status != "EXECUTING" {
+		if execution.Status != "EXECUTING" && execution.Status != "WAITING" {
 			log.Printf("[DEBUG] Health check for Agent execution status: %s (ID: %s)", execution.Status, agentHealth.ExecutionId)
 			agentHealth.RunFinished = true
 			agentHealth.RunStatus = execution.Status
-		}
 
-		// Extract agent-level output (decisions, LLM success) from action results.
-		if agentOutput, found := extractAgentOutputFromResults(execution); found {
-			agentHealth.AgentStatus = agentOutput.Status
-			agentHealth.AgentDecisionCount = len(agentOutput.Decisions)
-			agentHealth.LLMCallSuccess = true
-			log.Printf("[DEBUG] Health check for Agent made %d decisions, LLM call successful", len(agentOutput.Decisions))
+			// Extract agent-level output (decisions, LLM success) from action results.
+			if agentOutput, found := extractAgentOutputFromResults(execution); found {
+				agentHealth.AgentStatus = agentOutput.Status
+				agentTemp, err := strconv.Atoi(strings.TrimSpace(agentOutput.Output))
+				if err != nil {
+					log.Printf("[ERROR] Agent Health check failed due to atoi conversion failure: %s", err)
+					agentHealth.LLMCallSuccess = false
+				}
+
+				realTemp, apiErr := getRealTempC()
+				if apiErr != nil {
+					log.Printf("[ERROR] Agent Health check failed due to weather api call failure: %s", apiErr)
+					agentHealth.LLMCallSuccess = false
+				} else {
+					diff := int(math.Abs(float64(agentTemp - realTemp)))
+					if diff > 1 {
+						agentHealth.LLMCallSuccess = false
+						log.Printf("[ERROR] Agent Health check - LLM Call was not successful. Expected: %d, Got: %d, Diff: %d", realTemp, agentTemp, diff)
+					} else {
+						agentHealth.LLMCallSuccess = true
+						log.Printf("[INFO] Agent Health check - LLM Call was successful. Expected: %d, Got: %d, Diff: %d", realTemp, agentTemp, diff)
+					}
+				}
+
+				agentHealth.AgentDecisionCount = len(agentOutput.Decisions)
+				log.Printf("[DEBUG] Health check for Agent made %d decisions, LLM call successful", len(agentOutput.Decisions))
+			}
 		}
 
 		if execution.Status == "FINISHED" {
@@ -4415,4 +4433,30 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 	}
 
 	return agentHealth, nil
+}
+
+func getRealTempC() (int, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get("https://wttr.in/New+York?format=j1")
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	var data WttrResponse
+
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return 0, err
+	}
+
+	if len(data.CurrentCondition) > 0 {
+		// Parse as float first to handle "9.0" or "9.5" without crashing
+		val, err := strconv.ParseFloat(data.CurrentCondition[0].TempC, 64)
+		if err != nil {
+			return 0, err
+		}
+		return int(math.Round(val)), nil
+	}
+
+	return 0, fmt.Errorf("no data")
 }
