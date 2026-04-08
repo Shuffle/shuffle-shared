@@ -961,7 +961,16 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 	}
 
 	proxyScheme := "https"
-	proxyHost := fmt.Sprintf("shuffler.io")
+	proxyHost := "shuffler.io"
+	if len(os.Getenv("SHUFFLE_MAIN_REGION_HOST")) > 0 {
+		proxyHost = os.Getenv("SHUFFLE_MAIN_REGION_HOST")
+		if strings.HasPrefix(proxyHost, "http://") {
+			proxyScheme = "http"
+			proxyHost = strings.TrimPrefix(proxyHost, "http://")
+		} else if strings.HasPrefix(proxyHost, "https://") {
+			proxyHost = strings.TrimPrefix(proxyHost, "https://")
+		}
+	}
 	httpClient := &http.Client{
 		Timeout: 120 * time.Second,
 	}
