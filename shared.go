@@ -286,7 +286,13 @@ func ConstructSessionCookie(value string, expires time.Time) *http.Cookie {
 
 	if project.Environment == "cloud" {
 		c.Domain = ".shuffler.io"
+		if len(os.Getenv("SHUFFLE_COOKIE_DOMAIN")) > 0 {
+			c.Domain = os.Getenv("SHUFFLE_COOKIE_DOMAIN")
+		}
 		c.Secure = true
+		if os.Getenv("SHUFFLE_COOKIE_SECURE") == "false" {
+			c.Secure = false
+		}
 		//c.SameSite = http.SameSiteLaxMode
 		c.SameSite = http.SameSiteNoneMode
 	}
@@ -15394,10 +15400,10 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 }
 
 func verifier() (*CodeVerifier, error) {
-	r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
-	b := make([]byte, 32, 32)
-	for i := 0; i < 32; i++ {
-		b[i] = byte(r.Intn(255))
+	b := make([]byte, 32)
+	_, err := rand.Read(b)
+	if err != nil {
+		return nil, err
 	}
 	return CreateCodeVerifierFromBytes(b)
 }
@@ -15490,7 +15496,7 @@ func getOpenIdUrlCloud(request *http.Request, org Org, user User, mode string) (
 	if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
 		baseUrl = os.Getenv("SSO_REDIRECT_URL")
 	}
-	redirectUrl := url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", baseUrl))
+	redirectUrl := fmt.Sprintf("%s/api/v1/login_openid", baseUrl)
 
 	state := ""
 	if !signIn {
@@ -15520,13 +15526,7 @@ func getOpenIdUrlCloud(request *http.Request, org Org, user User, mode string) (
 		params.Set("code_challenge", codeChallenge)
 	}
 
-	paramString := ""
-	for key, value := range params {
-		paramString += fmt.Sprintf("%s=%s&", key, value[0])
-	}
-	paramString = strings.TrimSuffix(paramString, "&")
-
-	baseSSOUrl = baseSSOUrl + "?" + paramString
+	baseSSOUrl = baseSSOUrl + "?" + params.Encode()
 
 	log.Printf("[DEBUG] Generated SSO URL: %s", baseSSOUrl)
 
@@ -24111,13 +24111,21 @@ func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// For Okta-style URLs, issuer includes /oauth2/default; for Auth0/others, it's just the origin
+	// Derive a base issuer URL, then try to get the canonical issuer from well-known config
 	issuer := fmt.Sprintf("%s://%s", parsedAuthUrl.Scheme, parsedAuthUrl.Host)
 	if strings.Contains(parsedAuthUrl.Path, "/oauth2/") {
-		// Okta: https://dev-xxx.okta.com/oauth2/default/v1/authorize → issuer is https://dev-xxx.okta.com/oauth2/default
 		parts := strings.Split(parsedAuthUrl.Path, "/oauth2/")
 		if len(parts) > 1 {
 			oauthPath := strings.Split(parts[1], "/")
 			issuer = fmt.Sprintf("%s://%s/oauth2/%s", parsedAuthUrl.Scheme, parsedAuthUrl.Host, oauthPath[0])
+		}
+	}
+
+	// Use well-known discovery to get the canonical issuer (handles trailing slash mismatches)
+	wellKnownConfig, wellKnownErr := fetchWellKnownConfig(ctx, issuer, org.SSOConfig.OpenIdAuthorization)
+	if wellKnownErr == nil {
+		if canonical, ok := wellKnownConfig["issuer"].(string); ok && len(canonical) > 0 {
+			issuer = canonical
 		}
 	}
 	userInfo, err := fetchUserInfoFromToken(ctx, openid.AccessToken, issuer, org.SSOConfig.OpenIdAuthorization)
@@ -24170,6 +24178,16 @@ func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	redirectUrl := "https://shuffler.io/workflows"
+	if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+		baseUrl := os.Getenv("SSO_REDIRECT_URL")
+		if strings.Contains(baseUrl, "/api/v1/login_openid") {
+			redirectUrl = strings.Replace(baseUrl, "/api/v1/login_openid", "/workflows", 1)
+		} else if !strings.HasSuffix(baseUrl, "/workflows") {
+			redirectUrl = fmt.Sprintf("%s/workflows", baseUrl)
+		} else {
+			redirectUrl = baseUrl
+		}
+	}
 
 	if len(userName) == 0 {
 		log.Printf("[ERROR] Username (%v) is empty in OpenID login for org: %v", userName, org.Id)
