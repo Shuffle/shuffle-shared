@@ -77,6 +77,19 @@ func EstimatePromptTokens(messages []openai.ChatCompletionMessage) int64 {
 	return (totalChars + 3) / 4
 }
 
+// EnsureContextWithCaller ensures ctx is not nil and sets caller name if not already set
+func EnsureContextWithCaller(ctx context.Context, callerName string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	
+	if len(ctx.Value("caller").(string)) == 0 {
+		ctx = context.WithValue(ctx, "caller", callerName)
+	}
+	
+	return ctx
+}
+
 // Provide an incident triage and response plan for the reported incident finding. Make a short list of actions to perform in the following format: [{"title": "Title of the task", "category": "triage/containment/recovery/communication/documentation", "completed": false, "createdBy": "ai-agent@shuffler.io"}]. ONLY output as JSON array and nothing more. After the list is made, add these to the metadata.extensions.custom_attributes.tasks[] in the next action.
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
@@ -517,13 +530,7 @@ func FindNextApiStep(ctx context.Context, originalFields []Valuereplace, action 
 	//result = strings.Replace(result, "\\\"", "\"", -1)
 	//log.Printf("[INFO] Result: %s", result)
 
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	if len(ctx.Value("caller").(string)) == 0 {
-		ctx = context.WithValue(ctx, "caller", "FindNextApiStep")
-	}
+	ctx = EnsureContextWithCaller(ctx, "FindNextApiStep")
 
 	// Unmarshal result to a map and find status code
 	var resultMap map[string]interface{}
@@ -780,13 +787,7 @@ func RunSelfCorrectingRequest(ctx context.Context, originalFields []Valuereplace
 		fullUrl = fmt.Sprintf("- API URL: %s", fullUrl)
 	}
 
-    if ctx == nil {
-        ctx = context.Background()
-    }
-
-    if len(ctx.Value("caller").(string)) == 0 {
-        ctx = context.WithValue(ctx, "caller", "RunSelfCorrectingRequest")
-    }
+	ctx = EnsureContextWithCaller(ctx, "RunSelfCorrectingRequest")
 
 	// Add Intent Context if available
 	intentContext := ""
@@ -1196,13 +1197,7 @@ func getOpenApiInformation(ctx context.Context, appname, action string) string {
 	var contentOutput string
 	action = GetCorrectActionName(action)
 
-	if ctx == nil {
-        ctx = context.Background()
-    }
-
-    if len(ctx.Value("caller").(string)) == 0 {
-        ctx = context.WithValue(ctx, "caller", "getOpenApiInformation")
-    }
+	ctx = EnsureContextWithCaller(ctx, "getOpenApiInformation")
 
 	systemMessage := fmt.Sprintf("Output a valid JSON body format for a HTTP request %s in the %s API?", action, appname)
 
@@ -1229,13 +1224,7 @@ func UpdateActionBody(ctx context.Context, action WorkflowAppAction) (string, er
 		return "", errors.New("No app name found")
 	}
 
-	if ctx == nil {
-        ctx = context.Background()
-    }
-
-    if len(ctx.Value("caller").(string)) == 0 {
-        ctx = context.WithValue(ctx, "caller", "UpdateActionBody")
-    }
+ctx = EnsureContextWithCaller(ctx, "UpdateActionBody")
 
 	newName := strings.Replace(strings.Title(GetCorrectActionName(action.Name)), " ", "_", -1)
 
@@ -1777,13 +1766,7 @@ func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys [
 		app.Categories = []string{}
 	}
 
-	if ctx == nil {
-        ctx = context.Background()
-    }
-
-    if len(ctx.Value("caller").(string)) == 0 {
-        ctx = context.WithValue(ctx, "caller", "AutofixAppLabels")
-    }
+	ctx = EnsureContextWithCaller(ctx, "AutofixAppLabels")
 
 	// Check if the app has any actions
 	foundCategory := AppCategory{}
@@ -4466,13 +4449,7 @@ func findNextAction(ctx context.Context, action Action, stepOutput []byte, addit
 		return "", action, err, additionalInfo
 	}
 
-	if ctx == nil {
-        ctx = context.Background()
-    }
-
-    if len(ctx.Value("caller").(string)) == 0 {
-        ctx = context.WithValue(ctx, "caller", "FindNextAction")
-    }
+	ctx = EnsureContextWithCaller(ctx, "FindNextAction")
 
 	status := -1
 	statusCode, ok := resultMap["status"]
@@ -4934,13 +4911,7 @@ func runSelfCorrectingRequest(ctx context.Context, action Action, status int, ad
 	// FIX: Make it find shuffle internal docs as well for how an app works
 	// Make it work with Shuffle tools, as now it's explicitly trying to fix fields for HTTP apps
 
-	if ctx == nil {
-        ctx = context.Background()
-    }
-
-    if len(ctx.Value("caller").(string)) == 0 {
-        ctx = context.WithValue(ctx, "caller", "runSelfCorrectingRequest")
-    }
+ctx = EnsureContextWithCaller(ctx, "runSelfCorrectingRequest")
 
 	if len(action.InvalidParameters) == 0 && additionalInfo == "" && strings.ToUpper(appname) != "HTTP" && !strings.Contains(strings.ToUpper(appname), "SHUFFLE") {
 		additionalInfo = getOpenApiInformation(ctx, strings.Replace(appname, " ", "", -1), strings.Replace(action.Name, "_", " ", -1))
@@ -9435,13 +9406,7 @@ func RunAiQuery(ctx context.Context, systemMessage, userMessage string, incoming
 
 func generateWorkflowJson(ctx context.Context, input QueryInput, user User, workflow *Workflow) (*Workflow, error) {
 
-	if ctx == nil {
-        ctx = context.Background()
-    }
-
-    if len(ctx.Value("caller").(string)) == 0 {
-        ctx = context.WithValue(ctx, "caller", "generateWorkflowJson")
-    }
+        ctx = EnsureContextWithCaller(ctx, "generateWorkflowJson")
 
 	apps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
@@ -10722,13 +10687,7 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 
 func editWorkflowWithLLM(ctx context.Context, workflow *Workflow, user User, input WorkflowEditAIRequest) (*Workflow, error) {
 
-	if ctx == nil {
-        ctx = context.Background()
-    }
-
-    if len(ctx.Value("caller").(string)) == 0 {
-        ctx = context.WithValue(ctx, "caller", "editWorkflowWithLLM")
-    }
+        ctx = EnsureContextWithCaller(ctx, "editWorkflowWithLLM")
 
 	apps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
