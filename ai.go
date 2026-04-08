@@ -1224,7 +1224,7 @@ func UpdateActionBody(ctx context.Context, action WorkflowAppAction) (string, er
 		return "", errors.New("No app name found")
 	}
 
-ctx = EnsureContextWithCaller(ctx, "UpdateActionBody")
+	ctx = EnsureContextWithCaller(ctx, "UpdateActionBody")
 
 	newName := strings.Replace(strings.Title(GetCorrectActionName(action.Name)), " ", "_", -1)
 
@@ -4911,7 +4911,7 @@ func runSelfCorrectingRequest(ctx context.Context, action Action, status int, ad
 	// FIX: Make it find shuffle internal docs as well for how an app works
 	// Make it work with Shuffle tools, as now it's explicitly trying to fix fields for HTTP apps
 
-ctx = EnsureContextWithCaller(ctx, "runSelfCorrectingRequest")
+	ctx = EnsureContextWithCaller(ctx, "runSelfCorrectingRequest")
 
 	if len(action.InvalidParameters) == 0 && additionalInfo == "" && strings.ToUpper(appname) != "HTTP" && !strings.Contains(strings.ToUpper(appname), "SHUFFLE") {
 		additionalInfo = getOpenApiInformation(ctx, strings.Replace(appname, " ", "", -1), strings.Replace(action.Name, "_", " ", -1))
@@ -9406,7 +9406,7 @@ func RunAiQuery(ctx context.Context, systemMessage, userMessage string, incoming
 
 func generateWorkflowJson(ctx context.Context, input QueryInput, user User, workflow *Workflow) (*Workflow, error) {
 
-        ctx = EnsureContextWithCaller(ctx, "generateWorkflowJson")
+	ctx = EnsureContextWithCaller(ctx, "generateWorkflowJson")
 
 	apps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
@@ -10687,7 +10687,7 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 
 func editWorkflowWithLLM(ctx context.Context, workflow *Workflow, user User, input WorkflowEditAIRequest) (*Workflow, error) {
 
-        ctx = EnsureContextWithCaller(ctx, "editWorkflowWithLLM")
+	ctx = EnsureContextWithCaller(ctx, "editWorkflowWithLLM")
 
 	apps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
