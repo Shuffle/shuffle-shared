@@ -14060,6 +14060,14 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				sameValue = true
 			}
 
+			if len(cacheData.Enrichments) > 0 && len(cacheData.Value) == 0 {
+				if debug { 
+					log.Printf("[DEBUG] Having enrichments with empty value doesn't make sense, skipping enrichments for key %s in category %s", cacheData.Key, cacheData.Category)
+				}
+
+				cacheData.Value = config.Value
+			}
+
 			if getCacheError == nil && config.Created > 0 {
 
 				// Compares old vs new, checks if allowed
@@ -14136,6 +14144,11 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				cacheData.Authorization = config.Authorization
 				cacheData.SuborgDistribution = config.SuborgDistribution
 				cacheData.PublicAuthorization = config.PublicAuthorization
+
+				if len(cacheData.Enrichments) == 0 {
+					cacheData.Enrichments = config.Enrichments
+				} 
+
 
 				if len(cacheData.Tags) == 0 {
 					cacheData.Tags = config.Tags

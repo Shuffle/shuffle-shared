@@ -12863,6 +12863,8 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Username))
 		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Id))
 
+		// Added another to ensure we handle empty cursor
+		DeleteCache(ctx, fmt.Sprintf("%s__childorgs", inneruser.ActiveOrg.Id))
 		DeleteCache(ctx, fmt.Sprintf("%s_childorgs", inneruser.ActiveOrg.Id))
 	}
 
@@ -20400,14 +20402,14 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 
 			if sourceAuth[0] != foundExec.Authorization {
 				log.Printf("[INFO] Execution auth %s and %s don't match", foundExec.Authorization, sourceAuth[0])
-				resp.WriteHeader(401)
+				resp.WriteHeader(403)
 				resp.Write([]byte(`{"success": false, "reason": "Failed authentication (3)"}`))
 				return
 			}
 
 			if len(foundExec.ExecutionOrg) == 0 {
 				log.Printf("[WARNING] Execution %s doesn't have an org set", foundExec.ExecutionId)
-				resp.WriteHeader(401)
+				resp.WriteHeader(403)
 				resp.Write([]byte(`{"success": false, "reason": "Failed authentication (4)"}`))
 				return
 			}
@@ -21389,6 +21391,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 			Key:      tmpDataOverride.Key,
 			Category: tmpDataOverride.Category,
 			Tags:     tmpDataOverride.Tags,
+			Enrichments: tmpDataOverride.Enrichments,
 
 			Value: parsedValue,
 		})
@@ -22646,7 +22649,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	}
 
 	if debug {
-		log.Printf("[DEBUG] Starting single action execution check for %s. Max seconds: %d", workflowExecution.ExecutionId, maxSeconds)
+		log.Printf("[DEBUG][%s] Starting single action execution check. Max seconds: %d", workflowExecution.ExecutionId, maxSeconds)
 	}
 
 	addedParams := []string{}
@@ -22748,11 +22751,14 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		if time.Now().Unix()-startTime > int64(maxSeconds) {
 
 			returnBody.Success = true
-
 			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
 
 			break
 		}
+	}
+
+	if debug { 
+		log.Printf("[DEBUG][%s] Single action execution check finished. Result len: %d, Errors: %#v", workflowExecution.ExecutionId, len(returnBody.Result), returnBody.Errors)
 	}
 
 	if len(returnBody.Result) == 0 && len(returnBody.Errors) == 0 {
@@ -26585,7 +26591,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	// Check if the actions are children of the startnode?
 	imageNames := []string{}
 	cloudExec := false
-	for _, action := range workflowExecution.Workflow.Actions {
+	for actionIndex, action := range workflowExecution.Workflow.Actions {
 
 		// Verify if the action environment exists and append
 		found := false
@@ -26611,8 +26617,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			if strings.ToLower(action.Environment) == "cloud" && project.Environment == "cloud" {
 				//log.Printf("[DEBUG] Couldn't find environment %s in cloud for some reason.", action.Environment)
 			} else {
-				log.Printf("[WARNING][%s] Couldn't find environment %s when running workflow '%s'. Maybe it's inactive?", workflowExecution.ExecutionId, action.Environment, workflowExecution.Workflow.ID)
-				return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env '%s' in org '%s'", action.Environment, workflowExecution.ExecutionOrg))
+				if action.Environment == "Shuffle" && project.Environment == "cloud" {
+					action.Environment = "Cloud"
+					workflowExecution.Workflow.Actions[actionIndex].Environment = "Cloud"
+				} else {
+					log.Printf("[WARNING][%s] Couldn't find environment '%s' when running workflow '%s'. Maybe it's inactive?", workflowExecution.ExecutionId, action.Environment, workflowExecution.Workflow.ID)
+					return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env '%s' in org '%s'", action.Environment, workflowExecution.ExecutionOrg))
+				}
 			}
 		}
 

@@ -1207,12 +1207,18 @@ type DatastoreKeyMini struct {
 	Existed bool   `json:"existed" datastore:"existed"` // If the key existed before the update
 }
 
+type Enrichment struct { 
+	Type string `json:"type" datastore:"type"`
+	Data string `json:"data" datastore:"data"`
+}
+
 // Not sure how this is mini anymore (: 
 type CacheKeyDataMini struct {
 	Category            string `json:"category" datastore:"category"`
 	Key                 string `json:"key" datastore:"Key"`
 	Value               string `json:"value" datastore:"Value,noindex"`
 	IgnoreSecurityRules bool   `json:"ignore_security_rules" datastore:"ignore_security_rules,noindex"`
+	Enrichments []Enrichment `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 
 	OrgId              string   `json:"org_id,omitempty" datastore:"OrgId"`
 	ExecutionId        string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
@@ -1227,6 +1233,8 @@ type CacheKeyDataFallback struct {
 	Value    any      `json:"value" datastore:"Value,noindex"`
 	Category string   `json:"category" datastore:"category"`
 	Tags     []string `json:"tags,omitempty" datastore:"tags"`
+	
+	Enrichments []Enrichment `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 }
 
 type CacheKeyData struct {
@@ -1240,6 +1248,7 @@ type CacheKeyData struct {
 	Category            string   `json:"category" datastore:"category"`
 	Tags                []string `json:"tags,omitempty" datastore:"tags"`
 	IgnoreSecurityRules bool     `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"`
+	Enrichments []Enrichment `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`

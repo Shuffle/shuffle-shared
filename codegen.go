@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bufio"
+	"crypto/sha1"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -29,6 +30,7 @@ import (
 	"cloud.google.com/go/storage"
 	docker "github.com/docker/docker/client"
 	"gopkg.in/yaml.v2"
+	uuid "github.com/satori/go.uuid"
 
 	"github.com/frikky/kin-openapi/openapi3"
 	//iocParser "github.com/Shuffle/indicator-parser/go/ioc"
@@ -4990,6 +4992,11 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		}
 
 	} else if parsedName == "enrich" {
+
+		if debug { 
+			log.Printf("[DEBUG] Running enrich automation for key %s in category %s", cacheData.Key, cacheData.Category)
+		}
+
 		// Prevent recursion
 		cacheKey := fmt.Sprintf("enrich_wait_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
 		data, err := GetCache(ctx, cacheKey)
@@ -5004,15 +5011,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		// Use key "enrichments" =>
 		// [{"name": "answers.ip", "value": "92.24.47.250", "type": "location", "data": {"city": "Socotra", "continent": "Asia", "coordinates": [-25.4153, 17.0743], "country": "YE", "desc": "Yemen"}}]
 
-		parsedData := map[string]interface{}{}
-		if err := json.Unmarshal(marshalledBody, &parsedData); err != nil {
-			//log.Printf("[WARNING] Failed to unmarshal marshalledBody for enrich for key %s in category %s: %s", cacheData.Key, cacheData.Category, err)
-			return err
-		}
-
-		if _, ok := parsedData["enrichments"]; ok {
-			//log.Printf("[DEBUG] Enrichments key already exists - skipping enrichment automation for key %s in category %s", cacheData.Key, cacheData.Category)
-			return nil
+		if cacheData.Enrichments != nil && len(cacheData.Enrichments) > 0 {
 		}
 
 		// Send the data into shuffle_tools => parse_ioc?
@@ -5054,9 +5053,22 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			return errors.New("No admin user with API key found")
 		}
 
+		// Uses the same as the API /api/v*/workflows/generate  
+		seedString := fmt.Sprintf("%s_Enable Threat feeds_webhook", cacheData.OrgId)
+
+		hash := sha1.New()
+		hash.Write([]byte(seedString))
+		hashBytes := hash.Sum(nil)
+
+		uuidBytes := make([]byte, 16)
+		copy(uuidBytes, hashBytes)
+		relevantWorkflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
 		// FIXME: Find it dynamically.
-		relevantWorkflowId := "fd44510b-dab7-4e77-8882-e205cb844c84"
 		fullUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", backendUrl, relevantWorkflowId)
+		if debug { 
+			log.Printf("[DEBUG] Running enrich automation workflow %s for key %s in category %s", relevantWorkflowId, cacheData.Key, cacheData.Category)
+		}
 
 		executionRequest := ExecutionRequest{
 			ExecutionArgument: string(marshalledBody),
