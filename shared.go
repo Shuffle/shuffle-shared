@@ -16396,9 +16396,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		newCookie := ConstructSessionCookie(userdata.Session, expiration)
 		http.SetCookie(resp, newCookie)
 
-		newCookie.Name = "__session"
-		http.SetCookie(resp, newCookie)
-
 		//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", userdata.Session)
 		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
 			Key:        "session_token",
@@ -16413,15 +16410,18 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		})
 
 		// Singul handler
-	//	if project.Environment == "cloud" {
-	//		newCookie.Name = "__session"
-	//		newCookie.Domain = ".singul.io"
-	//		http.SetCookie(resp, newCookie)
+		if project.Environment == "cloud" {
+			newCookie.Name = "__session"
+			newCookie.Domain = ".singul.io"
+			http.SetCookie(resp, newCookie)
 
-	//		newCookie.Name = "__session"
-	//		newCookie.Domain = ".shutdown.no"
-	//		http.SetCookie(resp, newCookie)
-	//	}
+			newCookie.Name = "__session"
+			newCookie.Domain = ".shutdown.no"
+			http.SetCookie(resp, newCookie)
+		}
+		
+		newCookie.Name = "__session"
+		http.SetCookie(resp, newCookie)
 
 		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, userdata.Session, expiration.Unix(), regionUrl)
 		newData, err := json.Marshal(returnValue)
