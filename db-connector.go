@@ -16480,21 +16480,6 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	}
 
-	// Only cache if NO cursor at all.
-	// Otherwise we need to track and clean up all cursors(?)
-	if project.CacheDb {
-		newcache, err := json.Marshal(cacheKeys)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
-			return cacheKeys, cursor, nil
-		}
-
-		err = SetCache(ctx, cacheKey, newcache, 5)
-		if err != nil {
-			log.Printf("[WARNING] Failed updating cache keys cache: %s", err)
-		}
-	}
-
 	foundOrg, err := GetOrg(ctx, orgId)
 	if err == nil && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
 		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
@@ -16526,6 +16511,21 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 					cacheKeys = append(cacheKeys, parentCache)
 				}
 			}
+		}
+	}
+
+	// Only cache if NO cursor at all.
+	// Otherwise we need to track and clean up all cursors(?)
+	if project.CacheDb {
+		newcache, err := json.Marshal(cacheKeys)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
+			return cacheKeys, cursor, nil
+		}
+
+		err = SetCache(ctx, cacheKey, newcache, 5)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating cache keys cache: %s", err)
 		}
 	}
 
