@@ -3699,7 +3699,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 	// __session first due to Compatibility issues
 	c, err := request.Cookie("__session")
-	if err != nil {
+	if err != nil || len(c.Value) == 0 {
 		c, err = request.Cookie("session_token")
 	}
 
