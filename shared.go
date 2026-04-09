@@ -16421,6 +16421,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 		
 		newCookie.Name = "__session"
+		newCookie.Domain = ".shuffler.io"
 		http.SetCookie(resp, newCookie)
 
 		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, userdata.Session, expiration.Unix(), regionUrl)
