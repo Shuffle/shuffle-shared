@@ -912,7 +912,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 				return workflowExecution, nil
 			} else {
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG] Failed mapping workflowexecution cache for '%s': %s", id, err)
 				}
 			}
@@ -1023,7 +1023,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		newexecution, err := json.Marshal(workflowExecution)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling execution: %s", err)
-			return workflowExecution, getErr 
+			return workflowExecution, getErr
 		}
 
 		err = SetCache(ctx, id, newexecution, 30)
@@ -1032,7 +1032,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 	}
 
-	return workflowExecution, getErr 
+	return workflowExecution, getErr
 }
 
 func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string) (*WorkflowExecution, error) {
@@ -3516,7 +3516,7 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 // Doesn't get ALL anymore. Max 100 by default (cloud)
 func GetAllChildOrgs(ctx context.Context, orgId string, cursorInput ...string) ([]Org, string, error) {
 	cursor := ""
-	if len(cursorInput) > 0 { 
+	if len(cursorInput) > 0 {
 		cursor = cursorInput[0]
 	}
 
@@ -3623,14 +3623,14 @@ func GetAllChildOrgs(ctx context.Context, orgId string, cursorInput ...string) (
 		//	}
 		//}
 
-		maxAmount := 100 
+		maxAmount := 100
 		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(100)
 
 		if cursor != "" {
 			outputcursor, err := datastore.DecodeCursor(cursor)
 			if err != nil {
 				log.Printf("[ERROR] Error decoding cursor in creator org load: %s", err)
-				//return orgs, "", err 
+				//return orgs, "", err
 			}
 
 			query = query.Start(outputcursor)
@@ -3653,7 +3653,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string, cursorInput ...string) (
 					}
 				}
 
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG] SUBORG LOADER: %d", len(orgs))
 				}
 
@@ -3996,19 +3996,48 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 	}
 
 	if project.DbType == "opensearch" {
+		shouldInitializeStats := false
+
 		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
 			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
 			DocumentID: orgId,
 		})
 
-		if err != nil && !strings.Contains("status: 404", err.Error()) {
+		if err != nil && !strings.Contains(err.Error(), "status: 404") {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return stats, err
 		}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
+		if err != nil && strings.Contains(err.Error(), "status: 404") {
+			shouldInitializeStats = true
+		}
+
+		if !shouldInitializeStats {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if res.StatusCode == 404 {
+				shouldInitializeStats = true
+			} else {
+				respBody, err := ioutil.ReadAll(res.Body)
+				if err != nil {
+					return stats, err
+				}
+
+				wrapped := ExecutionInfoWrapper{}
+				err = json.Unmarshal(respBody, &wrapped)
+				if err != nil {
+					return stats, err
+				}
+
+				if !wrapped.Found {
+					shouldInitializeStats = true
+				} else {
+					stats = &wrapped.Source
+				}
+			}
+		}
+
+		if shouldInitializeStats {
 			org, err := GetOrg(ctx, orgId)
 			if err != nil {
 				log.Printf("[ERROR] Failed to get org(%s) for org_stats: %s", orgId, err)
@@ -4024,19 +4053,6 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 
 			return stats, nil
 		}
-
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return stats, err
-		}
-
-		wrapped := ExecutionInfoWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return stats, err
-		}
-
-		stats = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
 		if err := project.Dbclient.Get(ctx, key, stats); err != nil {
@@ -6446,7 +6462,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 	if len(user.Username) == 0 {
-		log.Printf("[ERROR] Setting user without username: %s. Is this expected?", user.Id) 
+		log.Printf("[ERROR] Setting user without username: %s. Is this expected?", user.Id)
 	}
 
 	if updateOrg {
@@ -10543,20 +10559,20 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 	var users []User
 
-//	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
-//	if project.CacheDb {
-//		cache, err := GetCache(ctx, cacheKey)
-//		if err == nil {
-//			cacheData := []byte(cache.([]uint8))
-//			err = json.Unmarshal(cacheData, &users)
-//			if err == nil && len(users) > 0 {
-//				log.Printf("[DEBUG] Found user apikey cache %s", cacheKey)
-//				return users[0], nil
-//			}
-//		}
-//	}
+	//	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
+	//	if project.CacheDb {
+	//		cache, err := GetCache(ctx, cacheKey)
+	//		if err == nil {
+	//			cacheData := []byte(cache.([]uint8))
+	//			err = json.Unmarshal(cacheData, &users)
+	//			if err == nil && len(users) > 0 {
+	//				log.Printf("[DEBUG] Found user apikey cache %s", cacheKey)
+	//				return users[0], nil
+	//			}
+	//		}
+	//	}
 
-	if (debug) {
+	if debug {
 		log.Printf("[DEBUG] Looking for the API Key pass the cache check %s", project.DbType)
 	}
 
@@ -10651,34 +10667,34 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	}
 
 	if len(users) != 0 {
-		if (debug) {
+		if debug {
 			log.Printf("[DEBUG] Moving away from getapikey '%s' (%s)", users[0].Username, users[0].Id)
 		}
 	}
 
-//	if project.CacheDb {
-//		userData, err := json.Marshal(users)
-//		if err != nil {
-//			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
-//			if len(users) > 0 { 
-//				return users[0], nil 
-//			} else {
-//				return User{}, err
-//			}
-//		}
-//
-//		err = SetCache(ctx, cacheKey, userData, 10)
-//		if err != nil {
-//			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
-//		}
-//	}
+	//	if project.CacheDb {
+	//		userData, err := json.Marshal(users)
+	//		if err != nil {
+	//			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
+	//			if len(users) > 0 {
+	//				return users[0], nil
+	//			} else {
+	//				return User{}, err
+	//			}
+	//		}
+	//
+	//		err = SetCache(ctx, cacheKey, userData, 10)
+	//		if err != nil {
+	//			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
+	//		}
+	//	}
 
 	if len(users) == 0 {
 		return User{}, errors.New("No users found for this apikey (2)")
 	}
 
 	for _, user := range users {
-		if len(user.Username) > 0 && len(user.Id) > 0 { 
+		if len(user.Username) > 0 && len(user.Id) > 0 {
 			return user, nil
 		}
 	}
@@ -15245,7 +15261,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 								cacheData = &cacheKey
 								break
 							}
-							
+
 							for _, subOrg := range cacheKey.SuborgDistribution {
 								if subOrg == orgId {
 									cacheData = &cacheKey
@@ -16477,21 +16493,6 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	}
 
-	// Only cache if NO cursor at all.
-	// Otherwise we need to track and clean up all cursors(?)
-	if project.CacheDb {
-		newcache, err := json.Marshal(cacheKeys)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
-			return cacheKeys, cursor, nil
-		}
-
-		err = SetCache(ctx, cacheKey, newcache, 5)
-		if err != nil {
-			log.Printf("[WARNING] Failed updating cache keys cache: %s", err)
-		}
-	}
-
 	foundOrg, err := GetOrg(ctx, orgId)
 	if err == nil && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
 		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
@@ -16523,6 +16524,21 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 					cacheKeys = append(cacheKeys, parentCache)
 				}
 			}
+		}
+	}
+
+	// Only cache if NO cursor at all.
+	// Otherwise we need to track and clean up all cursors(?)
+	if project.CacheDb {
+		newcache, err := json.Marshal(cacheKeys)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
+			return cacheKeys, cursor, nil
+		}
+
+		err = SetCache(ctx, cacheKey, newcache, 5)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating cache keys cache: %s", err)
 		}
 	}
 
