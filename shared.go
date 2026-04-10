@@ -13049,7 +13049,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		Id:   orgId,
 	})
 
-	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", parentOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", parentOrg.Id))
 
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
@@ -13093,7 +13092,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		newOrg.Users = append(newOrg.Users, loopUser)
 	}
 
-	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", newOrg.Id))
 	err = SetOrg(ctx, newOrg, newOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting new org %s: %s", newOrg.Id, err)
@@ -32659,7 +32657,7 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 
 	parentOrg.ChildOrgs = newChildOrg
 
-	suborgCacheKey := fmt.Sprintf("%s_childorgs", parentOrg.Id)
+	suborgCacheKey := fmt.Sprintf("%s__childorgs", parentOrg.Id)
 	DeleteCache(ctx, suborgCacheKey)
 	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", subOrg.Id))
 	parentOrg.SyncUsage.MultiTenant.Counter = int64(len(newChildOrg)) + 1
