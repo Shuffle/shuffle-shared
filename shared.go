@@ -872,14 +872,14 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if project.Environment == "cloud" {
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting GET ORGS request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
+	// if project.Environment == "cloud" {
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting GET ORGS request to main site handler (shuffler.io)")
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
@@ -946,15 +946,15 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Checking if it's a special region. All user-specific requests should
-	if project.Environment == "cloud" {
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting GET ORG request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
+	// // Checking if it's a special region. All user-specific requests should
+	// if project.Environment == "cloud" {
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting GET ORG request to main site handler (shuffler.io)")
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
@@ -1435,14 +1435,14 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
 
-	if project.Environment == "cloud" {
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting GET SUBORG request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
+	// if project.Environment == "cloud" {
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting GET SUBORG request to main site handler (shuffler.io)")
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
 
 	ctx := GetContext(request)
 	user, err := HandleApiAuthentication(resp, request)
@@ -5887,17 +5887,17 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if project.Environment == "cloud" {
-		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
+	// if project.Environment == "cloud" {
+	// 	// Checking if it's a special region. All user-specific requests should
+	// 	// go through shuffler.io and not subdomains
 
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting Update User request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting Update User request to main site handler (shuffler.io)")
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
 
 	userInfo, err := HandleApiAuthentication(resp, request)
 	if err != nil {
@@ -9988,15 +9988,15 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if project.Environment == "cloud" {
-		// Checking if it's a special region. All user-specific requests should
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting Get Users request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
+	// if project.Environment == "cloud" {
+	// 	// Checking if it's a special region. All user-specific requests should
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting Get Users request to main site handler (shuffler.io)")
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
@@ -12495,34 +12495,34 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[AUDIT] Api authentication failed in change org (local): %s", userErr)
 	}
 
-	if project.Environment == "cloud" {
-		// Checking if it's a special region. All user-specific requests should
-		// Clean up the users' cache for different parts
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// if project.Environment == "cloud" {
+	// 	// Checking if it's a special region. All user-specific requests should
+	// 	// Clean up the users' cache for different parts
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 
-			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
-			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
-			DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
-			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+	// 		DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
+	// 		DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+	// 		DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+	// 		DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+	// 		DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
+	// 		DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
+	// 		DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
-			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
+	// 		log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
+	// 		RedirectUserRequest(resp, request)
 
-			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
-			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
-			DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
-			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+	// 		DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
+	// 		DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+	// 		DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+	// 		DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+	// 		DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
+	// 		DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
+	// 		DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
-			return
-		}
-	}
+	// 		return
+	// 	}
+	// }
 
 	if userErr != nil {
 		resp.WriteHeader(401)
@@ -12866,20 +12866,22 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		DeleteCache(ctx, fmt.Sprintf("%s__childorgs", inneruser.ActiveOrg.Id))
 	}
 
+	DeleteCache(ctx, fmt.Sprintf("%s__childorgs", parentOrg.Id))
+
 	// Delete parent org cache as well from the org region
 	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", parentOrg.Id))
 
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
-	if project.Environment == "cloud" {
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting Create Suborg request to main site handler (shuffler.io)")
+	// if project.Environment == "cloud" {
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting Create Suborg request to main site handler (shuffler.io)")
 
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
@@ -13337,15 +13339,15 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
 
-	if project.Environment == "cloud" {
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting Edit Org request to main site handler (shuffler.io)")
+	// if project.Environment == "cloud" {
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting Edit Org request to main site handler (shuffler.io)")
 
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
@@ -16416,6 +16418,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 			newCookie.Name = "__session"
 			newCookie.Domain = ".shutdown.no"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			newCookie.Domain = ".shuffler.io"
 			http.SetCookie(resp, newCookie)
 		}
 
@@ -20229,6 +20235,8 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	var orgId string
 	category := ""
 	location := strings.Split(request.URL.String(), "/")
+
+	log.Printf("I am here 1")
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			log.Printf("Path too short: %d", len(location))
@@ -20257,7 +20265,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	if orgOk && len(orgQuery) > 0 {
 		orgId = orgQuery[0]
 	}
-
+	log.Printf("I am here 2")
 	if usererr != nil {
 		if len(category) == 0 || category == "default" {
 			log.Printf("[WARNING] No category provided in request. Returning 400.")
@@ -20283,6 +20291,8 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+
+	log.Printf("I am here 3 with orgId %s and category %s", orgId, category)
 
 	ctx := GetContext(request)
 	org, err := GetOrg(ctx, orgId)
@@ -20313,7 +20323,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	isSuccess := true
 	if keyList, keyOk := request.URL.Query()["key"]; keyOk && len(keyList) > 0 {
 		key := keyList[0]
-
+		log.Printf("I am here 4")
 		cacheId := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, key)
 		if len(category) > 0 {
 			cacheId = fmt.Sprintf("%s_%s_%s", user.ActiveOrg.Id, key, category)
@@ -20330,7 +20340,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			*cacheItem,
 		}
 	} else {
-
+		log.Printf("I am here 5")
 		if debug {
 			log.Printf("[DEBUG] Looking for keys in org %s and category %s", org.Id, category)
 		}
@@ -20341,11 +20351,15 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	log.Printf("retrived keys are: %+v", keys)
+
 	// This is NOT required unless automation/other config is set.
 	foundCategories := []string{}
 	categoryConfig := &DatastoreCategoryUpdate{}
+	log.Printf("I am here 6")
 	if len(category) > 0 && category != "default" {
 		foundCategories = append(foundCategories, category)
+		log.Printf("I am here 7")
 		categoryConfig, err = GetDatastoreCategoryConfig(ctx, org.Id, category)
 		if err != nil {
 			//if debug {
@@ -20353,6 +20367,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			//}
 		}
 	} else {
+		log.Printf("I am here 8")
 		allCategories, err := GetDatastoreCategories(ctx, org.Id)
 		if err == nil {
 			for _, cat := range allCategories {
@@ -20377,14 +20392,42 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	log.Printf("I am here 9 with found categories: %#v", foundCategories)
 	if orgId != user.ActiveOrg.Id {
 		if !categoryConfig.Settings.Public {
-			log.Printf("[AUDIT] User %s (%s) tried to list cache keys for org %s without access", user.Username, user.Id, orgId)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "This category is no longer public."}`))
-			return
+			sourceExecution, sourceExecutionOk := request.URL.Query()["execution_id"]
+			sourceAuth, sourceAuthOk := request.URL.Query()["authorization"]
+			if !sourceAuthOk || !sourceExecutionOk {
+				log.Printf("[AUDIT] User %s (%s) tried to list cache keys for org %s without access", user.Username, user.Id, orgId)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "This category is no longer public."}`))
+				return
+			}
+
+			foundExec, err := GetWorkflowExecution(ctx, sourceExecution[0])
+			if err != nil {
+				log.Printf("[WARNING] Failed getting exec during cache set: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "No permission to get execution (2)"}`))
+				return
+			}
+
+			if sourceAuth[0] != foundExec.Authorization {
+				log.Printf("[INFO] Execution auth %s and %s don't match", foundExec.Authorization, sourceAuth[0])
+				resp.WriteHeader(403)
+				resp.Write([]byte(`{"success": false, "reason": "Failed authentication (3)"}`))
+				return
+			}
+
+			if len(foundExec.ExecutionOrg) == 0 {
+				log.Printf("[WARNING] Execution %s doesn't have an org set", foundExec.ExecutionId)
+				resp.WriteHeader(403)
+				resp.Write([]byte(`{"success": false, "reason": "Failed authentication (4)"}`))
+				return
+			}
 		}
 
+		log.Printf("I am here 10")
 		// Cleanup just in case
 		categoryConfig = &DatastoreCategoryUpdate{}
 		for keyIndex, _ := range keys {
@@ -20413,10 +20456,11 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		Categories: foundCategories,
 	}
 
+	log.Printf("I am here 11 with new return: %#v", len(newReturn.Keys))
 	outputTypeList, outputTypeOk := request.URL.Query()["type"]
 	if outputTypeOk && len(outputTypeList) > 0 {
 		outputType := outputTypeList[0]
-
+		log.Printf("I am here 12 with output type %s", outputType)
 		if outputType == "ndjson" || outputType == "csv" || outputType == "raw" {
 			outputString := ""
 			for _, key := range newReturn.Keys {
@@ -20437,6 +20481,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			return
 
 		} else if outputType == "values" || outputType == "json" {
+			log.Printf("I am here 13 with output type %s", outputType)
 			newOutput := []string{}
 			for _, key := range newReturn.Keys {
 				if len(key.Value) == 0 {
@@ -20487,6 +20532,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	log.Printf("I am here 14 with new return amount %d and total amount %d", newReturn.Amount, newReturn.TotalAmount)
 	categoryCount, err := GetCacheKeyCount(ctx, orgId, category)
 	if err != nil {
 		log.Printf("[WARNING] Failed to get cache key count for org %s: %s", org.Id, err)
@@ -20833,7 +20879,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err != nil || len(cacheData.Key) == 0 {
-		log.Printf("[ERROR] Failed to DELETE cache key '%s' for org %s (delete) in category '%s'. Does it exist?", tmpData.Key, tmpData.OrgId, tmpData.Category)
+		log.Printf("[ERROR] Failed to DELETE cache key '%s' for org %s (delete) in category '%s' with error: %v. Does it exist?", tmpData.Key, tmpData.OrgId, tmpData.Category, err)
 		resp.WriteHeader(400)
 
 		result := ResultChecker{
@@ -21365,10 +21411,11 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		tmpData = append(tmpData, CacheKeyData{
-			OrgId:    tmpDataOverride.OrgId,
-			Key:      tmpDataOverride.Key,
-			Category: tmpDataOverride.Category,
-			Tags:     tmpDataOverride.Tags,
+			OrgId:       tmpDataOverride.OrgId,
+			Key:         tmpDataOverride.Key,
+			Category:    tmpDataOverride.Category,
+			Tags:        tmpDataOverride.Tags,
+			Enrichments: tmpDataOverride.Enrichments,
 
 			Value: parsedValue,
 		})
@@ -22626,7 +22673,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	}
 
 	if debug {
-		log.Printf("[DEBUG] Starting single action execution check for %s. Max seconds: %d", workflowExecution.ExecutionId, maxSeconds)
+		log.Printf("[DEBUG][%s] Starting single action execution check. Max seconds: %d", workflowExecution.ExecutionId, maxSeconds)
 	}
 
 	addedParams := []string{}
@@ -22728,11 +22775,14 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		if time.Now().Unix()-startTime > int64(maxSeconds) {
 
 			returnBody.Success = true
-
 			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
 
 			break
 		}
+	}
+
+	if debug {
+		log.Printf("[DEBUG][%s] Single action execution check finished. Result len: %d, Errors: %#v", workflowExecution.ExecutionId, len(returnBody.Result), returnBody.Errors)
 	}
 
 	if len(returnBody.Result) == 0 && len(returnBody.Errors) == 0 {
@@ -23031,7 +23081,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	err = SetCache(ctx, cacheKey, b, 180)
+	err = SetCache(ctx, cacheKey, b, 604800)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for doc %s: %s", location[4], err)
 	}
@@ -23150,7 +23200,7 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	err = SetCache(ctx, cacheKey, b, 300)
+	err = SetCache(ctx, cacheKey, b, 604800)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for cachekey %s: %s", cacheKey, err)
 	}
@@ -26565,7 +26615,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	// Check if the actions are children of the startnode?
 	imageNames := []string{}
 	cloudExec := false
-	for _, action := range workflowExecution.Workflow.Actions {
+	for actionIndex, action := range workflowExecution.Workflow.Actions {
 
 		// Verify if the action environment exists and append
 		found := false
@@ -26591,8 +26641,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			if strings.ToLower(action.Environment) == "cloud" && project.Environment == "cloud" {
 				//log.Printf("[DEBUG] Couldn't find environment %s in cloud for some reason.", action.Environment)
 			} else {
-				log.Printf("[WARNING][%s] Couldn't find environment %s when running workflow '%s'. Maybe it's inactive?", workflowExecution.ExecutionId, action.Environment, workflowExecution.Workflow.ID)
-				return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env '%s' in org '%s'", action.Environment, workflowExecution.ExecutionOrg))
+				if action.Environment == "Shuffle" && project.Environment == "cloud" {
+					action.Environment = "Cloud"
+					workflowExecution.Workflow.Actions[actionIndex].Environment = "Cloud"
+				} else {
+					log.Printf("[WARNING][%s] Couldn't find environment '%s' when running workflow '%s'. Maybe it's inactive?", workflowExecution.ExecutionId, action.Environment, workflowExecution.Workflow.ID)
+					return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env '%s' in org '%s'", action.Environment, workflowExecution.ExecutionOrg))
+				}
 			}
 		}
 
@@ -32449,14 +32504,14 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
 
-	if project.Environment == "cloud" {
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting DELETE ORG request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
+	// if project.Environment == "cloud" {
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting DELETE ORG request to main site handler (shuffler.io)")
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")

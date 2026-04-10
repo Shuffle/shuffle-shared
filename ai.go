@@ -8463,6 +8463,27 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			// Handles approvals
 			if decision.ApprovalRequired && decision.Action != "ask" && decision.Action != "question" && (decision.Category == "singul" || decision.Category == "standalone") && (decision.RunDetails.Status == "" || decision.RunDetails.Status == "RUNNING") {
 				log.Printf("[DEBUG] Decision %d requires approval. SHOULD mark as waiting for approval (not implemented)...", decision.I)
+
+				if agentOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
+
+					mappedDecision := agentOutput.Decisions[decisionIndex]
+
+					err = CreateOrgNotification(
+						ctx,
+						fmt.Sprintf("Agent - approval required for '%s'", mappedDecision.Tool),
+						fmt.Sprintf("Approval required during agent run."), 
+						fmt.Sprintf("/forms/%s?authorization=%s&reference_execution=%s&source_node=%s&decision_id=%s&backend_url=%s", execution.WorkflowId, execution.Authorization, execution.ExecutionId, startNode.ID, mappedDecision.RunDetails.Id, backendUrl),
+						execution.ExecutionOrg,
+						false,
+						"LOW",
+						"agent_approval",
+					)
+
+					if err != nil {
+						log.Printf("[ERROR][%s] Failed creating notification for ask input", execution.ExecutionId)
+					}
+				}
+
 				decision.RunDetails.StartedAt = time.Now().Unix()
 				decision.RunDetails.Status = "WAITING"
 
@@ -8497,7 +8518,6 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				agentOutput.CompletedAt = time.Now().Unix()
 
 			} else if decision.Action == "ask" || decision.Action == "question" {
-
 				// In case of bad parsing
 				for decisionFieldIndex, decisionField := range agentOutput.Decisions[decisionIndex].Fields {
 					// In case of bad parsing
@@ -8510,8 +8530,38 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 					}
 				}
 
+				if agentOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
+
+					//http://localhost:3002/forms/9d327719-5ee3-43d9-a775-7b13d5add416?authorization=5fc12b1d-e418-47e0-9789-f6f82f8826df&reference_execution=9d327719-5ee3-43d9-a775-7b13d5add416&source_node=2cf6fc9b-f470-40b3-aa52-56ad2e1a952b&decision_id=UVrjdHiQ&backend_url=http://localhost:5002
+					mappedDecision := agentOutput.Decisions[decisionIndex]
+
+					log.Printf("[DEBUG][%s] AI Agent: Decision index %d is an 'ask' action. Setting approval required to true for manual review in the UI.", execution.ExecutionId, mappedDecision.I)
+					question := mappedDecision.Reason
+					if len(mappedDecision.Fields) > 0 { 
+						question = mappedDecision.Fields[0].Value
+					}
+
+					err = CreateOrgNotification(
+						ctx,
+						fmt.Sprintf("Agent - input required: '%s'", question),
+						fmt.Sprintf("Input required during agent run."), 
+						fmt.Sprintf("/forms/%s?authorization=%s&reference_execution=%s&source_node=%s&decision_id=%s&backend_url=%s", execution.WorkflowId, execution.Authorization, execution.ExecutionId, startNode.ID, mappedDecision.RunDetails.Id, backendUrl),
+						execution.ExecutionOrg,
+						false,
+						"LOW",
+						"agent_question",
+					)
+
+					if err != nil {
+						log.Printf("[ERROR][%s] Failed creating notification for ask input", execution.ExecutionId)
+					}
+				}
+
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+
+
+
 
 			} else if decision.Category != "standalone" {
 				// Do we run the singul action directly?

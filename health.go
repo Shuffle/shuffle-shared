@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+
 	//	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/goccy/go-json"
 	"io"
 	"io/ioutil"
 	"log"
@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"github.com/Masterminds/semver"
 	"github.com/frikky/kin-openapi/openapi3"
