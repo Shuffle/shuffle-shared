@@ -701,7 +701,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					ID:          startActionId,
 					AppVersion:  "1.2.0",
 					Environment: actionEnv,
-					Label:       "Threat feed listing",
+					Label:       "IOC listing",
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:  "category",
@@ -746,6 +746,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow.OrgId = orgId
 	} else if parsedActiontype == "threatlist_monitor" {
 		secondActionId := uuid.NewV4().String()
+		thirdActionId := uuid.NewV4().String()
 
 		defaultWorkflow := Workflow{
 			Name:        actionType,
@@ -775,10 +776,30 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					},
 				},
 				Action{
-					Name:        "execute_python",
+					Name:        "list_datastore_category",
 					AppID:       "Shuffle Tools",
 					AppName:     "Shuffle Tools",
 					ID:          secondActionId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "IOC listing",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "category",
+							Value: "shuffle-security_ioc-config",
+							Required: true,
+						},
+						WorkflowAppActionParameter{
+							Name:      "output_type",
+							Value:     "values",
+						},
+					},
+				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          thirdActionId,
 					AppVersion:  "1.2.0",
 					Environment: actionEnv,
 					Label:       "Ingest IOCs",
@@ -837,6 +858,12 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 							},
 						},
 					},
+				},
+				Branch{
+					SourceID:      secondActionId,
+					DestinationID: thirdActionId,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{},
 				},
 			},
 		}
@@ -2337,6 +2364,7 @@ func GetTriggerData(triggerType string) string {
 	}
 }
 
+// For realtime checks of existing objects. 
 func getIocParsingScript() string {
 	return `import json
 import re
@@ -2351,7 +2379,7 @@ if len(input_data) < 4:
   exit()
 
 try:
-  all_items = json.loads(r'''$threat_feed_listing''')
+  all_items = json.loads(r'''$ioc_listing''')
 except Exception as e:
   print(json.dumps({
     "success": False,
@@ -2366,6 +2394,8 @@ def sanitize_regex(pattern):
     Removes anchors (^, $) that force start/end matching.
     Returns the core pattern for use with findall/finditer.
     """
+
+    pattern = str(pattern)
     # Remove leading ^ (start anchor)
     if pattern.startswith('^'):
         pattern = pattern[1:]
@@ -2431,7 +2461,7 @@ for ioc_object in all_items:
     
     found.append(match)
     found_items.append({
-      "data": match,
+      "value": match,
       "type": ioc_object["name"],
     })
 
@@ -2468,29 +2498,11 @@ except Exception as e:
   }))`
 }
 
+// For scheduled runs to ingest data
 func getIocIngestionScript(orgId string) string {
-	defaultRegexes := map[string]string{
-		"md5":    `r"\b[a-fA-F0-9]{32}\b"`,
-		"sha1":   `r'\b[a-fA-F0-9]{40}\b'`,
-		"sha256": `r"\b[a-fA-F0-9]{64}\b"`,
-		"ip":     `r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b"`,
-		"domain": `r"\b(?:[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,63}\b"`,
-	}
-
-	// Load the shuffle-security ioc-config datastore category
-	// Skipping cursor.
-	keys, _, err := GetAllCacheKeys(context.Background(), orgId, "shuffle-security ioc-config", 1000, "")
-	if err == nil {
-		log.Printf("[INFO] Found %d IOC config keys", len(keys))
-	}
-
-	marshaledRegexes, err := json.MarshalIndent(defaultRegexes, "", "  ")
-	if err != nil {
-		log.Printf("[ERROR] Failed marshaling regexes: %v", err)
-	}
-
 	timestampFormat := "%Y-%m-%d %H:%M:%S"
 	timestampFormat2 := "%Y-%m-%dT%H:%M:%SZ"
+
 	return fmt.Sprintf(`import os
 import re
 import json
@@ -2516,6 +2528,11 @@ if len(all_urls) == 0:
 
 input_data = []
 for key in all_urls:
+  try:
+    key = json.loads(key)
+  except:
+    pass
+
   if key["enabled"] != True:
     continue
 
@@ -2524,24 +2541,71 @@ for key in all_urls:
     input_data.append({
       "status": resp.status_code,
       "body": resp.text,
+      "url": key["url"],
     })
   except Exception as e:
     pass
 	
-upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
+try:
+  ioc_regexes = json.loads(r'''$ioc_listing''')
+except Exception as e:
+  print(json.dumps({
+    "success": False,
+    "reason": "Bad input data from ioc listing. Are the ioc patterns correct?"
+  }))
+  exit()
 
-parsed_headers = {}
-if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
-  parsed_headers["Authorization"] = f"Bearer {os.environ.get('SHUFFLE_AUTHORIZATION', '')}"
-else:
-  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+def sanitize_regex(pattern):
+  """
+  Clean up a regex pattern to find matches anywhere in text.
+  
+  Removes anchors (^, $) that force start/end matching.
+  Returns the core pattern for use with findall/finditer.
+  """
 
-regexsearch = %s
+  pattern = str(pattern)
+
+  # Remove leading ^ (start anchor)
+  if pattern.startswith('^'):
+  	pattern = pattern[1:]
+  
+  # Remove trailing $ (end anchor)
+  if pattern.endswith('$'):
+  	pattern = pattern[:-1]
+  
+  return pattern
+
+regexsearch = {}
+found_items = []
+for ioc_object in ioc_regexes:
+  try:
+    ioc_object = json.loads(ioc_object)
+  except:
+    pass
+  
+  try:
+    if "enabled" not in ioc_object or not ioc_object["enabled"]:
+      continue
+  except:
+    continue
+  
+  if "regex" not in ioc_object:
+    continue
+
+  regexsearch[ioc_object["name"]] = sanitize_regex(ioc_object["regex"])
+
+if not regexsearch:
+  print(json.dumps({
+	"success": False,
+	"reason": "No valid regexes found in ioc listing. Are the ioc patterns correct?"
+  }))
+  exit()
 
 all_items = {}
 
 if not isinstance(input_data, list):
   input_data = [input_data]
+
 
 ## Assuming
 max_items = 1000
@@ -2552,6 +2616,7 @@ for content in input_data:
   found_type = ""
   searchspace = iocs[0:1000]
   for key, value in regexsearch.items():
+    value = sanitize_regex(value)
     match = re.search(value, searchspace)
     if match:
       found_type = key
@@ -2667,6 +2732,14 @@ for content in input_data:
         "urls": [content["url"]],
       }
 
+
+upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
+parsed_headers = {}
+if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
+  parsed_headers["Authorization"] = f"Bearer {os.environ.get('SHUFFLE_AUTHORIZATION', '')}"
+else:
+  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+
 uploaded = {
 	"sources": len(input_data),
 }
@@ -2701,7 +2774,7 @@ for k, v in all_items.items():
     uploaded["uploaded_" + k] = len(new_list)
 
 print(json.dumps(uploaded))
-	`, marshaledRegexes, timestampFormat, timestampFormat, timestampFormat2, timestampFormat2)
+	`, timestampFormat, timestampFormat, timestampFormat2, timestampFormat2)
 }
 
 func GetHealthAppConfig() string {

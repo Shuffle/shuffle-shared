@@ -14084,6 +14084,29 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				cacheData.Value = config.Value
 			}
 
+			if len(cacheData.Enrichments) > 0 {
+				timeNow := int64(time.Now().Unix())
+				newObservables := []Observable{}
+				for observableIndex, observable := range cacheData.Enrichments {
+					if len(observable.Value) == 0 {
+						continue
+					}
+
+					//cacheData.Enrichments[observableIndex].LastSeen = timeNow
+					existed := false
+					for _, config := range config.Enrichments {
+
+						continue
+					}
+				}
+
+				cacheData.Enrichments = newObservables
+				if debug {
+					log.Printf("Found new enrichments: %d for key %s in category %s", len(newObservables), cacheData.Key, cacheData.Category)
+					os.Exit(3)
+				}
+			}
+
 			if getCacheError == nil && config.Created > 0 {
 
 				// Compares old vs new, checks if allowed
@@ -14161,7 +14184,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				cacheData.SuborgDistribution = config.SuborgDistribution
 				cacheData.PublicAuthorization = config.PublicAuthorization
 
-				if len(cacheData.Enrichments) == 0 {
+				if len(cacheData.Enrichments) == 0 && len(config.Enrichments) > 0 {
 					cacheData.Enrichments = config.Enrichments
 				}
 
@@ -14524,7 +14547,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			continue
 		}
 
-		go crossCorrelateNGrams(context.Background(), cacheData.OrgId, cacheData.Category, cacheData.Key, cacheData.Value)
+		go crossCorrelateNGrams(context.Background(), cacheData.OrgId, cacheData.Category, cacheData.Key, cacheData.Value, cacheData.Enrichments)
 	}
 
 	// Look for category triggers
