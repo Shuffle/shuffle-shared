@@ -5064,7 +5064,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		copy(uuidBytes, hashBytes)
 		relevantWorkflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
 
-		// FIXME: Find it dynamically.
+		// FIXME: If workflow doesn't exist - generate it 
 		fullUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", backendUrl, relevantWorkflowId)
 		if debug { 
 			log.Printf("[DEBUG] Running enrich automation workflow %s for key %s in category %s", relevantWorkflowId, cacheData.Key, cacheData.Category)
@@ -5109,7 +5109,13 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			return err
 		}
 
-		log.Printf("RESP FOR RUNNING ENRICHMENT (%d): %s", resp.StatusCode, string(body))
+		if resp.StatusCode != 200 { 
+			log.Printf("[ERROR] Enrichment workflow execution request failed with status code %d. Body: %s", resp.StatusCode, string(body))
+		}
+
+		if debug { 
+			log.Printf("[DEBUG] RESP FOR RUNNING ENRICHMENT (%d): %s", resp.StatusCode, string(body))
+		}
 
 	} else if parsedName == "run_workflow" {
 		for _, option := range automation.Options {

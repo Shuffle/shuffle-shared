@@ -1207,9 +1207,22 @@ type DatastoreKeyMini struct {
 	Existed bool   `json:"existed" datastore:"existed"` // If the key existed before the update
 }
 
-type Enrichment struct { 
+// Based on OCSF reputation: https://schema.ocsf.io/1.8.0/objects/reputation
+type Reputation struct { 
+	BaseScore float64 `json:"base_score" datastore:"base_score"`
+	Provider string `json:"provider" datastore:"provider"`
+	Score string `json:"score" datastore:"score"`
+}
+
+// Based on OCSF Observable: https://schema.ocsf.io/1.8.0/objects/observable
+type Observable struct { 
 	Type string `json:"type" datastore:"type"`
-	Data string `json:"data" datastore:"data"`
+	Value string `json:"value" datastore:"value"`
+	FirstSeen int64 `json:"first_seen" datastore:"first_seen"`
+	LastSeen int64 `json:"last_seen" datastore:"last_seen"`
+
+	Name string `json:"name" datastore:"name"`
+	Reputation Reputation `json:"reputation" datastore:"reputation"`
 }
 
 // Not sure how this is mini anymore (: 
@@ -1218,7 +1231,7 @@ type CacheKeyDataMini struct {
 	Key                 string `json:"key" datastore:"Key"`
 	Value               string `json:"value" datastore:"Value,noindex"`
 	IgnoreSecurityRules bool   `json:"ignore_security_rules" datastore:"ignore_security_rules,noindex"`
-	Enrichments []Enrichment `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
+	Enrichments []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 
 	OrgId              string   `json:"org_id,omitempty" datastore:"OrgId"`
 	ExecutionId        string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
@@ -1234,7 +1247,7 @@ type CacheKeyDataFallback struct {
 	Category string   `json:"category" datastore:"category"`
 	Tags     []string `json:"tags,omitempty" datastore:"tags"`
 	
-	Enrichments []Enrichment `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
+	Enrichments []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 }
 
 type CacheKeyData struct {
@@ -1248,7 +1261,7 @@ type CacheKeyData struct {
 	Category            string   `json:"category" datastore:"category"`
 	Tags                []string `json:"tags,omitempty" datastore:"tags"`
 	IgnoreSecurityRules bool     `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"`
-	Enrichments []Enrichment `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
+	Enrichments []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
