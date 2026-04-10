@@ -16396,6 +16396,9 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		newCookie := ConstructSessionCookie(userdata.Session, expiration)
 		http.SetCookie(resp, newCookie)
 
+		newCookie.Name = "__session"
+		http.SetCookie(resp, newCookie)
+
 		//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", userdata.Session)
 		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
 			Key:        "session_token",
