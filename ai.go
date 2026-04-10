@@ -23,7 +23,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-
+	"runtime"
+	"math"
 	openai "github.com/sashabaranov/go-openai"
 	uuid "github.com/satori/go.uuid"
 	"google.golang.org/api/customsearch/v1"
@@ -74,6 +75,19 @@ func EstimatePromptTokens(messages []openai.ChatCompletionMessage) int64 {
 	}
 	
 	return (totalChars + 3) / 4
+}
+
+// EnsureContextWithCaller ensures ctx is not nil and sets caller name if not already set
+func EnsureContextWithCaller(ctx context.Context, callerName string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	
+	if len(ctx.Value("caller").(string)) == 0 {
+		ctx = context.WithValue(ctx, "caller", callerName)
+	}
+	
+	return ctx
 }
 
 // Provide an incident triage and response plan for the reported incident finding. Make a short list of actions to perform in the following format: [{"title": "Title of the task", "category": "triage/containment/recovery/communication/documentation", "completed": false, "createdBy": "ai-agent@shuffler.io"}]. ONLY output as JSON array and nothing more. After the list is made, add these to the metadata.extensions.custom_attributes.tasks[] in the next action.
@@ -477,7 +491,7 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig, paramNa
 }
 
 // Used for recursively fixing HTTP outputs that are bad
-func FindNextApiStep(originalFields []Valuereplace, action Action, stepOutput []byte, additionalInfo, inputdata, originalAppname string, attempt ...int) (string, Action, error, string) {
+func FindNextApiStep(ctx context.Context, originalFields []Valuereplace, action Action, stepOutput []byte, additionalInfo, inputdata, originalAppname string, attempt ...int) (string, Action, error, string) {
 	// 1. Find the result field in json
 	// 2. Check the status code if it's a good one (<300). If it is, make the output correct based on it and add context based on output.
 	// 3. If 400-499, check for error message and self-correct. e.g. if body says something is wrong, try to fix it. If status is 415, try to add content-type header.
@@ -515,6 +529,8 @@ func FindNextApiStep(originalFields []Valuereplace, action Action, stepOutput []
 	result := result1.(string)
 	//result = strings.Replace(result, "\\\"", "\"", -1)
 	//log.Printf("[INFO] Result: %s", result)
+
+	ctx = EnsureContextWithCaller(ctx, "FindNextApiStep")
 
 	// Unmarshal result to a map and find status code
 	var resultMap map[string]interface{}
@@ -639,7 +655,7 @@ func FindNextApiStep(originalFields []Valuereplace, action Action, stepOutput []
 
 			// Body = previous requests' body
 			intent := ""
-			action, additionalInfo, err := RunSelfCorrectingRequest(originalFields, action, status, additionalInfo, fullUrl, string(body), useApp, intent, inputdata, curAttempt)
+			action, additionalInfo, err := RunSelfCorrectingRequest(ctx, originalFields, action, status, additionalInfo, fullUrl, string(body), useApp, intent, inputdata, curAttempt)
 			if err != nil {
 				if !strings.Contains(err.Error(), "missing_fields") {
 					log.Printf("[ERROR] Error running self-correcting request: %s", err)
@@ -673,7 +689,7 @@ func FindNextApiStep(originalFields []Valuereplace, action Action, stepOutput []
 // 1. The fully filled-in action
 // 2. The additional info from the previous request
 // 3. Any error that may have occurred
-func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, status int, additionalInfo, fullUrl, outputBody, appname, intent, inputdata string, attempt ...int) (Action, string, error) {
+func RunSelfCorrectingRequest(ctx context.Context, originalFields []Valuereplace, action Action, status int, additionalInfo, fullUrl, outputBody, appname, intent, inputdata string, attempt ...int) (Action, string, error) {
 	// Add all fields with value from here
 	additionalInfo = ""
 	inputBody := "{\n"
@@ -770,6 +786,8 @@ func RunSelfCorrectingRequest(originalFields []Valuereplace, action Action, stat
 	if len(fullUrl) > 0 && strings.Contains(fullUrl, "http") {
 		fullUrl = fmt.Sprintf("- API URL: %s", fullUrl)
 	}
+
+	ctx = EnsureContextWithCaller(ctx, "RunSelfCorrectingRequest")
 
 	// Add Intent Context if available
 	intentContext := ""
@@ -883,7 +901,7 @@ Input JSON Payload (ensure VALID JSON):
 		ReasoningEffort:     "low",
 	}
 
-	contentOutput, err := RunAiQuery(systemMessage, inputData, chatCompletion)
+	contentOutput, err := RunAiQuery(ctx, systemMessage, inputData, chatCompletion)
 	if err != nil {
 		return action, additionalInfo, err
 	}
@@ -1174,15 +1192,17 @@ func getBadOutputString(action Action, appname, inputdata, outputBody string, st
 
 // Ask itself for information about the API in case it has it
 // FIXMe: Add internet to search for the relevant API as well
-func getOpenApiInformation(appname, action string) string {
+func getOpenApiInformation(ctx context.Context, appname, action string) string {
 	var err error
 	var contentOutput string
 	action = GetCorrectActionName(action)
 
+	ctx = EnsureContextWithCaller(ctx, "getOpenApiInformation")
+
 	systemMessage := fmt.Sprintf("Output a valid JSON body format for a HTTP request %s in the %s API?", action, appname)
 
 	//log.Printf("[INFO] System message (find API documentation): %s", systemMessage)
-	contentOutput, err = RunAiQuery(systemMessage, "")
+	contentOutput, err = RunAiQuery(ctx, systemMessage, "")
 	if err != nil {
 		log.Printf("[ERROR] Failed to run API query: %s", err)
 	}
@@ -1194,7 +1214,7 @@ func getOpenApiInformation(appname, action string) string {
 	return contentOutput
 }
 
-func UpdateActionBody(action WorkflowAppAction) (string, error) {
+func UpdateActionBody(ctx context.Context, action WorkflowAppAction) (string, error) {
 	currentParam := "body"
 	if len(action.Name) == 0 {
 		return "", errors.New("No action name found")
@@ -1203,6 +1223,8 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 	if len(action.AppName) == 0 {
 		return "", errors.New("No app name found")
 	}
+
+	ctx = EnsureContextWithCaller(ctx, "UpdateActionBody")
 
 	newName := strings.Replace(strings.Title(GetCorrectActionName(action.Name)), " ", "_", -1)
 
@@ -1213,7 +1235,7 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 		log.Printf("\n\n[DEBUG] BODY CREATE SYSTEM MESSAGE: %s\n\n", systemMessage)
 	}
 
-	contentOutput, err := RunAiQuery(systemMessage, userMessage)
+	contentOutput, err := RunAiQuery(ctx, systemMessage, userMessage)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run API query: %s", err)
 		return "", err
@@ -1698,7 +1720,7 @@ func balanceJSONLikeString(s string) string {
 	return string(result)
 }
 
-func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp, WorkflowAppAction) {
+func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys []string) (WorkflowApp, WorkflowAppAction) {
 	standalone := os.Getenv("STANDALONE") == "true"
 
 	if len(app.ID) == 0 || len(app.Name) == 0 {
@@ -1743,6 +1765,8 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	if len(app.Categories) > 0 && app.Categories[0] == "Other" {
 		app.Categories = []string{}
 	}
+
+	ctx = EnsureContextWithCaller(ctx, "AutofixAppLabels")
 
 	// Check if the app has any actions
 	foundCategory := AppCategory{}
@@ -1798,7 +1822,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 				}
 			}
 
-			output, err := RunAiQuery(systemMessage, userMessage)
+			output, err := RunAiQuery(ctx, systemMessage, userMessage)
 			log.Printf("[DEBUG] Autocomplete output for category '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
 			if err != nil {
 				log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for category with app %s (%s): %s", app.Name, app.ID, err)
@@ -1853,7 +1877,10 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 	actionStruct := ActionStruct{}
 	var output string
-	ctx := context.Background()
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	tmpAppAction, cacheGeterr := GetAutofixAppLabelsCache(ctx, app, label, keys)
 	if cacheGeterr == nil {
@@ -2019,7 +2046,7 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 			ReasoningEffort:     "medium",
 		}
 
-		output, err := RunAiQuery(systemMessage, userMessage, chatCompletion)
+		output, err := RunAiQuery(ctx, systemMessage, userMessage, chatCompletion)
 		if err != nil {
 			log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
 			return app, WorkflowAppAction{}
@@ -2268,7 +2295,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 
 	inputQuery := input.Query
 	if outputFormat == "raw" {
-		relevancyOutput := findRelevantOutput(inputQuery, org, user)
+		relevancyOutput := findRelevantOutput(ctx, inputQuery, org, user)
 		if len(relevancyOutput) > 0 && !strings.Contains(relevancyOutput, "cannot be answered") && !strings.Contains(relevancyOutput, "does not require") && !(strings.HasPrefix(relevancyOutput, "{") && strings.HasSuffix(relevancyOutput, "}")) {
 			log.Printf("[INFO] Found relevant output for '%s': %s", inputQuery, relevancyOutput)
 			//resp.WriteHeader(500)
@@ -2449,7 +2476,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 			}
 
 			log.Printf("[INFO] Trying to run HTTP app for query: %s. URL: %s", inputQuery, httpOutput.URL)
-			httpOutput, err = findHTTPrequestInformation(inputQuery, httpOutput.URL)
+			httpOutput, err = findHTTPrequestInformation(ctx, inputQuery, httpOutput.URL)
 			if err != nil {
 				log.Printf("[ERROR] Failed to find HTTP request information (2): %s", err)
 				respBody = []byte(`{"success": false}`)
@@ -2538,7 +2565,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 					category = foundApp.Categories[0]
 				}
 			} else {
-				relevantApps := findRelevantOpenAIAppsForCategory(appname1.(string))
+				relevantApps := findRelevantOpenAIAppsForCategory(ctx, appname1.(string))
 				log.Println()
 				selectedAppIndex := 0
 				authHeader := "Bearer " + user.ApiKey
@@ -2562,7 +2589,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 				// Using the first one to find how to run it as a HTTP request
 				// "Fill in the following HTTP information with the API of 'Appname' based on the following information: 'CTA from user'"
 				if len(relevantApps) > 0 {
-					httpOutput, err = findHTTPrequestInformation(inputQuery, relevantApps[selectedAppIndex].Name)
+					httpOutput, err = findHTTPrequestInformation(ctx, inputQuery, relevantApps[selectedAppIndex].Name)
 					if err != nil {
 						log.Printf("[ERROR] Failed to find HTTP request information (1): %s", err)
 						respBody = []byte(`{"success": false, "reason": "Failed to find HTTP request information (1). Please be more specific."}`)
@@ -2817,7 +2844,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 
 		if len(actionName) == 0 {
 			log.Printf("[INFO] Finding action name for input '%s' in app '%s'", inputQuery, appname)
-			actionName, err = findActionByInput(inputQuery, actionLabel, foundApp)
+			actionName, err = findActionByInput(ctx, inputQuery, actionLabel, foundApp)
 			if err != nil {
 				log.Printf("[ERROR] Failed to find action by input in runActionAI (1): %s", err)
 				respBody = []byte(`{"success": false, "reason": "Failed to find action for app. Please be more specific."}`)
@@ -2913,7 +2940,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 				log.Printf("[ERROR] Failed to find app by name in Algolia (4): %s", err)
 
 				// Should try to search and build it out and make it into an HTTP app
-				relevantApps := findRelevantOpenAIAppsForCategory(appname)
+				relevantApps := findRelevantOpenAIAppsForCategory(ctx, appname)
 				log.Println()
 				selectedAppIndex := 0
 				authHeader := "Bearer " + user.ApiKey
@@ -2928,7 +2955,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 				// Using the first one to find how to run it as a HTTP request
 				// "Fill in the following HTTP information with the API of 'Appname' based on the following information: 'CTA from user'"
 				if len(relevantApps) > 0 {
-					httpOutput, err = findHTTPrequestInformation(inputQuery, relevantApps[selectedAppIndex].Name)
+					httpOutput, err = findHTTPrequestInformation(ctx, inputQuery, relevantApps[selectedAppIndex].Name)
 					if err != nil {
 						log.Printf("[ERROR] Failed to find HTTP request information (2): %s", err)
 						respBody = []byte(`{"success": false, "reason": "Failed to find HTTP request information (2). Please be more specific."}`)
@@ -3094,7 +3121,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 		// Do automatic name translation
 		// Cases: alert = incident = case = issue = ticket
 		// Track original names
-		contentOutput, err := findActionByInput(inputQuery, actionLabel, foundApp)
+		contentOutput, err := findActionByInput(ctx, inputQuery, actionLabel, foundApp)
 		if err != nil {
 			log.Printf("[ERROR] Failed to find action by input in runActionAI (2): %s", err)
 			respBody = []byte(`{"success": false, "reason": "Couldn't find the action you were looking for. Please try with a more specific prompt."}`)
@@ -3282,7 +3309,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 		}
 
 		// Find result field in json body from returnValue
-		outputString, outputAction, err, additionalInfo = findNextAction(newAction, returnValue, additionalInfo, inputQuery, originalAppname)
+		outputString, outputAction, err, additionalInfo = findNextAction(ctx, newAction, returnValue, additionalInfo, inputQuery, originalAppname)
 		_ = additionalInfo
 		if err != nil {
 			// Check for auth and send auth in that case
@@ -3358,7 +3385,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 }
 
 // Used at first to answer general questions
-func findRelevantOutput(inputQuery string, org Org, user User) string {
+func findRelevantOutput(ctx context.Context, inputQuery string, org Org, user User) string {
 	// Based on the following info,
 	usecasesString := GetUsecaseData()
 	// Unmarshal this
@@ -3435,7 +3462,7 @@ func findRelevantOutput(inputQuery string, org Org, user User) string {
 
 	//log.Printf("[INFO] User message (find relevant output type): %s", userMessage)
 
-	contentOutput, err := RunAiQuery("", userMessage)
+	contentOutput, err := RunAiQuery(ctx, "", userMessage)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in findRelevantOutput: %s", err)
 		return ""
@@ -3451,7 +3478,7 @@ func findRelevantOutput(inputQuery string, org Org, user User) string {
 	return contentOutput
 }
 
-func findHTTPrequestInformation(textInput string, appname string) (HTTPWrapper, error) {
+func findHTTPrequestInformation(ctx context.Context, textInput string, appname string) (HTTPWrapper, error) {
 	if len(textInput) == 0 {
 		return HTTPWrapper{}, errors.New("No text input")
 	}
@@ -3465,7 +3492,7 @@ func findHTTPrequestInformation(textInput string, appname string) (HTTPWrapper, 
 
 	// Parses the input and returns the category and action label
 	var httpWrapper HTTPWrapper
-	contentOutput, err := RunAiQuery(systemMessage, userMessage)
+	contentOutput, err := RunAiQuery(ctx, systemMessage, userMessage)
 	if err != nil {
 		log.Printf("[DEBUG] Failed to run AI query in findHTTPrequestInformation: %s", err)
 		return httpWrapper, err
@@ -3481,14 +3508,14 @@ func findHTTPrequestInformation(textInput string, appname string) (HTTPWrapper, 
 	return httpWrapper, nil
 }
 
-func findRelevantOpenAIAppsForCategory(category string) []WorkflowApp {
+func findRelevantOpenAIAppsForCategory(ctx context.Context, category string) []WorkflowApp {
 	newApps := []WorkflowApp{}
 
 	systemMessage := fmt.Sprintf("Use this exact format: [{\"rank\": 1, \"name\": \"appname\", \"logo\": \"logo url\", \"api url\": \"api doc url\", \"requires_oauth2\": false}]. If no apps, return {\"success\": false}")
 	userMessage := fmt.Sprintf("Create a list of the top three apps in the category '%s'", category)
 	log.Printf("[INFO] System message (find relevant apps for category): %s. Usermsg: %s", systemMessage, userMessage)
 
-	contentOutput, err := RunAiQuery(systemMessage, userMessage)
+	contentOutput, err := RunAiQuery(ctx, systemMessage, userMessage)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in findRelevantOpenAIAppsForCategory: %s", err)
 		return newApps
@@ -3722,7 +3749,7 @@ func RunGoogleSearch(ctx context.Context, query string) (string, error) {
 	return results.Items[0].Link, nil
 }
 
-func findActionByInput(inputQuery, actionLabel string, foundApp WorkflowApp) (string, error) {
+func findActionByInput(ctx context.Context, inputQuery, actionLabel string, foundApp WorkflowApp) (string, error) {
 	if len(actionLabel) > 0 {
 		actionLabel = fmt.Sprintf("'%s' or ", actionLabel)
 	}
@@ -3761,7 +3788,7 @@ func findActionByInput(inputQuery, actionLabel string, foundApp WorkflowApp) (st
 	//log.Printf("[INFO] System message: %s", systemMessage)
 
 	// Parses the input and returns the category and action label
-	contentOutput, err := RunAiQuery(systemMessage, parsedNames)
+	contentOutput, err := RunAiQuery(ctx, systemMessage, parsedNames)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in findActionByInput: %s", err)
 		return "", err
@@ -3973,7 +4000,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 			formattedFields = formattedFields[:len(formattedFields)-2] + `}`
 			outputBody := ""
 			if len(requiredFields) > 1 {
-				outputBody = MatchRequiredFieldsWithInputdata(inputQuery, appname, selectedAction.Name, formattedFields)
+				outputBody = MatchRequiredFieldsWithInputdata(ctx, inputQuery, appname, selectedAction.Name, formattedFields)
 			}
 
 			var parsedBody map[string]interface{}
@@ -4106,7 +4133,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 		// Uses the action to check if fields are already filled or not
 		// FIXME: May cause weird bugs where same should be used multiple times
 		inputQuery = fixInputQuery(inputQuery, selectedAction)
-		outputBody = MatchBodyWithInputdata(inputQuery, appname, selectedAction.Name, sampleBody, newAppContext)
+		outputBody = MatchBodyWithInputdata(ctx, inputQuery, appname, selectedAction.Name, sampleBody, newAppContext)
 		//log.Printf("[INFO] Found output body to match input data (required fields): %s", outputBody)
 
 		appContext = newAppContext
@@ -4190,7 +4217,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 		// This is a hack to get it to work for other fields
 		// FIXME: This should NOT run if not necessary
 		inputQuery = fixInputQuery(inputQuery, selectedAction)
-		outputQueries = MatchBodyWithInputdata(inputQuery, appname, selectedAction.Name, "shuffleFieldName=queries", newAppContext)
+		outputQueries = MatchBodyWithInputdata(ctx, inputQuery, appname, selectedAction.Name, "shuffleFieldName=queries", newAppContext)
 
 		// Marshal, then rebuild the query string
 		var parsedBody map[string]interface{}
@@ -4375,7 +4402,7 @@ func fixAppcontextExamples(appContext AppContext) AppContext {
 	return appContext
 }
 
-func findNextAction(action Action, stepOutput []byte, additionalInfo, inputdata, originalAppname string) (string, Action, error, string) {
+func findNextAction(ctx context.Context, action Action, stepOutput []byte, additionalInfo, inputdata, originalAppname string) (string, Action, error, string) {
 	// 1. Find the result field in json
 	// 2. Check the status code if it's a good one (<300). If it is, make the output correct based on it and add context based on output.
 	// 3. If 400-499, check for error message and self-correct. e.g. if body says something is wrong, try to fix it. If status is 415, try to add content-type header.
@@ -4421,6 +4448,8 @@ func findNextAction(action Action, stepOutput []byte, additionalInfo, inputdata,
 		log.Printf("[ERROR] Error unmarshalling result from string to map: %s", err)
 		return "", action, err, additionalInfo
 	}
+
+	ctx = EnsureContextWithCaller(ctx, "FindNextAction")
 
 	status := -1
 	statusCode, ok := resultMap["status"]
@@ -4511,7 +4540,7 @@ func findNextAction(action Action, stepOutput []byte, additionalInfo, inputdata,
 				useApp = originalAppname
 			}
 
-			outputString := HandleOutputFormatting(string(body), inputdata, useApp)
+			outputString := HandleOutputFormatting(ctx, string(body), inputdata, useApp)
 			//log.Printf("[INFO] Output string from OpenAI to be returned: %s", outputString)
 
 			return outputString, action, nil, additionalInfo
@@ -4526,7 +4555,7 @@ func findNextAction(action Action, stepOutput []byte, additionalInfo, inputdata,
 				useApp = originalAppname
 			}
 
-			action, additionalInfo, err := runSelfCorrectingRequest(action, status, additionalInfo, string(body), useApp, inputdata)
+			action, additionalInfo, err := runSelfCorrectingRequest(ctx, action, status, additionalInfo, string(body), useApp, inputdata)
 			if err != nil {
 				//log.Printf("[ERROR] Error running self-correcting request (2): %s", err)
 				return "", action, err, additionalInfo
@@ -4543,7 +4572,7 @@ func findNextAction(action Action, stepOutput []byte, additionalInfo, inputdata,
 	return "", action, errors.New(fmt.Sprintf("Field problem (3): %s", getBadOutputString(action, action.AppName, inputdata, string(body), status))), additionalInfo
 }
 
-func MatchRequiredFieldsWithInputdata(inputdata, appname, inputAction, body string) string {
+func MatchRequiredFieldsWithInputdata(ctx context.Context, inputdata, appname, inputAction, body string) string {
 	actionInfo := ""
 	if len(inputAction) > 1 {
 		actionInfo = fmt.Sprintf(" action '%s'", inputAction)
@@ -4552,7 +4581,7 @@ func MatchRequiredFieldsWithInputdata(inputdata, appname, inputAction, body stri
 	systemMessage := fmt.Sprintf("For the %s API%s, fill in the following fields in JSON format based on our input. If a specific input is not supplied, make a guess. Don't add fields that haven't been supplied.", appname, actionInfo)
 	log.Printf("[INFO] Required fields message: %s", systemMessage)
 
-	contentOutput, err := RunAiQuery(systemMessage, inputdata)
+	contentOutput, err := RunAiQuery(ctx, systemMessage, inputdata)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in MatchRequiredFieldsWithInputdata: %s", err)
 		return ""
@@ -4739,7 +4768,7 @@ func fixInputQuery(inputQuery string, selectedAction WorkflowAppAction) string {
 	return inputQuery
 }
 
-func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appContext []AppContext) string {
+func MatchBodyWithInputdata(ctx context.Context, inputdata, appname, actionName, body string, appContext []AppContext) string {
 	actionName = strings.ReplaceAll(actionName, "_", " ")
 	if strings.HasPrefix(actionName, "post ") {
 		actionName = strings.ReplaceAll(actionName, "post ", "")
@@ -4795,7 +4824,7 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 
 	// FIXME: This MAY not work as we used to do this with
 	// Assistant instead of User for some reason
-	contentOutput, err := RunAiQuery(systemMessage, userInfo)
+	contentOutput, err := RunAiQuery(ctx, systemMessage, userInfo)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in MatchBodyWithInputdata: %s", err)
 		return ""
@@ -4851,7 +4880,7 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 	return contentOutput
 }
 
-func HandleOutputFormatting(result, inputdata, appname string) string {
+func HandleOutputFormatting(ctx context.Context, result, inputdata, appname string) string {
 	if len(result) > 1000 {
 		result = result[0:1000]
 	}
@@ -4863,7 +4892,7 @@ func HandleOutputFormatting(result, inputdata, appname string) string {
 	}
 	//log.Printf("[INFO] System message for output: %s", systemMessage)
 
-	contentOutput, err := RunAiQuery(systemMessage, result)
+	contentOutput, err := RunAiQuery(ctx, systemMessage, result)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in HandleOutputFormatting: %s", err)
 		return ""
@@ -4877,13 +4906,15 @@ func HandleOutputFormatting(result, inputdata, appname string) string {
 	return contentOutput
 }
 
-func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputBody, appname, inputdata string) (Action, string, error) {
+func runSelfCorrectingRequest(ctx context.Context, action Action, status int, additionalInfo, outputBody, appname, inputdata string) (Action, string, error) {
 
 	// FIX: Make it find shuffle internal docs as well for how an app works
 	// Make it work with Shuffle tools, as now it's explicitly trying to fix fields for HTTP apps
 
+	ctx = EnsureContextWithCaller(ctx, "runSelfCorrectingRequest")
+
 	if len(action.InvalidParameters) == 0 && additionalInfo == "" && strings.ToUpper(appname) != "HTTP" && !strings.Contains(strings.ToUpper(appname), "SHUFFLE") {
-		additionalInfo = getOpenApiInformation(strings.Replace(appname, " ", "", -1), strings.Replace(action.Name, "_", " ", -1))
+		additionalInfo = getOpenApiInformation(ctx, strings.Replace(appname, " ", "", -1), strings.Replace(action.Name, "_", " ", -1))
 	} else {
 		log.Printf("\n\nGot %d invalid params and additional info of length %d", len(action.InvalidParameters), len(additionalInfo))
 	}
@@ -4961,7 +4992,7 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		log.Printf("[DEBUG] Input body sent: %s", inputBody)
 	}
 
-	contentOutput, err := RunAiQuery(systemMessage, inputData)
+	contentOutput, err := RunAiQuery(ctx, systemMessage, inputData)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in runActionAI: %s", err)
 		return action, additionalInfo, err
@@ -5748,7 +5779,7 @@ Use the following format, and add fields according to what the action and the ca
 }`, category, label, label)
 	//}`, category, label, category, label)
 
-	contentOutput, err := RunAiQuery(systemMessage, userMessage)
+	contentOutput, err := RunAiQuery(ctx, systemMessage, userMessage)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in GetCategoryLabelParameters: %s", err)
 		return ""
@@ -6794,6 +6825,9 @@ func RunActionAI(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	ctx = context.WithValue(ctx, "org_id", org.Id)
+	ctx = context.WithValue(ctx, "caller", "RunActionAI")
+
 	if outputFormat == "formatting" {
 		log.Printf("[INFO] Formatting query: %s. Should be formatted with the following info: %s", input.Query, input.Formatting)
 
@@ -6827,7 +6861,7 @@ func getFormattingAIResponse(ctx context.Context, input QueryInput) string {
 		return fmt.Sprintf(`{"success": false, "reason": "Formatting is too short. Please try again and be as descriptive as possible"}`)
 	}
 
-	contentOutput, err := RunAiQuery(input.Formatting, input.Query)
+	contentOutput, err := RunAiQuery(ctx, input.Formatting, input.Query)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in getFormattingAIResponse: %s", err)
 		return ""
@@ -6995,7 +7029,7 @@ other:run_script
 
 Make sure that the output is short and crisp, in bullet points, specifies the type (API-request or App-action based), and gives small description of the task. Ignore Formatting.`
 
-	contentOutput, err := RunAiQuery(systemMessage, input.Query)
+	contentOutput, err := RunAiQuery(ctx, systemMessage, input.Query)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in getWorkflowSuggestionAiResponse: %s", err)
 		return ""
@@ -7041,7 +7075,7 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 
 	sysMessage := "Introduce yourself as a support bot. Answer in less than 300 characters. Technical answers are best, with links. Make it clear that you are a bot, and that your answers are based on our documentation. If you don't have a good answer, say that you will find a human. If urls are in markdown format, make it easy to read. Focus most on the LAST question!! NEVER show a domain other than shuffler."
 
-	contentOutput, err := RunAiQuery(sysMessage, input.Query)
+	contentOutput, err := RunAiQuery(ctx, sysMessage, input.Query)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in runActionAI: %s", err)
 		return contentOutput
@@ -9105,7 +9139,25 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 // FIXME: We need some kind of failover for this so that the request
 // doesn't go from Backend directly, but instead from app. This makes it
 // more versatile in general, and able to run from Onprem -> Local model
-func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
+func RunAiQuery(ctx context.Context, systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	rootCaller, ok := ctx.Value("caller").(string)
+	org, ok := ctx.Value("org_id").(string)
+
+	if len(strings.TrimSpace(rootCaller)) == 0 {
+		return "", errors.New("No caller function name defined in RunAiQuery, Please provide it in the context ctx")
+	}
+
+	pc, _, _, ok := runtime.Caller(1)
+	callerName := "unknown"
+    if ok {
+        callerName = runtime.FuncForPC(pc).Name()
+    }
+
 	cnt := 0
 	maxCharacters := 100000
 
@@ -9137,6 +9189,10 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	//if len(aiRequestUrl) == 0 {
 	//	return "", errors.New("No AI_API_URL supplied")
 	//}
+
+	estSysTokens := int(math.Ceil(float64(len(systemMessage)) / 3.5))
+    estUserTokens := int(math.Ceil(float64(len(userMessage)) / 3.5))
+    totalEst := estSysTokens + estUserTokens
 
 	config := openai.DefaultConfig(apiKey)
 	if len(aiRequestUrl) > 0 {
@@ -9204,8 +9260,9 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 
 	// Rerun with the same chat IF POSSIBLE
 	// This makes it so that the chance of getting the right result is lower
-	ctx := context.Background()
-	cachedChatMd5 := md5.Sum([]byte(systemMessage))
+	// Does this mean that two same orgs that has same system message results in the same Md5 id ?
+
+	cachedChatMd5 := md5.Sum([]byte(systemMessage+org))
 	cachedChat := fmt.Sprintf("chat-%x", cachedChatMd5)
 
 	if len(incomingRequest) > 0 {
@@ -9276,6 +9333,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	maxRetries := 3
 	sleepTimer := time.Duration(2)
 	contentOutput := ""
+	log.Printf("[INFO] AI_QUERY: root_caller=%s immediate_caller=%s org_id=%s system_tokens=%d user_tokens=%d total_tokens=%d model=%s", rootCaller, callerName, org, estSysTokens, estUserTokens, totalEst, model)
 	for {
 		if cnt >= maxRetries {
 			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries for openapi info")
@@ -9348,6 +9406,8 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 
 func generateWorkflowJson(ctx context.Context, input QueryInput, user User, workflow *Workflow) (*Workflow, error) {
 
+	ctx = EnsureContextWithCaller(ctx, "generateWorkflowJson")
+
 	apps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get apps in Generate workflow: %s", err)
@@ -9373,7 +9433,7 @@ func generateWorkflowJson(ctx context.Context, input QueryInput, user User, work
 	}
 
 	categoryString := builder.String()
-	breakdown, err := getTaskBreakdown(input, categoryString)
+	breakdown, err := getTaskBreakdown(ctx, input, categoryString)
 	if err != nil {
 		return nil, err
 	}
@@ -9819,7 +9879,7 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		// 	workflowGenerationModel = ""
 		// }
 
-		finalContentOutput, err = RunAiQuery(systemMessage, currentInput)
+		finalContentOutput, err = RunAiQuery(ctx, systemMessage, currentInput)
 		if err != nil {
 			log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
 			return nil, err
@@ -10481,7 +10541,7 @@ func ExtractExternalAndWorkflow(response string) (string, string) {
 	return strings.TrimSpace(strings.Join(ext, "\n")), strings.TrimSpace(strings.Join(wf, "\n"))
 }
 
-func getTaskBreakdown(input QueryInput, categoryString string) (string, error) {
+func getTaskBreakdown(ctx context.Context, input QueryInput, categoryString string) (string, error) {
 	systemMessage := fmt.Sprintf(`You are a senior security automation assistant for Shuffle — a workflow automation platform (like a SOAR) that connects security tools and automates security workflows, You are not a conversational assistant or chatbot. Even if the user asks questions or speaks casually, your only job is to generate the correct workflow JSON.
 
 You will receive messy user inputs describing a task they want to automate. Your job is to produce a clean, fully structured, atomic breakdown of that task. In addition to the user input, you will also receive a list of apps the user has access to.
@@ -10608,10 +10668,10 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 			chatCompletion.MaxCompletionTokens = aiMaxTokens
 		}
 
-		contentOutput, err = RunAiQuery("", "", chatCompletion)
+		contentOutput, err = RunAiQuery(ctx, "", "", chatCompletion)
 
 	} else {
-		contentOutput, err = RunAiQuery(systemMessage, input.Query)
+		contentOutput, err = RunAiQuery(ctx, systemMessage, input.Query)
 
 	}
 	if err != nil {
@@ -10626,6 +10686,8 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 }
 
 func editWorkflowWithLLM(ctx context.Context, workflow *Workflow, user User, input WorkflowEditAIRequest) (*Workflow, error) {
+
+	ctx = EnsureContextWithCaller(ctx, "editWorkflowWithLLM")
 
 	apps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
@@ -10975,7 +11037,7 @@ FINAL OUTPUT RULE
 IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you return ONLY valid JSON in the exact format specified in the system instructions. Do not include any explanations, markdown formatting, or extra text - just the pure JSON object.`, userPrompt)
 		}
 
-		contentOutput, err = RunAiQuery(systemMessage, currentUserPrompt)
+		contentOutput, err = RunAiQuery(ctx, systemMessage, currentUserPrompt)
 		if err != nil {
 			// No need to retry, as RunAiQuery already has retry logic
 			log.Printf("[ERROR] Failed to run AI query in editWorkflowWithLLM: %s", err)
@@ -11517,6 +11579,9 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		return
 	}
 
+	ctx = context.WithValue(ctx, "caller", "HandleWorkflowGenerationResponse")
+	ctx = context.WithValue(ctx, "org_id", user.ActiveOrg.Id)
+	
 	if project.Environment == "cloud" {
 
 		// Check AI usage limits for workflow generation
@@ -11672,6 +11737,9 @@ func HandleEditWorkflowWithLLM(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	ctx = context.WithValue(ctx, "caller", "HandleEditWorkflowWithLLM")
+	ctx = context.WithValue(ctx, "org_id", user.ActiveOrg.Id )
 
 	if project.Environment == "cloud" {
 		if !user.SupportAccess {
@@ -12503,6 +12571,8 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 		return "", "", err
 	}
 
+	log.Printf("[INFO] User %s in org %s using runSupportAgent with input size %d", user.Id, input.OrgId, len(input.Query))
+
 	aiResponse := resp.OutputText()
 
 	// Save user message to DB
@@ -12720,6 +12790,8 @@ func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, inp
 
 	stream := oaiClient.Responses.NewStreaming(ctx, params, aioption.WithJSONSet("input", rawInput))
 	defer stream.Close()
+
+	log.Printf("[INFO] User %s in org %s using StreamSupportLLMResponse with input size %d", user.Id, input.OrgId, len(input.Query))
 
 	if err := stream.Err(); err != nil {
 		log.Printf("[ERROR] Failed to start chat stream: %v for org: %s", err, input.OrgId)
