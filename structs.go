@@ -4463,6 +4463,7 @@ type HealthCheck struct {
 	Updated   int64          `json:"updated"`
 	Apps      AppHealth      `json:"apps"`
 	Workflows WorkflowHealth `json:"workflows"`
+	Agents    AgentHealth    `json:"agents"`
 	//PythonApps    AppHealth                       `json:"python_apps"`
 	Datastore     DatastoreHealth                 `json:"datastore"`
 	FileOps       FileHealth                      `json:"fileops"`
@@ -4473,6 +4474,7 @@ type HealthCheckDB struct {
 	Success    bool                            `json:"success"`
 	Updated    int64                           `json:"updated"`
 	Workflows  WorkflowHealth                  `json:"workflows"`
+	Agents     AgentHealth                     `json:"agents"`
 	Opensearch opensearchapi.ClusterHealthResp `json:"opnsearch"`
 	Datastore  DatastoreHealth                 `json:"datastore"`
 	FileOps    FileHealth                      `json:"fileops"`
@@ -5210,4 +5212,32 @@ type AppBuildRequest struct {
 	Editing bool   `datastore:"editing"`
 	Id      string `datastore:"id"`
 	Image   string `datastore:"image"`
+}
+
+type AgentHealth struct {
+	Create             bool    `json:"create"`
+	Run                bool    `json:"run"`
+	BackendVersion     string  `json:"backend_version"`
+	RunFinished        bool    `json:"run_finished"`
+	ExecutionTook      float64 `json:"execution_took"`
+	RunStatus          string  `json:"run_status"`
+	Delete             bool    `json:"delete"`
+	ExecutionId        string  `json:"execution_id"`
+	WorkflowId         string  `json:"workflow_id"`
+	AgentNodeId        string  `json:"agent_node_id"`
+	AgentStatus        string  `json:"agent_status"`         // Status of the agent itself (RUNNING, FINISHED, ABORTED)
+	AgentDecisionCount int     `json:"agent_decision_count"` // Number of decisions made by the agent
+	LLMCallSuccess     bool    `json:"llm_call_success"`     // Whether the LLM call succeeded
+}
+
+type WttrResponse struct {
+	CurrentCondition []struct {
+		TempC string `json:"temp_C"`
+	} `json:"current_condition"`
+}
+
+type Parsed struct {
+	Success       bool   `json:"success"`
+	ExecutionId   string `json:"execution_id"`
+	Authorization string `json:"authorization"`
 }
