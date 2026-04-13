@@ -9705,7 +9705,8 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 		// Find the key for "workflows_<workflow.org_id>" and update the cache for this one. If it doesn't exist, add it
 		// Get the cache for the workflows
-		cacheKey = fmt.Sprintf("%s_workflows", workflow.OrgId)
+		cursor := ""
+		cacheKey = fmt.Sprintf("%s_%s_workflows", cursor, workflow.OrgId)
 		cache, err := GetCache(ctx, cacheKey)
 		if err != nil {
 			//log.Printf("[WARNING] Failed getting cache for getworkflow '%s': %s", cacheKey, err)
@@ -14085,26 +14086,40 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				cacheData.Value = config.Value
 			}
 
+			// Works on merging enrichments 
 			if len(cacheData.Enrichments) > 0 {
 				timeNow := int64(time.Now().Unix())
-				newObservables := []Observable{}
-				for observableIndex, observable := range cacheData.Enrichments {
+
+				// Start with existing ones
+				newObservables := config.Enrichments
+				for _, observable := range cacheData.Enrichments {
 					if len(observable.Value) == 0 {
 						continue
 					}
 
-					//cacheData.Enrichments[observableIndex].LastSeen = timeNow
 					existed := false
-					for _, config := range config.Enrichments {
+					for existingObsIndex, existingObs := range newObservables {
+						if existingObs.Type == observable.Type && existingObs.Value == observable.Value {
+							existed = true
+							newObservables[existingObsIndex].LastSeen = timeNow
+							if existingObs.FirstSeen == 0 {
+								existingObs.FirstSeen = timeNow
+							}
 
-						continue
+							continue
+						}
+					}
+
+					if !existed {
+						observable.FirstSeen = timeNow
+						observable.LastSeen = timeNow
+						newObservables = append(newObservables, observable)
 					}
 				}
 
 				cacheData.Enrichments = newObservables
 				if debug { 
-					log.Printf("Found new enrichments: %d for key %s in category %s", len(newObservables), cacheData.Key, cacheData.Category)
-					os.Exit(3)
+					log.Printf("\n\n\nFound new enrichments: %d for key %s in category %s\n\n\n", len(newObservables), cacheData.Key, cacheData.Category)
 				}
 			}
 

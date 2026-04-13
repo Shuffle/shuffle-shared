@@ -8860,12 +8860,16 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if categoryAction.ActionName == "remove" || categoryAction.ActionName == "disable" || categoryAction.ActionName == "stop" {
+
+
 		if workflowErr == nil && workflow.OrgId == user.ActiveOrg.Id {
 			// Delete the workflow
 			err = DeleteKey(ctx, "workflow", workflowId)
 			if err != nil {
 				log.Printf("[ERROR] Failed deleting workflow with ID %s in GenerateSingulWorkflows: %s", workflowId, err)
 			}
+
+			DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", user.ActiveOrg.Id))
 		} else {
 			log.Printf("[INFO] No existing workflow with ID %s to remove for category '%s'", workflowId, categoryAction.Label)
 			resp.WriteHeader(http.StatusOK)
