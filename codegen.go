@@ -4992,24 +4992,24 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		}
 
 	} else if parsedName == "enrich" {
+		// Prevent recursion
+		cacheKey := fmt.Sprintf("enrich_wait_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
+		data, err := GetCache(ctx, cacheKey)
+		if err == nil && data != nil {
+			if debug { 
+				log.Printf("[DEBUG] Enrich automation recently run for key %s in category %s - skipping.", cacheData.Key, cacheData.Category)
+			}
+
+			return nil
+		}
 
 		if debug { 
 			log.Printf("[DEBUG] Running enrich automation for key %s in category %s", cacheData.Key, cacheData.Category)
 		}
 
-		// Prevent recursion
-		cacheKey := fmt.Sprintf("enrich_wait_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
-		data, err := GetCache(ctx, cacheKey)
-		if err == nil && data != nil {
-			//log.Printf("[DEBUG] Enrich automation recently run for key %s in category %s - skipping.", cacheData.Key, cacheData.Category)
-			return nil
-		}
-
-		// Set cache key for 1 hour to avoid re-running enrich too often
-		SetCache(ctx, cacheKey, []byte("1"), 15)
-
-		// Use key "enrichments" =>
-		// [{"name": "answers.ip", "value": "92.24.47.250", "type": "location", "data": {"city": "Socotra", "continent": "Asia", "coordinates": [-25.4153, 17.0743], "country": "YE", "desc": "Yemen"}}]
+		// Set cache key for 1 MINUTE to avoid re-running enrich too often
+		// This doesn't matter too much as it won't impact data.
+		SetCache(ctx, cacheKey, []byte("1"), 1)
 
 		if cacheData.Enrichments != nil && len(cacheData.Enrichments) > 0 {
 		}

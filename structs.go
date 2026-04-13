@@ -5224,3 +5224,16 @@ type AppBuildRequest struct {
 	Id      string `datastore:"id"`
 	Image   string `datastore:"image"`
 }
+
+// Related to Orborus Agent Mode
+type SensorMode struct { 
+	AgentModeEnabled bool `json:"agent_mode_enabled" datastore:"agent_mode_enabled"`
+
+	AuditLogEnabled bool `json:"audit_log_enabled" datastore:"audit_log_enabled"`
+	SoftwareListEnabled bool `json:"software_list_enabled" datastore:"software_list_enabled"`
+	HdEncryptedCheck bool `json:"hd_encrypted_check" datastore:"hd_encrypted_check"`
+	ScreenlockCheck bool `json:"screenlock_check" datastore:"screenlock_check"`
+	SendComputerDetails bool `json:"send_computer_details" datastore:"send_computer_details"`
+
+	ResponseActionsEnabled bool `json:"response_actions_enabled" datastore:"response_actions_enabled"`
+}

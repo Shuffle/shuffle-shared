@@ -8314,6 +8314,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		if len(errorMessage) > 0 {
 			agentOutput.Output = errorMessage
+			agentOutput.Status = "FAILURE"
 		}
 
 		if createNextActions == true {
