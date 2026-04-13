@@ -2449,10 +2449,10 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 	body, bodyerr := ioutil.ReadAll(request.Body)
 	if bodyerr == nil {
 		orboruserr := json.Unmarshal(body, &orborusData)
-		if orboruserr == nil {
+		if !env.SensorGroup && orboruserr == nil {
 			if time.Now().Unix() > env.Checkin+90 {
 				if debug {
-					log.Printf("[DEBUG] Failover orborus to %s. Checkin: %d. Edit: %d", orborusData.Uuid, env.Checkin, env.Edited)
+					log.Printf("[DEBUG] Failover orborus to '%s'. Checkin: %d. Edit: %d", orborusData.Uuid, env.Checkin, env.Edited)
 				}
 
 				env.OrborusUuid = orborusData.Uuid
@@ -2466,6 +2466,102 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 				//env.Checkin = time.Now().Unix()
 			}
 		}
+	}
+
+	// Handles a group of hosts running Orborus based on this page:
+	// https://security.shuffler.io/assets
+	if env.SensorGroup { 
+		if len(orborusData.Uuid) == 0 || len(orborusData.SensorDetails.Hostname) == 0 {
+			if debug { 
+				log.Printf("[DEBUG] Orborus data missing UUID or Hostname for sensor group environment '%s' (%s). Orborus Data: %#v", env.Name, env.Id, orborusData)
+			}
+
+			return nil
+		}
+
+		//log.Printf("[DEBUG] Sensor group environment '%s' (%s) is checking in. Skipping Orborus failover logic for sensor groups. Checkin: %d", env.Name, env.Id, env.Checkin)
+
+		// 600 = time until it's not tracked anymore at all
+		hostTimeout := int64(600)
+		hostRefresh := int64(90)
+
+		// This will struggle a bit with many instances at once
+		timeNow := int64(time.Now().Unix())
+
+		removeIndex := []int{}
+		found := false
+		updateMade := false
+
+		foundHosts := []string{}
+		for hostIndex, host := range env.SensorHosts {
+			if ArrayContains(foundHosts, host.Hostname) {
+				removeIndex = append(removeIndex, hostIndex)
+				continue
+			}
+
+			foundHosts = append(foundHosts, host.Hostname)
+		}
+
+		// Run removeIndex backwards 
+		for i := len(removeIndex) - 1; i >= 0; i-- {
+			env.SensorHosts = append(env.SensorHosts[:removeIndex[i]], env.SensorHosts[removeIndex[i]+1:]...)
+			updateMade = true
+		}
+
+		removeIndex = []int{}
+		for hostIndex, host := range env.SensorHosts {
+			
+			// Check if more than 90 seconds ago
+			if host.Hostname == orborusData.SensorDetails.Hostname { 
+				found = true
+				if timeNow > host.Checkin+hostRefresh {
+
+					if debug { 
+						log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago", host.Hostname, env.Name, env.Id, timeNow-host.Checkin)
+					}
+
+					updateMade = true
+					env.SensorHosts[hostIndex].Checkin = timeNow
+				}
+
+				// We can do something here to dedup if more than X time, but..
+				if host.Uuid != orborusData.Uuid {
+					env.SensorHosts[hostIndex].Uuid = orborusData.Uuid
+					if debug { 
+						log.Printf("[DEBUG] Sensor %s (%s) restarted.", host.Hostname, host.Uuid)
+					}
+				}
+
+				break
+			}
+
+			// Check if more than 10 minutes ago
+			if timeNow > host.Checkin+hostTimeout {
+				removeIndex = append(removeIndex, hostIndex)
+				continue
+			}
+		}
+
+
+		// Appending a new one
+		if !found { 
+			updateMade = true
+
+			newHost := orborusData.SensorDetails
+			newHost.Uuid = orborusData.Uuid
+			newHost.Checkin = timeNow
+			env.SensorHosts = append(env.SensorHosts, newHost)
+		}
+
+		if updateMade { 
+			env.Checkin = timeNow
+			err := SetEnvironment(ctx, env)
+			if err != nil {
+				log.Printf("[ERROR] Sensor group environment '%s' (%s) FAILED to update with new sensor host data. Checkin: %d. Total hosts: %d. Error: %s", env.Name, env.Id, env.Checkin, len(env.SensorHosts), err)
+			}
+		}
+
+		return nil
 	}
 
 	timeNow := time.Now().Unix()

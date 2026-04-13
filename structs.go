@@ -559,9 +559,10 @@ type Environment struct {
 	OrborusUuid string `json:"orborus_uuid" datastore:"orborus_uuid"`
 
 	//Licensed bool       `json:"licensed" datastore:"licensed"`
-	RunType     string     `json:"run_type" datastore:"run_type"`
-	DataLake    LakeConfig `json:"data_lake" datastore:"data_lake"`
-	SensorGroup bool       `json:"sensor_group" datastore:"sensor_group"`
+	RunType     string          `json:"run_type" datastore:"run_type"`
+	DataLake    LakeConfig      `json:"data_lake" datastore:"data_lake"`
+	SensorGroup bool            `json:"sensor_group" datastore:"sensor_group"`
+	SensorHosts []SensorDetails `json:"sensor_hosts" datastore:"sensor_hosts"`
 
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 }
@@ -4268,17 +4269,6 @@ type Suggestion struct {
 	Status string `json:"status" datastore:"status"`
 }
 
-type SensorDetails struct {
-	SensorMode bool `json:"sensor_mode" datastore:"sensor_mode"`
-
-	Hostname string `json:"hostname" datastore:"hostname"`
-	OS       string `json:"os" datastore:"os"`
-	Arch     string `json:"arch" datastore:"arch"`
-
-	ElevatedAccess             bool `json:"elevated_access" datastore:"elevated_access"`
-	AutomaticScreenlockEnabled bool `json:"automatic_screen_lock_enabled" datastore:"automatic_screen_lock_enabled"`
-}
-
 // Parse out CPU, memory and disk. Make struct
 type OrborusStats struct {
 	// Environment name~
@@ -5239,15 +5229,44 @@ type AppBuildRequest struct {
 	Image   string `datastore:"image"`
 }
 
-// Related to Orborus Agent Mode
+type Software struct {
+	Name    string `json:"name" datastore:"name,noindex"`
+	Version string `json:"version" datastore:"version,noindex"`
+}
+
+// Data sent FROM Orborus->Backend about sensor mode
+type SensorDetails struct {
+	SensorMode bool   `json:"sensor_mode" datastore:"sensor_mode"`
+	Checkin    int64  `json:"checkin" datastore:"checkin"`
+	Uuid       string `json:"uuid" datastore:"uuid"`
+
+	Hostname string `json:"hostname" datastore:"hostname"`
+	OS       string `json:"os" datastore:"os"`
+	Arch     string `json:"arch" datastore:"arch"`
+	Serial   string `json:"serial" datastore:"serial,noindex"`
+
+	ElevatedAccess bool `json:"elevated_access" datastore:"elevated_access"`
+
+	// String, not bool => we want details
+	AutomaticScreenlockEnabled string     `json:"automatic_screen_lock_enabled" datastore:"automatic_screen_lock_enabled"`
+	HdEncrypted                string     `json:"hd_encrypted" datastore:"hd_encrypted"`
+	InstalledSoftware          []Software `json:"installed_software" datastore:"installed_software,noindex"`
+	LogForwarding              string     `json:"log_forwarding" datastore:"log_forwarding"`
+	ResponseActionsEnabled      string     `json:"response_actions_enabled" datastore:"response_actions_enabled"`
+}
+
+// Related to Orborus Agent Mode. Used locally.
 type SensorMode struct {
 	Enabled bool `json:"enabled" datastore:"enabled"`
 
-	AuditLogEnabled     bool `json:"audit_log_enabled" datastore:"audit_log_enabled"`
+	// Compliance
 	SoftwareListEnabled bool `json:"software_list_enabled" datastore:"software_list_enabled"`
 	HdEncryptedCheck    bool `json:"hd_encrypted_check" datastore:"hd_encrypted_check"`
 	ScreenlockCheck     bool `json:"screenlock_check" datastore:"screenlock_check"`
-	SendComputerDetails bool `json:"send_computer_details" datastore:"send_computer_details"`
 
+	// Monitoring
+	LogForwarding string `json:"log_forwarding" datastore:"log_forwarding"`
+
+	// Response
 	ResponseActionsEnabled bool `json:"response_actions_enabled" datastore:"response_actions_enabled"`
 }

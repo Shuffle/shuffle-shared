@@ -161,6 +161,8 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			// Support project
 			"https://support.shuffler.io",
 			"https://compliance.shuffler.io",
+			"https://2538a36b-5c1c-4954-8700-ee5d6c6b9f91.lovableproject.com",
+
 			"https://shuffle-support.lovable.app",
 			"https://shuffle-support.lovable.app/",
 			"https://05364669-00ea-43be-ae8f-8e333ccc870c.lovableproject.com",
