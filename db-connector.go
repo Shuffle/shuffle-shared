@@ -13987,7 +13987,7 @@ func SetDatastoreCategoryConfig(ctx context.Context, category DatastoreCategoryU
 	} else {
 		key := datastore.NameKey(nameKey, category.Id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &category); err != nil {
-			log.Printf("[ERROR] Error setting org cache: %s", err)
+			log.Printf("[ERROR] Error setting datastore config: %s", err)
 			return err
 		}
 	}
@@ -14927,7 +14927,7 @@ func SetDatastoreKeyRevision(ctx context.Context, cacheData CacheKeyData) error 
 	} else {
 		key := datastore.NameKey(nameKey, cacheId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
-			log.Printf("[ERROR] Error setting org cache: %s", err)
+			log.Printf("[ERROR] Error setting datastore key revision: %s", err)
 			return err
 		}
 	}
@@ -14985,7 +14985,7 @@ func SetDatastoreKeyMeta(ctx context.Context, cacheData CacheKeyData) error {
 	} else {
 		key := datastore.NameKey(nameKey, cacheId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
-			log.Printf("[ERROR] Error setting org cache: %s", err)
+			log.Printf("[ERROR] Error setting datastore key meta: %s", err)
 			return err
 		}
 	}
@@ -15059,7 +15059,7 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 	} else {
 		key := datastore.NameKey(nameKey, cacheId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
-			log.Printf("[ERROR] Error setting org cache: %s", err)
+			log.Printf("[ERROR] Error setting datastore key: %s", err)
 			return err
 		}
 	}

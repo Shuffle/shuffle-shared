@@ -559,8 +559,9 @@ type Environment struct {
 	OrborusUuid string `json:"orborus_uuid" datastore:"orborus_uuid"`
 
 	//Licensed bool       `json:"licensed" datastore:"licensed"`
-	RunType  string     `json:"run_type" datastore:"run_type"`
-	DataLake LakeConfig `json:"data_lake" datastore:"data_lake"`
+	RunType     string     `json:"run_type" datastore:"run_type"`
+	DataLake    LakeConfig `json:"data_lake" datastore:"data_lake"`
+	SensorGroup bool       `json:"sensor_group" datastore:"sensor_group"`
 
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 }
@@ -1208,30 +1209,30 @@ type DatastoreKeyMini struct {
 }
 
 // Based on OCSF reputation: https://schema.ocsf.io/1.8.0/objects/reputation
-type Reputation struct { 
+type Reputation struct {
 	BaseScore float64 `json:"base_score" datastore:"base_score"`
-	Provider string `json:"provider" datastore:"provider"`
-	Score string `json:"score" datastore:"score"`
+	Provider  string  `json:"provider" datastore:"provider"`
+	Score     string  `json:"score" datastore:"score"`
 }
 
 // Based on OCSF Observable: https://schema.ocsf.io/1.8.0/objects/observable
-type Observable struct { 
-	Type string `json:"type" datastore:"type"`
-	Value string `json:"value" datastore:"value"`
-	FirstSeen int64 `json:"first_seen" datastore:"first_seen"`
-	LastSeen int64 `json:"last_seen" datastore:"last_seen"`
+type Observable struct {
+	Type      string `json:"type" datastore:"type"`
+	Value     string `json:"value" datastore:"value"`
+	FirstSeen int64  `json:"first_seen" datastore:"first_seen"`
+	LastSeen  int64  `json:"last_seen" datastore:"last_seen"`
 
-	Name string `json:"name" datastore:"name"`
+	Name       string     `json:"name" datastore:"name"`
 	Reputation Reputation `json:"reputation" datastore:"reputation"`
 }
 
-// Not sure how this is mini anymore (: 
+// Not sure how this is mini anymore (:
 type CacheKeyDataMini struct {
-	Category            string `json:"category" datastore:"category"`
-	Key                 string `json:"key" datastore:"Key"`
-	Value               string `json:"value" datastore:"Value,noindex"`
-	IgnoreSecurityRules bool   `json:"ignore_security_rules" datastore:"ignore_security_rules,noindex"`
-	Enrichments []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
+	Category            string       `json:"category" datastore:"category"`
+	Key                 string       `json:"key" datastore:"Key"`
+	Value               string       `json:"value" datastore:"Value,noindex"`
+	IgnoreSecurityRules bool         `json:"ignore_security_rules" datastore:"ignore_security_rules,noindex"`
+	Enrichments         []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 
 	OrgId              string   `json:"org_id,omitempty" datastore:"OrgId"`
 	ExecutionId        string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
@@ -1246,22 +1247,22 @@ type CacheKeyDataFallback struct {
 	Value    any      `json:"value" datastore:"Value,noindex"`
 	Category string   `json:"category" datastore:"category"`
 	Tags     []string `json:"tags,omitempty" datastore:"tags"`
-	
+
 	Enrichments []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 }
 
 type CacheKeyData struct {
-	Success             bool     `json:"success,omitempty" datastore:"Success"`
-	WorkflowId          string   `json:"workflow_id," datastore:"WorkflowId"`
-	ExecutionId         string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
-	Authorization       string   `json:"authorization,omitempty" datastore:"Authorization"`
-	OrgId               string   `json:"org_id,omitempty" datastore:"OrgId"`
-	Key                 string   `json:"key" datastore:"Key"`
-	Value               string   `json:"value" datastore:"Value,noindex"`
-	Category            string   `json:"category" datastore:"category"`
-	Tags                []string `json:"tags,omitempty" datastore:"tags"`
-	IgnoreSecurityRules bool     `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"`
-	Enrichments []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
+	Success             bool         `json:"success,omitempty" datastore:"Success"`
+	WorkflowId          string       `json:"workflow_id," datastore:"WorkflowId"`
+	ExecutionId         string       `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	Authorization       string       `json:"authorization,omitempty" datastore:"Authorization"`
+	OrgId               string       `json:"org_id,omitempty" datastore:"OrgId"`
+	Key                 string       `json:"key" datastore:"Key"`
+	Value               string       `json:"value" datastore:"Value,noindex"`
+	Category            string       `json:"category" datastore:"category"`
+	Tags                []string     `json:"tags,omitempty" datastore:"tags"`
+	IgnoreSecurityRules bool         `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"`
+	Enrichments         []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
@@ -1295,7 +1296,6 @@ type RemoteWorkflowInfo struct {
 	ExistsInOrg   bool   `json:"exists_in_org"`
 	OrgWorkflowId string `json:"org_workflow_id"`
 }
-
 
 type PaymentSubscription struct {
 	Id               string   `json:"id" datastore:"id"`
@@ -4268,6 +4268,17 @@ type Suggestion struct {
 	Status string `json:"status" datastore:"status"`
 }
 
+type SensorDetails struct {
+	SensorMode bool `json:"sensor_mode" datastore:"sensor_mode"`
+
+	Hostname string `json:"hostname" datastore:"hostname"`
+	OS       string `json:"os" datastore:"os"`
+	Arch     string `json:"arch" datastore:"arch"`
+
+	ElevatedAccess             bool `json:"elevated_access" datastore:"elevated_access"`
+	AutomaticScreenlockEnabled bool `json:"automatic_screen_lock_enabled" datastore:"automatic_screen_lock_enabled"`
+}
+
 // Parse out CPU, memory and disk. Make struct
 type OrborusStats struct {
 	// Environment name~
@@ -4307,6 +4318,9 @@ type OrborusStats struct {
 	WorkerContainers  int `json:"worker_containers"`
 	StoppedContainers int `json:"stopped_containers"`
 	TotalContainers   int `json:"total_containers"`
+
+	// Host tracking (sensor mode)
+	SensorDetails SensorDetails `json:"sensor_details" datastore:"sensor_details"`
 
 	// New cache mechanics to keep better track of running/not running
 	RunningIp string     `json:"running_ip"`
@@ -5226,13 +5240,13 @@ type AppBuildRequest struct {
 }
 
 // Related to Orborus Agent Mode
-type SensorMode struct { 
-	AgentModeEnabled bool `json:"agent_mode_enabled" datastore:"agent_mode_enabled"`
+type SensorMode struct {
+	Enabled bool `json:"enabled" datastore:"enabled"`
 
-	AuditLogEnabled bool `json:"audit_log_enabled" datastore:"audit_log_enabled"`
+	AuditLogEnabled     bool `json:"audit_log_enabled" datastore:"audit_log_enabled"`
 	SoftwareListEnabled bool `json:"software_list_enabled" datastore:"software_list_enabled"`
-	HdEncryptedCheck bool `json:"hd_encrypted_check" datastore:"hd_encrypted_check"`
-	ScreenlockCheck bool `json:"screenlock_check" datastore:"screenlock_check"`
+	HdEncryptedCheck    bool `json:"hd_encrypted_check" datastore:"hd_encrypted_check"`
+	ScreenlockCheck     bool `json:"screenlock_check" datastore:"screenlock_check"`
 	SendComputerDetails bool `json:"send_computer_details" datastore:"send_computer_details"`
 
 	ResponseActionsEnabled bool `json:"response_actions_enabled" datastore:"response_actions_enabled"`

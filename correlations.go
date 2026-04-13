@@ -11,6 +11,7 @@ import (
 	"errors"
 	"time"
 	"math/rand"
+	"strconv"
 )
 
 func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
@@ -322,4 +323,26 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 
 	return nil
 
+}
+
+func extractRegValue(regOutput string) string {
+	// Registry output format:
+	// "    ScreenSaveTimeOut    REG_SZ    600"
+	// We want the last field
+
+	parts := strings.Fields(regOutput)
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return "0"
+}
+
+
+func parseInt(s string) int {
+	s = strings.TrimSpace(s)
+	val, err := strconv.Atoi(s)
+	if err != nil {
+		return 0 // default to 0 if parse fails
+	}
+	return val
 }
