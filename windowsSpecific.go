@@ -4,6 +4,11 @@ package shuffle
 
 import (
 	"golang.org/x/sys/windows"
+	"os/exec"
+	"strings"
+	"runtime"
+	"encoding/json"
+	"log"
 )
 
 func IsElevated() bool {
@@ -14,16 +19,35 @@ func IsElevated() bool {
 	}
 	defer token.Close()
 
-	elevated, err := token.IsElevated()
-	if err != nil {
-		return false
-	}
-	return elevated
+	return token.IsElevated()
 }
 
+func extractRegValue(output string) string {
+	// Windows reg output format:
+	// "    ValueName    REG_TYPE    ActualValue"
+	// We need to extract "ActualValue"
+
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Skip empty lines and the key path line
+		if line == "" || strings.HasPrefix(line, "HKEY_") {
+			continue
+		}
+
+		// Split by whitespace and get the last non-empty field
+		fields := strings.Fields(line)
+		if len(fields) >= 3 {
+			// Last field is the value
+			return fields[len(fields)-1]
+		}
+	}
+	return ""
+}
 
 // Windows: Check screensaver timeout
-func IsAutomaticScreenlockEnabled() (bool, error) {
+func IsAutomaticScreenlockEnabled() (bool) {
 	// Is screensaver active?
 	cmd := exec.Command(
 		"reg", "query",
@@ -32,6 +56,7 @@ func IsAutomaticScreenlockEnabled() (bool, error) {
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(output), "0x1") {
+		log.Printf("[ERROR] Failed to check ScreenSaveActive: %s", err)
 		return false
 	}
 
@@ -43,6 +68,7 @@ func IsAutomaticScreenlockEnabled() (bool, error) {
 	)
 	output, err = cmd.CombinedOutput()
 	if err != nil {
+		log.Printf("[ERROR] Failed to check ScreenSaveTimeOut: %s", err)
 		return false
 	}
 
@@ -108,7 +134,7 @@ ConvertTo-Json
 		return nil
 	}
 
-	var pkgs []winPkg
+	var pkgs []Software
 	json.Unmarshal(out, &pkgs)
 
 	var result []Software

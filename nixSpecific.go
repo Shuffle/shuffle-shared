@@ -13,15 +13,6 @@ import (
 	"runtime"
 )
 
-func parseInt(s string) int {
-	s = strings.TrimSpace(s)
-	val, err := strconv.Atoi(s)
-	if err != nil {
-		return 0 // default to 0 if parse fails
-	}
-	return val
-}
-
 func IsElevated() bool {
 	return os.Geteuid() == 0
 }
@@ -243,29 +234,6 @@ func getProfileMac() string {
 	}
 
 	return "failed to locate (macos)"
-}
-
-func isValidSerial(s string) bool {
-	s = strings.ToLower(strings.TrimSpace(s))
-
-	if s == "" {
-		return false
-	}
-
-	bad := []string{
-		"to be filled",
-		"default string",
-		"o.e.m",
-		"unknown",
-	}
-
-	for _, b := range bad {
-		if strings.Contains(s, b) {
-			return false
-		}
-	}
-
-	return true
 }
 
 func getSerialLinux() string {

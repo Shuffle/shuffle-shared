@@ -3,6 +3,7 @@ package shuffle
 import (
 	"net/http"
 	"fmt"
+	"strconv"
 	"io/ioutil"
 	"encoding/json"
 	"log"
@@ -324,3 +325,35 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 
 }
 
+func parseInt(s string) int {
+	s = strings.TrimSpace(s)
+	val, err := strconv.Atoi(s)
+	if err != nil {
+		return 0 // default to 0 if parse fails
+	}
+	return val
+}
+
+
+func isValidSerial(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+
+	if s == "" {
+		return false
+	}
+
+	bad := []string{
+		"to be filled",
+		"default string",
+		"o.e.m",
+		"unknown",
+	}
+
+	for _, b := range bad {
+		if strings.Contains(s, b) {
+			return false
+		}
+	}
+
+	return true
+}
