@@ -2479,7 +2479,11 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			return nil
 		}
 
-		//log.Printf("[DEBUG] Sensor group environment '%s' (%s) is checking in. Skipping Orborus failover logic for sensor groups. Checkin: %d", env.Name, env.Id, env.Checkin)
+		if strings.Contains(orborusData.SensorDetails.Hostname, ".") {
+			parsedHostnameSplit := strings.Split(orborusData.SensorDetails.Hostname, ".")
+			orborusData.SensorDetails.Hostname = parsedHostnameSplit[0]
+		}
+
 
 		// 600 = time until it's not tracked anymore at all
 		hostTimeout := int64(600)
@@ -2492,6 +2496,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 		found := false
 		updateMade := false
 
+		// Just some deduping in case
 		foundHosts := []string{}
 		for hostIndex, host := range env.SensorHosts {
 			if ArrayContains(foundHosts, host.Hostname) {
@@ -2514,21 +2519,32 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			// Check if more than 90 seconds ago
 			if host.Hostname == orborusData.SensorDetails.Hostname { 
 				found = true
-				if timeNow > host.Checkin+hostRefresh {
+				if timeNow > host.Checkin+hostRefresh || host.Uuid != orborusData.Uuid {
 
 					if debug { 
-						log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago", host.Hostname, env.Name, env.Id, timeNow-host.Checkin)
+						log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago, Fulldata: %#v", host.Hostname, env.Name, env.Id, timeNow-host.Checkin, orborusData.SensorDetails)
 					}
 
 					updateMade = true
 					env.SensorHosts[hostIndex].Checkin = timeNow
-				}
-
-				// We can do something here to dedup if more than X time, but..
-				if host.Uuid != orborusData.Uuid {
 					env.SensorHosts[hostIndex].Uuid = orborusData.Uuid
-					if debug { 
-						log.Printf("[DEBUG] Sensor %s (%s) restarted.", host.Hostname, host.Uuid)
+
+					// FIXME: This needs to be a bit smarter
+					// For now we will just keep whatever we get first. Any restart
+					// of the agent will change it too however.
+					if host.Uuid != orborusData.Uuid {
+						env.SensorHosts[hostIndex].AutomaticScreenlockEnabled = orborusData.SensorDetails.AutomaticScreenlockEnabled
+						env.SensorHosts[hostIndex].HdEncrypted = orborusData.SensorDetails.HdEncrypted
+						env.SensorHosts[hostIndex].LogForwarding = orborusData.SensorDetails.LogForwarding
+						env.SensorHosts[hostIndex].ResponseActions = orborusData.SensorDetails.ResponseActions
+
+						if len(orborusData.SensorDetails.Serial) > 0 {
+							env.SensorHosts[hostIndex].Serial = orborusData.SensorDetails.Serial
+						}
+
+						if len(orborusData.SensorDetails.InstalledSoftware) > 0 {
+							env.SensorHosts[hostIndex].InstalledSoftware = orborusData.SensorDetails.InstalledSoftware
+						}
 					}
 				}
 

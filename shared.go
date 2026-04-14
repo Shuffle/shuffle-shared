@@ -1,7 +1,6 @@
 package shuffle
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -44,7 +43,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
-	//"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -57,9 +55,6 @@ import (
 
 	"encoding/json"
 	//	"github.com/goccy/go-json"
-
-	"os/exec"
-	"runtime"
 
 	"crypto/aes"
 	"crypto/cipher"
@@ -16429,7 +16424,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			newCookie.Domain = ".shuffler.io"
 			http.SetCookie(resp, newCookie)
 		}
-		
 
 		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, userdata.Session, expiration.Unix(), regionUrl)
 		newData, err := json.Marshal(returnValue)
@@ -21403,10 +21397,10 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		tmpData = append(tmpData, CacheKeyData{
-			OrgId:    tmpDataOverride.OrgId,
-			Key:      tmpDataOverride.Key,
-			Category: tmpDataOverride.Category,
-			Tags:     tmpDataOverride.Tags,
+			OrgId:       tmpDataOverride.OrgId,
+			Key:         tmpDataOverride.Key,
+			Category:    tmpDataOverride.Category,
+			Tags:        tmpDataOverride.Tags,
 			Enrichments: tmpDataOverride.Enrichments,
 
 			Value: parsedValue,
@@ -21848,6 +21842,132 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 	} else if strings.ToLower(appId) == "integration" || strings.ToLower(appId) == "singul" {
 		log.Printf("[INFO] Running single action for 'integration' app => Singul")
+
+		// Related to sensor groups for Orborus
+	} else if strings.ToLower(appId) == "sensors" && action.Name == "run_action" {
+		if len(user.ActiveOrg.Id) == 0 {
+			return workflowExecution, errors.New("No org ID supplied for sensor execution")
+		}
+
+		log.Printf("[INFO] Running Shuffle Group sensor action for org '%s'", user.ActiveOrg.Id)
+
+		foundHosts := []string{}
+		foundAction := ""
+		foundSensorGroup := ""
+
+		foundError := ""
+		for _, param := range action.Parameters {
+			if len(param.Value) == 0 {
+				foundError = fmt.Sprintf("'%s' can't be empty. Required fields: action, hosts, sensor_group", param.Name)
+				break
+			}
+
+			if param.Name == "hosts" {
+				foundHosts = strings.Split(param.Value, ",")
+			} else if param.Name == "action" {
+				foundAction = param.Value
+			} else if param.Name == "sensor_group" {
+				foundSensorGroup = param.Value
+			}
+		}
+
+		if len(foundError) > 0 {
+			return workflowExecution, errors.New(foundError)
+		}
+
+		foundExec := workflowExecution
+		foundEnv := foundSensorGroup
+		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			return foundExec, err
+		}
+
+		parsedEnv := ""
+		for _, env := range environments {
+			if env.Archived {
+				continue
+			}
+
+			if !env.SensorGroup {
+				continue
+			}
+
+			if env.Name != foundEnv {
+				continue
+			}
+
+			parsedEnv = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(foundEnv, " ", "-"), "_", "-")), env.OrgId)
+			break
+		}
+
+		if len(parsedEnv) == 0 {
+			return foundExec, errors.New("Failed to find environment for sensor action. Make sure the environment exists and isn't archived.")
+		}
+
+		// One for each host
+		go IncrementCache(ctx, user.ActiveOrg.Id, "app_executions", len(foundHosts))
+		go IncrementCache(ctx, user.ActiveOrg.Id, "workflow_executions", len(foundHosts))
+		for hostIndex, host := range foundHosts {
+			workflowId := uuid.NewV4().String()
+			action.SourceWorkflow = workflowId
+
+			if len(action.ID) != 36 {
+				action.ID = uuid.NewV4().String()
+			}
+
+			exec := WorkflowExecution{
+				Workflow: Workflow{
+					ID: workflowId,
+					Actions: []Action{
+						action,
+					},
+
+					OrgId:     user.ActiveOrg.Id,
+					Owner:     user.Username,
+					UpdatedBy: user.Username,
+					Start:     action.ID,
+				},
+				Type:          "SENSOR_ACTION",
+				Start:         action.ID,
+				Status:        "EXECUTING",
+				WorkflowId:    workflowId,
+				ExecutionId:   workflowId,
+				ExecutionOrg:  user.ActiveOrg.Id,
+				StartedAt:     int64(time.Now().Unix()),
+				Authorization: uuid.NewV4().String(),
+			}
+
+			if hostIndex == 0 {
+				foundExec = exec
+			}
+
+			go SetWorkflowExecution(ctx, exec, true)
+
+			executionRequest := ExecutionRequest{
+				Start:         exec.Start,
+				ExecutionId:   exec.ExecutionId,
+				Authorization: exec.Authorization,
+
+				WorkflowId:   exec.Workflow.ID,
+				Environments: []string{parsedEnv},
+				Type:         "SENSOR_ACTION",
+				Priority:     5,
+
+				ExecutionArgument: foundAction,
+				ExecutionSource:   host,
+			}
+
+			// Queue logging to make sure we get it
+			log.Printf("[INFO][%s] Queued SENSOR_ACTION to be ran on hosts %s in group %s", exec.ExecutionId, foundHosts, foundEnv)
+			err = SetWorkflowQueue(ctx, executionRequest, parsedEnv)
+			if err != nil {
+				log.Printf("[WARNING][%s] Failed adding %s to db (single action queue): %s", exec.ExecutionId, parsedEnv, err)
+			}
+
+		}
+
+		return foundExec, nil
+
 	} else if strings.ToLower(appId) == "http" {
 
 		// Find the app and the ID for it
@@ -22773,7 +22893,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		}
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG][%s] Single action execution check finished. Result len: %d, Errors: %#v", workflowExecution.ExecutionId, len(returnBody.Result), returnBody.Errors)
 	}
 
@@ -35369,607 +35489,6 @@ func startSchedule(trigger Trigger, authorization string, workflow Workflow) err
 	}
 
 	return nil
-}
-
-// EDR and Telemetry Functions
-
-// NewAuditLogCollector creates a new audit log collector for the current platform
-func NewAuditLogCollector(config TelemetryConfig) (*AuditLogCollector, error) {
-	platform := runtime.GOOS
-
-	if config.BufferSize == 0 {
-		config.BufferSize = 1000
-	}
-
-	if config.FlushInterval == 0 {
-		config.FlushInterval = 10 * time.Second
-	}
-
-	collector := &AuditLogCollector{
-		Config:     config,
-		Platform:   platform,
-		LogChannel: make(chan AuditLogEntry, config.BufferSize),
-		StopChan:   make(chan bool),
-	}
-
-	return collector, nil
-}
-
-func (c *AuditLogCollector) LogCollectorStart(ctx context.Context) error {
-	if !c.Config.Enabled {
-		return nil
-	}
-
-	auditLogEnabled := false
-	for _, mode := range c.Config.Modes {
-		if mode == "audit_log" {
-			auditLogEnabled = true
-			break
-		}
-	}
-
-	if !auditLogEnabled {
-		return nil
-	}
-
-	log.Printf("[INFO] Starting audit log collector for platform: %s", c.Platform)
-
-	switch c.Platform {
-	case "linux":
-		go c.collectLinuxAuditLogs(ctx)
-	case "darwin":
-		go c.collectMacOSAuditLogs(ctx)
-	default:
-		return fmt.Errorf("unsupported platform: %s", c.Platform)
-	}
-
-	go c.processTelemetryLogs(ctx)
-
-	return nil
-}
-
-// Stop stops the audit log collection
-func (c *AuditLogCollector) Stop() {
-	log.Printf("[INFO] Stopping audit log collector")
-	close(c.StopChan)
-}
-
-// collectLinuxAuditLogs collects audit logs on Linux systems
-func (c *AuditLogCollector) collectLinuxAuditLogs(ctx context.Context) {
-	// Check for auditd logs
-	auditLogPath := "/var/log/audit/audit.log"
-	syslogPath := "/var/log/syslog"
-	journalAvailable := c.isJournalAvailable()
-
-	// Use journalctl if available
-	if journalAvailable {
-		go c.collectJournalLogs(ctx)
-	}
-
-	// Monitor audit.log if it exists
-	if _, err := os.Stat(auditLogPath); err == nil {
-		go c.tailLogFile(ctx, auditLogPath, "auditd")
-	}
-
-	// Monitor syslog
-	if _, err := os.Stat(syslogPath); err == nil {
-		go c.tailLogFile(ctx, syslogPath, "syslog")
-	}
-}
-
-func (c *AuditLogCollector) collectMacOSAuditLogs(ctx context.Context) {
-	go c.collectMacOSSecurityLogs(ctx)
-}
-
-// collectMacOSSecurityLogs collects all security-relevant logs with one predicate
-func (c *AuditLogCollector) collectMacOSSecurityLogs(ctx context.Context) {
-	log.Printf("[INFO] Starting macOS security log collection")
-
-	predicate := `(subsystem == "com.apple.opendirectoryd" && category == "auth") ||
-		process == "login" ||
-		process == "sshd" ||
-		process == "sudo" ||
-		process == "su"`
-
-	cmd := exec.Command("log", "stream",
-		"--predicate", predicate,
-		"--info", "--debug",
-		"--style", "json")
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Printf("[ERROR] Failed to create stdout pipe for security log stream: %v", err)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("[ERROR] Failed to start security log stream: %v", err)
-		return
-	}
-
-	log.Printf("[INFO] Successfully started security log stream")
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			cmd.Process.Kill()
-			return
-		case <-c.StopChan:
-			cmd.Process.Kill()
-			return
-		default:
-			line := scanner.Text()
-			if line != "" {
-				c.parseMacOSLogEntry(line)
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Printf("[ERROR] Error reading security log stream: %v", err)
-	}
-}
-
-func (c *AuditLogCollector) parseMacOSLogEntry(line string) {
-	// First, let's see what we're actually getting
-	log.Printf("[DEBUG] Raw log line: %s", line)
-
-	var logData map[string]interface{}
-	if err := json.Unmarshal([]byte(line), &logData); err != nil {
-		log.Printf("[ERROR] Failed to parse JSON: %v", err)
-		// If JSON parsing fails, treat it as plain text
-		c.parseSimpleMacOSLogEntry(line)
-		return
-	}
-
-	log.Printf("[DEBUG] Parsed JSON log entry: %v", logData)
-
-	entry := AuditLogEntry{
-		Timestamp: time.Now(),
-		Platform:  "darwin",
-		RawData:   line,
-		Metadata:  logData,
-	}
-
-	if eventType, ok := logData["eventType"].(string); ok {
-		entry.EventType = eventType
-	}
-
-	if eventMessage, ok := logData["eventMessage"].(string); ok {
-		entry.Message = eventMessage
-	}
-
-	if processID, ok := logData["processID"].(float64); ok {
-		entry.ProcessInfo = &ProcessInfo{
-			PID: int(processID),
-		}
-
-		if processImagePath, ok := logData["processImagePath"].(string); ok {
-			entry.ProcessInfo.ProcessName = filepath.Base(processImagePath)
-		}
-	}
-
-	if c.shouldFilterLog(&entry) {
-		return
-	}
-
-	select {
-	case c.LogChannel <- entry:
-	default:
-		// log.Printf("[WARNING] Log channel full, dropping log entry")
-	}
-}
-
-func (c *AuditLogCollector) parseSimpleMacOSLogEntry(line string) {
-	// this just looks for keywords in the log line
-	// not sure how reliable this is, but it's a start lol
-	lowerLine := strings.ToLower(line)
-	isSecurityRelevant := strings.Contains(lowerLine, "login") ||
-		strings.Contains(lowerLine, "auth") ||
-		strings.Contains(lowerLine, "sudo") ||
-		strings.Contains(lowerLine, "password") ||
-		strings.Contains(lowerLine, "session") ||
-		strings.Contains(lowerLine, "security") ||
-		strings.Contains(lowerLine, "loginwindow") ||
-		strings.Contains(lowerLine, "securityd")
-
-	if !isSecurityRelevant {
-		return
-	}
-
-	entry := AuditLogEntry{
-		Timestamp: time.Now(),
-		Platform:  "darwin",
-		Source:    "unified_log",
-		Message:   line,
-		RawData:   line,
-		EventType: "security",
-	}
-
-	// Basic process extraction from log format
-	if strings.Contains(line, ": ") {
-		parts := strings.Split(line, ": ")
-		if len(parts) > 1 {
-			processField := parts[0]
-			if strings.Contains(processField, "[") {
-				procParts := strings.Split(processField, "[")
-				if len(procParts) > 0 {
-					entry.ProcessInfo = &ProcessInfo{
-						ProcessName: strings.TrimSpace(procParts[0]),
-					}
-				}
-			}
-		}
-	}
-
-	if c.shouldFilterLog(&entry) {
-		return
-	}
-
-	select {
-	case c.LogChannel <- entry:
-	default:
-		// Channel full, drop the log
-	}
-}
-
-// collectMacOSAuthLogs monitors auth.log and system authentication events
-func (c *AuditLogCollector) collectMacOSAuthLogs(ctx context.Context) {
-	log.Printf("[INFO] Starting macOS auth log collection")
-
-	// Just monitor some basic log files that might exist
-	logPaths := []string{
-		"/var/log/auth.log",
-		"/var/log/system.log",
-		"/var/log/secure.log",
-	}
-
-	for _, logPath := range logPaths {
-		if _, err := os.Stat(logPath); err == nil {
-			log.Printf("[INFO] Monitoring log file: %s", logPath)
-			go c.tailLogFile(ctx, logPath, filepath.Base(logPath))
-		}
-	}
-}
-
-// collectMacOSBSMaudit collects from macOS BSM audit system
-func (c *AuditLogCollector) collectMacOSBSMaudit(ctx context.Context) {
-	// Check if audit is enabled
-	cmd := exec.Command("sudo", "audit", "-s")
-	if err := cmd.Run(); err != nil {
-		log.Printf("[WARNING] BSM audit not available or not enabled: %v", err)
-		return
-	}
-
-	// Monitor current audit trail
-	auditDir := "/var/audit"
-	if _, err := os.Stat(auditDir); err != nil {
-		log.Printf("[WARNING] Audit directory not accessible: %v", err)
-		return
-	}
-
-	// Use praudit to read audit records in real-time
-	cmd = exec.Command("sudo", "praudit", "-l")
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Printf("[ERROR] Failed to create stdout pipe for praudit: %v", err)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("[ERROR] Failed to start praudit: %v", err)
-		return
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			cmd.Process.Kill()
-			return
-		case <-c.StopChan:
-			cmd.Process.Kill()
-			return
-		default:
-			line := scanner.Text()
-			c.parseBSMAuditEntry(line)
-		}
-	}
-}
-
-// parseBSMAuditEntry parses BSM audit entries
-func (c *AuditLogCollector) parseBSMAuditEntry(line string) {
-	entry := AuditLogEntry{
-		Timestamp: time.Now(),
-		Platform:  "darwin",
-		Source:    "bsm_audit",
-		Message:   line,
-		RawData:   line,
-		EventType: "audit",
-	}
-
-	// Extract process info if available (basic parsing)
-	if strings.Contains(line, "process") {
-		// This is a simplified parser - BSM audit format is complex
-		fields := strings.Fields(line)
-		for i, field := range fields {
-			if field == "process" && i+1 < len(fields) {
-				entry.ProcessInfo = &ProcessInfo{
-					ProcessName: fields[i+1],
-				}
-				break
-			}
-		}
-	}
-
-	if c.shouldFilterLog(&entry) {
-		return
-	}
-
-	select {
-	case c.LogChannel <- entry:
-	default:
-		// Channel full, drop the log
-	}
-}
-
-func (c *AuditLogCollector) collectJournalLogs(ctx context.Context) {
-	cmd := exec.Command("journalctl", "-f", "-o", "json", "--since", "now")
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Printf("[ERROR] Failed to create stdout pipe for journalctl: %v", err)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("[ERROR] Failed to start journalctl: %v", err)
-		return
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			cmd.Process.Kill()
-			return
-		case <-c.StopChan:
-			cmd.Process.Kill()
-			return
-		default:
-			line := scanner.Text()
-			c.parseJournalEntry(line)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Printf("[ERROR] Error reading journalctl: %v", err)
-	}
-}
-
-// parseJournalEntry parses a systemd journal entry
-func (c *AuditLogCollector) parseJournalEntry(line string) {
-	var journalData map[string]interface{}
-	if err := json.Unmarshal([]byte(line), &journalData); err != nil {
-		return
-	}
-
-	entry := AuditLogEntry{
-		Timestamp: time.Now(),
-		Platform:  "linux",
-		Source:    "journal",
-		RawData:   line,
-		Metadata:  journalData,
-	}
-
-	// Extract standard journal fields
-	if priority, ok := journalData["PRIORITY"].(string); ok {
-		entry.Level = c.priorityToLevel(priority)
-	}
-
-	if message, ok := journalData["MESSAGE"].(string); ok {
-		entry.Message = message
-	}
-
-	if syslogID, ok := journalData["SYSLOG_IDENTIFIER"].(string); ok {
-		entry.EventType = syslogID
-	}
-
-	// Process information
-	if pid, ok := journalData["_PID"].(string); ok {
-		pidInt, _ := strconv.Atoi(pid)
-		entry.ProcessInfo = &ProcessInfo{
-			PID: pidInt,
-		}
-
-		if comm, ok := journalData["_COMM"].(string); ok {
-			entry.ProcessInfo.ProcessName = comm
-		}
-
-		if cmdline, ok := journalData["_CMDLINE"].(string); ok {
-			entry.ProcessInfo.CommandLine = cmdline
-		}
-	}
-
-	// User information
-	if uid, ok := journalData["_UID"].(string); ok {
-		entry.UserInfo = &UserInfo{
-			UserID: uid,
-		}
-	}
-
-	// Apply filters
-	if c.shouldFilterLog(&entry) {
-		return
-	}
-
-	select {
-	case c.LogChannel <- entry:
-	default:
-		// Channel full, drop the log
-	}
-}
-
-// tailLogFile monitors a log file for new entries
-func (c *AuditLogCollector) tailLogFile(ctx context.Context, filepath string, source string) {
-	file, err := os.Open(filepath)
-	if err != nil {
-		log.Printf("[ERROR] Failed to open log file %s: %v", filepath, err)
-		return
-	}
-	defer file.Close()
-
-	// Seek to end of file
-	file.Seek(0, 2)
-
-	scanner := bufio.NewScanner(file)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-c.StopChan:
-			return
-		default:
-			if scanner.Scan() {
-				line := scanner.Text()
-				entry := AuditLogEntry{
-					Timestamp: time.Now(),
-					Platform:  c.Platform,
-					Source:    source,
-					Message:   line,
-					RawData:   line,
-				}
-
-				// Apply filters
-				if c.shouldFilterLog(&entry) {
-					continue
-				}
-
-				select {
-				case c.LogChannel <- entry:
-				default:
-					// Channel full, drop the log
-				}
-			} else {
-				// No new data, sleep briefly
-				time.Sleep(100 * time.Millisecond)
-			}
-		}
-	}
-}
-
-func (c *AuditLogCollector) processTelemetryLogs(ctx context.Context) {
-	buffer := make([]AuditLogEntry, 0, c.Config.BufferSize)
-	ticker := time.NewTicker(c.Config.FlushInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			c.flushLogs(buffer)
-			return
-		case <-c.StopChan:
-			c.flushLogs(buffer)
-			return
-		case entry := <-c.LogChannel:
-			buffer = append(buffer, entry)
-			if len(buffer) >= c.Config.BufferSize {
-				c.flushLogs(buffer)
-				buffer = buffer[:0]
-			}
-		case <-ticker.C:
-			if len(buffer) > 0 {
-				c.flushLogs(buffer)
-				buffer = buffer[:0]
-			}
-		}
-	}
-}
-
-// flushLogs outputs collected logs (for now just printing)
-func (c *AuditLogCollector) flushLogs(logs []AuditLogEntry) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for _, log := range logs {
-		// For now, just print the logs
-		fmt.Printf("[AUDIT] %s | %s | %s | %s\n",
-			log.Timestamp.Format(time.RFC3339),
-			log.Platform,
-			log.EventType,
-			log.Message)
-	}
-}
-
-func (c *AuditLogCollector) shouldFilterLog(entry *AuditLogEntry) bool {
-	for _, filter := range c.Config.Filters {
-		switch filter.Type {
-		case "event_type":
-			if len(filter.Include) > 0 {
-				included := false
-				for _, inc := range filter.Include {
-					if strings.Contains(entry.EventType, inc) {
-						included = true
-						break
-					}
-				}
-				if !included {
-					return true
-				}
-			}
-
-			for _, exc := range filter.Exclude {
-				if strings.Contains(entry.EventType, exc) {
-					return true
-				}
-			}
-		case "message":
-			if len(filter.Include) > 0 {
-				included := false
-				for _, inc := range filter.Include {
-					if strings.Contains(entry.Message, inc) {
-						included = true
-						break
-					}
-				}
-				if !included {
-					return true
-				}
-			}
-
-			for _, exc := range filter.Exclude {
-				if strings.Contains(entry.Message, exc) {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-// isJournalAvailable checks if systemd journal is available
-func (c *AuditLogCollector) isJournalAvailable() bool {
-	cmd := exec.Command("which", "journalctl")
-	err := cmd.Run()
-	return err == nil
-}
-
-// priorityToLevel converts systemd priority to log level
-func (c *AuditLogCollector) priorityToLevel(priority string) string {
-	switch priority {
-	case "0", "1", "2", "3":
-		return "ERROR"
-	case "4":
-		return "WARNING"
-	case "5", "6":
-		return "INFO"
-	case "7":
-		return "DEBUG"
-	default:
-		return "INFO"
-	}
 }
 
 // getPrioritisedAppActions returns actions for an app, prioritised by most

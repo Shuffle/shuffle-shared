@@ -8526,6 +8526,10 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 		executionRequest.ExecutionId = uuid.NewV4().String()
 	}
 
+	if executionRequest.CreatedAt == 0 { 
+		executionRequest.CreatedAt = time.Now().Unix()
+	}
+
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		data, err := json.Marshal(executionRequest)
@@ -13107,7 +13111,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 					} else {
-						log.Printf("[WARNING] CreateValue iterator issue: %s", err)
+						log.Printf("[WARNING] CreateValue iterator issue (get executions): %s", err)
 						break
 					}
 				}
@@ -13703,7 +13707,7 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 					} else {
-						log.Printf("[WARNING] CreateValue iterator issue: %s", err)
+						log.Printf("[WARNING] CreateValue iterator issue (app execution values): %s", err)
 						break
 					}
 				}
@@ -17814,7 +17818,19 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 						},
 					},
 				}
-
+			} else if search.WorkflowId == "SENSOR_ACTION" {
+				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
+					{
+						"match": map[string]interface{}{
+							"execution_org": orgId,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"type": "SENSOR_ACTION",
+						},
+					},
+				}
 			} else {
 				// Change out the "must" part entirely to contain the workflow id as well
 				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
@@ -17935,6 +17951,8 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		if len(search.WorkflowId) > 0 {
 			if search.WorkflowId == "AGENT" {
 				query = query.Filter("type =", "AGENT")
+			} else if search.WorkflowId == "SENSOR_ACTION" {
+				query = query.Filter("type =", "SENSOR_ACTION")
 			} else {
 				query = query.Filter("workflow_id =", search.WorkflowId)
 			}
