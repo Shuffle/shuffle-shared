@@ -1381,7 +1381,6 @@ func CreateFs(basepath, pathname string) (billy.Filesystem, error) {
 	return fs, err
 }
 
-
 // Also deactivates. It's a toggle for off and on.
 func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -2033,7 +2032,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		for _, field := range parsedFields {
 			if strings.ToLower(field.Key) == "url" && field.Value != "" {
 				urlValue = strings.TrimSpace(field.Value)
-				continue 
+				continue
 			}
 			newFields = append(newFields, field)
 		}
@@ -2084,9 +2083,9 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	}
 
 	parsedAction := CategoryAction{
-		AppName:  decision.Tool,
-		Label:    decision.Action,
-		Query:    decision.Reason,   // Add the reason field for LLM context
+		AppName: decision.Tool,
+		Label:   decision.Action,
+		Query:   decision.Reason, // Add the reason field for LLM context
 
 		Fields: oldFields,
 	}
@@ -2470,9 +2469,9 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 
 	// Handles a group of hosts running Orborus based on this page:
 	// https://security.shuffler.io/assets
-	if env.SensorGroup { 
+	if env.SensorGroup {
 		if len(orborusData.Uuid) == 0 || len(orborusData.SensorDetails.Hostname) == 0 {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Orborus data missing UUID or Hostname for sensor group environment '%s' (%s). Orborus Data: %#v", env.Name, env.Id, orborusData)
 			}
 
@@ -2483,7 +2482,6 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			parsedHostnameSplit := strings.Split(orborusData.SensorDetails.Hostname, ".")
 			orborusData.SensorDetails.Hostname = parsedHostnameSplit[0]
 		}
-
 
 		// 600 = time until it's not tracked anymore at all
 		hostTimeout := int64(600)
@@ -2507,7 +2505,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			foundHosts = append(foundHosts, host.Hostname)
 		}
 
-		// Run removeIndex backwards 
+		// Run removeIndex backwards
 		for i := len(removeIndex) - 1; i >= 0; i-- {
 			env.SensorHosts = append(env.SensorHosts[:removeIndex[i]], env.SensorHosts[removeIndex[i]+1:]...)
 			updateMade = true
@@ -2515,12 +2513,12 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 
 		removeIndex = []int{}
 		for hostIndex, host := range env.SensorHosts {
-			
+
 			// Check if more than 90 seconds ago
-			if host.Hostname == orborusData.SensorDetails.Hostname && host.Arch == orborusData.SensorDetails.Arch { 
+			if host.Hostname == orborusData.SensorDetails.Hostname && host.Arch == orborusData.SensorDetails.Arch {
 				found = true
 				if timeNow > host.Checkin+hostRefresh || env.SensorHosts[hostIndex].Uuid != orborusData.Uuid {
-					if debug { 
+					if debug {
 						log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago, Fulldata: %#v", host.Hostname, env.Name, env.Id, timeNow-host.Checkin, orborusData.SensorDetails)
 					}
 
@@ -2557,9 +2555,8 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			}
 		}
 
-
 		// Appending a new one
-		if !found { 
+		if !found {
 			updateMade = true
 
 			newHost := orborusData.SensorDetails
@@ -2641,4 +2638,321 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 	}
 
 	return nil
+}
+
+type OrborusDownloadConfig struct {
+	BaseURL             string `json:"base_url"`
+	Queue               string `json:"queue"`
+	Auth                string `json:"auth"`
+	OrgID               string `json:"org_id"`
+	SoftwareListEnabled bool   `json:"software_list_enabled"`
+	HDEncryptedCheck    bool   `json:"hd_encrypted_check"`
+	ScreenlockCheck     bool   `json:"screenlock_check"`
+
+	ResponseActions string `json:"response_actions"`
+	LogForwarding   string `json:"log_forwarding"`
+
+	BinaryBaseURL string `json:"binary_base_url"`
+	Binaries map[string]string `json:"binaries"`
+}
+
+// Download handler for Orborus agent installation script. This is used in the "Assets" page for Orborus, and can be used by customers to easily install Orborus on their hosts. It returns a bash script that can be run on the target host to install Orborus with the correct configuration.
+func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	// 1. fetch config in Go (no jq dependency)
+	c := OrborusDownloadConfig{
+		BaseURL:             "https://shuffler.io",
+		Queue:               "default",
+		Auth:                "cb5st3d3Z!3X3zaJ*Pc",
+		OrgID:               "",
+		SoftwareListEnabled: true,
+		HDEncryptedCheck:    true,
+		ScreenlockCheck:     true,
+		ResponseActions:     "full",
+
+		// Used for builder in dynamic scripts
+		BinaryBaseURL: "https://github.com/Shuffle/orborus/releases/latest/download",
+		Binaries: map[string]string{
+			"linux_amd64": "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-linux-amd64",
+			"linux_arm64": "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-linux-arm64",
+
+			"darwin_amd64": "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-darwin-amd64",
+			"darwin_arm64": "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-darwin-arm64",
+
+			"windows_amd64": "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-windows-amd64.exe",
+			"windows_arm64": "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-windows-arm64.exe",
+		},
+	}
+
+	// 2. URL overrides (optional)
+	q := r.URL.Query()
+
+	isWindows := false
+	if v := q.Get("os"); v != "" {
+		if v == "windows" {
+			isWindows = true
+		}
+	}
+
+	if v := q.Get("base_url"); v != "" {
+		c.BaseURL = v
+	}
+	if v := q.Get("queue"); v != "" {
+		c.Queue = v
+	}
+	if v := q.Get("auth"); v != "" {
+		c.Auth = v
+	}
+	if v := q.Get("org_id"); v != "" {
+		c.OrgID = v
+	}
+	if v := q.Get("response_actions"); v != "" {
+		c.ResponseActions = v
+	}
+	if v := q.Get("log_forwarding"); v != "" {
+		c.LogForwarding = v
+	}
+	if v := q.Get("software_list_enabled"); v != "" {
+		c.SoftwareListEnabled = v == "true"
+	}
+	if v := q.Get("hd_encrypted_check"); v != "" {
+		c.HDEncryptedCheck = v == "true"
+	}
+	if v := q.Get("screenlock_check"); v != "" {
+		c.ScreenlockCheck = v == "true"
+	}
+
+	// Check the "AUTH" header for a secret value to allow overriding the config (for security)
+	if authHeader := r.Header.Get("AUTH"); authHeader != "" {
+		c.Auth = authHeader
+	}
+
+	// Quite untested.
+	script := ""
+	if isWindows {
+		script = fmt.Sprintf(`$ErrorActionPreference = "Stop"
+
+# ===== injected config (from cfg) =====
+$BASE_URL = "%s"
+$QUEUE = "%s"
+$AUTH = "%s"
+$ORG_ID = "%s"
+
+$SOFTWARE_LIST_ENABLED = "%t"
+$HD_ENCRYPTED_CHECK = "%t"
+$SCREENLOCK_CHECK = "%t"
+$RESPONSE_ACTIONS = "%s"
+$LOG_FORWARDING = "%s"
+
+# ===== install paths =====
+$INSTALL_DIR = "$env:ProgramFiles\orborus"
+New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
+
+# ===== arch detection =====
+$ARCH = if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") { "amd64" } else { "arm64" }
+
+$BIN_URL = "https://github.com/Shuffle/orborus/releases/latest/download/orborus-windows-$ARCH.exe"
+$BIN_PATH = Join-Path $INSTALL_DIR "orborus.exe"
+
+Write-Host "Downloading binary..."
+Invoke-WebRequest -Uri $BIN_URL -OutFile $BIN_PATH
+
+# ===== service =====
+$SERVICE_NAME = "orborus"
+
+$ARGS = @(
+    "--sensor_mode=true"
+    "--base_url=$BASE_URL"
+    "--queue=$QUEUE"
+    "--auth=$AUTH"
+    "--org_id=$ORG_ID"
+    "--software_list_enabled=$SOFTWARE_LIST_ENABLED"
+    "--hd_encrypted_check=$HD_ENCRYPTED_CHECK"
+    "--screenlock_check=$SCREENLOCK_CHECK"
+    "--response_actions=$RESPONSE_ACTIONS"
+    "--log_forwarding=$LOG_FORWARDING"
+) -join " "
+
+# ===== replace service if exists =====
+if (Get-Service $SERVICE_NAME -ErrorAction SilentlyContinue) {
+    Stop-Service $SERVICE_NAME -Force -ErrorAction SilentlyContinue
+    sc.exe delete $SERVICE_NAME | Out-Null
+    Start-Sleep -Seconds 2
+}
+
+# ===== create service =====
+$BIN_QUOTED = '"' + $BIN_PATH + '"'
+sc.exe create $SERVICE_NAME binPath= ($BIN_QUOTED + " " + $ARGS) start= auto
+
+sc.exe start $SERVICE_NAME
+
+Write-Host "orborus installed"`,
+			c.BaseURL,
+			c.Queue,
+			c.Auth,
+			c.OrgID,
+			c.SoftwareListEnabled,
+			c.HDEncryptedCheck,
+			c.ScreenlockCheck,
+			c.ResponseActions,
+			c.LogForwarding,
+		)
+
+	} else {
+		script = fmt.Sprintf(`#!/usr/bin/env bash
+set -e
+
+# =========================
+# Detect OS + ARCH
+# =========================
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
+
+case "$ARCH" in
+  x86_64|amd64) ARCH="amd64" ;;
+  arm64|aarch64) ARCH="arm64" ;;
+  *)
+    echo "unsupported architecture: $ARCH"
+    exit 1
+    ;;
+esac
+
+if [[ "$OS" != "linux" && "$OS" != "darwin" ]]; then
+  echo "unsupported OS: $OS"
+  exit 1
+fi
+
+# =========================
+# Config (from Go injection)
+# =========================
+BASE_URL="%s"
+QUEUE="%s"
+AUTH="%s"
+ORG_ID="%s"
+
+SOFTWARE_LIST_ENABLED="%t"
+HD_ENCRYPTED_CHECK="%t"
+SCREENLOCK_CHECK="%t"
+RESPONSE_ACTIONS="%s"
+LOG_FORWARDING="%s"
+
+# =========================
+# Binary selection
+# =========================
+BIN_BASE="%s"
+BIN_URL="${BIN_BASE}/orborus-agent-${OS}-${ARCH}"
+
+# =========================
+# Install binary
+# =========================
+INSTALL_PATH="/usr/local/bin/orborus"
+
+curl -fsSL "$BIN_URL" -o /tmp/orborus
+chmod +x /tmp/orborus
+sudo mv /tmp/orborus "$INSTALL_PATH"
+
+echo "Installed binary to $INSTALL_PATH"
+
+# =========================
+# Linux service (systemd)
+# =========================
+install_linux() {
+  sudo tee /etc/systemd/system/orborus.service > /dev/null <<EOF
+[Unit]
+Description=Orborus Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_PATH \
+  --sensor_mode=true \
+  --base_url=$BASE_URL \
+  --queue=$QUEUE \
+  --auth=$AUTH \
+  --org_id=$ORG_ID \
+  --software_list_enabled=$SOFTWARE_LIST_ENABLED \
+  --hd_encrypted_check=$HD_ENCRYPTED_CHECK \
+  --screenlock_check=$SCREENLOCK_CHECK \
+  --log_forwarding=$LOG_FORWARDING \
+  --response_actions=$RESPONSE_ACTIONS
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable orborus
+  systemctl restart orborus
+}
+
+# =========================
+# macOS service (launchd)
+# =========================
+install_macos() {
+  PLIST=~/Library/LaunchAgents/com.orborus.agent.plist
+  mkdir -p ~/Library/LaunchAgents
+
+  cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.orborus.agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>$INSTALL_PATH</string>
+    <string>--sensor_mode=true</string>
+    <string>--base_url=$BASE_URL</string>
+    <string>--queue=$QUEUE</string>
+    <string>--auth=$AUTH</string>
+    <string>--org_id=$ORG_ID</string>
+    <string>--software_list_enabled=$SOFTWARE_LIST_ENABLED</string>
+    <string>--hd_encrypted_check=$HD_ENCRYPTED_CHECK</string>
+    <string>--screenlock_check=$SCREENLOCK_CHECK</string>
+    <string>--log_forwarding=$LOG_FORWARDING</string>
+    <string>--response_actions=$RESPONSE_ACTIONS</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+EOF
+
+  launchctl unload "$PLIST" 2>/dev/null || true
+  launchctl load "$PLIST"
+}
+
+# =========================
+# Execute
+# =========================
+if [[ "$OS" == "linux" ]]; then
+  install_linux
+elif [[ "$OS" == "darwin" ]]; then
+  install_macos
+fi
+
+echo "orborus installed successfully"
+`,
+c.BaseURL,
+c.Queue,
+c.Auth,
+c.OrgID,
+c.SoftwareListEnabled,
+c.HDEncryptedCheck,
+c.ScreenlockCheck,
+c.ResponseActions,
+c.LogForwarding,
+c.BinaryBaseURL,
+)
+
+	}
+
+	w.Write([]byte(script))
 }
