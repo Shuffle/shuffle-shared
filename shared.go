@@ -21849,6 +21849,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			return workflowExecution, errors.New("No org ID supplied for sensor execution")
 		}
 
+		if user.Role != "admin" {
+			return workflowExecution, errors.New("Command execution requires Org Admin access")
+		}
+
 		log.Printf("[INFO] Running Shuffle Group sensor action for org '%s'", user.ActiveOrg.Id)
 
 		foundHosts := []string{}

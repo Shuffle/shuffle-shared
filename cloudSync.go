@@ -2517,10 +2517,9 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 		for hostIndex, host := range env.SensorHosts {
 			
 			// Check if more than 90 seconds ago
-			if host.Hostname == orborusData.SensorDetails.Hostname { 
+			if host.Hostname == orborusData.SensorDetails.Hostname && host.Arch == orborusData.SensorDetails.Arch { 
 				found = true
-				if timeNow > host.Checkin+hostRefresh || host.Uuid != orborusData.Uuid {
-
+				if timeNow > host.Checkin+hostRefresh || env.SensorHosts[hostIndex].Uuid != orborusData.Uuid {
 					if debug { 
 						log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago, Fulldata: %#v", host.Hostname, env.Name, env.Id, timeNow-host.Checkin, orborusData.SensorDetails)
 					}
@@ -2531,7 +2530,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 
 					// FIXME: This needs to be a bit smarter
 					// For now we will just keep whatever we get first. Any restart
-					// of the agent will change it too however.
+					// of the agent will change it.
 					if host.Uuid != orborusData.Uuid {
 						env.SensorHosts[hostIndex].AutomaticScreenlockEnabled = orborusData.SensorDetails.AutomaticScreenlockEnabled
 						env.SensorHosts[hostIndex].HdEncrypted = orborusData.SensorDetails.HdEncrypted
@@ -2569,7 +2568,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			env.SensorHosts = append(env.SensorHosts, newHost)
 		}
 
-		if updateMade { 
+		if updateMade && len(env.SensorHosts) >= 1 {
 			env.Checkin = timeNow
 			err := SetEnvironment(ctx, env)
 			if err != nil {
