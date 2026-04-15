@@ -11537,7 +11537,33 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// FIXME: Add a way to check if the user is a part of the
+	// Edge-case: foundUser.Orgs is empty and foundUser.ActiveOrg is empty,
+	// but the user exists in the admin's Org.Users list.
+	// Handle removal self-contained and return early.
+	if !orgFound {
+		adminOrg, err := GetOrg(ctx, userInfo.ActiveOrg.Id)
+		if err == nil {
+			for i, orgUser := range adminOrg.Users {
+				if orgUser.Id == foundUser.Id {
+					orgFound = true
+					adminOrg.Users = append(adminOrg.Users[:i], adminOrg.Users[i+1:]...)
+					err = SetOrg(ctx, *adminOrg, adminOrg.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating org (delete user %s) %s: %s", foundUser.Username, adminOrg.Id, err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "Failed removing user from org"}`))
+						return
+					}
+
+					log.Printf("[AUDIT] User %s (%s) successfully removed %s from org %s (edge-case: user had no org references)", userInfo.Username, userInfo.Id, foundUser.Username, userInfo.ActiveOrg.Id)
+					resp.WriteHeader(200)
+					resp.Write([]byte(`{"success": true}`))
+					return
+				}
+			}
+		}
+	}
+
 	if !orgFound && !userInfo.SupportAccess {
 		log.Printf("[AUDIT] User %s (%s) is admin, but can't delete users outside their own org.", userInfo.Username, userInfo.Id)
 		resp.WriteHeader(401)
@@ -16429,7 +16455,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			newCookie.Domain = ".shuffler.io"
 			http.SetCookie(resp, newCookie)
 		}
-		
 
 		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, userdata.Session, expiration.Unix(), regionUrl)
 		newData, err := json.Marshal(returnValue)
@@ -21403,10 +21428,10 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		tmpData = append(tmpData, CacheKeyData{
-			OrgId:    tmpDataOverride.OrgId,
-			Key:      tmpDataOverride.Key,
-			Category: tmpDataOverride.Category,
-			Tags:     tmpDataOverride.Tags,
+			OrgId:       tmpDataOverride.OrgId,
+			Key:         tmpDataOverride.Key,
+			Category:    tmpDataOverride.Category,
+			Tags:        tmpDataOverride.Tags,
 			Enrichments: tmpDataOverride.Enrichments,
 
 			Value: parsedValue,
@@ -22773,7 +22798,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		}
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG][%s] Single action execution check finished. Result len: %d, Errors: %#v", workflowExecution.ExecutionId, len(returnBody.Result), returnBody.Errors)
 	}
 
