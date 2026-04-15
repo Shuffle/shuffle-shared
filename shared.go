@@ -13278,7 +13278,7 @@ func HandlePromoteSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if requestData.OrgId != "" && requestData.OrgId != parentOrgId {
+	if user.ActiveOrg.Id != parentOrgId {
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "org_id mismatch between path and body"}`))
 		return
@@ -13369,17 +13369,17 @@ func HandlePromoteSubOrg(resp http.ResponseWriter, request *http.Request) {
 	parentOrg.ChildOrgs = newChildOrgs
 	subOrg.Description = ""
 
-	if err := SetOrg(ctx, *subOrg, subOrg.Id); err != nil {
-		log.Printf("[ERROR] Failed writing promoted org '%s': %s", subOrg.Id, err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed updating sub-organization"}`))
-		return
-	}
-
 	if err := SetOrg(ctx, *parentOrg, parentOrg.Id); err != nil {
 		log.Printf("[ERROR] Failed writing parent org '%s' while promoting '%s': %s", parentOrg.Id, subOrg.Id, err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Sub-organization promoted, but parent update failed"}`))
+		return
+	}
+
+	if err := SetOrg(ctx, *subOrg, subOrg.Id); err != nil {
+		log.Printf("[ERROR] Failed writing promoted org '%s': %s", subOrg.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed updating sub-organization"}`))
 		return
 	}
 
