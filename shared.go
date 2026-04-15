@@ -3246,9 +3246,38 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Check if there is any parameter for specific environments
+	var findEnv string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("[ERROR] Path too short: %d", len(location))
+		} else {
+			findEnv = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(location[4], "%20", "_"), " ", "_"))
+		}
+	}
+
+	if len(findEnv) > 0 {
+		newEnvironments := []Environment{}
+		for _, env := range environments {
+			parsedName := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, "%20", "_"), " ", "_"))
+			if parsedName == findEnv || env.Id == findEnv {
+				newEnvironments = append(newEnvironments, env)
+				break
+			}
+		}
+
+		environments = newEnvironments
+		if len(environments) == 0 {
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Can't find environment. Does it exist?"}`))
+			return 
+		}
+	}
+
 	// Always make Cloud the default environment
 	// If there are multiple and none are chosen
-	if project.Environment == "cloud" {
+	if project.Environment == "cloud" && findEnv == "" {
 		defaults := []int{}
 		cloudFound := false
 		for envIndex, environment := range environments {
@@ -3296,7 +3325,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 
 	hideEnvs := false
 	parentOrgMain := Org{}
-	if project.Environment == "onprem" {
+	if project.Environment == "onprem" && findEnv == "" {
 		currentOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
 		if err != nil {
 			resp.WriteHeader(401)
@@ -3327,7 +3356,9 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	})
 
 	filteredEnvironments := []Environment{}
-	if hideEnvs {
+	if findEnv != "" {
+		newEnvironments = environments
+	} else if hideEnvs {
 		defaultEnvs := []Environment{}
 		nonDefaultEnvs := []Environment{}
 		for _, env := range environments {
@@ -3442,12 +3473,23 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	newjson, err := json.Marshal(newEnvironments)
-	if err != nil {
-		log.Printf("[DEBUG] Failed unmarshal: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking environments"}`)))
-		return
+	var newjson []byte
+	if findEnv != "" && len(newEnvironments) >= 1 {
+		newjson, err = json.Marshal(newEnvironments[0])
+		if err != nil {
+			log.Printf("[DEBUG] Failed unmarshal: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking environment"}`)))
+			return
+		}
+	} else {
+		newjson, err = json.Marshal(newEnvironments)
+		if err != nil {
+			log.Printf("[DEBUG] Failed unmarshal: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking environments"}`)))
+			return
+		}
 	}
 
 	//log.Printf("Existing environments: %s", string(newjson))
