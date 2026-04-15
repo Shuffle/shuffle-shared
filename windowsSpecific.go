@@ -3,12 +3,21 @@
 package shuffle
 
 import (
-	"golang.org/x/sys/windows"
-	"os/exec"
 	"strings"
 	"runtime"
 	"encoding/json"
 	"log"
+	"os"
+	"bytes"
+	"time"
+	"context"
+	"io"
+	"errors"
+	"fmt"
+
+	"syscall"
+	"os/exec"
+	"golang.org/x/sys/windows"
 )
 
 func IsElevated() bool {
@@ -146,4 +155,104 @@ ConvertTo-Json
 	}
 
 	return result
+}
+
+var (
+	kernel32                     = syscall.NewLazyDLL("kernel32.dll")
+	procCreateJobObjectW         = kernel32.NewProc("CreateJobObjectW")
+	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
+	procTerminateJobObject       = kernel32.NewProc("TerminateJobObject")
+)
+
+func createJobObject() (syscall.Handle, error) {
+	r1, _, err := procCreateJobObjectW.Call(0, 0)
+	if r1 == 0 {
+		return 0, err
+	}
+	return syscall.Handle(r1), nil
+}
+
+func assignProcessToJob(job syscall.Handle, p *os.Process) error {
+	r1, _, err := procAssignProcessToJobObject.Call(
+		uintptr(job),
+		uintptr(p.Pid),
+	)
+	if r1 == 0 {
+		return err
+	}
+	return nil
+}
+
+func RunCommandString(command string, timeout time.Duration, onStream StreamFn) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "cmd", "/C", command)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
+	var out bytes.Buffer
+
+	read := func(r io.ReadCloser) {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := r.Read(buf)
+			if n > 0 {
+				chunk := buf[:n]
+				out.Write(chunk)
+
+				if onStream != nil {
+					onStream(string(chunk))
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	go read(stdout)
+	go read(stderr)
+
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-waitCh:
+		return out.String(), err
+
+	case <-ctx.Done():
+		// timeout path: kill only the parent process
+		_ = cmd.Process.Kill()
+
+		<-waitCh // ensure cleanup
+		return out.String(), fmt.Errorf("timeout after %s", timeout)
+	}
+}
+
+func (c *AuditLogCollector) Stop() {
+	return
+}
+
+func (c *AuditLogCollector) LogCollectorStart(ctx context.Context) error {
+	return errors.New("Not implemented on windows") 
+}
+
+func NewAuditLogCollector(config TelemetryConfig) (*AuditLogCollector, error) {
+	auditLogCollector := AuditLogCollector{}
+	return &auditLogCollector, errors.New("Not implemented on windows")
 }

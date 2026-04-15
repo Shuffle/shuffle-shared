@@ -158,6 +158,7 @@ type ExecutionRequest struct {
 	Type              string   `json:"type"`
 	Priority          int64    `json:"priority" datastore:"priority" yaml:"priority"` // Mapped back to workflowexecutions' priority
 
+	CreatedAt int64 `json:"created_at" datastore:"created_at"`
 	Authgroup string `json:"authgroup" datastore:"authgroup"`
 }
 
@@ -5252,7 +5253,7 @@ type SensorDetails struct {
 	HdEncrypted                string     `json:"hd_encrypted" datastore:"hd_encrypted"`
 	InstalledSoftware          []Software `json:"installed_software" datastore:"installed_software,noindex"`
 	LogForwarding              string     `json:"log_forwarding" datastore:"log_forwarding"`
-	ResponseActionsEnabled      string     `json:"response_actions_enabled" datastore:"response_actions_enabled"`
+	ResponseActions      string     `json:"response_actions" datastore:"response_actions"`
 }
 
 // Related to Orborus Agent Mode. Used locally.
@@ -5268,5 +5269,13 @@ type SensorMode struct {
 	LogForwarding string `json:"log_forwarding" datastore:"log_forwarding"`
 
 	// Response
-	ResponseActionsEnabled bool `json:"response_actions_enabled" datastore:"response_actions_enabled"`
+	ResponseActions string `json:"response_actions" datastore:"response_actions"`
+}
+
+
+type RCEResult struct {
+	Success bool `json:"success"`
+	Command string `json:"command"`
+	Output string `json:"output"`
+	Error  string `json:"error,omitempty"`
 }
