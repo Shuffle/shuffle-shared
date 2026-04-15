@@ -23180,7 +23180,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		parsedLink = realPath
 	}
 
-	token := os.Getenv("GITHUB_TOKEN")
+	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
 
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
 	tc := oauth2.NewClient(ctx, ts)
@@ -23286,7 +23286,7 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	token := os.Getenv("GITHUB_TOKEN")
+	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
 
 	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
 	tc := oauth2.NewClient(ctx, ts)
