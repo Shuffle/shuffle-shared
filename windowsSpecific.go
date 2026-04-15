@@ -1,0 +1,284 @@
+//go:build windows
+
+package shuffle
+
+import (
+	"strings"
+	"runtime"
+	"encoding/json"
+	"log"
+	"os"
+	"bytes"
+	"time"
+	"context"
+	"io"
+	"errors"
+	"fmt"
+
+	"syscall"
+	"os/exec"
+	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc"
+)
+
+func IsElevated() bool {
+	var token windows.Token
+	err := windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_QUERY, &token)
+	if err != nil {
+		return false
+	}
+	defer token.Close()
+
+	return token.IsElevated()
+}
+
+func extractRegValue(output string) string {
+	// Windows reg output format:
+	// "    ValueName    REG_TYPE    ActualValue"
+	// We need to extract "ActualValue"
+
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+
+		// Skip empty lines and the key path line
+		if line == "" || strings.HasPrefix(line, "HKEY_") {
+			continue
+		}
+
+		// Split by whitespace and get the last non-empty field
+		fields := strings.Fields(line)
+		if len(fields) >= 3 {
+			// Last field is the value
+			return fields[len(fields)-1]
+		}
+	}
+	return ""
+}
+
+func isEncryptedWindows() bool {
+	out, err := exec.Command("manage-bde", "-status", "C:").Output()
+	if err != nil {
+		return false
+	}
+
+	s := strings.ToLower(string(out))
+
+	// key signals
+	return strings.Contains(s, "protection on")
+}
+
+func IsDiskEncrypted() bool {
+	switch runtime.GOOS {
+	case "windows":
+		return isEncryptedWindows()
+	default:
+		return false
+	}
+}
+
+func GetProfiler() string {
+	cmds := []string{
+		"(Get-CimInstance Win32_BIOS).SerialNumber",
+		"(Get-CimInstance Win32_ComputerSystemProduct).IdentifyingNumber",
+	}
+
+	for _, c := range cmds {
+		out, err := exec.Command("powershell", "-Command", c).Output()
+		if err == nil {
+			s := strings.TrimSpace(string(out))
+			if isValidSerial(s) {
+				return s
+			}
+		}
+	}
+
+	return "failed to get profiler"
+}
+
+var (
+	kernel32                     = syscall.NewLazyDLL("kernel32.dll")
+	procCreateJobObjectW         = kernel32.NewProc("CreateJobObjectW")
+	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
+	procTerminateJobObject       = kernel32.NewProc("TerminateJobObject")
+)
+
+func createJobObject() (syscall.Handle, error) {
+	r1, _, err := procCreateJobObjectW.Call(0, 0)
+	if r1 == 0 {
+		return 0, err
+	}
+	return syscall.Handle(r1), nil
+}
+
+func assignProcessToJob(job syscall.Handle, p *os.Process) error {
+	r1, _, err := procAssignProcessToJobObject.Call(
+		uintptr(job),
+		uintptr(p.Pid),
+	)
+	if r1 == 0 {
+		return err
+	}
+	return nil
+}
+
+func RunCommandString(command string, timeout time.Duration, onStream StreamFn) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "cmd", "/C", command)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
+	var out bytes.Buffer
+
+	read := func(r io.ReadCloser) {
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := r.Read(buf)
+			if n > 0 {
+				chunk := buf[:n]
+				out.Write(chunk)
+
+				if onStream != nil {
+					onStream(string(chunk))
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}
+
+	go read(stdout)
+	go read(stderr)
+
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-waitCh:
+		return out.String(), err
+
+	case <-ctx.Done():
+		// timeout path: kill only the parent process
+		_ = cmd.Process.Kill()
+
+		<-waitCh // ensure cleanup
+		return out.String(), fmt.Errorf("timeout after %s", timeout)
+	}
+}
+
+func (c *AuditLogCollector) Stop() {
+	return
+}
+
+func (c *AuditLogCollector) LogCollectorStart(ctx context.Context) error {
+	return errors.New("Not implemented on windows") 
+}
+
+func NewAuditLogCollector(config TelemetryConfig) (*AuditLogCollector, error) {
+	auditLogCollector := AuditLogCollector{}
+	return &auditLogCollector, errors.New("Not implemented on windows")
+}
+
+func queryRegValue(name string) (string, error) {
+	cmd := exec.Command(
+		"reg", "query",
+		`HKEY_CURRENT_USER\Control Panel\Desktop`,
+		"/v", name,
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, name) {
+			fields := strings.Fields(line)
+			if len(fields) >= 3 {
+				return fields[len(fields)-1], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("value not found")
+}
+
+func IsAutomaticScreenlockEnabled() bool {
+	activeStr, err := queryRegValue("ScreenSaveActive")
+	if err != nil {
+		log.Printf("[ERROR] ScreenSaveActive: %v", err)
+		return false
+	}
+
+	secureStr, err := queryRegValue("ScreenSaverIsSecure")
+	if err != nil {
+		log.Printf("[ERROR] ScreenSaverIsSecure: %v", err)
+		return false
+	}
+
+	timeoutStr, err := queryRegValue("ScreenSaveTimeOut")
+	if err != nil {
+		log.Printf("[ERROR] ScreenSaveTimeOut: %v", err)
+		return false
+	}
+
+	active := parseInt(activeStr)
+	secure := parseInt(secureStr)
+	timeout := parseInt(timeoutStr)
+
+	return active == 1 && secure == 1 && timeout <= 900
+}
+
+func ListInstalledSoftware() []Software {
+	cmd := `
+$paths = @(
+  "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+  "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+  "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
+)
+
+Get-ItemProperty $paths |
+Where-Object { $_.DisplayName } |
+Select-Object @{Name="name";Expression={$_.DisplayName}}, @{Name="version";Expression={$_.DisplayVersion}} |
+ConvertTo-Json -Depth 1 -Compress
+`
+
+	out, err := exec.Command("powershell", "-NoProfile", "-Command", cmd).Output()
+	if err != nil {
+		return nil
+	}
+
+	data := bytes.TrimSpace(out)
+	if len(data) == 0 {
+		return nil
+	}
+
+	// normalize single object -> array
+	if data[0] == '{' {
+		data = append([]byte("["), append(data, ']')...)
+	}
+
+	var pkgs []Software
+	if err := json.Unmarshal(data, &pkgs); err != nil {
+		return nil
+	}
+
+	return pkgs
+}

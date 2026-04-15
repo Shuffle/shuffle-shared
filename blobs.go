@@ -17,15 +17,40 @@ import (
 )
 
 
+// Internal auth mapping. Makes sure we don't need auth for them 
+// as they can just use internal APIs
+func IsShuffleApp(app WorkflowApp) bool {
+	parsedAppname := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
+
+	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors"}
+	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448"}
+
+	isShuffleApp := false
+	if project.Environment == "cloud" && len(app.ID) > 0 { 
+		for _, appId := range skipAuthAppIds {
+			if app.ID == appId {
+				isShuffleApp = true
+				break
+			}
+		}
+	} else {
+		for _, appname := range skipAuthAppnames {
+			if parsedAppname == appname {
+				isShuffleApp = true
+				break
+			}
+		}
+	}
+
+	return isShuffleApp
+}
+
 func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user User, categoryAction CategoryAction) error {
 	if len(user.ActiveOrg.Id) == 0 {
 		return errors.New("Organization ID is empty. Can't generate workflow.")
 	}
 
 	actionType := strings.ReplaceAll(strings.ToLower(categoryAction.Label), " ", "_")
-
-	log.Printf("\n\nACTIONTYPE: %#v\n\n", actionType)
-
 	if actionType == "forward_tickets" || actionType == "forward_incidents" {
 		categoryCheck := "shuffle-security_incidents"
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
@@ -202,6 +227,67 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
 			}
 		}
+	} else if actionType == "enable_threat_feeds_webhook" {
+		categoryCheck := "shuffle-security_incidents"
+		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				categoryConfig = &DatastoreCategoryUpdate{
+					OrgId: user.ActiveOrg.Id,
+					Category: categoryCheck,
+					Automations: []DatastoreAutomation{},
+					Settings: DatastoreCategorySettings{},
+				}
+			} else {
+				return err
+			}
+		}
+
+		datastoreCategoryConfigEdited := false
+
+		foundRunWorkflow := DatastoreAutomation{
+			Name: "Enrich",
+			Description: "Enriches the data. Uses regex keys and runs a workflow in the background. Added to the 'enrichments' key.",
+			Type: "singul",
+			Options: []DatastoreAutomationOption{
+				DatastoreAutomationOption{
+					Key: "",
+					Value: "",
+				},
+			},
+			Beta: true, 
+			Icon: "/images/logos/singul.svg",
+			Enabled: true,
+			Disabled: false,
+		}
+
+		automationFound := false
+		if len(categoryConfig.Automations) > 0 {
+			for automationIndex, automation := range categoryConfig.Automations {
+				if strings.ToLower(automation.Name) != "enrich" {
+					continue
+				}
+
+				automationFound = true 
+				if !categoryConfig.Automations[automationIndex].Enabled {
+					datastoreCategoryConfigEdited = true
+					categoryConfig.Automations[automationIndex].Enabled = true
+				}
+				break
+			}
+		}
+
+		if !automationFound {
+			categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
+			datastoreCategoryConfigEdited = true
+		}
+
+		if datastoreCategoryConfigEdited { 
+			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+			if err != nil {
+				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
+			}
+		}
 	}
 
 	return nil
@@ -224,7 +310,9 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 	}
 
 	parsedActiontype := strings.ReplaceAll(strings.ToLower(actionType), " ", "_")
-	if strings.Contains(strings.ToLower(actionType), "threat feed") {
+	if strings.Contains(strings.ToLower(actionType), "threat feed") && strings.Contains(strings.ToLower(actionType), "webhook") {
+		parsedActiontype = "threatlist_monitor_webhook"
+	} else if strings.Contains(strings.ToLower(actionType), "threat feed") {
 		parsedActiontype = "threatlist_monitor"
 	}
 
@@ -595,8 +683,70 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			}
 		}
 
+	} else if parsedActiontype == "threatlist_monitor_webhook" {
+		secondActionId := uuid.NewV4().String()
+
+		defaultWorkflow := Workflow{
+			Name:        "Realtime IOC extraction",
+			Description: "Monitor threatlists and extract IOCs in real time through a webhook. This is ideal for high-volume feeds that need to be processed immediately",
+			OrgId:       orgId,
+			Start:       startActionId,
+			UsecaseIds:  []string{"External Enrichment"},
+			Tags:        []string{"ingest", "feeds", "automatic"},
+			Actions: []Action{
+				Action{
+					Name:        "list_datastore_category",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          startActionId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "IOC listing",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "category",
+							Value: "shuffle-security_ioc-config",
+							Required: true,
+						},
+						WorkflowAppActionParameter{
+							Name:      "output_type",
+							Value:     "values",
+						},
+					},
+				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          secondActionId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Add enrichments to entry",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "code",
+							Value: getIocParsingScript(),
+							Multiline: true,
+							Required: true,
+						},
+					},
+				},
+			},
+			Branches: []Branch{
+				Branch{
+					SourceID:      startActionId,
+					DestinationID: secondActionId,
+					ID:            uuid.NewV4().String(),
+				},
+			},
+		}
+
+		// For now while testing
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
 	} else if parsedActiontype == "threatlist_monitor" {
 		secondActionId := uuid.NewV4().String()
+		thirdActionId := uuid.NewV4().String()
 
 		defaultWorkflow := Workflow{
 			Name:        actionType,
@@ -607,22 +757,41 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			Tags:        []string{"ingest", "feeds", "automatic"},
 			Actions: []Action{
 				Action{
-					Name:        "GET",
-					AppID:       "HTTP",
-					AppName:     "HTTP",
+					Name:        "list_datastore_category",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
 					ID:          startActionId,
-					AppVersion:  "1.4.0",
+					AppVersion:  "1.2.0",
 					Environment: actionEnv,
-					Label:       "Get threatlist URLs",
+					Label:       "Threat feed listing",
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
-							Name:  "url",
-							Value: "$shuffle_cache.threatlist_urls.value.#",
+							Name:  "category",
+							Value: "shuffle-security_threat-feeds",
 						},
 						WorkflowAppActionParameter{
-							Name:      "headers",
-							Multiline: true,
-							Value:     "",
+							Name:      "output_type",
+							Value:     "values",
+						},
+					},
+				},
+				Action{
+					Name:        "list_datastore_category",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          secondActionId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "IOC listing",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "category",
+							Value: "shuffle-security_ioc-config",
+							Required: true,
+						},
+						WorkflowAppActionParameter{
+							Name:      "output_type",
+							Value:     "values",
 						},
 					},
 				},
@@ -630,7 +799,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					Name:        "execute_python",
 					AppID:       "Shuffle Tools",
 					AppName:     "Shuffle Tools",
-					ID:          secondActionId,
+					ID:          thirdActionId,
 					AppVersion:  "1.2.0",
 					Environment: actionEnv,
 					Label:       "Ingest IOCs",
@@ -677,7 +846,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 						Condition{
 							Source: WorkflowAppActionParameter{
 								Name:  "source",
-								Value: "{{ $get_threatlist_urls | size }}",
+								Value: "{{ $$threat_feed_listing | size }}",
 							},
 							Condition: WorkflowAppActionParameter{
 								Name:  "condition",
@@ -690,55 +859,18 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 						},
 					},
 				},
+				Branch{
+					SourceID:      secondActionId,
+					DestinationID: thirdActionId,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{},
+				},
 			},
 		}
 
 		// For now while testing
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
-
-		/*
-			if len(workflow.WorkflowVariables) == 0 {
-				workflow.WorkflowVariables = defaultWorkflow.WorkflowVariables
-			}
-
-			if len(workflow.Actions) == 0 {
-				workflow.Actions = defaultWorkflow.Actions
-			}
-
-			// Rules specific to this one
-			if len(workflow.Triggers) == 0 {
-				workflow.Triggers = defaultWorkflow.Triggers
-			}
-		*/
-
-		// Get the item with key "threatlist_urls" from datastore
-		ctx := GetContext(nil)
-		_, err := GetDatastoreKey(ctx, "threatlist_urls", "")
-		if err != nil {
-			//log.Printf("[INFO] Failed to get threatlist URLs from datastore. Making it.: %s", err)
-			urls := []string{
-				"https://sslbl.abuse.ch/blacklist/sslblacklist.csv",
-			}
-
-			jsonMarshalled, err := json.Marshal(urls)
-			if err != nil {
-				log.Printf("[ERROR] Failed to marshal threatlist URLs: %s", err)
-			} else {
-				key := CacheKeyData{
-					Key:   "threatlist_urls",
-					Value: fmt.Sprintf(`%s`, string(jsonMarshalled)),
-					OrgId: orgId,
-				}
-
-				err = SetDatastoreKey(ctx, key)
-				if err != nil {
-					log.Printf("[ERROR] Failed to set threatlist URLs in datastore: %s", err)
-				} else {
-					log.Printf("[INFO] Successfully set threatlist URLs in datastore")
-				}
-			}
-		}
 	}
 
 	if len(workflow.Name) == 0 || len(workflow.Actions) == 0 {
@@ -2232,29 +2364,145 @@ func GetTriggerData(triggerType string) string {
 	}
 }
 
+// For realtime checks of existing objects. 
+func getIocParsingScript() string {
+	return `import json
+import re
+import threading 
+
+input_data = '''$exec'''
+if len(input_data) < 4:
+  print({
+    "success": False,
+    "reason": "No input data"
+  })
+  exit()
+
+try:
+  all_items = json.loads(r'''$ioc_listing''')
+except Exception as e:
+  print(json.dumps({
+    "success": False,
+    "reason": "Bad input data from threat feed listing. Are the ioc patterns correct?"
+  }))
+  exit()
+
+def sanitize_regex(pattern):
+    """
+    Clean up a regex pattern to find matches anywhere in text.
+    
+    Removes anchors (^, $) that force start/end matching.
+    Returns the core pattern for use with findall/finditer.
+    """
+
+    pattern = str(pattern)
+    # Remove leading ^ (start anchor)
+    if pattern.startswith('^'):
+        pattern = pattern[1:]
+    
+    # Remove trailing $ (end anchor)
+    if pattern.endswith('$'):
+        pattern = pattern[:-1]
+    
+    return pattern
+
+
+def findall_with_limit(pattern, text, max_matches=None, timeout_seconds=5):
+    results = []
+    exception = [None]
+    
+    def search():
+        try:
+            for match in re.finditer(pattern, text):
+                if max_matches and len(results) >= max_matches:
+                    break
+                results.append(match.group(0))
+        except Exception as e:
+            exception[0] = e
+    
+    thread = threading.Thread(target=search, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+    
+    if thread.is_alive():
+        # Thread still running — timeout occurred
+        return results  # or raise TimeoutError
+    
+    if exception[0]:
+        return results
+
+    return results
+
+found_items = []
+for ioc_object in all_items:
+  try:
+    ioc_object = json.loads(ioc_object)
+  except:
+    pass
+  
+  try:
+    if "enabled" not in ioc_object or not ioc_object["enabled"]:
+      continue
+  except:
+    continue
+  
+  if "regex" not in ioc_object:
+    continue
+  
+  cleaned_regex = sanitize_regex(ioc_object["regex"])
+  matches = findall_with_limit(cleaned_regex, input_data, max_matches=100, timeout_seconds=2)
+  if not matches:
+    continue
+  
+  found = []
+  for match in matches:
+    if match in found:
+      continue
+    
+    found.append(match)
+    found_items.append({
+      "value": match,
+      "type": ioc_object["name"],
+    })
+
+full_body = [{
+  "key": "$exec.shuffle_datastore.key",
+  "category": "$exec.shuffle_datastore.category",
+  "org_id": "$exec.shuffle_datastore.org_id",
+  "enrichments": found_items,
+}]   
+
+upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
+parsed_headers = {}
+if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
+  parsed_headers["Authorization"] = f"Bearer {os.environ.get('SHUFFLE_AUTHORIZATION', '')}"
+else:
+  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+
+try:
+  ret = requests.post(upload_url, json=full_body, headers=parsed_headers)
+  if ret.status_code == 200:
+    print(json.dumps({
+      "success": True, 
+      "reason": "Uploaded '$exec.shuffle_datastore.key' in '$exec.shuffle_datastore.category' with %d indicators" % (len(found_items)),
+    }))
+  else:
+    print(json.dumps({
+      "success": False,
+      "reason": f"Failed request with status %d and body %s" % (ret.status_code, ret.text)
+    }))
+except Exception as e:
+  print(json.dumps({
+    "success": False,
+    "reason": f"Failed request: {e}"
+  }))`
+}
+
+// For scheduled runs to ingest data
 func getIocIngestionScript(orgId string) string {
-	defaultRegexes := map[string]string{
-		"md5":    `r"\b[a-fA-F0-9]{32}\b"`,
-		"sha1":   `r'\b[a-fA-F0-9]{40}\b'`,
-		"sha256": `r"\b[a-fA-F0-9]{64}\b"`,
-		"ip":     `r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.|$)){4}\b"`,
-		"domain": `r"\b(?:[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,63}\b"`,
-	}
-
-	// Load the shuffle-security ioc-config datastore category
-	// Skipping cursor.
-	keys, _, err := GetAllCacheKeys(context.Background(), orgId, "shuffle-security ioc-config", 1000, "")
-	if err == nil {
-		log.Printf("[INFO] Found %d IOC config keys", len(keys))
-	}
-
-	marshaledRegexes, err := json.MarshalIndent(defaultRegexes, "", "  ")
-	if err != nil {
-		log.Printf("[ERROR] Failed marshaling regexes: %v", err)
-	}
-
 	timestampFormat := "%Y-%m-%d %H:%M:%S"
 	timestampFormat2 := "%Y-%m-%dT%H:%M:%SZ"
+
 	return fmt.Sprintf(`import os
 import re
 import json
@@ -2262,22 +2510,102 @@ import uuid
 import time
 import requests
 
-input_data = json.loads(r'''$get_threatlist_urls''')
-upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
+try:
+  all_urls = json.loads(r'''$threat_feed_listing''')
+except Exception as e:
+  print({
+    "success": False,
+    "reason": "Bad data from threat feed listing"
+  })
+  exit()
 
-parsed_headers = {}
-if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
-  parsed_headers["Authorization"] = f"Bearer {os.environ.get('SHUFFLE_AUTHORIZATION', '')}"
-else:
-  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+if len(all_urls) == 0:
+  print({
+    "success": False,
+    "reason": "No threat feeds configured"
+  })
+  exit()
 
-# This is shitty, but is used for a basic test. 
-regexsearch = %s
+input_data = []
+for key in all_urls:
+  try:
+    key = json.loads(key)
+  except:
+    pass
+
+  if key["enabled"] != True:
+    continue
+
+  try:
+    resp = requests.get(key["url"], verify=False, timeout=3)
+    input_data.append({
+      "status": resp.status_code,
+      "body": resp.text,
+      "url": key["url"],
+    })
+  except Exception as e:
+    pass
+	
+try:
+  ioc_regexes = json.loads(r'''$ioc_listing''')
+except Exception as e:
+  print(json.dumps({
+    "success": False,
+    "reason": "Bad input data from ioc listing. Are the ioc patterns correct?"
+  }))
+  exit()
+
+def sanitize_regex(pattern):
+  """
+  Clean up a regex pattern to find matches anywhere in text.
+  
+  Removes anchors (^, $) that force start/end matching.
+  Returns the core pattern for use with findall/finditer.
+  """
+
+  pattern = str(pattern)
+
+  # Remove leading ^ (start anchor)
+  if pattern.startswith('^'):
+  	pattern = pattern[1:]
+  
+  # Remove trailing $ (end anchor)
+  if pattern.endswith('$'):
+  	pattern = pattern[:-1]
+  
+  return pattern
+
+regexsearch = {}
+found_items = []
+for ioc_object in ioc_regexes:
+  try:
+    ioc_object = json.loads(ioc_object)
+  except:
+    pass
+  
+  try:
+    if "enabled" not in ioc_object or not ioc_object["enabled"]:
+      continue
+  except:
+    continue
+  
+  if "regex" not in ioc_object:
+    continue
+
+  regexsearch[ioc_object["name"]] = sanitize_regex(ioc_object["regex"])
+
+if not regexsearch:
+  print(json.dumps({
+	"success": False,
+	"reason": "No valid regexes found in ioc listing. Are the ioc patterns correct?"
+  }))
+  exit()
 
 all_items = {}
 
 if not isinstance(input_data, list):
   input_data = [input_data]
+
 
 ## Assuming
 max_items = 1000
@@ -2288,6 +2616,7 @@ for content in input_data:
   found_type = ""
   searchspace = iocs[0:1000]
   for key, value in regexsearch.items():
+    value = sanitize_regex(value)
     match = re.search(value, searchspace)
     if match:
       found_type = key
@@ -2386,6 +2715,9 @@ for content in input_data:
       else:
         stix_pattern = f"[{found_type}:value = '{key}']"
 
+      if not found_type in all_items:
+        all_items[found_type] = {}
+
       all_items[found_type][key] = {
         "type": "indicator",
         "spec_version": "2.1",
@@ -2400,6 +2732,17 @@ for content in input_data:
         "urls": [content["url"]],
       }
 
+
+upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
+parsed_headers = {}
+if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
+  parsed_headers["Authorization"] = f"Bearer {os.environ.get('SHUFFLE_AUTHORIZATION', '')}"
+else:
+  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+
+uploaded = {
+	"sources": len(input_data),
+}
 for k, v in all_items.items():
     new_list = []
 
@@ -2420,14 +2763,18 @@ for k, v in all_items.items():
         })
 
         cnt += 1
-        #if cnt == 100:
-        #    break
+        if cnt >= 500:
+            break
 
     if len(new_list) > 0:
         ret = requests.post(upload_url, json=new_list, headers=parsed_headers)
-        print(ret.text)
-        print(ret.status_code)
-	`, marshaledRegexes, timestampFormat, timestampFormat, timestampFormat2, timestampFormat2)
+		#print(ret.text)
+        #print(ret.status_code)
+
+    uploaded["uploaded_" + k] = len(new_list)
+
+print(json.dumps(uploaded))
+	`, timestampFormat, timestampFormat, timestampFormat2, timestampFormat2)
 }
 
 func GetHealthAppConfig() string {

@@ -15,6 +15,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -83,6 +84,45 @@ func base64StringToString(base64String string) (string, error) {
 	return string(decoded), nil
 }
 
+// executeAppRunRequest POSTs an app-execute request and returns the parsed result.
+// Extracted to avoid a deeply-nested if/else pyramid at the call site.
+func executeAppRunRequest(url, apiKey string, executeBody WorkflowAppAction) (executionResult, error) {
+	b, err := json.Marshal(executeBody)
+	if err != nil {
+		return executionResult{}, fmt.Errorf("marshal execute body: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(b))
+	if err != nil {
+		return executionResult{}, fmt.Errorf("build execute request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := (&http.Client{Timeout: 120 * time.Second}).Do(req)
+	if err != nil {
+		return executionResult{}, fmt.Errorf("send execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return executionResult{}, fmt.Errorf("read execute response: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return executionResult{}, fmt.Errorf("execute request status %d: %s", resp.StatusCode, body)
+	}
+
+	var result executionResult
+	if err = json.Unmarshal(body, &result); err != nil {
+		return executionResult{}, fmt.Errorf("unmarshal execute response: %w", err)
+	}
+	if !result.Success {
+		return executionResult{}, errors.New("app run returned success=false")
+	}
+	return result, nil
+}
+
 func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	log.Printf("[DEBUG] Running app health check")
 	appHealth := AppHealth{
@@ -122,6 +162,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		err = json.Unmarshal([]byte(config), &app)
 		if err != nil {
 			log.Printf("[ERROR] Failed unmarshalling health app config blob: %s", err)
+			appHealth.Error.Read = fmt.Sprintf("failed to parse static app config: %s", err)
 			return appHealth, err
 		}
 	} else {
@@ -131,27 +172,31 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		req, err = http.NewRequest("GET", url, nil)
 		if err != nil {
 			log.Printf("[ERROR] Failed creating HTTP request: %s", err)
+			appHealth.Error.Read = fmt.Sprintf("failed to create config fetch request: %s", err)
 			return appHealth, err
 		}
 
 		// send the request
-		client := &http.Client{Timeout: 60 * time.Second}
+		client := &http.Client{Timeout: 180 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[ERROR] Failed sending HTTP request: %s", err)
+			appHealth.Error.Read = fmt.Sprintf("config fetch request failed: %s", err)
 			return appHealth, err
 		}
 
 		defer resp.Body.Close()
 
-		if resp.StatusCode != 200 {
-			log.Printf("[ERROR] Failed getting health check app: %s. The status code was: %d", err, resp.StatusCode)
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading config fetch response body: %s", err)
+			appHealth.Error.Read = fmt.Sprintf("failed to read config response: %s", err)
 			return appHealth, err
 		}
 
-		respBody, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed readin while getting HTTP response body: %s", err)
+		if resp.StatusCode != 200 {
+			log.Printf("[ERROR] Failed getting health check app: HTTP %d, body: %s", resp.StatusCode, string(respBody))
+			appHealth.Error.Read = fmt.Sprintf("config fetch returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 			return appHealth, err
 		}
 
@@ -159,12 +204,14 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		err = json.Unmarshal([]byte(respBody), &app)
 		if err != nil {
 			log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
+			appHealth.Error.Read = fmt.Sprintf("failed to parse config response: %s", err)
 			return appHealth, err
 		}
 	}
 
 	if app.Success == false {
 		log.Printf("[ERROR] Reading returned false for app health check: %s", err)
+		appHealth.Error.Read = "app config returned success=false"
 		return appHealth, err
 	}
 
@@ -175,6 +222,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	openapiString, err := base64StringToString(app.OpenAPI)
 	if err != nil {
 		log.Printf("[ERROR] Failed converting openapi base64 to string in app health check: %s", err)
+		appHealth.Error.Validate = fmt.Sprintf("base64 decode of openapi failed: %s", err)
 		return appHealth, err
 	}
 
@@ -188,6 +236,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	err = json.Unmarshal([]byte(openapiString), &openApiData)
 	if err != nil {
 		log.Printf("Error in unm %s", err)
+		appHealth.Error.Validate = fmt.Sprintf("failed to parse openapi data: %s", err)
 		return appHealth, err
 	}
 
@@ -200,6 +249,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(openapiString)))
 	if err != nil {
 		log.Printf("[ERROR] Failed creating HTTP for app validate request: %s", err)
+		appHealth.Error.Validate = fmt.Sprintf("failed to create validate_openapi request: %s", err)
 		return appHealth, err
 	}
 
@@ -208,30 +258,26 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
+	client = &http.Client{Timeout: 180 * time.Second}
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending the app validate HTTP request: %s", err)
+		appHealth.Error.Validate = fmt.Sprintf("validate_openapi request failed: %s", err)
 		return appHealth, err
 	}
 
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed validating app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		respBodyErr, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
-		} else {
-			log.Printf("[ERROR] Ops dashboard app deleting Response: %s", respBodyErr)
-		}
-
-		return appHealth, err
-	}
-
 	respBody, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed reading HTTP for app validate response body: %s", err)
+		appHealth.Error.Validate = fmt.Sprintf("failed to read validate_openapi response: %s", err)
+		return appHealth, err
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed validating app in app health check: HTTP %d, body: %s", resp.StatusCode, string(respBody))
+		appHealth.Error.Validate = fmt.Sprintf("validate_openapi returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		return appHealth, err
 	}
 
@@ -241,11 +287,13 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	err = json.Unmarshal(respBody, &validateResponse)
 	if err != nil {
 		log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
+		appHealth.Error.Validate = fmt.Sprintf("failed to parse validate_openapi response: %s", err)
 		return appHealth, err
 	}
 
 	if validateResponse.Success == false {
 		log.Printf("[ERROR] Validating returned false for app health check: %s", err)
+		appHealth.Error.Validate = "validate_openapi returned success=false"
 		return appHealth, err
 	}
 
@@ -279,12 +327,14 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	newOpenapi, err := json.Marshal(data)
 	if err != nil {
 		log.Printf("[ERROR] Failed to edit app data. Did we change the specs?")
+		appHealth.Error.Create = fmt.Sprintf("failed to build verify_openapi request body: %s", err)
 		return appHealth, err
 	}
 
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer(newOpenapi))
 	if err != nil {
 		log.Printf("[ERROR] Failed creating app check HTTP for app verify request: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("failed to create verify_openapi request: %s", err)
 		return appHealth, err
 	}
 
@@ -293,24 +343,26 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
+	client = &http.Client{Timeout: 180 * time.Second}
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check app verify HTTP request: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("verify_openapi request failed: %s", err)
 		return appHealth, err
 	}
 
 	respBody, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed reading HTTP for app verify response body: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("failed to read verify_openapi response: %s", err)
 		return appHealth, err
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed verifying app in app health check: %s.", err)
-		log.Printf("[ERROR] The status code was: %d with response %s", resp.StatusCode, respBody)
+		log.Printf("[ERROR] Failed verifying app in app health check: HTTP %d, body: %s", resp.StatusCode, string(respBody))
+		appHealth.Error.Create = fmt.Sprintf("verify_openapi returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		return appHealth, err
 	}
 
@@ -320,7 +372,14 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	err = json.Unmarshal(respBody, &validatedResp)
 	if err != nil {
 		log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("failed to parse verify_openapi response: %s", err)
 		return appHealth, err
+	}
+
+	if !validatedResp.Success {
+		log.Printf("[ERROR] verify_openapi returned success=false for app health check (id: %s)", validatedResp.ID)
+		appHealth.Error.Create = "verify_openapi returned success=false"
+		return appHealth, errors.New("verify_openapi returned success=false")
 	}
 
 	id = validatedResp.ID
@@ -333,6 +392,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req, err = http.NewRequest("GET", url, nil)
 	if err != nil {
 		log.Printf("[ERROR] Failed creating HTTP for app read request: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("failed to create app config request: %s", err)
 		return appHealth, err
 	}
 
@@ -340,10 +400,11 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
+	client = &http.Client{Timeout: 180 * time.Second}
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check app read HTTP request: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("app config request failed: %s", err)
 		return appHealth, err
 	}
 
@@ -352,12 +413,13 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	body, err := io.ReadAll(resp.Body) // Read response body
 	if err != nil {
 		log.Printf("[ERROR] Failed reading response body: %s", err)
+		appHealth.Error.Create = fmt.Sprintf("failed to read app config response: %s", err)
 		return appHealth, err
 	}
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed reading app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		log.Printf("[ERROR] The response body was: %s", body)
+		log.Printf("[ERROR] Failed reading app in app health check: HTTP %d, body: %s", resp.StatusCode, string(body))
+		appHealth.Error.Create = fmt.Sprintf("app config check returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 		return appHealth, err
 	}
 
@@ -387,63 +449,15 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		},
 	}
 
-	executeBodyJSON, err := json.Marshal(executeBody)
-	if err != nil {
-		log.Printf("[ERROR] Failed marshalling app run JSON data: %s", err)
-		return appHealth, err
+	runResult, runErr := executeAppRunRequest(url, apiKey, executeBody)
+	if runErr != nil {
+		log.Printf("[WARNING] App run health check failed: %s", runErr)
+		appHealth.Error.Run = fmt.Sprintf("app execution failed: %s", runErr)
+	} else {
+		appHealth.Result = runResult.Result
+		appHealth.ExecutionID = runResult.ID
+		appHealth.Run = true
 	}
-
-	req, err = http.NewRequest("POST", url, bytes.NewBuffer(executeBodyJSON))
-	if err != nil {
-		log.Printf("[ERROR] Failed creating HTTP for app run request: %s", err)
-		return appHealth, err
-	}
-
-	// set the headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
-	resp, err = client.Do(req)
-
-	if err != nil {
-		log.Printf("[ERROR] Failed sending health check app run HTTP request: %s", err)
-		return appHealth, err
-	}
-
-	respBody, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[ERROR] Failed reading HTTP for app run response body: %s", err)
-		return appHealth, err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed running app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		log.Printf("[ERROR] The response body was: %s", respBody)
-		return appHealth, err
-	}
-
-	// Unmarshal the JSON data into a Workflow instance
-	var runResponse executionResult
-
-	err = json.Unmarshal(respBody, &runResponse)
-
-	if err != nil {
-		log.Printf("[ERROR] Failed unmarshalling generic run JSON data: %s", err)
-		return appHealth, err
-	}
-
-	if runResponse.Success == false {
-		log.Printf("[ERROR] Running returned false for app health check: %s", err)
-		return appHealth, err
-	}
-
-	appHealth.Result = runResponse.Result
-	appHealth.ExecutionID = runResponse.ID
-	appHealth.Run = true
 
 	// 4. Delete App
 	// 4.1 call /api/v1/apps/<id> DELETE
@@ -454,6 +468,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req, err = http.NewRequest("DELETE", url, nil)
 	if err != nil {
 		log.Printf("[ERROR] Failed creating HTTP for app delete request: %s", err)
+		appHealth.Error.Delete = fmt.Sprintf("failed to create delete request: %s", err)
 		return appHealth, err
 	}
 
@@ -462,26 +477,46 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
+	client = &http.Client{Timeout: 180 * time.Second}
 	resp, err = client.Do(req)
 
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check app delete HTTP request: %s", err)
+		appHealth.Error.Delete = fmt.Sprintf("delete request failed: %s", err)
 		return appHealth, err
 	}
 
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed deleting app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		respBodyErr, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
-		} else {
-			log.Printf("[ERROR] Ops dashboard app deleting Response: %s", respBodyErr)
-		}
-
+	respBodyDel, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading app delete response body: %s", err)
+		appHealth.Error.Delete = fmt.Sprintf("failed to read delete response: %s", err)
 		return appHealth, err
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed deleting app in app health check: HTTP %d, body: %s", resp.StatusCode, string(respBodyDel))
+		appHealth.Error.Delete = fmt.Sprintf("app delete returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBodyDel)))
+		return appHealth, err
+	}
+	if err != nil {
+		log.Printf("[ERROR] Failed reading HTTP for app delete response body: %s", err)
+		appHealth.Error.Delete = fmt.Sprintf("failed to read delete response: %s", err)
+		return appHealth, err
+	}
+
+	var deleteResponse genericResp
+	if err = json.Unmarshal(respBodyDel, &deleteResponse); err != nil {
+		log.Printf("[ERROR] Failed unmarshalling app delete response JSON: %s", err)
+		appHealth.Error.Delete = fmt.Sprintf("failed to parse delete response: %s", err)
+		return appHealth, err
+	}
+
+	if !deleteResponse.Success {
+		log.Printf("[ERROR] App delete returned success=false for app health check (id: %s)", id)
+		appHealth.Error.Delete = "app delete returned success=false"
+		return appHealth, errors.New("app delete returned success=false")
 	}
 
 	appHealth.Delete = true
@@ -1095,7 +1130,7 @@ func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string, orgId strin
 	req.Header.Set("Org-Id", orgId)
 
 	// send the request
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 180 * time.Second}
 	resp, err := client.Do(req)
 
 	if err != nil {
@@ -1254,26 +1289,31 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		// if error string contains "High number of requests. Try again later", skip this run
 		if strings.Contains(err.Error(), "High number of requests. Try again later") {
 			log.Printf("[DEBUG] High number of requests sent to the backend. Skipping this run.")
+			workflowHealth.Error.Create = fmt.Sprintf("High number of requests sent to the backend. Try again later. Error details: %s", err)
 			return workflowHealth, err
 		}
 
 		if strings.Contains(err.Error(), "Unauthorized user saving ops workflow") {
 			log.Printf("[DEBUG] Unauthorized user saving the ops workflow. Skipping this run.")
+			workflowHealth.Error.Create = fmt.Sprintf("Unauthorized user saving ops workflow. Error details: %s", err)
 			return workflowHealth, err
 		}
 
 		log.Printf("[ERROR] Failed creating Health check workflow: %s", err)
+		workflowHealth.Error.Create = fmt.Sprintf("workflow init failed: %s", err)
 		return workflowHealth, err
 	}
 
 	if len(opsWorkflowID) == 0 {
 		log.Printf("[ERROR] Failed creating Health check workflow. Exiting..")
+		workflowHealth.Error.Create = "workflow init returned empty ID"
 		return workflowHealth, err
 	}
 
 	workflowPtr, err := GetWorkflow(ctx, opsWorkflowID)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting Health check workflow: %s", err)
+		workflowHealth.Error.Create = fmt.Sprintf("failed to fetch created workflow: %s", err)
 		return workflowHealth, err
 	}
 
@@ -1306,43 +1346,22 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check HTTP request: %s", err)
+		workflowHealth.Error.Run = fmt.Sprintf("execute HTTP request failed: %s", err)
 		return workflowHealth, err
 	}
 
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed running health check workflow: %s. The status code is %d", id, resp.StatusCode)
-
-		// print the response body
-		respBodyErr, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed reading health check HTTP response body: %s", err)
-		} else {
-			if strings.Contains(string(respBodyErr), "illegal_argument_exception") {
-			} else {
-				log.Printf("[ERROR] Health check running Workflow Response: %s", respBodyErr)
-			}
-		}
-
-		/*
-			if project.Environment == "onprem" {
-				//log.Printf("Trying to fix opensearch mappings")
-				//err = fixOpensearch()
-				//if err != nil {
-				//	log.Printf("[ERROR] Failed fixing opensearch mappings: %s", err)
-				//} else {
-				//	log.Printf("[DEBUG] Fixed opensearch mappings successfully! Maybe try ops dashboard again?")
-				//}
-			}
-		*/
-		// return workflowHealth, err
-	}
-
 	respBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
+		workflowHealth.Error.Run = fmt.Sprintf("execute response read failed: %s", err)
 		return workflowHealth, err
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed running health check workflow %s: HTTP %d, body: %s", id, resp.StatusCode, string(respBody))
+		workflowHealth.Error.Run = fmt.Sprintf("workflow execute returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
 	// Unmarshal the JSON data into a Workflow instance
@@ -1385,19 +1404,22 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[ERROR] Failed sending HTTP request: %s", err)
+			workflowHealth.Error.RunFinished = fmt.Sprintf("polling request failed: %s", err)
 			return workflowHealth, err
 		}
 
 		defer resp.Body.Close()
 
-		if resp.StatusCode != 200 {
-			log.Printf("[ERROR] Failed checking results for the workflow: %s. The status code was: %d", err, resp.StatusCode)
-			return workflowHealth, err
-		}
-
 		respBody, err = ioutil.ReadAll(resp.Body)
 		if err != nil {
 			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
+			workflowHealth.Error.RunFinished = fmt.Sprintf("polling response read failed: %s", err)
+			return workflowHealth, err
+		}
+
+		if resp.StatusCode != 200 {
+			log.Printf("[ERROR] Failed checking results for the workflow: HTTP %d, body: %s", resp.StatusCode, string(respBody))
+			workflowHealth.Error.RunFinished = fmt.Sprintf("polling returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 			return workflowHealth, err
 		}
 
@@ -1407,6 +1429,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 
 		if err != nil {
 			log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
+			workflowHealth.Error.RunFinished = fmt.Sprintf("failed to parse polling response: %s", err)
 			return workflowHealth, err
 		}
 
@@ -1436,6 +1459,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 			}
 
 			workflowHealth.RunStatus = "ABANDONED_BY_HEALTHCHECK"
+			workflowHealth.Error.RunFinished = "timeout: workflow did not finish within 10 minutes"
 
 			return workflowHealth, errors.New("Timeout reached for workflow health check")
 		default:
@@ -1451,6 +1475,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		err = deleteOpsWorkflow(workflowHealth, apiKey, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed deleting workflow: %s", err)
+			workflowHealth.Error.Delete = fmt.Sprintf("workflow delete failed: %s", err)
 		} else {
 			//log.Printf("[DEBUG] Deleted ops workflow successfully!")
 			workflowHealth.Delete = true
@@ -1465,6 +1490,40 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	}
 
 	return workflowHealth, nil
+}
+
+func executeAppUploadRunRequest(url, apiKey string, executeBody WorkflowAppAction) (SingleResult, error) {
+	b, err := json.Marshal(executeBody)
+	if err != nil {
+		return SingleResult{}, fmt.Errorf("marshal execute body: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(b))
+	if err != nil {
+		return SingleResult{}, fmt.Errorf("build execute request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := (&http.Client{Timeout: 120 * time.Second}).Do(req)
+	if err != nil {
+		return SingleResult{}, fmt.Errorf("send execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return SingleResult{}, fmt.Errorf("read execute response: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return SingleResult{}, fmt.Errorf("execute request status %d: %s", resp.StatusCode, body)
+	}
+
+	var result SingleResult
+	if err = json.Unmarshal(body, &result); err != nil {
+		return SingleResult{}, fmt.Errorf("unmarshal execute response: %w", err)
+	}
+	return result, nil
 }
 
 func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
@@ -1488,6 +1547,17 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed to download app zip from %s, status: %d", appZipUrl, resp.StatusCode)
+		return appHealth, fmt.Errorf("Failed to download app zip, got status %d", resp.StatusCode)
+	}
+
+	zipBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read app zip body: %s", err)
+		return appHealth, errors.New("Failed to read app zip body")
+	}
+
 	pr, pw := io.Pipe()
 	writer := multipart.NewWriter(pw)
 
@@ -1501,7 +1571,7 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 			return
 		}
 
-		_, err = io.Copy(part, resp.Body)
+		_, err = io.Copy(part, bytes.NewReader(zipBytes))
 		if err != nil {
 			log.Printf("[ERROR] Failed to stream file: %s", err)
 			return
@@ -1539,7 +1609,7 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: 60 * time.Second}
+	client := &http.Client{Timeout: 180 * time.Second}
 	res, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending request to app upload: %s", err)
@@ -1566,12 +1636,18 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 		return appHealth, errors.New("Failed to unmarshal response")
 	}
 
+	if !appData.Success {
+		log.Printf("[ERROR] App upload returned success=false for ops app health check")
+		return appHealth, errors.New("app upload returned success=false")
+	}
+
 	appHealth.Create = true
 	appHealth.AppId = appData.Id
 
 	// wait 5 second before execution
 	time.Sleep(5 * time.Second)
 
+	// Execute and poll — failures are non-fatal so we always reach the delete step.
 	executeUrl := baseUrl + "/api/v1/apps/" + appData.Id + "/run"
 
 	var executeBody WorkflowAppAction
@@ -1589,150 +1665,118 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error) {
 		},
 	}
 
-	executeBodyJSON, err := json.Marshal(executeBody)
-	if err != nil {
-		log.Printf("[ERROR] Failed marshalling app run JSON data: %s", err)
-		return appHealth, errors.New("Failed marshalling app run JSON data")
-	}
+	executionData, execErr := executeAppUploadRunRequest(executeUrl, apiKey, executeBody)
+	if execErr != nil {
+		log.Printf("[WARNING] App execute failed, skipping poll: %s", execErr)
+	} else {
+		appHealth.Run = true
+		appHealth.ExecutionID = executionData.Id
 
-	req, err = http.NewRequest("POST", executeUrl, bytes.NewBuffer(executeBodyJSON))
-	if err != nil {
-		log.Printf("[ERROR] Failed creating HTTP for app run request: %s", err)
-		return appHealth, errors.New("Failed to create HTTP for app run")
-	}
+		// Poll for the execution result.
+		runCount := 0
+		for executionData.Result == "" {
+			if runCount > 5 {
+				log.Printf("[WARNING] Timed out polling app execution result after %d attempts", runCount)
+				break
+			}
 
-	// set the headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+			pollReq, pollReqErr := http.NewRequest("POST", baseUrl+"/api/v1/streams/results", nil)
+			if pollReqErr != nil {
+				log.Printf("[WARNING] Failed creating poll HTTP request: %s", pollReqErr)
+				break
+			}
 
-	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
-	resp, err = client.Do(req)
+			pollReq.Header.Set("Content-Type", "application/json")
+			pollReq.Header.Set("Authorization", "Bearer "+apiKey)
+			pollReq.Header.Set("Org-Id", orgId)
 
-	if err != nil {
-		log.Printf("[ERROR] Failed sending health check app run HTTP request: %s", err)
-		return appHealth, errors.New("Failed sending HTTP request")
-	}
+			reqBody := map[string]string{"execution_id": executionData.Id, "authorization": executionData.Authorization}
+			reqBodyJson, _ := json.Marshal(reqBody)
+			pollReq.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyJson))
 
-	defer resp.Body.Close()
+			pollClient := &http.Client{Timeout: 120 * time.Second}
+			pollResp, pollErr := pollClient.Do(pollReq)
+			if pollErr != nil {
+				log.Printf("[WARNING] Failed sending poll HTTP request: %s", pollErr)
+				break
+			}
 
-	appExecuteData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[ERROR] Failed to read app execution data")
-		return appHealth, err
-	}
+			pollBody, pollReadErr := ioutil.ReadAll(pollResp.Body)
+			pollResp.Body.Close()
+			if pollReadErr != nil {
+				log.Printf("[WARNING] Failed reading poll response body: %s", pollReadErr)
+				break
+			}
 
-	var executionData SingleResult
+			if pollResp.StatusCode != 200 {
+				log.Printf("[WARNING] Poll returned HTTP %d, stopping poll", pollResp.StatusCode)
+				break
+			}
 
-	err = json.Unmarshal(appExecuteData, &executionData)
-	if err != nil {
-		log.Printf("[ERROR] Failed to unmarshal single app result")
-		return appHealth, errors.New("Failed to unmarshal")
-	}
+			var executionResults WorkflowExecution
+			if pollUnmarshalErr := json.Unmarshal(pollBody, &executionResults); pollUnmarshalErr != nil {
+				log.Printf("[WARNING] Failed unmarshalling poll response: %s", pollUnmarshalErr)
+				break
+			}
 
-	appHealth.Run = true
-	appHealth.ExecutionID = executionData.Id
+			if executionResults.Status != "EXECUTING" {
+				log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, executionResults.ExecutionId)
+			}
 
-	runCount := 0
-	for executionData.Result == "" {
-		if runCount > 5 {
-			return appHealth, errors.New("Failed to get app execution result")
+			if executionResults.Status == "FINISHED" {
+				log.Printf("[DEBUG] Workflow Health execution is finished, checking results")
+				executionData.Result = executionResults.Result
+				appHealth.Validate = executionResults.Workflow.Validated
+			}
+
+			time.Sleep(2 * time.Second)
+			runCount++
 		}
 
-		url := baseUrl + "/api/v1/streams/results"
-		req, err := http.NewRequest("POST", url, nil)
-		if err != nil {
-			log.Printf("[ERROR] Failed creating HTTP request: %s", err)
-			return appHealth, errors.New("Failed creating HTTP request")
-		}
-
-		// set the headers
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-		req.Header.Set("Org-Id", orgId)
-
-		// convert the body to JSON
-		reqBody := map[string]string{"execution_id": executionData.Id, "authorization": executionData.Authorization}
-		reqBodyJson, err := json.Marshal(reqBody)
-
-		// set the body
-		req.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyJson))
-
-		// send the request
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[ERROR] Failed sending HTTP request: %s", err)
-			return appHealth, err
-		}
-
-		defer resp.Body.Close()
-
-		if resp.StatusCode != 200 {
-			log.Printf("[ERROR] Failed checking results for the workflow: %s. The status code was: %d", err, resp.StatusCode)
-			return appHealth, err
-		}
-
-		respBody, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
-			return appHealth, err
-		}
-
-		// Unmarshal the JSON data into a Workflow instance
-		var executionResults WorkflowExecution
-		err = json.Unmarshal(respBody, &executionResults)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
-			return appHealth, err
-		}
-
-		if executionResults.Status != "EXECUTING" {
-			log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, executionResults.ExecutionId)
-		}
-
-		if executionResults.Status == "FINISHED" {
-			log.Printf("[DEBUG] Workflow Health exeution is finished, checking it's results")
-			executionData.Result = executionResults.Result
-			appHealth.Validate = executionResults.Workflow.Validated
-		}
-
-		time.Sleep(2 * time.Second)
-		runCount += 1
+		appHealth.Result = executionData.Result
 	}
 
-	appHealth.Result = executionData.Result
+	// Always attempt to delete the app regardless of execute/poll outcome.
+	delUrl := baseUrl + "/api/v1/apps/" + appData.Id
+	log.Printf("[DEBUG] Deleting app with URL %s", delUrl)
 
-	// Delete the app
-	url := baseUrl + "/api/v1/apps/" + appData.Id
-
-	log.Printf("[DEBUG] Deleting app with URL %s", url)
-
-	req, err = http.NewRequest("DELETE", url, nil)
-	if err != nil {
-		log.Printf("[ERROR] Failed creating HTTP for app delete request: %s", err)
-		return appHealth, err
+	delReq, delReqErr := http.NewRequest("DELETE", delUrl, nil)
+	if delReqErr != nil {
+		log.Printf("[ERROR] Failed creating HTTP for app delete request: %s", delReqErr)
+		return appHealth, delReqErr
 	}
 
-	// set the headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	delReq.Header.Set("Content-Type", "application/json")
+	delReq.Header.Set("Authorization", "Bearer "+apiKey)
 
-	// send the request
-	client = &http.Client{Timeout: 60 * time.Second}
-	resp, err = client.Do(req)
+	delClient := &http.Client{Timeout: 180 * time.Second}
+	delResp, delErr := delClient.Do(delReq)
+	if delErr != nil {
+		log.Printf("[ERROR] Failed sending health check app delete HTTP request: %s", delErr)
+		return appHealth, delErr
+	}
+	defer delResp.Body.Close()
 
-	if err != nil {
-		log.Printf("[ERROR] Failed sending health check app delete HTTP request: %s", err)
-		return appHealth, err
+	delBody, delReadErr := ioutil.ReadAll(delResp.Body)
+	if delReadErr != nil {
+		log.Printf("[ERROR] Failed reading app delete response body: %s", delReadErr)
+		return appHealth, delReadErr
 	}
 
-	defer resp.Body.Close()
+	if delResp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed deleting app in app health check. Status: %d, Body: %s", delResp.StatusCode, delBody)
+		return appHealth, errors.New("app delete returned non-200 status")
+	}
 
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed deleting app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		return appHealth, err
+	var deleteResponse genericResp
+	if delUnmarshalErr := json.Unmarshal(delBody, &deleteResponse); delUnmarshalErr != nil {
+		log.Printf("[ERROR] Failed unmarshalling app delete response JSON: %s", delUnmarshalErr)
+		return appHealth, delUnmarshalErr
+	}
+
+	if !deleteResponse.Success {
+		log.Printf("[ERROR] App delete returned success=false for ops app health check (id: %s)", appData.Id)
+		return appHealth, errors.New("app delete returned success=false")
 	}
 
 	appHealth.Delete = true
@@ -2080,6 +2124,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
 		log.Printf("[ERROR] Failed to create request (%s) for set_cache %s", url, err)
+		datastoreHealth.Error.Create = fmt.Sprintf("failed to create set_cache request: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2092,6 +2137,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send request (%s) for set_cache %s", url, err)
+		datastoreHealth.Error.Create = fmt.Sprintf("set_cache request failed: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2099,6 +2145,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	resp.Body.Close()
 	if readErr != nil {
 		log.Printf("[ERROR] Failed to read set_cache response body: %s", readErr)
+		datastoreHealth.Error.Create = fmt.Sprintf("failed to read set_cache response: %s", readErr)
 		return datastoreHealth, readErr
 	}
 
@@ -2107,6 +2154,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	}
 	if jsonErr := json.Unmarshal(createBody, &createResult); jsonErr != nil || !createResult.Success || resp.StatusCode != 200 {
 		log.Printf("[ERROR] set_cache health check failed. Status: %d, body: %s", resp.StatusCode, string(createBody))
+		datastoreHealth.Error.Create = fmt.Sprintf("set_cache failed with HTTP %d: %s", resp.StatusCode, string(createBody))
 		return datastoreHealth, fmt.Errorf("set_cache failed with status %d", resp.StatusCode)
 	}
 
@@ -2118,6 +2166,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
 		log.Printf("[ERROR] Failed to create request (%s) for get_cache: %s", url, err)
+		datastoreHealth.Error.Read = fmt.Sprintf("failed to create get_cache request: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2128,6 +2177,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send request to get_cache: %s", err)
+		datastoreHealth.Error.Read = fmt.Sprintf("get_cache request failed: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2135,6 +2185,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	resp.Body.Close()
 	if err != nil {
 		log.Printf("[ERROR] Failed to read datastore return value: %s", err)
+		datastoreHealth.Error.Read = fmt.Sprintf("failed to read get_cache response: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2143,6 +2194,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	}
 	if jsonErr := json.Unmarshal(dataStoreValue, &readResult); jsonErr != nil || !readResult.Success || resp.StatusCode != 200 {
 		log.Printf("[ERROR] get_cache health check failed. Status: %d, body: %s", resp.StatusCode, string(dataStoreValue))
+		datastoreHealth.Error.Read = fmt.Sprintf("get_cache failed with HTTP %d: %s", resp.StatusCode, string(dataStoreValue))
 		return datastoreHealth, fmt.Errorf("get_cache failed with status %d", resp.StatusCode)
 	}
 
@@ -2155,6 +2207,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
 		log.Printf("[ERROR] Failed to create request (%s) for delete_key: %s", url, err)
+		datastoreHealth.Error.Delete = fmt.Sprintf("failed to create delete_cache request: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2165,6 +2218,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send request to delete_key: %s", err)
+		datastoreHealth.Error.Delete = fmt.Sprintf("delete_cache request failed: %s", err)
 		return datastoreHealth, err
 	}
 
@@ -2172,6 +2226,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	resp.Body.Close()
 	if readErr != nil {
 		log.Printf("[ERROR] Failed to read delete_cache response body: %s", readErr)
+		datastoreHealth.Error.Delete = fmt.Sprintf("failed to read delete_cache response: %s", readErr)
 		return datastoreHealth, readErr
 	}
 
@@ -2180,6 +2235,7 @@ func RunOpsDatastore(apikey, orgId string) (DatastoreHealth, error) {
 	}
 	if jsonErr := json.Unmarshal(deleteBody, &deleteResult); jsonErr != nil || !deleteResult.Success || resp.StatusCode != 200 {
 		log.Printf("[ERROR] delete_cache health check failed. Status: %d, body: %s", resp.StatusCode, string(deleteBody))
+		datastoreHealth.Error.Delete = fmt.Sprintf("delete_cache failed with HTTP %d: %s", resp.StatusCode, string(deleteBody))
 		return datastoreHealth, fmt.Errorf("delete_cache failed with status %d", resp.StatusCode)
 	}
 
@@ -2210,6 +2266,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(PAYLOAD)))
 	if err != nil {
 		log.Printf("[ERROR] Failed to create new request for create file(%s): %s", url, err)
+		fileHealth.Error.Create = fmt.Sprintf("failed to create file request: %s", err)
 		return fileHealth, err
 	}
 
@@ -2226,6 +2283,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send request (%s) for create file: %s", url, err)
+		fileHealth.Error.Create = fmt.Sprintf("create file request failed: %s", err)
 		return fileHealth, err
 	}
 
@@ -2233,11 +2291,13 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	resp.Body.Close()
 	if readErr != nil {
 		log.Printf("[ERROR] Failed to read create file response body: %s", readErr)
+		fileHealth.Error.Create = fmt.Sprintf("failed to read create file response: %s", readErr)
 		return fileHealth, readErr
 	}
 
 	if err := json.Unmarshal(body, &fileRespStruct); err != nil || !fileRespStruct.Success || resp.StatusCode != 200 || len(fileRespStruct.Id) == 0 {
 		log.Printf("[ERROR] create file health check failed. Status: %d, body: %s", resp.StatusCode, string(body))
+		fileHealth.Error.Create = fmt.Sprintf("create file failed with HTTP %d: %s", resp.StatusCode, string(body))
 		return fileHealth, fmt.Errorf("create file failed with status %d", resp.StatusCode)
 	}
 
@@ -2249,6 +2309,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	resp, err = http.Get(remoteUrl)
 	if err != nil {
 		log.Printf("[ERROR] Failed to fetch remote file: %s", err)
+		fileHealth.Error.Upload = fmt.Sprintf("failed to fetch remote file for upload: %s", err)
 		return fileHealth, err
 	}
 
@@ -2259,11 +2320,13 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	formFile, err := w.CreateFormFile("shuffle_file", "file.txt")
 	if err != nil {
 		log.Printf("[ERROR] Failed to create form file: %s", err)
+		fileHealth.Error.Upload = fmt.Sprintf("failed to create multipart form: %s", err)
 		return fileHealth, err
 	}
 
 	if _, err := io.Copy(formFile, resp.Body); err != nil {
 		log.Printf("[ERROR] Failed to copy remote file to form: %s", err)
+		fileHealth.Error.Upload = fmt.Sprintf("failed to copy file content to form: %s", err)
 		return fileHealth, err
 	}
 
@@ -2271,6 +2334,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	req, err = http.NewRequest("POST", url, &buf)
 	if err != nil {
 		log.Printf("[ERROR] Failed to create upload request: %s", err)
+		fileHealth.Error.Upload = fmt.Sprintf("failed to create upload request: %s", err)
 		return fileHealth, err
 	}
 
@@ -2280,6 +2344,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	uploadResp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Upload request failed: %s", err)
+		fileHealth.Error.Upload = fmt.Sprintf("upload request failed: %s", err)
 		return fileHealth, err
 	}
 
@@ -2287,6 +2352,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	uploadResp.Body.Close()
 	if readErr != nil {
 		log.Printf("[ERROR] Failed to read upload response body: %s", readErr)
+		fileHealth.Error.Upload = fmt.Sprintf("failed to read upload response: %s", readErr)
 		return fileHealth, readErr
 	}
 
@@ -2295,6 +2361,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	}
 	if jsonErr := json.Unmarshal(uploadBody, &uploadResult); jsonErr != nil || !uploadResult.Success || uploadResp.StatusCode != 200 {
 		log.Printf("[ERROR] upload file health check failed. Status: %d, body: %s", uploadResp.StatusCode, string(uploadBody))
+		fileHealth.Error.Upload = fmt.Sprintf("upload failed with HTTP %d: %s", uploadResp.StatusCode, string(uploadBody))
 		return fileHealth, fmt.Errorf("upload failed with status %d", uploadResp.StatusCode)
 	}
 
@@ -2306,6 +2373,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	req, err = http.NewRequest("DELETE", url, nil)
 	if err != nil {
 		log.Printf("[ERROR] Failed to create delete request: %s", err)
+		fileHealth.Error.Delete = fmt.Sprintf("failed to create file delete request: %s", err)
 		return fileHealth, err
 	}
 
@@ -2315,6 +2383,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	resp, err = client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send delete request: %s", err)
+		fileHealth.Error.Delete = fmt.Sprintf("file delete request failed: %s", err)
 		return fileHealth, err
 	}
 
@@ -2322,6 +2391,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	resp.Body.Close()
 	if readErr != nil {
 		log.Printf("[ERROR] Failed to read delete response body: %s", readErr)
+		fileHealth.Error.Delete = fmt.Sprintf("failed to read file delete response: %s", readErr)
 		return fileHealth, readErr
 	}
 
@@ -2330,6 +2400,7 @@ func RunOpsFile(apikey, orgId string) (FileHealth, error) {
 	}
 	if jsonErr := json.Unmarshal(deleteBody, &deleteResult); jsonErr != nil || !deleteResult.Success || resp.StatusCode != 200 {
 		log.Printf("[ERROR] delete file health check failed. Status: %d, body: %s", resp.StatusCode, string(deleteBody))
+		fileHealth.Error.Delete = fmt.Sprintf("file delete failed with HTTP %d: %s", resp.StatusCode, string(deleteBody))
 		return fileHealth, fmt.Errorf("delete failed with status %d", resp.StatusCode)
 	}
 
@@ -3575,384 +3646,680 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 		return result, errors.New(result.Reason)
 	}
 
-	prefix := strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_OPENSEARCH_INDEX_PREFIX")))
-	if prefix == "" {
-		result.Success = true
-		result.Reason = "No index prefix configured"
-		return result, nil
-	}
-
-	opensearchUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
+	opensearchUrl := strings.TrimRight(os.Getenv("SHUFFLE_OPENSEARCH_URL"), "/")
 	if len(opensearchUrl) == 0 {
 		opensearchUrl = "https://shuffle-opensearch:9200"
 	}
 
 	foundClient := project.Es
-	aliasReq, err := http.NewRequest("GET", fmt.Sprintf("%s/_aliases", opensearchUrl), nil)
+	allIndices, err := getOpensearchIndices(foundClient, opensearchUrl)
 	if err != nil {
 		return result, err
 	}
 
-	aliasResp, err := foundClient.Client.Transport.Perform(aliasReq)
+	aliasInfo, err := getOpensearchAliases(foundClient, opensearchUrl)
 	if err != nil {
 		return result, err
+	}
+
+	prefix := strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_OPENSEARCH_INDEX_PREFIX")))
+	baseIndexes := GetOpensearchBaseIndexes()
+	expectedAliases := []string{}
+	for _, baseIndex := range baseIndexes {
+		expectedAliases = append(expectedAliases, strings.ToLower(GetESIndexPrefix(baseIndex)))
+	}
+
+	rolloverConfig := []byte(fmt.Sprintf(`{
+		"conditions": {
+			"max_age": "90d",
+			"max_size": "40gb",
+			"max_docs": 1000000
+		}
+	}`))
+
+	customRollover := os.Getenv("OPENSEARCH_INDEX_ROLLOVER")
+	if len(customRollover) > 0 {
+		checkValidJson := map[string]interface{}{}
+		if err := json.Unmarshal([]byte(customRollover), &checkValidJson); err != nil {
+			log.Printf("[ERROR] Invalid JSON in OPENSEARCH_INDEX_ROLLOVER: %s", err)
+		} else {
+			rolloverConfig = []byte(customRollover)
+		}
+	}
+
+	ismEnabled := strings.ToLower(strings.TrimSpace(os.Getenv("OPENSEARCH_USE_ISM_ROLLOVER"))) != "false"
+	ismPolicyName := strings.TrimSpace(os.Getenv("OPENSEARCH_ISM_POLICY_NAME"))
+	if ismPolicyName == "" {
+		ismPolicyName = "shuffle-rollover"
+	}
+
+	for _, baseIndex := range baseIndexes {
+		expectedAlias := strings.ToLower(GetESIndexPrefix(baseIndex))
+		doubleAlias := ""
+		if prefix != "" {
+			doubleAlias = fmt.Sprintf("%s_%s", prefix, expectedAlias)
+		}
+
+		if ArrayContains(allIndices, expectedAlias) {
+			targetIndex := fmt.Sprintf("%s-000001", expectedAlias)
+			taskID, err := handleAliasCollisionMigration(foundClient, opensearchUrl, expectedAlias, targetIndex)
+			if err != nil {
+				result.Skipped = append(result.Skipped, fmt.Sprintf("%s (collision repair failed: %s)", expectedAlias, err))
+				continue
+			}
+
+			if taskID != "" {
+				result.MigrationTasks = append(result.MigrationTasks, fmt.Sprintf("%s -> %s (task=%s)", expectedAlias, targetIndex, taskID))
+				result.Skipped = append(result.Skipped, fmt.Sprintf("%s (collision migration in progress)", expectedAlias))
+				continue
+			}
+
+			allIndices, err = getOpensearchIndices(foundClient, opensearchUrl)
+			if err != nil {
+				return result, err
+			}
+
+			aliasInfo, err = getOpensearchAliases(foundClient, opensearchUrl)
+			if err != nil {
+				return result, err
+			}
+		}
+
+		targetIndices, writeIndex := selectOpensearchAliasTargets(expectedAlias, doubleAlias, aliasInfo, allIndices)
+		if len(targetIndices) == 0 {
+			newIndex := fmt.Sprintf("%s-000001", expectedAlias)
+			if !ArrayContains(allIndices, newIndex) {
+				if err := createOpensearchIndex(foundClient, opensearchUrl, newIndex); err != nil {
+					return result, err
+				}
+				result.Created = append(result.Created, newIndex)
+				allIndices = append(allIndices, newIndex)
+			}
+
+			targetIndices = []string{newIndex}
+			writeIndex = newIndex
+		}
+
+		actions := []OpensearchAliasAction{}
+		for _, indexName := range targetIndices {
+			current, hasCurrent := aliasInfo[indexName][expectedAlias]
+			desiredWrite := indexName == writeIndex
+
+			if hasCurrent {
+				if current.IsWriteIndex != desiredWrite {
+					actions = append(actions, OpensearchAliasAction{
+						Remove: &OpensearchAliasActionTarget{Index: indexName, Alias: expectedAlias},
+					})
+					actions = append(actions, OpensearchAliasAction{
+						Add: &OpensearchAliasActionTarget{Index: indexName, Alias: expectedAlias, IsWriteIndex: &desiredWrite},
+					})
+				}
+			} else {
+				actions = append(actions, OpensearchAliasAction{
+					Add: &OpensearchAliasActionTarget{Index: indexName, Alias: expectedAlias, IsWriteIndex: &desiredWrite},
+				})
+			}
+
+			if doubleAlias != "" {
+				doubleAliasState, hasDoubleAlias := aliasInfo[indexName][doubleAlias]
+				if hasDoubleAlias && doubleAliasState.Present {
+					actions = append(actions, OpensearchAliasAction{
+						Remove: &OpensearchAliasActionTarget{Index: indexName, Alias: doubleAlias},
+					})
+				}
+			}
+		}
+
+		if len(actions) > 0 {
+			if err := updateOpensearchAliases(foundClient, opensearchUrl, actions); err != nil {
+				return result, err
+			}
+			result.AliasUpdates = append(result.AliasUpdates, fmt.Sprintf("%s -> %s", expectedAlias, writeIndex))
+		}
+
+		result.WriteIndexUpdates = append(result.WriteIndexUpdates, fmt.Sprintf("%s -> %s", expectedAlias, writeIndex))
+	}
+
+	verifiedAliasInfo, err := getOpensearchAliases(foundClient, opensearchUrl)
+	if err != nil {
+		return result, err
+	}
+
+	result.ExpectedAliases = len(expectedAliases)
+	result.FoundAliases = 0
+	for _, aliasName := range expectedAliases {
+		indices := []string{}
+		writeIndices := []string{}
+		for indexName, aliases := range verifiedAliasInfo {
+			state, ok := aliases[aliasName]
+			if !ok || !state.Present {
+				continue
+			}
+
+			indices = append(indices, indexName)
+			if state.IsWriteIndex {
+				writeIndices = append(writeIndices, indexName)
+			}
+		}
+
+		if len(indices) == 0 {
+			result.MissingAliases = append(result.MissingAliases, aliasName)
+			continue
+		}
+
+		result.FoundAliases++
+		if len(writeIndices) != 1 {
+			result.InvalidWriteAlias = append(result.InvalidWriteAlias, fmt.Sprintf("%s (write_indices=%d)", aliasName, len(writeIndices)))
+			continue
+		}
+
+		sorted := append([]string{}, indices...)
+		sort.Slice(sorted, func(i, j int) bool {
+			gi := getOpensearchGeneration(sorted[i])
+			gj := getOpensearchGeneration(sorted[j])
+			if gi == gj {
+				return sorted[i] > sorted[j]
+			}
+			return gi > gj
+		})
+
+		latest := sorted[0]
+		if writeIndices[0] != latest {
+			result.InvalidWriteAlias = append(result.InvalidWriteAlias, fmt.Sprintf("%s (write=%s latest=%s)", aliasName, writeIndices[0], latest))
+		}
+	}
+
+	if len(result.MissingAliases) > 0 || len(result.InvalidWriteAlias) > 0 || result.FoundAliases != result.ExpectedAliases {
+		result.Success = false
+		result.Reason = "Opensearch alias verification failed after repair"
+		log.Printf("[WARNING] %s. expected_aliases=%d found_aliases=%d missing=%d invalid_write=%d", result.Reason, result.ExpectedAliases, result.FoundAliases, len(result.MissingAliases), len(result.InvalidWriteAlias))
+	} else {
+		result.Success = true
+		result.Reason = "Opensearch alias and index state repaired without data reindexing"
+	}
+
+	if ismEnabled {
+		ismReady, ismErr := ensureOpensearchISMRolloverPolicy(ctx, opensearchUrl, expectedAliases, rolloverConfig, ismPolicyName)
+		if ismErr != nil {
+			log.Printf("[WARNING] Failed ensuring ISM rollover policy '%s' in prefix fix: %s", ismPolicyName, ismErr)
+		} else if ismReady {
+			for _, aliasName := range expectedAliases {
+				for indexName, aliases := range verifiedAliasInfo {
+					state, ok := aliases[aliasName]
+					if !ok || !state.Present {
+						continue
+					}
+
+					if err := ensureOpensearchIndexRolloverAliasSetting(ctx, opensearchUrl, indexName, aliasName); err != nil {
+						log.Printf("[WARNING] Failed ensuring rollover alias on %s for alias %s: %s", indexName, aliasName, err)
+						continue
+					}
+
+					if err := ensureOpensearchIndexISMPolicy(ctx, opensearchUrl, indexName, ismPolicyName); err != nil {
+						log.Printf("[WARNING] Failed attaching ISM policy '%s' to %s: %s", ismPolicyName, indexName, err)
+					}
+				}
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func handleAliasCollisionMigration(foundClient opensearchapi.Client, opensearchUrl, sourceIndex, targetIndex string) (string, error) {
+	targetExists, err := checkOpensearchIndexExists(foundClient, opensearchUrl, targetIndex)
+	if err != nil {
+		return "", err
+	}
+
+	if !targetExists {
+		if err := createOpensearchIndex(foundClient, opensearchUrl, targetIndex); err != nil {
+			return "", err
+		}
+	}
+
+	sourceCount, err := getOpensearchIndexCount(foundClient, opensearchUrl, sourceIndex)
+	if err != nil {
+		return "", err
+	}
+
+	targetCount, err := getOpensearchIndexCount(foundClient, opensearchUrl, targetIndex)
+	if err != nil {
+		return "", err
+	}
+
+	if sourceCount > 0 && targetCount < sourceCount {
+		taskID, err := startOpensearchReindexTask(foundClient, opensearchUrl, sourceIndex, targetIndex)
+		if err != nil {
+			return "", err
+		}
+
+		return taskID, nil
+	}
+
+	if sourceCount > targetCount {
+		return "", fmt.Errorf("target count %d is lower than source count %d", targetCount, sourceCount)
+	}
+
+	if err := deleteOpensearchIndex(foundClient, opensearchUrl, sourceIndex); err != nil {
+		return "", err
+	}
+
+	isWrite := true
+	actions := []OpensearchAliasAction{
+		{
+			Add: &OpensearchAliasActionTarget{Index: targetIndex, Alias: sourceIndex, IsWriteIndex: &isWrite},
+		},
+	}
+
+	if err := updateOpensearchAliases(foundClient, opensearchUrl, actions); err != nil {
+		return "", err
+	}
+
+	return "", nil
+}
+
+func checkOpensearchIndexExists(foundClient opensearchapi.Client, opensearchUrl, indexName string) (bool, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/%s", opensearchUrl, indexName), nil)
+	if err != nil {
+		return false, err
+	}
+
+	resp, err := foundClient.Client.Transport.Perform(req)
+	if err != nil {
+		return false, err
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return false, readErr
+	}
+
+	if resp.StatusCode == 404 {
+		return false, nil
+	}
+
+	if resp.StatusCode >= 300 {
+		return false, fmt.Errorf("failed checking index %s: %s", indexName, string(body))
+	}
+
+	return true, nil
+}
+
+func getOpensearchIndexCount(foundClient opensearchapi.Client, opensearchUrl, indexName string) (int64, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_count", opensearchUrl, indexName), nil)
+	if err != nil {
+		return 0, err
+	}
+
+	resp, err := foundClient.Client.Transport.Perform(req)
+	if err != nil {
+		return 0, err
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return 0, readErr
+	}
+
+	if resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("failed counting index %s: %s", indexName, string(body))
+	}
+
+	parsed := struct {
+		Count int64 `json:"count"`
+	}{}
+
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return 0, err
+	}
+
+	return parsed.Count, nil
+}
+
+func startOpensearchReindexTask(foundClient opensearchapi.Client, opensearchUrl, sourceIndex, targetIndex string) (string, error) {
+	payload := map[string]interface{}{
+		"source": map[string]interface{}{
+			"index": sourceIndex,
+		},
+		"dest": map[string]interface{}{
+			"index": targetIndex,
+		},
+		"conflicts": "proceed",
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/_reindex?wait_for_completion=false", opensearchUrl), bytes.NewBuffer(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := foundClient.Client.Transport.Perform(req)
+	if err != nil {
+		return "", err
+	}
+
+	respBody, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return "", readErr
+	}
+
+	if resp.StatusCode >= 300 {
+		lowerBody := strings.ToLower(string(respBody))
+		if strings.Contains(lowerBody, "resource_already_exists_exception") {
+			return "", nil
+		}
+
+		return "", fmt.Errorf("failed starting reindex %s -> %s: %s", sourceIndex, targetIndex, string(respBody))
+	}
+
+	parsed := struct {
+		Task string `json:"task"`
+	}{}
+
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return "", err
+	}
+
+	if strings.TrimSpace(parsed.Task) == "" {
+		return "", fmt.Errorf("reindex task missing in response")
+	}
+
+	return parsed.Task, nil
+}
+
+func deleteOpensearchIndex(foundClient opensearchapi.Client, opensearchUrl, indexName string) error {
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/%s", opensearchUrl, indexName), nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := foundClient.Client.Transport.Perform(req)
+	if err != nil {
+		return err
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return readErr
+	}
+
+	if resp.StatusCode == 404 {
+		return nil
+	}
+
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("failed deleting index %s: %s", indexName, string(body))
+	}
+
+	return nil
+}
+
+type opensearchAliasState struct {
+	Present      bool
+	IsWriteIndex bool
+}
+
+func getOpensearchAliases(foundClient opensearchapi.Client, opensearchUrl string) (map[string]map[string]opensearchAliasState, error) {
+	aliasReq, err := http.NewRequest("GET", fmt.Sprintf("%s/_aliases", opensearchUrl), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	aliasResp, err := foundClient.Client.Transport.Perform(aliasReq)
+	if err != nil {
+		return nil, err
 	}
 
 	aliasBody, err := io.ReadAll(aliasResp.Body)
 	if err != nil {
 		aliasResp.Body.Close()
-		return result, err
+		return nil, err
 	}
 	aliasResp.Body.Close()
 
 	if aliasResp.StatusCode >= 300 {
-		return result, fmt.Errorf("failed reading opensearch aliases: %s", string(aliasBody))
+		return nil, fmt.Errorf("failed reading opensearch aliases: %s", string(aliasBody))
 	}
 
-	aliasInfo := OpensearchAliasResponse{}
-
-	if err := json.Unmarshal(aliasBody, &aliasInfo); err != nil {
-		return result, err
+	rawAliasInfo := OpensearchAliasResponse{}
+	if err := json.Unmarshal(aliasBody, &rawAliasInfo); err != nil {
+		return nil, err
 	}
 
-	aliasToIndices := map[string][]string{}
-	indexNames := []string{}
-	for indexName, info := range aliasInfo {
-		indexNames = append(indexNames, indexName)
-		for aliasName := range info.Aliases {
-			aliasToIndices[aliasName] = append(aliasToIndices[aliasName], indexName)
+	aliasInfo := map[string]map[string]opensearchAliasState{}
+	type aliasDetails struct {
+		IsWriteIndex bool `json:"is_write_index,omitempty"`
+	}
+
+	for indexName, aliasEntry := range rawAliasInfo {
+		aliasInfo[indexName] = map[string]opensearchAliasState{}
+		for aliasName, aliasRaw := range aliasEntry.Aliases {
+			details := aliasDetails{}
+			_ = json.Unmarshal(aliasRaw, &details)
+			aliasInfo[indexName][aliasName] = opensearchAliasState{Present: true, IsWriteIndex: details.IsWriteIndex}
 		}
 	}
 
-	baseIndexes := []string{
-		"workflowexecution",
-		"datastore_ngram",
-		"org_cache",
-		"org_cache_revisions",
-		"notifications",
-		"shuffle_logs",
-		"environments",
-		"org_statistics",
-		"workflowapp",
-		"workflow",
-		"workflow_revisions",
+	return aliasInfo, nil
+}
+
+func getOpensearchIndices(foundClient opensearchapi.Client, opensearchUrl string) ([]string, error) {
+	indicesReq, err := http.NewRequest("GET", fmt.Sprintf("%s/_cat/indices?format=json&h=index", opensearchUrl), nil)
+	if err != nil {
+		return nil, err
 	}
 
-	for _, baseIndex := range baseIndexes {
-		expectedAlias := strings.ToLower(GetESIndexPrefix(baseIndex))
-		doubleAlias := strings.ToLower(fmt.Sprintf("%s_%s", prefix, expectedAlias))
+	indicesResp, err := foundClient.Client.Transport.Perform(indicesReq)
+	if err != nil {
+		return nil, err
+	}
 
-		candidateIndices := []string{}
-		if aliasIndices, ok := aliasToIndices[doubleAlias]; ok {
-			candidateIndices = append(candidateIndices, aliasIndices...)
+	indicesBody, err := io.ReadAll(indicesResp.Body)
+	if err != nil {
+		indicesResp.Body.Close()
+		return nil, err
+	}
+	indicesResp.Body.Close()
+
+	if indicesResp.StatusCode >= 300 {
+		return nil, fmt.Errorf("failed reading opensearch indices: %s", string(indicesBody))
+	}
+
+	type indexItem struct {
+		Index string `json:"index"`
+	}
+
+	parsedIndices := []indexItem{}
+	if err := json.Unmarshal(indicesBody, &parsedIndices); err != nil {
+		return nil, err
+	}
+
+	indices := []string{}
+	for _, item := range parsedIndices {
+		if strings.TrimSpace(item.Index) != "" {
+			indices = append(indices, item.Index)
 		}
+	}
 
-		if len(candidateIndices) == 0 {
-			for _, indexName := range indexNames {
-				if indexName == doubleAlias || strings.HasPrefix(indexName, doubleAlias+"-") {
-					candidateIndices = append(candidateIndices, indexName)
-				}
-			}
+	return indices, nil
+}
+
+func selectOpensearchAliasTargets(expectedAlias, doubleAlias string, aliasInfo map[string]map[string]opensearchAliasState, allIndices []string) ([]string, string) {
+	candidateMap := map[string]bool{}
+
+	for indexName, aliases := range aliasInfo {
+		if aliases[expectedAlias].Present {
+			candidateMap[indexName] = true
 		}
+		if doubleAlias != "" && aliases[doubleAlias].Present {
+			candidateMap[indexName] = true
+		}
+	}
 
-		if len(candidateIndices) == 0 {
-			result.Skipped = append(result.Skipped, expectedAlias)
+	for _, indexName := range allIndices {
+		if indexName == expectedAlias || strings.HasPrefix(indexName, expectedAlias+"-") {
+			candidateMap[indexName] = true
 			continue
 		}
 
-		for _, indexName := range candidateIndices {
-			newIndex := strings.Replace(indexName, doubleAlias, expectedAlias, 1)
-			if newIndex == indexName {
-				result.Skipped = append(result.Skipped, indexName)
-				continue
-			}
-
-			existsReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s", opensearchUrl, newIndex), nil)
-			if err != nil {
-				return result, err
-			}
-
-			existsResp, err := foundClient.Client.Transport.Perform(existsReq)
-			if err != nil {
-				return result, err
-			}
-			existsBody, err := io.ReadAll(existsResp.Body)
-			if err != nil {
-				existsResp.Body.Close()
-				return result, err
-			}
-			existsResp.Body.Close()
-
-			if existsResp.StatusCode == 404 {
-				indexConfig := OpensearchIndexConfig{}
-				if customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG"); len(customConfig) > 0 {
-					if err := json.Unmarshal([]byte(customConfig), &indexConfig); err != nil {
-						return result, fmt.Errorf("invalid OPENSEARCH_INDEX_CONFIG: %w", err)
-					}
-					if len(indexConfig.Aliases) > 0 {
-						indexConfig.Aliases = nil
-					}
-				}
-
-				if len(indexConfig.Aliases) == 0 && len(indexConfig.Settings) == 0 && len(indexConfig.Mappings) == 0 {
-					indexConfig = OpensearchIndexConfig{
-						Settings: map[string]interface{}{
-							"number_of_shards":   3,
-							"number_of_replicas": 1,
-							"refresh_interval":   "30s",
-						},
-					}
-
-					sourceMappings := map[string]interface{}{}
-					mappingReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_mapping", opensearchUrl, indexName), nil)
-					if err == nil {
-						mappingResp, err := foundClient.Client.Transport.Perform(mappingReq)
-						if err == nil {
-							mappingBody, err := io.ReadAll(mappingResp.Body)
-							if err == nil {
-								mappingResp.Body.Close()
-								mappingInfo := map[string]struct {
-									Mappings map[string]interface{} `json:"mappings"`
-								}{}
-								if err := json.Unmarshal(mappingBody, &mappingInfo); err == nil {
-									if info, ok := mappingInfo[indexName]; ok && len(info.Mappings) > 0 {
-										sourceMappings = info.Mappings
-									}
-								}
-							} else {
-								mappingResp.Body.Close()
-							}
-						}
-					}
-
-					if len(sourceMappings) > 0 {
-						indexConfig.Mappings = sourceMappings
-					} else {
-						indexConfig.Mappings = map[string]interface{}{
-							"dynamic_templates": []map[string]interface{}{
-								{
-									"strings_as_keywords": map[string]interface{}{
-										"match_mapping_type": "string",
-										"mapping": map[string]interface{}{
-											"type": "keyword",
-										},
-									},
-								},
-							},
-						}
-					}
-				}
-
-				indexConfigJson, err := json.Marshal(indexConfig)
-				if err != nil {
-					return result, err
-				}
-
-				createReq, err := http.NewRequest("PUT", fmt.Sprintf("%s/%s", opensearchUrl, newIndex), bytes.NewBuffer(indexConfigJson))
-				if err != nil {
-					return result, err
-				}
-				createReq.Header.Set("Content-Type", "application/json")
-
-				createResp, err := foundClient.Client.Transport.Perform(createReq)
-				if err != nil {
-					return result, err
-				}
-
-				createRespBody, err := io.ReadAll(createResp.Body)
-				if err != nil {
-					createResp.Body.Close()
-					return result, err
-				}
-				createResp.Body.Close()
-
-				if createResp.StatusCode >= 300 {
-					return result, fmt.Errorf("failed creating index %s: %s", newIndex, string(createRespBody))
-				}
-			} else if existsResp.StatusCode >= 300 {
-				return result, fmt.Errorf("failed checking index %s: %s", newIndex, string(existsBody))
-			}
-
-			sourceCountReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_count", opensearchUrl, indexName), nil)
-			if err != nil {
-				return result, err
-			}
-
-			sourceCountResp, err := foundClient.Client.Transport.Perform(sourceCountReq)
-			if err != nil {
-				return result, err
-			}
-
-			sourceCountBody, err := io.ReadAll(sourceCountResp.Body)
-			if err != nil {
-				sourceCountResp.Body.Close()
-				return result, err
-			}
-			sourceCountResp.Body.Close()
-
-			if sourceCountResp.StatusCode >= 300 {
-				return result, fmt.Errorf("failed counting source index %s: %s", indexName, string(sourceCountBody))
-			}
-
-			var sourceCount struct {
-				Count int64 `json:"count"`
-			}
-			if err := json.Unmarshal(sourceCountBody, &sourceCount); err != nil {
-				return result, err
-			}
-
-			reindexPayload := map[string]interface{}{
-				"source": map[string]interface{}{
-					"index": indexName,
-				},
-				"dest": map[string]interface{}{
-					"index": newIndex,
-				},
-			}
-
-			if batchSizeStr := os.Getenv("OPENSEARCH_REINDEX_BATCH_SIZE"); batchSizeStr != "" {
-				if batchSize, err := strconv.Atoi(batchSizeStr); err == nil && batchSize > 0 {
-					reindexPayload["source"].(map[string]interface{})["size"] = batchSize
-				}
-			}
-
-			if slicesStr := os.Getenv("OPENSEARCH_REINDEX_SLICES"); slicesStr != "" {
-				if slices, err := strconv.Atoi(slicesStr); err == nil && slices > 0 {
-					reindexPayload["slices"] = slices
-				}
-			}
-
-			reindexBody, err := json.Marshal(reindexPayload)
-			if err != nil {
-				return result, err
-			}
-
-			reindexUrl := fmt.Sprintf("%s/_reindex?wait_for_completion=true", opensearchUrl)
-			if scroll := strings.TrimSpace(os.Getenv("OPENSEARCH_REINDEX_SCROLL")); scroll != "" {
-				reindexUrl = fmt.Sprintf("%s&scroll=%s", reindexUrl, scroll)
-			}
-			if rps := strings.TrimSpace(os.Getenv("OPENSEARCH_REINDEX_RPS")); rps != "" {
-				reindexUrl = fmt.Sprintf("%s&requests_per_second=%s", reindexUrl, rps)
-			}
-
-			reindexReq, err := http.NewRequest("POST", reindexUrl, bytes.NewBuffer(reindexBody))
-			if err != nil {
-				return result, err
-			}
-			reindexReq.Header.Set("Content-Type", "application/json")
-
-			reindexResp, err := foundClient.Client.Transport.Perform(reindexReq)
-			if err != nil {
-				return result, err
-			}
-
-			reindexBodyResp, err := io.ReadAll(reindexResp.Body)
-			if err != nil {
-				reindexResp.Body.Close()
-				return result, err
-			}
-			reindexResp.Body.Close()
-
-			if reindexResp.StatusCode >= 300 {
-				return result, fmt.Errorf("failed reindexing %s -> %s: %s", indexName, newIndex, string(reindexBodyResp))
-			}
-
-			targetCountReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_count", opensearchUrl, newIndex), nil)
-			if err != nil {
-				return result, err
-			}
-
-			targetCountResp, err := foundClient.Client.Transport.Perform(targetCountReq)
-			if err != nil {
-				return result, err
-			}
-
-			targetCountBody, err := io.ReadAll(targetCountResp.Body)
-			if err != nil {
-				targetCountResp.Body.Close()
-				return result, err
-			}
-			targetCountResp.Body.Close()
-
-			if targetCountResp.StatusCode >= 300 {
-				return result, fmt.Errorf("failed counting target index %s: %s", newIndex, string(targetCountBody))
-			}
-
-			var targetCount struct {
-				Count int64 `json:"count"`
-			}
-			if err := json.Unmarshal(targetCountBody, &targetCount); err != nil {
-				return result, err
-			}
-
-			result.Counts = append(result.Counts, OpensearchPrefixFixCountSnapshot{
-				SourceIndex: indexName,
-				TargetIndex: newIndex,
-				SourceDocs:  sourceCount.Count,
-				TargetDocs:  targetCount.Count,
-			})
-
-			result.Reindexed = append(result.Reindexed, fmt.Sprintf("%s -> %s", indexName, newIndex))
-
-			aliasActionsList := []OpensearchAliasAction{}
-			if aliasIndices, ok := aliasToIndices[expectedAlias]; ok {
-				for _, aliasIndex := range aliasIndices {
-					if aliasIndex == newIndex {
-						continue
-					}
-					aliasActionsList = append(aliasActionsList, OpensearchAliasAction{
-						Remove: &OpensearchAliasActionTarget{Index: aliasIndex, Alias: expectedAlias},
-					})
-				}
-			}
-
-			aliasActionsList = append(aliasActionsList, OpensearchAliasAction{
-				Remove: &OpensearchAliasActionTarget{Index: indexName, Alias: doubleAlias},
-			})
-
-			isWriteIndex := true
-			aliasActionsList = append(aliasActionsList, OpensearchAliasAction{
-				Add: &OpensearchAliasActionTarget{Index: newIndex, Alias: expectedAlias, IsWriteIndex: &isWriteIndex},
-			})
-
-			aliasActions := OpensearchAliasActionsRequest{
-				Actions: aliasActionsList,
-			}
-
-			aliasBody, err := json.Marshal(aliasActions)
-			if err != nil {
-				return result, err
-			}
-
-			aliasReq, err := http.NewRequest("POST", fmt.Sprintf("%s/_aliases", opensearchUrl), bytes.NewBuffer(aliasBody))
-			if err != nil {
-				return result, err
-			}
-			aliasReq.Header.Set("Content-Type", "application/json")
-
-			aliasResp, err := foundClient.Client.Transport.Perform(aliasReq)
-			if err != nil {
-				return result, err
-			}
-
-			aliasRespBody, err := io.ReadAll(aliasResp.Body)
-			if err != nil {
-				aliasResp.Body.Close()
-				return result, err
-			}
-			aliasResp.Body.Close()
-
-			if aliasResp.StatusCode >= 300 {
-				return result, fmt.Errorf("failed updating aliases for %s: %s", newIndex, string(aliasRespBody))
-			}
-
-			result.AliasUpdates = append(result.AliasUpdates, fmt.Sprintf("%s -> %s", expectedAlias, newIndex))
+		if doubleAlias != "" && (indexName == doubleAlias || strings.HasPrefix(indexName, doubleAlias+"-")) {
+			candidateMap[indexName] = true
 		}
 	}
 
-	result.Success = true
-	result.Reason = "Opensearch indices reindexed with single prefix"
-	return result, nil
+	targetIndices := []string{}
+	for indexName := range candidateMap {
+		targetIndices = append(targetIndices, indexName)
+	}
+
+	if len(targetIndices) == 0 {
+		return targetIndices, ""
+	}
+
+	sort.Slice(targetIndices, func(i, j int) bool {
+		gi := getOpensearchGeneration(targetIndices[i])
+		gj := getOpensearchGeneration(targetIndices[j])
+		if gi == gj {
+			return targetIndices[i] > targetIndices[j]
+		}
+		return gi > gj
+	})
+
+	writeIndex := ""
+	for _, indexName := range targetIndices {
+		if indexName == expectedAlias || strings.HasPrefix(indexName, expectedAlias+"-") {
+			writeIndex = indexName
+			break
+		}
+	}
+
+	if writeIndex == "" {
+		writeIndex = targetIndices[0]
+	}
+
+	return targetIndices, writeIndex
+}
+
+func getOpensearchGeneration(indexName string) int {
+	parts := strings.Split(indexName, "-")
+	if len(parts) < 2 {
+		return 0
+	}
+
+	generation := parts[len(parts)-1]
+	value, err := strconv.Atoi(generation)
+	if err != nil {
+		return 0
+	}
+
+	return value
+}
+
+func createOpensearchIndex(foundClient opensearchapi.Client, opensearchUrl, indexName string) error {
+	indexConfig := OpensearchIndexConfig{}
+	customConfig := strings.TrimSpace(os.Getenv("OPENSEARCH_INDEX_CONFIG"))
+	if customConfig != "" {
+		if err := json.Unmarshal([]byte(customConfig), &indexConfig); err != nil {
+			return fmt.Errorf("invalid OPENSEARCH_INDEX_CONFIG: %w", err)
+		}
+
+		if len(indexConfig.Aliases) > 0 {
+			indexConfig.Aliases = nil
+		}
+	}
+
+	if len(indexConfig.Settings) == 0 && len(indexConfig.Mappings) == 0 {
+		indexConfig = OpensearchIndexConfig{
+			Settings: map[string]interface{}{
+				"number_of_shards":   3,
+				"number_of_replicas": 1,
+				"refresh_interval":   "30s",
+			},
+			Mappings: map[string]interface{}{
+				"dynamic_templates": []map[string]interface{}{
+					{
+						"strings_as_keywords": map[string]interface{}{
+							"match_mapping_type": "string",
+							"mapping": map[string]interface{}{
+								"type": "keyword",
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	indexConfigJson, err := json.Marshal(indexConfig)
+	if err != nil {
+		return err
+	}
+
+	createReq, err := http.NewRequest("PUT", fmt.Sprintf("%s/%s", opensearchUrl, indexName), bytes.NewBuffer(indexConfigJson))
+	if err != nil {
+		return err
+	}
+	createReq.Header.Set("Content-Type", "application/json")
+
+	createResp, err := foundClient.Client.Transport.Perform(createReq)
+	if err != nil {
+		return err
+	}
+
+	createRespBody, err := io.ReadAll(createResp.Body)
+	if err != nil {
+		createResp.Body.Close()
+		return err
+	}
+	createResp.Body.Close()
+
+	if createResp.StatusCode >= 300 {
+		return fmt.Errorf("failed creating index %s: %s", indexName, string(createRespBody))
+	}
+
+	return nil
+}
+
+func updateOpensearchAliases(foundClient opensearchapi.Client, opensearchUrl string, actions []OpensearchAliasAction) error {
+	aliasActions := OpensearchAliasActionsRequest{Actions: actions}
+	aliasBody, err := json.Marshal(aliasActions)
+	if err != nil {
+		return err
+	}
+
+	aliasReq, err := http.NewRequest("POST", fmt.Sprintf("%s/_aliases", opensearchUrl), bytes.NewBuffer(aliasBody))
+	if err != nil {
+		return err
+	}
+	aliasReq.Header.Set("Content-Type", "application/json")
+
+	aliasResp, err := foundClient.Client.Transport.Perform(aliasReq)
+	if err != nil {
+		return err
+	}
+
+	aliasRespBody, err := io.ReadAll(aliasResp.Body)
+	if err != nil {
+		aliasResp.Body.Close()
+		return err
+	}
+	aliasResp.Body.Close()
+
+	if aliasResp.StatusCode >= 300 {
+		return fmt.Errorf("failed updating aliases: %s", string(aliasRespBody))
+	}
+
+	return nil
 }
 
 func HandleFixOpensearchPrefix(resp http.ResponseWriter, request *http.Request) {

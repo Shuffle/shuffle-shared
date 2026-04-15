@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bufio"
+	"crypto/sha1"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -29,6 +30,7 @@ import (
 	"cloud.google.com/go/storage"
 	docker "github.com/docker/docker/client"
 	"gopkg.in/yaml.v2"
+	uuid "github.com/satori/go.uuid"
 
 	"github.com/frikky/kin-openapi/openapi3"
 	//iocParser "github.com/Shuffle/indicator-parser/go/ioc"
@@ -4924,7 +4926,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 				},
 			}
 
-			option.Value += fmt.Sprintf("\n%s", cacheData.Value)
+			// option.Value += fmt.Sprintf("\n%s", cacheData.Value)
 			parsedParams = append(parsedParams, map[string]string{
 				"name":  "input",
 				"value": fmt.Sprintf("TASK: %s\nKey: %s\nCategory: %s\n\nUNTRUSTED DATA:\n%s", option.Value, cacheData.Key, cacheData.Category, cacheData.Value),
@@ -4994,25 +4996,22 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		cacheKey := fmt.Sprintf("enrich_wait_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
 		data, err := GetCache(ctx, cacheKey)
 		if err == nil && data != nil {
-			//log.Printf("[DEBUG] Enrich automation recently run for key %s in category %s - skipping.", cacheData.Key, cacheData.Category)
+			if debug { 
+				log.Printf("[DEBUG] Enrich automation recently run for key %s in category %s - skipping.", cacheData.Key, cacheData.Category)
+			}
+
 			return nil
 		}
 
-		// Set cache key for 1 hour to avoid re-running enrich too often
-		SetCache(ctx, cacheKey, []byte("1"), 15)
-
-		// Use key "enrichments" =>
-		// [{"name": "answers.ip", "value": "92.24.47.250", "type": "location", "data": {"city": "Socotra", "continent": "Asia", "coordinates": [-25.4153, 17.0743], "country": "YE", "desc": "Yemen"}}]
-
-		parsedData := map[string]interface{}{}
-		if err := json.Unmarshal(marshalledBody, &parsedData); err != nil {
-			//log.Printf("[WARNING] Failed to unmarshal marshalledBody for enrich for key %s in category %s: %s", cacheData.Key, cacheData.Category, err)
-			return err
+		if debug { 
+			log.Printf("[DEBUG] Running enrich automation for key %s in category %s", cacheData.Key, cacheData.Category)
 		}
 
-		if _, ok := parsedData["enrichments"]; ok {
-			//log.Printf("[DEBUG] Enrichments key already exists - skipping enrichment automation for key %s in category %s", cacheData.Key, cacheData.Category)
-			return nil
+		// Set cache key for 1 MINUTE to avoid re-running enrich too often
+		// This doesn't matter too much as it won't impact data.
+		SetCache(ctx, cacheKey, []byte("1"), 1)
+
+		if cacheData.Enrichments != nil && len(cacheData.Enrichments) > 0 {
 		}
 
 		// Send the data into shuffle_tools => parse_ioc?
@@ -5054,9 +5053,22 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			return errors.New("No admin user with API key found")
 		}
 
-		// FIXME: Find it dynamically.
-		relevantWorkflowId := "fd44510b-dab7-4e77-8882-e205cb844c84"
+		// Uses the same as the API /api/v*/workflows/generate  
+		seedString := fmt.Sprintf("%s_Enable Threat feeds_webhook", cacheData.OrgId)
+
+		hash := sha1.New()
+		hash.Write([]byte(seedString))
+		hashBytes := hash.Sum(nil)
+
+		uuidBytes := make([]byte, 16)
+		copy(uuidBytes, hashBytes)
+		relevantWorkflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
+		// FIXME: If workflow doesn't exist - generate it 
 		fullUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", backendUrl, relevantWorkflowId)
+		if debug { 
+			log.Printf("[DEBUG] Running enrich automation workflow %s for key %s in category %s", relevantWorkflowId, cacheData.Key, cacheData.Category)
+		}
 
 		executionRequest := ExecutionRequest{
 			ExecutionArgument: string(marshalledBody),
@@ -5097,7 +5109,13 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			return err
 		}
 
-		log.Printf("RESP FOR RUNNING ENRICHMENT (%d): %s", resp.StatusCode, string(body))
+		if resp.StatusCode != 200 { 
+			log.Printf("[ERROR] Enrichment workflow execution request failed with status code %d. Body: %s", resp.StatusCode, string(body))
+		}
+
+		if debug { 
+			log.Printf("[DEBUG] RESP FOR RUNNING ENRICHMENT (%d): %s", resp.StatusCode, string(body))
+		}
 
 	} else if parsedName == "run_workflow" {
 		for _, option := range automation.Options {

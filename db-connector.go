@@ -85,6 +85,23 @@ func GetESIndexPrefix(index string) string {
 	return index
 }
 
+func GetOpensearchBaseIndexes() []string {
+	return []string{
+		"workflowexecution",
+		"datastore_ngram",
+		"org_cache",
+		"org_cache_revisions",
+		"notifications",
+		"shuffle_logs",
+		"environments",
+		"org_statistics",
+		"workflowapp",
+		"workflow",
+		"workflow_revisions",
+		"datastore_category",
+	}
+}
+
 func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error {
 	nameKey := "org_statistics"
 
@@ -137,9 +154,32 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 		}
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
-		if _, err := project.Dbclient.Put(ctx, key, &stats); err != nil {
-			log.Printf("[ERROR] Failed adding stats with ID %s: %s", id, err)
-			return err
+		if _, putErr := project.Dbclient.Put(ctx, key, &stats); putErr != nil {
+			log.Printf("[ERROR] Failed adding stats with ID %s: %s", id, putErr)
+
+			if strings.Contains(fmt.Sprintf("%s", putErr), "entity is too big") {
+				log.Printf("[WARNING] SetOrgStatistics: entity too big for org %s – archiving to GCS and trimming", id)
+
+				if archiveErr := archiveOldStatsToGCSBucket(ctx, id, &stats); archiveErr != nil {
+					log.Printf("[WARNING] SetOrgStatistics: GCS archive failed for org %s: %s – trimming anyway", id, archiveErr)
+				}
+
+				if len(stats.DailyStatistics) > 60 {
+					sort.Slice(stats.DailyStatistics, func(a, b int) bool {
+						return stats.DailyStatistics[a].Date.Before(stats.DailyStatistics[b].Date)
+					})
+					stats.DailyStatistics = stats.DailyStatistics[len(stats.DailyStatistics)-60:]
+				}
+
+				if _, retryErr := project.Dbclient.Put(ctx, key, &stats); retryErr != nil {
+					log.Printf("[ERROR] SetOrgStatistics: retry put failed for org %s: %s", id, retryErr)
+					return retryErr
+				}
+
+				log.Printf("[INFO] SetOrgStatistics: saved trimmed stats (last 60 days) for org %s", id)
+			} else {
+				return putErr
+			}
 		}
 
 	}
@@ -872,7 +912,9 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 				return workflowExecution, nil
 			} else {
-				//log.Printf("[WARNING] Failed getting workflowexecution: %s", err)
+				if debug {
+					log.Printf("[DEBUG] Failed mapping workflowexecution cache for '%s': %s", id, err)
+				}
 			}
 		} else {
 		}
@@ -882,6 +924,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		return workflowExecution, errors.New("ExecutionId doesn't exist in cache")
 	}
 
+	var getErr error = nil
 	if project.DbType == "opensearch" {
 		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
 			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
@@ -889,36 +932,49 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		})
 
 		if err != nil {
-			log.Printf("[WARNING][%s] Error for %s: %s", workflowExecution.ExecutionId, cacheKey, err)
-			return workflowExecution, err
+			if strings.Contains(err.Error(), "has more than one index associated with it") {
+				fallbackExec, fallbackErr := getWorkflowExecutionByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
+				if fallbackErr != nil {
+					log.Printf("[WARNING][%s] Error for %s: %s", workflowExecution.ExecutionId, cacheKey, err)
+					log.Printf("[WARNING][%s] WorkflowExecution alias fallback failed for %s: %s", workflowExecution.ExecutionId, cacheKey, fallbackErr)
+					return workflowExecution, fallbackErr
+				}
+
+				workflowExecution = fallbackExec
+			} else {
+				log.Printf("[WARNING][%s] Error for %s: %s", workflowExecution.ExecutionId, cacheKey, err)
+				return workflowExecution, err
+			}
 		}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return workflowExecution, errors.New("execution doesn't exist")
-		}
+		if err == nil {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if res.StatusCode == 404 {
+				return workflowExecution, errors.New("execution doesn't exist")
+			}
 
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return workflowExecution, err
-		}
+			respBody, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				return workflowExecution, err
+			}
 
-		wrapped := ExecWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		//err = gojson.Unmarshal(respBody, &wrapped)
-		if err != nil && len(wrapped.Source.ExecutionId) == 0 {
-			return workflowExecution, err
-		}
+			wrapped := ExecWrapper{}
+			err = json.Unmarshal(respBody, &wrapped)
+			//err = gojson.Unmarshal(respBody, &wrapped)
+			if err != nil && len(wrapped.Source.ExecutionId) == 0 {
+				return workflowExecution, err
+			}
 
-		workflowExecution = &wrapped.Source
+			workflowExecution = &wrapped.Source
+		}
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
-		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
-			if strings.Contains(err.Error(), `cannot load field`) {
-				err = nil
+		if getErr = project.Dbclient.Get(ctx, key, workflowExecution); getErr != nil {
+			if strings.Contains(getErr.Error(), `cannot load field`) {
+				getErr = nil
 			} else {
-				return workflowExecution, err
+				//return workflowExecution, err
 			}
 		}
 
@@ -929,6 +985,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				Result: workflowExecution.ExecutionArgument,
 				Action: Action{ID: "execution_argument"},
 			}
+
 			newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
 			if err != nil {
 				log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (4)", err)
@@ -966,7 +1023,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		newexecution, err := json.Marshal(workflowExecution)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling execution: %s", err)
-			return workflowExecution, nil
+			return workflowExecution, getErr
 		}
 
 		err = SetCache(ctx, id, newexecution, 30)
@@ -975,7 +1032,171 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 	}
 
-	return workflowExecution, nil
+	return workflowExecution, getErr
+}
+
+func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string) (*WorkflowExecution, error) {
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"size": 1,
+		"query": map[string]interface{}{
+			"ids": map[string]interface{}{
+				"values": []string{id},
+			},
+		},
+		"sort": []map[string]interface{}{
+			{
+				"edited": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
+			{
+				"created": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
+		},
+	}
+
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return nil, err
+	}
+
+	resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+		Indices: []string{aliasName},
+		Body:    &buf,
+		Params: opensearchapi.SearchParams{
+			TrackTotalHits: true,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	res := resp.Inspect().Response
+	defer res.Body.Close()
+
+	if res.StatusCode == 404 {
+		return nil, errors.New("execution doesn't exist")
+	}
+
+	respBody, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if res.StatusCode != 200 && res.StatusCode != 201 {
+		return nil, fmt.Errorf("failed workflowexecution alias lookup. status=%d body=%s", res.StatusCode, string(respBody))
+	}
+
+	wrapped := ExecutionSearchWrapper{}
+	err = json.Unmarshal(respBody, &wrapped)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(wrapped.Hits.Hits) == 0 {
+		return nil, errors.New("execution doesn't exist")
+	}
+
+	found := wrapped.Hits.Hits[0].Source
+	return &found, nil
+}
+
+// archiveOldStatsToGCSBucket offloads DailyStatistics entries older than 60 days to a GCS
+// bucket so they are not lost when the Datastore entity grows too large.
+//
+// Bucket : shuffle_org_files
+// Object : org_statistics/{orgId}/stats.json
+func archiveOldStatsToGCSBucket(ctx context.Context, orgId string, stats *ExecutionInfo) error {
+	if project.Environment != "cloud" {
+		return nil
+	}
+
+	if len(orgId) == 0 {
+		return errors.New("archiveOldStatsToGCSBucket: orgId must not be empty")
+	}
+
+	// Skip if a concurrent archive is already running for this org.
+	archiveCacheKey := fmt.Sprintf("gcs_archive_%s", orgId)
+	if cacheVal, cacheErr := GetCache(ctx, archiveCacheKey); cacheErr == nil {
+		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: skipping org %s – archive in progress (key=%s val=%v)", orgId, archiveCacheKey, cacheVal)
+		return nil
+	} else {
+		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: proceeding for org %s (key=%s not set)", orgId, archiveCacheKey)
+	}
+	_ = SetCache(ctx, archiveCacheKey, []byte("1"), 5)
+
+	cutoff := time.Now().UTC().AddDate(0, 0, -60)
+	overflowStats := []DailyStatistics{}
+	for _, d := range stats.DailyStatistics {
+		if d.Date.UTC().Before(cutoff) {
+			overflowStats = append(overflowStats, d)
+		}
+	}
+
+	if len(overflowStats) == 0 {
+		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: no entries older than 60 days for org %s", orgId)
+		return nil
+	}
+
+	bucketPath := fmt.Sprintf("org_statistics/%s/stats.json", orgId)
+	obj := project.StorageClient.Bucket(orgFileBucket).Object(bucketPath)
+
+	// Read existing GCS file to merge without losing older entries.
+	existingStats := []DailyStatistics{}
+	reader, readerErr := obj.NewReader(ctx)
+	if readerErr == nil {
+		existingBytes, readErr := ioutil.ReadAll(reader)
+		reader.Close()
+		if readErr == nil && len(existingBytes) > 0 {
+			if unmarshalErr := json.Unmarshal(existingBytes, &existingStats); unmarshalErr != nil {
+				log.Printf("[WARNING] archiveOldStatsToGCSBucket: could not parse existing GCS stats for org %s (will overwrite): %s", orgId, unmarshalErr)
+				existingStats = []DailyStatistics{}
+			}
+		}
+	}
+
+	// Deduplicate by date; new overflow entries win on conflict.
+	dateMapCap := len(existingStats)
+	if len(overflowStats) > dateMapCap {
+		dateMapCap = len(overflowStats)
+	}
+	dateMap := make(map[string]DailyStatistics, dateMapCap)
+	for _, d := range existingStats {
+		dateMap[d.Date.UTC().Format("2006-01-02")] = d
+	}
+	for _, d := range overflowStats {
+		dateMap[d.Date.UTC().Format("2006-01-02")] = d
+	}
+
+	merged := make([]DailyStatistics, 0, len(dateMap))
+	for _, d := range dateMap {
+		merged = append(merged, d)
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].Date.Before(merged[j].Date)
+	})
+
+	mergedBytes, err := json.Marshal(merged)
+	if err != nil {
+		return fmt.Errorf("archiveOldStatsToGCSBucket: failed to marshal overflow stats for org %s: %w", orgId, err)
+	}
+
+	gcsWriter := obj.NewWriter(ctx)
+	if _, writeErr := gcsWriter.Write(mergedBytes); writeErr != nil {
+		_ = gcsWriter.Close()
+		return fmt.Errorf("archiveOldStatsToGCSBucket: failed to write to GCS for org %s: %w", orgId, writeErr)
+	}
+	if closeErr := gcsWriter.Close(); closeErr != nil {
+		return fmt.Errorf("archiveOldStatsToGCSBucket: failed to close GCS writer for org %s: %w", orgId, closeErr)
+	}
+
+	log.Printf("[INFO] archiveOldStatsToGCSBucket: archived %d entries (>60 days old) to %s/%s for org %s",
+		len(overflowStats), orgFileBucket, bucketPath, orgId)
+	return nil
 }
 
 func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...int) error {
@@ -1148,7 +1369,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			}
 
 			if _, err = tx.Commit(); err != nil {
-				log.Printf("[ERROR] Failed commiting stats: %s", err)
+				log.Printf("[ERROR] Failed commiting stats for %s: %s", orgStatistics.OrgId, err)
 				if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
 					concurrentTxn = true
 					errMsg = fmt.Sprintf("%s", err)
@@ -1803,7 +2024,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 						// Max runtime of a decision at 5 minutes
 						if decision.RunDetails.StartedAt > 0 && time.Now().Unix()-decision.RunDetails.StartedAt > 300 {
-							log.Printf("[INFO][%s] Should stop decision %s for agent action %s due to running for more than 5 minutes. Marking as FAILURE.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID)
+							log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds", workflowExecution.ExecutionId, decision.Tool, decision.Action, time.Now().Unix()-decision.RunDetails.StartedAt)
 
 							decisionsUpdated = true
 							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
@@ -2418,33 +2639,98 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	}
 
 	if project.DbType == "opensearch" {
+		indexAlias := strings.ToLower(GetESIndexPrefix(nameKey))
 		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			Index:      indexAlias,
 			DocumentID: id,
 		})
 		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
-			return workflowApp, err
-		}
+			if strings.Contains(err.Error(), "has more than one index associated with it") {
+				var buf bytes.Buffer
+				query := map[string]interface{}{
+					"size": 1,
+					"query": map[string]interface{}{
+						"ids": map[string]interface{}{
+							"values": []string{id},
+						},
+					},
+					"sort": []map[string]interface{}{
+						{
+							"edited": map[string]interface{}{
+								"order":         "desc",
+								"unmapped_type": "long",
+							},
+						},
+						{
+							"created": map[string]interface{}{
+								"order":         "desc",
+								"unmapped_type": "long",
+							},
+						},
+					},
+				}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return workflowApp, errors.New("App doesn't exist")
-		}
+				if err := json.NewEncoder(&buf).Encode(query); err != nil {
+					return workflowApp, err
+				}
 
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return workflowApp, err
-		}
+				searchResp, serr := project.Es.Search(ctx, &opensearchapi.SearchReq{
+					Indices: []string{indexAlias},
+					Body:    &buf,
+				})
+				if serr != nil {
+					return workflowApp, serr
+				}
 
-		wrapped := AppWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return workflowApp, err
-		}
+				searchRes := searchResp.Inspect().Response
+				defer searchRes.Body.Close()
+				searchBody, serr := ioutil.ReadAll(searchRes.Body)
+				if serr != nil {
+					return workflowApp, serr
+				}
 
-		workflowApp = &wrapped.Source
+				if searchRes.StatusCode != 200 && searchRes.StatusCode != 201 {
+					return workflowApp, errors.New(fmt.Sprintf("Bad statuscode: %d, error: %s", searchRes.StatusCode, string(searchBody)))
+				}
+
+				wrappedSearch := AppSearchWrapper{}
+				if serr := json.Unmarshal(searchBody, &wrappedSearch); serr != nil {
+					return workflowApp, serr
+				}
+
+				if len(wrappedSearch.Hits.Hits) == 0 {
+					return workflowApp, errors.New("App doesn't exist")
+				}
+
+				workflowApp = &wrappedSearch.Hits.Hits[0].Source
+			} else {
+				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+				return workflowApp, err
+			}
+		} else {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if res.StatusCode == 404 {
+				return workflowApp, errors.New("App doesn't exist")
+			}
+
+			respBody, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				return workflowApp, err
+			}
+
+			if res.StatusCode != 200 && res.StatusCode != 201 {
+				return workflowApp, errors.New(fmt.Sprintf("Bad statuscode: %d, error: %s", res.StatusCode, string(respBody)))
+			}
+
+			wrapped := AppWrapper{}
+			err = json.Unmarshal(respBody, &wrapped)
+			if err != nil {
+				return workflowApp, err
+			}
+
+			workflowApp = &wrapped.Source
+		}
 	} else {
 		//log.Printf("[DEBUG] Getting app from datastore for ID %s", id)
 
@@ -2482,7 +2768,6 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 			}
 		}
 	}
-
 	if project.CacheDb {
 		data, err := json.Marshal(workflowApp)
 		if err != nil {
@@ -2789,7 +3074,7 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &files)
-			if err == nil {
+			if err == nil || len(files) > 0 {
 				return files, nil
 			}
 		} else {
@@ -2899,7 +3184,7 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 		if err != nil {
 			if !strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
-				return files, err
+				//return files, err
 			}
 		} else {
 			//log.Printf("[INFO] Got %d files for md5: %s", len(files), md5)
@@ -2910,8 +3195,6 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 				}
 			}
 
-			//log.Printf("[INFO] Got %d PARSD files for md5: %s", len(parsedFiles), md5)
-
 			if len(parsedFiles) == 0 {
 				return parsedFiles, errors.New(fmt.Sprintf("No file found for md5: %s", md5))
 				//log.Printf("[INFO] Couldn't find file with md5 %s for org %s", md5, orgId)
@@ -2920,8 +3203,6 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 			files = parsedFiles
 		}
 	}
-
-	//log.Printf("[DEBUG] Got hit: %s", file)
 
 	if project.CacheDb {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
@@ -3232,21 +3513,28 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 	return count, nil
 }
 
-func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
+// Doesn't get ALL anymore. Max 100 by default (cloud)
+func GetAllChildOrgs(ctx context.Context, orgId string, cursorInput ...string) ([]Org, string, error) {
+	cursor := ""
+	if len(cursorInput) > 0 {
+		cursor = cursorInput[0]
+	}
+
 	orgs := []Org{}
 	nameKey := "Organizations"
 
-	cacheKey := fmt.Sprintf("%s_childorgs", orgId)
+	cacheKey := fmt.Sprintf("%s_%s_childorgs", orgId, cursor)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &orgs)
-			if err == nil && len(orgs) > 0 {
-				return orgs, nil
+			//if err == nil && len(orgs) > 0 {
+			if err == nil {
+				return orgs, cursor, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for workflow (7): %s", err)
 		}
 	}
 
@@ -3263,7 +3551,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find user query: %s", err)
-			return orgs, err
+			return orgs, cursor, err
 		}
 
 		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
@@ -3276,24 +3564,24 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 
 		if err != nil {
 			if strings.Contains(err.Error(), "index_not_found_exception") {
-				return orgs, nil
+				return orgs, cursor, nil
 			}
 
 			log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
-			return orgs, err
+			return orgs, cursor, err
 		}
 
 		res := resp.Inspect().Response
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
-			return orgs, nil
+			return orgs, cursor, nil
 		}
 
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
 				log.Printf("[WARNING] Error parsing the response body: %s", err)
-				return orgs, err
+				return orgs, cursor, err
 			} else {
 				// Print the response status and error information.
 				log.Printf("[%s] %s: %s",
@@ -3305,18 +3593,18 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return orgs, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+			return orgs, cursor, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
-			return orgs, err
+			return orgs, cursor, err
 		}
 
 		wrapped := OrgSearchWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
 		if err != nil {
-			return orgs, err
+			return orgs, cursor, err
 		}
 
 		for _, hit := range wrapped.Hits.Hits {
@@ -3328,30 +3616,96 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		}
 	} else {
 		// Cloud database
-		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(400)
-		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
-		if err != nil {
-			if !strings.Contains(err.Error(), `cannot load field`) {
-				return orgs, err
+		//log.Printf("Pre running creator org search for %s", orgId)
+		//_, err := project.Dbclient.GetAll(ctx, query, &orgs)
+		//if err != nil {
+		//	if !strings.Contains(err.Error(), `cannot load field`) {
+		//	}
+		//}
+
+		maxAmount := 100
+		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(100)
+
+		if cursor != "" {
+			outputcursor, err := datastore.DecodeCursor(cursor)
+			if err != nil {
+				log.Printf("[ERROR] Error decoding cursor in creator org load: %s", err)
+				//return orgs, "", err
+			}
+
+			query = query.Start(outputcursor)
+		}
+
+		iterCount := 0
+		//cursorStr := ""
+		var err error
+		for {
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerOrg := Org{}
+				_, err = it.Next(&innerOrg)
+				if err != nil {
+					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					} else {
+						//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+						break
+					}
+				}
+
+				if debug {
+					log.Printf("[DEBUG] SUBORG LOADER: %d", len(orgs))
+				}
+
+				iterCount++
+				orgs = append(orgs, innerOrg)
+				if iterCount >= maxAmount {
+					break
+				}
+			}
+
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("[ERROR] Problem with cursor (childorg): %s", err)
+				break
+			} else {
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursor == nextStr {
+					break
+				}
+
+				cursor = nextStr
+				query = query.Start(nextCursor)
+			}
+
+			if iterCount >= maxAmount {
+				cursor = fmt.Sprintf("%s", nextCursor)
+				break
 			}
 		}
 	}
 
-	if project.CacheDb && len(orgs) > 0 {
+	if project.CacheDb {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(orgs)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in getchildorgs: %s", err)
-			return orgs, nil
+			return orgs, cursor, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, data, 10)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getworkflow '%s': %s", cacheKey, err)
 		}
 	}
 
-	return orgs, nil
+	return orgs, cursor, nil
 }
 
 func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow, error) {
@@ -3414,7 +3768,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 			}
 		} else {
 			if debug {
-				log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+				log.Printf("[DEBUG] Failed getting cache for workflow (2): %s", err)
 			}
 		}
 	}
@@ -3425,28 +3779,41 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 			DocumentID: id,
 		})
 		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
-			return workflow, err
+			if strings.Contains(err.Error(), "has more than one index associated with it") {
+				fallbackWorkflow, fallbackErr := getWorkflowByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
+				if fallbackErr != nil {
+					log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+					log.Printf("[WARNING] Workflow alias fallback failed for %s: %s", cacheKey, fallbackErr)
+					return workflow, fallbackErr
+				}
+
+				workflow = fallbackWorkflow
+			} else {
+				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+				return workflow, err
+			}
 		}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return workflow, errors.New("Workflow doesn't exist")
-		}
+		if err == nil {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if res.StatusCode == 404 {
+				return workflow, errors.New("Workflow doesn't exist")
+			}
 
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return workflow, err
-		}
+			respBody, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				return workflow, err
+			}
 
-		wrapped := WorkflowWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return workflow, err
-		}
+			wrapped := WorkflowWrapper{}
+			err = json.Unmarshal(respBody, &wrapped)
+			if err != nil {
+				return workflow, err
+			}
 
-		workflow = &wrapped.Source
+			workflow = &wrapped.Source
+		}
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
@@ -3542,6 +3909,74 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 	return workflow, nil
 }
 
+func getWorkflowByAliasSearch(ctx context.Context, aliasName, id string) (*Workflow, error) {
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"size": 1,
+		"query": map[string]interface{}{
+			"ids": map[string]interface{}{
+				"values": []string{id},
+			},
+		},
+		"sort": []map[string]interface{}{
+			{
+				"edited": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
+			{
+				"created": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
+		},
+	}
+
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return nil, err
+	}
+
+	resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+		Indices: []string{aliasName},
+		Body:    &buf,
+		Params:  opensearchapi.SearchParams{TrackTotalHits: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	res := resp.Inspect().Response
+	defer res.Body.Close()
+
+	if res.StatusCode == 404 {
+		return nil, errors.New("Workflow doesn't exist")
+	}
+
+	respBody, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if res.StatusCode != 200 && res.StatusCode != 201 {
+		return nil, fmt.Errorf("failed workflow alias lookup. status=%d body=%s", res.StatusCode, string(respBody))
+	}
+
+	wrapped := WorkflowSearchWrapper{}
+	err = json.Unmarshal(respBody, &wrapped)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(wrapped.Hits.Hits) == 0 {
+		return nil, errors.New("Workflow doesn't exist")
+	}
+
+	found := wrapped.Hits.Hits[0].Source
+	return &found, nil
+}
+
 func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error) {
 	nameKey := "org_statistics"
 	stats := &ExecutionInfo{}
@@ -3561,19 +3996,48 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 	}
 
 	if project.DbType == "opensearch" {
+		shouldInitializeStats := false
+
 		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
 			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
 			DocumentID: orgId,
 		})
 
-		if err != nil && !strings.Contains("status: 404", err.Error()) {
+		if err != nil && !strings.Contains(err.Error(), "status: 404") {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return stats, err
 		}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
+		if err != nil && strings.Contains(err.Error(), "status: 404") {
+			shouldInitializeStats = true
+		}
+
+		if !shouldInitializeStats {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if res.StatusCode == 404 {
+				shouldInitializeStats = true
+			} else {
+				respBody, err := ioutil.ReadAll(res.Body)
+				if err != nil {
+					return stats, err
+				}
+
+				wrapped := ExecutionInfoWrapper{}
+				err = json.Unmarshal(respBody, &wrapped)
+				if err != nil {
+					return stats, err
+				}
+
+				if !wrapped.Found {
+					shouldInitializeStats = true
+				} else {
+					stats = &wrapped.Source
+				}
+			}
+		}
+
+		if shouldInitializeStats {
 			org, err := GetOrg(ctx, orgId)
 			if err != nil {
 				log.Printf("[ERROR] Failed to get org(%s) for org_stats: %s", orgId, err)
@@ -3589,19 +4053,6 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 
 			return stats, nil
 		}
-
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return stats, err
-		}
-
-		wrapped := ExecutionInfoWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return stats, err
-		}
-
-		stats = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
 		if err := project.Dbclient.Get(ctx, key, stats); err != nil {
@@ -3679,16 +4130,15 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		maxAmount = 250
 	}
 
-	cacheKey := fmt.Sprintf("%s_workflows", user.ActiveOrg.Id)
-	if maxAmount != 250 {
-		if project.CacheDb {
-			cache, err := GetCache(ctx, cacheKey)
+	cacheKey := fmt.Sprintf("%s_%s_workflows", cursor, user.ActiveOrg.Id)
+	//if maxAmount != 250 {
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &workflows)
 			if err == nil {
-				cacheData := []byte(cache.([]uint8))
-				err = json.Unmarshal(cacheData, &workflows)
-				if err == nil {
-					return workflows, nil
-				}
+				return workflows, nil
 			}
 		}
 	}
@@ -3908,7 +4358,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 
 					} else {
 						if !strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
-							log.Printf("[WARNING] Workflow iterator issue: %s", err)
+							//log.Printf("[WARNING] Workflow iterator issue: %s", err)
 						}
 
 						break
@@ -3990,17 +4440,15 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		return fixedWorkflows[i].Edited > fixedWorkflows[j].Edited
 	})
 
-	if maxAmount != 250 {
-		if project.CacheDb {
-			newjson, err := json.Marshal(fixedWorkflows)
-			if err != nil {
-				return fixedWorkflows, nil
-			}
+	if project.CacheDb {
+		newjson, err := json.Marshal(fixedWorkflows)
+		if err != nil {
+			return fixedWorkflows, nil
+		}
 
-			err = SetCache(ctx, cacheKey, newjson, 60)
-			if err != nil {
-				log.Printf("[WARNING] Failed updating workflow cache: %s", err)
-			}
+		err = SetCache(ctx, cacheKey, newjson, 5)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating workflow cache: %s", err)
 		}
 	}
 
@@ -4949,6 +5397,16 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "has more than one index associated with it") {
+				deleteErr := deleteDocumentByQueryAcrossAlias(ctx, strings.ToLower(GetESIndexPrefix(entity)), value)
+				if deleteErr == nil {
+					return nil
+				}
+
+				log.Printf("[WARNING] Fallback delete by query failed for %s/%s: %s", entity, value, deleteErr)
+				return deleteErr
+			}
+
 			if strings.Contains(err.Error(), "not_found") {
 				return nil
 			}
@@ -4987,6 +5445,51 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 			log.Printf("[WARNING] Error deleting %s from %s: %s", value, entity, err)
 			return err
 		}
+	}
+
+	return nil
+}
+
+func deleteDocumentByQueryAcrossAlias(ctx context.Context, aliasName, documentID string) error {
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"ids": map[string]interface{}{
+				"values": []string{documentID},
+			},
+		},
+	}
+
+	queryBytes, err := json.Marshal(query)
+	if err != nil {
+		return err
+	}
+
+	resp, err := project.Es.Document.DeleteByQuery(ctx, opensearchapi.DocumentDeleteByQueryReq{
+		Indices: []string{aliasName},
+		Body:    bytes.NewReader(queryBytes),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not_found") {
+			return nil
+		}
+
+		return err
+	}
+
+	res := resp.Inspect().Response
+	defer res.Body.Close()
+
+	if res.StatusCode == 404 {
+		return nil
+	}
+
+	if res.IsError() {
+		responseData, readErr := ioutil.ReadAll(res.Body)
+		if readErr != nil {
+			return readErr
+		}
+
+		return fmt.Errorf("delete by query failed with status %d: %s", res.StatusCode, string(responseData))
 	}
 
 	return nil
@@ -5957,6 +6460,11 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	DeleteCache(ctx, user.ApiKey+user.ActiveOrg.Id)
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+
+	if len(user.Username) == 0 {
+		log.Printf("[ERROR] Setting user without username: %s. Is this expected?", user.Id)
+	}
+
 	if updateOrg {
 		user = fixUserOrg(ctx, user)
 	}
@@ -6013,6 +6521,11 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	DeleteCache(ctx, user.ApiKey)
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+	err = DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
+	if err != nil {
+		log.Printf("[ERROR] Failed to delete cache for user apikey %s", err)
+	}
+
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("user_%s", parsedKey)
 
@@ -6367,7 +6880,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &allworkflowappAuths)
-			if err == nil {
+			if err == nil || len(allworkflowappAuths) > 0 {
 				return allworkflowappAuths, nil
 			}
 		} else {
@@ -6457,6 +6970,20 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		_, err := project.Dbclient.GetAll(ctx, q, &allworkflowappAuths)
 		if err != nil && len(allworkflowappAuths) == 0 {
 			if !strings.Contains(err.Error(), `cannot load field`) {
+
+				if project.CacheDb {
+					data, err := json.Marshal(allworkflowappAuths)
+					if err != nil {
+						log.Printf("[WARNING] Failed marshalling get app auth (2): %s", err)
+						return allworkflowappAuths, nil
+					}
+
+					err = SetCache(ctx, cacheKey, data, 10)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating get app auth cache (2): %s", err)
+					}
+				}
+
 				return allworkflowappAuths, err
 			}
 		}
@@ -6637,12 +7164,25 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			environments = append(environments, hit.Source)
 		}
 	} else {
-		//log.Printf("\n\nQuerying ALL for org %s\n\n", orgId)
 		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(10)
-		//q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Filter("archived =", false).Limit(10)
 		_, err := project.Dbclient.GetAll(ctx, q, &environments)
 		if err != nil && len(environments) == 0 {
 			if !strings.Contains(err.Error(), `cannot load field`) {
+
+				if project.CacheDb {
+					log.Printf("[INFO] Setting empty cache for environments in org %s", orgId)
+					data, err := json.Marshal(environments)
+					if err != nil {
+						log.Printf("[WARNING] Failed marshalling environment cache (2): %s", err)
+						return environments, nil
+					}
+
+					err = SetCache(ctx, cacheKey, data, 60)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating environment cache (2): %s", err)
+					}
+				}
+
 				return []Environment{}, err
 			}
 		}
@@ -7986,6 +8526,10 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 		executionRequest.ExecutionId = uuid.NewV4().String()
 	}
 
+	if executionRequest.CreatedAt == 0 { 
+		executionRequest.CreatedAt = time.Now().Unix()
+	}
+
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		data, err := json.Marshal(executionRequest)
@@ -8478,7 +9022,7 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 				return workflows, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for workflow (3): %s", err)
 		}
 	}
 
@@ -8682,7 +9226,7 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 				return workflows, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for workflow (4): %s", err)
 		}
 	}
 
@@ -8912,6 +9456,8 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 		workflow.Created = timeNow
 	}
 
+	trimOversizedWorkflowImages(&workflow)
+
 	// Tet ID to be an md5 for name+ID+action+triggers+variables
 	// this makes sure overwrites don't happen, and duplicates aren't kept
 	// json marshal actions
@@ -9121,6 +9667,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	workflow = FixWorkflowPosition(ctx, workflow)
+	trimOversizedWorkflowImages(&workflow)
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflow)
@@ -9130,15 +9677,6 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	if project.DbType == "opensearch" {
-		if len([]byte(workflow.Image)) > 32766 {
-			workflow.Image = ""
-			data, err = json.Marshal(workflow)
-			if err != nil {
-				log.Printf("[WARNING] Failed marshalling in set workflow: %s", err)
-				return nil
-			}
-		}
-
 		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
 			return err
@@ -9171,7 +9709,8 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 		// Find the key for "workflows_<workflow.org_id>" and update the cache for this one. If it doesn't exist, add it
 		// Get the cache for the workflows
-		cacheKey = fmt.Sprintf("%s_workflows", workflow.OrgId)
+		cursor := ""
+		cacheKey = fmt.Sprintf("%s_%s_workflows", cursor, workflow.OrgId)
 		cache, err := GetCache(ctx, cacheKey)
 		if err != nil {
 			//log.Printf("[WARNING] Failed getting cache for getworkflow '%s': %s", cacheKey, err)
@@ -9219,6 +9758,48 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	return nil
+}
+
+func trimOversizedWorkflowImages(workflow *Workflow) {
+	if workflow == nil {
+		return
+	}
+
+	if len(workflow.Image) > 32766 {
+		workflow.Image = ""
+	}
+
+	for index := range workflow.Actions {
+		if shouldStripWorkflowImage(workflow.Actions[index].LargeImage) {
+			workflow.Actions[index].LargeImage = ""
+		}
+
+		if shouldStripWorkflowImage(workflow.Actions[index].SmallImage) {
+			workflow.Actions[index].SmallImage = ""
+		}
+	}
+
+	for index := range workflow.Triggers {
+		if shouldStripWorkflowImage(workflow.Triggers[index].LargeImage) {
+			workflow.Triggers[index].LargeImage = ""
+		}
+
+		if shouldStripWorkflowImage(workflow.Triggers[index].SmallImage) {
+			workflow.Triggers[index].SmallImage = ""
+		}
+	}
+}
+
+func shouldStripWorkflowImage(value string) bool {
+	if value == "" {
+		return false
+	}
+
+	if len(value) > 32766 {
+		return true
+	}
+
+	return false
 }
 
 func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthenticationStorage, id string) error {
@@ -9613,6 +10194,10 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 		})
 
 		if err != nil {
+			if strings.Contains(err.Error(), "status: 404") || strings.Contains(err.Error(), "not_found") {
+				return &ScheduleOld{}, errors.New("Schedule doesn't exist")
+			}
+
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &ScheduleOld{}, err
 		}
@@ -9973,9 +10558,29 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 }
 
 func GetApikey(ctx context.Context, apikey string) (User, error) {
+
 	// Query for the specific API-key in users
 	nameKey := "Users"
+
 	var users []User
+
+	//	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
+	//	if project.CacheDb {
+	//		cache, err := GetCache(ctx, cacheKey)
+	//		if err == nil {
+	//			cacheData := []byte(cache.([]uint8))
+	//			err = json.Unmarshal(cacheData, &users)
+	//			if err == nil && len(users) > 0 {
+	//				log.Printf("[DEBUG] Found user apikey cache %s", cacheKey)
+	//				return users[0], nil
+	//			}
+	//		}
+	//	}
+
+	if debug {
+		log.Printf("[DEBUG] Looking for the API Key pass the cache check %s", project.DbType)
+	}
+
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -10061,13 +10666,42 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		if err != nil && len(users) == 0 {
 			if !strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[WARNING] Error getting apikey: %s", err)
-				return User{}, err
+				//return User{}, err
 			}
 		}
 	}
 
+	if len(users) != 0 {
+		if debug {
+			log.Printf("[DEBUG] Moving away from getapikey '%s' (%s)", users[0].Username, users[0].Id)
+		}
+	}
+
+	//	if project.CacheDb {
+	//		userData, err := json.Marshal(users)
+	//		if err != nil {
+	//			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
+	//			if len(users) > 0 {
+	//				return users[0], nil
+	//			} else {
+	//				return User{}, err
+	//			}
+	//		}
+	//
+	//		err = SetCache(ctx, cacheKey, userData, 10)
+	//		if err != nil {
+	//			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
+	//		}
+	//	}
+
 	if len(users) == 0 {
 		return User{}, errors.New("No users found for this apikey (2)")
+	}
+
+	for _, user := range users {
+		if len(user.Username) > 0 && len(user.Id) > 0 {
+			return user, nil
+		}
 	}
 
 	return users[0], nil
@@ -10767,6 +11401,17 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 
 		if err != nil && len(notifications) == 0 {
+			data, err := json.Marshal(notifications)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling notification cache (2): %s", err)
+				return notifications, nil
+			}
+
+			err = SetCache(ctx, cacheKey, data, 5)
+			if err != nil {
+				log.Printf("[ERROR] Failed updating notification cache (2): %s", err)
+			}
+
 			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
 				q = q.Limit(50)
 				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
@@ -11971,7 +12616,8 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &executions)
-			if err == nil && len(executions) > 0 {
+			//if err == nil && len(executions) > 0 {
+			if err == nil {
 				return executions, "", nil
 			}
 		}
@@ -12465,7 +13111,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 					} else {
-						log.Printf("[WARNING] CreateValue iterator issue: %s", err)
+						log.Printf("[WARNING] CreateValue iterator issue (get executions): %s", err)
 						break
 					}
 				}
@@ -13061,7 +13707,7 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 					} else {
-						log.Printf("[WARNING] CreateValue iterator issue: %s", err)
+						log.Printf("[WARNING] CreateValue iterator issue (app execution values): %s", err)
 						break
 					}
 				}
@@ -13345,7 +13991,7 @@ func SetDatastoreCategoryConfig(ctx context.Context, category DatastoreCategoryU
 	} else {
 		key := datastore.NameKey(nameKey, category.Id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &category); err != nil {
-			log.Printf("[ERROR] Error setting org cache: %s", err)
+			log.Printf("[ERROR] Error setting datastore config: %s", err)
 			return err
 		}
 	}
@@ -13435,6 +14081,52 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				sameValue = true
 			}
 
+			if len(cacheData.Enrichments) > 0 && len(cacheData.Value) == 0 {
+				if debug { 
+					log.Printf("[DEBUG] Having enrichments with empty value doesn't make sense, skipping enrichments for key %s in category %s", cacheData.Key, cacheData.Category)
+				}
+
+
+				cacheData.Value = config.Value
+			}
+
+			// Works on merging enrichments 
+			if len(cacheData.Enrichments) > 0 {
+				timeNow := int64(time.Now().Unix())
+
+				// Start with existing ones
+				newObservables := config.Enrichments
+				for _, observable := range cacheData.Enrichments {
+					if len(observable.Value) == 0 {
+						continue
+					}
+
+					existed := false
+					for existingObsIndex, existingObs := range newObservables {
+						if existingObs.Type == observable.Type && existingObs.Value == observable.Value {
+							existed = true
+							newObservables[existingObsIndex].LastSeen = timeNow
+							if existingObs.FirstSeen == 0 {
+								existingObs.FirstSeen = timeNow
+							}
+
+							continue
+						}
+					}
+
+					if !existed {
+						observable.FirstSeen = timeNow
+						observable.LastSeen = timeNow
+						newObservables = append(newObservables, observable)
+					}
+				}
+
+				cacheData.Enrichments = newObservables
+				if debug { 
+					log.Printf("\n\n\nFound new enrichments: %d for key %s in category %s\n\n\n", len(newObservables), cacheData.Key, cacheData.Category)
+				}
+			}
+
 			if getCacheError == nil && config.Created > 0 {
 
 				// Compares old vs new, checks if allowed
@@ -13511,6 +14203,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				cacheData.Authorization = config.Authorization
 				cacheData.SuborgDistribution = config.SuborgDistribution
 				cacheData.PublicAuthorization = config.PublicAuthorization
+
+				if len(cacheData.Enrichments) == 0 && len(config.Enrichments) > 0 {
+					cacheData.Enrichments = config.Enrichments
+				} 
 
 				if len(cacheData.Tags) == 0 {
 					cacheData.Tags = config.Tags
@@ -13871,7 +14567,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			continue
 		}
 
-		go crossCorrelateNGrams(context.Background(), cacheData.OrgId, cacheData.Category, cacheData.Key, cacheData.Value)
+		go crossCorrelateNGrams(context.Background(), cacheData.OrgId, cacheData.Category, cacheData.Key, cacheData.Value, cacheData.Enrichments)
 	}
 
 	// Look for category triggers
@@ -13951,14 +14647,14 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 }
 
 func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]CacheKeyData, error) {
+	var datastoreKeys []CacheKeyData
 	if len(orgId) == 0 {
-		return []CacheKeyData, errors.New("Org ID required for revisions") 
+		return datastoreKeys, errors.New("Org ID required for revisions")
 	}
 
-	var datastoreKeys []CacheKeyData
 	var err error
 
-	amount := 50 
+	amount := 50
 	if amount <= 0 {
 		amount = 50
 	}
@@ -13967,7 +14663,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 		amount = 200
 	}
 
-	key = url.QueryEscape(cacheId)
+	key = url.QueryEscape(key)
 	if len(key) > 127 {
 		key = key[:127]
 	}
@@ -13978,7 +14674,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 	}
 
 	nameKey := "org_cache_revisions"
-	cacheKey := fmt.Sprintf("%s_%s_%d", nameKey, key, category, orgId)
+	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, key, category, orgId)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -13993,7 +14689,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 				return datastoreKeys, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for workflow (5): %s", err)
 		}
 	}
 
@@ -14101,7 +14797,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 		}
 
 		query := datastore.NewQuery(nameKey).Filter("Key =", key).Filter("category =", category).Filter("OrgId =", orgId).Limit(queryAmount)
-		query = query.Order("-edited")
+		query = query.Order("-Edited")
 
 		iterCount := 0
 
@@ -14115,7 +14811,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 					} else {
-						log.Printf("[WARNING] Datastore revision iterator issue: %s", err)
+						//log.Printf("[ERROR] Datastore revision iterator issue: %s", err)
 						break
 					}
 				}
@@ -14132,14 +14828,14 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 			}
 
 			if err != iterator.Done {
-				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//log.Printf("[INFO] Failed fetching datastore revisions: %v", err)
 				//break
 			}
 
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("[ERROR] Problem with cursor: %s", err)
+				log.Printf("[ERROR] Problem with datastore revisions cursor: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -14177,7 +14873,7 @@ func GetDatastoreRevisions(ctx context.Context, key, category, orgId string) ([]
 			return datastoreKeys, nil
 		}
 
-		err = SetCache(ctx, cacheKey, cacheData, 60)
+		err = SetCache(ctx, cacheKey, cacheData, 2)
 		if err != nil {
 			log.Printf("[ERROR] Failed setting cache for workflow revisions: %s (not critical)", err)
 		}
@@ -14235,7 +14931,7 @@ func SetDatastoreKeyRevision(ctx context.Context, cacheData CacheKeyData) error 
 	} else {
 		key := datastore.NameKey(nameKey, cacheId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
-			log.Printf("[ERROR] Error setting org cache: %s", err)
+			log.Printf("[ERROR] Error setting datastore key revision: %s", err)
 			return err
 		}
 	}
@@ -14293,7 +14989,7 @@ func SetDatastoreKeyMeta(ctx context.Context, cacheData CacheKeyData) error {
 	} else {
 		key := datastore.NameKey(nameKey, cacheId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
-			log.Printf("[ERROR] Error setting org cache: %s", err)
+			log.Printf("[ERROR] Error setting datastore key meta: %s", err)
 			return err
 		}
 	}
@@ -14367,7 +15063,7 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 	} else {
 		key := datastore.NameKey(nameKey, cacheId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
-			log.Printf("[ERROR] Error setting org cache: %s", err)
+			log.Printf("[ERROR] Error setting datastore key: %s", err)
 			return err
 		}
 	}
@@ -14497,32 +15193,54 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 			DocumentID: id,
 		})
 		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
-			return cacheData, err
+			if strings.Contains(err.Error(), "has more than one index associated with it") {
+				fallbackData, fallbackErr := getCacheKeyByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
+				if fallbackErr == nil {
+					cacheData = fallbackData
+				} else {
+					log.Printf("[WARNING] Alias search fallback failed for %s: %s", cacheKey, fallbackErr)
+					return cacheData, fallbackErr
+				}
+			} else {
+				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+				return cacheData, err
+			}
 		}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return cacheData, errors.New("Key doesn't exist")
-		}
+		if err == nil {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if res.StatusCode == 404 {
+				return cacheData, errors.New("Key doesn't exist")
+			}
 
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return cacheData, err
-		}
+			respBody, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				return cacheData, err
+			}
 
-		wrapped := CacheKeyWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return cacheData, err
-		}
+			wrapped := CacheKeyWrapper{}
+			err = json.Unmarshal(respBody, &wrapped)
+			if err != nil {
+				return cacheData, err
+			}
 
-		cacheData = &wrapped.Source
+			cacheData = &wrapped.Source
+		}
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
-			//log.Printf("[WARNING]: Failed getting cache key %s: %s", id, err)
+			if project.CacheDb {
+				data, err := json.Marshal(cacheData)
+				if err != nil {
+					log.Printf("[ERROR] Failed marshalling in getcachekey (2): %s", err)
+				} else {
+					err = SetCache(ctx, cacheKey, data, 30)
+					if err != nil {
+						log.Printf("[ERROR] Failed setting cache for get cache key (2): %s", err)
+					}
+				}
+			}
 
 			if strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[ERROR] Error in cache key loading. Migrating org cache to new handler (3): %s", err)
@@ -14560,7 +15278,21 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 					_, err := project.Dbclient.GetAll(ctx, query, &cacheKeys)
 					if err != nil {
 						if !strings.Contains(err.Error(), `cannot load field`) {
-							log.Printf("[WARNING] Failed getting cacheKey (1) %s: %s", newId, err)
+							log.Printf("[WARNING] Failed getting datastoreKey (2) %s: %s", newId, err)
+
+							if project.CacheDb {
+								data, err := json.Marshal(cacheData)
+								if err != nil {
+									log.Printf("[WARNING] Failed marshalling in getcachekey (3): %s", err)
+									return cacheData, nil
+								}
+
+								err = SetCache(ctx, cacheKey, data, 30)
+								if err != nil {
+									log.Printf("[WARNING] Failed setting cache for get cache key (3): %s", err)
+								}
+							}
+
 							return cacheData, err
 						}
 					}
@@ -14571,13 +15303,20 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 								cacheData = &cacheKey
 								break
 							}
+
+							for _, subOrg := range cacheKey.SuborgDistribution {
+								if subOrg == orgId {
+									cacheData = &cacheKey
+									break
+								}
+							}
 						}
 
 						if cacheData.Key == "" {
 							return cacheData, errors.New("Key doesn't exist")
 						}
 					} else {
-						log.Printf("[WARNING] Failed getting cacheKey '%s': %s", newId, err)
+						log.Printf("[WARNING] Failed getting datastoreKey '%s': %s", newId, err)
 
 						return cacheData, errors.New("Key doesn't exist")
 					}
@@ -14613,6 +15352,67 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	}
 
 	return cacheData, nil
+}
+
+func getCacheKeyByAliasSearch(ctx context.Context, aliasName, id string) (*CacheKeyData, error) {
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"size": 1,
+		"sort": map[string]interface{}{
+			"edited": map[string]interface{}{
+				"order": "desc",
+			},
+		},
+		"query": map[string]interface{}{
+			"ids": map[string]interface{}{
+				"values": []string{id},
+			},
+		},
+	}
+
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return nil, err
+	}
+
+	resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+		Indices: []string{aliasName},
+		Body:    &buf,
+		Params: opensearchapi.SearchParams{
+			TrackTotalHits: true,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	res := resp.Inspect().Response
+	defer res.Body.Close()
+
+	if res.StatusCode == 404 {
+		return nil, errors.New("Key doesn't exist")
+	}
+
+	respBody, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if res.StatusCode != 200 && res.StatusCode != 201 {
+		return nil, fmt.Errorf("failed alias fallback lookup. status=%d body=%s", res.StatusCode, string(respBody))
+	}
+
+	wrapped := CacheKeySearchWrapper{}
+	err = json.Unmarshal(respBody, &wrapped)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(wrapped.Hits.Hits) == 0 {
+		return nil, errors.New("Key doesn't exist")
+	}
+
+	item := wrapped.Hits.Hits[0].Source
+	return &item, nil
 }
 
 var retryCount int
@@ -15424,7 +16224,8 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	// Find cache and return instantly
 	cacheKeys := []CacheKeyData{}
-	if project.CacheDb && category == "protected" {
+	//if project.CacheDb && category == "protected" {
+	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
@@ -15734,22 +16535,6 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	}
 
-	// Only cache if NO cursor at all.
-	// Otherwise we need to track and clean up all cursors
-	//if project.CacheDb && len(inputcursor) == 0 {
-	if project.CacheDb {
-		newcache, err := json.Marshal(cacheKeys)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
-			return cacheKeys, cursor, nil
-		}
-
-		err = SetCache(ctx, cacheKey, newcache, 10)
-		if err != nil {
-			log.Printf("[WARNING] Failed updating cache keys cache: %s", err)
-		}
-	}
-
 	foundOrg, err := GetOrg(ctx, orgId)
 	if err == nil && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
 		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
@@ -15781,6 +16566,21 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 					cacheKeys = append(cacheKeys, parentCache)
 				}
 			}
+		}
+	}
+
+	// Only cache if NO cursor at all.
+	// Otherwise we need to track and clean up all cursors(?)
+	if project.CacheDb {
+		newcache, err := json.Marshal(cacheKeys)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
+			return cacheKeys, cursor, nil
+		}
+
+		err = SetCache(ctx, cacheKey, newcache, 5)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating cache keys cache: %s", err)
 		}
 	}
 
@@ -16383,7 +17183,7 @@ func GetSuggestion(ctx context.Context, id string) (*Suggestion, error) {
 				return suggestion, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for workflow (6): %s", err)
 		}
 	}
 
@@ -17018,7 +17818,19 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 						},
 					},
 				}
-
+			} else if search.WorkflowId == "SENSOR_ACTION" {
+				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
+					{
+						"match": map[string]interface{}{
+							"execution_org": orgId,
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"type": "SENSOR_ACTION",
+						},
+					},
+				}
 			} else {
 				// Change out the "must" part entirely to contain the workflow id as well
 				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
@@ -17139,6 +17951,8 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		if len(search.WorkflowId) > 0 {
 			if search.WorkflowId == "AGENT" {
 				query = query.Filter("type =", "AGENT")
+			} else if search.WorkflowId == "SENSOR_ACTION" {
+				query = query.Filter("type =", "SENSOR_ACTION")
 			} else {
 				query = query.Filter("workflow_id =", search.WorkflowId)
 			}
@@ -18099,19 +18913,14 @@ func InitOpensearchIndexes() {
 	log.Printf("[INFO] Configuring Opensearch indexes for scaling")
 
 	ctx := context.Background()
-	relevantScaleIndexes := []string{
-		GetESIndexPrefix("workflowexecution"),
-		GetESIndexPrefix("datastore_ngram"),
-		GetESIndexPrefix("org_cache"),
-		GetESIndexPrefix("org_cache_revisions"),
-		GetESIndexPrefix("notifications"),
-		GetESIndexPrefix("shuffle_logs"),
-		GetESIndexPrefix("environments"),
-		GetESIndexPrefix("org_statistics"),
-		GetESIndexPrefix("workflowapp"),
-		GetESIndexPrefix("workflow"),
-		GetESIndexPrefix("workflow_revisions"),
-		GetESIndexPrefix("datastore_category"),
+	opensearchUrl := strings.TrimRight(os.Getenv("SHUFFLE_OPENSEARCH_URL"), "/")
+	if len(opensearchUrl) == 0 {
+		opensearchUrl = "https://shuffle-opensearch:9200"
+	}
+
+	relevantScaleIndexes := []string{}
+	for _, baseIndex := range GetOpensearchBaseIndexes() {
+		relevantScaleIndexes = append(relevantScaleIndexes, GetESIndexPrefix(baseIndex))
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")
@@ -18134,6 +18943,41 @@ func InitOpensearchIndexes() {
 		}
 
 		log.Printf("[DEBUG] Using custom rollover config for relevant scale indexes: %s", customRollover)
+	}
+
+	rolloverConfig := []byte(fmt.Sprintf(`{
+		"conditions": {
+			"max_age": "90d",
+			"max_size": "40gb",
+			"max_docs": 1000000
+		}
+	}`))
+
+	if len(customRollover) > 0 {
+		rolloverConfig = []byte(customRollover)
+	}
+
+	ismEnabled := strings.ToLower(strings.TrimSpace(os.Getenv("OPENSEARCH_USE_ISM_ROLLOVER"))) != "false"
+	ismPolicyName := strings.TrimSpace(os.Getenv("OPENSEARCH_ISM_POLICY_NAME"))
+	if ismPolicyName == "" {
+		ismPolicyName = "shuffle-rollover"
+	}
+
+	ismReady := false
+	if ismEnabled {
+		var err error
+		ismReady, err = ensureOpensearchISMRolloverPolicy(ctx, opensearchUrl, relevantScaleIndexes, rolloverConfig, ismPolicyName)
+		if err != nil {
+			log.Printf("[WARNING] Failed ensuring ISM rollover policy '%s': %s", ismPolicyName, err)
+		}
+	}
+
+	if fixResult, fixErr := FixOpensearchIndexPrefix(ctx); fixErr != nil {
+		log.Printf("[WARNING] Prefix repair before init failed: %s", fixErr)
+	} else if !fixResult.Success {
+		log.Printf("[WARNING] Prefix repair before init completed with verification warnings: %s", fixResult.Reason)
+	} else {
+		log.Printf("[INFO] Prefix repair before init: expected aliases=%d found=%d", fixResult.ExpectedAliases, fixResult.FoundAliases)
 	}
 
 	for _, index := range relevantScaleIndexes {
@@ -18191,9 +19035,10 @@ func InitOpensearchIndexes() {
 		}
 
 		index = strings.ToLower(index)
+		initialIndexName := fmt.Sprintf("%s-000001", index)
+		indexConfig = ensureOpensearchIndexRolloverAlias(indexConfig, index)
 		// Directly try to force create it. Opensearch throws a 400 if it fails.
 
-		initialIndexName := fmt.Sprintf("%s-000001", index)
 		resp, err := project.Es.Indices.Create(ctx, opensearchapi.IndicesCreateReq{
 			Index: initialIndexName,
 			Body:  bytes.NewReader(indexConfig),
@@ -18247,17 +19092,16 @@ func InitOpensearchIndexes() {
 			}
 		}
 
-		// Define rollover mechanism
-		rolloverConfig := []byte(fmt.Sprintf(`{
-			"conditions": {
-				"max_age": "90d",
-				"max_size": "40gb",
-				"max_docs": 1000000
+		if ismReady {
+			if err := ensureOpensearchIndexRolloverAliasSetting(ctx, opensearchUrl, initialIndexName, index); err != nil {
+				log.Printf("[WARNING] Failed ensuring rollover_alias on index %s: %s", initialIndexName, err)
 			}
-		}`))
 
-		if len(customRollover) > 0 {
-			rolloverConfig = []byte(customRollover)
+			if err := ensureOpensearchIndexISMPolicy(ctx, opensearchUrl, initialIndexName, ismPolicyName); err != nil {
+				log.Printf("[WARNING] Failed attaching ISM policy '%s' to %s: %s", ismPolicyName, initialIndexName, err)
+			}
+
+			continue
 		}
 
 		rolloverResp, err := project.Es.Indices.Rollover(ctx, opensearchapi.IndicesRolloverReq{
@@ -18283,4 +19127,219 @@ func InitOpensearchIndexes() {
 
 	}
 
+	if fixResult, fixErr := FixOpensearchIndexPrefix(ctx); fixErr != nil {
+		log.Printf("[WARNING] Alias verification after init failed: %s", fixErr)
+	} else if !fixResult.Success {
+		log.Printf("[WARNING] Alias verification after init completed with warnings: %s", fixResult.Reason)
+	} else {
+		log.Printf("[INFO] Alias verification after init passed: expected aliases=%d found=%d", fixResult.ExpectedAliases, fixResult.FoundAliases)
+	}
+
+}
+
+func ensureOpensearchIndexRolloverAlias(indexConfig []byte, alias string) []byte {
+	unmarshalled := map[string]interface{}{}
+	if err := json.Unmarshal(indexConfig, &unmarshalled); err != nil {
+		return indexConfig
+	}
+
+	settings, ok := unmarshalled["settings"].(map[string]interface{})
+	if !ok || settings == nil {
+		settings = map[string]interface{}{}
+	}
+
+	settings["plugins.index_state_management.rollover_alias"] = alias
+	unmarshalled["settings"] = settings
+
+	updated, err := json.Marshal(unmarshalled)
+	if err != nil {
+		return indexConfig
+	}
+
+	return updated
+}
+
+func getOpensearchISMRolloverConditions(rolloverConfig []byte) map[string]interface{} {
+	defaultConditions := map[string]interface{}{
+		"min_index_age": "90d",
+		"min_size":      "40gb",
+		"min_doc_count": 1000000,
+	}
+
+	parsed := struct {
+		Conditions map[string]interface{} `json:"conditions"`
+	}{}
+
+	if err := json.Unmarshal(rolloverConfig, &parsed); err != nil {
+		return defaultConditions
+	}
+
+	if len(parsed.Conditions) == 0 {
+		return defaultConditions
+	}
+
+	conditions := map[string]interface{}{}
+	if value, ok := parsed.Conditions["min_index_age"]; ok {
+		conditions["min_index_age"] = value
+	} else if value, ok := parsed.Conditions["max_age"]; ok {
+		conditions["min_index_age"] = value
+	}
+
+	if value, ok := parsed.Conditions["min_size"]; ok {
+		conditions["min_size"] = value
+	} else if value, ok := parsed.Conditions["max_size"]; ok {
+		conditions["min_size"] = value
+	}
+
+	if value, ok := parsed.Conditions["min_doc_count"]; ok {
+		conditions["min_doc_count"] = value
+	} else if value, ok := parsed.Conditions["max_docs"]; ok {
+		conditions["min_doc_count"] = value
+	}
+
+	if len(conditions) == 0 {
+		return defaultConditions
+	}
+
+	return conditions
+}
+
+func ensureOpensearchISMRolloverPolicy(ctx context.Context, opensearchUrl string, aliases []string, rolloverConfig []byte, policyName string) (bool, error) {
+	conditions := getOpensearchISMRolloverConditions(rolloverConfig)
+
+	patterns := []string{}
+	for _, alias := range aliases {
+		patterns = append(patterns, fmt.Sprintf("%s-*", alias))
+	}
+
+	policyBody := map[string]interface{}{
+		"policy": map[string]interface{}{
+			"description":   "Shuffle rollover policy",
+			"default_state": "hot",
+			"states": []map[string]interface{}{
+				{
+					"name": "hot",
+					"actions": []map[string]interface{}{
+						{
+							"rollover": conditions,
+						},
+					},
+					"transitions": []interface{}{},
+				},
+			},
+			"ism_template": []map[string]interface{}{
+				{
+					"index_patterns": patterns,
+					"priority":       100,
+				},
+			},
+		},
+	}
+
+	policyData, err := json.Marshal(policyBody)
+	if err != nil {
+		return false, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/_plugins/_ism/policies/%s", opensearchUrl, policyName), bytes.NewReader(policyData))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := project.Es.Client.Transport.Perform(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		if resp.StatusCode == 404 || resp.StatusCode == 400 {
+			if strings.Contains(strings.ToLower(string(body)), "_plugins/_ism") || strings.Contains(strings.ToLower(string(body)), "no handler found") {
+				log.Printf("[INFO] ISM plugin not available. Falling back to direct rollover")
+				return false, nil
+			}
+		}
+
+		return false, fmt.Errorf("status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	log.Printf("[INFO] Ensured ISM rollover policy '%s' for %d index patterns", policyName, len(patterns))
+	return true, nil
+}
+
+func ensureOpensearchIndexRolloverAliasSetting(ctx context.Context, opensearchUrl, indexName, alias string) error {
+	settingsBody := map[string]interface{}{
+		"index": map[string]interface{}{
+			"plugins.index_state_management.rollover_alias": alias,
+		},
+	}
+
+	body, err := json.Marshal(settingsBody)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/%s/_settings", opensearchUrl, indexName), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := project.Es.Client.Transport.Perform(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		if resp.StatusCode == 404 && strings.Contains(strings.ToLower(string(respBody)), "index_not_found_exception") {
+			return nil
+		}
+
+		return fmt.Errorf("status: %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+func ensureOpensearchIndexISMPolicy(ctx context.Context, opensearchUrl, indexName, policyName string) error {
+	policyBody := map[string]interface{}{
+		"policy_id": policyName,
+	}
+
+	body, err := json.Marshal(policyBody)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/_plugins/_ism/add/%s", opensearchUrl, indexName), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := project.Es.Client.Transport.Perform(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		lowerResp := strings.ToLower(string(respBody))
+		if strings.Contains(lowerResp, "already has a policy") {
+			return nil
+		}
+
+		if resp.StatusCode == 404 && strings.Contains(lowerResp, "index_not_found_exception") {
+			return nil
+		}
+
+		return fmt.Errorf("status: %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
 }

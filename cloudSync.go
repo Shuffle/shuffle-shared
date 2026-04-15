@@ -1381,7 +1381,6 @@ func CreateFs(basepath, pathname string) (billy.Filesystem, error) {
 	return fs, err
 }
 
-
 // Also deactivates. It's a toggle for off and on.
 func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -2033,7 +2032,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		for _, field := range parsedFields {
 			if strings.ToLower(field.Key) == "url" && field.Value != "" {
 				urlValue = strings.TrimSpace(field.Value)
-				continue 
+				continue
 			}
 			newFields = append(newFields, field)
 		}
@@ -2084,9 +2083,9 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	}
 
 	parsedAction := CategoryAction{
-		AppName:  decision.Tool,
-		Label:    decision.Action,
-		Query:    decision.Reason,   // Add the reason field for LLM context
+		AppName: decision.Tool,
+		Label:   decision.Action,
+		Query:   decision.Reason, // Add the reason field for LLM context
 
 		Fields: oldFields,
 	}
@@ -2241,6 +2240,16 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 // 2. Taking the result and sending (?) it back
 // 3. Ensuring cache for an action is kept up to date
 func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput, decision AgentDecision) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[ERROR] AI_AGENT_PANIC: execution_id=%s decision_id=%s panic=%v", execution.ExecutionId, decision.RunDetails.Id, r)
+
+			// Mark decision as failed so agent doesn't get stuck
+			decision.RunDetails.Status = "FAILURE"
+			decision.RunDetails.CompletedAt = time.Now().Unix()
+			decision.RunDetails.RawResponse = fmt.Sprintf("PANIC: %v", r)
+		}
+	}()
 
 	// Check if it's already ran or not
 	ctx := context.Background()
@@ -2271,7 +2280,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 
-	go SetCache(ctx, decisionId, marshalledDecision, 60)
+	go SetCache(ctx, decisionId, marshalledDecision, 300)
 
 	if decision.Action == "user_input" || decision.Action == "answer" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" || decision.Category == "standalone" {
 	} else {
@@ -2297,6 +2306,13 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		} else {
 			decision.RunDetails.Status = "FINISHED"
 		}
+
+		// Log individual tool execution result
+		duration := int64(0)
+		if decision.RunDetails.CompletedAt > 0 && decision.RunDetails.StartedAt > 0 {
+			duration = decision.RunDetails.CompletedAt - decision.RunDetails.StartedAt
+		}
+		log.Printf("[INFO][%s] AI_AGENT_TOOL: org=%s tool=%s action=%s status=%s duration=%ds", execution.ExecutionId, execution.Workflow.OrgId, decision.Tool, decision.Action, decision.RunDetails.Status, duration)
 	}
 
 	// 1. Send this back as a result for an action
@@ -2309,7 +2325,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling completed decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 
-	go SetCache(ctx, decisionId, marshalledDecision, 60)
+	go SetCache(ctx, decisionId, marshalledDecision, 300)
 
 	// 1. Send an /api/v1/streams request? Due to concurrency, I think this is the only way (?)
 	// 2. On the streams API, make sure to:
@@ -2432,10 +2448,10 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 	body, bodyerr := ioutil.ReadAll(request.Body)
 	if bodyerr == nil {
 		orboruserr := json.Unmarshal(body, &orborusData)
-		if orboruserr == nil {
+		if !env.SensorGroup && orboruserr == nil {
 			if time.Now().Unix() > env.Checkin+90 {
 				if debug {
-					log.Printf("[DEBUG] Failover orborus to %s. Checkin: %d. Edit: %d", orborusData.Uuid, env.Checkin, env.Edited)
+					log.Printf("[DEBUG] Failover orborus to '%s'. Checkin: %d. Edit: %d", orborusData.Uuid, env.Checkin, env.Edited)
 				}
 
 				env.OrborusUuid = orborusData.Uuid
@@ -2449,6 +2465,115 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 				//env.Checkin = time.Now().Unix()
 			}
 		}
+	}
+
+	// Handles a group of hosts running Orborus based on this page:
+	// https://security.shuffler.io/assets
+	if env.SensorGroup {
+		if len(orborusData.Uuid) == 0 || len(orborusData.SensorDetails.Hostname) == 0 {
+			if debug {
+				log.Printf("[DEBUG] Orborus data missing UUID or Hostname for sensor group environment '%s' (%s). Orborus Data: %#v", env.Name, env.Id, orborusData)
+			}
+
+			return nil
+		}
+
+		if strings.Contains(orborusData.SensorDetails.Hostname, ".") {
+			parsedHostnameSplit := strings.Split(orborusData.SensorDetails.Hostname, ".")
+			orborusData.SensorDetails.Hostname = parsedHostnameSplit[0]
+		}
+
+		// 600 = time until it's not tracked anymore at all
+		hostTimeout := int64(600)
+		hostRefresh := int64(90)
+
+		// This will struggle a bit with many instances at once
+		timeNow := int64(time.Now().Unix())
+
+		removeIndex := []int{}
+		found := false
+		updateMade := false
+
+		// Just some deduping in case
+		foundHosts := []string{}
+		for hostIndex, host := range env.SensorHosts {
+			if ArrayContains(foundHosts, host.Hostname) {
+				removeIndex = append(removeIndex, hostIndex)
+				continue
+			}
+
+			foundHosts = append(foundHosts, host.Hostname)
+		}
+
+		// Run removeIndex backwards
+		for i := len(removeIndex) - 1; i >= 0; i-- {
+			env.SensorHosts = append(env.SensorHosts[:removeIndex[i]], env.SensorHosts[removeIndex[i]+1:]...)
+			updateMade = true
+		}
+
+		removeIndex = []int{}
+		for hostIndex, host := range env.SensorHosts {
+
+			// Check if more than 90 seconds ago
+			if host.Hostname == orborusData.SensorDetails.Hostname && host.Arch == orborusData.SensorDetails.Arch {
+				found = true
+				if timeNow > host.Checkin+hostRefresh || env.SensorHosts[hostIndex].Uuid != orborusData.Uuid {
+					if debug {
+						log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago, Fulldata: %#v", host.Hostname, env.Name, env.Id, timeNow-host.Checkin, orborusData.SensorDetails)
+					}
+
+					updateMade = true
+					env.SensorHosts[hostIndex].Checkin = timeNow
+					env.SensorHosts[hostIndex].Uuid = orborusData.Uuid
+
+					// FIXME: This needs to be a bit smarter
+					// For now we will just keep whatever we get first. Any restart
+					// of the agent will change it.
+					if host.Uuid != orborusData.Uuid {
+						env.SensorHosts[hostIndex].AutomaticScreenlockEnabled = orborusData.SensorDetails.AutomaticScreenlockEnabled
+						env.SensorHosts[hostIndex].HdEncrypted = orborusData.SensorDetails.HdEncrypted
+						env.SensorHosts[hostIndex].LogForwarding = orborusData.SensorDetails.LogForwarding
+						env.SensorHosts[hostIndex].ResponseActions = orborusData.SensorDetails.ResponseActions
+
+						if len(orborusData.SensorDetails.Serial) > 0 {
+							env.SensorHosts[hostIndex].Serial = orborusData.SensorDetails.Serial
+						}
+
+						if len(orborusData.SensorDetails.InstalledSoftware) > 0 {
+							env.SensorHosts[hostIndex].InstalledSoftware = orborusData.SensorDetails.InstalledSoftware
+						}
+					}
+				}
+
+				break
+			}
+
+			// Check if more than 10 minutes ago
+			if timeNow > host.Checkin+hostTimeout {
+				removeIndex = append(removeIndex, hostIndex)
+				continue
+			}
+		}
+
+		// Appending a new one
+		if !found {
+			updateMade = true
+
+			newHost := orborusData.SensorDetails
+			newHost.Uuid = orborusData.Uuid
+			newHost.Checkin = timeNow
+			env.SensorHosts = append(env.SensorHosts, newHost)
+		}
+
+		if updateMade && len(env.SensorHosts) >= 1 {
+			env.Checkin = timeNow
+			err := SetEnvironment(ctx, env)
+			if err != nil {
+				log.Printf("[ERROR] Sensor group environment '%s' (%s) FAILED to update with new sensor host data. Checkin: %d. Total hosts: %d. Error: %s", env.Name, env.Id, env.Checkin, len(env.SensorHosts), err)
+			}
+		}
+
+		return nil
 	}
 
 	timeNow := time.Now().Unix()
@@ -2513,4 +2638,400 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 	}
 
 	return nil
+}
+
+type OrborusDownloadConfig struct {
+	BaseURL             string `json:"base_url"`
+	Queue               string `json:"queue"`
+	Auth                string `json:"auth"`
+	OrgID               string `json:"org_id"`
+	SoftwareListEnabled bool   `json:"software_list_enabled"`
+	HDEncryptedCheck    bool   `json:"hd_encrypted_check"`
+	ScreenlockCheck     bool   `json:"screenlock_check"`
+
+	ResponseActions string `json:"response_actions"`
+	LogForwarding   string `json:"log_forwarding"`
+
+	BinaryBaseURL string `json:"binary_base_url"`
+	Binaries map[string]string `json:"binaries"`
+}
+
+// Download handler for Orborus agent installation script. This is used in the "Assets" page for Orborus, and can be used by customers to easily install Orborus on their hosts. It returns a bash script that can be run on the target host to install Orborus with the correct configuration.
+func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	// 1. fetch config in Go (no jq dependency)
+	c := OrborusDownloadConfig{
+		BaseURL:             "https://shuffler.io",
+		Queue:               "default",
+		Auth:                "cb5st3d3Z!3X3zaJ*Pc",
+		OrgID:               "",
+		SoftwareListEnabled: true,
+		HDEncryptedCheck:    true,
+		ScreenlockCheck:     true,
+		ResponseActions:     "full",
+
+		// Used for builder in dynamic scripts
+		BinaryBaseURL: "https://github.com/Shuffle/orborus/releases/latest/download",
+		Binaries: map[string]string{
+			"linux_amd64": "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-linux-amd64",
+			"linux_arm64": "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-linux-arm64",
+
+			"darwin_amd64": "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-darwin-amd64",
+			"darwin_arm64": "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-darwin-arm64",
+
+			"windows_amd64": "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-windows-amd64.exe",
+			"windows_arm64": "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-windows-arm64.exe",
+		},
+	}
+
+	// 2. URL overrides (optional)
+	q := r.URL.Query()
+
+	isWindows := false
+	if v := q.Get("os"); v != "" {
+		if v == "windows" {
+			isWindows = true
+		}
+	}
+
+	if v := q.Get("base_url"); v != "" {
+		c.BaseURL = v
+	}
+	if v := q.Get("queue"); v != "" {
+		c.Queue = v
+	}
+	if v := q.Get("auth"); v != "" {
+		c.Auth = v
+	}
+	if v := q.Get("org_id"); v != "" {
+		c.OrgID = v
+	}
+	if v := q.Get("response_actions"); v != "" {
+		c.ResponseActions = v
+	}
+	if v := q.Get("log_forwarding"); v != "" {
+		c.LogForwarding = v
+	}
+	if v := q.Get("software_list_enabled"); v != "" {
+		c.SoftwareListEnabled = v == "true"
+	}
+	if v := q.Get("hd_encrypted_check"); v != "" {
+		c.HDEncryptedCheck = v == "true"
+	}
+	if v := q.Get("screenlock_check"); v != "" {
+		c.ScreenlockCheck = v == "true"
+	}
+
+	// Check the "AUTH" header for a secret value to allow overriding the config (for security)
+	if authHeader := r.Header.Get("AUTH"); authHeader != "" {
+		c.Auth = authHeader
+	}
+
+	// Quite untested.
+	script := ""
+	if isWindows {
+		script = fmt.Sprintf(`[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+		$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+
+$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $isAdmin) {
+    Start-Process powershell -Verb RunAs -ArgumentList @(
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "iwr <your-url> | iex"
+    )
+
+	Write-Host "started sensor installation in a new elevated PowerShell window. Please follow the prompts there to complete installation.",
+    exit 1
+}
+
+$ErrorActionPreference = "Stop"
+
+# ===== injected config (from cfg) =====
+$BASE_URL = "%s"
+$QUEUE = "%s"
+$AUTH = "%s"
+$ORG_ID = "%s"
+
+$SOFTWARE_LIST_ENABLED = "%t"
+$HD_ENCRYPTED_CHECK = "%t"
+$SCREENLOCK_CHECK = "%t"
+$RESPONSE_ACTIONS = "%s"
+$LOG_FORWARDING = "%s"
+
+# ===== install paths =====
+$INSTALL_DIR = "$env:ProgramData\orborus"
+New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
+
+# ===== arch detection =====
+if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") {
+    $ARCH = "amd64"
+} elseif ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
+    $ARCH = "arm64"
+} else {
+    Write-Error "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE"
+    exit 1
+}
+
+$BIN_URL = "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-windows-$ARCH.exe"
+$BIN_PATH = Join-Path $INSTALL_DIR "orborus.exe"
+
+Write-Host "Downloading binary from $BIN_URL to $BIN_PATH..."
+try {
+    Write-Host "Downloading via BITS..."
+    Start-BitsTransfer -Source $BIN_URL -Destination $BIN_PATH -ErrorAction Stop
+}
+catch {
+    Write-Host "BITS failed, falling back to Invoke-WebRequest..."
+
+    Invoke-WebRequest -Uri $BIN_URL -OutFile $BIN_PATH -UseBasicParsing -MaximumRedirection 10
+}
+
+# ===== service =====
+function Escape-ArgValue($v) {
+    if ($v -match "\s") {
+        return '"' + $v + '"'
+    }
+    return $v
+}
+
+$SERVICE_NAME = "orborus-agent"
+
+$ARGS = @()
+$ARGS += "--sensor_mode=true"
+
+if ($BASE_URL) { $ARGS += "--base_url=$BASE_URL" }
+if ($QUEUE) { $ARGS += "--queue=$QUEUE" }
+if ($AUTH) { $ARGS += "--auth=$AUTH" }
+if ($ORG_ID) { $ARGS += "--org_id=$ORG_ID" }
+
+# Removed as they made the command more than 260 characters (hard limit)
+#if ($SOFTWARE_LIST_ENABLED -eq "true") { $ARGS += "--software_list_enabled=true" }
+#if ($HD_ENCRYPTED_CHECK -eq "true") { $ARGS += "--hd_encrypted_check=true" }
+#if ($SCREENLOCK_CHECK -eq "true") { $ARGS += "--screenlock_check=true" }
+
+if ($RESPONSE_ACTIONS) { $ARGS += "--response_actions=$RESPONSE_ACTIONS" }
+if ($LOG_FORWARDING) { $ARGS += "--log_forwarding=$LOG_FORWARDING" }
+
+for ($i = 0; $i -lt $ARGS.Count; $i++) {
+    if ($ARGS[$i] -match '=') {
+        $parts = $ARGS[$i] -split '=', 2
+        $key = $parts[0]
+        $val = $parts[1]
+
+        if ($val -match '\s' -and $val -notmatch '^".*"$') {
+            $val = '"' + $val + '"'
+        }
+
+        $ARGS[$i] = "$key=$val"
+    }
+}
+
+$ARGS = $ARGS -join " "
+
+# remove if exists
+echo "Deleting old agent"
+schtasks /Delete /TN $SERVICE_NAME /F
+Start-Sleep -Seconds 1
+
+# ===== create service =====
+$WRAPPER = Join-Path $INSTALL_DIR "run-orborus.bat"
+
+echo "Writing bat file to $WRAPPER"
+$writer = New-Item -ItemType File -Path $Wrapper -Force
+
+# Pre-prep
+$line2 = "cd /d " + '"' + $INSTALL_DIR + '"'
+$line4 = '"' + $BIN_PATH + '"' + " " + $ARGS + " >> orborus.log 2>&1"
+
+Add-Content $WRAPPER "@echo off"
+Add-Content $WRAPPER $line2
+Add-Content $WRAPPER "echo STARTED >> debug.log"
+Add-Content $WRAPPER $line4
+Add-Content $WRAPPER "echo EXIT CODE %sRRORLEVEL%s >> debug.log"
+
+echo "Starting scheduled task"
+$PARSED_WRAPPER = '"' + $WRAPPER + '"'
+schtasks /Create /TN $SERVICE_NAME /TR "$PARSED_WRAPPER" /SC ONSTART /RU "SYSTEM" /RL HIGHEST /F
+
+# 
+# schtasks /Change /TN $SERVICE_NAME /RI 1 /DU 9999:59
+
+schtasks /Run /TN $SERVICE_NAME
+
+Write-Host "orborus-agent installed"`,
+			c.BaseURL,
+			c.Queue,
+			c.Auth,
+			c.OrgID,
+			c.SoftwareListEnabled,
+			c.HDEncryptedCheck,
+			c.ScreenlockCheck,
+			c.ResponseActions,
+			c.LogForwarding,
+			"%E",
+			"%",
+		)
+
+	} else {
+		script = fmt.Sprintf(`#!/usr/bin/env bash
+set -e
+
+# =========================
+# Detect OS + ARCH
+# =========================
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
+
+case "$ARCH" in
+  x86_64|amd64) ARCH="amd64" ;;
+  arm64|aarch64) ARCH="arm64" ;;
+  *)
+    echo "unsupported architecture: $ARCH"
+    exit 1
+    ;;
+esac
+
+if [[ "$OS" != "linux" && "$OS" != "darwin" ]]; then
+  echo "unsupported OS: $OS"
+  exit 1
+fi
+
+# =========================
+# Config (from Go injection)
+# =========================
+BASE_URL="%s"
+QUEUE="%s"
+AUTH="%s"
+ORG_ID="%s"
+
+SOFTWARE_LIST_ENABLED="%t"
+HD_ENCRYPTED_CHECK="%t"
+SCREENLOCK_CHECK="%t"
+RESPONSE_ACTIONS="%s"
+LOG_FORWARDING="%s"
+
+# =========================
+# Binary selection
+# =========================
+BIN_BASE="%s"
+BIN_URL="${BIN_BASE}/orborus-agent-${OS}-${ARCH}"
+
+# =========================
+# Install binary
+# =========================
+INSTALL_PATH="/usr/local/bin/orborus"
+
+curl -fsSL "$BIN_URL" -o /tmp/orborus
+chmod +x /tmp/orborus
+sudo mv /tmp/orborus "$INSTALL_PATH"
+
+echo "Installed binary to $INSTALL_PATH"
+
+# =========================
+# Linux service (systemd)
+# =========================
+install_linux() {
+  sudo tee /etc/systemd/system/orborus.service > /dev/null <<EOF
+[Unit]
+Description=Orborus Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_PATH \
+  --sensor_mode=true \
+  --base_url=$BASE_URL \
+  --queue=$QUEUE \
+  --auth=$AUTH \
+  --org_id=$ORG_ID \
+  --software_list_enabled=$SOFTWARE_LIST_ENABLED \
+  --hd_encrypted_check=$HD_ENCRYPTED_CHECK \
+  --screenlock_check=$SCREENLOCK_CHECK \
+  --log_forwarding=$LOG_FORWARDING \
+  --response_actions=$RESPONSE_ACTIONS
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable orborus
+  systemctl restart orborus
+}
+
+# =========================
+# macOS service (launchd)
+# =========================
+install_macos() {
+  PLIST=~/Library/LaunchAgents/com.orborus.agent.plist
+  mkdir -p ~/Library/LaunchAgents
+
+  cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.orborus.agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>$INSTALL_PATH</string>
+    <string>--sensor_mode=true</string>
+    <string>--base_url=$BASE_URL</string>
+    <string>--queue=$QUEUE</string>
+    <string>--auth=$AUTH</string>
+    <string>--org_id=$ORG_ID</string>
+    <string>--software_list_enabled=$SOFTWARE_LIST_ENABLED</string>
+    <string>--hd_encrypted_check=$HD_ENCRYPTED_CHECK</string>
+    <string>--screenlock_check=$SCREENLOCK_CHECK</string>
+    <string>--log_forwarding=$LOG_FORWARDING</string>
+    <string>--response_actions=$RESPONSE_ACTIONS</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+</dict>
+</plist>
+EOF
+
+  launchctl unload "$PLIST" 2>/dev/null || true
+  launchctl load "$PLIST"
+}
+
+# =========================
+# Execute
+# =========================
+if [[ "$OS" == "linux" ]]; then
+  install_linux
+elif [[ "$OS" == "darwin" ]]; then
+  install_macos
+fi
+
+echo "orborus installed successfully"
+`,
+c.BaseURL,
+c.Queue,
+c.Auth,
+c.OrgID,
+c.SoftwareListEnabled,
+c.HDEncryptedCheck,
+c.ScreenlockCheck,
+c.ResponseActions,
+c.LogForwarding,
+c.BinaryBaseURL,
+)
+
+	}
+
+	w.Write([]byte(script))
 }
