@@ -75,6 +75,7 @@ import (
 
 	"github.com/google/go-github/v28/github"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/oauth2"
 
 	"github.com/Masterminds/semver"
 	dockerclient "github.com/docker/docker/client"
@@ -23179,7 +23180,11 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		parsedLink = realPath
 	}
 
-	client := github.NewClient(nil)
+	token := os.Getenv("GITHUB_TOKEN")
+
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
 	githubResp := GithubResp{
 		Name:         location[4],
 		Contributors: []GithubAuthor{},
@@ -23281,7 +23286,11 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	client := github.NewClient(nil)
+	token := os.Getenv("GITHUB_TOKEN")
+
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
 	owner := "shuffle"
 	repo := "shuffle-docs"
 
