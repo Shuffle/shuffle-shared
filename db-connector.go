@@ -1261,7 +1261,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			if debug {
 				log.Printf("[WARNING] Error in org STATS get: %s", err)
 			}
-			return err
+			//return err
 		}
 
 		res := resp.Inspect().Response
