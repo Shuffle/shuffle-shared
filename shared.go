@@ -23240,7 +23240,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	err = SetCache(ctx, cacheKey, b, 604800)
+	err = SetCache(ctx, cacheKey, b, 10080)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for doc %s: %s", location[4], err)
 	}
@@ -23359,7 +23359,7 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	err = SetCache(ctx, cacheKey, b, 604800)
+	err = SetCache(ctx, cacheKey, b, 10080)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for cachekey %s: %s", cacheKey, err)
 	}
