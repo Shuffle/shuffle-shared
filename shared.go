@@ -393,7 +393,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 && userSettingUpMfa == false {
-			log.Printf("[ERROR] Path too short: %d", len(location))
+			log.Printf("[ERROR] Path too short (2fa): %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -796,7 +796,7 @@ func HandleGet2fa(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" && userSettingUpMfa == false {
 		if len(location) <= 4 {
-			log.Printf("[ERROR] Path too short: %d", len(location))
+			log.Printf("[ERROR] Path too short - MFA: %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -958,7 +958,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
-			log.Printf("Path too short: %d", len(location))
+			log.Printf("Path too short (getorg): %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -1455,7 +1455,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
-			log.Printf("Path too short: %d", len(location))
+			log.Printf("Path too short (get suborgs): %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -3251,7 +3251,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
-			log.Printf("[ERROR] Path too short: %d", len(location))
+			//log.Printf("[ERROR] Path too short (get environments): %d", len(location))
 		} else {
 			findEnv = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(location[4], "%20", "_"), " ", "_"))
 		}
@@ -21961,6 +21961,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				action.ID = uuid.NewV4().String()
 			}
 
+			startTime := int64(time.Now().Unix())
 			exec := WorkflowExecution{
 				Workflow: Workflow{
 					ID: workflowId,
@@ -21979,7 +21980,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				WorkflowId:    workflowId,
 				ExecutionId:   workflowId,
 				ExecutionOrg:  user.ActiveOrg.Id,
-				StartedAt:     int64(time.Now().Unix()),
+				StartedAt:     startTime,
 				Authorization: uuid.NewV4().String(),
 			}
 

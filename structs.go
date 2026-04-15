@@ -5251,9 +5251,9 @@ type SensorDetails struct {
 	// String, not bool => we want details
 	AutomaticScreenlockEnabled string     `json:"automatic_screen_lock_enabled" datastore:"automatic_screen_lock_enabled"`
 	HdEncrypted                string     `json:"hd_encrypted" datastore:"hd_encrypted"`
-	InstalledSoftware          []Software `json:"installed_software" datastore:"installed_software,noindex"`
 	LogForwarding              string     `json:"log_forwarding" datastore:"log_forwarding"`
 	ResponseActions      string     `json:"response_actions" datastore:"response_actions"`
+	InstalledSoftware          []Software `json:"installed_software" datastore:"installed_software,noindex"`
 }
 
 // Related to Orborus Agent Mode. Used locally.

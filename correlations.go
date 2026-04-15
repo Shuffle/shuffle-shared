@@ -434,6 +434,8 @@ func HandleSensorResponseAction(sensorDetails SensorMode, incRequest ExecutionRe
 		return
 	}
 
+	startTime := time.Now().Unix()
+
 	command := incRequest.ExecutionArgument
 	if sensorDetails.ResponseActions == "controlled" { 
 		if !strings.HasPrefix(command, "script:") { 
@@ -509,6 +511,8 @@ func HandleSensorResponseAction(sensorDetails SensorMode, incRequest ExecutionRe
 			AppID: "sensor",
 			ID: incRequest.Start,
 		},
+		StartedAt: startTime,
+		CompletedAt: time.Now().Unix(),
 		Result: string(marshalledResult),
 	}
 

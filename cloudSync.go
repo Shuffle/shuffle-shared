@@ -2731,7 +2731,17 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 	// Quite untested.
 	script := ""
 	if isWindows {
-		script = fmt.Sprintf(`$ErrorActionPreference = "Stop"
+		script = fmt.Sprintf(`$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+
+$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $isAdmin) {
+    $cmd = "iwr <your-url> | iex"
+    Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command $cmd"
+    exit
+}
+
+$ErrorActionPreference = "Stop"
 
 # ===== injected config (from cfg) =====
 $BASE_URL = "%s"
@@ -2750,13 +2760,20 @@ $INSTALL_DIR = "$env:ProgramFiles\orborus"
 New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
 
 # ===== arch detection =====
-$ARCH = if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") { "amd64" } else { "arm64" }
+if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") {
+    $ARCH = "amd64"
+} elseif ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
+    $ARCH = "arm64"
+} else {
+    Write-Error "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE"
+    exit 1
+}
 
 $BIN_URL = "https://github.com/Shuffle/orborus/releases/latest/download/orborus-windows-$ARCH.exe"
 $BIN_PATH = Join-Path $INSTALL_DIR "orborus.exe"
 
 Write-Host "Downloading binary..."
-Invoke-WebRequest -Uri $BIN_URL -OutFile $BIN_PATH
+Invoke-WebRequest -Uri $BIN_URL -OutFile $BIN_PATH -UseBasicParsing
 
 # ===== service =====
 $SERVICE_NAME = "orborus"
