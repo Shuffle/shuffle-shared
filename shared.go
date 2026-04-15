@@ -3949,7 +3949,7 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	if err == nil || len(app.ID) > 0 {
 		log.Printf("[AUDIT] Found app %s (%s) for OpenAPI. Checking for user %s (%s) in org %s (%s) to access", app.Name, id, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
-		if !app.Public && app.Owner != user.Id && user.ActiveOrg.Id != app.ReferenceOrg && !user.SupportAccess {
+		if !app.Public && !app.Sharing && app.Owner != user.Id && user.ActiveOrg.Id != app.ReferenceOrg && !user.SupportAccess {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
