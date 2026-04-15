@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"os/exec"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc"
 )
 
 func IsElevated() bool {

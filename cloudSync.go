@@ -2765,7 +2765,7 @@ $RESPONSE_ACTIONS = "%s"
 $LOG_FORWARDING = "%s"
 
 # ===== install paths =====
-$INSTALL_DIR = "$env:ProgramFiles\orborus"
+$INSTALL_DIR = "$env:ProgramData\orborus"
 New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
 
 # ===== arch detection =====
@@ -2810,9 +2810,10 @@ if ($QUEUE) { $ARGS += "--queue=$QUEUE" }
 if ($AUTH) { $ARGS += "--auth=$AUTH" }
 if ($ORG_ID) { $ARGS += "--org_id=$ORG_ID" }
 
-if ($SOFTWARE_LIST_ENABLED -eq "true") { $ARGS += "--software_list_enabled=true" }
-if ($HD_ENCRYPTED_CHECK -eq "true") { $ARGS += "--hd_encrypted_check=true" }
-if ($SCREENLOCK_CHECK -eq "true") { $ARGS += "--screenlock_check=true" }
+# Removed as they made the command more than 260 characters (hard limit)
+#if ($SOFTWARE_LIST_ENABLED -eq "true") { $ARGS += "--software_list_enabled=true" }
+#if ($HD_ENCRYPTED_CHECK -eq "true") { $ARGS += "--hd_encrypted_check=true" }
+#if ($SCREENLOCK_CHECK -eq "true") { $ARGS += "--screenlock_check=true" }
 
 if ($RESPONSE_ACTIONS) { $ARGS += "--response_actions=$RESPONSE_ACTIONS" }
 if ($LOG_FORWARDING) { $ARGS += "--log_forwarding=$LOG_FORWARDING" }
@@ -2833,23 +2834,35 @@ for ($i = 0; $i -lt $ARGS.Count; $i++) {
 
 $ARGS = $ARGS -join " "
 
-# ===== replace service if exists =====
-if (Get-Service $SERVICE_NAME -ErrorAction SilentlyContinue) {
-    Stop-Service $SERVICE_NAME -Force -ErrorAction SilentlyContinue
-    sc.exe delete $SERVICE_NAME | Out-Null
-    Start-Sleep -Seconds 2
-}
+# remove if exists
+echo "Deleting old agent"
+schtasks /Delete /TN $SERVICE_NAME /F
+Start-Sleep -Seconds 1
 
 # ===== create service =====
-# $BIN_QUOTED = '\"' + $BIN_PATH + '\"'
-$BIN_QUOTED = $BIN_PATH
-$FULL_BINPATH = '"' + $BIN_PATH + " " + $ARGS + '"'
+$WRAPPER = Join-Path $INSTALL_DIR "run-orborus.bat"
 
-echo "Creating service"
-sc.exe create $SERVICE_NAME binPath= $FULL_BINPATH start= auto
+echo "Writing bat file to $WRAPPER"
+$writer = New-Item -ItemType File -Path $Wrapper -Force
 
-echo "Service created. Starting service..."
-sc.exe start $SERVICE_NAME
+# Pre-prep
+$line2 = "cd /d " + '"' + $INSTALL_DIR + '"'
+$line4 = '"' + $BIN_PATH + '"' + " " + $ARGS + " >> orborus.log 2>&1"
+
+Add-Content $WRAPPER "@echo off"
+Add-Content $WRAPPER $line2
+Add-Content $WRAPPER "echo STARTED >> debug.log"
+Add-Content $WRAPPER $line4
+Add-Content $WRAPPER "echo EXIT CODE %sRRORLEVEL%s >> debug.log"
+
+echo "Starting scheduled task"
+$PARSED_WRAPPER = '"' + $WRAPPER + '"'
+schtasks /Create /TN $SERVICE_NAME /TR "$PARSED_WRAPPER" /SC ONSTART /RU "SYSTEM" /RL HIGHEST /F
+
+# 
+# schtasks /Change /TN $SERVICE_NAME /RI 1 /DU 9999:59
+
+schtasks /Run /TN $SERVICE_NAME
 
 Write-Host "orborus-agent installed"`,
 			c.BaseURL,
@@ -2861,6 +2874,8 @@ Write-Host "orborus-agent installed"`,
 			c.ScreenlockCheck,
 			c.ResponseActions,
 			c.LogForwarding,
+			"%E",
+			"%",
 		)
 
 	} else {
