@@ -2731,14 +2731,23 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 	// Quite untested.
 	script := ""
 	if isWindows {
-		script = fmt.Sprintf(`$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+		script = fmt.Sprintf(`[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+		$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 
 $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
 if (-not $isAdmin) {
-    $cmd = "iwr <your-url> | iex"
-    Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -Command $cmd"
-    exit
+    Start-Process powershell -Verb RunAs -ArgumentList @(
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "iwr <your-url> | iex"
+    )
+
+	Write-Host "started sensor installation in a new elevated PowerShell window. Please follow the prompts there to complete installation.",
+    exit 1
 }
 
 $ErrorActionPreference = "Stop"
@@ -2769,27 +2778,60 @@ if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") {
     exit 1
 }
 
-$BIN_URL = "https://github.com/Shuffle/orborus/releases/latest/download/orborus-windows-$ARCH.exe"
+$BIN_URL = "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-windows-$ARCH.exe"
 $BIN_PATH = Join-Path $INSTALL_DIR "orborus.exe"
 
-Write-Host "Downloading binary..."
-Invoke-WebRequest -Uri $BIN_URL -OutFile $BIN_PATH -UseBasicParsing
+Write-Host "Downloading binary from $BIN_URL to $BIN_PATH..."
+try {
+    Write-Host "Downloading via BITS..."
+    Start-BitsTransfer -Source $BIN_URL -Destination $BIN_PATH -ErrorAction Stop
+}
+catch {
+    Write-Host "BITS failed, falling back to Invoke-WebRequest..."
+
+    Invoke-WebRequest -Uri $BIN_URL -OutFile $BIN_PATH -UseBasicParsing -MaximumRedirection 10
+}
 
 # ===== service =====
-$SERVICE_NAME = "orborus"
+function Escape-ArgValue($v) {
+    if ($v -match "\s") {
+        return '"' + $v + '"'
+    }
+    return $v
+}
 
-$ARGS = @(
-    "--sensor_mode=true"
-    "--base_url=$BASE_URL"
-    "--queue=$QUEUE"
-    "--auth=$AUTH"
-    "--org_id=$ORG_ID"
-    "--software_list_enabled=$SOFTWARE_LIST_ENABLED"
-    "--hd_encrypted_check=$HD_ENCRYPTED_CHECK"
-    "--screenlock_check=$SCREENLOCK_CHECK"
-    "--response_actions=$RESPONSE_ACTIONS"
-    "--log_forwarding=$LOG_FORWARDING"
-) -join " "
+$SERVICE_NAME = "orborus-agent"
+
+$ARGS = @()
+$ARGS += "--sensor_mode=true"
+
+if ($BASE_URL) { $ARGS += "--base_url=$BASE_URL" }
+if ($QUEUE) { $ARGS += "--queue=$QUEUE" }
+if ($AUTH) { $ARGS += "--auth=$AUTH" }
+if ($ORG_ID) { $ARGS += "--org_id=$ORG_ID" }
+
+if ($SOFTWARE_LIST_ENABLED -eq "true") { $ARGS += "--software_list_enabled=true" }
+if ($HD_ENCRYPTED_CHECK -eq "true") { $ARGS += "--hd_encrypted_check=true" }
+if ($SCREENLOCK_CHECK -eq "true") { $ARGS += "--screenlock_check=true" }
+
+if ($RESPONSE_ACTIONS) { $ARGS += "--response_actions=$RESPONSE_ACTIONS" }
+if ($LOG_FORWARDING) { $ARGS += "--log_forwarding=$LOG_FORWARDING" }
+
+for ($i = 0; $i -lt $ARGS.Count; $i++) {
+    if ($ARGS[$i] -match '=') {
+        $parts = $ARGS[$i] -split '=', 2
+        $key = $parts[0]
+        $val = $parts[1]
+
+        if ($val -match '\s' -and $val -notmatch '^".*"$') {
+            $val = '"' + $val + '"'
+        }
+
+        $ARGS[$i] = "$key=$val"
+    }
+}
+
+$ARGS = $ARGS -join " "
 
 # ===== replace service if exists =====
 if (Get-Service $SERVICE_NAME -ErrorAction SilentlyContinue) {
@@ -2799,12 +2841,17 @@ if (Get-Service $SERVICE_NAME -ErrorAction SilentlyContinue) {
 }
 
 # ===== create service =====
-$BIN_QUOTED = '"' + $BIN_PATH + '"'
-sc.exe create $SERVICE_NAME binPath= ($BIN_QUOTED + " " + $ARGS) start= auto
+# $BIN_QUOTED = '\"' + $BIN_PATH + '\"'
+$BIN_QUOTED = $BIN_PATH
+$FULL_BINPATH = '"' + $BIN_PATH + " " + $ARGS + '"'
 
+echo "Creating service"
+sc.exe create $SERVICE_NAME binPath= $FULL_BINPATH start= auto
+
+echo "Service created. Starting service..."
 sc.exe start $SERVICE_NAME
 
-Write-Host "orborus installed"`,
+Write-Host "orborus-agent installed"`,
 			c.BaseURL,
 			c.Queue,
 			c.Auth,
