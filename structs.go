@@ -158,7 +158,7 @@ type ExecutionRequest struct {
 	Type              string   `json:"type"`
 	Priority          int64    `json:"priority" datastore:"priority" yaml:"priority"` // Mapped back to workflowexecutions' priority
 
-	CreatedAt int64 `json:"created_at" datastore:"created_at"`
+	CreatedAt int64  `json:"created_at" datastore:"created_at"`
 	Authgroup string `json:"authgroup" datastore:"authgroup"`
 }
 
@@ -5241,6 +5241,7 @@ type SensorDetails struct {
 	Checkin    int64  `json:"checkin" datastore:"checkin"`
 	Uuid       string `json:"uuid" datastore:"uuid"`
 
+	User     string `json:"user" datastore:"user"`
 	Hostname string `json:"hostname" datastore:"hostname"`
 	OS       string `json:"os" datastore:"os"`
 	Arch     string `json:"arch" datastore:"arch"`
@@ -5252,7 +5253,7 @@ type SensorDetails struct {
 	AutomaticScreenlockEnabled string     `json:"automatic_screen_lock_enabled" datastore:"automatic_screen_lock_enabled"`
 	HdEncrypted                string     `json:"hd_encrypted" datastore:"hd_encrypted"`
 	LogForwarding              string     `json:"log_forwarding" datastore:"log_forwarding"`
-	ResponseActions      string     `json:"response_actions" datastore:"response_actions"`
+	ResponseActions            string     `json:"response_actions" datastore:"response_actions"`
 	InstalledSoftware          []Software `json:"installed_software" datastore:"installed_software,noindex"`
 }
 
@@ -5272,10 +5273,10 @@ type SensorMode struct {
 	ResponseActions string `json:"response_actions" datastore:"response_actions"`
 }
 
-
 type RCEResult struct {
-	Success bool `json:"success"`
-	Command string `json:"command"`
-	Output string `json:"output"`
-	Error  string `json:"error,omitempty"`
+	Success  bool   `json:"success"`
+	Hostname string `json:"hostname"`
+	Command  string `json:"command"`
+	Output   string `json:"output"`
+	Error    string `json:"error,omitempty"`
 }
