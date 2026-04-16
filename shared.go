@@ -25314,6 +25314,15 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					userinputResp.ClickInfo.IP = GetRequestIp(request)
 					userinputResp.ClickInfo.Note = ""
 
+					// Set success based on answer
+					if len(answer) > 0 && answer[0] == "false" {
+						userinputResp.Success = false
+						userinputResp.Reason = "User declined the input"
+					} else {
+						userinputResp.Success = true
+						userinputResp.Reason = "User approved the input"
+					}
+
 					// Check if the "note" parameter exists in the request
 					execArg := request.URL.Query().Get("execution_argument")
 					if len(execArg) > 0 {
@@ -25429,10 +25438,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					sendSelfRequest := false
 					if answer[0] == "false" {
-						result.Status = "SKIPPED"
-						sendSelfRequest = true
+						result.Status = "SUCCESS"
+						log.Printf("[INFO][%s] User Input '%s' (%s) answered FALSE - status SUCCESS, answer stored in click_info.", oldExecution.ExecutionId, result.Action.Label, result.Action.ID)
 					} else {
 						result.Status = "SUCCESS"
+						log.Printf("[INFO][%s] User Input '%s' (%s) answered TRUE - status SUCCESS.", oldExecution.ExecutionId, result.Action.Label, result.Action.ID)
 					}
 
 					// Should send result to self?
@@ -25448,8 +25458,173 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
 						}
 
-						// FIXME: Should send result to self?
-						// Maybe that is ONLY if on cloud?
+						// Answer=false: save result, trigger failure subflow if configured, then finish.
+						if answer[0] == "false" {
+							log.Printf("[INFO][%s] User Input '%s' answered NO - saving result and finishing execution.", oldExecution.ExecutionId, result.Action.Label)
+
+							// Update result in execution before triggering subflow (auth needs non-FINISHED status)
+							for newresIndex, newres := range oldExecution.Results {
+								if newres.Action.ID == result.Action.ID {
+									oldExecution.Results[newresIndex] = result
+									break
+								}
+							}
+
+							// Trigger failure subflow if configured
+							failureSubflowId := ""
+							failureSubflowStartnode := ""
+							log.Printf("[DEBUG][%s] Looking for subflow_failure param in trigger %s. Workflow has %d triggers.", oldExecution.ExecutionId, result.Action.ID, len(workflow.Triggers))
+							for _, trigger := range workflow.Triggers {
+								if trigger.ID == result.Action.ID {
+									log.Printf("[DEBUG][%s] Found matching trigger '%s' with %d params", oldExecution.ExecutionId, trigger.Label, len(trigger.Parameters))
+									for _, param := range trigger.Parameters {
+										log.Printf("[DEBUG][%s] Trigger param: name=%s, value=%s", oldExecution.ExecutionId, param.Name, param.Value)
+										if param.Name == "subflow_failure" && len(param.Value) > 0 {
+											failureSubflowId = param.Value
+										}
+										if param.Name == "subflow_failure_startnode" && len(param.Value) > 0 {
+											failureSubflowStartnode = param.Value
+										}
+									}
+									break
+								}
+							}
+							log.Printf("[DEBUG][%s] Failure subflow lookup result: id='%s', startnode='%s'", oldExecution.ExecutionId, failureSubflowId, failureSubflowStartnode)
+
+							if len(failureSubflowId) > 0 {
+								log.Printf("[INFO][%s] Triggering failure subflow %s for declined User Input '%s'", oldExecution.ExecutionId, failureSubflowId, result.Action.Label)
+
+								backendUrl := os.Getenv("BASE_URL")
+								if project.Environment != "cloud" {
+									port := 5001
+									if os.Getenv("BACKEND_PORT") != "" {
+										newPort, err := strconv.Atoi(os.Getenv("BACKEND_PORT"))
+										if err == nil {
+											port = newPort
+										}
+									}
+									backendUrl = fmt.Sprintf("http://localhost:%d", port)
+								}
+
+								if project.Environment == "cloud" && len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+									backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+								}
+
+								if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+									backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+								}
+
+								// Execution argument with decline context
+								execArgMap := map[string]interface{}{
+									"success":          false,
+									"reason":           userinputResp.Reason,
+									"source_workflow":  workflow.ID,
+									"source_execution": oldExecution.ExecutionId,
+									"source_node":      result.Action.ID,
+									"information":      userinputResp.Information,
+									"click_info":       userinputResp.ClickInfo,
+								}
+								execArgBytes, _ := json.Marshal(execArgMap)
+								execArg := string(execArgBytes)
+
+								runUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute?source_workflow=%s&source_execution=%s&source_auth=%s&source_node=%s&start=%s",
+									backendUrl, failureSubflowId,
+									workflow.ID,
+									oldExecution.ExecutionId,
+									oldExecution.Authorization,
+									result.Action.ID,
+									failureSubflowStartnode,
+								)
+								reqBody := fmt.Sprintf(`{"execution_argument": %s}`, strconv.Quote(execArg))
+
+								topClient := &http.Client{
+									Transport: &http.Transport{
+										Proxy: nil,
+									},
+								}
+
+								req, err := http.NewRequest("POST", runUrl, bytes.NewBuffer([]byte(reqBody)))
+								if err != nil {
+									log.Printf("[ERROR][%s] Failed creating failure subflow request: %s", oldExecution.ExecutionId, err)
+								} else {
+									req.Header.Set("Content-Type", "application/json")
+									req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", oldExecution.Authorization))
+
+									resp, err := topClient.Do(req)
+									if err != nil {
+										log.Printf("[ERROR][%s] Failed triggering failure subflow %s: %s", oldExecution.ExecutionId, failureSubflowId, err)
+									} else {
+										defer resp.Body.Close()
+										respBody, _ := ioutil.ReadAll(resp.Body)
+										log.Printf("[INFO][%s] Failure subflow %s triggered (status: %d)", oldExecution.ExecutionId, failureSubflowId, resp.StatusCode)
+
+										// Parse response to get execution ID and update result
+										var subflowResp struct {
+											Success     bool   `json:"success"`
+											ExecutionID string `json:"execution_id"`
+											Authorization string `json:"authorization"`
+										}
+										if jsonErr := json.Unmarshal(respBody, &subflowResp); jsonErr == nil && len(subflowResp.ExecutionID) > 0 {
+											userinputResp.DeclineSubflow.Success = subflowResp.Success
+											userinputResp.DeclineSubflow.ExecutionID = subflowResp.ExecutionID
+											userinputResp.DeclineSubflow.WorkflowID = failureSubflowId
+
+											frontendUrl := backendUrl
+											if strings.Contains(frontendUrl, ":5001") {
+												frontendUrl = strings.Replace(frontendUrl, ":5001", ":3001", 1)
+											}
+											if strings.Contains(frontendUrl, "appspot.com") || strings.Contains(frontendUrl, "run.app") {
+												frontendUrl = "https://shuffler.io"
+											}
+											userinputResp.DeclineSubflowURL = fmt.Sprintf("%s/workflows/%s?execution_id=%s", frontendUrl, failureSubflowId, subflowResp.ExecutionID)
+
+											// Update result with decline subflow info
+											updatedResult, marshalErr := json.Marshal(userinputResp)
+											if marshalErr == nil {
+												result.Result = string(updatedResult)
+												oldExecution.Result = result.Result
+
+												for newresIndex, newres := range oldExecution.Results {
+													if newres.Action.ID == result.Action.ID {
+														oldExecution.Results[newresIndex] = result
+														break
+													}
+												}
+
+												// Update result with decline subflow info
+											updatedResult, marshalErr := json.Marshal(userinputResp)
+											if marshalErr == nil {
+												result.Result = string(updatedResult)
+												for newresIndex, newres := range oldExecution.Results {
+													if newres.Action.ID == result.Action.ID {
+														oldExecution.Results[newresIndex] = result
+														break
+													}
+												}
+											}
+											}
+
+											log.Printf("[INFO][%s] Decline subflow execution: %s, URL: %s", oldExecution.ExecutionId, subflowResp.ExecutionID, userinputResp.DeclineSubflowURL)
+										}
+									}
+								}
+							}
+
+							// Finish execution
+							oldExecution.Status = "FINISHED"
+							oldExecution.Result = result.Result
+							oldExecution.CompletedAt = int64(time.Now().Unix())
+							oldExecution.LastNode = result.Action.ID
+
+							err = SetWorkflowExecution(ctx, *oldExecution, true)
+							if err != nil {
+								log.Printf("[ERROR][%s] Failed saving finished execution after answer=false: %s", oldExecution.ExecutionId, err)
+							}
+
+							return *oldExecution, ExecInfo{}, "", errors.New("User Input: Execution stopped by user (answer=false)")
+						}
+
+						// Answer=true: save result and re-add to queue
 						if sendSelfRequest == false && strings.ToLower(result.Action.Environment) != "cloud" {
 							log.Printf("[DEBUG][%s] SETTING user input result, and re-adding it to queue IF not in worker. Environment: %s", result.ExecutionId, result.Action.Environment)
 							if project.Environment == "worker" {
@@ -25497,7 +25672,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								}
 
 								if updateMade {
-									return *oldExecution, ExecInfo{}, "", errors.New("User Input: Execution action skipped!")
+									return *oldExecution, ExecInfo{}, "", errors.New("User Input: Execution continued by user (answer=true)")
 								}
 							}
 						}
