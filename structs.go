@@ -1062,6 +1062,7 @@ type OnpremLicense struct {
 	Tenant             OnpremLimits `json:"tenant" datastore:"tenant"`
 	Environment        OnpremLimits `json:"environment" datastore:"environment"`
 	WorkflowExecutions OnpremLimits `json:"workflow_executions" datastore:"workflow_executions"`
+	AppRuns            OnpremLimits `json:"app_runs" datastore:"app_runs"`
 	Timeout            string       `json:"timeout" datastore:"timeout"`
 	Branding           bool         `json:"branding" datastore:"branding"`
 }
@@ -1321,25 +1322,26 @@ type PaymentSubscription struct {
 }
 
 type SyncUsage struct {
-	WorkflowExecutions SyncDataUsage `json:"workflow_executions" datastore:"workflow_executions"`
-	Webhook            SyncDataUsage `json:"webhook" datastore:"webhook"`
-	Schedules          SyncDataUsage `json:"schedules" datastore:"schedules"`
-	UserInput          SyncDataUsage `json:"user_input" datastore:"user_input"`
-	SendMail           SyncDataUsage `json:"send_mail" datastore:"send_mail"`
-	SendSms            SyncDataUsage `json:"send_sms" datastore:"send_sms"`
-	EmailTrigger       SyncDataUsage `json:"email_trigger" datastore:"email_trigger"`
-	Autocomplete       SyncDataUsage `json:"autocomplete" datastore:"autocomplete"`
-	Authentication     SyncDataUsage `json:"authentication" datastore:"authentication"`
-	Schedule           SyncDataUsage `json:"schedule" datastore:"schedule"`
-	AppExecutions      SyncDataUsage `json:"app_executions" datastore:"app_executions"`
-	Workflows          SyncDataUsage `json:"workflows" datastore:"workflows"`
-	MultiTenant        SyncDataUsage `json:"multi_tenant" datastore:"multi_tenant"`
-	MultiRegion        SyncDataUsage `json:"multi_region" datastore:"multi_region"`
-	MultiEnv           SyncDataUsage `json:"multi_env" datastore:"multi_env"`
-	Apps               SyncDataUsage `json:"apps" datastore:"apps"`
-	ShuffleGPT         SyncDataUsage `json:"shuffle_gpt" datastore:"shuffle_gpt"`
-	AgentExecutions    SyncDataUsage `json:"agent_executions" datastore:"agent_executions"`
-	AgentTokens        SyncDataUsage `json:"agent_tokens" datastore:"agent_tokens"`
+	WorkflowExecutions  SyncDataUsage `json:"workflow_executions" datastore:"workflow_executions"`
+	Webhook             SyncDataUsage `json:"webhook" datastore:"webhook"`
+	Schedules           SyncDataUsage `json:"schedules" datastore:"schedules"`
+	UserInput           SyncDataUsage `json:"user_input" datastore:"user_input"`
+	SendMail            SyncDataUsage `json:"send_mail" datastore:"send_mail"`
+	SendSms             SyncDataUsage `json:"send_sms" datastore:"send_sms"`
+	EmailTrigger        SyncDataUsage `json:"email_trigger" datastore:"email_trigger"`
+	Autocomplete        SyncDataUsage `json:"autocomplete" datastore:"autocomplete"`
+	Authentication      SyncDataUsage `json:"authentication" datastore:"authentication"`
+	Schedule            SyncDataUsage `json:"schedule" datastore:"schedule"`
+	AppExecutions       SyncDataUsage `json:"app_executions" datastore:"app_executions"`
+	OnpremAppExecutions SyncDataUsage `json:"onprem_app_executions" datastore:"onprem_app_executions"`
+	Workflows           SyncDataUsage `json:"workflows" datastore:"workflows"`
+	MultiTenant         SyncDataUsage `json:"multi_tenant" datastore:"multi_tenant"`
+	MultiRegion         SyncDataUsage `json:"multi_region" datastore:"multi_region"`
+	MultiEnv            SyncDataUsage `json:"multi_env" datastore:"multi_env"`
+	Apps                SyncDataUsage `json:"apps" datastore:"apps"`
+	ShuffleGPT          SyncDataUsage `json:"shuffle_gpt" datastore:"shuffle_gpt"`
+	AgentExecutions     SyncDataUsage `json:"agent_executions" datastore:"agent_executions"`
+	AgentTokens         SyncDataUsage `json:"agent_tokens" datastore:"agent_tokens"`
 }
 
 type SyncDataUsage struct {
@@ -1366,30 +1368,31 @@ type MailLevel struct {
 }
 
 type SyncFeatures struct {
-	Editing            bool        `json:"editing" datastore:"editing"`
-	MailSent           []MailLevel `json:"mail_sent" datastore:"mail_sent"`
-	AppExecutions      SyncData    `json:"app_executions" datastore:"app_executions"`
-	MultiEnv           SyncData    `json:"multi_env" datastore:"multi_env"`
-	MultiTenant        SyncData    `json:"multi_tenant" datastore:"multi_tenant"`
-	MultiRegion        SyncData    `json:"multi_region" datastore:"multi_region"`
-	Webhook            SyncData    `json:"webhook" datastore:"webhook"`
-	Schedules          SyncData    `json:"schedules" datastore:"schedules"`
-	UserInput          SyncData    `json:"user_input" datastore:"user_input"`
-	SendMail           SyncData    `json:"send_mail" datastore:"send_mail"`
-	SendSms            SyncData    `json:"send_sms" datastore:"send_sms"`
-	Updates            SyncData    `json:"updates" datastore:"updates"`
-	EmailTrigger       SyncData    `json:"email_trigger" datastore:"email_trigger"`
-	Notifications      SyncData    `json:"notifications" datastore:"notifications"`
-	Workflows          SyncData    `json:"workflows" datastore:"workflows"`
-	Autocomplete       SyncData    `json:"autocomplete" datastore:"autocomplete"`
-	WorkflowExecutions SyncData    `json:"workflow_executions" datastore:"workflow_executions"`
-	Authentication     SyncData    `json:"authentication" datastore:"authentication"`
-	Schedule           SyncData    `json:"schedule" datastore:"schedule"`
-	Apps               SyncData    `json:"apps" datastore:"apps"`
-	ShuffleGPT         SyncData    `json:"shuffle_gpt" datastore:"shuffle_gpt"`
-	Branding           SyncData    `json:"branding" datastore:"branding"`
-	AgentExecutions    SyncData    `json:"agent_executions" datastore:"agent_executions"`
-	AgentTokens        SyncData    `json:"agent_tokens" datastore:"agent_tokens"`
+	Editing             bool        `json:"editing" datastore:"editing"`
+	MailSent            []MailLevel `json:"mail_sent" datastore:"mail_sent"`
+	AppExecutions       SyncData    `json:"app_executions" datastore:"app_executions"`
+	OnpremAppExecutions SyncData    `json:"onprem_app_executions" datastore:"onprem_app_executions"`
+	MultiEnv            SyncData    `json:"multi_env" datastore:"multi_env"`
+	MultiTenant         SyncData    `json:"multi_tenant" datastore:"multi_tenant"`
+	MultiRegion         SyncData    `json:"multi_region" datastore:"multi_region"`
+	Webhook             SyncData    `json:"webhook" datastore:"webhook"`
+	Schedules           SyncData    `json:"schedules" datastore:"schedules"`
+	UserInput           SyncData    `json:"user_input" datastore:"user_input"`
+	SendMail            SyncData    `json:"send_mail" datastore:"send_mail"`
+	SendSms             SyncData    `json:"send_sms" datastore:"send_sms"`
+	Updates             SyncData    `json:"updates" datastore:"updates"`
+	EmailTrigger        SyncData    `json:"email_trigger" datastore:"email_trigger"`
+	Notifications       SyncData    `json:"notifications" datastore:"notifications"`
+	Workflows           SyncData    `json:"workflows" datastore:"workflows"`
+	Autocomplete        SyncData    `json:"autocomplete" datastore:"autocomplete"`
+	WorkflowExecutions  SyncData    `json:"workflow_executions" datastore:"workflow_executions"`
+	Authentication      SyncData    `json:"authentication" datastore:"authentication"`
+	Schedule            SyncData    `json:"schedule" datastore:"schedule"`
+	Apps                SyncData    `json:"apps" datastore:"apps"`
+	ShuffleGPT          SyncData    `json:"shuffle_gpt" datastore:"shuffle_gpt"`
+	Branding            SyncData    `json:"branding" datastore:"branding"`
+	AgentExecutions     SyncData    `json:"agent_executions" datastore:"agent_executions"`
+	AgentTokens         SyncData    `json:"agent_tokens" datastore:"agent_tokens"`
 }
 
 type SyncData struct {
