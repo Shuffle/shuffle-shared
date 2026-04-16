@@ -5262,9 +5262,9 @@ type SensorMode struct {
 	Enabled bool `json:"enabled" datastore:"enabled"`
 
 	// Compliance
-	SoftwareListEnabled bool `json:"software_list_enabled" datastore:"software_list_enabled"`
-	HdEncryptedCheck    bool `json:"hd_encrypted_check" datastore:"hd_encrypted_check"`
-	ScreenlockCheck     bool `json:"screenlock_check" datastore:"screenlock_check"`
+	SoftwareListEnabled string `json:"software_list_enabled" datastore:"software_list_enabled"`
+	HdEncryptedCheck    string `json:"hd_encrypted_check" datastore:"hd_encrypted_check"`
+	ScreenlockCheck     string `json:"screenlock_check" datastore:"screenlock_check"`
 
 	// Monitoring
 	LogForwarding string `json:"log_forwarding" datastore:"log_forwarding"`

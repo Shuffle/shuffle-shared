@@ -2651,6 +2651,7 @@ type OrborusDownloadConfig struct {
 
 	ResponseActions string `json:"response_actions"`
 	LogForwarding   string `json:"log_forwarding"`
+	AsRoot bool `json:"as_root"`
 
 	BinaryBaseURL string `json:"binary_base_url"`
 	Binaries map[string]string `json:"binaries"`
@@ -2670,6 +2671,8 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 		HDEncryptedCheck:    true,
 		ScreenlockCheck:     true,
 		ResponseActions:     "full",
+
+		AsRoot: true,
 
 		// Used for builder in dynamic scripts
 		BinaryBaseURL: "https://github.com/Shuffle/orborus/releases/latest/download",
@@ -2721,6 +2724,9 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := q.Get("screenlock_check"); v != "" {
 		c.ScreenlockCheck = v == "true"
+	}
+	if v := q.Get("admin"); v != "" {
+		c.AsRoot = v != "false"
 	}
 
 	// Check the "AUTH" header for a secret value to allow overriding the config (for security)
@@ -2875,9 +2881,16 @@ $PARSED_WRAPPER = '"' + $WRAPPER + '"'
 # IF you want to run it without admin permissions, don't set /RU SYSTEM here
 # Problem is then it's controllable by users too. That's fine for now.
 
-schtasks /Create /TN $SERVICE_NAME /TR "$PARSED_WRAPPER" /SC ONSTART /RU "SYSTEM" /RL HIGHEST /F
-#schtasks /Create /TN $SERVICE_NAME /TR "$PARSED_WRAPPER" /SC ONSTART /RL HIGHEST /F
+$RUN_AS_ROOT = "%t"
+if ($RUN_AS_ROOT -eq "true") {
+	echo "Running as root (default) - admin=false to disable"
+	schtasks /Create /TN $SERVICE_NAME /TR "$PARSED_WRAPPER" /SC ONSTART /RU "SYSTEM" /RL HIGHEST /F
+} else {
+	echo "Running as normal $env:USERNAME"
+	schtasks /Create /TN $SERVICE_NAME /TR "$PARSED_WRAPPER" /SC ONSTART /RL HIGHEST /F
+}
 
+echo "Running service"
 schtasks /Run /TN $SERVICE_NAME
 
 Write-Host "orborus-agent installed"`,
@@ -2892,6 +2905,7 @@ Write-Host "orborus-agent installed"`,
 			c.LogForwarding,
 			"%E",
 			"%",
+			c.AsRoot,
 		)
 
 	} else {
@@ -2917,6 +2931,10 @@ if [[ "$OS" != "linux" && "$OS" != "darwin" ]]; then
   echo "unsupported OS: $OS"
   exit 1
 fi
+
+echo ""
+echo "Download started. Please be patient while we install the agent. Detected OS: $OS, ARCH: $ARCH"
+echo ""
 
 # =========================
 # Config (from Go injection)
