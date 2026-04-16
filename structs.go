@@ -4121,6 +4121,12 @@ type UserInputResponse struct {
 		Authorization string `json:"authorization"`
 	} `json:"subflow"`
 	SubflowURL string `json:"subflow_url"`
+	DeclineSubflow struct {
+		Success       bool   `json:"success"`
+		ExecutionID   string `json:"execution_id"`
+		WorkflowID    string `json:"workflow_id"`
+	} `json:"decline_subflow"`
+	DeclineSubflowURL string `json:"decline_subflow_url"`
 }
 
 type SchemalessOutput struct {
