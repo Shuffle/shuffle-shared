@@ -25496,23 +25496,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								log.Printf("[INFO][%s] Triggering failure subflow %s for declined User Input '%s'", oldExecution.ExecutionId, failureSubflowId, result.Action.Label)
 
 								backendUrl := os.Getenv("BASE_URL")
-								if project.Environment != "cloud" {
-									port := 5001
-									if os.Getenv("BACKEND_PORT") != "" {
-										newPort, err := strconv.Atoi(os.Getenv("BACKEND_PORT"))
-										if err == nil {
-											port = newPort
-										}
-									}
-									backendUrl = fmt.Sprintf("http://localhost:%d", port)
-								}
-
-								if project.Environment == "cloud" && len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
-									backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
-								}
-
 								if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
 									backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+								} else if project.Environment == "cloud" && len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+									backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 								}
 
 								// Execution argument with decline context
@@ -25571,9 +25558,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 											userinputResp.DeclineSubflow.WorkflowID = failureSubflowId
 
 											frontendUrl := backendUrl
-											if strings.Contains(frontendUrl, ":5001") {
-												frontendUrl = strings.Replace(frontendUrl, ":5001", ":3001", 1)
-											}
 											if strings.Contains(frontendUrl, "appspot.com") || strings.Contains(frontendUrl, "run.app") {
 												frontendUrl = "https://shuffler.io"
 											}
