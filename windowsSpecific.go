@@ -349,3 +349,9 @@ func ListInstalledSoftware() []Software {
 
 	return append(allSoftware, listInstalledSoftwareRegistry()...)
 }
+
+func ListCodeScannerProjects() []ProjectInfo {
+	log.Printf("[WARNING] Codescanner not implemented on windows yet.")
+
+	return []ProjectInfo{}
+}

@@ -2542,6 +2542,10 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 						if len(orborusData.SensorDetails.InstalledSoftware) > 0 {
 							env.SensorHosts[hostIndex].InstalledSoftware = orborusData.SensorDetails.InstalledSoftware
 						}
+
+						if len(orborusData.SensorDetails.InstalledSoftware) > 0 {
+							env.SensorHosts[hostIndex].CodeScanner = orborusData.SensorDetails.CodeScanner
+						}
 					}
 				}
 

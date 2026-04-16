@@ -5250,11 +5250,12 @@ type SensorDetails struct {
 	ElevatedAccess bool `json:"elevated_access" datastore:"elevated_access"`
 
 	// String, not bool => we want details
-	AutomaticScreenlockEnabled string     `json:"automatic_screen_lock_enabled" datastore:"automatic_screen_lock_enabled"`
-	HdEncrypted                string     `json:"hd_encrypted" datastore:"hd_encrypted"`
-	LogForwarding              string     `json:"log_forwarding" datastore:"log_forwarding"`
-	ResponseActions            string     `json:"response_actions" datastore:"response_actions"`
-	InstalledSoftware          []Software `json:"installed_software" datastore:"installed_software,noindex"`
+	AutomaticScreenlockEnabled string        `json:"automatic_screen_lock_enabled" datastore:"automatic_screen_lock_enabled"`
+	HdEncrypted                string        `json:"hd_encrypted" datastore:"hd_encrypted"`
+	LogForwarding              string        `json:"log_forwarding" datastore:"log_forwarding"`
+	ResponseActions            string        `json:"response_actions" datastore:"response_actions"`
+	InstalledSoftware          []Software    `json:"installed_software" datastore:"installed_software,noindex"`
+	CodeScanner                []ProjectInfo `json:"code_scanner" datastore:"code_scanner,noindex"`
 }
 
 // Related to Orborus Agent Mode. Used locally.
@@ -5263,6 +5264,7 @@ type SensorMode struct {
 
 	// Compliance
 	SoftwareListEnabled string `json:"software_list_enabled" datastore:"software_list_enabled"`
+	CodeScannerEnabled  string `json:"code_scanner_enabled" datastore:"code_scanner_enabled"`
 	HdEncryptedCheck    string `json:"hd_encrypted_check" datastore:"hd_encrypted_check"`
 	ScreenlockCheck     string `json:"screenlock_check" datastore:"screenlock_check"`
 
@@ -5279,4 +5281,19 @@ type RCEResult struct {
 	Command  string `json:"command"`
 	Output   string `json:"output"`
 	Error    string `json:"error,omitempty"`
+}
+
+// ProjectInfo holds details about a discovered project
+type ProjectInfo struct {
+	Path     string     `json:"path"`
+	Type     string     `json:"type"` // "golang", "python", "javascript"
+	Packages []Software `json:"packages"`
+}
+
+// Scanner manages concurrent directory scanning
+type Scanner struct {
+	results chan ProjectInfo
+	wg      sync.WaitGroup
+	mu      sync.Mutex
+	visited map[string]bool // Track visited dirs to avoid symlink loops
 }
