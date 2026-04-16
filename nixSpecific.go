@@ -523,17 +523,108 @@ func listMacSoftware() []Software {
 	return result
 }
 
+func GetLinuxSoftware() (Software, error) {
+	file, err := os.Open("/etc/os-release")
+	if err != nil {
+		return Software{}, err
+	}
+	defer file.Close()
+
+	var name, version, codename string
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := parts[0]
+		value := strings.Trim(parts[1], `"`)
+
+		switch key {
+		case "NAME":
+			name = value
+		case "VERSION_ID":
+			version = value
+		case "VERSION_CODENAME":
+			codename = value
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return Software{}, err
+	}
+
+	fullName := name
+	if version != "" {
+		fullName = fmt.Sprintf("%s %s", name, version)
+	}
+	if codename != "" {
+		fullName = fmt.Sprintf("%s (%s)", fullName, codename)
+	}
+
+	return Software{
+		Name:    fullName,
+		Version: version,
+	}, nil
+}
+
+func FindSystemVersionMacOS() Software {
+	get := func(flag string) (string, error) {
+	out, err := exec.Command("sw_vers", flag).Output()
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+
+	productName, err := get("-productName")
+	if err != nil {
+		return Software{}
+	}
+
+	version, err := get("-productVersion")
+	if err != nil {
+		return Software{}
+	}
+
+	build, err := get("-buildVersion")
+	if err != nil {
+		return Software{}
+	}
+
+	return Software{
+		Name:    fmt.Sprintf("%s %s (%s)", productName, version, build),
+		Version: version,
+	}
+}
+
 func ListInstalledSoftware() []Software {
 	switch runtime.GOOS {
 	case "windows":
 		return []Software{}
 	case "darwin":
+		systemInfo := FindSystemVersionMacOS()
 		systemApps := listMacSoftware()
 		homebrew := listBrew()
 
-		return append(systemApps, homebrew...)
+		allSoftware := []Software{systemInfo}
+		allSoftware = append(allSoftware, systemApps...)
+		allSoftware = append(allSoftware, homebrew...)
+		return allSoftware
 	default:
-		return listLinuxSoftware()
+		allSoftware := []Software{}
+		defaultSoftware, err := GetLinuxSoftware() 
+		if err != nil { 
+			log.Printf("[WARNING] Failed to get Linux distribution info: %v", err)
+		} else {
+			allSoftware = append(allSoftware, defaultSoftware)
+		}
+
+		return append(allSoftware, listLinuxSoftware()...)
 	}
 }
 

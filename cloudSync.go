@@ -2651,6 +2651,7 @@ type OrborusDownloadConfig struct {
 
 	ResponseActions string `json:"response_actions"`
 	LogForwarding   string `json:"log_forwarding"`
+	AsRoot bool `json:"as_root"`
 
 	BinaryBaseURL string `json:"binary_base_url"`
 	Binaries map[string]string `json:"binaries"`
@@ -2670,6 +2671,8 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 		HDEncryptedCheck:    true,
 		ScreenlockCheck:     true,
 		ResponseActions:     "full",
+
+		AsRoot: true,
 
 		// Used for builder in dynamic scripts
 		BinaryBaseURL: "https://github.com/Shuffle/orborus/releases/latest/download",
@@ -2722,6 +2725,9 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("screenlock_check"); v != "" {
 		c.ScreenlockCheck = v == "true"
 	}
+	if v := q.Get("admin"); v != "" {
+		c.AsRoot = v != "false"
+	}
 
 	// Check the "AUTH" header for a secret value to allow overriding the config (for security)
 	if authHeader := r.Header.Get("AUTH"); authHeader != "" {
@@ -2731,7 +2737,26 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 	// Quite untested.
 	script := ""
 	if isWindows {
-		script = fmt.Sprintf(`$ErrorActionPreference = "Stop"
+		script = fmt.Sprintf(`[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+		$principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+
+$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $isAdmin) {
+    Start-Process powershell -Verb RunAs -ArgumentList @(
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "iwr <your-url> | iex"
+    )
+
+	Write-Host "started sensor installation in a new elevated PowerShell window. Please follow the prompts there to complete installation.",
+    exit 1
+}
+
+$ErrorActionPreference = "Stop"
 
 # ===== injected config (from cfg) =====
 $BASE_URL = "%s"
@@ -2746,48 +2771,129 @@ $RESPONSE_ACTIONS = "%s"
 $LOG_FORWARDING = "%s"
 
 # ===== install paths =====
-$INSTALL_DIR = "$env:ProgramFiles\orborus"
+$INSTALL_DIR = "$env:ProgramData\orborus"
 New-Item -ItemType Directory -Force -Path $INSTALL_DIR | Out-Null
 
 # ===== arch detection =====
-$ARCH = if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") { "amd64" } else { "arm64" }
-
-$BIN_URL = "https://github.com/Shuffle/orborus/releases/latest/download/orborus-windows-$ARCH.exe"
-$BIN_PATH = Join-Path $INSTALL_DIR "orborus.exe"
-
-Write-Host "Downloading binary..."
-Invoke-WebRequest -Uri $BIN_URL -OutFile $BIN_PATH
-
-# ===== service =====
-$SERVICE_NAME = "orborus"
-
-$ARGS = @(
-    "--sensor_mode=true"
-    "--base_url=$BASE_URL"
-    "--queue=$QUEUE"
-    "--auth=$AUTH"
-    "--org_id=$ORG_ID"
-    "--software_list_enabled=$SOFTWARE_LIST_ENABLED"
-    "--hd_encrypted_check=$HD_ENCRYPTED_CHECK"
-    "--screenlock_check=$SCREENLOCK_CHECK"
-    "--response_actions=$RESPONSE_ACTIONS"
-    "--log_forwarding=$LOG_FORWARDING"
-) -join " "
-
-# ===== replace service if exists =====
-if (Get-Service $SERVICE_NAME -ErrorAction SilentlyContinue) {
-    Stop-Service $SERVICE_NAME -Force -ErrorAction SilentlyContinue
-    sc.exe delete $SERVICE_NAME | Out-Null
-    Start-Sleep -Seconds 2
+if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") {
+    $ARCH = "amd64"
+} elseif ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") {
+    $ARCH = "arm64"
+} else {
+    Write-Error "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE"
+    exit 1
 }
 
+$BIN_URL = "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-windows-$ARCH.exe"
+$BIN_PATH = Join-Path $INSTALL_DIR "orborus-agent.exe"
+icacls $INSTALL_DIR /grant Users:R
+icacls $BIN_PATH /grant Users:RX
+
+# Remove if exists early as the process may be running and we need to change the file
+$SERVICE_NAME = "orborus-agent"
+echo "Deleting old agent"
+schtasks /Delete /TN $SERVICE_NAME /F
+
+$p = Get-Process -Name "orborus-agent" -ErrorAction SilentlyContinue
+if ($p) {
+    $p | Stop-Process -Force
+}
+
+Start-Sleep -Seconds 2
+
+Write-Host "Downloading binary from $BIN_URL to $BIN_PATH..."
+try {
+    Write-Host "Downloading via BITS..."
+    Start-BitsTransfer -Source $BIN_URL -Destination $BIN_PATH -ErrorAction Stop
+}
+catch {
+    Write-Host "BITS failed, falling back to Invoke-WebRequest..."
+
+    Invoke-WebRequest -Uri $BIN_URL -OutFile $BIN_PATH -UseBasicParsing -MaximumRedirection 10
+}
+
+icacls $INSTALL_DIR /grant Users:R
+icacls $BIN_PATH /grant Users:RX
+
+# ===== service =====
+function Escape-ArgValue($v) {
+    if ($v -match "\s") {
+        return '"' + $v + '"'
+    }
+    return $v
+}
+
+
+$ARGS = @()
+$ARGS += "--sensor_mode=true"
+
+if ($BASE_URL) { $ARGS += "--base_url=$BASE_URL" }
+if ($QUEUE) { $ARGS += "--queue=$QUEUE" }
+if ($AUTH) { $ARGS += "--auth=$AUTH" }
+if ($ORG_ID) { $ARGS += "--org_id=$ORG_ID" }
+
+# Removed as they made the command more than 260 characters (hard limit)
+#if ($SOFTWARE_LIST_ENABLED -eq "true") { $ARGS += "--software_list_enabled=true" }
+#if ($HD_ENCRYPTED_CHECK -eq "true") { $ARGS += "--hd_encrypted_check=true" }
+#if ($SCREENLOCK_CHECK -eq "true") { $ARGS += "--screenlock_check=true" }
+
+if ($RESPONSE_ACTIONS) { $ARGS += "--response_actions=$RESPONSE_ACTIONS" }
+if ($LOG_FORWARDING) { $ARGS += "--log_forwarding=$LOG_FORWARDING" }
+
+for ($i = 0; $i -lt $ARGS.Count; $i++) {
+    if ($ARGS[$i] -match '=') {
+        $parts = $ARGS[$i] -split '=', 2
+        $key = $parts[0]
+        $val = $parts[1]
+
+        if ($val -match '\s' -and $val -notmatch '^".*"$') {
+            $val = '"' + $val + '"'
+        }
+
+        $ARGS[$i] = "$key=$val"
+    }
+}
+
+$ARGS = $ARGS -join " "
+
 # ===== create service =====
-$BIN_QUOTED = '"' + $BIN_PATH + '"'
-sc.exe create $SERVICE_NAME binPath= ($BIN_QUOTED + " " + $ARGS) start= auto
+$WRAPPER = Join-Path $INSTALL_DIR "run-orborus.bat"
 
-sc.exe start $SERVICE_NAME
+## Give exec permissions as user
+icacls $WRAPPER /grant Users:RX
 
-Write-Host "orborus installed"`,
+echo "Writing bat file to $WRAPPER"
+$writer = New-Item -ItemType File -Path $Wrapper -Force
+
+# Pre-prep
+$line2 = "cd /d " + '"' + $INSTALL_DIR + '"'
+$line4 = 'start "" ' + '"' + $BIN_PATH + '"' + " " + $ARGS + " >> orborus.log 2>&1"
+
+Add-Content $WRAPPER "@echo off"
+Add-Content $WRAPPER $line2
+Add-Content $WRAPPER "echo STARTED >> debug.log"
+Add-Content $WRAPPER $line4
+Add-Content $WRAPPER "echo EXIT CODE %sRRORLEVEL%s >> debug.log"
+
+echo "Starting scheduled task"
+$PARSED_WRAPPER = '"' + $WRAPPER + '"'
+
+# IF you want to run it without admin permissions, don't set /RU SYSTEM here
+# Problem is then it's controllable by users too. That's fine for now.
+
+$RUN_AS_ROOT = "%t"
+if ($RUN_AS_ROOT -eq "true") {
+	echo "Running as root (default) - admin=false to disable"
+	schtasks /Create /TN $SERVICE_NAME /TR "$PARSED_WRAPPER" /SC ONSTART /RU "SYSTEM" /RL HIGHEST /F
+} else {
+	echo "Running as normal $env:USERNAME"
+	schtasks /Create /TN $SERVICE_NAME /TR "$PARSED_WRAPPER" /SC ONSTART /RL HIGHEST /F
+}
+
+echo "Running service"
+schtasks /Run /TN $SERVICE_NAME
+
+Write-Host "orborus-agent installed"`,
 			c.BaseURL,
 			c.Queue,
 			c.Auth,
@@ -2797,6 +2903,9 @@ Write-Host "orborus installed"`,
 			c.ScreenlockCheck,
 			c.ResponseActions,
 			c.LogForwarding,
+			"%E",
+			"%",
+			c.AsRoot,
 		)
 
 	} else {
@@ -2822,6 +2931,10 @@ if [[ "$OS" != "linux" && "$OS" != "darwin" ]]; then
   echo "unsupported OS: $OS"
   exit 1
 fi
+
+echo ""
+echo "Download started. Please be patient while we install the agent. Detected OS: $OS, ARCH: $ARCH"
+echo ""
 
 # =========================
 # Config (from Go injection)

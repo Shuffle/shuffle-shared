@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 
+	"unsafe" // for pointer control. Not ideal, but ok
 	"syscall"
 	"os/exec"
 	"golang.org/x/sys/windows"
@@ -55,40 +56,6 @@ func extractRegValue(output string) string {
 	return ""
 }
 
-// Windows: Check screensaver timeout
-func IsAutomaticScreenlockEnabled() (bool) {
-	// Is screensaver active?
-	cmd := exec.Command(
-		"reg", "query",
-		"HKEY_CURRENT_USER\\Control Panel\\Desktop",
-		"/v", "ScreenSaveActive",
-	)
-	output, err := cmd.CombinedOutput()
-	if err != nil || !strings.Contains(string(output), "0x1") {
-		log.Printf("[ERROR] Failed to check ScreenSaveActive: %s", err)
-		return false
-	}
-
-	// Check timeout (ScreenSaveTimeOut is in seconds)
-	cmd = exec.Command(
-		"reg", "query",
-		"HKEY_CURRENT_USER\\Control Panel\\Desktop",
-		"/v", "ScreenSaveTimeOut",
-	)
-	output, err = cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("[ERROR] Failed to check ScreenSaveTimeOut: %s", err)
-		return false
-	}
-
-	// Parse and check
-	timeoutStr := extractRegValue(string(output))
-	timeout := parseInt(timeoutStr)
-
-	// Compliance: timeout should be <= 15 minutes
-	return timeout <= 900
-}
-
 func isEncryptedWindows() bool {
 	out, err := exec.Command("manage-bde", "-status", "C:").Output()
 	if err != nil {
@@ -127,34 +94,6 @@ func GetProfiler() string {
 	}
 
 	return "failed to get profiler"
-}
-
-func ListInstalledSoftware() []Software {
-	cmd := `
-Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* ,
-                 HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* |
-Select-Object DisplayName, DisplayVersion |
-Where-Object {$_.DisplayName} |
-ConvertTo-Json
-`
-
-	out, err := exec.Command("powershell", "-Command", cmd).Output()
-	if err != nil {
-		return nil
-	}
-
-	var pkgs []Software
-	json.Unmarshal(out, &pkgs)
-
-	var result []Software
-	for _, p := range pkgs {
-		result = append(result, Software{
-			Name:    p.Name,
-			Version: p.Version,
-		})
-	}
-
-	return result
 }
 
 var (
@@ -255,4 +194,158 @@ func (c *AuditLogCollector) LogCollectorStart(ctx context.Context) error {
 func NewAuditLogCollector(config TelemetryConfig) (*AuditLogCollector, error) {
 	auditLogCollector := AuditLogCollector{}
 	return &auditLogCollector, errors.New("Not implemented on windows")
+}
+
+func queryRegValue(name string) (string, error) {
+	cmd := exec.Command(
+		"reg", "query",
+		`HKEY_CURRENT_USER\Control Panel\Desktop`,
+		"/v", name,
+	)
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, name) {
+			fields := strings.Fields(line)
+			if len(fields) >= 3 {
+				return fields[len(fields)-1], nil
+			}
+		}
+	}
+	return "", fmt.Errorf("value not found")
+}
+
+func IsAutomaticScreenlockEnabled() bool {
+	activeStr, err := queryRegValue("ScreenSaveActive")
+	if err != nil {
+		log.Printf("[ERROR] ScreenSaveActive: %v", err)
+		return false
+	}
+
+	secureStr, err := queryRegValue("ScreenSaverIsSecure")
+	if err != nil {
+		log.Printf("[ERROR] ScreenSaverIsSecure: %v", err)
+		return false
+	}
+
+	timeoutStr, err := queryRegValue("ScreenSaveTimeOut")
+	if err != nil {
+		log.Printf("[ERROR] ScreenSaveTimeOut: %v", err)
+		return false
+	}
+
+	active := parseInt(activeStr)
+	secure := parseInt(secureStr)
+	timeout := parseInt(timeoutStr)
+
+	return active == 1 && secure == 1 && timeout <= 900
+}
+
+type osVersionInfoEx struct {
+	dwOSVersionInfoSize uint32
+	dwMajorVersion      uint32
+	dwMinorVersion      uint32
+	dwBuildNumber       uint32
+	dwPlatformId        uint32
+	szCSDVersion        [128]uint16
+	wServicePackMajor   uint16
+	wServicePackMinor   uint16
+	wSuiteMask          uint16
+	wProductType        byte
+	wReserved           byte
+}
+
+func getWindowsSoftware() (Software, error) {
+	// Load ntdll and RtlGetVersion (more reliable than GetVersionEx)
+	mod := syscall.NewLazyDLL("ntdll.dll")
+	proc := mod.NewProc("RtlGetVersion")
+
+	var info osVersionInfoEx
+	info.dwOSVersionInfoSize = uint32(unsafe.Sizeof(info))
+
+	r1, _, _ := proc.Call(uintptr(unsafe.Pointer(&info)))
+	if r1 != 0 {
+		return Software{}, fmt.Errorf("RtlGetVersion failed")
+	}
+
+	version := fmt.Sprintf("%d.%d.%d",
+		info.dwMajorVersion,
+		info.dwMinorVersion,
+		info.dwBuildNumber,
+	)
+
+	name := "Windows"
+
+	// Light mapping (best-effort, not official API)
+	switch {
+	case info.dwMajorVersion == 10 && info.dwBuildNumber >= 22000:
+		name = fmt.Sprintf("Windows 11 (Build %d)", info.dwBuildNumber)
+	case info.dwMajorVersion == 10:
+		name = fmt.Sprintf("Windows 10 (Build %d)", info.dwBuildNumber)
+	default:
+		name = fmt.Sprintf("Windows %d.%d (Build %d)",
+			info.dwMajorVersion,
+			info.dwMinorVersion,
+			info.dwBuildNumber,
+		)
+	}
+
+	return Software{
+		Name:    name,
+		Version: version,
+	}, nil
+}
+
+func listInstalledSoftwareRegistry() []Software {
+	cmd := `
+$paths = @(
+  "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+  "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+  "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
+)
+
+Get-ItemProperty $paths |
+Where-Object { $_.DisplayName } |
+Select-Object @{Name="name";Expression={$_.DisplayName}}, @{Name="version";Expression={$_.DisplayVersion}} |
+ConvertTo-Json -Depth 1 -Compress
+`
+
+	out, err := exec.Command("powershell", "-NoProfile", "-Command", cmd).Output()
+	if err != nil {
+		return nil
+	}
+
+	data := bytes.TrimSpace(out)
+	if len(data) == 0 {
+		return nil
+	}
+
+	// normalize single object -> array
+	if data[0] == '{' {
+		data = append([]byte("["), append(data, ']')...)
+	}
+
+	var pkgs []Software
+	if err := json.Unmarshal(data, &pkgs); err != nil {
+		return nil
+	}
+
+	return pkgs
+}
+
+func ListInstalledSoftware() []Software {
+	allSoftware := []Software{}
+	localSoftware, err := getWindowsSoftware()
+	if err != nil {
+		log.Printf("[ERROR] getLocalSoftware load error: %v", err)
+	} else {
+		allSoftware = append(allSoftware, localSoftware)
+	}
+
+	return append(allSoftware, listInstalledSoftwareRegistry()...)
 }

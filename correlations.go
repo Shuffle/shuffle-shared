@@ -412,7 +412,7 @@ func RCECleanup(command string) string {
 	return command
 }
 
-func HandleSensorResponseAction(sensorDetails SensorMode, incRequest ExecutionRequest) {
+func HandleSensorResponseAction(hostname string, sensorDetails SensorMode, incRequest ExecutionRequest) {
 	if len(incRequest.ExecutionId) == 0 || len(incRequest.Authorization) == 0 {
 		log.Printf("[WARNING] Invalid execution request: missing execution ID or action")
 		return
@@ -433,6 +433,8 @@ func HandleSensorResponseAction(sensorDetails SensorMode, incRequest ExecutionRe
 		log.Printf("[ERROR] BASE_URL environment variable not set. Cannot execute response action.")
 		return
 	}
+
+	startTime := time.Now().Unix()
 
 	command := incRequest.ExecutionArgument
 	if sensorDetails.ResponseActions == "controlled" { 
@@ -477,6 +479,7 @@ func HandleSensorResponseAction(sensorDetails SensorMode, incRequest ExecutionRe
 
 	parsedResult := RCEResult{
 		Success: true,
+		Hostname: hostname,
 		Command: command,
 		Output: out,
 		Error: "",
@@ -509,6 +512,8 @@ func HandleSensorResponseAction(sensorDetails SensorMode, incRequest ExecutionRe
 			AppID: "sensor",
 			ID: incRequest.Start,
 		},
+		StartedAt: startTime,
+		CompletedAt: time.Now().Unix(),
 		Result: string(marshalledResult),
 	}
 

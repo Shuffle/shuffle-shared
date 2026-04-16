@@ -75,6 +75,7 @@ import (
 
 	"github.com/google/go-github/v28/github"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/oauth2"
 
 	"github.com/Masterminds/semver"
 	dockerclient "github.com/docker/docker/client"
@@ -393,7 +394,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 && userSettingUpMfa == false {
-			log.Printf("[ERROR] Path too short: %d", len(location))
+			log.Printf("[ERROR] Path too short (2fa): %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -796,7 +797,7 @@ func HandleGet2fa(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" && userSettingUpMfa == false {
 		if len(location) <= 4 {
-			log.Printf("[ERROR] Path too short: %d", len(location))
+			log.Printf("[ERROR] Path too short - MFA: %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -958,7 +959,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
-			log.Printf("Path too short: %d", len(location))
+			log.Printf("Path too short (getorg): %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -1455,7 +1456,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
-			log.Printf("Path too short: %d", len(location))
+			log.Printf("Path too short (get suborgs): %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -3251,7 +3252,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
-			log.Printf("[ERROR] Path too short: %d", len(location))
+			//log.Printf("[ERROR] Path too short (get environments): %d", len(location))
 		} else {
 			findEnv = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(location[4], "%20", "_"), " ", "_"))
 		}
@@ -3948,7 +3949,7 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	if err == nil || len(app.ID) > 0 {
 		log.Printf("[AUDIT] Found app %s (%s) for OpenAPI. Checking for user %s (%s) in org %s (%s) to access", app.Name, id, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
-		if !app.Public && app.Owner != user.Id && user.ActiveOrg.Id != app.ReferenceOrg && !user.SupportAccess {
+		if !app.Public && !app.Sharing && app.Owner != user.Id && user.ActiveOrg.Id != app.ReferenceOrg && !user.SupportAccess {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -11574,7 +11575,33 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// FIXME: Add a way to check if the user is a part of the
+	// Edge-case: foundUser.Orgs is empty and foundUser.ActiveOrg is empty,
+	// but the user exists in the admin's Org.Users list.
+	// Handle removal self-contained and return early.
+	if !orgFound {
+		adminOrg, err := GetOrg(ctx, userInfo.ActiveOrg.Id)
+		if err == nil {
+			for i, orgUser := range adminOrg.Users {
+				if orgUser.Id == foundUser.Id {
+					orgFound = true
+					adminOrg.Users = append(adminOrg.Users[:i], adminOrg.Users[i+1:]...)
+					err = SetOrg(ctx, *adminOrg, adminOrg.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating org (delete user %s) %s: %s", foundUser.Username, adminOrg.Id, err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "Failed removing user from org"}`))
+						return
+					}
+
+					log.Printf("[AUDIT] User %s (%s) successfully removed %s from org %s (edge-case: user had no org references)", userInfo.Username, userInfo.Id, foundUser.Username, userInfo.ActiveOrg.Id)
+					resp.WriteHeader(200)
+					resp.Write([]byte(`{"success": true}`))
+					return
+				}
+			}
+		}
+	}
+
 	if !orgFound && !userInfo.SupportAccess {
 		log.Printf("[AUDIT] User %s (%s) is admin, but can't delete users outside their own org.", userInfo.Username, userInfo.Id)
 		resp.WriteHeader(401)
@@ -22212,6 +22239,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				action.ID = uuid.NewV4().String()
 			}
 
+			startTime := int64(time.Now().Unix())
 			exec := WorkflowExecution{
 				Workflow: Workflow{
 					ID: workflowId,
@@ -22230,7 +22258,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				WorkflowId:    workflowId,
 				ExecutionId:   workflowId,
 				ExecutionOrg:  user.ActiveOrg.Id,
-				StartedAt:     int64(time.Now().Unix()),
+				StartedAt:     startTime,
 				Authorization: uuid.NewV4().String(),
 			}
 
@@ -23430,7 +23458,11 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		parsedLink = realPath
 	}
 
-	client := github.NewClient(nil)
+	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
+
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
 	githubResp := GithubResp{
 		Name:         location[4],
 		Contributors: []GithubAuthor{},
@@ -23490,7 +23522,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	err = SetCache(ctx, cacheKey, b, 604800)
+	err = SetCache(ctx, cacheKey, b, 10080)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for doc %s: %s", location[4], err)
 	}
@@ -23532,7 +23564,11 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	client := github.NewClient(nil)
+	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
+
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
 	owner := "shuffle"
 	repo := "shuffle-docs"
 
@@ -23609,296 +23645,7 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	err = SetCache(ctx, cacheKey, b, 604800)
-	if err != nil {
-		log.Printf("[WARNING] Failed setting cache for cachekey %s: %s", cacheKey, err)
-	}
-
-	resp.WriteHeader(200)
-	resp.Write(b)
-}
-
-func GetArticles(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	location := strings.Split(request.URL.String(), "/")
-	if len(location) < 5 {
-		resp.WriteHeader(404)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/articles/workflows.md"`)))
-		return
-	}
-
-	if strings.Contains(location[4], "?") {
-		location[4] = strings.Split(location[4], "?")[0]
-	}
-
-	ctx := GetContext(request)
-	downloadLocation, downloadOk := request.URL.Query()["location"]
-	version, versionOk := request.URL.Query()["version"]
-	cacheKey := fmt.Sprintf("articles_%s", location[4])
-	if downloadOk {
-		cacheKey = fmt.Sprintf("%s_%s", cacheKey, downloadLocation[0])
-	}
-
-	if versionOk {
-		cacheKey = fmt.Sprintf("%s_%s", cacheKey, version[0])
-	}
-
-	cache, err := GetCache(ctx, cacheKey)
-	if err == nil {
-		cacheData := []byte(cache.([]uint8))
-		resp.WriteHeader(200)
-		resp.Write(cacheData)
-		return
-	}
-
-	owner := "shuffle"
-	repo := "shuffle-docs"
-	path := "articles"
-	docPath := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s/%s.md", owner, repo, path, location[4])
-
-	// FIXME: User controlled and dangerous (possibly). Uses Markdown on the frontend to render it
-	realPath := ""
-
-	newname := location[4]
-	if downloadOk {
-		if downloadLocation[0] == "openapi" {
-			newname = strings.ReplaceAll(strings.ToLower(location[4]), `%20`, "_")
-			docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs/%s.md", newname)
-			realPath = fmt.Sprintf("https://github.com/Shuffle/openapi-apps/blob/master/docs/%s.md", newname)
-
-		} else if downloadLocation[0] == "python" && versionOk {
-			// Apparently this uses dashes for no good reason?
-			// Should maybe move everything over to underscores later?
-			newname = strings.ReplaceAll(newname, `%20`, "-")
-			newname = strings.ReplaceAll(newname, ` `, "-")
-			newname = strings.ReplaceAll(newname, `_`, "-")
-			newname = strings.ToLower(newname)
-
-			if version[0] == "1.0.0" {
-				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/1.0.0/README.md", newname)
-				realPath = fmt.Sprintf("https://github.com/Shuffle/python-apps/blob/master/%s/1.0.0/README.md", newname)
-
-				log.Printf("[INFO] Should download python app for version %s: %s", version[0], docPath)
-
-			} else {
-				realPath = fmt.Sprintf("https://github.com/Shuffle/python-apps/blob/master/%s/README.md", newname)
-				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/README.md", newname)
-			}
-
-		}
-	}
-
-	//log.Printf("Docpath: %s", docPath)
-
-	httpClient := &http.Client{}
-	req, err := http.NewRequest(
-		"GET",
-		docPath,
-		nil,
-	)
-
-	if err != nil {
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/articles/workflows.md"}`)))
-		resp.WriteHeader(404)
-		return
-	}
-
-	newresp, err := httpClient.Do(req)
-	if err != nil {
-		resp.WriteHeader(404)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/articles/workflows.md"}`)))
-		return
-	}
-
-	defer newresp.Body.Close()
-	body, err := ioutil.ReadAll(newresp.Body)
-	if err != nil {
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't parse data"}`)))
-		return
-	}
-
-	commitOptions := &github.CommitsListOptions{
-		Path: fmt.Sprintf("%s/%s.md", path, location[4]),
-	}
-
-	parsedLink := fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s.md", owner, repo, path, location[4])
-	if len(realPath) > 0 {
-		parsedLink = realPath
-	}
-
-	client := github.NewClient(nil)
-	githubResp := GithubResp{
-		Name:         location[4],
-		Contributors: []GithubAuthor{},
-		Edited:       "",
-		ReadTime:     len(body) / 10 / 250,
-		Link:         parsedLink,
-	}
-
-	if githubResp.ReadTime == 0 {
-		githubResp.ReadTime = 1
-	}
-
-	info, _, err := client.Repositories.ListCommits(ctx, owner, repo, commitOptions)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting commit info: %s", err)
-	} else {
-		//log.Printf("Info: %s", info)
-		for _, commit := range info {
-			//log.Printf("Commit: %s", commit.Author)
-			newAuthor := GithubAuthor{}
-			if commit.Author != nil && commit.Author.AvatarURL != nil {
-				newAuthor.ImageUrl = *commit.Author.AvatarURL
-			}
-
-			if commit.Author != nil && commit.Author.HTMLURL != nil {
-				newAuthor.Url = *commit.Author.HTMLURL
-			}
-
-			found := false
-			for _, contributor := range githubResp.Contributors {
-				if contributor.Url == newAuthor.Url {
-					found = true
-					break
-				}
-			}
-
-			if !found && len(newAuthor.Url) > 0 && len(newAuthor.ImageUrl) > 0 {
-				githubResp.Contributors = append(githubResp.Contributors, newAuthor)
-			}
-		}
-	}
-
-	type Result struct {
-		Success bool       `json:"success"`
-		Reason  string     `json:"reason"`
-		Meta    GithubResp `json:"meta"`
-	}
-
-	var result Result
-	result.Success = true
-	result.Meta = githubResp
-
-	result.Reason = string(body)
-	b, err := json.Marshal(result)
-	if err != nil {
-		http.Error(resp, err.Error(), 500)
-		return
-	}
-
-	err = SetCache(ctx, cacheKey, b, 180)
-	if err != nil {
-		log.Printf("[WARNING] Failed setting cache for articles %s: %s", location[4], err)
-	}
-
-	resp.WriteHeader(200)
-	resp.Write(b)
-}
-
-func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	ctx := GetContext(request)
-	cacheKey := "articles_list"
-	resetCache := request.URL.Query().Get("resetCache") == "true" // Check for resetCache parameter
-
-	if !resetCache {
-		cache, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			resp.WriteHeader(200)
-			resp.Write(cacheData)
-			return
-		}
-	}
-	result := FileList{}
-	log.Println("[DEBUG] Skipping Cache for Articles List")
-
-	client := github.NewClient(nil)
-	owner := "shuffle"
-	repo := "shuffle-docs"
-	path := "articles"
-	_, item1, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting articles list: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error listing directory"}`)))
-		return
-	}
-
-	if len(item1) == 0 {
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No articles available."}`)))
-		return
-	}
-
-	names := []GithubResp{}
-	for _, item := range item1 {
-		if !strings.HasSuffix(*item.Name, "md") {
-			continue
-		}
-
-		commits, resp, err := client.Repositories.ListCommits(ctx, owner, repo, &github.CommitsListOptions{
-			Path: fmt.Sprintf("%s/%s", path, *item.Name),
-		})
-
-		publishedDate := time.Now().Unix()
-		if err != nil {
-			log.Printf("[WARNING] Failed getting commits for %s: %s", *item.Name, err)
-			if resp != nil {
-				log.Printf("[DEBUG] Response status: %d", resp.StatusCode)
-			}
-		} else {
-			log.Printf("[DEBUG] Found %d commits for %s", len(commits), *item.Name)
-			if len(commits) > 0 {
-				publishedDate = commits[len(commits)-1].Commit.Author.Date.Unix()
-				log.Printf("[DEBUG] Setting published date for %s to %s (%d) from first commit", *item.Name, commits[len(commits)-1].Commit.Author.Date.Format("2006-01-02 15:04:05"), publishedDate)
-			} else {
-				log.Printf("[WARNING] No commits found for %s", *item.Name)
-			}
-		}
-
-		// FIXME: Scuffed readtime calc
-		// Average word length = 5. Space = 1. 5+1 = 6 avg.
-		// Words = *item.Size/6/250
-		//250 = average read time / minute
-		// Doubling this for bloat removal in Markdown~
-		githubResp := GithubResp{
-			Name:          (*item.Name)[0 : len(*item.Name)-3],
-			Contributors:  []GithubAuthor{},
-			PublishedDate: publishedDate,
-			Edited:        "",
-			ReadTime:      *item.Size / 6 / 250,
-			Link:          fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
-		}
-
-		names = append(names, githubResp)
-	}
-
-	// Sort articles by published date (newest first)
-	sort.Slice(names, func(i, j int) bool {
-		return names[i].PublishedDate > names[j].PublishedDate
-	})
-
-	//log.Printf(names)
-	result.Success = true
-	result.Reason = "Success"
-	result.List = names
-	b, err := json.Marshal(result)
-	if err != nil {
-		http.Error(resp, err.Error(), 500)
-		return
-	}
-
-	err = SetCache(ctx, cacheKey, b, 300)
+	err = SetCache(ctx, cacheKey, b, 10080)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for cachekey %s: %s", cacheKey, err)
 	}
