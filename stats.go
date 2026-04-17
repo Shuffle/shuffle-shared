@@ -2,7 +2,7 @@ package shuffle
 
 import (
 	"context"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -1427,7 +1427,7 @@ func generateAlertCacheKey(orgId string, threshold interface{}, emailList []stri
 
 	// Memcache keys have a 250-character limit. Hash anything that exceeds it.
 	if len(key) > 200 {
-		hash := md5.Sum([]byte(key))
+		hash := sha256.Sum256([]byte(key))
 		key = "alert_cache_" + hex.EncodeToString(hash[:])
 	}
 
