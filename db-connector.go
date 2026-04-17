@@ -10672,9 +10672,9 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	}
 
 	if len(users) != 0 {
-		if debug {
-			log.Printf("[DEBUG] Moving away from getapikey '%s' (%s)", users[0].Username, users[0].Id)
-		}
+		//if debug {
+		//	log.Printf("[DEBUG] Moving away from getapikey '%s' (%s)", users[0].Username, users[0].Id)
+		//}
 	}
 
 	//	if project.CacheDb {

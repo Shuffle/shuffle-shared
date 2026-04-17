@@ -2519,7 +2519,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 				found = true
 				if timeNow > host.Checkin+hostRefresh || env.SensorHosts[hostIndex].Uuid != orborusData.Uuid {
 					if debug {
-						log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago, Fulldata: %#v", host.Hostname, env.Name, env.Id, timeNow-host.Checkin, orborusData.SensorDetails)
+						log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago", host.Hostname, env.Name, env.Id, timeNow-host.Checkin)
 					}
 
 					updateMade = true
@@ -2566,10 +2566,14 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			newHost := orborusData.SensorDetails
 			newHost.Uuid = orborusData.Uuid
 			newHost.Checkin = timeNow
+
 			env.SensorHosts = append(env.SensorHosts, newHost)
 		}
 
 		if updateMade && len(env.SensorHosts) >= 1 {
+			// Update datastore for the sensor as well.
+			go HandleSensorDatastoreUpdate(orborusData)
+
 			env.Checkin = timeNow
 			err := SetEnvironment(ctx, env)
 			if err != nil {
@@ -2644,21 +2648,158 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 	return nil
 }
 
-type OrborusDownloadConfig struct {
-	BaseURL             string `json:"base_url"`
-	Queue               string `json:"queue"`
-	Auth                string `json:"auth"`
-	OrgID               string `json:"org_id"`
-	SoftwareListEnabled bool   `json:"software_list_enabled"`
-	HDEncryptedCheck    bool   `json:"hd_encrypted_check"`
-	ScreenlockCheck     bool   `json:"screenlock_check"`
+func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
+	if len(orborusDetails.SensorDetails.Hostname) == 0 || orborusDetails.OrgId == "" {
+		if debug { 
+			log.Printf("[DEBUG] Not updating datastore for sensor without hostname/orgId.")
+		}
 
-	ResponseActions string `json:"response_actions"`
-	LogForwarding   string `json:"log_forwarding"`
-	AsRoot bool `json:"as_root"`
+		return
+	}
 
-	BinaryBaseURL string `json:"binary_base_url"`
-	Binaries map[string]string `json:"binaries"`
+	sensorDetails := orborusDetails.SensorDetails
+
+	ctx := context.Background()
+
+	// MAX every 60 minutes
+	cacheKey := fmt.Sprintf("sensorupdate_%s", sensorDetails.Hostname)
+	GotCache, err := GetCache(ctx, cacheKey)
+	if err == nil && GotCache != nil {
+		if debug { 
+			log.Printf("[DEBUG] Skipping datastore update for sensor '%s' as it was updated recently (cache hit)", sensorDetails.Hostname)
+		}
+
+		return
+	}
+
+	log.Printf("[DEBUG] Handling datastore update for sensor '%s'", sensorDetails.Hostname)
+	SetCache(ctx, cacheKey, []byte("1"), 60)
+
+	datastoreSensorIndex := "shuffle-security_sensors"
+	datastoreSoftwareIndex := "shuffle-security_software"
+	datastorePackageIndex := "shuffle-security_packages"
+	_ = datastorePackageIndex
+	_ = datastoreSoftwareIndex
+	_ = datastoreSensorIndex
+
+
+	if debug { 
+		log.Printf("[DEBUG] Found on %s. Software: %d, Packages: %d", sensorDetails.Hostname, len(sensorDetails.InstalledSoftware), len(sensorDetails.CodeScanner))
+	}
+
+	handledKeys := []string{}
+	softwareKeys := []CacheKeyData{}
+	for softwareCnt, software := range sensorDetails.InstalledSoftware {
+		if softwareCnt > 1000 { 
+			break
+		}
+
+		// linux/macos/windows handler
+		if softwareCnt == 0 && strings.Contains(software.Name, " ") {
+			software.Name = strings.ReplaceAll(software.Name, software.Version, "")
+			nameSplit := strings.Split(software.Name, " ")
+
+			software.Name = nameSplit[0]
+			for _, part := range nameSplit[1:] {
+				if len(part) <= 1 {
+					continue
+				}
+
+				software.Version = fmt.Sprintf("%s-%s", software.Version, part)
+			}
+		}
+
+		parsedKeyname := fmt.Sprintf("%s_%s", strings.TrimSpace(strings.ReplaceAll(strings.ToLower(software.Name), " ", "_")), sensorDetails.OS)
+		if ArrayContains(handledKeys, software.Name) {
+			continue
+		}
+
+		handledKeys = append(handledKeys, software.Name)
+		//go func(parsedKeyname string, software Software) {
+			// 1. Get existing key 
+			// 2. Update Versions & Hostnames
+			// 3. If it existed already, don't update the "Last Seen" field (or set it to the oldest of the two)
+			software.OS = sensorDetails.OS
+			software.Hostnames = []HostDetails{
+				HostDetails{
+					Hostname: sensorDetails.Hostname,
+					Version: software.Version,
+					UpdatedAt: time.Now().Unix(),
+				},
+			}
+			if len(software.Version) > 0 {
+				software.Versions = []string{software.Version}
+			}
+
+			datastoreId := fmt.Sprintf("%s_%s_%s", orborusDetails.OrgId, parsedKeyname, datastoreSoftwareIndex)
+			config, getCacheError := GetDatastoreKey(ctx, datastoreId, datastoreSoftwareIndex)
+			if getCacheError != nil {
+				//log.Printf("[ERROR] Failed to get existing datastore key for software '%s': %s", parsedKeyname, getCacheError)
+			} else if len(config.Value) > 0 {
+				unmarshalledSoftware := Software{}
+				err := json.Unmarshal([]byte(config.Value), &unmarshalledSoftware)
+				if err == nil { 
+					hostExists := false
+					versionExists := false
+					for _, foundHost := range unmarshalledSoftware.Hostnames {
+						if foundHost.Hostname == sensorDetails.Hostname && foundHost.Version == software.Version {
+							hostExists = true
+							break
+						}
+					}
+
+					if !hostExists {
+						unmarshalledSoftware.Hostnames = append(unmarshalledSoftware.Hostnames, HostDetails{
+							Hostname: sensorDetails.Hostname,
+							Version: software.Version,
+							UpdatedAt: time.Now().Unix(),
+						})
+					}
+
+					if ArrayContains(unmarshalledSoftware.Versions, software.Version) {
+						versionExists = true
+					} else {
+						unmarshalledSoftware.Versions = append(unmarshalledSoftware.Versions, software.Version)
+					}
+
+					if hostExists && versionExists {
+						log.Printf("[WARNING] Software '%s' on host '%s' with version '%s' already exists in datastore. Skipping update.", software.Name, sensorDetails.Hostname, software.Version)
+						continue
+					}
+
+					software = unmarshalledSoftware
+				}
+			}
+
+			software.Version = ""
+			parsedValue, err := json.Marshal(software)
+			if err != nil {
+				log.Printf("[ERROR] Failed to marshal software for datastore update: %s. Software: %#v", err, software)
+				return
+			}
+
+
+			newKey := CacheKeyData{
+				Key: parsedKeyname, 
+				Category: datastoreSoftwareIndex,
+				Value: string(parsedValue),
+				OrgId: orborusDetails.OrgId,
+			}
+
+			softwareKeys = append(softwareKeys, newKey)
+		//}(parsedKeyname, software)
+	}
+
+	if len(softwareKeys) > 0 { 
+		// Set them in the datastore (with some delay to avoid spikes)
+		// Do we do it directly maybe, as we already are in the backend?
+		// We can't due to automation huh. Gotta use the bulk API
+		log.Printf("[INFO] Updating datastore with %d software keys for sensor '%s'", len(softwareKeys), sensorDetails.Hostname)
+		_, err = SetDatastoreKeyBulk(ctx, softwareKeys) 
+		if err != nil { 
+			log.Printf("[ERROR] Failed to update datastore with software keys for sensor '%s': %s", sensorDetails.Hostname, err)
+		}
+	}
 }
 
 // Download handler for Orborus agent installation script. This is used in the "Assets" page for Orborus, and can be used by customers to easily install Orborus on their hosts. It returns a bash script that can be run on the target host to install Orborus with the correct configuration.
@@ -2769,6 +2910,7 @@ $AUTH = "%s"
 $ORG_ID = "%s"
 
 $SOFTWARE_LIST_ENABLED = "%t"
+$CODE_SCANNER_ENABLED = "%t"
 $HD_ENCRYPTED_CHECK = "%t"
 $SCREENLOCK_CHECK = "%t"
 $RESPONSE_ACTIONS = "%s"
@@ -2837,7 +2979,9 @@ if ($AUTH) { $ARGS += "--auth=$AUTH" }
 if ($ORG_ID) { $ARGS += "--org_id=$ORG_ID" }
 
 # Removed as they made the command more than 260 characters (hard limit)
+# These are now being enabled by default.
 #if ($SOFTWARE_LIST_ENABLED -eq "true") { $ARGS += "--software_list_enabled=true" }
+#if ($SOFTWARE_LIST_ENABLED -eq "false") { $ARGS += "--software_list_enabled=false" }
 #if ($HD_ENCRYPTED_CHECK -eq "true") { $ARGS += "--hd_encrypted_check=true" }
 #if ($SCREENLOCK_CHECK -eq "true") { $ARGS += "--screenlock_check=true" }
 
@@ -2903,6 +3047,7 @@ Write-Host "orborus-agent installed"`,
 			c.Auth,
 			c.OrgID,
 			c.SoftwareListEnabled,
+			c.CodeScannerEnabled,
 			c.HDEncryptedCheck,
 			c.ScreenlockCheck,
 			c.ResponseActions,
@@ -2949,6 +3094,7 @@ AUTH="%s"
 ORG_ID="%s"
 
 SOFTWARE_LIST_ENABLED="%t"
+CODE_SCANNER_ENABLED = "%t"
 HD_ENCRYPTED_CHECK="%t"
 SCREENLOCK_CHECK="%t"
 RESPONSE_ACTIONS="%s"
@@ -2989,6 +3135,7 @@ ExecStart=$INSTALL_PATH \
   --auth=$AUTH \
   --org_id=$ORG_ID \
   --software_list_enabled=$SOFTWARE_LIST_ENABLED \
+  --code_scanner_enabled=$CODE_SCANNER_ENABLED \
   --hd_encrypted_check=$HD_ENCRYPTED_CHECK \
   --screenlock_check=$SCREENLOCK_CHECK \
   --log_forwarding=$LOG_FORWARDING \
@@ -3030,6 +3177,7 @@ install_macos() {
     <string>--auth=$AUTH</string>
     <string>--org_id=$ORG_ID</string>
     <string>--software_list_enabled=$SOFTWARE_LIST_ENABLED</string>
+    <string>--code_scanner_enabled=$CODE_SCANNER_ENABLED</string>
     <string>--hd_encrypted_check=$HD_ENCRYPTED_CHECK</string>
     <string>--screenlock_check=$SCREENLOCK_CHECK</string>
     <string>--log_forwarding=$LOG_FORWARDING</string>

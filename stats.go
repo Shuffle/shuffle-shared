@@ -1963,11 +1963,12 @@ func UpdateDetectionStats(ctx context.Context, cacheData CacheKeyData) {
 	}
 
 	// Handle Detection
+	// We actually do this in 'shuffle-security_incidents' tho
 	category := strings.ToLower(cacheData.Category)
-	if category != "ticket" && category != "detection" && category != "tickets" && category != "detections" {
-		if debug {
-			log.Printf("[WARNING] Debug: Not a detection or ticket category, skipping detection stats update for category '%s'", category)
-		}
+	if category != "ticket" && category != "detection" && category != "incidents" {
+		//if debug {
+		//	log.Printf("[WARNING] Debug: Not a detection or ticket category, skipping detection stats update for category '%s'", category)
+		//}
 
 		return
 	}

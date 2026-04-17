@@ -484,45 +484,6 @@ func listBrew() []Software {
 	return result
 }
 
-
-type MacApp struct {
-	Name    string `json:"_name"`
-	Version string `json:"version"`
-	Path    string `json:"path"`
-}
-
-type macProfile struct {
-	Apps []MacApp `json:"SPApplicationsDataType"`
-}
-
-func listMacSoftware() []Software {
-	out, err := exec.Command(
-		"system_profiler",
-		"SPApplicationsDataType",
-		"-json",
-	).Output()
-
-	if err != nil {
-		return nil
-	}
-
-	var p macProfile
-	if err := json.Unmarshal(out, &p); err != nil {
-		return nil
-	}
-
-	result := make([]Software, 0, len(p.Apps))
-
-	for _, app := range p.Apps {
-		result = append(result, Software{
-			Name:    app.Name,
-			Version: app.Version,
-		})
-	}
-
-	return result
-}
-
 func GetLinuxSoftware() (Software, error) {
 	file, err := os.Open("/etc/os-release")
 	if err != nil {
@@ -2026,4 +1987,52 @@ func ListCodeScannerProjects() []ProjectInfo {
 	}
 
 	return parsedProjects 
+}
+
+type MacApp struct {
+	Name          string `json:"_name"`
+	Version       string `json:"version"`
+	BundleVersion string `json:"bundle_version"`
+	Path          string `json:"path"`
+	Info string `json:"info"`
+}
+
+type macProfile struct {
+	Apps []MacApp `json:"SPApplicationsDataType"`
+}
+
+func listMacSoftware() []Software {
+	out, err := exec.Command(
+		"system_profiler",
+		"SPApplicationsDataType",
+		"-json",
+	).Output()
+
+	if err != nil {
+		return nil
+	}
+
+	var p macProfile
+	if err := json.Unmarshal(out, &p); err != nil {
+		return nil
+	}
+
+	result := make([]Software, 0, len(p.Apps))
+	for _, app := range p.Apps {
+		version := app.Version
+		if version == "" {
+			version = app.BundleVersion
+		}
+
+		if version == "" {
+			version = app.Info
+		}
+
+		result = append(result, Software{
+			Name:    app.Name,
+			Version: version,
+		})
+	}
+
+	return result
 }

@@ -4120,11 +4120,11 @@ type UserInputResponse struct {
 		ExecutionID   string `json:"execution_id"`
 		Authorization string `json:"authorization"`
 	} `json:"subflow"`
-	SubflowURL string `json:"subflow_url"`
+	SubflowURL     string `json:"subflow_url"`
 	DeclineSubflow struct {
-		Success       bool   `json:"success"`
-		ExecutionID   string `json:"execution_id"`
-		WorkflowID    string `json:"workflow_id"`
+		Success     bool   `json:"success"`
+		ExecutionID string `json:"execution_id"`
+		WorkflowID  string `json:"workflow_id"`
 	} `json:"decline_subflow"`
 	DeclineSubflowURL string `json:"decline_subflow_url"`
 }
@@ -5236,32 +5236,42 @@ type AppBuildRequest struct {
 	Image   string `datastore:"image"`
 }
 
+type HostDetails struct {
+	Hostname  string `json:"hostname" datastore:"hostname"`
+	Version   string `json:"version,omitempty" datastore:"version,noindex"`
+	UpdatedAt int64  `json:"updated_at,omitempty" datastore:"updated_at"`
+}
+
 type Software struct {
 	Name    string `json:"name" datastore:"name,noindex"`
-	Version string `json:"version" datastore:"version,noindex"`
+	OS      string `json:"os,omitempty" datastore:"os,omitempty"`
+	Version string `json:"version,omitempty" datastore:"version,noindex"`
+
+	Versions  []string      `json:"versions,omitempty" datastore:"version,noindex"`
+	Hostnames []HostDetails `json:"hostnames,omitempty" datastore:"hostnames,noindex"`
 }
 
 // Data sent FROM Orborus->Backend about sensor mode
 type SensorDetails struct {
-	SensorMode bool   `json:"sensor_mode" datastore:"sensor_mode"`
+	SensorMode bool   `json:"sensor_mode,omitempty" datastore:"sensor_mode"`
 	Checkin    int64  `json:"checkin" datastore:"checkin"`
 	Uuid       string `json:"uuid" datastore:"uuid"`
 
-	User     string `json:"user" datastore:"user"`
-	Hostname string `json:"hostname" datastore:"hostname"`
-	OS       string `json:"os" datastore:"os"`
-	Arch     string `json:"arch" datastore:"arch"`
-	Serial   string `json:"serial" datastore:"serial,noindex"`
+	User     string `json:"user,omitempty" datastore:"user"`
+	Hostname string `json:"hostname,omitempty" datastore:"hostname"`
+	OS       string `json:"os,omitempty" datastore:"os"`
+	Arch     string `json:"arch,omitempty" datastore:"arch"`
+	Serial   string `json:"serial,omitempty" datastore:"serial,noindex"`
 
-	ElevatedAccess bool `json:"elevated_access" datastore:"elevated_access"`
+	ElevatedAccess bool `json:"elevated_access,omitempty" datastore:"elevated_access"`
 
 	// String, not bool => we want details
-	AutomaticScreenlockEnabled string        `json:"automatic_screen_lock_enabled" datastore:"automatic_screen_lock_enabled"`
-	HdEncrypted                string        `json:"hd_encrypted" datastore:"hd_encrypted"`
-	LogForwarding              string        `json:"log_forwarding" datastore:"log_forwarding"`
-	ResponseActions            string        `json:"response_actions" datastore:"response_actions"`
-	InstalledSoftware          []Software    `json:"installed_software" datastore:"installed_software,noindex"`
-	CodeScanner                []ProjectInfo `json:"code_scanner" datastore:"code_scanner,noindex"`
+	AutomaticScreenlockEnabled string        `json:"automatic_screen_lock_enabled,omitempty" datastore:"automatic_screen_lock_enabled"`
+	HdEncrypted                string        `json:"hd_encrypted,omitempty" datastore:"hd_encrypted"`
+	LogForwarding              string        `json:"log_forwarding,omitempty" datastore:"log_forwarding"`
+	ResponseActions            string        `json:"response_actions,omitempty" datastore:"response_actions"`
+	InstalledSoftware          []Software    `json:"installed_software,omitempty" datastore:"installed_software,noindex"`
+	CodeScanner                []ProjectInfo `json:"code_scanner,omitempty" datastore:"code_scanner,noindex"`
 }
 
 // Related to Orborus Agent Mode. Used locally.
@@ -5302,4 +5312,22 @@ type Scanner struct {
 	wg      sync.WaitGroup
 	mu      sync.Mutex
 	visited map[string]bool // Track visited dirs to avoid symlink loops
+}
+
+type OrborusDownloadConfig struct {
+	BaseURL             string `json:"base_url"`
+	Queue               string `json:"queue"`
+	Auth                string `json:"auth"`
+	OrgID               string `json:"org_id"`
+	SoftwareListEnabled bool   `json:"software_list_enabled"`
+	CodeScannerEnabled  bool   `json:"code_scanner_enabled"`
+	HDEncryptedCheck    bool   `json:"hd_encrypted_check"`
+	ScreenlockCheck     bool   `json:"screenlock_check"`
+
+	ResponseActions string `json:"response_actions"`
+	LogForwarding   string `json:"log_forwarding"`
+	AsRoot          bool   `json:"as_root"`
+
+	BinaryBaseURL string            `json:"binary_base_url"`
+	Binaries      map[string]string `json:"binaries"`
 }
