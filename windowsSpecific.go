@@ -15,10 +15,10 @@ import (
 	"errors"
 	"fmt"
 
+	"unsafe" // for pointer control. Not ideal, but ok
 	"syscall"
 	"os/exec"
 	"golang.org/x/sys/windows"
-	"golang.org/x/sys/windows/svc"
 )
 
 func IsElevated() bool {
@@ -246,7 +246,62 @@ func IsAutomaticScreenlockEnabled() bool {
 	return active == 1 && secure == 1 && timeout <= 900
 }
 
-func ListInstalledSoftware() []Software {
+type osVersionInfoEx struct {
+	dwOSVersionInfoSize uint32
+	dwMajorVersion      uint32
+	dwMinorVersion      uint32
+	dwBuildNumber       uint32
+	dwPlatformId        uint32
+	szCSDVersion        [128]uint16
+	wServicePackMajor   uint16
+	wServicePackMinor   uint16
+	wSuiteMask          uint16
+	wProductType        byte
+	wReserved           byte
+}
+
+func getWindowsSoftware() (Software, error) {
+	// Load ntdll and RtlGetVersion (more reliable than GetVersionEx)
+	mod := syscall.NewLazyDLL("ntdll.dll")
+	proc := mod.NewProc("RtlGetVersion")
+
+	var info osVersionInfoEx
+	info.dwOSVersionInfoSize = uint32(unsafe.Sizeof(info))
+
+	r1, _, _ := proc.Call(uintptr(unsafe.Pointer(&info)))
+	if r1 != 0 {
+		return Software{}, fmt.Errorf("RtlGetVersion failed")
+	}
+
+	version := fmt.Sprintf("%d.%d.%d",
+		info.dwMajorVersion,
+		info.dwMinorVersion,
+		info.dwBuildNumber,
+	)
+
+	name := "Windows"
+
+	// Light mapping (best-effort, not official API)
+	switch {
+	case info.dwMajorVersion == 10 && info.dwBuildNumber >= 22000:
+		name = fmt.Sprintf("Windows 11 (Build %d)", info.dwBuildNumber)
+	case info.dwMajorVersion == 10:
+		name = fmt.Sprintf("Windows 10 (Build %d)", info.dwBuildNumber)
+	default:
+		name = fmt.Sprintf("Windows %d.%d (Build %d)",
+			info.dwMajorVersion,
+			info.dwMinorVersion,
+			info.dwBuildNumber,
+		)
+	}
+
+	return Software{
+		Name:    name,
+		Version: version,
+	}, nil
+}
+
+func listInstalledSoftwareRegistry() []Software {
 	cmd := `
 $paths = @(
   "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
@@ -281,4 +336,22 @@ ConvertTo-Json -Depth 1 -Compress
 	}
 
 	return pkgs
+}
+
+func ListInstalledSoftware() []Software {
+	allSoftware := []Software{}
+	localSoftware, err := getWindowsSoftware()
+	if err != nil {
+		log.Printf("[ERROR] getLocalSoftware load error: %v", err)
+	} else {
+		allSoftware = append(allSoftware, localSoftware)
+	}
+
+	return append(allSoftware, listInstalledSoftwareRegistry()...)
+}
+
+func ListCodeScannerProjects() []ProjectInfo {
+	log.Printf("[WARNING] Codescanner not implemented on windows yet.")
+
+	return []ProjectInfo{}
 }

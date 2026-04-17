@@ -158,7 +158,7 @@ type ExecutionRequest struct {
 	Type              string   `json:"type"`
 	Priority          int64    `json:"priority" datastore:"priority" yaml:"priority"` // Mapped back to workflowexecutions' priority
 
-	CreatedAt int64 `json:"created_at" datastore:"created_at"`
+	CreatedAt int64  `json:"created_at" datastore:"created_at"`
 	Authgroup string `json:"authgroup" datastore:"authgroup"`
 }
 
@@ -4121,6 +4121,12 @@ type UserInputResponse struct {
 		Authorization string `json:"authorization"`
 	} `json:"subflow"`
 	SubflowURL string `json:"subflow_url"`
+	DeclineSubflow struct {
+		Success       bool   `json:"success"`
+		ExecutionID   string `json:"execution_id"`
+		WorkflowID    string `json:"workflow_id"`
+	} `json:"decline_subflow"`
+	DeclineSubflowURL string `json:"decline_subflow_url"`
 }
 
 type SchemalessOutput struct {
@@ -5254,8 +5260,65 @@ type WttrResponse struct {
 	} `json:"current_condition"`
 }
 
-type Parsed struct {
-	Success       bool   `json:"success"`
-	ExecutionId   string `json:"execution_id"`
-	Authorization string `json:"authorization"`
+// Data sent FROM Orborus->Backend about sensor mode
+type SensorDetails struct {
+	SensorMode bool   `json:"sensor_mode" datastore:"sensor_mode"`
+	Checkin    int64  `json:"checkin" datastore:"checkin"`
+	Uuid       string `json:"uuid" datastore:"uuid"`
+
+	User     string `json:"user" datastore:"user"`
+	Hostname string `json:"hostname" datastore:"hostname"`
+	OS       string `json:"os" datastore:"os"`
+	Arch     string `json:"arch" datastore:"arch"`
+	Serial   string `json:"serial" datastore:"serial,noindex"`
+
+	ElevatedAccess bool `json:"elevated_access" datastore:"elevated_access"`
+
+	// String, not bool => we want details
+	AutomaticScreenlockEnabled string        `json:"automatic_screen_lock_enabled" datastore:"automatic_screen_lock_enabled"`
+	HdEncrypted                string        `json:"hd_encrypted" datastore:"hd_encrypted"`
+	LogForwarding              string        `json:"log_forwarding" datastore:"log_forwarding"`
+	ResponseActions            string        `json:"response_actions" datastore:"response_actions"`
+	InstalledSoftware          []Software    `json:"installed_software" datastore:"installed_software,noindex"`
+	CodeScanner                []ProjectInfo `json:"code_scanner" datastore:"code_scanner,noindex"`
+}
+
+// Related to Orborus Agent Mode. Used locally.
+type SensorMode struct {
+	Enabled bool `json:"enabled" datastore:"enabled"`
+
+	// Compliance
+	SoftwareListEnabled string `json:"software_list_enabled" datastore:"software_list_enabled"`
+	CodeScannerEnabled  string `json:"code_scanner_enabled" datastore:"code_scanner_enabled"`
+	HdEncryptedCheck    string `json:"hd_encrypted_check" datastore:"hd_encrypted_check"`
+	ScreenlockCheck     string `json:"screenlock_check" datastore:"screenlock_check"`
+
+	// Monitoring
+	LogForwarding string `json:"log_forwarding" datastore:"log_forwarding"`
+
+	// Response
+	ResponseActions string `json:"response_actions" datastore:"response_actions"`
+}
+
+type RCEResult struct {
+	Success  bool   `json:"success"`
+	Hostname string `json:"hostname"`
+	Command  string `json:"command"`
+	Output   string `json:"output"`
+	Error    string `json:"error,omitempty"`
+}
+
+// ProjectInfo holds details about a discovered project
+type ProjectInfo struct {
+	Path     string     `json:"path"`
+	Type     string     `json:"type"` // "golang", "python", "javascript"
+	Packages []Software `json:"packages"`
+}
+
+// Scanner manages concurrent directory scanning
+type Scanner struct {
+	results chan ProjectInfo
+	wg      sync.WaitGroup
+	mu      sync.Mutex
+	visited map[string]bool // Track visited dirs to avoid symlink loops
 }

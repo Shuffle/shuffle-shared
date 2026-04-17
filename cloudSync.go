@@ -2542,6 +2542,10 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 						if len(orborusData.SensorDetails.InstalledSoftware) > 0 {
 							env.SensorHosts[hostIndex].InstalledSoftware = orborusData.SensorDetails.InstalledSoftware
 						}
+
+						if len(orborusData.SensorDetails.InstalledSoftware) > 0 {
+							env.SensorHosts[hostIndex].CodeScanner = orborusData.SensorDetails.CodeScanner
+						}
 					}
 				}
 
@@ -2651,6 +2655,7 @@ type OrborusDownloadConfig struct {
 
 	ResponseActions string `json:"response_actions"`
 	LogForwarding   string `json:"log_forwarding"`
+	AsRoot bool `json:"as_root"`
 
 	BinaryBaseURL string `json:"binary_base_url"`
 	Binaries map[string]string `json:"binaries"`
@@ -2670,6 +2675,8 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 		HDEncryptedCheck:    true,
 		ScreenlockCheck:     true,
 		ResponseActions:     "full",
+
+		AsRoot: true,
 
 		// Used for builder in dynamic scripts
 		BinaryBaseURL: "https://github.com/Shuffle/orborus/releases/latest/download",
@@ -2721,6 +2728,9 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := q.Get("screenlock_check"); v != "" {
 		c.ScreenlockCheck = v == "true"
+	}
+	if v := q.Get("admin"); v != "" {
+		c.AsRoot = v != "false"
 	}
 
 	// Check the "AUTH" header for a secret value to allow overriding the config (for security)
@@ -2779,7 +2789,21 @@ if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64") {
 }
 
 $BIN_URL = "https://github.com/Shuffle/orborus/releases/latest/download/orborus-agent-windows-$ARCH.exe"
-$BIN_PATH = Join-Path $INSTALL_DIR "orborus.exe"
+$BIN_PATH = Join-Path $INSTALL_DIR "orborus-agent.exe"
+icacls $INSTALL_DIR /grant Users:R
+icacls $BIN_PATH /grant Users:RX
+
+# Remove if exists early as the process may be running and we need to change the file
+$SERVICE_NAME = "orborus-agent"
+echo "Deleting old agent"
+schtasks /Delete /TN $SERVICE_NAME /F
+
+$p = Get-Process -Name "orborus-agent" -ErrorAction SilentlyContinue
+if ($p) {
+    $p | Stop-Process -Force
+}
+
+Start-Sleep -Seconds 2
 
 Write-Host "Downloading binary from $BIN_URL to $BIN_PATH..."
 try {
@@ -2792,6 +2816,9 @@ catch {
     Invoke-WebRequest -Uri $BIN_URL -OutFile $BIN_PATH -UseBasicParsing -MaximumRedirection 10
 }
 
+icacls $INSTALL_DIR /grant Users:R
+icacls $BIN_PATH /grant Users:RX
+
 # ===== service =====
 function Escape-ArgValue($v) {
     if ($v -match "\s") {
@@ -2800,7 +2827,6 @@ function Escape-ArgValue($v) {
     return $v
 }
 
-$SERVICE_NAME = "orborus-agent"
 
 $ARGS = @()
 $ARGS += "--sensor_mode=true"
@@ -2834,20 +2860,18 @@ for ($i = 0; $i -lt $ARGS.Count; $i++) {
 
 $ARGS = $ARGS -join " "
 
-# remove if exists
-echo "Deleting old agent"
-schtasks /Delete /TN $SERVICE_NAME /F
-Start-Sleep -Seconds 1
-
 # ===== create service =====
 $WRAPPER = Join-Path $INSTALL_DIR "run-orborus.bat"
+
+## Give exec permissions as user
+icacls $WRAPPER /grant Users:RX
 
 echo "Writing bat file to $WRAPPER"
 $writer = New-Item -ItemType File -Path $Wrapper -Force
 
 # Pre-prep
 $line2 = "cd /d " + '"' + $INSTALL_DIR + '"'
-$line4 = '"' + $BIN_PATH + '"' + " " + $ARGS + " >> orborus.log 2>&1"
+$line4 = 'start "" ' + '"' + $BIN_PATH + '"' + " " + $ARGS + " >> orborus.log 2>&1"
 
 Add-Content $WRAPPER "@echo off"
 Add-Content $WRAPPER $line2
@@ -2857,11 +2881,20 @@ Add-Content $WRAPPER "echo EXIT CODE %sRRORLEVEL%s >> debug.log"
 
 echo "Starting scheduled task"
 $PARSED_WRAPPER = '"' + $WRAPPER + '"'
-schtasks /Create /TN $SERVICE_NAME /TR "$PARSED_WRAPPER" /SC ONSTART /RU "SYSTEM" /RL HIGHEST /F
 
-# 
-# schtasks /Change /TN $SERVICE_NAME /RI 1 /DU 9999:59
+# IF you want to run it without admin permissions, don't set /RU SYSTEM here
+# Problem is then it's controllable by users too. That's fine for now.
 
+$RUN_AS_ROOT = "%t"
+if ($RUN_AS_ROOT -eq "true") {
+	echo "Running as root (default) - admin=false to disable"
+	schtasks /Create /TN $SERVICE_NAME /TR "$PARSED_WRAPPER" /SC ONSTART /RU "SYSTEM" /RL HIGHEST /F
+} else {
+	echo "Running as normal $env:USERNAME"
+	schtasks /Create /TN $SERVICE_NAME /TR "$PARSED_WRAPPER" /SC ONSTART /RL HIGHEST /F
+}
+
+echo "Running service"
 schtasks /Run /TN $SERVICE_NAME
 
 Write-Host "orborus-agent installed"`,
@@ -2876,6 +2909,7 @@ Write-Host "orborus-agent installed"`,
 			c.LogForwarding,
 			"%E",
 			"%",
+			c.AsRoot,
 		)
 
 	} else {
@@ -2901,6 +2935,10 @@ if [[ "$OS" != "linux" && "$OS" != "darwin" ]]; then
   echo "unsupported OS: $OS"
   exit 1
 fi
+
+echo ""
+echo "Download started. Please be patient while we install the agent. Detected OS: $OS, ARCH: $ARCH"
+echo ""
 
 # =========================
 # Config (from Go injection)
