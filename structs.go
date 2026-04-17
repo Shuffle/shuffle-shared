@@ -5236,20 +5236,6 @@ type AppBuildRequest struct {
 	Image   string `datastore:"image"`
 }
 
-type HostDetails struct {
-	Hostname  string `json:"hostname" datastore:"hostname"`
-	Version   string `json:"version,omitempty" datastore:"version,noindex"`
-	UpdatedAt int64  `json:"updated_at,omitempty" datastore:"updated_at"`
-}
-
-type Software struct {
-	Name    string `json:"name" datastore:"name,noindex"`
-	OS      string `json:"os,omitempty" datastore:"os,omitempty"`
-	Version string `json:"version,omitempty" datastore:"version,noindex"`
-
-	Versions  []string      `json:"versions,omitempty" datastore:"version,noindex"`
-	Hostnames []HostDetails `json:"hostnames,omitempty" datastore:"hostnames,noindex"`
-}
 
 // Data sent FROM Orborus->Backend about sensor mode
 type SensorDetails struct {
@@ -5299,11 +5285,30 @@ type RCEResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
+type HostDetails struct {
+	Hostname  string `json:"hostname" datastore:"hostname"`
+	Paths      []string `json:"paths,omitempty" datastore:"path,noindex"`
+	Version   string `json:"version,omitempty" datastore:"version,noindex"`
+	UpdatedAt int64  `json:"updated_at,omitempty" datastore:"updated_at"`
+}
+
+type Software struct {
+	Name    string `json:"name" datastore:"name,noindex"`
+	OS      string `json:"os,omitempty" datastore:"os,omitempty"`
+	Version string `json:"version,omitempty" datastore:"version,noindex"`
+
+	Versions  []string      `json:"versions,omitempty" datastore:"version,noindex"`
+	Hostnames []HostDetails `json:"hostnames,omitempty" datastore:"hostnames,noindex"`
+}
+
 // ProjectInfo holds details about a discovered project
 type ProjectInfo struct {
 	Path     string     `json:"path"`
 	Type     string     `json:"type"` // "golang", "python", "javascript"
 	Packages []Software `json:"packages"`
+
+	Versions  []string      `json:"versions,omitempty" datastore:"version,noindex"`
+	Hostnames []HostDetails `json:"hostnames,omitempty" datastore:"hostnames,noindex"`
 }
 
 // Scanner manages concurrent directory scanning

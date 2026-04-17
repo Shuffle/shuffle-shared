@@ -1983,6 +1983,10 @@ func ListCodeScannerProjects() []ProjectInfo {
 			continue
 		}
 
+		if strings.Contains(project.Path, "/go/pkg/mod") {
+			continue
+		}
+
 		parsedProjects = append(parsedProjects, project)
 	}
 

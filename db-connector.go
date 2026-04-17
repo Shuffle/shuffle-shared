@@ -13998,7 +13998,7 @@ func SetDatastoreCategoryConfig(ctx context.Context, category DatastoreCategoryU
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s_%s", nameKey, category.OrgId, category.Category)
-		err = SetCache(ctx, cacheKey, data, 60)
+		err = SetCache(ctx, cacheKey, data, 62)
 		if err != nil {
 			log.Printf("[ERROR] Failed setting datastore category for set category '%s' in org %s: %s", category.Category, category.OrgId, err)
 		}
@@ -14242,7 +14242,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				}
 
 				newCacheId = fmt.Sprintf("org_cache_%s", newCacheId)
-				SetCache(ctx, newCacheId, marshalledEntry, 60)
+				SetCache(ctx, newCacheId, marshalledEntry, 62)
 			}
 
 			// URL encode
@@ -15345,7 +15345,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 			return cacheData, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 60)
+		err = SetCache(ctx, cacheKey, data, 62)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for get cache key: %s", err)
 		}

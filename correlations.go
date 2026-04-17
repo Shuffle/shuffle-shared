@@ -254,8 +254,6 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 				log.Printf("[DEBUG] Updated ngram item for %s with key %s", ngramSearchKey, parsedValue)
 			}
 		}
-
-		log.Println()
 	}
 
 	for enrichmentCnt, enrichment := range enrichments {
