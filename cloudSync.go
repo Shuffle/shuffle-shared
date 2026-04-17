@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"sync"
 
 	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
@@ -2688,9 +2689,21 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 	}
 
 	handledKeys := []string{}
-	softwareKeys := []CacheKeyData{}
+
+	softwareWg := sync.WaitGroup{}
+	packageWg := sync.WaitGroup{}
+	//softwareKeys := []CacheKeyData{}
+
+	maxSoftwareAmount := 1000 
+	softwareAmount := len(sensorDetails.InstalledSoftware)
+	if softwareAmount > maxSoftwareAmount { 
+		softwareAmount = maxSoftwareAmount
+	}
+
+	skippedAmount := 0
+	softwareKeys := make(chan CacheKeyData, softwareAmount)
 	for softwareCnt, software := range sensorDetails.InstalledSoftware {
-		if softwareCnt > 1000 { 
+		if softwareCnt+skippedAmount > maxSoftwareAmount { 
 			break
 		}
 
@@ -2711,11 +2724,14 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 
 		parsedKeyname := fmt.Sprintf("%s_%s", strings.TrimSpace(strings.ReplaceAll(strings.ToLower(software.Name), " ", "_")), sensorDetails.OS)
 		if ArrayContains(handledKeys, software.Name) {
+			skippedAmount += 1
 			continue
 		}
 
 		handledKeys = append(handledKeys, software.Name)
-		//go func(parsedKeyname string, software Software) {
+		softwareWg.Add(1)
+		go func(parsedKeyname string, software Software) {
+			defer softwareWg.Done()
 			// 1. Get existing key 
 			// 2. Update Versions & Hostnames
 			// 3. If it existed already, don't update the "Last Seen" field (or set it to the oldest of the two)
@@ -2764,7 +2780,7 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 
 					if hostExists && versionExists {
 						log.Printf("[WARNING] Software '%s' on host '%s' with version '%s' already exists in datastore. Skipping update.", software.Name, sensorDetails.Hostname, software.Version)
-						continue
+						return
 					}
 
 					software = unmarshalledSoftware
@@ -2786,16 +2802,33 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 				OrgId: orborusDetails.OrgId,
 			}
 
-			softwareKeys = append(softwareKeys, newKey)
-		//}(parsedKeyname, software)
+			//softwareKeys = append(softwareKeys, newKey)
+			//datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
+			//datastoreKeys := make(chan datastore.Key, cnt)
+			softwareKeys <- newKey
+		}(parsedKeyname, software)
 	}
 
-	if len(softwareKeys) > 0 { 
+	_ = packageWg
+
+	softwareWg.Wait()
+	close(softwareKeys)
+
+	newSoftwareArray := []CacheKeyData{}
+	for key := range softwareKeys {
+		if key.Key == "" {
+			continue
+		}
+
+		newSoftwareArray = append(newSoftwareArray, key)
+	}
+
+	if len(newSoftwareArray) > 0 { 
 		// Set them in the datastore (with some delay to avoid spikes)
 		// Do we do it directly maybe, as we already are in the backend?
 		// We can't due to automation huh. Gotta use the bulk API
 		log.Printf("[INFO] Updating datastore with %d software keys for sensor '%s'", len(softwareKeys), sensorDetails.Hostname)
-		_, err = SetDatastoreKeyBulk(ctx, softwareKeys) 
+		_, err = SetDatastoreKeyBulk(ctx, newSoftwareArray) 
 		if err != nil { 
 			log.Printf("[ERROR] Failed to update datastore with software keys for sensor '%s': %s", sensorDetails.Hostname, err)
 		}
@@ -3082,7 +3115,7 @@ if [[ "$OS" != "linux" && "$OS" != "darwin" ]]; then
 fi
 
 echo ""
-echo "Download started. Please be patient while we install the agent. Detected OS: $OS, ARCH: $ARCH"
+echo "Download started. Please be patient while we install the sensor. Detected OS: $OS, ARCH: $ARCH"
 echo ""
 
 # =========================
@@ -3094,7 +3127,7 @@ AUTH="%s"
 ORG_ID="%s"
 
 SOFTWARE_LIST_ENABLED="%t"
-CODE_SCANNER_ENABLED = "%t"
+CODE_SCANNER_ENABLED="%t"
 HD_ENCRYPTED_CHECK="%t"
 SCREENLOCK_CHECK="%t"
 RESPONSE_ACTIONS="%s"
@@ -3111,6 +3144,7 @@ BIN_URL="${BIN_BASE}/orborus-agent-${OS}-${ARCH}"
 # =========================
 INSTALL_PATH="/usr/local/bin/orborus"
 
+echo "Please input your sudo password to allow installation (required for service setup and sensor capabilities). Contact support@shuffler.io if you need help."
 curl -fsSL "$BIN_URL" -o /tmp/orborus
 chmod +x /tmp/orborus
 sudo mv /tmp/orborus "$INSTALL_PATH"
@@ -3210,12 +3244,15 @@ c.Queue,
 c.Auth,
 c.OrgID,
 c.SoftwareListEnabled,
+c.CodeScannerEnabled,
 c.HDEncryptedCheck,
 c.ScreenlockCheck,
 c.ResponseActions,
 c.LogForwarding,
 c.BinaryBaseURL,
 )
+
+log.Printf("SCRIPT: %s", script)
 
 	}
 
