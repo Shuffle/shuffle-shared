@@ -2,6 +2,8 @@ package shuffle
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"sort"
@@ -1423,6 +1425,12 @@ func generateAlertCacheKey(orgId string, threshold interface{}, emailList []stri
 	key = strings.ReplaceAll(key, ".", "_dot_")
 	key = strings.ReplaceAll(key, " ", "_")
 
+	// Memcache keys have a 250-character limit. Hash anything that exceeds it.
+	if len(key) > 200 {
+		hash := md5.Sum([]byte(key))
+		key = "alert_cache_" + hex.EncodeToString(hash[:])
+	}
+
 	return key
 }
 
@@ -1432,7 +1440,7 @@ func checkAndSetAlertCache(ctx context.Context, cacheKey string) bool {
 		return false
 	}
 
-	err = SetCache(ctx, cacheKey, []byte("sent"), 60)
+	err = SetCache(ctx, cacheKey, []byte("sent"), 1440)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting alert cache for key %s: %s", cacheKey, err)
 	}
