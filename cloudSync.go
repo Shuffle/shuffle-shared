@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"strconv"
 	"sync"
 
 	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
@@ -2484,12 +2485,18 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			orborusData.SensorDetails.Hostname = parsedHostnameSplit[0]
 		}
 
-		// 600 = time until it's not tracked anymore at all
-		hostTimeout := int64(600)
+		// 1 month timeout before removed from the list. We only store
+		// minimal data anyway, so it really shouldn't matter
+		hostTimeout := int64(2592000)
 		hostRefresh := int64(90)
 
-		// This will struggle a bit with many instances at once
 		timeNow := int64(time.Now().Unix())
+
+		// Using cache to not have to constantly update the environment for every host 
+		// This should fix itself over time (eventual completeness)
+		checkinKey := fmt.Sprintf("sensor_%s_%s_%s_checkin", env.Name, orborusData.SensorDetails.Hostname, orborusData.SensorDetails.Arch)
+		timeNowString := fmt.Sprintf("%d", timeNow)
+		SetCache(ctx, checkinKey, []byte(timeNowString), 120)
 
 		removeIndex := []int{}
 		found := false
@@ -2498,17 +2505,19 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 		// Just some deduping in case
 		foundHosts := []string{}
 		for hostIndex, host := range env.SensorHosts {
-			if ArrayContains(foundHosts, host.Hostname) {
+			parsedHost := fmt.Sprintf("%s-%s", host.Hostname, host.Arch)
+			if ArrayContains(foundHosts, parsedHost) {
 				removeIndex = append(removeIndex, hostIndex)
 				continue
 			}
 
-			foundHosts = append(foundHosts, host.Hostname)
+			foundHosts = append(foundHosts, parsedHost)
 		}
 
 		// Run removeIndex backwards
 		for i := len(removeIndex) - 1; i >= 0; i-- {
 			env.SensorHosts = append(env.SensorHosts[:removeIndex[i]], env.SensorHosts[removeIndex[i]+1:]...)
+
 			updateMade = true
 		}
 
@@ -2552,12 +2561,6 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 
 				break
 			}
-
-			// Check if more than 10 minutes ago
-			if timeNow > host.Checkin+hostTimeout {
-				removeIndex = append(removeIndex, hostIndex)
-				continue
-			}
 		}
 
 		// Appending a new one
@@ -2572,16 +2575,49 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 		}
 
 		if updateMade && len(env.SensorHosts) >= 1 {
+			log.Printf("[INFO] Updating sensors?")
+			go HandleSensorDatastoreUpdate(orborusData)
+
 			// Sideloading from shuffle-security_sensors instead
+			removeIndex = []int{}
 			for sensorIndex, sensor := range env.SensorHosts {
+				if sensor.Hostname == orborusData.SensorDetails.Hostname && sensor.Arch == orborusData.SensorDetails.Arch {
+					sensor.Checkin = timeNow
+				} else {
+					checkinKeyCheck := fmt.Sprintf("sensor_%s_%s_%s_checkin", env.Name, sensor.Hostname, sensor.Arch)
+					foundCache, err := GetCache(ctx, checkinKeyCheck)
+					if err == nil { 
+						cacheData := string(foundCache.([]uint8))
+						timestamp, err := strconv.Atoi(cacheData) 
+						if err == nil && timestamp > 0 { 
+							sensor.Checkin = int64(timestamp)
+						} else {
+							log.Printf("\n\n[ERROR] Failed ATOI for timestamp of %s: %s. Output: %s\n\n", sensor.Hostname, err, cacheData)
+						}
+					}
+				}
+
+				// Check if more than X minutes ago to time out hosts
+				if timeNow > sensor.Checkin+hostTimeout {
+					removeIndex = append(removeIndex, sensorIndex)
+					continue
+				}
+
+				// To reset the data that the env has 
+				// as it doesn't need that much
 				env.SensorHosts[sensorIndex] = SensorDetails{
 					Hostname: sensor.Hostname,
+					Arch: sensor.Arch,
 					Uuid: sensor.Uuid,
 					Checkin: sensor.Checkin,
 				}
 			}
 
-			go HandleSensorDatastoreUpdate(orborusData)
+			// Last cleanup
+			for i := len(removeIndex) - 1; i >= 0; i-- {
+				env.SensorHosts = append(env.SensorHosts[:removeIndex[i]], env.SensorHosts[removeIndex[i]+1:]...)
+				log.Printf("[INFO] Sensor '%s' removed from group environment '%s' (%s) due to inactivity. Checkin: %d seconds ago", env.SensorHosts[removeIndex[i]].Hostname, env.Name, env.Id, timeNow-env.SensorHosts[removeIndex[i]].Checkin)
+			}
 
 			env.Checkin = timeNow
 			err := SetEnvironment(ctx, env)
@@ -2682,10 +2718,6 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 		return
 	}
 
-	if debug { 
-		log.Printf("[DEBUG] Handling datastore update for sensor '%s' in org %s. Software: %d, Packages: %d", sensorDetails.Hostname, orborusDetails.OrgId, len(sensorDetails.InstalledSoftware), len(sensorDetails.CodeScanner))
-	}
-
 	// 24 hour updates. Don't want to overload it. 
 	SetCache(ctx, cacheKey, []byte("1"), 1440)
 
@@ -2694,26 +2726,7 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 
 	// Sets the current sensor details raw
 	sensorDetails.Checkin = time.Now().Unix()
-
-
-	// datastoreId := fmt.Sprintf("%s_%s_%s", orborusDetails.OrgId, parsedKeyname, datastoreSoftwareIndex)
-	hostData, err := json.Marshal(sensorDetails)
-	if err != nil { 
-		log.Printf("[ERROR] Failed to marshal sensor details for datastore update for sensor '%s': %s", sensorDetails.Hostname, err)
-	} else {
-		hostKey := CacheKeyData{
-			Key: sensorDetails.Hostname,
-			Category: datastoreSensorIndex,
-			Value: string(hostData),
-			OrgId: orborusDetails.OrgId,
-		}
-
-		// Set them in the datastore (with some delay to avoid spikes)
-		_, err = SetDatastoreKeyBulk(ctx, []CacheKeyData{hostKey}) 
-		if err != nil { 
-			log.Printf("[ERROR] Failed to update datastore with software keys for sensor '%s': %s", sensorDetails.Hostname, err)
-		}
-	}
+	parsedHostname := strings.TrimSpace(strings.ReplaceAll(strings.ToUpper(sensorDetails.Hostname), " ", "_"))	
 
 	skippedAmount := 0
 	maxSoftwareAmount := 1000
@@ -2959,7 +2972,7 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 
 						if hostPathExists && versionExists {
 							if debug { 
-								log.Printf("[DEBUG] Package '%s' on host '%s' with version '%s' already exists in datastore. Skipping update.", software.Name, sensorDetails.Hostname, software.Version)
+								//log.Printf("[DEBUG] Package '%s' on host '%s' with version '%s' already exists in datastore. Skipping update.", software.Name, sensorDetails.Hostname, software.Version)
 							}
 
 							packageKeys <- CacheKeyData{
@@ -3123,7 +3136,54 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 		if err != nil { 
 			log.Printf("[ERROR] Failed to update datastore with %d package keys for sensor '%s': %s", len(newPackageArray), sensorDetails.Hostname, err)
 		}
-	
+	}
+
+	// Loading in historical info 
+	// Putting it here so we don't re-upload without a reason
+	if len(sensorDetails.CodeScanner) == 0 || len(sensorDetails.CodeScanner) == 0 {
+
+
+		datastoreId := fmt.Sprintf("%s_%s_%s", orborusDetails.OrgId, parsedHostname, datastoreSensorIndex)
+		cachedHost, err := GetDatastoreKey(ctx, datastoreId, datastoreSensorIndex)
+		if err == nil && len(cachedHost.Value) > 0 { 
+			// unmarshal value to check what exists
+			oldHost := SensorDetails{}
+			err := json.Unmarshal([]byte(cachedHost.Value), &oldHost)
+			if err == nil {
+				if len(oldHost.User) > 0 && len(sensorDetails.User) == 0 {
+					sensorDetails.User = oldHost.User
+				}
+
+				if len(oldHost.CodeScanner) > 0 {
+					sensorDetails.CodeScanner = oldHost.CodeScanner
+				}
+
+				if len(oldHost.InstalledSoftware) > 0 {
+					sensorDetails.InstalledSoftware = oldHost.InstalledSoftware
+				}
+			}
+		} else {
+			log.Printf("[ERROR] Failed to load existing sensor details for sensor '%s' from datastore: %s", sensorDetails.Hostname, err)
+		}
+	}
+
+	sensorDetails.Checkin = time.Now().Unix()
+	hostData, err := json.Marshal(sensorDetails)
+	if err != nil { 
+		log.Printf("[ERROR] Failed to marshal sensor details for datastore update for sensor '%s': %s", sensorDetails.Hostname, err)
+	} else {
+		hostKey := CacheKeyData{
+			Key: parsedHostname,
+			Category: datastoreSensorIndex,
+			Value: string(hostData),
+			OrgId: orborusDetails.OrgId,
+		}
+
+		// Set them in the datastore (with some delay to avoid spikes)
+		_, err = SetDatastoreKeyBulk(ctx, []CacheKeyData{hostKey}) 
+		if err != nil { 
+			log.Printf("[ERROR] Failed to update datastore with software keys for sensor '%s': %s", sensorDetails.Hostname, err)
+		}
 	}
 }
 

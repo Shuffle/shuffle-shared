@@ -2370,7 +2370,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	// Check if finished too?
 	finalWorkflowExecution := SanitizeExecution(workflowExecution)
 	if (workflowExecution.Status == "WAITING" || workflowExecution.Status == "EXECUTING") && len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extra {
-
 		skipFinished := false
 		for _, result := range workflowExecution.Results {
 			if result.Status == "WAITING" {
@@ -15170,7 +15169,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 
 	if debug {
-		log.Printf("[DEBUG] Getting datastore key for %s", cacheKey)
+		//log.Printf("[DEBUG] Getting datastore key '%s'", cacheKey)
 	}
 
 	if project.CacheDb {
@@ -19339,6 +19338,108 @@ func ensureOpensearchIndexISMPolicy(ctx context.Context, opensearchUrl, indexNam
 		}
 
 		return fmt.Errorf("status: %d, body: %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+func ListVulnerabilities(ctx context.Context, ecosystem string, inputcursor string) ([]OSVVulnerability, string, error) {
+	nameKey := "vulnerabilities"
+
+	var vulns []OSVVulnerability
+	cacheKey := fmt.Sprintf("%s_list_%s_%s", nameKey, ecosystem, inputcursor)
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		err = json.Unmarshal(cacheData, &vulns)
+		if err == nil {
+			return vulns, "", nil
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		return nil, "", errors.New("Not implemented for opensearch. Use shuffler.io/api/v1/vulnerabilities")
+	} else {
+		q := datastore.NewQuery(nameKey)
+		if len(ecosystem) > 0 { 
+			log.Printf("[DEBUG] Filtering vulnerabilities for ecosystem: '%s'", ecosystem)
+			q = q.Filter("Affected.Package.Ecosystem = ", ecosystem)
+		}
+
+		q = q.Order("-CreatedAt").Limit(100)
+
+		if len(inputcursor) > 0 {
+			cursor, err := datastore.DecodeCursor(inputcursor)
+			if err != nil {
+				log.Printf("[WARNING] Invalid cursor provided to ListVulnerabilities: %s", err)
+			} else { 
+				q = q.Start(cursor)
+			}
+		}
+
+		// Not sure if cursor works this way but ok
+		_, err := project.Dbclient.GetAll(ctx, q, &vulns)
+		if err != nil {
+			if strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[ERROR] Error in vulnerability loading. Migrating vulnerabilities to new handler (1): %s", err)
+				return vulns, "", nil
+			}
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(vulns)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in ListVulnerabilities: %s", err)
+			return vulns, "", nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 60)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for ListVulnerabilities '%s': %s", cacheKey, err)
+		}
+	}
+
+	return vulns, "", nil
+}
+
+func SetVulnerability(ctx context.Context, vuln OSVVulnerability) error {
+	if vuln.ID == "" {
+		log.Printf("[WARNING] No ID provided for GET vulnerability. Cannot set without ID.")
+		return errors.New("ID is required for vulnerability subscription")
+	}
+
+	nameKey := "vulnerabilities"
+
+	// Check if it's in cache already
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, vuln.ID)
+	cached, err := GetCache(ctx, cacheKey)
+	if err == nil && len(cached.([]uint8)) > 0 {
+		return nil
+	}
+
+	if vuln.CreatedAt == 0 { 
+		vuln.CreatedAt = time.Now().Unix()
+	}
+
+	// New struct, to not add body, author etc
+	if project.DbType == "opensearch" {
+		return errors.New("Not implemented for opensearch. Use shuffler.io/api/v1/vulnerabilities")
+	} else {
+		key := datastore.NameKey(nameKey, vuln.ID, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &vuln); err != nil {
+			log.Printf("\n\n[WARNING] Failed adding vulnerability with ID %s: %s", vuln.ID, err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		// 1 month~
+		// Just a check for exists or not to not use db writes too much (?)
+		err = SetCache(ctx, cacheKey, []byte("1"), 525960)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for setworkflow key '%s': %s", cacheKey, err)
+		}
 	}
 
 	return nil

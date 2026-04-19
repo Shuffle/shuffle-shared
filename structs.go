@@ -5236,7 +5236,6 @@ type AppBuildRequest struct {
 	Image   string `datastore:"image"`
 }
 
-
 // Data sent FROM Orborus->Backend about sensor mode
 type SensorDetails struct {
 	SensorMode bool   `json:"sensor_mode,omitempty" datastore:"sensor_mode"`
@@ -5286,10 +5285,10 @@ type RCEResult struct {
 }
 
 type HostDetails struct {
-	Hostname  string `json:"hostname" datastore:"hostname"`
-	Paths      []string `json:"paths,omitempty" datastore:"path,noindex"`
-	Version   string `json:"version,omitempty" datastore:"version,noindex"`
-	UpdatedAt int64  `json:"updated_at,omitempty" datastore:"updated_at"`
+	Hostname  string   `json:"hostname" datastore:"hostname"`
+	Paths     []string `json:"paths,omitempty" datastore:"path,noindex"`
+	Version   string   `json:"version,omitempty" datastore:"version,noindex"`
+	UpdatedAt int64    `json:"updated_at,omitempty" datastore:"updated_at"`
 }
 
 type Software struct {
@@ -5335,4 +5334,187 @@ type OrborusDownloadConfig struct {
 
 	BinaryBaseURL string            `json:"binary_base_url"`
 	Binaries      map[string]string `json:"binaries"`
+}
+
+type NVDCPEResponse struct {
+	ResultsPerPage int          `json:"resultsPerPage"`
+	StartIndex     int          `json:"startIndex"`
+	TotalResults   int          `json:"totalResults"`
+	Products       []NVDProduct `json:"products"`
+}
+
+type NVDProduct struct {
+	CPE NVDCPEItem `json:"cpe"`
+}
+
+type NVDCPEItem struct {
+	CPEName      string    `json:"cpeName"`
+	Deprecated   bool      `json:"deprecated"`
+	LastModified string  `json:"lastModified"`
+	Created      string `json:"created"`
+}
+
+type NVDCVEResponse struct {
+	ResultsPerPage  int          `json:"resultsPerPage"`
+	StartIndex      int          `json:"startIndex"`
+	TotalResults    int          `json:"totalResults"`
+	Vulnerabilities []NVDCVEItem `json:"vulnerabilities"`
+}
+
+type NVDCVEItem struct {
+	CVE NVDCVEDetail `json:"cve"`
+}
+
+type NVDCVEDetail struct {
+	ID                    string           `json:"id"`
+	Published             string        `json:"published"`
+	LastModified          string        `json:"lastModified"`
+	Descriptions          []NVDDescription `json:"descriptions"`
+	Metrics               NVDMetrics       `json:"metrics"`
+	Weaknesses            []NVDWeakness    `json:"weaknesses"`
+	References            []NVDReference   `json:"references"`
+	Configurations        []NVDConfig      `json:"configurations"`
+	CISAExploitAdd        string           `json:"cisaExploitAdd,omitempty"`
+	CISAActionDue         string           `json:"cisaActionDue,omitempty"`
+	CISARequiredAction    string           `json:"cisaRequiredAction,omitempty"`
+	CISAVulnerabilityName string           `json:"cisaVulnerabilityName,omitempty"`
+}
+
+type NVDDescription struct {
+	Lang  string `json:"lang"`
+	Value string `json:"value"`
+}
+
+type NVDMetrics struct {
+	CVSSMetricV31 []NVDCVSSMetric `json:"cvssMetricV31"`
+	CVSSMetricV30 []NVDCVSSMetric `json:"cvssMetricV30"`
+	CVSSMetricV2  []NVDCVSSMetric `json:"cvssMetricV2"`
+}
+
+type NVDCVSSMetric struct {
+	Source   string      `json:"source"`
+	Type     string      `json:"type"`
+	CVSSData NVDCVSSData `json:"cvssData"`
+}
+
+type NVDCVSSData struct {
+	Version      string  `json:"version"`
+	VectorString string  `json:"vectorString"`
+	BaseScore    float64 `json:"baseScore"`
+	BaseSeverity string  `json:"baseSeverity"`
+}
+
+type NVDWeakness struct {
+	Description []NVDDescription `json:"description"`
+}
+
+type NVDReference struct {
+	URL    string   `json:"url"`
+	Source string   `json:"source"`
+	Tags   []string `json:"tags"`
+}
+
+type NVDConfig struct {
+	Nodes []NVDNode `json:"nodes"`
+}
+
+type NVDNode struct {
+	CPEMatch []NVDCPEMatch `json:"cpeMatch"`
+}
+
+type NVDCPEMatch struct {
+	Vulnerable            bool   `json:"vulnerable"`
+	Criteria              string `json:"criteria"`
+	VersionStartIncluding string `json:"versionStartIncluding,omitempty"`
+	VersionStartExcluding string `json:"versionStartExcluding,omitempty"`
+	VersionEndIncluding   string `json:"versionEndIncluding,omitempty"`
+	VersionEndExcluding   string `json:"versionEndExcluding,omitempty"`
+}
+
+type OSVReference struct {
+	Type string `json:"type"`
+	URL  string `json:"url"`
+}
+
+type OSVRange struct {
+	Type   string     `json:"type"`
+	Events []OSVEvent `json:"events"`
+}
+
+type OSVEvent struct {
+	Introduced   string `json:"introduced,omitempty"`
+	Fixed        string `json:"fixed,omitempty"`
+	LastAffected string `json:"last_affected,omitempty"`
+}
+
+type OSVDatabaseSpecific struct {
+	Source string `json:"source"`
+	CWEs   []string `json:"cwes,omitempty"`
+
+	DateAdded	  string `json:"date_added,omitempty"`
+	ActionDue	 string `json:"action_due,omitempty"`
+	RequiredAction string `json:"required_action,omitempty"`
+	Vulnerability string `json:"vulnerability,omitempty"`
+}
+
+type OSVEcosystemSpecific struct {
+	Severity string `json:"severity"`
+}
+
+type OSVAffected struct {
+	Package           OSVPackage     `json:"package"`
+	Ranges            []OSVRange     `json:"ranges"`
+	Versions          []string       `json:"versions"`
+
+	EcosystemSpecific OSVEcosystemSpecific `json:"ecosystem_specific,omitempty"`
+	DatabaseSpecific  OSVDatabaseSpecific `json:"database_specific,omitempty"`
+}
+
+type OSVSeverity struct {
+	Type  string `json:"type"`
+	Score string `json:"score"`
+}
+
+type OSVVulnerability struct {
+	ID               string         `json:"id"`
+	Summary          string         `json:"summary,omitempty"`
+	Details          string         `json:"details"`
+	Aliases          []string       `json:"aliases"`
+	Modified         time.Time      `json:"modified"`
+	Published        time.Time      `json:"published"`
+	References       []OSVReference `json:"references,omitempty"`
+	Affected         []OSVAffected  `json:"affected,omitempty"`
+	Severity         []OSVSeverity  `json:"severity,omitempty"`
+	SchemaVersion    string         `json:"schema_version"`
+	Related          []string       `json:"related,omitempty"`
+
+	DatabaseSpecific OSVDatabaseSpecific `json:"database_specific,omitempty"`
+
+	// Custom for Shuffle
+	CreatedAt int64  `json:"created_at,omitempty"`
+	Code      int    `json:"code,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+type VulnDbOutput struct {
+	Vulns         []OSVVulnerability `json:"vulns"`
+	NextPageToken string             `json:"next_page_token,omitempty"`
+	Cursor        string             `json:"cursor,omitempty"`
+
+	Code    int    `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type OSVPackage struct {
+	Name      string `json:"name"`
+	Ecosystem string `json:"ecosystem"`
+	Purl      string `json:"purl"`
+}
+
+type VulnerabilityQuery struct {
+	ID string `json:"id,omitempty"`
+
+	PageToken string     `json:"page_token,omitempty"`
+	Version   string     `json:"version,omitempty"`
+	Package   OSVPackage `json:"package"`
 }
