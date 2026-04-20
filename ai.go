@@ -7496,6 +7496,22 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				userMessage = oldAgentOutput.OriginalInput
 			}
 
+			// If the user continued the agent after a finish decision (via "Add more details"),
+			// the new input is stored in the "continue" field of the injected "ask" decision.
+			// Override userMessage so the LLM acts on the new instruction instead of the original one.
+			for _, mappedDecision := range mappedResult.Decisions {
+				if mappedDecision.Action != "ask" {
+					continue
+				}
+				for _, field := range mappedDecision.Fields {
+					if field.Key == "continue" && len(field.Answer) > 0 {
+						log.Printf("[DEBUG][%s] AI Agent continuation: overriding userMessage with 'continue' answer: %s", execution.ExecutionId, field.Answer)
+						userMessage = field.Answer
+						break
+					}
+				}
+			}
+
 			if hasFailure {
 				log.Printf("[WARNING][%s] AI Agent: Detected failure in previous decisions. Last finished index: %d", execution.ExecutionId, lastFinishedIndex)
 
