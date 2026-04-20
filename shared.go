@@ -1289,8 +1289,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		if err != nil {
 			log.Printf("[ERROR] Failed getting org statistics for %s: %s", org.Id, err)
 		} else {
-			totalWorkflowExecutions := statistics.TotalWorkflowExecutions + statistics.TotalChildWorkflowExecutions
-			if totalWorkflowExecutions > int64(5000) {
+			totalAppExecutions := statistics.TotalAppExecutions + statistics.TotalChildAppExecutions
+			if totalAppExecutions > int64(20000) {
 				org.OldOrg = true
 			}
 		}
