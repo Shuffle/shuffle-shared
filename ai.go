@@ -7179,315 +7179,227 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 	}
 }
 
-// bulkyResponseFields is a FALLBACK-ONLY blocklist. It is only hit when
-// data_filter="list" but the agent did not specify fields_needed.
-// The primary mechanism is the fields_needed allowlist in applyFieldsAllowlist.
-var bulkyResponseFields = map[string]bool{
-	// Raw email body variants — always large text, never metadata
-	"html_body": true, "text_body": true, "body_html": true, "body_text": true,
-	"raw_body": true, "raw_message": true, "raw": true, "mime_content": true,
-	"content": true,
-	"attachment_data": true, "file_data": true, "base64data": true,
+const maxRawBytes = 8000
+
+var httpWrapperKeys = map[string]bool{
+	"date": true, "status": true, "url": true, "success": true,
+	"message": true, "headers": true, "statuscode": true,
 }
 
-// explicitTotalKeys are field names APIs use to report the full dataset size,
-// independent of pagination. Searched at every object depth
-var explicitTotalKeys = []string{
-	"@odata.count",       
-	"totalCount",        
-	"total_count",        
-	"total",             
-	"totalResults",      
-	"total_results",      
-	"resultSizeEstimate", 
-	"count",              
-}
-
-// commonListKeys are the wrapper keys APIs use around an array of items.
-// Tried in order — first match wins.
-var commonListKeys = []string{
-	"value",    
-	"items",    
-	"data",     
-	"results",  
-	"emails",   
-	"messages", 
-	"records",  
-	"entries",  
-	"hits",     
-	"objects",  
-	"tickets",  
-	"issues",   
-}
-
-// findExplicitTotal searches for a known total/count field at any object
-func findExplicitTotal(obj map[string]interface{}, depth int) (interface{}, bool) {
-	if depth > 4 {
-		return nil, false
+func safeRawFallback(raw []byte, reason string) []byte {
+	if len(raw) <= maxRawBytes {
+		log.Printf("[DEBUG] AI_AGENT_REDUCE: Returning raw fallback (%d bytes). Reason: %s\n", len(raw), reason)
+		return raw
 	}
-	for _, key := range explicitTotalKeys {
-		if v, ok := obj[key]; ok {
-			return v, true
-		}
+	
+	previewLen := 500
+	if len(raw) < 500 {
+		previewLen = len(raw)
 	}
-	// Recurse into nested objects
-	for _, v := range obj {
-		if nested, ok := v.(map[string]interface{}); ok {
-			if val, found := findExplicitTotal(nested, depth+1); found {
-				return val, true
+	preview := string(raw[:previewLen]) + "..."
+
+	fallbackMsg := map[string]interface{}{
+		"warning": "response_too_large_fallback_truncated",
+		"preview": preview,
+		"context": "API returned a massive payload that bypassed reduction rules. Proceed with caution.",
+	}
+	res, _ := json.Marshal(fallbackMsg)
+	return res
+}
+
+// dynamically searches the entire JSON tree for the largest array.
+func findMainArray(v interface{}) []interface{} {
+	var maxArr []interface{}
+	var search func(node interface{})
+	search = func(node interface{}) {
+		switch val := node.(type) {
+		case []interface{}:
+			if len(val) > len(maxArr) {
+				maxArr = val
+			}
+			for _, item := range val {
+				search(item)
+			}
+		case map[string]interface{}:
+			for _, child := range val {
+				search(child)
 			}
 		}
 	}
-	return nil, false
+	search(v)
+	return maxArr
 }
 
-// findListInObject searches for an array of items inside a JSON object,
-func findListInObject(obj map[string]interface{}, depth int) ([]interface{}, bool) {
-	if depth > 4 {
-		return nil, false
-	}
-
-	for _, key := range commonListKeys {
-		if v, ok := obj[key]; ok {
-			if arr, ok := v.([]interface{}); ok {
-				return arr, true
-			}
-		}
-	}
-
-	// Priority 2: recurse into nested objects (e.g. the "body" wrapper).
-	for _, v := range obj {
-		nested, ok := v.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if arr, found := findListInObject(nested, depth+1); found {
-			return arr, found
-		}
-	}
-	return nil, false
-}
-
-// extractListFromResponse finds the actual array of items in a raw JSON
-func extractListFromResponse(rawResponse []byte) ([]interface{}, bool) {
-	// if its a bare JSON array [{...}, {...}]
-	var arr []interface{}
-	if err := json.Unmarshal(rawResponse, &arr); err == nil {
-		return arr, true
-	}
-
-	// if its an object then search for a list recursively (handles nested wrappers)
-	var obj map[string]interface{}
-	if err := json.Unmarshal(rawResponse, &obj); err != nil {
-		return nil, false
-	}
-	return findListInObject(obj, 0)
-}
-
-// stripBulkyFieldsDeep recursively walks any unmarshalled JSON value and
-// removes keys in bulkyResponseFields at every nesting level. Used as the
-// fallback when the agent did not specify fields_needed.
-func stripBulkyFieldsDeep(v interface{}) interface{} {
-	switch val := v.(type) {
-	case map[string]interface{}:
-		clean := make(map[string]interface{}, len(val))
-		for k, child := range val {
-			if bulkyResponseFields[strings.ToLower(k)] {
-				continue
-			}
-			clean[k] = stripBulkyFieldsDeep(child)
-		}
-		return clean
-	case []interface{}:
-		for i, item := range val {
-			val[i] = stripBulkyFieldsDeep(item)
-		}
-		return val
-	default:
-		return v
-	}
-}
-
-// collectWantedFields does a depth-first search through a JSON object and
-// collects values for every key in `wanted` into `result`. This means the
-// agent can say ["from","subject","id"] and we find those fields even if the
-// API nests them under intermediate wrapper keys (e.g. Graph's sender.emailAddress.address).
-// The result is always a flat map — field name → value.
-func collectWantedFields(v interface{}, wanted map[string]bool, result map[string]interface{}) {
+// collectWantedFields does a depth-first search through a JSON object and tracks what it finds.
+func collectWantedFields(v interface{}, wanted map[string]bool, result map[string]interface{}, foundTracker map[string]bool) {
 	switch val := v.(type) {
 	case map[string]interface{}:
 		for k, child := range val {
-			if wanted[strings.ToLower(k)] {
-				result[k] = child // found a wanted key — record it
+			lowerK := strings.ToLower(k)
+			if wanted[lowerK] {
+				result[k] = child
+				foundTracker[lowerK] = true // Mark that we actually found this field
 			} else {
-				collectWantedFields(child, wanted, result) // recurse into non-wanted keys
+				collectWantedFields(child, wanted, result, foundTracker)
 			}
 		}
 	case []interface{}:
 		for _, item := range val {
-			collectWantedFields(item, wanted, result)
+			collectWantedFields(item, wanted, result, foundTracker)
 		}
 	}
 }
 
-// collectItemsWithWantedFields recursively walks the JSON tree and appends every
-// map object that contains at least one key from `wanted` to `out`.
-// This is the primary mechanism for list mode — the agent's fields_needed IS
-// the search signal, so we don't need to know the API's wrapper key names.
-func collectItemsWithWantedFields(v interface{}, wanted map[string]bool, out *[]interface{}) {
-	switch val := v.(type) {
-	case map[string]interface{}:
-		for k := range val {
-			if wanted[strings.ToLower(k)] {
-				*out = append(*out, val) // this object has a wanted key — collect it
-				return                   // don't recurse further into this object
-			}
-		}
-		// No wanted key at this level — recurse into children
-		for _, child := range val {
-			collectItemsWithWantedFields(child, wanted, out)
-		}
-	case []interface{}:
-		for _, item := range val {
-			collectItemsWithWantedFields(item, wanted, out)
+// getMissingFields calculates what the API failed to return.
+func getMissingFields(wanted map[string]bool, found map[string]bool) []string {
+	var missing []string
+	for k := range wanted {
+		if !found[k] {
+			missing = append(missing, k)
 		}
 	}
+	return missing
 }
 
-// applyFieldsAllowlist extracts only the fields in `wanted` from a single item.
-//   - If wanted is non-empty and at least one field was found → return only those fields.
-//   - If wanted is non-empty but nothing matched → return the item as-is. The agent
-//     said it needs these fields; if they're absent the full item is the safest answer
-//     (the agent will at least see what came back rather than an empty object).
-//   - If wanted is empty → strip known-bulky binary/HTML blobs and return the rest.
-func applyFieldsAllowlist(item interface{}, wanted map[string]bool) interface{} {
-	if len(wanted) == 0 {
-		return stripBulkyFieldsDeep(item)
+func normalizeWantedFields(fieldsNeeded []string) map[string]bool {
+	wanted := make(map[string]bool, len(fieldsNeeded))
+	for _, field := range fieldsNeeded {
+		trimmed := strings.ToLower(strings.TrimSpace(field))
+		if trimmed != "" {
+			wanted[trimmed] = true
+		}
 	}
-	result := make(map[string]interface{}, len(wanted))
-	collectWantedFields(item, wanted, result)
-	if len(result) == 0 {
-
-		return item
-	}
-	return result
+	return wanted
 }
 
-// ReduceAgentResponseData reduces the raw API response based on the
-// data_filter and fields_needed the agent set on its decision. This is the
-// primary token reduction mechanism.
-//
-// data_filter values:
-//
-//	"count" – returns {"count": N}. Uses the API's own total field first
-//	          (handles pagination), falls back to counting the returned array.
-//	"list"  – returns only the fields in fieldsNeeded per item (allowlist).
-//	          Falls back to bulky-field blocklist if fieldsNeeded is empty.
-//	"full"  – no reduction.
-//	""      – no reduction (backward-compatible).
+func isHTTPMetadataOnly(extracted map[string]interface{}) bool {
+	if len(extracted) == 0 {
+		return false
+	}
+	for k := range extracted {
+		if !httpWrapperKeys[strings.ToLower(k)] {
+			return false // Found a real data field
+		}
+	}
+	return true // It ONLY found HTTP garbage
+}
+
 func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded []string) []byte {
 	if len(rawResponse) == 0 {
+		log.Println("[DEBUG] AI_AGENT_REDUCE: Empty raw response, passing through.")
 		return rawResponse
 	}
 
-	// Pass error responses through immediately — they're small, contain the
-	// message the agent needs, and have no list or total to extract.
-	var topLevel map[string]interface{}
-	if json.Unmarshal(rawResponse, &topLevel) == nil {
-		if errVal, hasErr := topLevel["error"]; hasErr {
-			switch e := errVal.(type) {
-			case string:
-				if e != "" {
-					return rawResponse
-				}
-			case map[string]interface{}:
-				if len(e) > 0 {
-					return rawResponse
-				}
-			}
+	if dataFilter == "full" {
+		return safeRawFallback(rawResponse, "data_filter_is_full")
+	}
+
+	var parsed interface{}
+	if err := json.Unmarshal(rawResponse, &parsed); err != nil {
+		return safeRawFallback(rawResponse, "invalid_json_fallback")
+	}
+
+	// Error Check
+	if topLevel, ok := parsed.(map[string]interface{}); ok {
+		if _, hasErr := topLevel["error"]; hasErr {
+			return safeRawFallback(rawResponse, "api_returned_error_object")
 		}
-		if success, ok := topLevel["success"].(bool); ok && !success {
-			return rawResponse
+		if success, hasSuccess := topLevel["success"].(bool); hasSuccess && !success {
+			return safeRawFallback(rawResponse, "api_returned_success_false")
 		}
 	}
 
-	switch dataFilter {
-	case "count":
-		// Step 1: prefer the API's own total field — real count across all pages.
-		var obj map[string]interface{}
-		if err := json.Unmarshal(rawResponse, &obj); err == nil {
-			if v, found := findExplicitTotal(obj, 0); found {
-				if result, err := json.Marshal(map[string]interface{}{"count": v}); err == nil {
-					return result
-				}
-			}
-		}
+	mainArray := findMainArray(parsed)
 
-		// Step 2: no explicit total — count the items in the returned array.
-		items, found := extractListFromResponse(rawResponse)
-		if found {
-			if result, err := json.Marshal(map[string]int{"count": len(items)}); err == nil {
-				return result
-			}
-		}
-
-		// Step 3: nothing found — return raw as-is (error check above already
-		// filtered real failures; this is just an unusual non-standard response).
-		return rawResponse
-
-	case "list":
-		// Build a lowercase allowlist set from whatever the agent declared.
-		wanted := make(map[string]bool, len(fieldsNeeded))
-		for _, f := range fieldsNeeded {
-			wanted[strings.ToLower(f)] = true
-		}
-
-		// Primary path: agent told us which fields it needs.
-		// Walk the whole JSON tree — any object that contains a wanted key IS an
-		// item. No need to know the API's wrapper key name (value/items/messages/etc).
-		if len(wanted) > 0 {
-			var parsed interface{}
-			if err := json.Unmarshal(rawResponse, &parsed); err == nil {
-				var items []interface{}
-				collectItemsWithWantedFields(parsed, wanted, &items)
-				if len(items) > 0 {
-					reduced := make([]interface{}, 0, len(items))
-					for _, item := range items {
-						reduced = append(reduced, applyFieldsAllowlist(item, wanted))
-					}
-					if result, err := json.Marshal(reduced); err == nil {
-						return result
-					}
-				}
-			}
-		}
-
-		// Fallback: agent didn't set fields_needed — use commonListKeys to find
-		// the array and strip known-bulky fields.
-		fallbackItems, found := extractListFromResponse(rawResponse)
-		if found {
-			reduced := make([]interface{}, 0, len(fallbackItems))
-			for _, item := range fallbackItems {
-				reduced = append(reduced, applyFieldsAllowlist(item, wanted))
-			}
-			if result, err := json.Marshal(reduced); err == nil {
-				return result
-			}
-		}
-
-		// Single object fallback (e.g. fetching one item by ID).
-		var singleObj map[string]interface{}
-		if err := json.Unmarshal(rawResponse, &singleObj); err == nil {
-			if result, err := json.Marshal(applyFieldsAllowlist(singleObj, wanted)); err == nil {
-				return result
-			}
-		}
-		return rawResponse
-
-	default:
-		// "full" or empty — no reduction
-		return rawResponse
+	if dataFilter == "count" {
+		res, _ := json.Marshal(map[string]interface{}{"count": len(mainArray)})
+		log.Printf("[DEBUG] AI_AGENT_REDUCE: Count mode executed. Found %d items. Reduced %d bytes -> %d bytes\n", len(mainArray), len(rawResponse), len(res))
+		return res
 	}
+
+	if dataFilter == "list" {
+		if len(fieldsNeeded) == 0 {
+			if len(mainArray) > 0 {
+				res, _ := json.Marshal(mainArray)
+				return safeRawFallback(res, "list_requested_but_no_fields_needed_specified")
+			}
+			return safeRawFallback(rawResponse, "list_requested_no_fields_no_array_found")
+		}
+
+		wanted := normalizeWantedFields(fieldsNeeded)
+		foundTracker := make(map[string]bool)
+
+		// We found an array (It might be the main list, OR it might be a false positive inner array)
+		if len(mainArray) > 0 {
+			var cleaned []interface{}
+			for _, item := range mainArray {
+				extracted := make(map[string]interface{})
+				collectWantedFields(item, wanted, extracted, foundTracker)
+				if len(extracted) > 0 {
+					cleaned = append(cleaned, extracted)
+				}
+			}
+
+			// If we actually found the requested fields in the array, check for missing fields and return!
+			if len(cleaned) > 0 {
+				missing := getMissingFields(wanted, foundTracker)
+				if len(missing) > 0 {
+					log.Printf("[DEBUG] AI_AGENT_REDUCE: Partial match in list. Missing fields: %v\n", missing)
+					res, _ := json.Marshal(map[string]interface{}{
+						"items":          cleaned,
+						"warning":        "partial_fields_found_api_did_not_return_the_rest",
+						"missing_fields": missing,
+					})
+					return res
+				}
+
+				res, _ := json.Marshal(cleaned)
+				return res
+			}
+
+			log.Printf("[DEBUG] AI_AGENT_REDUCE: Array yielded 0 matches. Falling back to Path B (Single Blob).")
+			foundTracker = make(map[string]bool) // Reset tracker for Path B
+		}
+
+		// No array found OR array was a false positive (Single JSON blob)
+		extracted := make(map[string]interface{})
+		collectWantedFields(parsed, wanted, extracted, foundTracker)
+
+		if len(extracted) > 0 {
+			if isHTTPMetadataOnly(extracted) {
+				log.Printf("[DEBUG] AI_AGENT_REDUCE: Single blob only contained HTTP metadata. Returning none_found warning.")
+				res, _ := json.Marshal(map[string]interface{}{
+					"items":  []interface{}{},
+					"reason": "api_returned_no_items",
+				})
+				return res
+			}
+
+			missing := getMissingFields(wanted, foundTracker)
+			if len(missing) > 0 {
+				log.Printf("[DEBUG] AI_AGENT_REDUCE: Partial match in blob. Missing fields: %v\n", missing)
+				res, _ := json.Marshal(map[string]interface{}{
+					"item":           extracted,
+					"warning":        "partial_fields_found_api_did_not_return_the_rest",
+					"missing_fields": missing,
+				})
+				return res
+			}
+
+			res, _ := json.Marshal(extracted)
+			return res
+		}
+
+		// Finally, if BOTH Path A and Path B found absolutely nothing:
+		log.Printf("[DEBUG] AI_AGENT_REDUCE: Field mismatch everywhere. Returning none_found warning.")
+		res, _ := json.Marshal(map[string]interface{}{
+			"reason": "none_of_the_requested_fields_found_in_response_try_variant_names",
+		})
+		return res
+	}
+
+	// Catch-all fallback
+	return safeRawFallback(rawResponse, "unknown_data_filter")
 }
 
 // createNextActions = false => start of agent to find initial decisions
@@ -8023,14 +7935,16 @@ For EVERY fetch/list/search tool call you MUST set both "data_filter" and, when 
 **data_filter** — pick the lowest mode that satisfies the user's intent:
 - **"count"**: User only needs a number ("how many emails?", "how many alerts?") — system returns {"count": N}. No fields needed.
 - **"list"**: User needs to identify, filter, or browse items ("which came from Hari?", "open tickets", "find invoice emails") — system returns ONLY the fields you list in "fields_needed" per item.
-- **"full"**: User needs to read or act on item content ("answer those emails", "summarise the body") — no reduction. Only use when you genuinely need the content; it is expensive.
+- **"full"**: User needs to read or act on item content ("answer those emails", "summarise the body") — no reduction. **Avoid this — even for single-item fetches, use "list" with explicit fields_needed instead.** Only use "full" as an absolute last resort when you truly cannot predict any field names.
 
 **fields_needed** — REQUIRED when data_filter is "list". List the exact field names you need from each item to answer the user's question. Think: what is the minimum set of fields needed?
 - "how many from Hari?" → ["from", "sender", "id"] — need sender to filter, id to count
 - "show open tickets" → ["id", "title", "status", "assignee", "created"]
 - "find emails about invoices" → ["id", "subject", "from", "receivedDateTime"]
-- Use the field names the tool/API actually returns (you chose the tool, you know its schema).
-- When unsure of exact names, make sure you include likely variants (e.g. ["from", "sender", "fromAddress"]).
+- **Always include field name variations** — APIs differ. For sender: ["from", "sender", "fromAddress", "from_address"]. For time: ["date", "receivedDateTime", "created_at", "createdAt", "timestamp"]. For subject: ["subject", "title", "name"]. Over-specifying is safe; missing the real field name means you get nothing.
+- If a prior step returned only IDs (thin list), your next Get/Fetch call should still use "list" with the fields you want, NOT "full". E.g. after listing email IDs, do Get Message with data_filter:"list" and fields_needed:["subject","from","snippet","date","receivedDateTime"].
+- **IMPORTANT — thin-list APIs**: Some APIs (e.g. Gmail "List Messages", Jira "List Issues") only return IDs in the list step — not full fields. This is normal. When you get back only IDs, fetch the individual items using Get/Fetch with data_filter:"list" and your fields_needed. Do NOT re-run the list with data_filter:"full" — that wastes tokens on a response that still won't have the fields.
+- **If the system returns** {"reason": "none_of_the_requested_fields_found_in_response..."} it means your field names didn't match what the API returned. Try different field name variants or use data_filter:"full" on one item to discover the real field names, then switch back to "list".
 
 ### OUTPUT FORMAT (STRICT JSON). Ensure 'reason' and output fields like 'question' are Markdown formatted for readability.
 
