@@ -148,8 +148,8 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 
 	// Simple workaround for dates
 	// hardcoded for now just to remove certain things
-	skippableKeys := []string{"spec_version", "version", "pattern_type", "created", "edited", "creation"}
-	skippableValues := []string{"indicator", "stix", "active", "false", "true"}
+	skippableKeys := []string{"spec_version", "version", "pattern_type", "created", "edited", "creation", "status"}
+	skippableValues := []string{"indicator", "stix", "active", "false", "true", "inprogress", "new", "closed", "resolved", "escalated"}
 	invalidStarts := []string{"[", "{", "$", "202", "203", "204"} // Specific for timestamps
 
 	//for jsonKey, val := range unmarshalled {

@@ -5453,6 +5453,7 @@ type OSVDatabaseSpecific struct {
 	Source string `json:"source"`
 	CWEs   []string `json:"cwes,omitempty"`
 	Severity string `json:"severity,omitempty"`
+	GithubReviewed string `json:"github_reviewed,omitempty"`
 
 	GithubReviewedAt time.Time `json:"github_reviewed_at,omitempty"`
 	DateAdded	  string `json:"date_added,omitempty"`
