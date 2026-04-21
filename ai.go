@@ -7289,6 +7289,7 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 		return rawResponse
 	}
 
+	dataFilter = strings.ToLower(strings.TrimSpace(dataFilter))
 	if dataFilter == "full" {
 		return safeRawFallback(rawResponse, "data_filter_is_full")
 	}
