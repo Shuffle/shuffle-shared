@@ -5247,6 +5247,7 @@ type SensorDetails struct {
 	OS       string `json:"os,omitempty" datastore:"os"`
 	Arch     string `json:"arch,omitempty" datastore:"arch"`
 	Serial   string `json:"serial,omitempty" datastore:"serial,noindex"`
+	Isolated bool   `json:"isolated,omitempty" datastore:"isolated"`
 
 	ElevatedAccess bool `json:"elevated_access,omitempty" datastore:"elevated_access"`
 
@@ -5447,10 +5448,13 @@ type OSVEvent struct {
 	LastAffected string `json:"last_affected,omitempty"`
 }
 
+// Keep appending as we find more missing fields
 type OSVDatabaseSpecific struct {
 	Source string `json:"source"`
 	CWEs   []string `json:"cwes,omitempty"`
+	Severity string `json:"severity,omitempty"`
 
+	GithubReviewedAt time.Time `json:"github_reviewed_at,omitempty"`
 	DateAdded	  string `json:"date_added,omitempty"`
 	ActionDue	 string `json:"action_due,omitempty"`
 	RequiredAction string `json:"required_action,omitempty"`
@@ -5477,8 +5481,8 @@ type OSVSeverity struct {
 
 type OSVVulnerability struct {
 	ID               string         `json:"id"`
-	Summary          string         `json:"summary,omitempty"`
-	Details          string         `json:"details"`
+	Summary          string         `json:"summary,omitempty" datastore:"summary,noindex"`
+	Details          string         `json:"details" datastore:"details,noindex"`
 	Aliases          []string       `json:"aliases"`
 	Modified         time.Time      `json:"modified"`
 	Published        time.Time      `json:"published"`

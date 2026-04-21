@@ -288,6 +288,86 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
 			}
 		}
+	} else if actionType == "vulnerability_comparison" {
+		categoryCheck := "shuffle-security_sensors"
+		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				categoryConfig = &DatastoreCategoryUpdate{
+					OrgId: user.ActiveOrg.Id,
+					Category: categoryCheck,
+					Automations: []DatastoreAutomation{},
+					Settings: DatastoreCategorySettings{},
+				}
+			} else {
+				return err
+			}
+		}
+
+		datastoreCategoryConfigEdited := false
+
+		foundRunWorkflow := DatastoreAutomation{
+			Name: "Run workflow",
+			Description: "Runs one or more workflows with the updated value as runtime argument",
+			Options: []DatastoreAutomationOption{
+				DatastoreAutomationOption{
+					Key: "workflow_id",
+					Value: workflow.ID,
+				},
+			},
+			Icon: "",
+			Enabled: true,
+		}
+
+		automationFound := false
+		if len(categoryConfig.Automations) > 0 {
+			for automationIndex, automation := range categoryConfig.Automations {
+				if strings.ToLower(automation.Name) != "run workflow" {
+					continue
+				}
+
+				automationFound = true
+
+				workflowIdFound := false
+				for optionIndex, option := range automation.Options {
+					if option.Key != "workflow_id" {
+						continue
+					}
+
+					if debug { 
+						log.Printf("[DEBUG] VALUE: %#v", option.Value)
+					}
+
+					workflowIdFound = true 
+
+					if !strings.Contains(option.Value, workflow.ID) {
+						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+					}
+
+					break
+				}
+
+				if !workflowIdFound {
+					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+				}
+
+				datastoreCategoryConfigEdited = true
+				categoryConfig.Automations[automationIndex].Enabled = true
+				break
+			}
+		}
+
+		if !automationFound {
+			categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
+			datastoreCategoryConfigEdited = true
+		}
+
+		if datastoreCategoryConfigEdited { 
+			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+			if err != nil {
+				log.Printf("[ERROR] Failed to update category config for automation enablement (vuln comparison): %s", err)
+			}
+		}
 	}
 
 	return nil
@@ -869,6 +949,37 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		}
 
 		// For now while testing
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+	} else if parsedActiontype == "vulnerability_comparison" {
+		defaultWorkflow := Workflow{
+			Name:        actionType,
+			Description: "Based on available vulnerabilities in the shuffle-security_sensors (and otherwise), checks these realtime against available ones.",
+			OrgId:       orgId,
+			Start:       startActionId,
+			UsecaseIds:  []string{"SIEM to ticket"},
+			Tags:        []string{"ingest", "automatic"},
+			Actions: []Action{
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          startActionId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Add enrichments to entry",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "code",
+							Value: getVulnerabilityComparison(),
+							Multiline: true,
+							Required: true,
+						},
+					},
+				},
+			},
+		}
+
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
 	}
@@ -2362,6 +2473,10 @@ func GetTriggerData(triggerType string) string {
 	default:
 		return ""
 	}
+}
+
+func getVulnerabilityComparison() string {
+	return "Not implemented yet"
 }
 
 // For realtime checks of existing objects. 

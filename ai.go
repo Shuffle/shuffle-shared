@@ -8856,7 +8856,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	initialising := false
 	workflow, workflowErr := GetWorkflow(ctx, workflowId)
 	if workflowErr != nil || workflow.ID == "" {
-		log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, workflowErr)
+		//log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, workflowErr)
 		initialising = true
 	}
 

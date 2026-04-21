@@ -17,6 +17,11 @@ import (
 	"regexp"
 	"bytes"
 	"io"
+	"net"
+
+	// For BOM scans
+	//"github.com/CycloneDX/cyclonedx-gomod/pkg/generate/app"
+	//"github.com/CycloneDX/cyclonedx-gomod/pkg/generate/mod"
 )
 
 func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
@@ -436,7 +441,7 @@ func HandleSensorResponseAction(hostname string, sensorDetails SensorMode, incRe
 	startTime := time.Now().Unix()
 
 	command := incRequest.ExecutionArgument
-	if sensorDetails.ResponseActions == "controlled" { 
+	if sensorDetails.ResponseActions == "controlled" {
 		if !strings.HasPrefix(command, "script:") { 
 			log.Printf("[WARNING] Invalid execution argument for controlled response action: %s. Must start with 'script:', which points to a valid cloud script.", command)
 			return
@@ -447,11 +452,97 @@ func HandleSensorResponseAction(hostname string, sensorDetails SensorMode, incRe
 
 	var out string
 	var err error
-	if strings.HasPrefix(command, "script:") { 
-		log.Printf("[ERROR] Script-based response actions are not yet available. Cannot execute script: %s", command)
+	if strings.HasPrefix(strings.ToLower(command), "script:") { 
 
-		out = "Not available yet"
-		err = fmt.Errorf("script-based response actions are not available yet")
+		if strings.HasPrefix(command, "script:isolate") { 
+			allowedIPs := []string{}
+
+			// Nslookup the current backendUrl 
+			if backendUrl != "" {
+				parsedUrl, err := url.Parse(backendUrl)
+				if err != nil {
+					log.Printf("[ERROR] Failed to parse backend URL '%s': %s", backendUrl, err)
+				} else {
+					host := parsedUrl.Hostname()
+					ips, err := net.LookupIP(host)
+					if err != nil {
+						log.Printf("[ERROR] Failed to lookup IP for host '%s': %s", host, err)
+					} else {
+						for _, ip := range ips {
+							if ip.String() == "::1" || strings.HasPrefix(ip.String(), "127.0.0") {
+								continue
+							}
+
+							allowedIPs = append(allowedIPs, ip.String())
+						}
+					}
+				}
+			}
+
+			if len(allowedIPs) == 0 {
+				out = "Failed to determine allowed IPs for isolation. Host isolation requires at least one allowed IP to be determined."
+			} else {
+				log.Printf("[WARNING] Isolating with URL %s. Allowed IPs: %#v", backendUrl, allowedIPs)
+
+				err := isolateHost(allowedIPs) 
+				if err != nil { 
+					log.Printf("[ERROR] Failed to isolate host: %s", err)
+					out = fmt.Sprintf("Failed to isolate host: %s", err.Error())
+				} else {
+					out = "Host isolated successfully"
+					err = nil
+
+					os.Setenv("HOST_ISOLATED", "true")
+				}
+			}
+		} else if strings.HasPrefix(command, "script:unisolate") {
+			err := unisolateHost()
+			if err != nil {
+				log.Printf("[ERROR] Failed to un-isolate host: %s", err)
+			} else {
+				out = "Host un-isolated successfully"
+				os.Setenv("HOST_ISOLATED", "false")
+			}
+		} else if strings.HasPrefix(command, "script:cbom ") { 
+			filepath := strings.TrimPrefix(command, "script:cbom ")
+			out = fmt.Sprintf("CBOM scan of '%s' is not available yet", filepath)
+			err = nil
+
+			// For scanning a module at a specific path:
+			//app.NewGenerator(moduleDir) - For scanning applications
+			//bin.NewGenerator(binaryPath) - For scanning compiled binaries
+
+			//generator, err := mod.NewGenerator(
+			/*
+			generator, err := app.NewGenerator(
+				filepath,
+			)
+			if err != nil {
+				log.Printf("[ERROR] Failed to create CBOM generator: %s", err)
+				out = fmt.Sprintf("Failed to create CBOM gen: %s", err.Error())
+			} else {
+				bom, err := generator.Generate()
+				if err != nil {
+					log.Printf("[ERROR] Failed to generate CBOM: %s", err)
+					out = fmt.Sprintf("Failed run cbom generate: %s", err.Error())
+				} else {
+					outBytes, err := json.Marshal(bom)
+					if err != nil {
+						log.Printf("[ERROR] Failed to marshal CBOM output: %s", err)
+						out = fmt.Sprintf("Failed to marshal CBOM: %s", err.Error())
+					} else {
+						out = string(outBytes)
+					}
+				}
+			}
+			*/
+
+		} else {
+			log.Printf("[ERROR] Script-based response actions are not yet available. Cannot execute script: %s", command)
+
+			out = "Not available yet"
+			err = fmt.Errorf("script-based response actions are not available yet")
+		}
 	} else { 
 		if len(command) == 0 {
 			return
