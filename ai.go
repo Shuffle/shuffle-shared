@@ -7942,7 +7942,6 @@ For EVERY fetch/list/search tool call you MUST set both "data_filter" and, when 
 - "show open tickets" → ["id", "title", "status", "assignee", "created"]
 - "find emails about invoices" → ["id", "subject", "from", "receivedDateTime"]
 - **Always include field name variations** — APIs differ. For sender: ["from", "sender", "fromAddress", "from_address"]. For time: ["date", "receivedDateTime", "created_at", "createdAt", "timestamp"] etc. Missing the real field name means you get nothing.
-- **IMPORTANT: Some APIs only return IDs in the list step — not full fields. This is normal. When you get back only IDs, fetch the individual items using Get/Fetch with data_filter:"list" and your fields_needed.
 - **If the system returns** {"reason": "none_of_the_requested_fields_found_in_response..."} it means your field names didn't match what the API returned. Try different field name variants or use data_filter:"full" on one item to discover the real field names, then switch back to "list".
 
 ### OUTPUT FORMAT (STRICT JSON). Ensure 'reason' and output fields like 'question' are Markdown formatted for readability.
