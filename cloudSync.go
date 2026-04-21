@@ -2293,6 +2293,15 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			decision.Tool = appname
 		}
 
+		// Reduce the raw response based on what the agent said it actually needs.
+		if decision.DataFilter != "" && decision.DataFilter != "full" {
+			originalLen := len(rawResponse)
+			rawResponse = ReduceAgentResponseData(rawResponse, decision.DataFilter, decision.FieldsNeeded)
+			if debug {
+				log.Printf("[DEBUG][%s] AI_AGENT_REDUCE: data_filter=%s original_bytes=%d reduced_bytes=%d tool=%s action=%s", execution.ExecutionId, decision.DataFilter, originalLen, len(rawResponse), decision.Tool, decision.Action)
+			}
+		}
+
 		decision.RunDetails.RawResponse = string(rawResponse)
 		decision.RunDetails.DebugUrl = debugUrl
 		decision.RunDetails.CategoryLabels = categoryLabels
