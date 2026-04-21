@@ -7188,7 +7188,6 @@ var httpWrapperKeys = map[string]bool{
 
 func safeRawFallback(raw []byte, reason string) []byte {
 	if len(raw) <= maxRawBytes {
-		log.Printf("[DEBUG] AI_AGENT_REDUCE: Returning raw fallback (%d bytes). Reason: %s\n", len(raw), reason)
 		return raw
 	}
 	
@@ -7202,6 +7201,7 @@ func safeRawFallback(raw []byte, reason string) []byte {
 		"warning": "response_too_large_fallback_truncated",
 		"preview": preview,
 		"context": "API returned a massive payload that bypassed reduction rules. Proceed with caution.",
+		"reason": reason,
 	}
 	res, _ := json.Marshal(fallbackMsg)
 	return res
@@ -7286,7 +7286,6 @@ func isHTTPMetadataOnly(extracted map[string]interface{}) bool {
 
 func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded []string) []byte {
 	if len(rawResponse) == 0 {
-		log.Println("[DEBUG] AI_AGENT_REDUCE: Empty raw response, passing through.")
 		return rawResponse
 	}
 
@@ -7313,7 +7312,6 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 
 	if dataFilter == "count" {
 		res, _ := json.Marshal(map[string]interface{}{"count": len(mainArray)})
-		log.Printf("[DEBUG] AI_AGENT_REDUCE: Count mode executed. Found %d items. Reduced %d bytes -> %d bytes\n", len(mainArray), len(rawResponse), len(res))
 		return res
 	}
 
@@ -7344,7 +7342,6 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 			if len(cleaned) > 0 {
 				missing := getMissingFields(wanted, foundTracker)
 				if len(missing) > 0 {
-					log.Printf("[DEBUG] AI_AGENT_REDUCE: Partial match in list. Missing fields: %v\n", missing)
 					res, _ := json.Marshal(map[string]interface{}{
 						"items":          cleaned,
 						"warning":        "partial_fields_found_api_did_not_return_the_rest",
@@ -7357,7 +7354,6 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 				return res
 			}
 
-			log.Printf("[DEBUG] AI_AGENT_REDUCE: Array yielded 0 matches. Falling back to Path B (Single Blob).")
 			foundTracker = make(map[string]bool) // Reset tracker for Path B
 		}
 
@@ -7367,7 +7363,6 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 
 		if len(extracted) > 0 {
 			if isHTTPMetadataOnly(extracted) {
-				log.Printf("[DEBUG] AI_AGENT_REDUCE: Single blob only contained HTTP metadata. Returning none_found warning.")
 				res, _ := json.Marshal(map[string]interface{}{
 					"items":  []interface{}{},
 					"reason": "api_returned_no_items",
@@ -7377,7 +7372,6 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 
 			missing := getMissingFields(wanted, foundTracker)
 			if len(missing) > 0 {
-				log.Printf("[DEBUG] AI_AGENT_REDUCE: Partial match in blob. Missing fields: %v\n", missing)
 				res, _ := json.Marshal(map[string]interface{}{
 					"item":           extracted,
 					"warning":        "partial_fields_found_api_did_not_return_the_rest",
@@ -7391,7 +7385,6 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 		}
 
 		// Finally, if BOTH Path A and Path B found absolutely nothing:
-		log.Printf("[DEBUG] AI_AGENT_REDUCE: Field mismatch everywhere. Returning none_found warning.")
 		res, _ := json.Marshal(map[string]interface{}{
 			"reason": "none_of_the_requested_fields_found_in_response_try_variant_names",
 		})
