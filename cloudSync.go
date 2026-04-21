@@ -2294,7 +2294,9 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		}
 
 		// Reduce the raw response based on what the agent said it actually needs.
-		if decision.DataFilter != "" && decision.DataFilter != "full" {
+		// Always route non-empty data filters through the reducer so "full" still
+		// benefits from its passthrough/max-size/error-handling logic.
+		if decision.DataFilter != "" {
 			originalLen := len(rawResponse)
 			rawResponse = ReduceAgentResponseData(rawResponse, decision.DataFilter, decision.FieldsNeeded)
 			if debug {
