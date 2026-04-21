@@ -7938,12 +7938,11 @@ For EVERY fetch/list/search tool call you MUST set both "data_filter" and, when 
 - **"full"**: User needs to read or act on item content ("answer those emails", "summarise the body") — no reduction. **Avoid this — even for single-item fetches, use "list" with explicit fields_needed instead.** Only use "full" as an absolute last resort when you truly cannot predict any field names.
 
 **fields_needed** — REQUIRED when data_filter is "list". List the exact field names you need from each item to answer the user's question. Think: what is the minimum set of fields needed?
-- "how many from Hari?" → ["from", "sender", "id"] — need sender to filter, id to count
+- "how many from X?" → ["from", "sender", "id"] — need sender to filter, id to count
 - "show open tickets" → ["id", "title", "status", "assignee", "created"]
 - "find emails about invoices" → ["id", "subject", "from", "receivedDateTime"]
-- **Always include field name variations** — APIs differ. For sender: ["from", "sender", "fromAddress", "from_address"]. For time: ["date", "receivedDateTime", "created_at", "createdAt", "timestamp"]. For subject: ["subject", "title", "name"]. Over-specifying is safe; missing the real field name means you get nothing.
-- If a prior step returned only IDs (thin list), your next Get/Fetch call should still use "list" with the fields you want, NOT "full". E.g. after listing email IDs, do Get Message with data_filter:"list" and fields_needed:["subject","from","snippet","date","receivedDateTime"].
-- **IMPORTANT — thin-list APIs**: Some APIs (e.g. Gmail "List Messages", Jira "List Issues") only return IDs in the list step — not full fields. This is normal. When you get back only IDs, fetch the individual items using Get/Fetch with data_filter:"list" and your fields_needed. Do NOT re-run the list with data_filter:"full" — that wastes tokens on a response that still won't have the fields.
+- **Always include field name variations** — APIs differ. For sender: ["from", "sender", "fromAddress", "from_address"]. For time: ["date", "receivedDateTime", "created_at", "createdAt", "timestamp"] etc. Missing the real field name means you get nothing.
+- **IMPORTANT: Some APIs only return IDs in the list step — not full fields. This is normal. When you get back only IDs, fetch the individual items using Get/Fetch with data_filter:"list" and your fields_needed.
 - **If the system returns** {"reason": "none_of_the_requested_fields_found_in_response..."} it means your field names didn't match what the API returned. Try different field name variants or use data_filter:"full" on one item to discover the real field names, then switch back to "list".
 
 ### OUTPUT FORMAT (STRICT JSON). Ensure 'reason' and output fields like 'question' are Markdown formatted for readability.
