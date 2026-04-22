@@ -4130,6 +4130,10 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 	}
 
 	cacheKey := fmt.Sprintf("%s_%s_workflows", cursor, user.ActiveOrg.Id)
+	if len(cursor) == 0 {
+		cacheKey = fmt.Sprintf("%s_workflows", user.ActiveOrg.Id)
+	}
+
 	//if maxAmount != 250 {
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
