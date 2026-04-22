@@ -14136,7 +14136,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 				cacheData.Enrichments = newObservables
 				if debug { 
-					log.Printf("\n\n\nFound new enrichments: %d for key %s in category %s\n\n\n", len(newObservables), cacheData.Key, cacheData.Category)
+					log.Printf("\n\n\n[DEBUG] Found new enrichments: %d for key %s in category %s\n\n\n", len(newObservables), cacheData.Key, cacheData.Category)
 				}
 			}
 

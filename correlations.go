@@ -61,7 +61,7 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 		searchKey := fmt.Sprintf("%s", correlationData.Key)
 		ngramItem, err := GetDatastoreNGramItem(ctx, searchKey)
 		if err != nil {
-			log.Printf("[WARNING] Failed to get ngram item in GetCorrelations: %s", err)
+			log.Printf("[WARNING] Failed to get ngram item in GetCorrelations for '%s': %s", searchKey, err)
 			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false, "reason": "No correlations found"}`))
 			return
@@ -149,7 +149,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 	// Simple workaround for dates
 	// hardcoded for now just to remove certain things
 	skippableKeys := []string{"spec_version", "version", "pattern_type", "created", "edited", "creation", "status"}
-	skippableValues := []string{"indicator", "stix", "active", "false", "true", "inprogress", "new", "closed", "resolved", "escalated"}
+	skippableValues := []string{"indicator", "stix", "active", "false", "true", "inprogress", "new", "closed", "resolved", "escalated", "incidentfinding"}
 	invalidStarts := []string{"[", "{", "$", "202", "203", "204"} // Specific for timestamps
 
 	//for jsonKey, val := range unmarshalled {
