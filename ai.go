@@ -7201,7 +7201,7 @@ func safeRawFallback(raw []byte, reason string) []byte {
 		"warning": "response_too_large_fallback_truncated",
 		"preview": preview,
 		"context": "API returned a massive payload that bypassed reduction rules. Proceed with caution.",
-		"reason": reason,
+		"reason":  reason,
 	}
 	res, _ := json.Marshal(fallbackMsg)
 	return res
@@ -7285,7 +7285,7 @@ func isHTTPMetadataOnly(extracted map[string]interface{}) bool {
 }
 
 // explicitTotalKeys are field names APIs use to report the real dataset size across all pages — independent of how many items were returned on this page.
-// E.g. Gmail returns resultSizeEstimate:69 even when sending only 50 messages.
+// E.g. Gmail returns resultSizeEstimate: 70 even when sending only 50 messages.
 var explicitTotalKeys = []string{
 	"@odata.count", "totalCount", "total_count", "total",
 	"totalResults", "total_results", "resultSizeEstimate", "count",
@@ -7341,24 +7341,6 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 
 	mainArray := findMainArray(parsed)
 
-	if dataFilter == "count" {
-		// Prefer the API's own total field, it's the real count across all pages.
-		if total, found := findExplicitTotal(parsed, 0); found {
-			res, _ := json.Marshal(map[string]interface{}{"count": total})
-			return res
-		}
-		// No total field then count the returned array. Flag it as potentially partial so the agent knows this may be one page only.
-		if len(mainArray) > 0 {
-			res, _ := json.Marshal(map[string]interface{}{
-				"count":   len(mainArray),
-				"warning": "no_total_field_found_this_may_be_one_page_only",
-			})
-			return res
-		}
-		// Nothing countable at all then return raw (it's an unusual blob, let agent read it)
-		return safeRawFallback(rawResponse, "count_nothing_found")
-	}
-
 	if dataFilter == "list" {
 		if len(fieldsNeeded) == 0 {
 			if len(mainArray) > 0 {
@@ -7385,6 +7367,21 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 			// If we actually found the requested fields in the array, check for missing fields and return!
 			if len(cleaned) > 0 {
 				missing := getMissingFields(wanted, foundTracker)
+
+				// If the API also reported a real total (e.g. Gmail's resultSizeEstimate), include it so the agent knows whether this is the full set or one page.
+				if apiTotal, found := findExplicitTotal(parsed, 0); found {
+					responseMap := map[string]interface{}{
+						"items":              cleaned,
+						"api_reported_total": apiTotal,
+					}
+					if len(missing) > 0 {
+						responseMap["missing_fields"] = missing
+						responseMap["warning"] = "partial_fields_found_api_did_not_return_the_rest"
+					}
+					res, _ := json.Marshal(responseMap)
+					return res
+				}
+
 				if len(missing) > 0 {
 					res, _ := json.Marshal(map[string]interface{}{
 						"items":          cleaned,
@@ -7967,19 +7964,19 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
      - If action is DESTRUCTIVE (delete/remove) -> Set "approval_required": true.
 
 ### DATA REDUCTION (data_filter + fields_needed)
-For EVERY fetch/list/search tool call you MUST set both "data_filter" and, when using "list", "fields_needed". The system uses these to reduce the API response before it reaches you — this is critical for keeping token costs low.
+For EVERY fetch/list/search tool call you MUST set "data_filter" and "fields_needed". The system uses these to reduce the API response before it reaches you.
 
-**data_filter** — pick the lowest mode that satisfies the user's intent:
-- **"count"**: User only needs a number ("how many emails?", "how many alerts?") — system returns {"count": N}. No fields needed.
-- **"list"**: User needs to identify, filter, or browse items ("which came from Hari?", "open tickets", "find invoice emails") — system returns ONLY the fields you list in "fields_needed" per item.
-- **"full"**: User needs to read or act on item content ("answer those emails", "summarise the body") — no reduction. **Avoid this — even for single-item fetches, use "list" with explicit fields_needed instead.** Only use "full" as an absolute last resort when you truly cannot predict any field names.
+data_filter — two modes only:
+- "list": Use for everything — browsing, filtering, AND counting. System returns only the fields you specify per item. You count/filter the result yourself.
+- "full": No reduction. Avoid this — even for single-item fetches, use "list" instead. Only use "full" as an absolute last resort on a SINGLE item to discover field names if "list" keeps failing.
 
-**fields_needed** — REQUIRED when data_filter is "list". List the exact field names you need from each item to answer the user's question. Think: what is the minimum set of fields needed?
-- "how many from X?" → ["from", "sender", "id"] — need sender to filter, id to count
-- "show open tickets" → ["id", "title", "status", "assignee", "created"]
-- "find emails about invoices" → ["id", "subject", "from", "receivedDateTime"]
-- **Always include field name variations** — APIs differ. For sender: ["from", "sender", "fromAddress", "from_address"]. For time: ["date", "receivedDateTime", "created_at", "createdAt", "timestamp"] etc. Missing the real field name means you get nothing.
-- **If the system returns** {"reason": "none_of_the_requested_fields_found_in_response..."} it means your field names didn't match what the API returned. Try different field name variants or use data_filter:"full" on one item to discover the real field names, then switch back to "list".
+fields_needed — REQUIRED. The minimum data points required to answer the question.
+- "how many from X?" -> ["from", "sender", "id"] (need sender to filter, id to count)
+- "show open tickets" -> ["id", "title", "status", "assignee", "created"]
+
+RULE 1 - Limit data points, expand variations: Do NOT pad the request with useless data points (e.g., don't ask for "body" or "attachments" if the user just wants the sender). HOWEVER, you MUST provide multiple name variations for the data you actually need (e.g., ["from", "sender", "fromAddress"]). Missing the real field name means you get nothing.
+
+RULE 2 - Schema Discovery: If the system returns {"reason": "none_of_the_requested_fields_found..."}, your names didn't match. Do not blindly retry. Either guess new variants, or run data_filter:"full" on exactly ONE item to read the real schema, then switch back to "list".
 
 ### OUTPUT FORMAT (STRICT JSON). Ensure 'reason' and output fields like 'question' are Markdown formatted for readability.
 
@@ -7992,8 +7989,8 @@ For EVERY fetch/list/search tool call you MUST set both "data_filter" and, when 
     "confidence": 1.0,
     "runs": "1", 
     "approval_required": false, 
-    "data_filter": "list", // REQUIRED for fetch/list/search: "count" | "list" | "full"
-    "fields_needed": ["from", "subject", "id", "receivedDateTime"], // REQUIRED when data_filter is "list": exact fields you need from each item
+    "data_filter": "list", // REQUIRED for fetch/list/search: "list" | "full"
+    "fields_needed": ["<List of fields>"], // REQUIRED when data_filter is "list": exact fields you need from each item
     "reason": "Explain WHY.",
     "fields": [
       { "key": "argument_name", "value": "literal_value" }
