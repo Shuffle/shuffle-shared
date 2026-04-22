@@ -2040,3 +2040,211 @@ func listMacSoftware() []Software {
 
 	return result
 }
+
+const (
+	anchorName   = "edr_isolation"
+	anchorFile   = "/etc/pf.anchors/edr_isolation"
+	pfConf       = "/etc/pf.conf"
+	pfConfBackup = "/etc/pf.conf.backup_edr"
+
+	nftConf       = "/etc/nftables.conf"
+	nftBackup     = "/etc/nftables.conf.backup_edr"
+	isolationFile = "/etc/nftables.edr.conf"
+)
+
+func isolateHostMacos(allowIPs []string) error {
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("must run as root")
+	}
+
+	// 1. Backup pf.conf once
+	if _, err := os.Stat(pfConfBackup); os.IsNotExist(err) {
+		input, err := os.ReadFile(pfConf)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(pfConfBackup, input, 0600); err != nil {
+			return err
+		}
+	}
+
+	// 2. Build anchor rules
+	var rules strings.Builder
+
+	rules.WriteString("block all\n")
+	rules.WriteString("pass quick on lo0 all\n")
+
+	for _, ip := range allowIPs {
+		rules.WriteString(fmt.Sprintf("pass out quick to %s keep state\n", ip))
+		rules.WriteString(fmt.Sprintf("pass in quick from %s keep state\n", ip))
+	}
+
+	if err := os.WriteFile(anchorFile, []byte(rules.String()), 0600); err != nil {
+		return err
+	}
+
+	// 3. Ensure pf.conf loads our anchor
+	confData, err := os.ReadFile(pfConf)
+	if err != nil {
+		return err
+	}
+
+	confStr := string(confData)
+
+	anchorLine := fmt.Sprintf("anchor \"%s\"\nload anchor \"%s\" from \"%s\"\n", anchorName, anchorName, anchorFile)
+
+	if !strings.Contains(confStr, anchorName) {
+		confStr += "\n" + anchorLine
+		if err := os.WriteFile(pfConf, []byte(confStr), 0644); err != nil {
+			return err
+		}
+	}
+
+	// 4. Enable PF
+	exec.Command("pfctl", "-E").Run()
+
+	// 5. Load full config (which includes anchor)
+	if err := exec.Command("pfctl", "-f", pfConf).Run(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func isolateHostLinux(allowIPs []string) error {
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("must run as root")
+	}
+
+	// 1. Backup nftables config once
+	if _, err := os.Stat(nftBackup); os.IsNotExist(err) {
+		data, err := os.ReadFile(nftConf)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(nftBackup, data, 0600); err != nil {
+			return err
+		}
+	}
+
+	// 2. Build isolation rules
+	var b strings.Builder
+
+	b.WriteString("table inet edr_isolation {\n")
+
+	b.WriteString("  chain input {\n")
+	b.WriteString("    type filter hook input priority 0;\n")
+	b.WriteString("    policy drop;\n")
+
+	// loopback always allowed
+	b.WriteString("    iif lo accept\n")
+
+	for _, ip := range allowIPs {
+		b.WriteString(fmt.Sprintf("    ip saddr %s accept\n", ip))
+	}
+
+	b.WriteString("  }\n")
+
+	b.WriteString("  chain output {\n")
+	b.WriteString("    type filter hook output priority 0;\n")
+	b.WriteString("    policy drop;\n")
+
+	b.WriteString("    oif lo accept\n")
+
+	for _, ip := range allowIPs {
+		b.WriteString(fmt.Sprintf("    ip daddr %s accept\n", ip))
+	}
+
+	b.WriteString("  }\n")
+
+	b.WriteString("  chain forward {\n")
+	b.WriteString("    type filter hook forward priority 0;\n")
+	b.WriteString("    policy drop;\n")
+	b.WriteString("  }\n")
+
+	b.WriteString("}\n")
+
+	if err := os.WriteFile(isolationFile, []byte(b.String()), 0600); err != nil {
+		return err
+	}
+
+	// 3. Ensure main config includes our file
+	conf, err := os.ReadFile(nftConf)
+	if err != nil {
+		return err
+	}
+
+	if !strings.Contains(string(conf), isolationFile) {
+		conf = append(conf, []byte("\ninclude \""+isolationFile+"\"\n")...)
+		if err := os.WriteFile(nftConf, conf, 0644); err != nil {
+			return err
+		}
+	}
+
+	// 4. Apply nftables rules
+	if err := exec.Command("nft", "-f", nftConf).Run(); err != nil {
+		return fmt.Errorf("failed to apply nft rules: %w", err)
+	}
+
+	return nil
+}
+
+func isolateHost(allowIPs []string) error {
+	if runtime.GOOS == "darwin" {
+		return isolateHostMacos(allowIPs)
+	} else {
+		return isolateHostLinux(allowIPs)
+	}
+
+	return fmt.Errorf("isolation not supported on this platform")
+}
+
+func unisolateHostMacos() error {
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("must run as root")
+	}
+
+	// Restore original pf.conf
+	backup, err := os.ReadFile(pfConfBackup)
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(pfConf, backup, 0644); err != nil {
+		return err
+	}
+
+	// Reload PF config
+	if err := exec.Command("pfctl", "-f", pfConf).Run(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func unisolateHostLinux() error {
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("must run as root")
+	}
+
+	backup, err := os.ReadFile(nftBackup)
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(nftConf, backup, 0644); err != nil {
+		return err
+	}
+
+	return exec.Command("nft", "-f", nftConf).Run()
+}
+
+func unisolateHost() error {
+	if runtime.GOOS == "darwin" {
+		return unisolateHostMacos()
+	} else {
+		return unisolateHostLinux()
+	}
+
+	return fmt.Errorf("un-isolation not supported on this platform")
+}

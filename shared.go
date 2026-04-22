@@ -29179,6 +29179,8 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 		name = location[5]
 	}
 
+	log.Printf("\n\nIN HERE!\n\n")
+
 	ctx := GetContext(request)
 	usecase, err := GetUsecase(ctx, name)
 	if err != nil {
@@ -29328,9 +29330,9 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 	newjson, err := json.Marshal(usecase)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshal in get usecase: %s", err)
-		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data"}`)))
-		return
+		//resp.WriteHeader(400)
+		//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data"}`)))
+		//return
 	}
 
 	resp.WriteHeader(200)
