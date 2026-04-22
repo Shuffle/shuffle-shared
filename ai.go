@@ -7284,6 +7284,36 @@ func isHTTPMetadataOnly(extracted map[string]interface{}) bool {
 	return true // It ONLY found HTTP garbage
 }
 
+// explicitTotalKeys are field names APIs use to report the real dataset size across all pages — independent of how many items were returned on this page.
+// E.g. Gmail returns resultSizeEstimate:69 even when sending only 50 messages.
+var explicitTotalKeys = []string{
+	"@odata.count", "totalCount", "total_count", "total",
+	"totalResults", "total_results", "resultSizeEstimate", "count",
+}
+
+// findExplicitTotal recursively searches for a known API total field at any
+// depth. Returns the value and true if found.
+func findExplicitTotal(v interface{}, depth int) (interface{}, bool) {
+	if depth > 4 {
+		return nil, false
+	}
+	obj, ok := v.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	for _, key := range explicitTotalKeys {
+		if val, exists := obj[key]; exists {
+			return val, true
+		}
+	}
+	for _, child := range obj {
+		if val, found := findExplicitTotal(child, depth+1); found {
+			return val, found
+		}
+	}
+	return nil, false
+}
+
 func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded []string) []byte {
 	if len(rawResponse) == 0 {
 		return rawResponse
@@ -7311,8 +7341,21 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 	mainArray := findMainArray(parsed)
 
 	if dataFilter == "count" {
-		res, _ := json.Marshal(map[string]interface{}{"count": len(mainArray)})
-		return res
+		// Prefer the API's own total field, it's the real count across all pages.
+		if total, found := findExplicitTotal(parsed, 0); found {
+			res, _ := json.Marshal(map[string]interface{}{"count": total})
+			return res
+		}
+		// No total field then count the returned array. Flag it as potentially partial so the agent knows this may be one page only.
+		if len(mainArray) > 0 {
+			res, _ := json.Marshal(map[string]interface{}{
+				"count":   len(mainArray),
+				"warning": "no_total_field_found_this_may_be_one_page_only",
+			})
+			return res
+		}
+		// Nothing countable at all then return raw (it's an unusual blob, let agent read it)
+		return safeRawFallback(rawResponse, "count_nothing_found")
 	}
 
 	if dataFilter == "list" {
