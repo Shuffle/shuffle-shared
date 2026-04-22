@@ -7319,6 +7319,7 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 		return rawResponse
 	}
 
+	dataFilter = strings.ToLower(strings.TrimSpace(dataFilter))
 	if dataFilter == "full" {
 		return safeRawFallback(rawResponse, "data_filter_is_full")
 	}
@@ -9132,7 +9133,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	initialising := false
 	workflow, workflowErr := GetWorkflow(ctx, workflowId)
 	if workflowErr != nil || workflow.ID == "" {
-		log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, workflowErr)
+		//log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, workflowErr)
 		initialising = true
 	}
 

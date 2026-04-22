@@ -2294,7 +2294,9 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		}
 
 		// Reduce the raw response based on what the agent said it actually needs.
-		if decision.DataFilter != "" && decision.DataFilter != "full" {
+		// Always route non-empty data filters through the reducer so "full" still
+		// benefits from its passthrough/max-size/error-handling logic.
+		if decision.DataFilter != "" {
 			originalLen := len(rawResponse)
 			rawResponse = ReduceAgentResponseData(rawResponse, decision.DataFilter, decision.FieldsNeeded)
 			if debug {
@@ -2549,6 +2551,8 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 					// For now we will just keep whatever we get first. Any restart
 					// of the agent will change it.
 					if host.Uuid != orborusData.Uuid {
+						DeleteCache(ctx, fmt.Sprintf("sensorupdate_%s_%s", orborusData.SensorDetails.Hostname, orborusData.SensorDetails.Arch))
+
 						env.SensorHosts[hostIndex].AutomaticScreenlockEnabled = orborusData.SensorDetails.AutomaticScreenlockEnabled
 						env.SensorHosts[hostIndex].HdEncrypted = orborusData.SensorDetails.HdEncrypted
 						env.SensorHosts[hostIndex].LogForwarding = orborusData.SensorDetails.LogForwarding
@@ -2574,6 +2578,9 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 
 		// Appending a new one
 		if !found {
+			if debug { 
+				log.Printf("\n\n[DEBUG] Adding new sensor host '%s' to group environment '%s' (%s). Total hosts: %d\n\n", orborusData.SensorDetails.Hostname, env.Name, env.Id, len(env.SensorHosts)+1)
+			}
 			updateMade = true
 
 			newHost := orborusData.SensorDetails
@@ -2583,15 +2590,22 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			env.SensorHosts = append(env.SensorHosts, newHost)
 		}
 
+		// Updates at that point (2 minutes~) as long as a single sensor is sending data.
+		if !updateMade && env.Checkin > 0 && timeNow > env.Checkin+120 {
+			updateMade = true
+		}
+
 		if updateMade && len(env.SensorHosts) >= 1 {
-			log.Printf("[INFO] Updating sensors?")
-			go HandleSensorDatastoreUpdate(orborusData)
+			if debug { 
+				log.Printf("[DEBUG] Updating sensor host data for group environment '%s' (%s). Total hosts: %d. Checkin: %d seconds ago\n\n", env.Name, env.Id, len(env.SensorHosts), timeNow-env.Checkin)
+			}
 
 			// Sideloading from shuffle-security_sensors instead
 			removeIndex = []int{}
 			for sensorIndex, sensor := range env.SensorHosts {
 				if sensor.Hostname == orborusData.SensorDetails.Hostname && sensor.Arch == orborusData.SensorDetails.Arch {
 					sensor.Checkin = timeNow
+					orborusData.SensorDetails.Checkin = timeNow
 				} else {
 					checkinKeyCheck := fmt.Sprintf("sensor_%s_%s_%s_checkin", env.Name, sensor.Hostname, sensor.Arch)
 					foundCache, err := GetCache(ctx, checkinKeyCheck)
@@ -2627,6 +2641,8 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 				env.SensorHosts = append(env.SensorHosts[:removeIndex[i]], env.SensorHosts[removeIndex[i]+1:]...)
 				log.Printf("[INFO] Sensor '%s' removed from group environment '%s' (%s) due to inactivity. Checkin: %d seconds ago", env.SensorHosts[removeIndex[i]].Hostname, env.Name, env.Id, timeNow-env.SensorHosts[removeIndex[i]].Checkin)
 			}
+
+			go HandleSensorDatastoreUpdate(orborusData)
 
 			env.Checkin = timeNow
 			err := SetEnvironment(ctx, env)
@@ -2716,8 +2732,8 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 
 	ctx := context.Background()
 
-	// MAX every 60 minutes
-	cacheKey := fmt.Sprintf("sensorupdate_%s", sensorDetails.Hostname)
+	// MAX every 60 minutes, or if a sensor is restarted
+	cacheKey := fmt.Sprintf("sensorupdate_%s_%s", sensorDetails.Hostname, sensorDetails.Arch)
 	GotCache, err := GetCache(ctx, cacheKey)
 	if err == nil && GotCache != nil {
 		if debug { 
@@ -3331,7 +3347,7 @@ icacls $BIN_PATH /grant Users:RX
 
 # Remove if exists early as the process may be running and we need to change the file
 $SERVICE_NAME = "orborus-agent"
-echo "Deleting old agent"
+echo "Deleting old sensor"
 schtasks /Delete /TN $SERVICE_NAME /F
 
 $p = Get-Process -Name "orborus-agent" -ErrorAction SilentlyContinue
