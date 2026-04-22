@@ -8718,14 +8718,24 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 		if err != nil {
 			log.Printf("[ERROR] Failed getting statistics for org %s: %s", parentOrg.Id, err)
 
-			stats.MonthlyWorkflowExecutions = 0
-			stats.MonthlyChildWorkflowExecutions = 0
+			stats.MonthlyAppExecutions = 0
+			stats.MonthlyChildAppExecutions = 0
 		}
 
-		limit := licenseOrg.SyncFeatures.WorkflowExecutions.Limit
-		totalWorkflowExecutions := stats.MonthlyWorkflowExecutions + stats.MonthlyChildWorkflowExecutions
+		limit := licenseOrg.SyncFeatures.AppExecutions.Limit
+		totalAppExecutions := stats.MonthlyAppExecutions + stats.MonthlyChildAppExecutions
 
-		if totalWorkflowExecutions > limit {
+		license := checkNoInternet()
+		if license.Valid {
+			limit = limit * 2
+		}
+
+		shouldSkipRateLimit := false
+		if licenseOrg.CloudSync && !license.Valid && licenseOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+			shouldSkipRateLimit = true
+		}
+
+		if !shouldSkipRateLimit && totalAppExecutions > limit {
 			cacheKey := fmt.Sprintf("org-%s-last-queue-send", orgId)
 			currentTime := time.Now().Unix()
 			lastSendCache, err := GetCache(ctx, cacheKey)
@@ -8755,7 +8765,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 			} else {
 
 				if len(executions) > 1 {
-					log.Printf("[INFO] Rate limiting (3): Org %s exceeded the 10K workflow run quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalWorkflowExecutions)
+					log.Printf("[INFO] Rate limiting (3): Org %s exceeded the 25K app run quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalAppExecutions)
 					executions = executions[0:1]
 				}
 
@@ -15588,9 +15598,9 @@ func checkNoInternet() OnpremLicense {
 			Active: false,
 			Limit:  1,
 		},
-		WorkflowExecutions: OnpremLimits{
+		AppRuns: OnpremLimits{
 			Active: false,
-			Limit:  10000,
+			Limit:  25000,
 		},
 		Timeout:  "",
 		Branding: false,
@@ -15620,13 +15630,13 @@ func checkNoInternet() OnpremLicense {
 	sum := sha256.Sum256([]byte(licenseKeyPart))
 	encodedString := hex.EncodeToString(sum[:])
 
-	workflowLimitKey := ""
+	appRunsLimitKey := ""
 	if len(licenseParts) > 1 {
-		workflowLimitKey = licenseParts[1]
+		appRunsLimitKey = licenseParts[1]
 	}
 
-	workflowLimitHash := sha256.Sum256([]byte(workflowLimitKey))
-	encodedWorkflowLimit := hex.EncodeToString(workflowLimitHash[:])
+	appRunsLimitHash := sha256.Sum256([]byte(appRunsLimitKey))
+	encodedAppRunsLimit := hex.EncodeToString(appRunsLimitHash[:])
 
 	tenantKey := ""
 	if len(licenseParts) > 2 {
@@ -15699,14 +15709,14 @@ func checkNoInternet() OnpremLicense {
 					license.Branding = false
 				}
 
-				//check workflow limit
-				if len(workflowLimitKey) > 0 && len(encodedWorkflowLimit) > 0 {
-					amount := GetWorkflowRunAmount(encodedWorkflowLimit)
-					license.WorkflowExecutions.Limit = int64(amount)
-					if amount > 10000 {
-						license.WorkflowExecutions.Active = true
+				//check app runs limit
+				if len(appRunsLimitKey) > 0 && len(encodedAppRunsLimit) > 0 {
+					amount := GetWorkflowRunAmount(encodedAppRunsLimit)
+					license.AppRuns.Limit = int64(amount)
+					if amount > 25000 {
+						license.AppRuns.Active = true
 					} else {
-						license.WorkflowExecutions.Active = false
+						license.AppRuns.Active = false
 					}
 				}
 
