@@ -7181,11 +7181,7 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 
 const maxRawBytes = 8000
 
-var httpWrapperKeys = map[string]bool{
-	"date": true, "status": true, "url": true, "success": true,
-	"message": true, "headers": true, "statuscode": true,
-}
-
+// safeRawFallback enforces the 8000-byte token limit to protect the LLM context window.
 func safeRawFallback(raw []byte, reason string) []byte {
 	if len(raw) <= maxRawBytes {
 		return raw
@@ -7207,60 +7203,7 @@ func safeRawFallback(raw []byte, reason string) []byte {
 	return res
 }
 
-// dynamically searches the entire JSON tree for the largest array.
-func findMainArray(v interface{}) []interface{} {
-	var maxArr []interface{}
-	var search func(node interface{})
-	search = func(node interface{}) {
-		switch val := node.(type) {
-		case []interface{}:
-			if len(val) > len(maxArr) {
-				maxArr = val
-			}
-			for _, item := range val {
-				search(item)
-			}
-		case map[string]interface{}:
-			for _, child := range val {
-				search(child)
-			}
-		}
-	}
-	search(v)
-	return maxArr
-}
-
-// collectWantedFields does a depth-first search through a JSON object and tracks what it finds.
-func collectWantedFields(v interface{}, wanted map[string]bool, result map[string]interface{}, foundTracker map[string]bool) {
-	switch val := v.(type) {
-	case map[string]interface{}:
-		for k, child := range val {
-			lowerK := strings.ToLower(k)
-			if wanted[lowerK] {
-				result[k] = child
-				foundTracker[lowerK] = true // Mark that we actually found this field
-			} else {
-				collectWantedFields(child, wanted, result, foundTracker)
-			}
-		}
-	case []interface{}:
-		for _, item := range val {
-			collectWantedFields(item, wanted, result, foundTracker)
-		}
-	}
-}
-
-// getMissingFields calculates what the API failed to return.
-func getMissingFields(wanted map[string]bool, found map[string]bool) []string {
-	var missing []string
-	for k := range wanted {
-		if !found[k] {
-			missing = append(missing, k)
-		}
-	}
-	return missing
-}
-
+// normalizeWantedFields converts the LLM's slice of fields into an O(1) lookup map and lowercases them.
 func normalizeWantedFields(fieldsNeeded []string) map[string]bool {
 	wanted := make(map[string]bool, len(fieldsNeeded))
 	for _, field := range fieldsNeeded {
@@ -7272,16 +7215,67 @@ func normalizeWantedFields(fieldsNeeded []string) map[string]bool {
 	return wanted
 }
 
-func isHTTPMetadataOnly(extracted map[string]interface{}) bool {
-	if len(extracted) == 0 {
-		return false
-	}
-	for k := range extracted {
-		if !httpWrapperKeys[strings.ToLower(k)] {
-			return false // Found a real data field
+// getMissingFields checks what the agent asked for vs what the passive tracker actually saw.
+func getMissingFields(wanted map[string]bool, found map[string]bool) []string {
+	var missing []string
+	for k := range wanted {
+		if !found[k] {
+			missing = append(missing, k)
 		}
 	}
-	return true // It ONLY found HTTP garbage
+	return missing
+}
+
+// filterByKeys recursively prunes a JSON tree, keeping only paths that lead to an allowed key.
+func filterByKeys(data interface{}, allowed map[string]bool, foundTracker map[string]bool) (interface{}, bool) {
+	switch v := data.(type) {
+
+	case map[string]interface{}:
+		result := make(map[string]interface{}, len(v))
+		found := false
+
+		for key, val := range v {
+			lowerKey := strings.ToLower(key)
+
+			// If key matches -> keep full value and passively track it
+			if allowed[lowerKey] {
+				result[key] = val
+				foundTracker[lowerKey] = true 
+				found = true
+				continue // Stop digging deeper into this branch
+			}
+
+			// Search deeper
+			if filtered, ok := filterByKeys(val, allowed, foundTracker); ok {
+				result[key] = filtered
+				found = true
+			}
+		}
+
+		if !found {
+			return nil, false
+		}
+		return result, true
+
+	case []interface{}:
+		result := make([]interface{}, 0, len(v))
+		found := false
+
+		for _, item := range v {
+			if filtered, ok := filterByKeys(item, allowed, foundTracker); ok {
+				result = append(result, filtered)
+				found = true
+			}
+		}
+
+		if !found {
+			return nil, false
+		}
+		return result, true
+
+	default:
+		return nil, false
+	}
 }
 
 // explicitTotalKeys are field names APIs use to report the real dataset size across all pages — independent of how many items were returned on this page.
@@ -7291,8 +7285,7 @@ var explicitTotalKeys = []string{
 	"totalResults", "total_results", "resultSizeEstimate", "count",
 }
 
-// findExplicitTotal recursively searches for a known API total field at any
-// depth. Returns the value and true if found.
+// findExplicitTotal recursively searches for a known API total field at any depth. Returns the value and true if found.
 func findExplicitTotal(v interface{}, depth int) (interface{}, bool) {
 	if depth > 4 {
 		return nil, false
@@ -7329,7 +7322,7 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 		return safeRawFallback(rawResponse, "invalid_json_fallback")
 	}
 
-	// Error Check
+	// Explicit Error Check
 	if topLevel, ok := parsed.(map[string]interface{}); ok {
 		if _, hasErr := topLevel["error"]; hasErr {
 			return safeRawFallback(rawResponse, "api_returned_error_object")
@@ -7339,96 +7332,48 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 		}
 	}
 
-	mainArray := findMainArray(parsed)
-
 	if dataFilter == "list" {
 		if len(fieldsNeeded) == 0 {
-			if len(mainArray) > 0 {
-				res, _ := json.Marshal(mainArray)
-				return safeRawFallback(res, "list_requested_but_no_fields_needed_specified")
-			}
-			return safeRawFallback(rawResponse, "list_requested_no_fields_no_array_found")
+			return safeRawFallback(rawResponse, "list_requested_but_no_fields_needed_specified")
 		}
 
 		wanted := normalizeWantedFields(fieldsNeeded)
-		foundTracker := make(map[string]bool)
+		globalTracker := make(map[string]bool)
 
-		// We found an array (It might be the main list, OR it might be a false positive inner array)
-		if len(mainArray) > 0 {
-			var cleaned []interface{}
-			for _, item := range mainArray {
-				extracted := make(map[string]interface{})
-				collectWantedFields(item, wanted, extracted, foundTracker)
-				if len(extracted) > 0 {
-					cleaned = append(cleaned, extracted)
-				}
-			}
+		// check if the api included any explicit total fields that we can pass on to the Agent for better context.
+		apiTotal, hasTotal := findExplicitTotal(parsed, 0)
 
-			// If we actually found the requested fields in the array, check for missing fields and return!
-			if len(cleaned) > 0 {
-				missing := getMissingFields(wanted, foundTracker)
+		filteredData, ok := filterByKeys(parsed, wanted, globalTracker)
 
-				// If the API also reported a real total (e.g. Gmail's resultSizeEstimate), include it so the agent knows whether this is the full set or one page.
-				if apiTotal, found := findExplicitTotal(parsed, 0); found {
-					responseMap := map[string]interface{}{
-						"items":              cleaned,
-						"api_reported_total": apiTotal,
-					}
-					if len(missing) > 0 {
-						responseMap["missing_fields"] = missing
-						responseMap["warning"] = "partial_fields_found_api_did_not_return_the_rest"
-					}
-					res, _ := json.Marshal(responseMap)
-					return res
-				}
-
-				if len(missing) > 0 {
-					res, _ := json.Marshal(map[string]interface{}{
-						"items":          cleaned,
-						"warning":        "partial_fields_found_api_did_not_return_the_rest",
-						"missing_fields": missing,
-					})
-					return res
-				}
-
-				res, _ := json.Marshal(cleaned)
-				return res
-			}
-
-			foundTracker = make(map[string]bool) // Reset tracker for Path B
-		}
-
-		// No array found OR array was a false positive (Single JSON blob)
-		extracted := make(map[string]interface{})
-		collectWantedFields(parsed, wanted, extracted, foundTracker)
-
-		if len(extracted) > 0 {
-			if isHTTPMetadataOnly(extracted) {
-				res, _ := json.Marshal(map[string]interface{}{
-					"items":  []interface{}{},
-					"reason": "api_returned_no_items",
-				})
-				return res
-			}
-
-			missing := getMissingFields(wanted, foundTracker)
-			if len(missing) > 0 {
-				res, _ := json.Marshal(map[string]interface{}{
-					"item":           extracted,
-					"warning":        "partial_fields_found_api_did_not_return_the_rest",
-					"missing_fields": missing,
-				})
-				return res
-			}
-
-			res, _ := json.Marshal(extracted)
+		if !ok {
+			// Complete miss
+			res, _ := json.Marshal(map[string]interface{}{
+				"reason": "none_of_the_requested_fields_found_in_response_try_variant_names",
+			})
 			return res
 		}
 
-		// Finally, if BOTH Path A and Path B found absolutely nothing:
-		res, _ := json.Marshal(map[string]interface{}{
-			"reason": "none_of_the_requested_fields_found_in_response_try_variant_names",
-		})
+		// Check for missing fields
+		missing := getMissingFields(wanted, globalTracker)
+
+		// If we have warnings or an API total, we wrap the data so the LLM gets the context.
+		if hasTotal || len(missing) > 0 {
+			responseMap := map[string]interface{}{
+				"data": filteredData, // Safely holds either an array or a single blob
+			}
+			if hasTotal {
+				responseMap["api_reported_total"] = apiTotal
+			}
+			if len(missing) > 0 {
+				responseMap["warning"] = "partial_fields_found_api_did_not_return_the_rest"
+				responseMap["missing_fields"] = missing
+			}
+			res, _ := json.Marshal(responseMap)
+			return res
+		}
+
+		// Perfect match with no extra metadata needed
+		res, _ := json.Marshal(filteredData)
 		return res
 	}
 
@@ -7681,9 +7626,19 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					}
 				}
 
-				// Truncating, as most valuable details are at the start anyway
-				if len(mappedDecision.RunDetails.RawResponse) > 5000 {
-					mappedDecision.RunDetails.RawResponse = mappedDecision.RunDetails.RawResponse[:5000] + "..."
+				// Reduce data for the LLM prompt
+				if mappedDecision.DataFilter != "" {
+					originalLen := len(mappedDecision.RunDetails.RawResponse)
+					reduced := ReduceAgentResponseData([]byte(mappedDecision.RunDetails.RawResponse), mappedDecision.DataFilter, mappedDecision.FieldsNeeded)
+					mappedResult.Decisions[i].RunDetails.RawResponse = string(reduced)
+					log.Printf("[DEBUG][%s] AI_AGENT_REDUCE: decision=%s tool=%s data_filter=%s fields=%v original_bytes=%d reduced_bytes=%d",
+						execution.ExecutionId, mappedDecision.RunDetails.Id, mappedDecision.Tool,
+						mappedDecision.DataFilter, mappedDecision.FieldsNeeded, originalLen, len(reduced))
+				} else if len(mappedDecision.RunDetails.RawResponse) > 5000 {
+					// No filter set, truncate so the prompt doesn't blow up.
+					mappedResult.Decisions[i].RunDetails.RawResponse = mappedDecision.RunDetails.RawResponse[:5000] + "..."
+					log.Printf("[DEBUG][%s] AI_AGENT_TRUNCATE: decision=%s tool=%s no data_filter, truncated %d->5000 bytes",
+						execution.ExecutionId, mappedDecision.RunDetails.Id, mappedDecision.Tool, len(mappedDecision.RunDetails.RawResponse))
 				}
 
 				// Count how many times this exact action+tool combination has failed.
@@ -7969,6 +7924,7 @@ For EVERY fetch/list/search tool call you MUST set "data_filter" and "fields_nee
 data_filter — two modes only:
 - "list": Use for everything — browsing, filtering, AND counting. System returns only the fields you specify per item. You count/filter the result yourself.
 - "full": No reduction. Avoid this — even for single-item fetches, use "list" instead. Only use "full" as an absolute last resort on a SINGLE item to discover field names if "list" keeps failing.
+-  use data filter only when you are making a tool call that returns data you want to read, filter, or count. Don't use it for other actions like asking a question or finish etc.
 
 fields_needed — REQUIRED. The minimum data points required to answer the question.
 - "how many from X?" -> ["from", "sender", "id"] (need sender to filter, id to count)
@@ -7989,8 +7945,8 @@ RULE 2 - Schema Discovery: If the system returns {"reason": "none_of_the_request
     "confidence": 1.0,
     "runs": "1", 
     "approval_required": false, 
-    "data_filter": "list", // REQUIRED for fetch/list/search: "list" | "full"
-    "fields_needed": ["<List of fields>"], // REQUIRED when data_filter is "list": exact fields you need from each item
+    "data_filter": "list", // use this for fetch/list/search: "list" | "full"
+    "fields_needed": ["<List of fields>"], // use this when data_filter is "list": exact fields you need from each item
     "reason": "Explain WHY.",
     "fields": [
       { "key": "argument_name", "value": "literal_value" }
