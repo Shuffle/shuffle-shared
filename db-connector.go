@@ -6821,7 +6821,7 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 		}
 	}
 
-	if !found {
+	if !found && !user.SupportAccess {
 		user.Orgs = append(user.Orgs, user.ActiveOrg.Id)
 	}
 
@@ -6859,8 +6859,11 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 
 			if userFound {
 				org.Users[orgIndex] = innerUser
-			} else {
+			} else if !user.SupportAccess {
 				org.Users = append(org.Users, innerUser)
+			} else {
+				log.Printf("[DEBUG] Skipping org.Users update for support user %s (%s) in org %s — not an official member", user.Username, user.Id, orgId)
+				return
 			}
 
 			err = SetOrg(ctx, *org, org.Id)
