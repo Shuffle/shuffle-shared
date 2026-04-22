@@ -7631,9 +7631,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					originalLen := len(mappedDecision.RunDetails.RawResponse)
 					reduced := ReduceAgentResponseData([]byte(mappedDecision.RunDetails.RawResponse), mappedDecision.DataFilter, mappedDecision.FieldsNeeded)
 					mappedResult.Decisions[i].RunDetails.RawResponse = string(reduced)
-					log.Printf("[DEBUG][%s] AI_AGENT_REDUCE: decision=%s tool=%s data_filter=%s fields=%v original_bytes=%d reduced_bytes=%d",
-						execution.ExecutionId, mappedDecision.RunDetails.Id, mappedDecision.Tool,
-						mappedDecision.DataFilter, mappedDecision.FieldsNeeded, originalLen, len(reduced))
+					if debug {
+						log.Printf("[DEBUG][%s] AI_AGENT_REDUCE: decision=%s tool=%s data_filter=%s fields=%v original_bytes=%d reduced_bytes=%d", execution.ExecutionId, mappedDecision.RunDetails.Id, mappedDecision.Tool, mappedDecision.DataFilter, mappedDecision.FieldsNeeded, originalLen, len(reduced))
+					}
 				} else if len(mappedDecision.RunDetails.RawResponse) > 5000 {
 					// No filter set, truncate so the prompt doesn't blow up.
 					mappedResult.Decisions[i].RunDetails.RawResponse = mappedDecision.RunDetails.RawResponse[:5000] + "..."
