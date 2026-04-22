@@ -14558,9 +14558,6 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 	*/
 
-	if debug { 
-		log.Printf("\n\nNEWARRAY LENGTH: %d\n\n", len(newArray))
-	}
 	for cnt, cacheData := range newArray {
 		// Maxing out at 100 for now just in case
 		if cnt > 100 {

@@ -2252,6 +2252,7 @@ def findall_with_limit(pattern, text, max_matches=None, timeout_seconds=5):
 
     return results
 
+# These are the regex items from the datastore
 found_items = []
 for ioc_object in all_items:
   try:
@@ -2279,6 +2280,10 @@ for ioc_object in all_items:
       continue
 
     if "shuffler.io" in match:
+      continue
+
+    # Check if we match ip while in domain. Very basic check.
+    if ioc_object["name"] == "domain" and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", match):
       continue
     
     found.append(match)

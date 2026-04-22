@@ -99,6 +99,8 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	//1.13.22.203
+
 	newCorrelations := []NGramItem{}
 	for _, item := range correlations {
 		if item.OrgId != user.ActiveOrg.Id {
@@ -141,10 +143,6 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 	// Skipping searchability for protected keys
 	if strings.ToLower(category) == "protected" {
 		return nil
-	}
-
-	if debug { 
-		log.Printf("\n\n\nIN CROSS CORRELATE NGRAMS WITH %d ENRICHMENTS\n\n", len(enrichments))
 	}
 
 	amountAdded := 0
@@ -294,7 +292,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 	}
 
 	if debug { 
-		log.Printf("\n\nEnrichments: %d\n\n", len(enrichments))
+		log.Printf("\n\n[DEBUG] Enrichments: %d\n\n", len(enrichments))
 	}
 
 	for enrichmentCnt, enrichment := range enrichments {
