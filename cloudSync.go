@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"strconv"
+	"sync"
 
 	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
@@ -2483,12 +2485,18 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			orborusData.SensorDetails.Hostname = parsedHostnameSplit[0]
 		}
 
-		// 600 = time until it's not tracked anymore at all
-		hostTimeout := int64(600)
+		// 1 month timeout before removed from the list. We only store
+		// minimal data anyway, so it really shouldn't matter
+		hostTimeout := int64(2592000)
 		hostRefresh := int64(90)
 
-		// This will struggle a bit with many instances at once
 		timeNow := int64(time.Now().Unix())
+
+		// Using cache to not have to constantly update the environment for every host 
+		// This should fix itself over time (eventual completeness)
+		checkinKey := fmt.Sprintf("sensor_%s_%s_%s_checkin", env.Name, orborusData.SensorDetails.Hostname, orborusData.SensorDetails.Arch)
+		timeNowString := fmt.Sprintf("%d", timeNow)
+		SetCache(ctx, checkinKey, []byte(timeNowString), 120)
 
 		removeIndex := []int{}
 		found := false
@@ -2497,17 +2505,19 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 		// Just some deduping in case
 		foundHosts := []string{}
 		for hostIndex, host := range env.SensorHosts {
-			if ArrayContains(foundHosts, host.Hostname) {
+			parsedHost := fmt.Sprintf("%s-%s", host.Hostname, host.Arch)
+			if ArrayContains(foundHosts, parsedHost) {
 				removeIndex = append(removeIndex, hostIndex)
 				continue
 			}
 
-			foundHosts = append(foundHosts, host.Hostname)
+			foundHosts = append(foundHosts, parsedHost)
 		}
 
 		// Run removeIndex backwards
 		for i := len(removeIndex) - 1; i >= 0; i-- {
 			env.SensorHosts = append(env.SensorHosts[:removeIndex[i]], env.SensorHosts[removeIndex[i]+1:]...)
+
 			updateMade = true
 		}
 
@@ -2519,7 +2529,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 				found = true
 				if timeNow > host.Checkin+hostRefresh || env.SensorHosts[hostIndex].Uuid != orborusData.Uuid {
 					if debug {
-						log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago, Fulldata: %#v", host.Hostname, env.Name, env.Id, timeNow-host.Checkin, orborusData.SensorDetails)
+						log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago", host.Hostname, env.Name, env.Id, timeNow-host.Checkin)
 					}
 
 					updateMade = true
@@ -2530,6 +2540,8 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 					// For now we will just keep whatever we get first. Any restart
 					// of the agent will change it.
 					if host.Uuid != orborusData.Uuid {
+						DeleteCache(ctx, fmt.Sprintf("sensorupdate_%s_%s", orborusData.SensorDetails.Hostname, orborusData.SensorDetails.Arch))
+
 						env.SensorHosts[hostIndex].AutomaticScreenlockEnabled = orborusData.SensorDetails.AutomaticScreenlockEnabled
 						env.SensorHosts[hostIndex].HdEncrypted = orborusData.SensorDetails.HdEncrypted
 						env.SensorHosts[hostIndex].LogForwarding = orborusData.SensorDetails.LogForwarding
@@ -2542,30 +2554,85 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 						if len(orborusData.SensorDetails.InstalledSoftware) > 0 {
 							env.SensorHosts[hostIndex].InstalledSoftware = orborusData.SensorDetails.InstalledSoftware
 						}
+
+						if len(orborusData.SensorDetails.InstalledSoftware) > 0 {
+							env.SensorHosts[hostIndex].CodeScanner = orborusData.SensorDetails.CodeScanner
+						}
 					}
 				}
 
 				break
 			}
-
-			// Check if more than 10 minutes ago
-			if timeNow > host.Checkin+hostTimeout {
-				removeIndex = append(removeIndex, hostIndex)
-				continue
-			}
 		}
 
 		// Appending a new one
 		if !found {
+			if debug { 
+				log.Printf("\n\n[DEBUG] Adding new sensor host '%s' to group environment '%s' (%s). Total hosts: %d\n\n", orborusData.SensorDetails.Hostname, env.Name, env.Id, len(env.SensorHosts)+1)
+			}
 			updateMade = true
 
 			newHost := orborusData.SensorDetails
 			newHost.Uuid = orborusData.Uuid
 			newHost.Checkin = timeNow
+
 			env.SensorHosts = append(env.SensorHosts, newHost)
 		}
 
+		// Updates at that point (2 minutes~) as long as a single sensor is sending data.
+		if !updateMade && env.Checkin > 0 && timeNow > env.Checkin+120 {
+			updateMade = true
+		}
+
 		if updateMade && len(env.SensorHosts) >= 1 {
+			if debug { 
+				log.Printf("[DEBUG] Updating sensor host data for group environment '%s' (%s). Total hosts: %d. Checkin: %d seconds ago\n\n", env.Name, env.Id, len(env.SensorHosts), timeNow-env.Checkin)
+			}
+
+			// Sideloading from shuffle-security_sensors instead
+			removeIndex = []int{}
+			for sensorIndex, sensor := range env.SensorHosts {
+				if sensor.Hostname == orborusData.SensorDetails.Hostname && sensor.Arch == orborusData.SensorDetails.Arch {
+					sensor.Checkin = timeNow
+					orborusData.SensorDetails.Checkin = timeNow
+				} else {
+					checkinKeyCheck := fmt.Sprintf("sensor_%s_%s_%s_checkin", env.Name, sensor.Hostname, sensor.Arch)
+					foundCache, err := GetCache(ctx, checkinKeyCheck)
+					if err == nil { 
+						cacheData := string(foundCache.([]uint8))
+						timestamp, err := strconv.Atoi(cacheData) 
+						if err == nil && timestamp > 0 { 
+							sensor.Checkin = int64(timestamp)
+						} else {
+							log.Printf("\n\n[ERROR] Failed ATOI for timestamp of %s: %s. Output: %s\n\n", sensor.Hostname, err, cacheData)
+						}
+					}
+				}
+
+				// Check if more than X minutes ago to time out hosts
+				if timeNow > sensor.Checkin+hostTimeout {
+					removeIndex = append(removeIndex, sensorIndex)
+					continue
+				}
+
+				// To reset the data that the env has 
+				// as it doesn't need that much
+				env.SensorHosts[sensorIndex] = SensorDetails{
+					Hostname: sensor.Hostname,
+					Arch: sensor.Arch,
+					Uuid: sensor.Uuid,
+					Checkin: sensor.Checkin,
+				}
+			}
+
+			// Last cleanup
+			for i := len(removeIndex) - 1; i >= 0; i-- {
+				env.SensorHosts = append(env.SensorHosts[:removeIndex[i]], env.SensorHosts[removeIndex[i]+1:]...)
+				log.Printf("[INFO] Sensor '%s' removed from group environment '%s' (%s) due to inactivity. Checkin: %d seconds ago", env.SensorHosts[removeIndex[i]].Hostname, env.Name, env.Id, timeNow-env.SensorHosts[removeIndex[i]].Checkin)
+			}
+
+			go HandleSensorDatastoreUpdate(orborusData)
+
 			env.Checkin = timeNow
 			err := SetEnvironment(ctx, env)
 			if err != nil {
@@ -2640,21 +2707,498 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 	return nil
 }
 
-type OrborusDownloadConfig struct {
-	BaseURL             string `json:"base_url"`
-	Queue               string `json:"queue"`
-	Auth                string `json:"auth"`
-	OrgID               string `json:"org_id"`
-	SoftwareListEnabled bool   `json:"software_list_enabled"`
-	HDEncryptedCheck    bool   `json:"hd_encrypted_check"`
-	ScreenlockCheck     bool   `json:"screenlock_check"`
+// Sets sensor details in the org that they belong to 
+func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
+	if len(orborusDetails.SensorDetails.Hostname) == 0 || orborusDetails.OrgId == "" {
+		if debug { 
+			log.Printf("[DEBUG] Not updating datastore for sensor without hostname/orgId.")
+		}
 
-	ResponseActions string `json:"response_actions"`
-	LogForwarding   string `json:"log_forwarding"`
-	AsRoot bool `json:"as_root"`
+		return
+	}
 
-	BinaryBaseURL string `json:"binary_base_url"`
-	Binaries map[string]string `json:"binaries"`
+	sensorDetails := orborusDetails.SensorDetails
+
+	ctx := context.Background()
+
+	// MAX every 60 minutes, or if a sensor is restarted
+	cacheKey := fmt.Sprintf("sensorupdate_%s_%s", sensorDetails.Hostname, sensorDetails.Arch)
+	GotCache, err := GetCache(ctx, cacheKey)
+	if err == nil && GotCache != nil {
+		if debug { 
+			log.Printf("[DEBUG] Skipping datastore update for sensor '%s' as it was updated recently (cache hit)", sensorDetails.Hostname)
+		}
+
+		return
+	}
+
+	// 24 hour updates. Don't want to overload it. 
+	SetCache(ctx, cacheKey, []byte("1"), 1440)
+
+	datastoreSensorIndex := "shuffle-security_sensors"
+	datastorePackageIndex := "shuffle-security_packages"
+
+	// Sets the current sensor details raw
+	sensorDetails.Checkin = time.Now().Unix()
+	parsedHostname := strings.TrimSpace(strings.ReplaceAll(strings.ToUpper(sensorDetails.Hostname), " ", "_"))	
+
+	skippedAmount := 0
+	maxSoftwareAmount := 1000
+	handledKeys := []string{}
+
+	softwareWg := sync.WaitGroup{}
+	datastoreSoftwareIndex := "shuffle-security_software"
+	softwareAmount := len(sensorDetails.InstalledSoftware)
+	if softwareAmount > maxSoftwareAmount { 
+		softwareAmount = maxSoftwareAmount
+	}
+
+	softwareKeys := make(chan CacheKeyData, softwareAmount)
+	for softwareCnt, software := range sensorDetails.InstalledSoftware {
+		if softwareCnt+skippedAmount > maxSoftwareAmount { 
+			break
+		}
+
+		// linux/macos/windows handler
+		if softwareCnt == 0 && strings.Contains(software.Name, " ") {
+			software.Name = strings.ReplaceAll(software.Name, software.Version, "")
+			nameSplit := strings.Split(software.Name, " ")
+
+			software.Name = nameSplit[0]
+			for _, part := range nameSplit[1:] {
+				if len(part) <= 1 {
+					continue
+				}
+
+				software.Version = fmt.Sprintf("%s-%s", software.Version, part)
+			}
+		}
+
+		parsedKeyname := fmt.Sprintf("%s_%s", strings.TrimSpace(strings.ReplaceAll(strings.ToLower(software.Name), " ", "_")), sensorDetails.OS)
+		if ArrayContains(handledKeys, software.Name) {
+			skippedAmount += 1
+			continue
+		}
+
+		handledKeys = append(handledKeys, software.Name)
+		softwareWg.Add(1)
+		go func(parsedKeyname string, software Software) {
+			defer softwareWg.Done()
+			// 1. Get existing key 
+			// 2. Update Versions & Hostnames
+			// 3. If it existed already, don't update the "Last Seen" field (or set it to the oldest of the two)
+			software.OS = sensorDetails.OS
+			software.Hostnames = []HostDetails{
+				HostDetails{
+					Hostname: sensorDetails.Hostname,
+					Version: software.Version,
+					UpdatedAt: time.Now().Unix(),
+				},
+			}
+			if len(software.Version) > 0 {
+				software.Versions = []string{software.Version}
+			}
+
+			datastoreId := fmt.Sprintf("%s_%s_%s", orborusDetails.OrgId, parsedKeyname, datastoreSoftwareIndex)
+			config, getCacheError := GetDatastoreKey(ctx, datastoreId, datastoreSoftwareIndex)
+			if getCacheError != nil {
+				//log.Printf("[ERROR] Failed to get existing datastore key for software '%s': %s", parsedKeyname, getCacheError)
+			} else if len(config.Value) > 0 {
+				unmarshalledSoftware := Software{}
+				err := json.Unmarshal([]byte(config.Value), &unmarshalledSoftware)
+				if err == nil { 
+					hostExists := false
+					versionExists := false
+					for _, foundHost := range unmarshalledSoftware.Hostnames {
+						if foundHost.Hostname == sensorDetails.Hostname && foundHost.Version == software.Version {
+							hostExists = true
+							break
+						}
+					}
+
+					if !hostExists {
+						unmarshalledSoftware.Hostnames = append(unmarshalledSoftware.Hostnames, HostDetails{
+							Hostname: sensorDetails.Hostname,
+							Version: software.Version,
+							UpdatedAt: time.Now().Unix(),
+						})
+					}
+
+					if ArrayContains(unmarshalledSoftware.Versions, software.Version) {
+						versionExists = true
+					} else {
+						unmarshalledSoftware.Versions = append(unmarshalledSoftware.Versions, software.Version)
+					}
+
+					if hostExists && versionExists {
+						if debug { 
+							//log.Printf("[DEBUG] Software '%s' on host '%s' with version '%s' already exists in datastore. Skipping update.", software.Name, sensorDetails.Hostname, software.Version)
+						}
+
+						softwareKeys <- CacheKeyData{
+							Key: "",
+						}
+						return
+					}
+
+					software = unmarshalledSoftware
+				}
+			}
+
+			software.Version = ""
+			parsedValue, err := json.Marshal(software)
+			if err != nil {
+				log.Printf("[ERROR] Failed to marshal software for datastore update: %s. Software: %#v", err, software)
+
+				softwareKeys <- CacheKeyData{
+					Key: "",
+				}
+				return
+			}
+
+
+			newKey := CacheKeyData{
+				Key: parsedKeyname, 
+				Category: datastoreSoftwareIndex,
+				Value: string(parsedValue),
+				OrgId: orborusDetails.OrgId,
+			}
+
+			softwareKeys <- newKey
+		}(parsedKeyname, software)
+	}
+
+	packageAmount := 0
+	handledKeys = []string{}
+	for _, curPackage := range sensorDetails.CodeScanner {
+		if packageAmount > maxSoftwareAmount {
+			break
+		}
+
+		// Dedups
+		for _, software := range curPackage.Packages {
+			if packageAmount > maxSoftwareAmount {
+				break
+			}
+
+			parsedKeyname := strings.TrimSpace(strings.ReplaceAll(strings.ToLower(software.Name), " ", "_"))
+			if ArrayContains(handledKeys, parsedKeyname) {
+				skippedAmount += 1
+				continue
+			}
+
+			handledKeys = append(handledKeys, parsedKeyname)
+			packageAmount += 1
+		}
+	}
+
+	skippedAmount = 0
+	handledKeys = []string{}
+	packageWg := sync.WaitGroup{}
+	packageKeys := make(chan CacheKeyData, packageAmount)
+
+	totalCount := 0
+	for _, curPackage := range sensorDetails.CodeScanner {
+		if totalCount >= maxSoftwareAmount { 
+			log.Printf("[WARNING] Reached max amount of software+packages to update for sensor '%s'. Total count: %d. Skipped amount: %d", sensorDetails.Hostname, totalCount, skippedAmount)
+			break
+		}
+
+		// Loop the inner part
+		for _, software := range curPackage.Packages { 
+			if totalCount >= maxSoftwareAmount { 
+				break
+			}
+
+			//parsedKeyname := fmt.Sprintf("%s_%s", strings.TrimSpace(strings.ReplaceAll(strings.ToLower(software.Name), " ", "_")), sensorDetails.OS)
+			parsedKeyname := strings.TrimSpace(strings.ReplaceAll(strings.ToLower(software.Name), " ", "_"))
+			if ArrayContains(handledKeys, parsedKeyname) {
+				skippedAmount += 1
+				continue
+			}
+
+			handledKeys = append(handledKeys, parsedKeyname)
+			packageWg.Add(1)
+			go func(parsedKeyname string, software Software) {
+				defer packageWg.Done()
+				// 1. Get existing key 
+				// 2. Update Versions & Hostnames
+				// 3. If it existed already, don't update the "Last Seen" field (or set it to the oldest of the two)
+				software.OS = curPackage.Type
+				software.Hostnames = []HostDetails{
+					HostDetails{
+						Hostname: sensorDetails.Hostname,
+						Version: software.Version,
+						UpdatedAt: time.Now().Unix(),
+						Paths: []string{curPackage.Path},
+					},
+				}
+
+				if len(software.Version) > 0 {
+					software.Versions = []string{software.Version}
+				}
+
+				datastoreId := fmt.Sprintf("%s_%s_%s", orborusDetails.OrgId, parsedKeyname, datastorePackageIndex)
+				config, getCacheError := GetDatastoreKey(ctx, datastoreId, datastorePackageIndex)
+				if getCacheError != nil {
+					//log.Printf("[ERROR] Failed to get existing datastore key for software '%s': %s", parsedKeyname, getCacheError)
+				} else if len(config.Value) > 0 {
+					unmarshalledSoftware := Software{}
+					err := json.Unmarshal([]byte(config.Value), &unmarshalledSoftware)
+					if err == nil { 
+						hostPathExists := false
+						versionExists := false
+						for foundHostIndex, foundHost := range unmarshalledSoftware.Hostnames {
+							if foundHost.Hostname == sensorDetails.Hostname && foundHost.Version == software.Version {
+								unmarshalledSoftware.Hostnames[foundHostIndex].UpdatedAt = time.Now().Unix()
+
+								found := false
+								for _, path := range unmarshalledSoftware.Hostnames[foundHostIndex].Paths {
+									if path == curPackage.Path {
+										unmarshalledSoftware.Hostnames[foundHostIndex].Paths = append(unmarshalledSoftware.Hostnames[foundHostIndex].Paths, path)
+										found = true
+										break
+									}
+								}
+
+								if !found {
+									hostPathExists = true
+								}
+
+								break
+							}
+						}
+
+						if !hostPathExists {
+							unmarshalledSoftware.Hostnames = append(unmarshalledSoftware.Hostnames, HostDetails{
+								Hostname: sensorDetails.Hostname,
+								Version: software.Version,
+								UpdatedAt: time.Now().Unix(),
+								Paths: []string{curPackage.Path},
+							})
+						}
+
+						if ArrayContains(unmarshalledSoftware.Versions, software.Version) {
+							versionExists = true
+						} else {
+							unmarshalledSoftware.Versions = append(unmarshalledSoftware.Versions, software.Version)
+						}
+
+						if hostPathExists && versionExists {
+							if debug { 
+								//log.Printf("[DEBUG] Package '%s' on host '%s' with version '%s' already exists in datastore. Skipping update.", software.Name, sensorDetails.Hostname, software.Version)
+							}
+
+							packageKeys <- CacheKeyData{
+								Key: "",
+							}
+							return
+						}
+
+						software = unmarshalledSoftware
+					}
+				}
+
+				software.Version = ""
+				parsedValue, err := json.Marshal(software)
+				if err != nil {
+					log.Printf("[ERROR] Failed to marshal Package for datastore update: %s. Software: %#v", err, curPackage)
+					packageKeys <- CacheKeyData{
+						Key: "",
+					}
+					return
+				}
+
+				packageKeys <- CacheKeyData{
+					Key: parsedKeyname, 
+					Category: datastorePackageIndex,
+					Value: string(parsedValue),
+					OrgId: orborusDetails.OrgId,
+				}
+			}(parsedKeyname, software)
+
+			totalCount += 1
+		}
+	}
+
+	softwareWg.Wait()
+	close(softwareKeys)
+
+	packageWg.Wait()
+	close(packageKeys)
+
+	// Doing another dedup here as well
+	newPackageArray := []CacheKeyData{}
+	for key := range packageKeys {
+		if key.Key == "" {
+			continue
+		}
+
+		found := false
+		for packageIndex, newPackage := range newPackageArray {
+			if newPackage.Key != key.Key {
+				continue
+			}
+
+			log.Printf("[DEBUG] FOUND DUPE: %s", key.Key)
+			found = true
+
+			unmarshalledSoftwareNew := Software{}
+			err := json.Unmarshal([]byte(key.Value), &unmarshalledSoftwareNew)
+			if err != nil {
+				log.Printf("[ERROR] Failed to unmarshal software for package deduplication: %s. Software: %#v", err, key.Value)
+				continue
+			}
+
+			unmarshalledSoftwareExisting := Software{}
+			err = json.Unmarshal([]byte(newPackage.Value), &unmarshalledSoftwareExisting)
+			if err != nil {
+				log.Printf("[ERROR] Failed to unmarshal software for package deduplication: %s. Software: %#v", err, newPackage.Value)
+				continue
+			}
+
+			// Make sure the path and version exists 
+			updated := false
+			for _, newHost := range unmarshalledSoftwareNew.Hostnames {
+				if !ArrayContains(unmarshalledSoftwareExisting.Versions, newHost.Version) {
+					continue
+				}
+
+				existingHostIndex := -1
+				for i, existingHost := range unmarshalledSoftwareExisting.Hostnames {
+					if existingHost.Hostname == newHost.Hostname {
+						existingHostIndex = i
+						break
+					}
+				}
+
+				if existingHostIndex == -1 {
+					unmarshalledSoftwareExisting.Hostnames = append(unmarshalledSoftwareExisting.Hostnames, newHost)
+				} else {
+					for _, newPath := range newHost.Paths {
+						if !ArrayContains(unmarshalledSoftwareExisting.Hostnames[existingHostIndex].Paths, newPath) {
+							unmarshalledSoftwareExisting.Hostnames[existingHostIndex].Paths = append(unmarshalledSoftwareExisting.Hostnames[existingHostIndex].Paths, newPath)
+			
+							updated = true
+						}
+					}
+				}
+
+				// Update the "Last Seen" field to be the oldest of the two
+				if unmarshalledSoftwareExisting.Hostnames[existingHostIndex].UpdatedAt < newHost.UpdatedAt {
+					unmarshalledSoftwareExisting.Hostnames[existingHostIndex].UpdatedAt = newHost.UpdatedAt
+					updated = true
+				}
+			}
+
+			// FIXME: SOMETHING is wrong here. 
+			if updated {
+				if debug { 
+					log.Printf("FOUND DUPE: %s. Updated existing package key with new host and paths. %#v", key.Key, unmarshalledSoftwareExisting)
+					log.Printf("Old value: %#v", newPackage.Value)
+					log.Printf("New value: %#v", key.Value)
+				}
+
+				parsedValue, err := json.Marshal(unmarshalledSoftwareExisting)
+				if err != nil {
+					log.Printf("[ERROR] Failed to marshal software for package deduplication update: %s. Software: %#v", err, unmarshalledSoftwareExisting)
+					continue
+				}
+
+				newPackageArray[packageIndex].Value = string(parsedValue)
+			}
+		}
+
+		// We need to deduplicate here 
+		if !found {
+			newPackageArray = append(newPackageArray, key)
+		}
+	}
+
+	newSoftwareArray := []CacheKeyData{}
+	for key := range softwareKeys {
+		if key.Key == "" {
+			continue
+		}
+
+		newSoftwareArray = append(newSoftwareArray, key)
+	}
+
+	if debug { 
+		log.Printf("[DEBUG] %s - Packages: %d. Software: %d. Skipped amount: %d", sensorDetails.Hostname, len(newPackageArray), len(newSoftwareArray), skippedAmount)
+	}
+
+	if len(newSoftwareArray) > 0 { 
+		if debug { 
+			log.Printf("[DEBUG] Updating datastore with %d software keys for sensor '%s'", len(newSoftwareArray), sensorDetails.Hostname)
+		}
+
+		// Set them in the datastore (with some delay to avoid spikes)
+		_, err = SetDatastoreKeyBulk(ctx, newSoftwareArray) 
+		if err != nil { 
+			log.Printf("[ERROR] Failed to update datastore with %d software keys for sensor '%s': %s", len(newSoftwareArray), sensorDetails.Hostname, err)
+		}
+	}
+
+	if len(newPackageArray) > 0 {
+		if debug { 
+			log.Printf("[DEBUG] Updating datastore with %d package keys for sensor '%s'", len(newPackageArray), sensorDetails.Hostname)
+		}
+
+		// Set them in the datastore (with some delay to avoid spikes)
+		_, err = SetDatastoreKeyBulk(ctx, newPackageArray) 
+		if err != nil { 
+			log.Printf("[ERROR] Failed to update datastore with %d package keys for sensor '%s': %s", len(newPackageArray), sensorDetails.Hostname, err)
+		}
+	}
+
+	// Loading in historical info 
+	// Putting it here so we don't re-upload without a reason
+	if len(sensorDetails.CodeScanner) == 0 || len(sensorDetails.CodeScanner) == 0 {
+
+
+		datastoreId := fmt.Sprintf("%s_%s_%s", orborusDetails.OrgId, parsedHostname, datastoreSensorIndex)
+		cachedHost, err := GetDatastoreKey(ctx, datastoreId, datastoreSensorIndex)
+		if err == nil && len(cachedHost.Value) > 0 { 
+			// unmarshal value to check what exists
+			oldHost := SensorDetails{}
+			err := json.Unmarshal([]byte(cachedHost.Value), &oldHost)
+			if err == nil {
+				if len(oldHost.User) > 0 && len(sensorDetails.User) == 0 {
+					sensorDetails.User = oldHost.User
+				}
+
+				if len(oldHost.CodeScanner) > 0 {
+					sensorDetails.CodeScanner = oldHost.CodeScanner
+				}
+
+				if len(oldHost.InstalledSoftware) > 0 {
+					sensorDetails.InstalledSoftware = oldHost.InstalledSoftware
+				}
+			}
+		} else {
+			log.Printf("[ERROR] Failed to load existing sensor details for sensor '%s' from datastore: %s", sensorDetails.Hostname, err)
+		}
+	}
+
+	sensorDetails.Checkin = time.Now().Unix()
+	hostData, err := json.Marshal(sensorDetails)
+	if err != nil { 
+		log.Printf("[ERROR] Failed to marshal sensor details for datastore update for sensor '%s': %s", sensorDetails.Hostname, err)
+	} else {
+		hostKey := CacheKeyData{
+			Key: parsedHostname,
+			Category: datastoreSensorIndex,
+			Value: string(hostData),
+			OrgId: orborusDetails.OrgId,
+		}
+
+		// Set them in the datastore (with some delay to avoid spikes)
+		_, err = SetDatastoreKeyBulk(ctx, []CacheKeyData{hostKey}) 
+		if err != nil { 
+			log.Printf("[ERROR] Failed to update datastore with software keys for sensor '%s': %s", sensorDetails.Hostname, err)
+		}
+	}
 }
 
 // Download handler for Orborus agent installation script. This is used in the "Assets" page for Orborus, and can be used by customers to easily install Orborus on their hosts. It returns a bash script that can be run on the target host to install Orborus with the correct configuration.
@@ -2765,6 +3309,7 @@ $AUTH = "%s"
 $ORG_ID = "%s"
 
 $SOFTWARE_LIST_ENABLED = "%t"
+$CODE_SCANNER_ENABLED = "%t"
 $HD_ENCRYPTED_CHECK = "%t"
 $SCREENLOCK_CHECK = "%t"
 $RESPONSE_ACTIONS = "%s"
@@ -2791,7 +3336,7 @@ icacls $BIN_PATH /grant Users:RX
 
 # Remove if exists early as the process may be running and we need to change the file
 $SERVICE_NAME = "orborus-agent"
-echo "Deleting old agent"
+echo "Deleting old sensor"
 schtasks /Delete /TN $SERVICE_NAME /F
 
 $p = Get-Process -Name "orborus-agent" -ErrorAction SilentlyContinue
@@ -2833,7 +3378,9 @@ if ($AUTH) { $ARGS += "--auth=$AUTH" }
 if ($ORG_ID) { $ARGS += "--org_id=$ORG_ID" }
 
 # Removed as they made the command more than 260 characters (hard limit)
+# These are now being enabled by default.
 #if ($SOFTWARE_LIST_ENABLED -eq "true") { $ARGS += "--software_list_enabled=true" }
+#if ($SOFTWARE_LIST_ENABLED -eq "false") { $ARGS += "--software_list_enabled=false" }
 #if ($HD_ENCRYPTED_CHECK -eq "true") { $ARGS += "--hd_encrypted_check=true" }
 #if ($SCREENLOCK_CHECK -eq "true") { $ARGS += "--screenlock_check=true" }
 
@@ -2899,6 +3446,7 @@ Write-Host "orborus-agent installed"`,
 			c.Auth,
 			c.OrgID,
 			c.SoftwareListEnabled,
+			c.CodeScannerEnabled,
 			c.HDEncryptedCheck,
 			c.ScreenlockCheck,
 			c.ResponseActions,
@@ -2933,7 +3481,7 @@ if [[ "$OS" != "linux" && "$OS" != "darwin" ]]; then
 fi
 
 echo ""
-echo "Download started. Please be patient while we install the agent. Detected OS: $OS, ARCH: $ARCH"
+echo "Download started. Please be patient while we install the sensor. Detected OS: $OS, ARCH: $ARCH"
 echo ""
 
 # =========================
@@ -2945,6 +3493,7 @@ AUTH="%s"
 ORG_ID="%s"
 
 SOFTWARE_LIST_ENABLED="%t"
+CODE_SCANNER_ENABLED="%t"
 HD_ENCRYPTED_CHECK="%t"
 SCREENLOCK_CHECK="%t"
 RESPONSE_ACTIONS="%s"
@@ -2961,6 +3510,7 @@ BIN_URL="${BIN_BASE}/orborus-agent-${OS}-${ARCH}"
 # =========================
 INSTALL_PATH="/usr/local/bin/orborus"
 
+echo "Please input your sudo password to allow installation (required for service setup and sensor capabilities). Contact support@shuffler.io if you need help."
 curl -fsSL "$BIN_URL" -o /tmp/orborus
 chmod +x /tmp/orborus
 sudo mv /tmp/orborus "$INSTALL_PATH"
@@ -2985,6 +3535,7 @@ ExecStart=$INSTALL_PATH \
   --auth=$AUTH \
   --org_id=$ORG_ID \
   --software_list_enabled=$SOFTWARE_LIST_ENABLED \
+  --code_scanner_enabled=$CODE_SCANNER_ENABLED \
   --hd_encrypted_check=$HD_ENCRYPTED_CHECK \
   --screenlock_check=$SCREENLOCK_CHECK \
   --log_forwarding=$LOG_FORWARDING \
@@ -3026,6 +3577,7 @@ install_macos() {
     <string>--auth=$AUTH</string>
     <string>--org_id=$ORG_ID</string>
     <string>--software_list_enabled=$SOFTWARE_LIST_ENABLED</string>
+    <string>--code_scanner_enabled=$CODE_SCANNER_ENABLED</string>
     <string>--hd_encrypted_check=$HD_ENCRYPTED_CHECK</string>
     <string>--screenlock_check=$SCREENLOCK_CHECK</string>
     <string>--log_forwarding=$LOG_FORWARDING</string>
@@ -3058,6 +3610,7 @@ c.Queue,
 c.Auth,
 c.OrgID,
 c.SoftwareListEnabled,
+c.CodeScannerEnabled,
 c.HDEncryptedCheck,
 c.ScreenlockCheck,
 c.ResponseActions,

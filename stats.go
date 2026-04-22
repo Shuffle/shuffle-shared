@@ -2,6 +2,8 @@ package shuffle
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"sort"
@@ -1423,6 +1425,12 @@ func generateAlertCacheKey(orgId string, threshold interface{}, emailList []stri
 	key = strings.ReplaceAll(key, ".", "_dot_")
 	key = strings.ReplaceAll(key, " ", "_")
 
+	// Memcache keys have a 250-character limit. Hash anything that exceeds it.
+	if len(key) > 200 {
+		hash := sha256.Sum256([]byte(key))
+		key = "alert_cache_" + hex.EncodeToString(hash[:])
+	}
+
 	return key
 }
 
@@ -1432,7 +1440,7 @@ func checkAndSetAlertCache(ctx context.Context, cacheKey string) bool {
 		return false
 	}
 
-	err = SetCache(ctx, cacheKey, []byte("sent"), 60)
+	err = SetCache(ctx, cacheKey, []byte("sent"), 1440)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting alert cache for key %s: %s", cacheKey, err)
 	}
@@ -1963,11 +1971,12 @@ func UpdateDetectionStats(ctx context.Context, cacheData CacheKeyData) {
 	}
 
 	// Handle Detection
+	// We actually do this in 'shuffle-security_incidents' tho
 	category := strings.ToLower(cacheData.Category)
-	if category != "ticket" && category != "detection" && category != "tickets" && category != "detections" {
-		if debug {
-			log.Printf("[WARNING] Debug: Not a detection or ticket category, skipping detection stats update for category '%s'", category)
-		}
+	if category != "ticket" && category != "detection" && category != "incidents" {
+		//if debug {
+		//	log.Printf("[WARNING] Debug: Not a detection or ticket category, skipping detection stats update for category '%s'", category)
+		//}
 
 		return
 	}

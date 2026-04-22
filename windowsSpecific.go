@@ -349,3 +349,90 @@ func ListInstalledSoftware() []Software {
 
 	return append(allSoftware, listInstalledSoftwareRegistry()...)
 }
+
+func ListCodeScannerProjects() []ProjectInfo {
+	log.Printf("[WARNING] Codescanner not implemented on windows yet.")
+
+	return []ProjectInfo{}
+}
+
+const (
+	backupFile = "C:\\Windows\\Temp\\firewall_backup_edr.wfw"
+)
+
+func isAdmin() bool {
+	_, err := os.Open("\\\\.\\PHYSICALDRIVE0")
+	return err == nil
+}
+
+func isolateHostWindows(allowIPs []string) error {
+	// Must run as admin
+	if !isAdmin() {
+		return fmt.Errorf("requires administrator privileges")
+	}
+
+	// 1. Backup firewall state
+	exec.Command("netsh", "advfirewall", "export", backupFile).Run()
+
+	// 2. Set default block policies
+	cmds := [][]string{
+		{"netsh", "advfirewall", "set", "allprofiles", "firewallpolicy", "blockinbound,blockoutbound"},
+	}
+
+	for _, c := range cmds {
+		if err := exec.Command(c[0], c[1:]...).Run(); err != nil {
+			return fmt.Errorf("failed to set firewall policy: %w", err)
+		}
+	}
+
+	// 3. Allow loopback explicitly
+	exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
+		"name=EDR-Allow-Loopback",
+		"dir=in",
+		"action=allow",
+		"interface=any",
+		"enable=yes").Run()
+
+	exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
+		"name=EDR-Allow-Loopback-Out",
+		"dir=out",
+		"action=allow",
+		"interface=any",
+		"enable=yes").Run()
+
+	// 4. Allow EDR endpoints
+	for _, ip := range allowIPs {
+		exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
+			fmt.Sprintf("name=EDR-Allow-%s", ip),
+			"dir=out",
+			"action=allow",
+			fmt.Sprintf("remoteip=%s", ip),
+			"enable=yes").Run()
+
+		exec.Command("netsh", "advfirewall", "firewall", "add", "rule",
+			fmt.Sprintf("name=EDR-Allow-In-%s", ip),
+			"dir=in",
+			"action=allow",
+			fmt.Sprintf("remoteip=%s", ip),
+			"enable=yes").Run()
+	}
+
+	return nil
+}
+
+func unisolateHostWindows() error {
+	if !isAdmin() {
+		return fmt.Errorf("requires administrator privileges")
+	}
+
+	// Restore firewall config
+	return exec.Command("netsh", "advfirewall", "import", backupFile).Run()
+}
+
+func isolateHost(allowIPs []string) error {
+	return isolateHostWindows(allowIPs)
+}
+
+func unisolateHost() error {
+	return unisolateHostWindows()
+}
