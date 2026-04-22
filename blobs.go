@@ -2277,6 +2277,9 @@ for ioc_object in all_items:
   for match in matches:
     if match in found:
       continue
+
+    if "shuffler.io" in match:
+      continue
     
     found.append(match)
     found_items.append({

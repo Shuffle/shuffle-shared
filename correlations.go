@@ -19,6 +19,8 @@ import (
 	"io"
 	"net"
 
+	uuid "github.com/satori/go.uuid"
+
 	// For BOM scans
 	//"github.com/CycloneDX/cyclonedx-gomod/pkg/generate/app"
 	//"github.com/CycloneDX/cyclonedx-gomod/pkg/generate/mod"
@@ -59,6 +61,10 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 	correlations := []NGramItem{}
 	if len(correlationData.Category) == 0 {
 		searchKey := fmt.Sprintf("%s", correlationData.Key)
+		if !strings.HasPrefix(correlationData.Key, user.ActiveOrg.Id) {
+			searchKey = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, correlationData.Key)
+		}
+
 		ngramItem, err := GetDatastoreNGramItem(ctx, searchKey)
 		if err != nil {
 			log.Printf("[WARNING] Failed to get ngram item in GetCorrelations for '%s': %s", searchKey, err)
@@ -124,8 +130,11 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 // Issues:
 // Only does strings
 // Only does top-level in JSON (no recursion)
-func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, value string, enrichments []Observable) error {
+func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, value string, enrichments []Observable, enrichmentsOnly bool) error {
 	if len(orgId) == 0 || len(category) == 0 || len(datastoreKey) == 0 || len(value) == 0 {
+		if debug { 
+			log.Printf("\n\n[ERROR] Invalid parameters for cross-correlate ngrams. All parameters must be set. orgId, category, key, value\n\n")
+		}
 		return errors.New("Invalid parameters for cross-correlate ngrams. All parameters must be set. orgId, category, key, value")
 	}
 
@@ -134,199 +143,227 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 		return nil
 	}
 
-	// Random sleeptime between 0-1000ms because we're inside a goroutine
-	// and want to ensure there aren't a ton of concurrent writes to the datastore
-	time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
-
-	unmarshalled := map[string]interface{}{}
-	if err := json.Unmarshal([]byte(value), &unmarshalled); err != nil {
-		log.Printf("[WARNING] Failed unmarshalling value for cross-correlate ngrams: %s. Storing the key directly.", err)
-		unmarshalled = map[string]interface{}{
-			"key": value,
-		}
+	if debug { 
+		log.Printf("\n\n\nIN CROSS CORRELATE NGRAMS WITH %d ENRICHMENTS\n\n", len(enrichments))
 	}
 
-	// Simple workaround for dates
-	// hardcoded for now just to remove certain things
-	skippableKeys := []string{"spec_version", "version", "pattern_type", "created", "edited", "creation", "status"}
-	skippableValues := []string{"indicator", "stix", "active", "false", "true", "inprogress", "new", "closed", "resolved", "escalated", "incidentfinding"}
-	invalidStarts := []string{"[", "{", "$", "202", "203", "204"} // Specific for timestamps
-
-	//for jsonKey, val := range unmarshalled {
 	amountAdded := 0
-	maxAmountToAdd := 5
-	for jsonKey, val := range unmarshalled {
-		if ArrayContains(skippableKeys, jsonKey) {
-			continue
+	if !enrichmentsOnly { 
+		// Random sleeptime between 0-1000ms because we're inside a goroutine
+		// and want to ensure there aren't a ton of concurrent writes to the datastore
+		time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
+
+		unmarshalled := map[string]interface{}{}
+		if err := json.Unmarshal([]byte(value), &unmarshalled); err != nil {
+			log.Printf("[WARNING] Failed unmarshalling value for cross-correlate ngrams: %s. Storing the key directly.", err)
+			unmarshalled = map[string]interface{}{
+				"key": value,
+			}
 		}
 
-		// Only handle strings for now
-		if val == nil {
-			continue
-		}
+		// Simple workaround for dates
+		// hardcoded for now just to remove certain things
+		skippableKeys := []string{"spec_version", "version", "pattern_type", "created", "edited", "creation", "status"}
 
-		if _, ok := val.(string); !ok {
-			// FIXME: Check here if it's a map, then recurse down
-			// to find more string
-			continue
-		}
+		// Types and patterns
+		skippableValues := []string{"indicator", "stix", "active", "false", "true", "inprogress", "new", "closed", "resolved", "escalated", "incidentfinding", "domain", "ip", "url", "file", "cve", "vulnerability", "threat-actor", "tool", "attack-pattern", "campaign", "malware", "indicator", "observable"}
+		invalidStarts := []string{"[", "{", "$", "202", "203", "204"} // Specific for timestamps
 
-		parsedValue := val.(string)
+		//for jsonKey, val := range unmarshalled {
+		maxAmountToAdd := 5
+		for jsonKey, val := range unmarshalled {
+			if ArrayContains(skippableKeys, jsonKey) {
+				continue
+			}
 
-		// FIXME: Arbitrary limits
-		// About ngram: We will want to do additional splitting,
-		// but to start with, we just do the whole thing
-		if len(parsedValue) > 70 || len(parsedValue) < 2 {
-			continue
-		}
+			// Only handle strings for now
+			if val == nil {
+				continue
+			}
 
-		skip := false
-		for _, invalidStart := range invalidStarts {
-			if strings.HasPrefix(parsedValue, invalidStart) {
-				skip = true
+			if _, ok := val.(string); !ok {
+				// FIXME: Check here if it's a map, then recurse down
+				// to find more string
+				continue
+			}
+
+			parsedValue := val.(string)
+
+			// FIXME: Arbitrary limits
+			// About ngram: We will want to do additional splitting,
+			// but to start with, we just do the whole thing
+			if len(parsedValue) > 70 || len(parsedValue) < 2 {
+				continue
+			}
+
+			skip := false
+			for _, invalidStart := range invalidStarts {
+				if strings.HasPrefix(parsedValue, invalidStart) {
+					skip = true
+					break
+				}
+			}
+
+			if skip {
+				continue
+			}
+
+			if strings.HasPrefix(parsedValue, "$") {
+				continue
+			}
+
+			// Make sure we don't add more than 5 items (for now)
+			if amountAdded > maxAmountToAdd {
 				break
 			}
-		}
 
-		if skip || ArrayContains(skippableValues, strings.ToLower(parsedValue)) {
-			continue
-		}
-
-		if strings.HasPrefix(parsedValue, "$") {
-			continue
-		}
-
-		// Make sure we don't add more than 5 items (for now)
-		if amountAdded > maxAmountToAdd {
-			break
-		}
-
-		parsedValue = strings.ToLower(strings.TrimSpace(
-			strings.ReplaceAll(
+			parsedValue = strings.ToLower(strings.TrimSpace(
 				strings.ReplaceAll(
-					parsedValue, "\n", "",
-				), " ", "",
-			),
-		))
+					strings.ReplaceAll(
+						parsedValue, "\n", "",
+					), " ", "",
+				),
+			))
 
-		parsedCategory := strings.ToLower(strings.ReplaceAll(category, " ", "_"))
-
-		// Doing it WITHOUT the JSON key & Org, as we only want to partially cross-correlate to find items among each other
-		referenceKey := fmt.Sprintf("%s|%s", parsedCategory, datastoreKey)
-
-		// FIXME: May need to hash the parsedValue to make search work well
-		// as we are doing the full string right now
-		ngramSearchKey := fmt.Sprintf("%s_%s", orgId, parsedValue)
-		ngramItem, err := GetDatastoreNGramItem(ctx, ngramSearchKey)
-
-		// FIXME: Key may disappear/be overwritten if connectivity to backend fails briefly?
-		if err != nil || ngramItem == nil || ngramItem.Key == "" {
-			ngramItem = &NGramItem{
-				Key:   parsedValue,
-				OrgId: orgId,
-
-				Amount: 1,
-				Ref: []string{
-					referenceKey,
-				},
+			if ArrayContains(skippableValues, strings.ToLower(parsedValue)) {
+				continue
 			}
+
+			// Check if the value is a unix timestamp or uuid
+			if _, err := strconv.ParseInt(parsedValue, 10, 64); err == nil {
+				continue
+			}
+
+			u, err := uuid.FromString(parsedValue)
+			if err == nil || u == uuid.Nil { 
+				continue
+			}
+
+			parsedCategory := strings.ToLower(strings.ReplaceAll(category, " ", "_"))
+
+			// Doing it WITHOUT the JSON key & Org, as we only want to partially cross-correlate to find items among each other
+			referenceKey := fmt.Sprintf("%s|%s", parsedCategory, datastoreKey)
+
+			// FIXME: May need to hash the parsedValue to make search work well
+			// as we are doing the full string right now
+			ngramSearchKey := fmt.Sprintf("%s_%s", orgId, parsedValue)
+			ngramItem, err := GetDatastoreNGramItem(ctx, ngramSearchKey)
+
+			// FIXME: Key may disappear/be overwritten if connectivity to backend fails briefly?
+			if err != nil || ngramItem == nil || ngramItem.Key == "" {
+				ngramItem = &NGramItem{
+					Key:   parsedValue,
+					OrgId: orgId,
+
+					Amount: 1,
+					Ref: []string{
+						referenceKey,
+					},
+				}
+
+				err = SetDatastoreNGramItem(ctx, ngramSearchKey, ngramItem)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
+				}
+
+				amountAdded += 1
+				if debug { 
+					log.Printf("[DEBUG] Created new ngram item for %s with key '%s'", ngramSearchKey, parsedValue)
+				}
+				continue
+			}
+
+			if ArrayContains(ngramItem.Ref, referenceKey) {
+				continue
+			}
+
+			// Add the reference to the ngram item
+			amountAdded += 1
+			ngramItem.Ref = append(ngramItem.Ref, referenceKey)
+			ngramItem.Amount = len(ngramItem.Ref)
 
 			err = SetDatastoreNGramItem(ctx, ngramSearchKey, ngramItem)
 			if err != nil {
 				log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
-			}
-
-			amountAdded += 1
-			if debug { 
-				log.Printf("[DEBUG] Created new ngram item for %s with key '%s'", ngramSearchKey, parsedValue)
-			}
-			continue
-		}
-
-		if ArrayContains(ngramItem.Ref, referenceKey) {
-			continue
-		}
-
-		// Add the reference to the ngram item
-		amountAdded += 1
-		ngramItem.Ref = append(ngramItem.Ref, referenceKey)
-		ngramItem.Amount = len(ngramItem.Ref)
-
-		err = SetDatastoreNGramItem(ctx, ngramSearchKey, ngramItem)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
-		} else {
-			if debug { 
-				log.Printf("[DEBUG] Updated ngram item for %s with key %s", ngramSearchKey, parsedValue)
+			} else {
+				if debug { 
+					log.Printf("[DEBUG] Updated ngram item for %s with key %s", ngramSearchKey, parsedValue)
+				}
 			}
 		}
+	}
+
+	if debug { 
+		log.Printf("\n\nEnrichments: %d\n\n", len(enrichments))
 	}
 
 	for enrichmentCnt, enrichment := range enrichments {
-		if enrichmentCnt > 50 {
+		if enrichmentCnt > 2 {
 			break
 		}
 
-		parsedValue := strings.ToLower(strings.TrimSpace(
-			strings.ReplaceAll(
+		go func(enrichment Observable) { 
+			parsedValue := strings.ToLower(strings.TrimSpace(
 				strings.ReplaceAll(
-					enrichment.Value, "\n", "",
-				), " ", "",
-			),
-		))
+					strings.ReplaceAll(
+						enrichment.Value, "\n", "",
+					), " ", "",
+				),
+			))
 
-		parsedCategory := strings.ToLower(strings.ReplaceAll(category, " ", "_"))
+			parsedCategory := strings.ToLower(strings.ReplaceAll(category, " ", "_"))
 
-		// Doing it WITHOUT the JSON key & Org, as we only want to partially cross-correlate to find items among each other
-		referenceKey := fmt.Sprintf("%s|%s", parsedCategory, datastoreKey)
+			// Doing it WITHOUT the JSON key & Org, as we only want to partially cross-correlate to find items among each other
+			referenceKey := fmt.Sprintf("%s|%s", parsedCategory, datastoreKey)
 
-		// FIXME: May need to hash the parsedValue to make search work well
-		// as we are doing the full string right now
-		ngramSearchKey := fmt.Sprintf("%s_%s", orgId, parsedValue)
-		ngramItem, err := GetDatastoreNGramItem(ctx, ngramSearchKey)
+			// FIXME: Key may disappear/be overwritten if connectivity to backend fails briefly?
+			// FIXME: May need to hash the parsedValue to make search work well
+			// as we are doing the full string right now
+			ngramSearchKey := fmt.Sprintf("%s_%s", orgId, parsedValue)
+			ngramItem, err := GetDatastoreNGramItem(ctx, ngramSearchKey)
 
-		// FIXME: Key may disappear/be overwritten if connectivity to backend fails briefly?
-		if err != nil || ngramItem == nil || ngramItem.Key == "" {
-			ngramItem = &NGramItem{
-				Key:   parsedValue,
-				OrgId: orgId,
+			if err != nil || ngramItem == nil || ngramItem.Key == "" {
+				ngramItem = &NGramItem{
+					Key:   parsedValue,
+					OrgId: orgId,
 
-				Amount: 1,
-				Ref: []string{
-					referenceKey,
-				},
+					Amount: 1,
+					Ref: []string{
+						referenceKey,
+					},
+				}
+
+				err = SetDatastoreNGramItem(ctx, ngramSearchKey, ngramItem)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
+				}
+
+				amountAdded += 1
+				if debug { 
+					log.Printf("[DEBUG] Created new ngram item for %s with key '%s'", ngramSearchKey, parsedValue)
+				}
+
+				return
 			}
+
+			if ArrayContains(ngramItem.Ref, referenceKey) {
+				return
+			}
+
+			// Add the reference to the ngram item
+			amountAdded += 1
+			ngramItem.Ref = append(ngramItem.Ref, referenceKey)
+			ngramItem.Amount = len(ngramItem.Ref)
 
 			err = SetDatastoreNGramItem(ctx, ngramSearchKey, ngramItem)
 			if err != nil {
 				log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
+			} else {
+				if debug { 
+					log.Printf("[DEBUG] Updated ngram item for %s with key %s", ngramSearchKey, parsedValue)
+				}
 			}
-
-			amountAdded += 1
-			if debug { 
-				log.Printf("[DEBUG] Created new ngram item for %s with key '%s'", ngramSearchKey, parsedValue)
-			}
-
-			continue
-		}
-
-		if ArrayContains(ngramItem.Ref, referenceKey) {
-			continue
-		}
-
-		// Add the reference to the ngram item
-		amountAdded += 1
-		ngramItem.Ref = append(ngramItem.Ref, referenceKey)
-		ngramItem.Amount = len(ngramItem.Ref)
-
-		err = SetDatastoreNGramItem(ctx, ngramSearchKey, ngramItem)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting ngram item for cross-correlate: %s", err)
-		} else {
-			if debug { 
-				log.Printf("[DEBUG] Updated ngram item for %s with key %s", ngramSearchKey, parsedValue)
-			}
-		}
+		}(enrichment)
 	}
 
 	return nil
