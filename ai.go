@@ -7179,30 +7179,6 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 	}
 }
 
-const maxRawBytes = 8000
-
-// safeRawFallback enforces the 8000-byte token limit to protect the LLM context window.
-func safeRawFallback(raw []byte, reason string) []byte {
-	if len(raw) <= maxRawBytes {
-		return raw
-	}
-	
-	previewLen := 500
-	if len(raw) < 500 {
-		previewLen = len(raw)
-	}
-	preview := string(raw[:previewLen]) + "..."
-
-	fallbackMsg := map[string]interface{}{
-		"warning": "response_too_large_fallback_truncated",
-		"preview": preview,
-		"context": "API returned a massive payload that bypassed reduction rules. Proceed with caution.",
-		"reason":  reason,
-	}
-	res, _ := json.Marshal(fallbackMsg)
-	return res
-}
-
 func parseDeepJSON(raw []byte) (interface{}, error) {
 	var data interface{}
 	current := raw
@@ -7260,7 +7236,7 @@ func filterByKeys(data interface{}, allowed map[string]bool, foundTracker map[st
 			// If key matches -> keep full value and passively track it
 			if allowed[lowerKey] {
 				result[key] = val
-				foundTracker[lowerKey] = true 
+				foundTracker[lowerKey] = true
 				found = true
 				continue // Stop digging deeper into this branch
 			}
@@ -7334,27 +7310,27 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 
 	dataFilter = strings.ToLower(strings.TrimSpace(dataFilter))
 	if dataFilter == "full" {
-		return safeRawFallback(rawResponse, "data_filter_is_full")
+		return rawResponse
 	}
 
 	parsed, err := parseDeepJSON(rawResponse)
 	if err != nil {
-		return safeRawFallback(rawResponse, "invalid_json_fallback")
+		return rawResponse
 	}
 
 	// Explicit Error Check
 	if topLevel, ok := parsed.(map[string]interface{}); ok {
 		if _, hasErr := topLevel["error"]; hasErr {
-			return safeRawFallback(rawResponse, "api_returned_error_object")
+			return rawResponse
 		}
 		if success, hasSuccess := topLevel["success"].(bool); hasSuccess && !success {
-			return safeRawFallback(rawResponse, "api_returned_success_false")
+			return rawResponse
 		}
 	}
 
 	if dataFilter == "list" {
 		if len(fieldsNeeded) == 0 {
-			return safeRawFallback(rawResponse, "list_requested_but_no_fields_needed_specified")
+			return rawResponse
 		}
 
 		wanted := normalizeWantedFields(fieldsNeeded)
@@ -7367,10 +7343,7 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 
 		if !ok {
 			// Complete miss
-			res, _ := json.Marshal(map[string]interface{}{
-				"reason": "none_of_the_requested_fields_found_in_response_try_variant_names",
-			})
-			return res
+			return rawResponse
 		}
 
 		// Check for missing fields
@@ -7398,7 +7371,7 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 	}
 
 	// Catch-all fallback
-	return safeRawFallback(rawResponse, "unknown_data_filter")
+	return rawResponse
 }
 
 // createNextActions = false => start of agent to find initial decisions
@@ -7620,7 +7593,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			failureCount := 0
 			successCount := 0
 
-			for i, mappedDecision := range mappedResult.Decisions {
+			for _, mappedDecision := range mappedResult.Decisions {
 				if mappedDecision.RunDetails.Status == "FAILURE" {
 					// Overrides as to get the correct index
 					if lastFinishedIndex < mappedDecision.I {
@@ -7646,19 +7619,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					}
 				}
 
-				// Reduce data for the LLM prompt
+				// Build a prompt-only copy of the decision so the stored decision is never mutated.
 				if mappedDecision.DataFilter != "" {
 					originalLen := len(mappedDecision.RunDetails.RawResponse)
 					reduced := ReduceAgentResponseData([]byte(mappedDecision.RunDetails.RawResponse), mappedDecision.DataFilter, mappedDecision.FieldsNeeded)
-					mappedResult.Decisions[i].RunDetails.RawResponse = string(reduced)
+					mappedDecision.RunDetails.RawResponse = string(reduced)
 					if debug {
-						log.Printf("[DEBUG][%s] AI_AGENT_REDUCE: decision=%s tool=%s data_filter=%s fields=%v original_bytes=%d reduced_bytes=%d", execution.ExecutionId, mappedDecision.RunDetails.Id, mappedDecision.Tool, mappedDecision.DataFilter, mappedDecision.FieldsNeeded, originalLen, len(reduced))
+						log.Printf("[DEBUG][%s] AI_AGENT_REDUCE: decision=%s tool=%s data_filter=%s fields=%v original_bytes=%d reduced_bytes=%d", execution.ExecutionId, mappedDecision.RunDetails.Id, mappedDecision.Tool, mappedDecision.DataFilter, mappedDecision.FieldsNeeded, originalLen, len(mappedDecision.RunDetails.RawResponse))
 					}
-				} else if len(mappedDecision.RunDetails.RawResponse) > 5000 {
-					// No filter set, truncate so the prompt doesn't blow up.
-					mappedResult.Decisions[i].RunDetails.RawResponse = mappedDecision.RunDetails.RawResponse[:5000] + "..."
-					log.Printf("[DEBUG][%s] AI_AGENT_TRUNCATE: decision=%s tool=%s no data_filter, truncated %d->5000 bytes",
-						execution.ExecutionId, mappedDecision.RunDetails.Id, mappedDecision.Tool, len(mappedDecision.RunDetails.RawResponse))
 				}
 
 				// Count how many times this exact action+tool combination has failed.
@@ -7671,10 +7639,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							runsForThisDecision++
 						}
 					}
-					mappedResult.Decisions[i].Runs = fmt.Sprintf("%d", runsForThisDecision)
+					mappedDecision.Runs = fmt.Sprintf("%d", runsForThisDecision)
 				}
 
-				relevantDecisions = append(relevantDecisions, mappedResult.Decisions[i])
+				relevantDecisions = append(relevantDecisions, mappedDecision)
 			}
 
 			log.Printf("[INFO][%s] AI_AGENT: org=%s decisions_total=%d failures=%d successes=%d last_index=%d",
