@@ -8636,6 +8636,13 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 							Result: string(marshalledDecision),
 						}
 
+						for _, action := range execution.Workflow.Actions {
+							if action.ID == actionResult.Action.ID {
+								actionResult.Action = action
+								break
+							}
+						}
+
 						// This is required as the result for the agent isn't set yet on the first run. Minor delay to wait up a bit
 						if decisionIndex == 0 {
 							go func() {

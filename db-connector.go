@@ -1999,6 +1999,11 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		workflowExecution.Workflow.Actions[actionIndex].LargeImage = ""
 		workflowExecution.Workflow.Actions[actionIndex].SmallImage = ""
 		for resultIndex, innerresult := range workflowExecution.Results {
+			// There was some WAITING issue here. This is a hotfix from agent issues.
+			if innerresult.Status == "WAITING" && innerresult.Action.AppName == "Shuffle Tools" && innerresult.CompletedAt > 0 { 
+				workflowExecution.Results[resultIndex].Status = "SUCCESS"
+			}
+
 			if innerresult.Action.ID != action.ID {
 				continue
 			}

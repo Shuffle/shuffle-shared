@@ -2368,6 +2368,13 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		Result: string(marshalledDecision),
 	}
 
+	for _, action := range execution.Workflow.Actions {
+		if action.ID == parsedAction.Action.ID {
+			parsedAction.Action = action
+			break
+		}
+	}
+
 	marshalledAction, err := json.Marshal(parsedAction)
 	if err != nil {
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling action in agent decision: %s", execution.ExecutionId, err)
