@@ -1623,7 +1623,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 	for _, alert := range org.Billing.AlertThreshold {
 		found := false
 		for _, statAlert := range orgStatistics.UsageAlerts {
-			if statAlert.Percentage == alert.Percentage || statAlert.Count == alert.Count {
+			if statAlert.Percentage == alert.Percentage && statAlert.Count == alert.Count {
 				found = true
 				break
 			}
