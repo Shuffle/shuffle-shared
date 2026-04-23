@@ -342,8 +342,9 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 	return "", errors.New(fmt.Sprintf("No cache found for %s", name))
 }
 
-// Sets a key in cache. Expiration is in minutes.
-func SetCache(ctx context.Context, name string, data []byte, expiration int32) error {
+// Sets a key in cache. Expiration is in minutes, unless you pass in useMilliseconds=true
+// Added Millisecond timeout because some things like execution results may need more precise timing. Use by adding a true boolean as the last parameter.
+func SetCache(ctx context.Context, name string, data []byte, expiration int32, useMillisecondsInput ...bool) error {
 	// Set cache verbose
 	//if strings.Contains(name, "execution") || strings.Contains(name, "action") && len(data) > 1 {
 	//}
@@ -355,6 +356,13 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 
 	if len(data) == 0 {
 		log.Printf("[WARNING] Data is empty with key %s and expiration %d. Skipping cache", name, expiration)
+	}
+
+	useMilliseconds := false
+	if len(useMillisecondsInput) > 0 {
+		if useMillisecondsInput[0] {
+			useMilliseconds = true
+		}
 	}
 
 	// Maxsize ish~
@@ -393,6 +401,10 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 					Key:        keyname,
 					Value:      parsedData,
 					Expiration: time.Minute * time.Duration(expiration),
+				}
+
+				if useMilliseconds {
+					item.Expiration = time.Millisecond * time.Duration(expiration)
 				}
 
 				var err error
@@ -436,6 +448,10 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 				Expiration: time.Minute * time.Duration(expiration),
 			}
 
+			if useMilliseconds {
+				item.Expiration = time.Millisecond * time.Duration(expiration)
+			}
+
 			var err error
 			if len(memcached) > 0 {
 				newitem := &gomemcache.Item{
@@ -460,9 +476,18 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 
 		return nil
 	} else if project.Environment == "onprem" {
-		requestCache.Set(name, data, time.Minute*time.Duration(expiration))
+		if useMilliseconds { 
+			requestCache.Set(name, data, time.Millisecond*time.Duration(expiration))
+		} else {
+			requestCache.Set(name, data, time.Minute*time.Duration(expiration))
+		}
 	} else {
-		requestCache.Set(name, data, time.Minute*time.Duration(expiration))
+		if useMilliseconds { 
+			requestCache.Set(name, data, time.Millisecond*time.Duration(expiration))
+		} else {
+			requestCache.Set(name, data, time.Minute*time.Duration(expiration))
+		}
+
 	}
 
 	return nil
@@ -1989,6 +2014,11 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMicro()
 				}
 
+				// Somehow possible to get Nano()
+				if workflowExecution.Results[resultIndex].StartedAt > 17769710273568 {
+					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMicro()
+				}
+
 				// Auto fixing decision data based on cache for better decisionmaking
 				// Map the result into AgentOutput to check decisions
 				mappedOutput := AgentOutput{}
@@ -2002,7 +2032,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				finishedDecisions := []string{}
 				failedFound := false
 				finishDecisionFound := false
-				// FIXME: Optimize it to not run too far past "FINISHED" on cache searches
 				for decisionIndex, decision := range mappedOutput.Decisions {
 					if decision.Action == "finish" {
 						finishDecisionFound = true
@@ -3990,7 +4019,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 				return stats, nil
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for stats: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for stats: %s", err)
 		}
 	}
 
@@ -14584,12 +14613,15 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			break
 		}
 
+		// Only runs once per minute MAX except for enrichments.
 		enrichmentsOnly := false
 		if found {
 			cacheKey := fmt.Sprintf("ngram_check_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
 			data, err := GetCache(ctx, cacheKey)
 			if err == nil && data != nil {
-				enrichmentsOnly = true
+				if len(cacheData.Enrichments) > 0 { 
+					enrichmentsOnly = true
+				}
 			} else {
 				enrichmentsOnly = false 
 				SetCache(ctx, cacheKey, []byte("1"), 1)
@@ -18550,7 +18582,7 @@ func getSyncApikey(ctx context.Context, apikey string) (string, error) {
 			return synckey.OrgId, nil
 		}
 	} else {
-		log.Printf("[INFO] Failed getting cache for syncKEY: %s", err)
+		//log.Printf("[INFO] Failed getting cache for syncKEY: %s", err)
 	}
 
 	dbclient, err := GetDatastoreClient(ctx, gceProject)

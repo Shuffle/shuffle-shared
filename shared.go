@@ -25049,14 +25049,21 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						start = append(start, workflow.Actions[0].ID)
 						oldExecution.Results[0].Status = "WAITING"
 					} else {
-						log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Decision ID: %#v", workflow.ID, decisionId[0])
+
+						// Can loop for it
+						nodeIds, nodeIdsOk := request.URL.Query()["node_id"]
+						if len(nodeIds) > 0 && nodeIdsOk {
+							start = append(start, nodeIds[0])
+						} else {
+							log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Pass in '&node_id={action.id}. Decision ID: %#v", workflow.ID, decisionId)
+						}
 					}
 				}
 			}
 
 			if len(start) == 0 {
 				log.Printf("[ERROR] No start node found for workflow %s during workflow continuation", workflow.ID)
-				return workflowExecution, ExecInfo{}, fmt.Sprintf("No start node found for workflow continuation %s", workflow.ID), errors.New("No start node found for workflow continuation")
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("No start node found for workflow continuation %s. Pass in node_id={action.id} to bypass", workflow.ID), errors.New("No start node found for workflow continuation")
 			}
 
 			//log.Printf("Result len: %d", len(oldExecution.Results))

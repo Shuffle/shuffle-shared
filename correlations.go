@@ -68,7 +68,7 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 		ngramItem, err := GetDatastoreNGramItem(ctx, searchKey)
 		if err != nil {
 			log.Printf("[WARNING] Failed to get ngram item in GetCorrelations for '%s': %s", searchKey, err)
-			resp.WriteHeader(400)
+			resp.WriteHeader(404)
 			resp.Write([]byte(`{"success": false, "reason": "No correlations found"}`))
 			return
 		}
@@ -98,8 +98,6 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-
-	//1.13.22.203
 
 	newCorrelations := []NGramItem{}
 	for _, item := range correlations {
@@ -291,12 +289,12 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 		}
 	}
 
-	if debug { 
-		log.Printf("\n\n[DEBUG] Enrichments: %d\n\n", len(enrichments))
+	if debug && len(enrichments) > 0 { 
+		log.Printf("\n\n[DEBUG] Enrichments (%s): %d\n\n", datastoreKey, len(enrichments))
 	}
 
 	for enrichmentCnt, enrichment := range enrichments {
-		if enrichmentCnt > 2 {
+		if enrichmentCnt > 100 {
 			break
 		}
 
