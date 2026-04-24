@@ -1594,8 +1594,6 @@ func FixContentOutput(contentOutput string) string {
 	contentOutput = FixJSONNewlines(contentOutput)
 	contentOutput = balanceJSONLikeString(contentOutput)
 
-	log.Printf("NEW OUTPUT: %s", contentOutput)
-
 	// Indent it with marshalling
 	tmpMap := map[string]interface{}{}
 	err := json.Unmarshal([]byte(contentOutput), &tmpMap)
@@ -8223,7 +8221,9 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		// Edgecase handling for LLM not being available etc
 		if len(choicesString) > 0 {
-			log.Printf("\n\n[ERROR][%s] AI Agent: Found choicesString (1) in AI Agent response error handling: %s\n\n", execution.ExecutionId, choicesString)
+			if debug { 
+				log.Printf("[ERROR][%s] AI Agent: Found choicesString (1) in AI Agent response error handling: %s", execution.ExecutionId, choicesString)
+			}
 
 		} else if len(openaiOutput.Choices) == 0 {
 			log.Printf("[ERROR][%s] AI Agent: No choices found in AI agent response (1). Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
