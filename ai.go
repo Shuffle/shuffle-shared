@@ -7323,14 +7323,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 		if param.Name == "memory" {
 			// Handle memory injection (may use Singul?)
-			if debug {
+			if debug && len(param.Value) > 0 {
 				log.Printf("[DEBUG] Memory parameter found: %s", param.Value)
 			}
 		}
 
 		if param.Name == "storage" {
 			// Handle storage injection (how?)
-			if debug {
+			if debug && len(param.Value) > 0 {
 				log.Printf("[DEBUG] Storage parameter found: %s", param.Value)
 			}
 		}
