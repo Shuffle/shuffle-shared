@@ -4289,8 +4289,6 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("[DEBUG] Found %d executions for workflow %s", len(workflowExecutions), fileId)
-
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)
 		resp.Write([]byte("[]"))
@@ -17411,9 +17409,9 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
 	_, err := GetCache(ctx, cacheKey)
 	if err == nil {
-		if debug {
-			log.Printf("[DEBUG][%s] Agent self-request for Agent Result '%s' with status '%s' has already been sent. Skipping.", workflowExecution.ExecutionId, actionResult.Action.ID, status)
-		}
+		//if debug {
+		//	log.Printf("[DEBUG][%s] Agent self-request for Agent Result '%s' with status '%s' has already been sent. Skipping.", workflowExecution.ExecutionId, actionResult.Action.ID, status)
+		//}
 
 		return nil
 	} else {
@@ -20805,7 +20803,10 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", orgId, cacheData.Key))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", orgId, cacheData.Key, cacheData.Category))
 
-	log.Printf("[INFO] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
+	if debug { 
+		log.Printf("[DEBUG] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
+	}
+
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
 }
@@ -21006,7 +21007,9 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		Reason:  fmt.Sprintf("Key '%s' deleted", tmpData.Key),
 	}
 
-	log.Printf("[INFO] Successfully Deleted key '%s' for org %s in category '%s'", tmpData.Key, tmpData.OrgId, tmpData.Category)
+	if debug { 
+		log.Printf("[DEBUG] Successfully Deleted key '%s' for org %s in category '%s'", tmpData.Key, tmpData.OrgId, tmpData.Category)
+	}
 
 	// Marshal
 	resp.WriteHeader(200)
@@ -22334,7 +22337,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 	// Fallback to inject creds if the user don't have any. This is for internal +
 	// AI oriented APIs only. Check IsShuffleApp() for details
 	isShuffleApp := IsShuffleApp(app)
-	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" {
+	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" && action.Environment == "cloud" {
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -22514,6 +22517,8 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				//log.Printf("[AUDIT] Injected system AI credentials (fallback) for org %s", user.ActiveOrg.Id)
 
 				// Mapping to internal so the execution itself is not referencable
+				// FIXME: This doesn't work well, so we're just filtering out these
+				// executions until FINISHED (AKA cleaned up)
 				if project.Environment == "cloud" {
 					workflow.ID = "INTERNAL"
 					workflow.OrgId = "INTERNAL"
@@ -22805,6 +22810,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 			// Execution reset
 			executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExec.ExecutionId)
+
 			DeleteCache(ctx, executionCacheKey)
 			marshalledTotalResult, err := json.Marshal(oldExec)
 			if err == nil {
@@ -30191,9 +30197,9 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 		}
 
 		if foundCnt != 2 {
-			if debug {
-				log.Printf("[ERROR] Missing branch fullfillment for src + dst! Source: %s, Destination: %s, Branch: %#v", branch.SourceID, branch.DestinationID, branch)
-			}
+			//if debug {
+			//	log.Printf("[ERROR] Missing branch fullfillment for src + dst! Source: %s, Destination: %s, Branch: %#v", branch.SourceID, branch.DestinationID, branch)
+			//}
 		}
 	}
 

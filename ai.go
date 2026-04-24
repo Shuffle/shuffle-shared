@@ -7109,8 +7109,8 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		Status:      "SUCCESS",
 		Result:      string(marshalledOutput),
 		Action:      startNode,
-		StartedAt:   time.Now().UnixMicro(),
-		CompletedAt: time.Now().UnixMicro(),
+		StartedAt:   time.Now().UnixMilli(),
+		CompletedAt: time.Now().UnixMilli(),
 	}
 
 	// Replace existing result for this node rather than appending,
@@ -7182,7 +7182,6 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool) (Action, error) {
-
 	aiStarttime := time.Now().Unix()
 	// A handler to ensure we ALWAYS focus on next actions if a node starts late
 	// or is missing context, but has previous decisions
@@ -7234,6 +7233,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				Result: fmt.Sprintf(`{"success": false, "reason": "%s"}`, err.Error()),
 				Action: startNode,
 			})
+
 			go SetWorkflowExecution(ctx, execution, true)
 			return startNode, err
 		}
@@ -7879,7 +7879,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			},
 			{
 				Role:    openai.ChatMessageRoleUser,
-				Content: fmt.Sprintf("USER CONTEXT:\n%s\n", metadata),
+				Content: fmt.Sprintf("USER CONTEXT:\n%s. Current time: %s\n", metadata, time.Now().Format(time.RFC3339)),
 			},
 		},
 
@@ -7919,11 +7919,6 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			Content: fmt.Sprintf("HISTORY:\n%s", string(marshalledDecisions)),
 		})
 	}
-
-	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: fmt.Sprintf("Current time: %s\n", time.Now().Format(time.RFC3339)),
-	})
 
 	if failureInjection != "" {
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
@@ -8015,6 +8010,9 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	// meaning it has access to current variables
 	aiNode.SourceWorkflow = execution.Workflow.ID
 	aiNode.SourceExecution = execution.ExecutionId
+
+	// App run delay if needed (e.g. for debugging)
+	//aiNode.ExecutionDelay = 60
 
 	marshalledAction, err := json.Marshal(aiNode)
 	if err != nil {
@@ -8228,7 +8226,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		} else if len(openaiOutput.Choices) == 0 {
 			log.Printf("[ERROR][%s] AI Agent: No choices found in AI agent response (1). Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
 
-			// FIXME: This is specific to OpenAI, but may work for others :thinking:
+			// This is specific to OpenAI, but may work for others 
 			newOutput := openai.ErrorResponse{}
 			err = json.Unmarshal(bodyString, &newOutput)
 			if err == nil && len(newOutput.Error.Message) > 0 {
@@ -8291,25 +8289,30 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		decisionString := FixContentOutput(choicesString)
 
 		// Find the first one and remove anything until that point
+		conditionText := "conditions must be correct"
 		if !strings.HasPrefix(decisionString, `[`) {
 			firstIndex := strings.Index(decisionString, "[")
 			if firstIndex != -1 {
 				decisionString = decisionString[firstIndex:]
 			} else {
-				log.Printf("[WARNING][%s] No '[' found in AI Agent response. Using full response: %s", execution.ExecutionId, decisionString)
+				if !strings.Contains(decisionString, conditionText) {
+					log.Printf("[WARNING][%s] No '[' found in AI Agent response. Using full response: %s", execution.ExecutionId, decisionString)
+				}
 			}
 		}
 
 		errorMessage := ""
 		err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent (5): Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
+			if !strings.Contains(decisionString, conditionText) {
+				log.Printf("[ERROR][%s] AI Agent (5): Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
+			}
 
 			if len(mappedDecisions) == 0 {
 				decisionString = strings.Replace(decisionString, `\"`, `"`, -1)
 
 				err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
-				if err != nil {
+				if err != nil && !strings.Contains(decisionString, conditionText) {
 					log.Printf("[ERROR][%s] AI Agent (6): Failed unmarshalling decisions in AI Agent response (2): %s. String: %s", execution.ExecutionId, err, decisionString)
 
 					// Updating the OUTPUT in some way to help the user a bit.
@@ -8345,7 +8348,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 			ExecutionId: execution.ExecutionId,
 			NodeId:      startNode.ID,
-			StartedAt:   time.Now().UnixMicro(),
+			StartedAt:   time.Now().UnixMilli(),
 			CompletedAt: 0,
 
 			Memory: memorizationEngine,
@@ -8518,7 +8521,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 						fmt.Sprintf("/forms/%s?authorization=%s&reference_execution=%s&source_node=%s&decision_id=%s&backend_url=%s", execution.WorkflowId, execution.Authorization, execution.ExecutionId, startNode.ID, mappedDecision.RunDetails.Id, backendUrl),
 						execution.ExecutionOrg,
 						false,
-						"LOW",
+						"MEDIUM",
 						"agent_approval",
 					)
 
@@ -8594,7 +8597,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 						execution.ExecutionOrg,
 						false,
 						"LOW",
-						"agent_question",
+						"agent_approval",
 					)
 
 					if err != nil {
@@ -8681,7 +8684,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			decisionActionRan = true
 		}
 
-		if !decisionActionRan {
+		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
 			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Marking the agent as FAILURE.", execution.ExecutionId)
 		}
 
