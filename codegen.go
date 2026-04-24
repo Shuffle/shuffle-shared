@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bufio"
+	"crypto/sha1"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -29,6 +30,7 @@ import (
 	"cloud.google.com/go/storage"
 	docker "github.com/docker/docker/client"
 	"gopkg.in/yaml.v2"
+	uuid "github.com/satori/go.uuid"
 
 	"github.com/frikky/kin-openapi/openapi3"
 	//iocParser "github.com/Shuffle/indicator-parser/go/ioc"
@@ -3934,7 +3936,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.35"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.36"
 }
 
 // Removes JSON values from the input
@@ -4646,6 +4648,20 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType string) error {
 	var err error
 
+	// Dedup here with cache
+	cacheName := fmt.Sprintf("automation_%s_%s_%s", runType, cacheData.Category, cacheData.Key)
+	_, err = GetCache(ctx, cacheName)
+	if err == nil {
+		if debug { 
+			log.Printf("[DEBUG] Found existing cache for %s - skipping execution to prevent duplicates", cacheName)
+		}
+
+		return nil
+	}
+
+	// Makes sure we wait 2500ms
+	SetCache(ctx, cacheName, []byte("1"), 2500, true)
+
 	if runType == "run_workflow" {
 
 	} else if runType == "webhook" {
@@ -4992,27 +5008,33 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	} else if parsedName == "enrich" {
 		// Prevent recursion
 		cacheKey := fmt.Sprintf("enrich_wait_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
+
+
+		// Validates if the data is the same. Need a proper data diff
+		//md5sum := Md5sum([]byte(cacheData.Value))
+		//log.Printf("VALUE (%s):\n\n%s\n\n", md5sum, cacheData.Value)
+
 		data, err := GetCache(ctx, cacheKey)
 		if err == nil && data != nil {
-			//log.Printf("[DEBUG] Enrich automation recently run for key %s in category %s - skipping.", cacheData.Key, cacheData.Category)
+			//cacheData := []byte(data.([]uint8))
+			//if string(cacheData) == md5sum {
+			//	return nil
+			//}
+
 			return nil
 		}
 
-		// Set cache key for 1 hour to avoid re-running enrich too often
-		SetCache(ctx, cacheKey, []byte("1"), 15)
-
-		// Use key "enrichments" =>
-		// [{"name": "answers.ip", "value": "92.24.47.250", "type": "location", "data": {"city": "Socotra", "continent": "Asia", "coordinates": [-25.4153, 17.0743], "country": "YE", "desc": "Yemen"}}]
-
-		parsedData := map[string]interface{}{}
-		if err := json.Unmarshal(marshalledBody, &parsedData); err != nil {
-			//log.Printf("[WARNING] Failed to unmarshal marshalledBody for enrich for key %s in category %s: %s", cacheData.Key, cacheData.Category, err)
-			return err
+		if debug { 
+			log.Printf("[DEBUG] Running enrich automation for key %s in category %s", cacheData.Key, cacheData.Category)
 		}
 
-		if _, ok := parsedData["enrichments"]; ok {
-			//log.Printf("[DEBUG] Enrichments key already exists - skipping enrichment automation for key %s in category %s", cacheData.Key, cacheData.Category)
-			return nil
+		//SetCache(ctx, cacheKey, []byte("1"), 1)
+		var timeout int32 = 5000 
+		if project.Environment != "cloud" {
+			timeout = 60000 
+		}
+		SetCache(ctx, cacheKey, []byte("1"), timeout, true)
+		if cacheData.Enrichments != nil && len(cacheData.Enrichments) > 0 {
 		}
 
 		// Send the data into shuffle_tools => parse_ioc?
@@ -5054,9 +5076,22 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			return errors.New("No admin user with API key found")
 		}
 
-		// FIXME: Find it dynamically.
-		relevantWorkflowId := "fd44510b-dab7-4e77-8882-e205cb844c84"
+		// Uses the same as the API /api/v*/workflows/generate  
+		seedString := fmt.Sprintf("%s_Enable Threat feeds_webhook", cacheData.OrgId)
+
+		hash := sha1.New()
+		hash.Write([]byte(seedString))
+		hashBytes := hash.Sum(nil)
+
+		uuidBytes := make([]byte, 16)
+		copy(uuidBytes, hashBytes)
+		relevantWorkflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
+		// FIXME: If workflow doesn't exist - generate it 
 		fullUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", backendUrl, relevantWorkflowId)
+		if debug { 
+			log.Printf("[DEBUG] Running enrich automation workflow %s for key %s in category %s", relevantWorkflowId, cacheData.Key, cacheData.Category)
+		}
 
 		executionRequest := ExecutionRequest{
 			ExecutionArgument: string(marshalledBody),
@@ -5097,7 +5132,13 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			return err
 		}
 
-		log.Printf("RESP FOR RUNNING ENRICHMENT (%d): %s", resp.StatusCode, string(body))
+		if resp.StatusCode != 200 { 
+			log.Printf("[ERROR] Enrichment workflow execution request failed with status code %d. Body: %s", resp.StatusCode, string(body))
+		}
+
+		if debug { 
+			log.Printf("[DEBUG] RESP FOR RUNNING ENRICHMENT (%d): %s", resp.StatusCode, string(body))
+		}
 
 	} else if parsedName == "run_workflow" {
 		for _, option := range automation.Options {

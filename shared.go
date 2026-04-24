@@ -1,7 +1,6 @@
 package shuffle
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -44,7 +43,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 
-	//"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -57,9 +55,6 @@ import (
 
 	"encoding/json"
 	//	"github.com/goccy/go-json"
-
-	"os/exec"
-	"runtime"
 
 	"crypto/aes"
 	"crypto/cipher"
@@ -80,6 +75,7 @@ import (
 
 	"github.com/google/go-github/v28/github"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/oauth2"
 
 	"github.com/Masterminds/semver"
 	dockerclient "github.com/docker/docker/client"
@@ -160,6 +156,9 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 
 			// Support project
 			"https://support.shuffler.io",
+			"https://compliance.shuffler.io",
+			"https://2538a36b-5c1c-4954-8700-ee5d6c6b9f91.lovableproject.com",
+
 			"https://shuffle-support.lovable.app",
 			"https://shuffle-support.lovable.app/",
 			"https://05364669-00ea-43be-ae8f-8e333ccc870c.lovableproject.com",
@@ -395,7 +394,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 && userSettingUpMfa == false {
-			log.Printf("[ERROR] Path too short: %d", len(location))
+			log.Printf("[ERROR] Path too short (2fa): %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -798,7 +797,7 @@ func HandleGet2fa(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" && userSettingUpMfa == false {
 		if len(location) <= 4 {
-			log.Printf("[ERROR] Path too short: %d", len(location))
+			log.Printf("[ERROR] Path too short - MFA: %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -960,7 +959,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
-			log.Printf("Path too short: %d", len(location))
+			log.Printf("Path too short (getorg): %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -1290,8 +1289,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		if err != nil {
 			log.Printf("[ERROR] Failed getting org statistics for %s: %s", org.Id, err)
 		} else {
-			totalWorkflowExecutions := statistics.TotalWorkflowExecutions + statistics.TotalChildWorkflowExecutions
-			if totalWorkflowExecutions > int64(5000) {
+			totalAppExecutions := statistics.TotalAppExecutions + statistics.TotalChildAppExecutions
+			if totalAppExecutions > int64(20000) {
 				org.OldOrg = true
 			}
 		}
@@ -1457,7 +1456,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
-			log.Printf("Path too short: %d", len(location))
+			log.Printf("Path too short (get suborgs): %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -3248,9 +3247,38 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Check if there is any parameter for specific environments
+	var findEnv string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			//log.Printf("[ERROR] Path too short (get environments): %d", len(location))
+		} else {
+			findEnv = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(location[4], "%20", "_"), " ", "_"))
+		}
+	}
+
+	if len(findEnv) > 0 {
+		newEnvironments := []Environment{}
+		for _, env := range environments {
+			parsedName := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, "%20", "_"), " ", "_"))
+			if parsedName == findEnv || env.Id == findEnv {
+				newEnvironments = append(newEnvironments, env)
+				break
+			}
+		}
+
+		environments = newEnvironments
+		if len(environments) == 0 {
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Can't find environment. Does it exist?"}`))
+			return 
+		}
+	}
+
 	// Always make Cloud the default environment
 	// If there are multiple and none are chosen
-	if project.Environment == "cloud" {
+	if project.Environment == "cloud" && findEnv == "" {
 		defaults := []int{}
 		cloudFound := false
 		for envIndex, environment := range environments {
@@ -3298,7 +3326,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 
 	hideEnvs := false
 	parentOrgMain := Org{}
-	if project.Environment == "onprem" {
+	if project.Environment == "onprem" && findEnv == "" {
 		currentOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
 		if err != nil {
 			resp.WriteHeader(401)
@@ -3329,7 +3357,9 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	})
 
 	filteredEnvironments := []Environment{}
-	if hideEnvs {
+	if findEnv != "" {
+		newEnvironments = environments
+	} else if hideEnvs {
 		defaultEnvs := []Environment{}
 		nonDefaultEnvs := []Environment{}
 		for _, env := range environments {
@@ -3444,12 +3474,23 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	newjson, err := json.Marshal(newEnvironments)
-	if err != nil {
-		log.Printf("[DEBUG] Failed unmarshal: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking environments"}`)))
-		return
+	var newjson []byte
+	if findEnv != "" && len(newEnvironments) >= 1 {
+		newjson, err = json.Marshal(newEnvironments[0])
+		if err != nil {
+			log.Printf("[DEBUG] Failed unmarshal: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking environment"}`)))
+			return
+		}
+	} else {
+		newjson, err = json.Marshal(newEnvironments)
+		if err != nil {
+			log.Printf("[DEBUG] Failed unmarshal: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking environments"}`)))
+			return
+		}
 	}
 
 	//log.Printf("Existing environments: %s", string(newjson))
@@ -3908,7 +3949,7 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	if err == nil || len(app.ID) > 0 {
 		log.Printf("[AUDIT] Found app %s (%s) for OpenAPI. Checking for user %s (%s) in org %s (%s) to access", app.Name, id, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
-		if !app.Public && app.Owner != user.Id && user.ActiveOrg.Id != app.ReferenceOrg && !user.SupportAccess {
+		if !app.Public && !app.Sharing && app.Owner != user.Id && user.ActiveOrg.Id != app.ReferenceOrg && !user.SupportAccess {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -11534,7 +11575,33 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// FIXME: Add a way to check if the user is a part of the
+	// Edge-case: foundUser.Orgs is empty and foundUser.ActiveOrg is empty,
+	// but the user exists in the admin's Org.Users list.
+	// Handle removal self-contained and return early.
+	if !orgFound {
+		adminOrg, err := GetOrg(ctx, userInfo.ActiveOrg.Id)
+		if err == nil {
+			for i, orgUser := range adminOrg.Users {
+				if orgUser.Id == foundUser.Id {
+					orgFound = true
+					adminOrg.Users = append(adminOrg.Users[:i], adminOrg.Users[i+1:]...)
+					err = SetOrg(ctx, *adminOrg, adminOrg.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating org (delete user %s) %s: %s", foundUser.Username, adminOrg.Id, err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "Failed removing user from org"}`))
+						return
+					}
+
+					log.Printf("[AUDIT] User %s (%s) successfully removed %s from org %s (edge-case: user had no org references)", userInfo.Username, userInfo.Id, foundUser.Username, userInfo.ActiveOrg.Id)
+					resp.WriteHeader(200)
+					resp.Write([]byte(`{"success": true}`))
+					return
+				}
+			}
+		}
+	}
+
 	if !orgFound && !userInfo.SupportAccess {
 		log.Printf("[AUDIT] User %s (%s) is admin, but can't delete users outside their own org.", userInfo.Username, userInfo.Id)
 		resp.WriteHeader(401)
@@ -12863,6 +12930,8 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Username))
 		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Id))
 
+		// Added another to ensure we handle empty cursor
+		DeleteCache(ctx, fmt.Sprintf("%s__childorgs", inneruser.ActiveOrg.Id))
 		DeleteCache(ctx, fmt.Sprintf("%s_childorgs", inneruser.ActiveOrg.Id))
 	}
 
@@ -13046,7 +13115,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		Id:   orgId,
 	})
 
-	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", parentOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", parentOrg.Id))
 
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
@@ -13090,7 +13158,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		newOrg.Users = append(newOrg.Users, loopUser)
 	}
 
-	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", newOrg.Id))
 	err = SetOrg(ctx, newOrg, newOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting new org %s: %s", newOrg.Id, err)
@@ -16418,6 +16485,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 			newCookie.Name = "__session"
 			newCookie.Domain = ".shutdown.no"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			newCookie.Domain = ".shuffler.io"
 			http.SetCookie(resp, newCookie)
 		}
 
@@ -20381,10 +20452,36 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 
 	if orgId != user.ActiveOrg.Id {
 		if !categoryConfig.Settings.Public {
-			log.Printf("[AUDIT] User %s (%s) tried to list cache keys for org %s without access", user.Username, user.Id, orgId)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "This category is no longer public."}`))
-			return
+			sourceExecution, sourceExecutionOk := request.URL.Query()["execution_id"]
+			sourceAuth, sourceAuthOk := request.URL.Query()["authorization"]
+			if !sourceAuthOk || !sourceExecutionOk {
+				log.Printf("[AUDIT] User %s (%s) tried to list cache keys for org %s without access", user.Username, user.Id, orgId)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "This category is no longer public."}`))
+				return
+			}
+
+			foundExec, err := GetWorkflowExecution(ctx, sourceExecution[0])
+			if err != nil {
+				log.Printf("[WARNING] Failed getting exec during cache set: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "No permission to get execution (2)"}`))
+				return
+			}
+
+			if sourceAuth[0] != foundExec.Authorization {
+				log.Printf("[INFO] Execution auth %s and %s don't match", foundExec.Authorization, sourceAuth[0])
+				resp.WriteHeader(403)
+				resp.Write([]byte(`{"success": false, "reason": "Failed authentication (3)"}`))
+				return
+			}
+
+			if len(foundExec.ExecutionOrg) == 0 {
+				log.Printf("[WARNING] Execution %s doesn't have an org set", foundExec.ExecutionId)
+				resp.WriteHeader(403)
+				resp.Write([]byte(`{"success": false, "reason": "Failed authentication (4)"}`))
+				return
+			}
 		}
 
 		// Cleanup just in case
@@ -20896,6 +20993,14 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, cacheId))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, url.QueryEscape(cacheId)))
 
+	normalizedCategory := strings.ReplaceAll(strings.ToLower(tmpData.Category), " ", "_")
+	if normalizedCategory == "default" {
+		normalizedCategory = ""
+	}
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s", entity, org.Id, normalizedCategory))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_", entity, org.Id))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s", entity, org.Id))
+
 	result := ResultChecker{
 		Success: true,
 		Reason:  fmt.Sprintf("Key '%s' deleted", tmpData.Key),
@@ -21359,10 +21464,11 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		tmpData = append(tmpData, CacheKeyData{
-			OrgId:    tmpDataOverride.OrgId,
-			Key:      tmpDataOverride.Key,
-			Category: tmpDataOverride.Category,
-			Tags:     tmpDataOverride.Tags,
+			OrgId:       tmpDataOverride.OrgId,
+			Key:         tmpDataOverride.Key,
+			Category:    tmpDataOverride.Category,
+			Tags:        tmpDataOverride.Tags,
+			Enrichments: tmpDataOverride.Enrichments,
 
 			Value: parsedValue,
 		})
@@ -21803,6 +21909,137 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 	} else if strings.ToLower(appId) == "integration" || strings.ToLower(appId) == "singul" {
 		log.Printf("[INFO] Running single action for 'integration' app => Singul")
+
+		// Related to sensor groups for Orborus
+	} else if strings.ToLower(appId) == "sensors" && action.Name == "run_action" {
+		if len(user.ActiveOrg.Id) == 0 {
+			return workflowExecution, errors.New("No org ID supplied for sensor execution")
+		}
+
+		if user.Role != "admin" {
+			return workflowExecution, errors.New("Command execution requires Org Admin access")
+		}
+
+		log.Printf("[INFO] Running Shuffle Group sensor action for org '%s'", user.ActiveOrg.Id)
+
+		foundHosts := []string{}
+		foundAction := ""
+		foundSensorGroup := ""
+
+		foundError := ""
+		for _, param := range action.Parameters {
+			if len(param.Value) == 0 {
+				foundError = fmt.Sprintf("'%s' can't be empty. Required fields: action, hosts, sensor_group", param.Name)
+				break
+			}
+
+			if param.Name == "hosts" {
+				foundHosts = strings.Split(param.Value, ",")
+			} else if param.Name == "action" {
+				foundAction = param.Value
+			} else if param.Name == "sensor_group" {
+				foundSensorGroup = param.Value
+			}
+		}
+
+		if len(foundError) > 0 {
+			return workflowExecution, errors.New(foundError)
+		}
+
+		foundExec := workflowExecution
+		foundEnv := foundSensorGroup
+		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			return foundExec, err
+		}
+
+		parsedEnv := ""
+		for _, env := range environments {
+			if env.Archived {
+				continue
+			}
+
+			if !env.SensorGroup {
+				continue
+			}
+
+			if env.Name != foundEnv {
+				continue
+			}
+
+			parsedEnv = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(foundEnv, " ", "-"), "_", "-")), env.OrgId)
+			break
+		}
+
+		if len(parsedEnv) == 0 {
+			return foundExec, errors.New("Failed to find environment for sensor action. Make sure the environment exists and isn't archived.")
+		}
+
+		// One for each host
+		go IncrementCache(ctx, user.ActiveOrg.Id, "app_executions", len(foundHosts))
+		go IncrementCache(ctx, user.ActiveOrg.Id, "workflow_executions", len(foundHosts))
+		for hostIndex, host := range foundHosts {
+			workflowId := uuid.NewV4().String()
+			action.SourceWorkflow = workflowId
+
+			if len(action.ID) != 36 {
+				action.ID = uuid.NewV4().String()
+			}
+
+			startTime := int64(time.Now().Unix())
+			exec := WorkflowExecution{
+				Workflow: Workflow{
+					ID: workflowId,
+					Actions: []Action{
+						action,
+					},
+
+					OrgId:     user.ActiveOrg.Id,
+					Owner:     user.Username,
+					UpdatedBy: user.Username,
+					Start:     action.ID,
+				},
+				Type:          "SENSOR_ACTION",
+				Start:         action.ID,
+				Status:        "EXECUTING",
+				WorkflowId:    workflowId,
+				ExecutionId:   workflowId,
+				ExecutionOrg:  user.ActiveOrg.Id,
+				StartedAt:     startTime,
+				Authorization: uuid.NewV4().String(),
+			}
+
+			if hostIndex == 0 {
+				foundExec = exec
+			}
+
+			go SetWorkflowExecution(ctx, exec, true)
+
+			executionRequest := ExecutionRequest{
+				Start:         exec.Start,
+				ExecutionId:   exec.ExecutionId,
+				Authorization: exec.Authorization,
+
+				WorkflowId:   exec.Workflow.ID,
+				Environments: []string{parsedEnv},
+				Type:         "SENSOR_ACTION",
+				Priority:     5,
+
+				ExecutionArgument: foundAction,
+				ExecutionSource:   host,
+			}
+
+			// Queue logging to make sure we get it
+			log.Printf("[INFO][%s] Queued SENSOR_ACTION to be ran on hosts %s in group %s", exec.ExecutionId, foundHosts, foundEnv)
+			err = SetWorkflowQueue(ctx, executionRequest, parsedEnv)
+			if err != nil {
+				log.Printf("[WARNING][%s] Failed adding %s to db (single action queue): %s", exec.ExecutionId, parsedEnv, err)
+			}
+
+		}
+
+		return foundExec, nil
+
 	} else if strings.ToLower(appId) == "http" {
 
 		// Find the app and the ID for it
@@ -22097,7 +22334,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	// Fallback to inject creds if the user don't have any. This is for internal +
 	// AI oriented APIs only. Check IsShuffleApp() for details
 	isShuffleApp := IsShuffleApp(app)
-	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 {
+	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" {
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -22274,7 +22511,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 					})
 				}
 
-				log.Printf("[AUDIT] Injected system AI credentials (fallback) for org %s", user.ActiveOrg.Id)
+				//log.Printf("[AUDIT] Injected system AI credentials (fallback) for org %s", user.ActiveOrg.Id)
 
 				// Mapping to internal so the execution itself is not referencable
 				if project.Environment == "cloud" {
@@ -22620,7 +22857,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	}
 
 	if debug {
-		log.Printf("[DEBUG] Starting single action execution check for %s. Max seconds: %d", workflowExecution.ExecutionId, maxSeconds)
+		log.Printf("[DEBUG][%s] Starting single action execution check. Max seconds: %d", workflowExecution.ExecutionId, maxSeconds)
 	}
 
 	addedParams := []string{}
@@ -22722,11 +22959,14 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		if time.Now().Unix()-startTime > int64(maxSeconds) {
 
 			returnBody.Success = true
-
 			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
 
 			break
 		}
+	}
+
+	if debug {
+		log.Printf("[DEBUG][%s] Single action execution check finished. Result len: %d, Errors: %#v", workflowExecution.ExecutionId, len(returnBody.Result), returnBody.Errors)
 	}
 
 	if len(returnBody.Result) == 0 && len(returnBody.Errors) == 0 {
@@ -22965,7 +23205,11 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		parsedLink = realPath
 	}
 
-	client := github.NewClient(nil)
+	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
+
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
 	githubResp := GithubResp{
 		Name:         location[4],
 		Contributors: []GithubAuthor{},
@@ -23025,7 +23269,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	err = SetCache(ctx, cacheKey, b, 180)
+	err = SetCache(ctx, cacheKey, b, 10080)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for doc %s: %s", location[4], err)
 	}
@@ -23067,7 +23311,11 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	client := github.NewClient(nil)
+	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
+
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	tc := oauth2.NewClient(ctx, ts)
+	client := github.NewClient(tc)
 	owner := "shuffle"
 	repo := "shuffle-docs"
 
@@ -23144,296 +23392,7 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	err = SetCache(ctx, cacheKey, b, 300)
-	if err != nil {
-		log.Printf("[WARNING] Failed setting cache for cachekey %s: %s", cacheKey, err)
-	}
-
-	resp.WriteHeader(200)
-	resp.Write(b)
-}
-
-func GetArticles(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	location := strings.Split(request.URL.String(), "/")
-	if len(location) < 5 {
-		resp.WriteHeader(404)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/articles/workflows.md"`)))
-		return
-	}
-
-	if strings.Contains(location[4], "?") {
-		location[4] = strings.Split(location[4], "?")[0]
-	}
-
-	ctx := GetContext(request)
-	downloadLocation, downloadOk := request.URL.Query()["location"]
-	version, versionOk := request.URL.Query()["version"]
-	cacheKey := fmt.Sprintf("articles_%s", location[4])
-	if downloadOk {
-		cacheKey = fmt.Sprintf("%s_%s", cacheKey, downloadLocation[0])
-	}
-
-	if versionOk {
-		cacheKey = fmt.Sprintf("%s_%s", cacheKey, version[0])
-	}
-
-	cache, err := GetCache(ctx, cacheKey)
-	if err == nil {
-		cacheData := []byte(cache.([]uint8))
-		resp.WriteHeader(200)
-		resp.Write(cacheData)
-		return
-	}
-
-	owner := "shuffle"
-	repo := "shuffle-docs"
-	path := "articles"
-	docPath := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s/%s.md", owner, repo, path, location[4])
-
-	// FIXME: User controlled and dangerous (possibly). Uses Markdown on the frontend to render it
-	realPath := ""
-
-	newname := location[4]
-	if downloadOk {
-		if downloadLocation[0] == "openapi" {
-			newname = strings.ReplaceAll(strings.ToLower(location[4]), `%20`, "_")
-			docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs/%s.md", newname)
-			realPath = fmt.Sprintf("https://github.com/Shuffle/openapi-apps/blob/master/docs/%s.md", newname)
-
-		} else if downloadLocation[0] == "python" && versionOk {
-			// Apparently this uses dashes for no good reason?
-			// Should maybe move everything over to underscores later?
-			newname = strings.ReplaceAll(newname, `%20`, "-")
-			newname = strings.ReplaceAll(newname, ` `, "-")
-			newname = strings.ReplaceAll(newname, `_`, "-")
-			newname = strings.ToLower(newname)
-
-			if version[0] == "1.0.0" {
-				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/1.0.0/README.md", newname)
-				realPath = fmt.Sprintf("https://github.com/Shuffle/python-apps/blob/master/%s/1.0.0/README.md", newname)
-
-				log.Printf("[INFO] Should download python app for version %s: %s", version[0], docPath)
-
-			} else {
-				realPath = fmt.Sprintf("https://github.com/Shuffle/python-apps/blob/master/%s/README.md", newname)
-				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/README.md", newname)
-			}
-
-		}
-	}
-
-	//log.Printf("Docpath: %s", docPath)
-
-	httpClient := &http.Client{}
-	req, err := http.NewRequest(
-		"GET",
-		docPath,
-		nil,
-	)
-
-	if err != nil {
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/articles/workflows.md"}`)))
-		resp.WriteHeader(404)
-		return
-	}
-
-	newresp, err := httpClient.Do(req)
-	if err != nil {
-		resp.WriteHeader(404)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/articles/workflows.md"}`)))
-		return
-	}
-
-	defer newresp.Body.Close()
-	body, err := ioutil.ReadAll(newresp.Body)
-	if err != nil {
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't parse data"}`)))
-		return
-	}
-
-	commitOptions := &github.CommitsListOptions{
-		Path: fmt.Sprintf("%s/%s.md", path, location[4]),
-	}
-
-	parsedLink := fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s.md", owner, repo, path, location[4])
-	if len(realPath) > 0 {
-		parsedLink = realPath
-	}
-
-	client := github.NewClient(nil)
-	githubResp := GithubResp{
-		Name:         location[4],
-		Contributors: []GithubAuthor{},
-		Edited:       "",
-		ReadTime:     len(body) / 10 / 250,
-		Link:         parsedLink,
-	}
-
-	if githubResp.ReadTime == 0 {
-		githubResp.ReadTime = 1
-	}
-
-	info, _, err := client.Repositories.ListCommits(ctx, owner, repo, commitOptions)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting commit info: %s", err)
-	} else {
-		//log.Printf("Info: %s", info)
-		for _, commit := range info {
-			//log.Printf("Commit: %s", commit.Author)
-			newAuthor := GithubAuthor{}
-			if commit.Author != nil && commit.Author.AvatarURL != nil {
-				newAuthor.ImageUrl = *commit.Author.AvatarURL
-			}
-
-			if commit.Author != nil && commit.Author.HTMLURL != nil {
-				newAuthor.Url = *commit.Author.HTMLURL
-			}
-
-			found := false
-			for _, contributor := range githubResp.Contributors {
-				if contributor.Url == newAuthor.Url {
-					found = true
-					break
-				}
-			}
-
-			if !found && len(newAuthor.Url) > 0 && len(newAuthor.ImageUrl) > 0 {
-				githubResp.Contributors = append(githubResp.Contributors, newAuthor)
-			}
-		}
-	}
-
-	type Result struct {
-		Success bool       `json:"success"`
-		Reason  string     `json:"reason"`
-		Meta    GithubResp `json:"meta"`
-	}
-
-	var result Result
-	result.Success = true
-	result.Meta = githubResp
-
-	result.Reason = string(body)
-	b, err := json.Marshal(result)
-	if err != nil {
-		http.Error(resp, err.Error(), 500)
-		return
-	}
-
-	err = SetCache(ctx, cacheKey, b, 180)
-	if err != nil {
-		log.Printf("[WARNING] Failed setting cache for articles %s: %s", location[4], err)
-	}
-
-	resp.WriteHeader(200)
-	resp.Write(b)
-}
-
-func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	ctx := GetContext(request)
-	cacheKey := "articles_list"
-	resetCache := request.URL.Query().Get("resetCache") == "true" // Check for resetCache parameter
-
-	if !resetCache {
-		cache, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			resp.WriteHeader(200)
-			resp.Write(cacheData)
-			return
-		}
-	}
-	result := FileList{}
-	log.Println("[DEBUG] Skipping Cache for Articles List")
-
-	client := github.NewClient(nil)
-	owner := "shuffle"
-	repo := "shuffle-docs"
-	path := "articles"
-	_, item1, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting articles list: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error listing directory"}`)))
-		return
-	}
-
-	if len(item1) == 0 {
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No articles available."}`)))
-		return
-	}
-
-	names := []GithubResp{}
-	for _, item := range item1 {
-		if !strings.HasSuffix(*item.Name, "md") {
-			continue
-		}
-
-		commits, resp, err := client.Repositories.ListCommits(ctx, owner, repo, &github.CommitsListOptions{
-			Path: fmt.Sprintf("%s/%s", path, *item.Name),
-		})
-
-		publishedDate := time.Now().Unix()
-		if err != nil {
-			log.Printf("[WARNING] Failed getting commits for %s: %s", *item.Name, err)
-			if resp != nil {
-				log.Printf("[DEBUG] Response status: %d", resp.StatusCode)
-			}
-		} else {
-			log.Printf("[DEBUG] Found %d commits for %s", len(commits), *item.Name)
-			if len(commits) > 0 {
-				publishedDate = commits[len(commits)-1].Commit.Author.Date.Unix()
-				log.Printf("[DEBUG] Setting published date for %s to %s (%d) from first commit", *item.Name, commits[len(commits)-1].Commit.Author.Date.Format("2006-01-02 15:04:05"), publishedDate)
-			} else {
-				log.Printf("[WARNING] No commits found for %s", *item.Name)
-			}
-		}
-
-		// FIXME: Scuffed readtime calc
-		// Average word length = 5. Space = 1. 5+1 = 6 avg.
-		// Words = *item.Size/6/250
-		//250 = average read time / minute
-		// Doubling this for bloat removal in Markdown~
-		githubResp := GithubResp{
-			Name:          (*item.Name)[0 : len(*item.Name)-3],
-			Contributors:  []GithubAuthor{},
-			PublishedDate: publishedDate,
-			Edited:        "",
-			ReadTime:      *item.Size / 6 / 250,
-			Link:          fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
-		}
-
-		names = append(names, githubResp)
-	}
-
-	// Sort articles by published date (newest first)
-	sort.Slice(names, func(i, j int) bool {
-		return names[i].PublishedDate > names[j].PublishedDate
-	})
-
-	//log.Printf(names)
-	result.Success = true
-	result.Reason = "Success"
-	result.List = names
-	b, err := json.Marshal(result)
-	if err != nil {
-		http.Error(resp, err.Error(), 500)
-		return
-	}
-
-	err = SetCache(ctx, cacheKey, b, 300)
+	err = SetCache(ctx, cacheKey, b, 10080)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for cachekey %s: %s", cacheKey, err)
 	}
@@ -25090,14 +25049,21 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						start = append(start, workflow.Actions[0].ID)
 						oldExecution.Results[0].Status = "WAITING"
 					} else {
-						log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Decision ID: %#v", workflow.ID, decisionId[0])
+
+						// Can loop for it
+						nodeIds, nodeIdsOk := request.URL.Query()["node_id"]
+						if len(nodeIds) > 0 && nodeIdsOk {
+							start = append(start, nodeIds[0])
+						} else {
+							log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Pass in '&node_id={action.id}. Decision ID: %#v", workflow.ID, decisionId)
+						}
 					}
 				}
 			}
 
 			if len(start) == 0 {
 				log.Printf("[ERROR] No start node found for workflow %s during workflow continuation", workflow.ID)
-				return workflowExecution, ExecInfo{}, fmt.Sprintf("No start node found for workflow continuation %s", workflow.ID), errors.New("No start node found for workflow continuation")
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("No start node found for workflow continuation %s. Pass in node_id={action.id} to bypass", workflow.ID), errors.New("No start node found for workflow continuation")
 			}
 
 			//log.Printf("Result len: %d", len(oldExecution.Results))
@@ -25354,6 +25320,15 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					userinputResp.ClickInfo.IP = GetRequestIp(request)
 					userinputResp.ClickInfo.Note = ""
 
+					// Set success based on answer
+					if len(answer) > 0 && answer[0] == "false" {
+						userinputResp.Success = false
+						userinputResp.Reason = "User declined the input"
+					} else {
+						userinputResp.Success = true
+						userinputResp.Reason = "User approved the input"
+					}
+
 					// Check if the "note" parameter exists in the request
 					execArg := request.URL.Query().Get("execution_argument")
 					if len(execArg) > 0 {
@@ -25469,10 +25444,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					sendSelfRequest := false
 					if answer[0] == "false" {
-						result.Status = "SKIPPED"
-						sendSelfRequest = true
+						result.Status = "SUCCESS"
+						log.Printf("[INFO][%s] User Input '%s' (%s) answered FALSE - status SUCCESS, answer stored in click_info.", oldExecution.ExecutionId, result.Action.Label, result.Action.ID)
 					} else {
 						result.Status = "SUCCESS"
+						log.Printf("[INFO][%s] User Input '%s' (%s) answered TRUE - status SUCCESS.", oldExecution.ExecutionId, result.Action.Label, result.Action.ID)
 					}
 
 					// Should send result to self?
@@ -25488,8 +25464,173 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
 						}
 
-						// FIXME: Should send result to self?
-						// Maybe that is ONLY if on cloud?
+						// Answer=false: save result, trigger failure subflow if configured, then finish.
+						if answer[0] == "false" {
+							log.Printf("[INFO][%s] User Input '%s' answered NO - saving result and finishing execution.", oldExecution.ExecutionId, result.Action.Label)
+
+							// Update result in execution before triggering subflow (auth needs non-FINISHED status)
+							for newresIndex, newres := range oldExecution.Results {
+								if newres.Action.ID == result.Action.ID {
+									oldExecution.Results[newresIndex] = result
+									break
+								}
+							}
+
+							// Trigger failure subflow if configured
+							failureSubflowId := ""
+							failureSubflowStartnode := ""
+							log.Printf("[DEBUG][%s] Looking for subflow_failure param in trigger %s. Workflow has %d triggers.", oldExecution.ExecutionId, result.Action.ID, len(workflow.Triggers))
+							for _, trigger := range workflow.Triggers {
+								if trigger.ID == result.Action.ID {
+									log.Printf("[DEBUG][%s] Found matching trigger '%s' with %d params", oldExecution.ExecutionId, trigger.Label, len(trigger.Parameters))
+									for _, param := range trigger.Parameters {
+										log.Printf("[DEBUG][%s] Trigger param: name=%s, value=%s", oldExecution.ExecutionId, param.Name, param.Value)
+										if param.Name == "subflow_failure" && len(param.Value) > 0 {
+											failureSubflowId = param.Value
+										}
+										if param.Name == "subflow_failure_startnode" && len(param.Value) > 0 {
+											failureSubflowStartnode = param.Value
+										}
+									}
+									break
+								}
+							}
+							log.Printf("[DEBUG][%s] Failure subflow lookup result: id='%s', startnode='%s'", oldExecution.ExecutionId, failureSubflowId, failureSubflowStartnode)
+
+							if len(failureSubflowId) > 0 {
+								log.Printf("[INFO][%s] Triggering failure subflow %s for declined User Input '%s'", oldExecution.ExecutionId, failureSubflowId, result.Action.Label)
+
+								backendUrl := os.Getenv("BASE_URL")
+								if project.Environment != "cloud" {
+									port := 5001
+									if os.Getenv("BACKEND_PORT") != "" {
+										newPort, err := strconv.Atoi(os.Getenv("BACKEND_PORT"))
+										if err == nil {
+											port = newPort
+										}
+									}
+									backendUrl = fmt.Sprintf("http://localhost:%d", port)
+								}
+
+								if project.Environment == "cloud" && len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+									backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+								}
+
+								if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+									backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+								}
+
+								// Execution argument with decline context
+								execArgMap := map[string]interface{}{
+									"success":          false,
+									"reason":           userinputResp.Reason,
+									"source_workflow":  workflow.ID,
+									"source_execution": oldExecution.ExecutionId,
+									"source_node":      result.Action.ID,
+									"information":      userinputResp.Information,
+									"click_info":       userinputResp.ClickInfo,
+								}
+								execArgBytes, _ := json.Marshal(execArgMap)
+								execArg := string(execArgBytes)
+
+								runUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute?source_workflow=%s&source_execution=%s&source_auth=%s&source_node=%s&start=%s",
+									backendUrl, failureSubflowId,
+									workflow.ID,
+									oldExecution.ExecutionId,
+									oldExecution.Authorization,
+									result.Action.ID,
+									failureSubflowStartnode,
+								)
+								reqBody := fmt.Sprintf(`{"execution_argument": %s}`, strconv.Quote(execArg))
+
+								topClient := &http.Client{
+									Transport: &http.Transport{
+										Proxy: nil,
+									},
+								}
+
+								req, err := http.NewRequest("POST", runUrl, bytes.NewBuffer([]byte(reqBody)))
+								if err != nil {
+									log.Printf("[ERROR][%s] Failed creating failure subflow request: %s", oldExecution.ExecutionId, err)
+								} else {
+									req.Header.Set("Content-Type", "application/json")
+									req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", oldExecution.Authorization))
+
+									resp, err := topClient.Do(req)
+									if err != nil {
+										log.Printf("[ERROR][%s] Failed triggering failure subflow %s: %s", oldExecution.ExecutionId, failureSubflowId, err)
+									} else {
+										defer resp.Body.Close()
+										respBody, _ := ioutil.ReadAll(resp.Body)
+										log.Printf("[INFO][%s] Failure subflow %s triggered (status: %d)", oldExecution.ExecutionId, failureSubflowId, resp.StatusCode)
+
+										// Parse response to get execution ID and update result
+										var subflowResp struct {
+											Success     bool   `json:"success"`
+											ExecutionID string `json:"execution_id"`
+											Authorization string `json:"authorization"`
+										}
+										if jsonErr := json.Unmarshal(respBody, &subflowResp); jsonErr == nil && len(subflowResp.ExecutionID) > 0 {
+											userinputResp.DeclineSubflow.Success = subflowResp.Success
+											userinputResp.DeclineSubflow.ExecutionID = subflowResp.ExecutionID
+											userinputResp.DeclineSubflow.WorkflowID = failureSubflowId
+
+											frontendUrl := backendUrl
+											if strings.Contains(frontendUrl, ":5001") {
+												frontendUrl = strings.Replace(frontendUrl, ":5001", ":3001", 1)
+											}
+											if strings.Contains(frontendUrl, "appspot.com") || strings.Contains(frontendUrl, "run.app") {
+												frontendUrl = "https://shuffler.io"
+											}
+											userinputResp.DeclineSubflowURL = fmt.Sprintf("%s/workflows/%s?execution_id=%s", frontendUrl, failureSubflowId, subflowResp.ExecutionID)
+
+											// Update result with decline subflow info
+											updatedResult, marshalErr := json.Marshal(userinputResp)
+											if marshalErr == nil {
+												result.Result = string(updatedResult)
+												oldExecution.Result = result.Result
+
+												for newresIndex, newres := range oldExecution.Results {
+													if newres.Action.ID == result.Action.ID {
+														oldExecution.Results[newresIndex] = result
+														break
+													}
+												}
+
+												// Update result with decline subflow info
+											updatedResult, marshalErr := json.Marshal(userinputResp)
+											if marshalErr == nil {
+												result.Result = string(updatedResult)
+												for newresIndex, newres := range oldExecution.Results {
+													if newres.Action.ID == result.Action.ID {
+														oldExecution.Results[newresIndex] = result
+														break
+													}
+												}
+											}
+											}
+
+											log.Printf("[INFO][%s] Decline subflow execution: %s, URL: %s", oldExecution.ExecutionId, subflowResp.ExecutionID, userinputResp.DeclineSubflowURL)
+										}
+									}
+								}
+							}
+
+							// Finish execution
+							oldExecution.Status = "FINISHED"
+							oldExecution.Result = result.Result
+							oldExecution.CompletedAt = int64(time.Now().Unix())
+							oldExecution.LastNode = result.Action.ID
+
+							err = SetWorkflowExecution(ctx, *oldExecution, true)
+							if err != nil {
+								log.Printf("[ERROR][%s] Failed saving finished execution after answer=false: %s", oldExecution.ExecutionId, err)
+							}
+
+							return *oldExecution, ExecInfo{}, "", errors.New("User Input: Execution stopped by user (answer=false)")
+						}
+
+						// Answer=true: save result and re-add to queue
 						if sendSelfRequest == false && strings.ToLower(result.Action.Environment) != "cloud" {
 							log.Printf("[DEBUG][%s] SETTING user input result, and re-adding it to queue IF not in worker. Environment: %s", result.ExecutionId, result.Action.Environment)
 							if project.Environment == "worker" {
@@ -25537,7 +25678,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								}
 
 								if updateMade {
-									return *oldExecution, ExecInfo{}, "", errors.New("User Input: Execution action skipped!")
+									return *oldExecution, ExecInfo{}, "", errors.New("User Input: Execution continued by user (answer=true)")
 								}
 							}
 						}
@@ -26559,7 +26700,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	// Check if the actions are children of the startnode?
 	imageNames := []string{}
 	cloudExec := false
-	for _, action := range workflowExecution.Workflow.Actions {
+	for actionIndex, action := range workflowExecution.Workflow.Actions {
 
 		// Verify if the action environment exists and append
 		found := false
@@ -26585,8 +26726,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			if strings.ToLower(action.Environment) == "cloud" && project.Environment == "cloud" {
 				//log.Printf("[DEBUG] Couldn't find environment %s in cloud for some reason.", action.Environment)
 			} else {
-				log.Printf("[WARNING][%s] Couldn't find environment %s when running workflow '%s'. Maybe it's inactive?", workflowExecution.ExecutionId, action.Environment, workflowExecution.Workflow.ID)
-				return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env '%s' in org '%s'", action.Environment, workflowExecution.ExecutionOrg))
+				if action.Environment == "Shuffle" && project.Environment == "cloud" {
+					action.Environment = "Cloud"
+					workflowExecution.Workflow.Actions[actionIndex].Environment = "Cloud"
+				} else {
+					log.Printf("[WARNING][%s] Couldn't find environment '%s' when running workflow '%s'. Maybe it's inactive?", workflowExecution.ExecutionId, action.Environment, workflowExecution.Workflow.ID)
+					return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env '%s' in org '%s'", action.Environment, workflowExecution.ExecutionOrg))
+				}
 			}
 		}
 
@@ -29038,6 +29184,8 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 		name = location[5]
 	}
 
+	log.Printf("\n\nIN HERE!\n\n")
+
 	ctx := GetContext(request)
 	usecase, err := GetUsecase(ctx, name)
 	if err != nil {
@@ -29187,9 +29335,9 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 	newjson, err := json.Marshal(usecase)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshal in get usecase: %s", err)
-		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data"}`)))
-		return
+		//resp.WriteHeader(400)
+		//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data"}`)))
+		//return
 	}
 
 	resp.WriteHeader(200)
@@ -32608,7 +32756,7 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 
 	parentOrg.ChildOrgs = newChildOrg
 
-	suborgCacheKey := fmt.Sprintf("%s_childorgs", parentOrg.Id)
+	suborgCacheKey := fmt.Sprintf("%s__childorgs", parentOrg.Id)
 	DeleteCache(ctx, suborgCacheKey)
 	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", subOrg.Id))
 	parentOrg.SyncUsage.MultiTenant.Counter = int64(len(newChildOrg)) + 1
@@ -33322,8 +33470,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.Branding.Active = false
 			org.Licensed = false
 
-			org.SyncFeatures.WorkflowExecutions.Limit = 10000
-			org.SyncFeatures.WorkflowExecutions.Active = false
+			org.SyncFeatures.AppExecutions.Active = false
+			org.SyncFeatures.AppExecutions.Limit = 25000
 
 			return org
 		}
@@ -33346,11 +33494,11 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 						org.SyncFeatures.Branding.Active = features.Branding.Active
 
-						org.SyncFeatures.WorkflowExecutions.Active = features.WorkflowExecutions.Active
-						if features.WorkflowExecutions.Limit < 10000 {
-							org.SyncFeatures.WorkflowExecutions.Limit = 10000
+						org.SyncFeatures.AppExecutions.Active = features.OnpremAppExecutions.Active
+						if features.AppExecutions.Limit < 25000 {
+							org.SyncFeatures.AppExecutions.Limit = 25000
 						} else {
-							org.SyncFeatures.WorkflowExecutions.Limit = features.WorkflowExecutions.Limit
+							org.SyncFeatures.AppExecutions.Limit = features.OnpremAppExecutions.Limit
 						}
 					} else {
 						org.SyncFeatures.MultiEnv.Active = false
@@ -33359,9 +33507,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 						org.SyncFeatures.MultiTenant.Active = false
 						org.SyncFeatures.MultiTenant.Limit = 3
 
-						org.SyncFeatures.Branding.Active = features.Branding.Active
-						org.SyncFeatures.WorkflowExecutions.Limit = 10000
-						org.SyncFeatures.WorkflowExecutions.Active = false
+						org.SyncFeatures.Branding.Active = false
+						org.SyncFeatures.AppExecutions.Active = false
+						org.SyncFeatures.AppExecutions.Limit = 25000
 					}
 				} else {
 					org.Licensed = false
@@ -33371,13 +33519,18 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 					org.SyncFeatures.MultiTenant.Active = false
 					org.SyncFeatures.MultiTenant.Limit = 3
 
-					org.SyncFeatures.Branding.Active = features.Branding.Active
-					org.SyncFeatures.WorkflowExecutions.Limit = 10000
-					org.SyncFeatures.WorkflowExecutions.Active = false
+					org.SyncFeatures.Branding.Active = false
+					org.SyncFeatures.AppExecutions.Active = false
+					org.SyncFeatures.AppExecutions.Limit = 25000
+
 				}
 
-				org.SyncFeatures.AppExecutions.Active = features.AppExecutions.Active
-				org.SyncFeatures.AppExecutions.Limit = features.AppExecutions.Limit
+				org.SyncFeatures.AppExecutions.Active = features.OnpremAppExecutions.Active
+				if features.OnpremAppExecutions.Limit < 25000 {
+					org.SyncFeatures.AppExecutions.Limit = 25000
+				} else {
+					org.SyncFeatures.AppExecutions.Limit = features.OnpremAppExecutions.Limit
+				}
 
 				org.SyncFeatures.Webhook.Active = features.Webhook.Active
 				org.SyncFeatures.Webhook.Limit = features.Webhook.Limit
@@ -33434,8 +33587,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.MultiTenant.Limit = 3
 
 			org.SyncFeatures.Branding.Active = false
-			org.SyncFeatures.WorkflowExecutions.Limit = 10000
-			org.SyncFeatures.WorkflowExecutions.Active = false
+			org.SyncFeatures.AppExecutions.Active = false
+			org.SyncFeatures.AppExecutions.Limit = 25000
 		}
 
 		if len(shuffleLicenseKey) > 0 {
@@ -33452,9 +33605,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 					org.SyncFeatures.MultiTenant.Active = license.Tenant.Active
 				}
 
-				if license.WorkflowExecutions.Limit > org.SyncFeatures.WorkflowExecutions.Limit {
-					org.SyncFeatures.WorkflowExecutions.Limit = license.WorkflowExecutions.Limit
-					org.SyncFeatures.WorkflowExecutions.Active = license.WorkflowExecutions.Active
+				if license.AppRuns.Limit > org.SyncFeatures.AppExecutions.Limit {
+					org.SyncFeatures.AppExecutions.Limit = license.AppRuns.Limit
+					org.SyncFeatures.AppExecutions.Active = license.AppRuns.Active
 				}
 
 				org.SyncFeatures.Branding.Active = license.Branding
@@ -33488,10 +33641,10 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.MultiTenant.Limit = license.Tenant.Limit
 			org.SyncFeatures.MultiTenant.Active = license.Tenant.Active
 			org.SyncFeatures.Branding.Active = license.Branding
-			org.SyncFeatures.WorkflowExecutions.Active = license.WorkflowExecutions.Active
-			org.SyncFeatures.WorkflowExecutions.Limit = license.WorkflowExecutions.Limit
+			org.SyncFeatures.AppExecutions.Active = license.AppRuns.Active
+			org.SyncFeatures.AppExecutions.Limit = license.AppRuns.Limit
 
-			org.SyncFeatures.AppExecutions.Active = true
+			org.SyncFeatures.WorkflowExecutions.Active = true
 			org.SyncFeatures.Webhook.Active = true
 			org.SyncFeatures.Schedules.Active = true
 			org.SyncFeatures.UserInput.Active = true
@@ -33516,8 +33669,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 			org.SyncFeatures.Branding.Active = false
 
-			org.SyncFeatures.WorkflowExecutions.Active = false
-			org.SyncFeatures.WorkflowExecutions.Limit = 10000
+			org.SyncFeatures.AppExecutions.Active = false
+			org.SyncFeatures.AppExecutions.Limit = 25000
 		}
 
 		parsedEula := GetOnpremPaidEula()
@@ -33594,8 +33747,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 		org.SyncFeatures.Branding.Active = false
 
-		org.SyncFeatures.WorkflowExecutions.Active = false
-		org.SyncFeatures.WorkflowExecutions.Limit = 10000
+		org.SyncFeatures.AppExecutions.Active = false
+		org.SyncFeatures.AppExecutions.Limit = 25000
 	}
 
 	return org
@@ -35316,607 +35469,6 @@ func startSchedule(trigger Trigger, authorization string, workflow Workflow) err
 	}
 
 	return nil
-}
-
-// EDR and Telemetry Functions
-
-// NewAuditLogCollector creates a new audit log collector for the current platform
-func NewAuditLogCollector(config TelemetryConfig) (*AuditLogCollector, error) {
-	platform := runtime.GOOS
-
-	if config.BufferSize == 0 {
-		config.BufferSize = 1000
-	}
-
-	if config.FlushInterval == 0 {
-		config.FlushInterval = 10 * time.Second
-	}
-
-	collector := &AuditLogCollector{
-		Config:     config,
-		Platform:   platform,
-		LogChannel: make(chan AuditLogEntry, config.BufferSize),
-		StopChan:   make(chan bool),
-	}
-
-	return collector, nil
-}
-
-func (c *AuditLogCollector) LogCollectorStart(ctx context.Context) error {
-	if !c.Config.Enabled {
-		return nil
-	}
-
-	auditLogEnabled := false
-	for _, mode := range c.Config.Modes {
-		if mode == "audit_log" {
-			auditLogEnabled = true
-			break
-		}
-	}
-
-	if !auditLogEnabled {
-		return nil
-	}
-
-	log.Printf("[INFO] Starting audit log collector for platform: %s", c.Platform)
-
-	switch c.Platform {
-	case "linux":
-		go c.collectLinuxAuditLogs(ctx)
-	case "darwin":
-		go c.collectMacOSAuditLogs(ctx)
-	default:
-		return fmt.Errorf("unsupported platform: %s", c.Platform)
-	}
-
-	go c.processTelemetryLogs(ctx)
-
-	return nil
-}
-
-// Stop stops the audit log collection
-func (c *AuditLogCollector) Stop() {
-	log.Printf("[INFO] Stopping audit log collector")
-	close(c.StopChan)
-}
-
-// collectLinuxAuditLogs collects audit logs on Linux systems
-func (c *AuditLogCollector) collectLinuxAuditLogs(ctx context.Context) {
-	// Check for auditd logs
-	auditLogPath := "/var/log/audit/audit.log"
-	syslogPath := "/var/log/syslog"
-	journalAvailable := c.isJournalAvailable()
-
-	// Use journalctl if available
-	if journalAvailable {
-		go c.collectJournalLogs(ctx)
-	}
-
-	// Monitor audit.log if it exists
-	if _, err := os.Stat(auditLogPath); err == nil {
-		go c.tailLogFile(ctx, auditLogPath, "auditd")
-	}
-
-	// Monitor syslog
-	if _, err := os.Stat(syslogPath); err == nil {
-		go c.tailLogFile(ctx, syslogPath, "syslog")
-	}
-}
-
-func (c *AuditLogCollector) collectMacOSAuditLogs(ctx context.Context) {
-	go c.collectMacOSSecurityLogs(ctx)
-}
-
-// collectMacOSSecurityLogs collects all security-relevant logs with one predicate
-func (c *AuditLogCollector) collectMacOSSecurityLogs(ctx context.Context) {
-	log.Printf("[INFO] Starting macOS security log collection")
-
-	predicate := `(subsystem == "com.apple.opendirectoryd" && category == "auth") ||
-		process == "login" ||
-		process == "sshd" ||
-		process == "sudo" ||
-		process == "su"`
-
-	cmd := exec.Command("log", "stream",
-		"--predicate", predicate,
-		"--info", "--debug",
-		"--style", "json")
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Printf("[ERROR] Failed to create stdout pipe for security log stream: %v", err)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("[ERROR] Failed to start security log stream: %v", err)
-		return
-	}
-
-	log.Printf("[INFO] Successfully started security log stream")
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			cmd.Process.Kill()
-			return
-		case <-c.StopChan:
-			cmd.Process.Kill()
-			return
-		default:
-			line := scanner.Text()
-			if line != "" {
-				c.parseMacOSLogEntry(line)
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Printf("[ERROR] Error reading security log stream: %v", err)
-	}
-}
-
-func (c *AuditLogCollector) parseMacOSLogEntry(line string) {
-	// First, let's see what we're actually getting
-	log.Printf("[DEBUG] Raw log line: %s", line)
-
-	var logData map[string]interface{}
-	if err := json.Unmarshal([]byte(line), &logData); err != nil {
-		log.Printf("[ERROR] Failed to parse JSON: %v", err)
-		// If JSON parsing fails, treat it as plain text
-		c.parseSimpleMacOSLogEntry(line)
-		return
-	}
-
-	log.Printf("[DEBUG] Parsed JSON log entry: %v", logData)
-
-	entry := AuditLogEntry{
-		Timestamp: time.Now(),
-		Platform:  "darwin",
-		RawData:   line,
-		Metadata:  logData,
-	}
-
-	if eventType, ok := logData["eventType"].(string); ok {
-		entry.EventType = eventType
-	}
-
-	if eventMessage, ok := logData["eventMessage"].(string); ok {
-		entry.Message = eventMessage
-	}
-
-	if processID, ok := logData["processID"].(float64); ok {
-		entry.ProcessInfo = &ProcessInfo{
-			PID: int(processID),
-		}
-
-		if processImagePath, ok := logData["processImagePath"].(string); ok {
-			entry.ProcessInfo.ProcessName = filepath.Base(processImagePath)
-		}
-	}
-
-	if c.shouldFilterLog(&entry) {
-		return
-	}
-
-	select {
-	case c.LogChannel <- entry:
-	default:
-		// log.Printf("[WARNING] Log channel full, dropping log entry")
-	}
-}
-
-func (c *AuditLogCollector) parseSimpleMacOSLogEntry(line string) {
-	// this just looks for keywords in the log line
-	// not sure how reliable this is, but it's a start lol
-	lowerLine := strings.ToLower(line)
-	isSecurityRelevant := strings.Contains(lowerLine, "login") ||
-		strings.Contains(lowerLine, "auth") ||
-		strings.Contains(lowerLine, "sudo") ||
-		strings.Contains(lowerLine, "password") ||
-		strings.Contains(lowerLine, "session") ||
-		strings.Contains(lowerLine, "security") ||
-		strings.Contains(lowerLine, "loginwindow") ||
-		strings.Contains(lowerLine, "securityd")
-
-	if !isSecurityRelevant {
-		return
-	}
-
-	entry := AuditLogEntry{
-		Timestamp: time.Now(),
-		Platform:  "darwin",
-		Source:    "unified_log",
-		Message:   line,
-		RawData:   line,
-		EventType: "security",
-	}
-
-	// Basic process extraction from log format
-	if strings.Contains(line, ": ") {
-		parts := strings.Split(line, ": ")
-		if len(parts) > 1 {
-			processField := parts[0]
-			if strings.Contains(processField, "[") {
-				procParts := strings.Split(processField, "[")
-				if len(procParts) > 0 {
-					entry.ProcessInfo = &ProcessInfo{
-						ProcessName: strings.TrimSpace(procParts[0]),
-					}
-				}
-			}
-		}
-	}
-
-	if c.shouldFilterLog(&entry) {
-		return
-	}
-
-	select {
-	case c.LogChannel <- entry:
-	default:
-		// Channel full, drop the log
-	}
-}
-
-// collectMacOSAuthLogs monitors auth.log and system authentication events
-func (c *AuditLogCollector) collectMacOSAuthLogs(ctx context.Context) {
-	log.Printf("[INFO] Starting macOS auth log collection")
-
-	// Just monitor some basic log files that might exist
-	logPaths := []string{
-		"/var/log/auth.log",
-		"/var/log/system.log",
-		"/var/log/secure.log",
-	}
-
-	for _, logPath := range logPaths {
-		if _, err := os.Stat(logPath); err == nil {
-			log.Printf("[INFO] Monitoring log file: %s", logPath)
-			go c.tailLogFile(ctx, logPath, filepath.Base(logPath))
-		}
-	}
-}
-
-// collectMacOSBSMaudit collects from macOS BSM audit system
-func (c *AuditLogCollector) collectMacOSBSMaudit(ctx context.Context) {
-	// Check if audit is enabled
-	cmd := exec.Command("sudo", "audit", "-s")
-	if err := cmd.Run(); err != nil {
-		log.Printf("[WARNING] BSM audit not available or not enabled: %v", err)
-		return
-	}
-
-	// Monitor current audit trail
-	auditDir := "/var/audit"
-	if _, err := os.Stat(auditDir); err != nil {
-		log.Printf("[WARNING] Audit directory not accessible: %v", err)
-		return
-	}
-
-	// Use praudit to read audit records in real-time
-	cmd = exec.Command("sudo", "praudit", "-l")
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Printf("[ERROR] Failed to create stdout pipe for praudit: %v", err)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("[ERROR] Failed to start praudit: %v", err)
-		return
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			cmd.Process.Kill()
-			return
-		case <-c.StopChan:
-			cmd.Process.Kill()
-			return
-		default:
-			line := scanner.Text()
-			c.parseBSMAuditEntry(line)
-		}
-	}
-}
-
-// parseBSMAuditEntry parses BSM audit entries
-func (c *AuditLogCollector) parseBSMAuditEntry(line string) {
-	entry := AuditLogEntry{
-		Timestamp: time.Now(),
-		Platform:  "darwin",
-		Source:    "bsm_audit",
-		Message:   line,
-		RawData:   line,
-		EventType: "audit",
-	}
-
-	// Extract process info if available (basic parsing)
-	if strings.Contains(line, "process") {
-		// This is a simplified parser - BSM audit format is complex
-		fields := strings.Fields(line)
-		for i, field := range fields {
-			if field == "process" && i+1 < len(fields) {
-				entry.ProcessInfo = &ProcessInfo{
-					ProcessName: fields[i+1],
-				}
-				break
-			}
-		}
-	}
-
-	if c.shouldFilterLog(&entry) {
-		return
-	}
-
-	select {
-	case c.LogChannel <- entry:
-	default:
-		// Channel full, drop the log
-	}
-}
-
-func (c *AuditLogCollector) collectJournalLogs(ctx context.Context) {
-	cmd := exec.Command("journalctl", "-f", "-o", "json", "--since", "now")
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Printf("[ERROR] Failed to create stdout pipe for journalctl: %v", err)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("[ERROR] Failed to start journalctl: %v", err)
-		return
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		select {
-		case <-ctx.Done():
-			cmd.Process.Kill()
-			return
-		case <-c.StopChan:
-			cmd.Process.Kill()
-			return
-		default:
-			line := scanner.Text()
-			c.parseJournalEntry(line)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Printf("[ERROR] Error reading journalctl: %v", err)
-	}
-}
-
-// parseJournalEntry parses a systemd journal entry
-func (c *AuditLogCollector) parseJournalEntry(line string) {
-	var journalData map[string]interface{}
-	if err := json.Unmarshal([]byte(line), &journalData); err != nil {
-		return
-	}
-
-	entry := AuditLogEntry{
-		Timestamp: time.Now(),
-		Platform:  "linux",
-		Source:    "journal",
-		RawData:   line,
-		Metadata:  journalData,
-	}
-
-	// Extract standard journal fields
-	if priority, ok := journalData["PRIORITY"].(string); ok {
-		entry.Level = c.priorityToLevel(priority)
-	}
-
-	if message, ok := journalData["MESSAGE"].(string); ok {
-		entry.Message = message
-	}
-
-	if syslogID, ok := journalData["SYSLOG_IDENTIFIER"].(string); ok {
-		entry.EventType = syslogID
-	}
-
-	// Process information
-	if pid, ok := journalData["_PID"].(string); ok {
-		pidInt, _ := strconv.Atoi(pid)
-		entry.ProcessInfo = &ProcessInfo{
-			PID: pidInt,
-		}
-
-		if comm, ok := journalData["_COMM"].(string); ok {
-			entry.ProcessInfo.ProcessName = comm
-		}
-
-		if cmdline, ok := journalData["_CMDLINE"].(string); ok {
-			entry.ProcessInfo.CommandLine = cmdline
-		}
-	}
-
-	// User information
-	if uid, ok := journalData["_UID"].(string); ok {
-		entry.UserInfo = &UserInfo{
-			UserID: uid,
-		}
-	}
-
-	// Apply filters
-	if c.shouldFilterLog(&entry) {
-		return
-	}
-
-	select {
-	case c.LogChannel <- entry:
-	default:
-		// Channel full, drop the log
-	}
-}
-
-// tailLogFile monitors a log file for new entries
-func (c *AuditLogCollector) tailLogFile(ctx context.Context, filepath string, source string) {
-	file, err := os.Open(filepath)
-	if err != nil {
-		log.Printf("[ERROR] Failed to open log file %s: %v", filepath, err)
-		return
-	}
-	defer file.Close()
-
-	// Seek to end of file
-	file.Seek(0, 2)
-
-	scanner := bufio.NewScanner(file)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-c.StopChan:
-			return
-		default:
-			if scanner.Scan() {
-				line := scanner.Text()
-				entry := AuditLogEntry{
-					Timestamp: time.Now(),
-					Platform:  c.Platform,
-					Source:    source,
-					Message:   line,
-					RawData:   line,
-				}
-
-				// Apply filters
-				if c.shouldFilterLog(&entry) {
-					continue
-				}
-
-				select {
-				case c.LogChannel <- entry:
-				default:
-					// Channel full, drop the log
-				}
-			} else {
-				// No new data, sleep briefly
-				time.Sleep(100 * time.Millisecond)
-			}
-		}
-	}
-}
-
-func (c *AuditLogCollector) processTelemetryLogs(ctx context.Context) {
-	buffer := make([]AuditLogEntry, 0, c.Config.BufferSize)
-	ticker := time.NewTicker(c.Config.FlushInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			c.flushLogs(buffer)
-			return
-		case <-c.StopChan:
-			c.flushLogs(buffer)
-			return
-		case entry := <-c.LogChannel:
-			buffer = append(buffer, entry)
-			if len(buffer) >= c.Config.BufferSize {
-				c.flushLogs(buffer)
-				buffer = buffer[:0]
-			}
-		case <-ticker.C:
-			if len(buffer) > 0 {
-				c.flushLogs(buffer)
-				buffer = buffer[:0]
-			}
-		}
-	}
-}
-
-// flushLogs outputs collected logs (for now just printing)
-func (c *AuditLogCollector) flushLogs(logs []AuditLogEntry) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	for _, log := range logs {
-		// For now, just print the logs
-		fmt.Printf("[AUDIT] %s | %s | %s | %s\n",
-			log.Timestamp.Format(time.RFC3339),
-			log.Platform,
-			log.EventType,
-			log.Message)
-	}
-}
-
-func (c *AuditLogCollector) shouldFilterLog(entry *AuditLogEntry) bool {
-	for _, filter := range c.Config.Filters {
-		switch filter.Type {
-		case "event_type":
-			if len(filter.Include) > 0 {
-				included := false
-				for _, inc := range filter.Include {
-					if strings.Contains(entry.EventType, inc) {
-						included = true
-						break
-					}
-				}
-				if !included {
-					return true
-				}
-			}
-
-			for _, exc := range filter.Exclude {
-				if strings.Contains(entry.EventType, exc) {
-					return true
-				}
-			}
-		case "message":
-			if len(filter.Include) > 0 {
-				included := false
-				for _, inc := range filter.Include {
-					if strings.Contains(entry.Message, inc) {
-						included = true
-						break
-					}
-				}
-				if !included {
-					return true
-				}
-			}
-
-			for _, exc := range filter.Exclude {
-				if strings.Contains(entry.Message, exc) {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
-}
-
-// isJournalAvailable checks if systemd journal is available
-func (c *AuditLogCollector) isJournalAvailable() bool {
-	cmd := exec.Command("which", "journalctl")
-	err := cmd.Run()
-	return err == nil
-}
-
-// priorityToLevel converts systemd priority to log level
-func (c *AuditLogCollector) priorityToLevel(priority string) string {
-	switch priority {
-	case "0", "1", "2", "3":
-		return "ERROR"
-	case "4":
-		return "WARNING"
-	case "5", "6":
-		return "INFO"
-	case "7":
-		return "DEBUG"
-	default:
-		return "INFO"
-	}
 }
 
 // getPrioritisedAppActions returns actions for an app, prioritised by most

@@ -7496,6 +7496,33 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				userMessage = oldAgentOutput.OriginalInput
 			}
 
+			// If the user continued the agent after a finish decision (via "Add more details"),
+			// the new input is stored in the "continue" field of the injected "ask" decision.
+			// Override userMessage so the LLM acts on the new instruction instead of the original one.
+			// Iterate from the end so we deterministically pick the most recent continuation.
+			for i := len(mappedResult.Decisions) - 1; i >= 0; i-- {
+				mappedDecision := mappedResult.Decisions[i]
+				if mappedDecision.Action != "ask" {
+					continue
+				}
+
+				foundContinuation := false
+				for _, field := range mappedDecision.Fields {
+					if field.Key == "continue" && len(field.Answer) > 0 {
+						if debug {
+							log.Printf("[DEBUG][%s] AI Agent continuation: overriding userMessage with 'continue' answer (length=%d)", execution.ExecutionId, len(field.Answer))
+						}
+
+						userMessage = field.Answer
+						foundContinuation = true
+						break
+					}
+				}
+				if foundContinuation {
+					break
+				}
+			}
+
 			if hasFailure {
 				log.Printf("[WARNING][%s] AI Agent: Detected failure in previous decisions. Last finished index: %d", execution.ExecutionId, lastFinishedIndex)
 
@@ -7913,6 +7940,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		}
 	}
 
+	// Fix e.g. injected JSON and other quote/newline mechanics that aren't compatible
+	// Problem: The input data itself can be a reference.
 	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
 		Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
@@ -8121,6 +8150,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 	resultMapping.ExecutionId = execution.ExecutionId
 	resultMapping.Authorization = execution.Authorization
+	// Waiting 3
 	resultMapping.Status = "WAITING"
 	resultMapping.Action = startNode
 	resultMapping.Action.Name = "agent"
@@ -8152,7 +8182,9 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 					continue
 				}
 
-				log.Printf("[DEBUG][%s] AI Agent: Found body parameter which MAY contain the right user input. LEN: %d", execution.ExecutionId, len(param.Value))
+				if debug { 
+					log.Printf("[DEBUG][%s] AI Agent: Found body parameter which MAY contain the right user input. LEN: %d", execution.ExecutionId, len(param.Value))
+				}
 
 				if len(param.Value) > 0 {
 					parsedAgentInput = param.Value
@@ -8339,7 +8371,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 			ExecutionId: execution.ExecutionId,
 			NodeId:      startNode.ID,
-			StartedAt:   time.Now().Unix(),
+			StartedAt:   time.Now().UnixMicro(),
+			CompletedAt: 0,
 
 			Memory: memorizationEngine,
 
@@ -8348,6 +8381,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		if len(errorMessage) > 0 {
 			agentOutput.Output = errorMessage
+			agentOutput.Status = "FAILURE"
 		}
 
 		if createNextActions == true {
@@ -8414,6 +8448,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 						execution.Results[resultIndex].Result = string(agentOutputMarshalled)
 					}
 
+					// Waiting 1 
 					execution.Results[resultIndex].Status = "WAITING"
 
 					// Update the result in cache as actions are self-corrective
@@ -8519,6 +8554,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				}
 
 				decision.RunDetails.StartedAt = time.Now().Unix()
+
+				// Waiting 2
 				decision.RunDetails.Status = "WAITING"
 
 				agentOutput.Decisions[decisionIndex] = decision
@@ -8592,10 +8629,9 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				}
 
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
-				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
-
-
-
+				//agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+				agentOutput.Decisions[decisionIndex].RunDetails.Status = "WAITING"
+				agentOutput.Status = "WAITING"
 
 			} else if decision.Category != "standalone" {
 				// Do we run the singul action directly?
@@ -8632,6 +8668,13 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 							},
 							Status: fmt.Sprintf("%s_%s", decision.RunDetails.Status, decision.RunDetails.Id),
 							Result: string(marshalledDecision),
+						}
+
+						for _, action := range execution.Workflow.Actions {
+							if action.ID == actionResult.Action.ID {
+								actionResult.Action = action
+								break
+							}
 						}
 
 						// This is required as the result for the agent isn't set yet on the first run. Minor delay to wait up a bit
@@ -8889,17 +8932,21 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	initialising := false
 	workflow, workflowErr := GetWorkflow(ctx, workflowId)
 	if workflowErr != nil || workflow.ID == "" {
-		log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, workflowErr)
+		//log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, workflowErr)
 		initialising = true
 	}
 
 	if categoryAction.ActionName == "remove" || categoryAction.ActionName == "disable" || categoryAction.ActionName == "stop" {
+
+
 		if workflowErr == nil && workflow.OrgId == user.ActiveOrg.Id {
 			// Delete the workflow
 			err = DeleteKey(ctx, "workflow", workflowId)
 			if err != nil {
 				log.Printf("[ERROR] Failed deleting workflow with ID %s in GenerateSingulWorkflows: %s", workflowId, err)
 			}
+
+			DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", user.ActiveOrg.Id))
 		} else {
 			log.Printf("[INFO] No existing workflow with ID %s to remove for category '%s'", workflowId, categoryAction.Label)
 			resp.WriteHeader(http.StatusOK)
