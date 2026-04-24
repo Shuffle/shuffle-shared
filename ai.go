@@ -9196,7 +9196,7 @@ func RunAiQuery(ctx context.Context, systemMessage, userMessage string, incoming
 	org, ok := ctx.Value("org_id").(string)
 
 	if len(strings.TrimSpace(rootCaller)) == 0 {
-		return "", errors.New("No caller function name defined in RunAiQuery, Please provide it in the context ctx")
+		return "", errors.New("missing caller in context; set ctx caller before calling RunAiQuery")
 	}
 
 	pc, _, _, ok := runtime.Caller(1)
