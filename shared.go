@@ -21795,7 +21795,7 @@ func CheckHookAuth(request *http.Request, auth string) error {
 }
 
 // Body = The action body received from the user to test.
-func PrepareSingleAction(ctx context.Context, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
+func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
 
 	workflowExecution := WorkflowExecution{}
 
@@ -22647,6 +22647,37 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 		workflowExecution.Results = newResults
+		for _, result := range newResults { 
+			workflowExecution.Workflow.FormControl.CleanupActions = append(workflowExecution.Workflow.FormControl.CleanupActions, result.Action.ID) 
+		}
+
+		// Special handler for AI Agent things.
+		parentActionId := ""
+		if parentRequest != nil && parentRequest.URL != nil {
+			// Check for parameter "parent_node"
+			queries := parentRequest.URL.Query()
+			if queries != nil {
+				parentNode := queries.Get("parent_node")
+				if len(parentNode) > 0 {
+					parentActionId = parentNode
+				}
+			}
+		}
+
+		if len(parentActionId) > 0 {
+			// Makes them 'required' to run. Makes it possible to have conditions
+			// for AI Agents in workflows primarily
+			for _, branch := range oldExec.Workflow.Branches { 
+				if branch.DestinationID != parentActionId { 
+					continue
+				}
+
+				modifiedBranch := branch
+				modifiedBranch.DestinationID = action.ID
+
+				workflowExecution.Workflow.Branches = append(workflowExecution.Workflow.Branches, modifiedBranch)
+			}
+		}
 
 		workflowExecution.WorkflowId = action.SourceWorkflow
 		workflowExecution.Workflow.ID = action.SourceWorkflow
@@ -26887,10 +26918,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		log.Printf("\n\n[ERROR] No org found for execution. This should not happen.\n\n")
 	}
 
-	if len(org.Id) == 0 {
+	if len(org.Id) == 0 && workflowExecution.ExecutionOrg != "INTERNAL" {
 		org, err = GetOrg(ctx, workflowExecution.ExecutionOrg)
 		if err != nil {
-			log.Printf("[ERROR] Failed to get org: %s", err)
+			log.Printf("[ERROR] Failed to get org %#v (workflow exec): %s", workflowExecution.ExecutionOrg, err)
 		}
 	}
 

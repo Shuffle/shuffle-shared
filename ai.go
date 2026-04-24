@@ -1594,6 +1594,8 @@ func FixContentOutput(contentOutput string) string {
 	contentOutput = FixJSONNewlines(contentOutput)
 	contentOutput = balanceJSONLikeString(contentOutput)
 
+	log.Printf("NEW OUTPUT: %s", contentOutput)
+
 	// Indent it with marshalling
 	tmpMap := map[string]interface{}{}
 	err := json.Unmarshal([]byte(contentOutput), &tmpMap)
@@ -7371,7 +7373,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			mappedResult := AgentOutput{}
 			err := json.Unmarshal([]byte(result.Result), &mappedResult)
 			if err != nil {
-				log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
+				log.Printf("[ERROR][%s] AI Agent (1): Failed unmarshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
 				break
 			}
 
@@ -8070,9 +8072,9 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		}
 	}
 
-	fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization)
+	fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s&parent_node=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization, startNode.ID)
 	client := GetExternalClient(fullUrl)
-	client.Timeout = time.Minute * 3
+	client.Timeout = time.Minute * 5
 	req, err := http.NewRequest(
 		"POST",
 		fullUrl,
@@ -8111,7 +8113,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	resultMapping := ActionResult{}
 	err = json.Unmarshal(body, &resultMapping)
 	if err != nil {
-		log.Printf("[ERROR] AI Agent: Failed unmarshalling response into decisions. Response from sending AI Agent request: %d - %s", newresp.StatusCode, string(body))
+		log.Printf("[ERROR] AI Agent (2): Failed unmarshalling response into decisions. Response from sending AI Agent request: %d - %s", newresp.StatusCode, string(body))
 	}
 
 	resultMapping.ExecutionId = execution.ExecutionId
@@ -8169,7 +8171,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		outputMap := HTTPOutput{}
 		err = json.Unmarshal([]byte(resultMapping.Result), &outputMap)
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling response from sending request for stream during SKIPPED user input: %s. Body: %s", execution.ExecutionId, err, string(resultMapping.Result))
+			log.Printf("[ERROR][%s] AI Agent (3): Failed unmarshalling response from sending request for stream during SKIPPED user input: %s. Body: %s", execution.ExecutionId, err, string(resultMapping.Result))
 
 			execution.Status = "ABORTED"
 			execution.Results = append(execution.Results, ActionResult{
@@ -8194,7 +8196,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		if !ok {
 			log.Printf("[ERROR][%s] AI Agent: Failed to convert body to MAP in AI Agent response. Raw response: %s", execution.ExecutionId, string(resultMapping.Result))
 
-			choicesString = fmt.Sprintf("LLM Response Error: %s", string(resultMapping.Result))
+			//choicesString = fmt.Sprintf("LLM Response Error: %s", string(resultMapping.Result))
+			choicesString = fmt.Sprintf("%s", string(resultMapping.Result))
 		} else {
 			bodyString, err = json.Marshal(bodyMap)
 			if err != nil {
@@ -8215,7 +8218,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		openaiOutput := openai.ChatCompletionResponse{}
 		err = json.Unmarshal(bodyString, &openaiOutput)
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling response from OpenAI Agent request: %s", execution.ExecutionId, err)
+			log.Printf("[ERROR][%s] AI Agent (4): Failed unmarshalling response from OpenAI Agent request: %s", execution.ExecutionId, err)
 		}
 
 		// Edgecase handling for LLM not being available etc
@@ -8300,18 +8303,23 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		errorMessage := ""
 		err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
+			log.Printf("[ERROR][%s] AI Agent (5): Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
 
 			if len(mappedDecisions) == 0 {
 				decisionString = strings.Replace(decisionString, `\"`, `"`, -1)
 
 				err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
 				if err != nil {
-					log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling decisions in AI Agent response (2): %s. String: %s", execution.ExecutionId, err, decisionString)
-					resultMapping.Status = "FAILURE"
+					log.Printf("[ERROR][%s] AI Agent (6): Failed unmarshalling decisions in AI Agent response (2): %s. String: %s", execution.ExecutionId, err, decisionString)
 
 					// Updating the OUTPUT in some way to help the user a bit.
-					errorMessage = fmt.Sprintf("The output from the LLM had no decisions. See the raw decisions tring for the response. Contact support@shuffler.io if you think this is wrong.")
+					if strings.Contains(decisionString, "conditions must be correct") { 
+						errorMessage = fmt.Sprintf("Condition failed. See decision_string for details")
+						resultMapping.Status = "SKIPPED"
+					} else {
+						resultMapping.Status = "FAILURE"
+						errorMessage = fmt.Sprintf("The output from the LLM had no decisions. See the raw decisions tring for the response. Contact support@shuffler.io if you think this is wrong.")
+					}
 				}
 			}
 		}
@@ -13124,7 +13132,7 @@ func RunMCPAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	workflowExecution, err := PrepareSingleAction(ctx, user, "agent", marshalledAction, false, "")
+	workflowExecution, err := PrepareSingleAction(ctx, request, user, "agent", marshalledAction, false, "")
 	if fileId == "agent_starter" {
 		log.Printf("[INFO] Returning early for agent_starter single action execution: %s", workflowExecution.ExecutionId)
 		resp.WriteHeader(200)
