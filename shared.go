@@ -21885,6 +21885,11 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 			caller, _ := ctx.Value("caller").(string)
     		traceID, _ := ctx.Value("trace_id").(string)
+			if strings.TrimSpace(caller) == "" {
+				caller = "PrepareSingleAction"
+			}
+
+			ctx = context.WithValue(ctx, "caller", caller)
 
 			action, err := HandleAiAgentExecutionStart(ctx, exec, action, false)
 			if err != nil {
