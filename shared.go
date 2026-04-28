@@ -4289,8 +4289,6 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("[DEBUG] Found %d executions for workflow %s", len(workflowExecutions), fileId)
-
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)
 		resp.Write([]byte("[]"))
@@ -17411,9 +17409,9 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
 	_, err := GetCache(ctx, cacheKey)
 	if err == nil {
-		if debug {
-			log.Printf("[DEBUG][%s] Agent self-request for Agent Result '%s' with status '%s' has already been sent. Skipping.", workflowExecution.ExecutionId, actionResult.Action.ID, status)
-		}
+		//if debug {
+		//	log.Printf("[DEBUG][%s] Agent self-request for Agent Result '%s' with status '%s' has already been sent. Skipping.", workflowExecution.ExecutionId, actionResult.Action.ID, status)
+		//}
 
 		return nil
 	} else {
@@ -20805,7 +20803,10 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", orgId, cacheData.Key))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", orgId, cacheData.Key, cacheData.Category))
 
-	log.Printf("[INFO] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
+	if debug { 
+		log.Printf("[DEBUG] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
+	}
+
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
 }
@@ -21006,7 +21007,9 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		Reason:  fmt.Sprintf("Key '%s' deleted", tmpData.Key),
 	}
 
-	log.Printf("[INFO] Successfully Deleted key '%s' for org %s in category '%s'", tmpData.Key, tmpData.OrgId, tmpData.Category)
+	if debug { 
+		log.Printf("[DEBUG] Successfully Deleted key '%s' for org %s in category '%s'", tmpData.Key, tmpData.OrgId, tmpData.Category)
+	}
 
 	// Marshal
 	resp.WriteHeader(200)
@@ -21795,7 +21798,7 @@ func CheckHookAuth(request *http.Request, auth string) error {
 }
 
 // Body = The action body received from the user to test.
-func PrepareSingleAction(ctx context.Context, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
+func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
 
 	workflowExecution := WorkflowExecution{}
 
@@ -22334,7 +22337,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	// Fallback to inject creds if the user don't have any. This is for internal +
 	// AI oriented APIs only. Check IsShuffleApp() for details
 	isShuffleApp := IsShuffleApp(app)
-	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" {
+	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" && action.Environment == "cloud" {
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -22514,6 +22517,8 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				//log.Printf("[AUDIT] Injected system AI credentials (fallback) for org %s", user.ActiveOrg.Id)
 
 				// Mapping to internal so the execution itself is not referencable
+				// FIXME: This doesn't work well, so we're just filtering out these
+				// executions until FINISHED (AKA cleaned up)
 				if project.Environment == "cloud" {
 					workflow.ID = "INTERNAL"
 					workflow.OrgId = "INTERNAL"
@@ -22647,6 +22652,37 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 		workflowExecution.Results = newResults
+		for _, result := range newResults { 
+			workflowExecution.Workflow.FormControl.CleanupActions = append(workflowExecution.Workflow.FormControl.CleanupActions, result.Action.ID) 
+		}
+
+		// Special handler for AI Agent things.
+		parentActionId := ""
+		if parentRequest != nil && parentRequest.URL != nil {
+			// Check for parameter "parent_node"
+			queries := parentRequest.URL.Query()
+			if queries != nil {
+				parentNode := queries.Get("parent_node")
+				if len(parentNode) > 0 {
+					parentActionId = parentNode
+				}
+			}
+		}
+
+		if len(parentActionId) > 0 {
+			// Makes them 'required' to run. Makes it possible to have conditions
+			// for AI Agents in workflows primarily
+			for _, branch := range oldExec.Workflow.Branches { 
+				if branch.DestinationID != parentActionId { 
+					continue
+				}
+
+				modifiedBranch := branch
+				modifiedBranch.DestinationID = action.ID
+
+				workflowExecution.Workflow.Branches = append(workflowExecution.Workflow.Branches, modifiedBranch)
+			}
+		}
 
 		workflowExecution.WorkflowId = action.SourceWorkflow
 		workflowExecution.Workflow.ID = action.SourceWorkflow
@@ -22774,6 +22810,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 			// Execution reset
 			executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExec.ExecutionId)
+
 			DeleteCache(ctx, executionCacheKey)
 			marshalledTotalResult, err := json.Marshal(oldExec)
 			if err == nil {
@@ -26887,10 +26924,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		log.Printf("\n\n[ERROR] No org found for execution. This should not happen.\n\n")
 	}
 
-	if len(org.Id) == 0 {
+	if len(org.Id) == 0 && workflowExecution.ExecutionOrg != "INTERNAL" {
 		org, err = GetOrg(ctx, workflowExecution.ExecutionOrg)
 		if err != nil {
-			log.Printf("[ERROR] Failed to get org: %s", err)
+			log.Printf("[ERROR] Failed to get org %#v (workflow exec): %s", workflowExecution.ExecutionOrg, err)
 		}
 	}
 
@@ -30160,9 +30197,9 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 		}
 
 		if foundCnt != 2 {
-			if debug {
-				log.Printf("[ERROR] Missing branch fullfillment for src + dst! Source: %s, Destination: %s, Branch: %#v", branch.SourceID, branch.DestinationID, branch)
-			}
+			//if debug {
+			//	log.Printf("[ERROR] Missing branch fullfillment for src + dst! Source: %s, Destination: %s, Branch: %#v", branch.SourceID, branch.DestinationID, branch)
+			//}
 		}
 	}
 

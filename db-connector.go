@@ -1999,13 +1999,18 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		workflowExecution.Workflow.Actions[actionIndex].LargeImage = ""
 		workflowExecution.Workflow.Actions[actionIndex].SmallImage = ""
 		for resultIndex, innerresult := range workflowExecution.Results {
+			if innerresult.Action.ID != action.ID {
+				continue
+			}
+
 			// There was some WAITING issue here. This is a hotfix from agent issues.
 			if innerresult.Status == "WAITING" && innerresult.Action.AppName == "Shuffle Tools" && innerresult.CompletedAt > 0 { 
 				workflowExecution.Results[resultIndex].Status = "SUCCESS"
 			}
 
-			if innerresult.Action.ID != action.ID {
-				continue
+			// Forcing it to become agent
+			if innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent" {
+				workflowExecution.Type = "AGENT"
 			}
 
 			if innerresult.Status != "WAITING" && innerresult.Status != "SUCCESS" {
@@ -2016,23 +2021,38 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				//} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
 			} else if (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") && (innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent") {
 				if workflowExecution.Results[resultIndex].StartedAt == 0 {
-					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMicro()
+					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMilli()
 				}
 
 				// Somehow possible to get Nano()
 				if workflowExecution.Results[resultIndex].StartedAt > 17769710273568 {
-					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMicro()
+					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMilli()
 				}
 
 				// Auto fixing decision data based on cache for better decisionmaking
 				// Map the result into AgentOutput to check decisions
+				decisionsUpdated := false
+
 				mappedOutput := AgentOutput{}
 				err = json.Unmarshal([]byte(innerresult.Result), &mappedOutput)
 				if err != nil {
 					log.Printf("[WARNING] Agent mapping: Failed in mapped output mapping: %s", err)
-				}
+				} else {
+					// Handles "stuck" cases
+					if innerresult.Status == "WAITING" {
+						decisionFailedCheck := ResultChecker{} 
+						err = json.Unmarshal([]byte(mappedOutput.DecisionString), &decisionFailedCheck)
+						if err == nil && len(decisionFailedCheck.Reason) > 0 && decisionFailedCheck.Success == false {
+							//if strings.Contains(decisionFailedCheck.Reason
+							//mappedOutput.Status = "SKIPPED"
+							mappedOutput.Status = "FINISHED"
 
-				decisionsUpdated := false
+							innerresult.Status = "SKIPPED"
+							workflowExecution.Results[resultIndex].Status = "SKIPPED" 
+							decisionsUpdated = true
+						}
+					}
+				}
 
 				finishedDecisions := []string{}
 				failedFound := false
@@ -2040,10 +2060,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				for decisionIndex, decision := range mappedOutput.Decisions {
 					if decision.Action == "finish" {
 						finishDecisionFound = true
-					}
-
-					if decision.RunDetails.Status == "NOT IMPLEMENTED" {
-						continue
 					}
 
 					decisionId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
@@ -12434,6 +12450,16 @@ func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExec
 		}
 	}
 
+	newExecutions := []WorkflowExecution{}
+	for _, execution := range executions {
+		if execution.Workflow.OrgId == "INTERNAL" && execution.Status != "FINISHED" {
+			continue
+		}
+
+		newExecutions = append(newExecutions, execution)
+	}
+	executions = newExecutions
+
 	slice.Sort(executions[:], func(i, j int) bool {
 		return executions[i].StartedAt > executions[j].StartedAt
 	})
@@ -12629,6 +12655,16 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 			return executions[i].StartedAt > executions[j].StartedAt
 		})
 	}
+
+	newExecutions := []WorkflowExecution{}
+	for _, execution := range executions {
+		if execution.Workflow.OrgId == "INTERNAL" && execution.Status != "FINISHED" {
+			continue
+		}
+
+		newExecutions = append(newExecutions, execution)
+	}
+	executions = newExecutions
 
 	// Gets the correct one from cache to make it appear to be correct everywhere
 	for execIndex, execution := range executions {
@@ -12921,6 +12957,16 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			}
 		}
 	}
+
+	newExecutions := []WorkflowExecution{}
+	for _, execution := range executions {
+		if execution.Workflow.OrgId == "INTERNAL" && execution.Status != "FINISHED" {
+			continue
+		}
+
+		newExecutions = append(newExecutions, execution)
+	}
+	executions = newExecutions
 
 	// Find difference between what's in the list and what is in cache
 	//log.Printf("\n\n[DEBUG] Checking local cache for executions. Got %d executions\n\n", len(executions))
@@ -13258,6 +13304,16 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			}
 		}
 	}
+
+	newExecutions := []WorkflowExecution{}
+	for _, execution := range executions {
+		if execution.Workflow.OrgId == "INTERNAL" && execution.Status != "FINISHED" {
+			continue
+		}
+
+		newExecutions = append(newExecutions, execution)
+	}
+	executions = newExecutions
 
 	slice.Sort(executions[:], func(i, j int) bool {
 		return executions[i].StartedAt > executions[j].StartedAt
@@ -16550,7 +16606,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 						newCacheKeys = append(newCacheKeys, cacheKey)
 					} else {
 						if debug {
-							log.Printf("[DEBUG] Should delete cache key '%s' with edited time %d. Timed out!", cacheKey.Key, cacheKey.Edited)
+							//log.Printf("[DEBUG] Should delete cache key '%s' with edited time %d. Timed out!", cacheKey.Key, cacheKey.Edited)
 						}
 
 						// URL encode the key
@@ -18193,6 +18249,16 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 			}
 		}
 	}
+
+	newExecutions := []WorkflowExecution{}
+	for _, execution := range executions {
+		if execution.Workflow.OrgId == "INTERNAL" && execution.Status != "FINISHED" {
+			continue
+		}
+
+		newExecutions = append(newExecutions, execution)
+	}
+	executions = newExecutions
 
 	// Find difference between what's in the list and what is in cache
 
