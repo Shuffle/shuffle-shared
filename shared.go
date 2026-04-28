@@ -20934,8 +20934,8 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err != nil || len(cacheData.Key) == 0 {
 		log.Printf("[ERROR] Failed to DELETE cache key '%s' for org %s (delete) in category '%s'. Does it exist?", tmpData.Key, tmpData.OrgId, tmpData.Category)
-		resp.WriteHeader(400)
 
+		resp.WriteHeader(400)
 		result := ResultChecker{
 			Success: false,
 			Reason:  "Failed to get key. Does it exist? Correct category?",
@@ -21815,7 +21815,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 	if appId != action.AppID {
 
-		// Used for standalone runs stared on /agents
+		// Used for standalone runs controlled from /agents and /mcp
 		if appId == "agent_starter" {
 			workflowId := uuid.NewV4().String()
 			action.SourceWorkflow = workflowId
@@ -26737,8 +26737,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	// Check if the actions are children of the startnode?
 	imageNames := []string{}
 	cloudExec := false
-	for actionIndex, action := range workflowExecution.Workflow.Actions {
 
+	prevEnvironment := ""
+	for actionIndex, action := range workflowExecution.Workflow.Actions {
 		// Verify if the action environment exists and append
 		found := false
 		for _, env := range allEnvs {
@@ -26756,21 +26757,32 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				log.Printf("[ERROR] No handler for environment type %s", env.Type)
 				return workflowExecution, ExecInfo{}, "No active environments found", errors.New(fmt.Sprintf("No handler for environment type %s", env.Type))
 			}
+
 			break
 		}
 
 		if !found {
-			if strings.ToLower(action.Environment) == "cloud" && project.Environment == "cloud" {
-				//log.Printf("[DEBUG] Couldn't find environment %s in cloud for some reason.", action.Environment)
+			if action.Environment == "Shuffle" && project.Environment == "cloud" {
+				action.Environment = "Cloud"
+				workflowExecution.Workflow.Actions[actionIndex].Environment = "Cloud"
+				cloudExec = true
 			} else {
-				if action.Environment == "Shuffle" && project.Environment == "cloud" {
+				if project.Environment == "cloud" { 
 					action.Environment = "Cloud"
 					workflowExecution.Workflow.Actions[actionIndex].Environment = "Cloud"
+					cloudExec = true
 				} else {
-					log.Printf("[WARNING][%s] Couldn't find environment '%s' when running workflow '%s'. Maybe it's inactive?", workflowExecution.ExecutionId, action.Environment, workflowExecution.Workflow.ID)
-					return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env '%s' in org '%s'", action.Environment, workflowExecution.ExecutionOrg))
+					action.Environment = "Shuffle"
+					workflowExecution.Workflow.Actions[actionIndex].Environment = "Shuffle"
 				}
 			}
+
+			if len(prevEnvironment) > 0 {
+				action.Environment = prevEnvironment
+				workflowExecution.Workflow.Actions[actionIndex].Environment = prevEnvironment
+			}
+		} else {
+			prevEnvironment = action.Environment
 		}
 
 		found = false
@@ -29220,8 +29232,6 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 
 		name = location[5]
 	}
-
-	log.Printf("\n\nIN HERE!\n\n")
 
 	ctx := GetContext(request)
 	usecase, err := GetUsecase(ctx, name)

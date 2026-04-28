@@ -7254,6 +7254,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	failureInjection := ""
 	memorizationEngine := "shuffle_db"
 	for _, param := range startNode.Parameters {
+		if debug { 
+			log.Printf("PARAM: %s => %s", param.Name, param.Value)
+		}
+
 		if param.Name == "app_name" {
 			appname = param.Value
 			if ArrayContains(openaiAllowedApps, strings.ToLower(param.Value)) {
@@ -8907,7 +8911,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	initialising := false
-	workflow, workflowErr := GetWorkflow(ctx, workflowId)
+	workflow, workflowErr := GetWorkflow(ctx, workflowId, true)
 	if workflowErr != nil || workflow.ID == "" {
 		//log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, workflowErr)
 		initialising = true
@@ -8924,6 +8928,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", user.ActiveOrg.Id))
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", "", user.ActiveOrg.Id))
 		} else {
 			log.Printf("[INFO] No existing workflow with ID %s to remove for category '%s'", workflowId, categoryAction.Label)
 			resp.WriteHeader(http.StatusOK)
@@ -9133,7 +9138,10 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if len(workflow.Actions[actionIndex].LargeImage) == 0 {
-				if debug {
+
+				if strings.Contains(strings.ToLower(action.AppName), "agent") || strings.Contains(strings.ToLower(action.AppName), "singul") || strings.Contains(strings.ToLower(action.AppName), "integration") { 
+					workflow.Actions[actionIndex].LargeImage = "/icons/workflow-page/shuffle_agent.png"
+				} else if debug {
 					log.Printf("[DEBUG] Missing app image for app '%s'", action.AppName)
 				}
 			}

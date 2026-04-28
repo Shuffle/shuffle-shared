@@ -2732,9 +2732,9 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 	cacheKey := fmt.Sprintf("sensorupdate_%s_%s", sensorDetails.Hostname, sensorDetails.Arch)
 	GotCache, err := GetCache(ctx, cacheKey)
 	if err == nil && GotCache != nil {
-		if debug { 
-			log.Printf("[DEBUG] Skipping datastore update for sensor '%s' as it was updated recently (cache hit)", sensorDetails.Hostname)
-		}
+		//if debug { 
+		//	log.Printf("[DEBUG] Skipping datastore update for sensor '%s' as it was updated recently (cache hit)", sensorDetails.Hostname)
+		//}
 
 		return
 	}

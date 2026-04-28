@@ -5435,6 +5435,10 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 		log.Printf("[WARNING] DELETING workflowexecution: %s", value)
 	}
 
+	if entity == "org_cache" {
+		// FIXME: Add check in ngram to clean up correlations after deletions
+	}
+
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
 	if len(value) == 0 {
 		//log.Printf("[WARNING] Couldn't delete %s because value (id) must be longer than 0", entity)
@@ -9776,6 +9780,8 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		// Find the key for "workflows_<workflow.org_id>" and update the cache for this one. If it doesn't exist, add it
 		// Get the cache for the workflows
 		cursor := ""
+		DeleteCache(ctx, fmt.Sprintf("%s_workflows", "", workflow.OrgId))
+
 		cacheKey = fmt.Sprintf("%s_%s_workflows", cursor, workflow.OrgId)
 		cache, err := GetCache(ctx, cacheKey)
 		if err != nil {
@@ -9784,11 +9790,14 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 			var workflows []Workflow
 
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("[INFO] Got cache for getworkflow '%s': %s", cacheKey, cacheData)
+			//log.Printf("[INFO] Got cache for getworkflow '%s': %s", cacheKey, cacheData)	
+			DeleteCache(ctx, cacheKey)
+
 			err = json.Unmarshal(cacheData, &workflows)
 			if err != nil {
 				log.Printf("[WARNING] Failed unmarshalling cache for getworkflow '%s': %s", cacheKey, err)
 			} else {
+
 				slice.Sort(workflows[:], func(i, j int) bool {
 					return workflows[i].Edited > workflows[j].Edited
 				})
@@ -16583,6 +16592,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	}
 
 	// Get category settings and do stuff
+	skipCache := false
 	if len(categories) > 0 {
 		removedKeys := []string{}
 		for _, category := range categories {
@@ -16599,6 +16609,9 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 				newCacheKeys := []CacheKeyData{}
 				for _, cacheKey := range cacheKeys {
 					if cacheKey.Category != category {
+						if debug { 
+							log.Printf("[WARNING] Cache key '%s' has category '%s' which doesn't match expected category '%s'. Skipping timeout check for this key.", cacheKey.Key, cacheKey.Category, category)
+						}
 						continue
 					}
 
@@ -16618,6 +16631,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 						//}
 						go DeleteKey(backgroundCtx, nameKey, parsedKey)
 						removedKeys = append(removedKeys, cacheKey.Key+cacheKey.Category)
+						skipCache = true
 					}
 				}
 			}
@@ -16697,7 +16711,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	// Only cache if NO cursor at all.
 	// Otherwise we need to track and clean up all cursors(?)
-	if project.CacheDb {
+	if project.CacheDb && !skipCache {
 		newcache, err := json.Marshal(cacheKeys)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
