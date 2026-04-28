@@ -1289,8 +1289,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		if err != nil {
 			log.Printf("[ERROR] Failed getting org statistics for %s: %s", org.Id, err)
 		} else {
-			totalWorkflowExecutions := statistics.TotalWorkflowExecutions + statistics.TotalChildWorkflowExecutions
-			if totalWorkflowExecutions > int64(5000) {
+			totalAppExecutions := statistics.TotalAppExecutions + statistics.TotalChildAppExecutions
+			if totalAppExecutions > int64(20000) {
 				org.OldOrg = true
 			}
 		}
@@ -4288,8 +4288,6 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
-
-	//log.Printf("[DEBUG] Found %d executions for workflow %s", len(workflowExecutions), fileId)
 
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)
@@ -13115,7 +13113,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		Id:   orgId,
 	})
 
-	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", parentOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", parentOrg.Id))
 
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
@@ -13159,7 +13156,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		newOrg.Users = append(newOrg.Users, loopUser)
 	}
 
-	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", newOrg.Id))
 	err = SetOrg(ctx, newOrg, newOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting new org %s: %s", newOrg.Id, err)
@@ -17413,9 +17409,9 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
 	_, err := GetCache(ctx, cacheKey)
 	if err == nil {
-		if debug {
-			log.Printf("[DEBUG][%s] Agent self-request for Agent Result '%s' with status '%s' has already been sent. Skipping.", workflowExecution.ExecutionId, actionResult.Action.ID, status)
-		}
+		//if debug {
+		//	log.Printf("[DEBUG][%s] Agent self-request for Agent Result '%s' with status '%s' has already been sent. Skipping.", workflowExecution.ExecutionId, actionResult.Action.ID, status)
+		//}
 
 		return nil
 	} else {
@@ -20807,7 +20803,10 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", orgId, cacheData.Key))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", orgId, cacheData.Key, cacheData.Category))
 
-	log.Printf("[INFO] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
+	if debug { 
+		log.Printf("[DEBUG] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
+	}
+
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
 }
@@ -21008,7 +21007,9 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		Reason:  fmt.Sprintf("Key '%s' deleted", tmpData.Key),
 	}
 
-	log.Printf("[INFO] Successfully Deleted key '%s' for org %s in category '%s'", tmpData.Key, tmpData.OrgId, tmpData.Category)
+	if debug { 
+		log.Printf("[DEBUG] Successfully Deleted key '%s' for org %s in category '%s'", tmpData.Key, tmpData.OrgId, tmpData.Category)
+	}
 
 	// Marshal
 	resp.WriteHeader(200)
@@ -21797,7 +21798,7 @@ func CheckHookAuth(request *http.Request, auth string) error {
 }
 
 // Body = The action body received from the user to test.
-func PrepareSingleAction(ctx context.Context, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
+func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
 
 	workflowExecution := WorkflowExecution{}
 
@@ -22336,7 +22337,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	// Fallback to inject creds if the user don't have any. This is for internal +
 	// AI oriented APIs only. Check IsShuffleApp() for details
 	isShuffleApp := IsShuffleApp(app)
-	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" {
+	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" && action.Environment == "cloud" {
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -22513,9 +22514,11 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 					})
 				}
 
-				log.Printf("[AUDIT] Injected system AI credentials (fallback) for org %s", user.ActiveOrg.Id)
+				//log.Printf("[AUDIT] Injected system AI credentials (fallback) for org %s", user.ActiveOrg.Id)
 
 				// Mapping to internal so the execution itself is not referencable
+				// FIXME: This doesn't work well, so we're just filtering out these
+				// executions until FINISHED (AKA cleaned up)
 				if project.Environment == "cloud" {
 					workflow.ID = "INTERNAL"
 					workflow.OrgId = "INTERNAL"
@@ -22649,6 +22652,37 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 		workflowExecution.Results = newResults
+		for _, result := range newResults { 
+			workflowExecution.Workflow.FormControl.CleanupActions = append(workflowExecution.Workflow.FormControl.CleanupActions, result.Action.ID) 
+		}
+
+		// Special handler for AI Agent things.
+		parentActionId := ""
+		if parentRequest != nil && parentRequest.URL != nil {
+			// Check for parameter "parent_node"
+			queries := parentRequest.URL.Query()
+			if queries != nil {
+				parentNode := queries.Get("parent_node")
+				if len(parentNode) > 0 {
+					parentActionId = parentNode
+				}
+			}
+		}
+
+		if len(parentActionId) > 0 {
+			// Makes them 'required' to run. Makes it possible to have conditions
+			// for AI Agents in workflows primarily
+			for _, branch := range oldExec.Workflow.Branches { 
+				if branch.DestinationID != parentActionId { 
+					continue
+				}
+
+				modifiedBranch := branch
+				modifiedBranch.DestinationID = action.ID
+
+				workflowExecution.Workflow.Branches = append(workflowExecution.Workflow.Branches, modifiedBranch)
+			}
+		}
 
 		workflowExecution.WorkflowId = action.SourceWorkflow
 		workflowExecution.Workflow.ID = action.SourceWorkflow
@@ -22776,6 +22810,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 			// Execution reset
 			executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExec.ExecutionId)
+
 			DeleteCache(ctx, executionCacheKey)
 			marshalledTotalResult, err := json.Marshal(oldExec)
 			if err == nil {
@@ -25051,14 +25086,21 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						start = append(start, workflow.Actions[0].ID)
 						oldExecution.Results[0].Status = "WAITING"
 					} else {
-						log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Decision ID: %#v", workflow.ID, decisionId[0])
+
+						// Can loop for it
+						nodeIds, nodeIdsOk := request.URL.Query()["node_id"]
+						if len(nodeIds) > 0 && nodeIdsOk {
+							start = append(start, nodeIds[0])
+						} else {
+							log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Pass in '&node_id={action.id}. Decision ID: %#v", workflow.ID, decisionId)
+						}
 					}
 				}
 			}
 
 			if len(start) == 0 {
 				log.Printf("[ERROR] No start node found for workflow %s during workflow continuation", workflow.ID)
-				return workflowExecution, ExecInfo{}, fmt.Sprintf("No start node found for workflow continuation %s", workflow.ID), errors.New("No start node found for workflow continuation")
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("No start node found for workflow continuation %s. Pass in node_id={action.id} to bypass", workflow.ID), errors.New("No start node found for workflow continuation")
 			}
 
 			//log.Printf("Result len: %d", len(oldExecution.Results))
@@ -26882,10 +26924,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		log.Printf("\n\n[ERROR] No org found for execution. This should not happen.\n\n")
 	}
 
-	if len(org.Id) == 0 {
+	if len(org.Id) == 0 && workflowExecution.ExecutionOrg != "INTERNAL" {
 		org, err = GetOrg(ctx, workflowExecution.ExecutionOrg)
 		if err != nil {
-			log.Printf("[ERROR] Failed to get org: %s", err)
+			log.Printf("[ERROR] Failed to get org %#v (workflow exec): %s", workflowExecution.ExecutionOrg, err)
 		}
 	}
 
@@ -30155,9 +30197,9 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 		}
 
 		if foundCnt != 2 {
-			if debug {
-				log.Printf("[ERROR] Missing branch fullfillment for src + dst! Source: %s, Destination: %s, Branch: %#v", branch.SourceID, branch.DestinationID, branch)
-			}
+			//if debug {
+			//	log.Printf("[ERROR] Missing branch fullfillment for src + dst! Source: %s, Destination: %s, Branch: %#v", branch.SourceID, branch.DestinationID, branch)
+			//}
 		}
 	}
 
@@ -32751,7 +32793,7 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 
 	parentOrg.ChildOrgs = newChildOrg
 
-	suborgCacheKey := fmt.Sprintf("%s_childorgs", parentOrg.Id)
+	suborgCacheKey := fmt.Sprintf("%s__childorgs", parentOrg.Id)
 	DeleteCache(ctx, suborgCacheKey)
 	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", subOrg.Id))
 	parentOrg.SyncUsage.MultiTenant.Counter = int64(len(newChildOrg)) + 1
@@ -33465,8 +33507,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.Branding.Active = false
 			org.Licensed = false
 
-			org.SyncFeatures.WorkflowExecutions.Limit = 10000
-			org.SyncFeatures.WorkflowExecutions.Active = false
+			org.SyncFeatures.AppExecutions.Active = false
+			org.SyncFeatures.AppExecutions.Limit = 25000
 
 			return org
 		}
@@ -33489,11 +33531,11 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 						org.SyncFeatures.Branding.Active = features.Branding.Active
 
-						org.SyncFeatures.WorkflowExecutions.Active = features.WorkflowExecutions.Active
-						if features.WorkflowExecutions.Limit < 10000 {
-							org.SyncFeatures.WorkflowExecutions.Limit = 10000
+						org.SyncFeatures.AppExecutions.Active = features.OnpremAppExecutions.Active
+						if features.AppExecutions.Limit < 25000 {
+							org.SyncFeatures.AppExecutions.Limit = 25000
 						} else {
-							org.SyncFeatures.WorkflowExecutions.Limit = features.WorkflowExecutions.Limit
+							org.SyncFeatures.AppExecutions.Limit = features.OnpremAppExecutions.Limit
 						}
 					} else {
 						org.SyncFeatures.MultiEnv.Active = false
@@ -33502,9 +33544,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 						org.SyncFeatures.MultiTenant.Active = false
 						org.SyncFeatures.MultiTenant.Limit = 3
 
-						org.SyncFeatures.Branding.Active = features.Branding.Active
-						org.SyncFeatures.WorkflowExecutions.Limit = 10000
-						org.SyncFeatures.WorkflowExecutions.Active = false
+						org.SyncFeatures.Branding.Active = false
+						org.SyncFeatures.AppExecutions.Active = false
+						org.SyncFeatures.AppExecutions.Limit = 25000
 					}
 				} else {
 					org.Licensed = false
@@ -33514,13 +33556,18 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 					org.SyncFeatures.MultiTenant.Active = false
 					org.SyncFeatures.MultiTenant.Limit = 3
 
-					org.SyncFeatures.Branding.Active = features.Branding.Active
-					org.SyncFeatures.WorkflowExecutions.Limit = 10000
-					org.SyncFeatures.WorkflowExecutions.Active = false
+					org.SyncFeatures.Branding.Active = false
+					org.SyncFeatures.AppExecutions.Active = false
+					org.SyncFeatures.AppExecutions.Limit = 25000
+
 				}
 
-				org.SyncFeatures.AppExecutions.Active = features.AppExecutions.Active
-				org.SyncFeatures.AppExecutions.Limit = features.AppExecutions.Limit
+				org.SyncFeatures.AppExecutions.Active = features.OnpremAppExecutions.Active
+				if features.OnpremAppExecutions.Limit < 25000 {
+					org.SyncFeatures.AppExecutions.Limit = 25000
+				} else {
+					org.SyncFeatures.AppExecutions.Limit = features.OnpremAppExecutions.Limit
+				}
 
 				org.SyncFeatures.Webhook.Active = features.Webhook.Active
 				org.SyncFeatures.Webhook.Limit = features.Webhook.Limit
@@ -33577,8 +33624,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.MultiTenant.Limit = 3
 
 			org.SyncFeatures.Branding.Active = false
-			org.SyncFeatures.WorkflowExecutions.Limit = 10000
-			org.SyncFeatures.WorkflowExecutions.Active = false
+			org.SyncFeatures.AppExecutions.Active = false
+			org.SyncFeatures.AppExecutions.Limit = 25000
 		}
 
 		if len(shuffleLicenseKey) > 0 {
@@ -33595,9 +33642,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 					org.SyncFeatures.MultiTenant.Active = license.Tenant.Active
 				}
 
-				if license.WorkflowExecutions.Limit > org.SyncFeatures.WorkflowExecutions.Limit {
-					org.SyncFeatures.WorkflowExecutions.Limit = license.WorkflowExecutions.Limit
-					org.SyncFeatures.WorkflowExecutions.Active = license.WorkflowExecutions.Active
+				if license.AppRuns.Limit > org.SyncFeatures.AppExecutions.Limit {
+					org.SyncFeatures.AppExecutions.Limit = license.AppRuns.Limit
+					org.SyncFeatures.AppExecutions.Active = license.AppRuns.Active
 				}
 
 				org.SyncFeatures.Branding.Active = license.Branding
@@ -33631,10 +33678,10 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.MultiTenant.Limit = license.Tenant.Limit
 			org.SyncFeatures.MultiTenant.Active = license.Tenant.Active
 			org.SyncFeatures.Branding.Active = license.Branding
-			org.SyncFeatures.WorkflowExecutions.Active = license.WorkflowExecutions.Active
-			org.SyncFeatures.WorkflowExecutions.Limit = license.WorkflowExecutions.Limit
+			org.SyncFeatures.AppExecutions.Active = license.AppRuns.Active
+			org.SyncFeatures.AppExecutions.Limit = license.AppRuns.Limit
 
-			org.SyncFeatures.AppExecutions.Active = true
+			org.SyncFeatures.WorkflowExecutions.Active = true
 			org.SyncFeatures.Webhook.Active = true
 			org.SyncFeatures.Schedules.Active = true
 			org.SyncFeatures.UserInput.Active = true
@@ -33659,8 +33706,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 			org.SyncFeatures.Branding.Active = false
 
-			org.SyncFeatures.WorkflowExecutions.Active = false
-			org.SyncFeatures.WorkflowExecutions.Limit = 10000
+			org.SyncFeatures.AppExecutions.Active = false
+			org.SyncFeatures.AppExecutions.Limit = 25000
 		}
 
 		parsedEula := GetOnpremPaidEula()
@@ -33737,8 +33784,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 		org.SyncFeatures.Branding.Active = false
 
-		org.SyncFeatures.WorkflowExecutions.Active = false
-		org.SyncFeatures.WorkflowExecutions.Limit = 10000
+		org.SyncFeatures.AppExecutions.Active = false
+		org.SyncFeatures.AppExecutions.Limit = 25000
 	}
 
 	return org

@@ -3496,7 +3496,7 @@ func cleanupExecutionNodes(ctx context.Context, exec WorkflowExecution) Workflow
 
 			exec.Results[resultIndex].Result = `{
 				"success": true,
-				"reason": "CLEANED. Edit the workflow to disable node cleanup."
+				"reason": "CLEANED after finishing. Edit the 'Result cleanup' in the workflow edit menu to disable node cleanup."
 			}`
 		}
 	}
