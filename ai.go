@@ -83,7 +83,8 @@ func EnsureContextWithCaller(ctx context.Context, callerName string) context.Con
 		ctx = context.Background()
 	}
 	
-	if len(ctx.Value("caller").(string)) == 0 {
+	v, _ := ctx.Value("caller").(string)
+	if len(v) == 0 {
 		ctx = context.WithValue(ctx, "caller", callerName)
 	}
 	
