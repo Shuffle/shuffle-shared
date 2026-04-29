@@ -11,7 +11,6 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/json"
-	"math/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -4822,7 +4821,7 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 
 	traceID, _ := ctx.Value("trace_id").(string)
 	if traceID == "" {
-    	traceID = fmt.Sprintf("ROOT-%d-%d", time.Now().UnixNano(), rand.Intn(1000))
+		traceID = fmt.Sprintf("ROOT-%s", uuid.NewV4().String())
 	}
 
 	parsedName := strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_")
