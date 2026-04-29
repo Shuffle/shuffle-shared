@@ -1239,7 +1239,7 @@ type CacheKeyDataMini struct {
 	Enrichments         []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 
 	OrgId              string   `json:"org_id,omitempty" datastore:"OrgId"`
-	ExecutionId        string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	ExecutionId        string   `json:"execution_id,omitempty" datastore:"ExecutionId"`
 	Authorization      string   `json:"authorization,omitempty" datastore:"Authorization"`
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 	Tags               []string `json:"tags,omitempty" datastore:"tags"`
@@ -1257,8 +1257,8 @@ type CacheKeyDataFallback struct {
 
 type CacheKeyData struct {
 	Success             bool         `json:"success,omitempty" datastore:"Success"`
-	WorkflowId          string       `json:"workflow_id," datastore:"WorkflowId"`
-	ExecutionId         string       `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	WorkflowId          string       `json:"workflow_id,omitempty" datastore:"WorkflowId"`
+	ExecutionId         string       `json:"execution_id,omitempty" datastore:"ExecutionId"`
 	Authorization       string       `json:"authorization,omitempty" datastore:"Authorization"`
 	OrgId               string       `json:"org_id,omitempty" datastore:"OrgId"`
 	Key                 string       `json:"key" datastore:"Key"`
