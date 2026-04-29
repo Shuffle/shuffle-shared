@@ -22460,12 +22460,18 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		// cloud => only do it on cloud location
 		// This prevents local users from being able to see it
 		if project.Environment != "cloud" || (project.Environment == "cloud" && strings.ToLower(action.Environment) == "cloud") {
-			apiKey := os.Getenv("AI_API_KEY")
+			apiKey := os.Getenv("AGENT_LLM_API_KEY")
+			if apiKey == "" {
+				apiKey = os.Getenv("AI_API_KEY")
+			}
 			if apiKey == "" {
 				apiKey = os.Getenv("OPENAI_API_KEY")
 			}
 
-			apiUrl := os.Getenv("AI_API_URL")
+			apiUrl := os.Getenv("AGENT_LLM_API_URL")
+			if apiUrl == "" {
+				apiUrl = os.Getenv("AI_API_URL")
+			}
 			if apiUrl == "" {
 				apiUrl = os.Getenv("OPENAI_API_URL")
 			}
