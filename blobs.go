@@ -16,8 +16,7 @@ import (
 	uuid "github.com/satori/go.uuid"
 )
 
-
-// Internal auth mapping. Makes sure we don't need auth for them 
+// Internal auth mapping. Makes sure we don't need auth for them
 // as they can just use internal APIs
 func IsShuffleApp(app WorkflowApp) bool {
 	parsedAppname := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
@@ -26,7 +25,7 @@ func IsShuffleApp(app WorkflowApp) bool {
 	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448"}
 
 	isShuffleApp := false
-	if project.Environment == "cloud" && len(app.ID) > 0 { 
+	if project.Environment == "cloud" && len(app.ID) > 0 {
 		for _, appId := range skipAuthAppIds {
 			if app.ID == appId {
 				isShuffleApp = true
@@ -57,10 +56,10 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
 				categoryConfig = &DatastoreCategoryUpdate{
-					OrgId: user.ActiveOrg.Id,
-					Category: categoryCheck,
+					OrgId:       user.ActiveOrg.Id,
+					Category:    categoryCheck,
 					Automations: []DatastoreAutomation{},
-					Settings: DatastoreCategorySettings{},
+					Settings:    DatastoreCategorySettings{},
 				}
 			} else {
 				return err
@@ -70,15 +69,15 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		datastoreCategoryConfigEdited := false
 
 		foundRunWorkflow := DatastoreAutomation{
-			Name: "Run workflow",
+			Name:        "Run workflow",
 			Description: "Runs one or more workflows with the updated value as runtime argument",
 			Options: []DatastoreAutomationOption{
 				DatastoreAutomationOption{
-					Key: "workflow_id",
+					Key:   "workflow_id",
 					Value: workflow.ID,
 				},
 			},
-			Icon: "",
+			Icon:    "",
 			Enabled: true,
 		}
 
@@ -97,11 +96,11 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 						continue
 					}
 
-					if debug { 
+					if debug {
 						log.Printf("[DEBUG] VALUE: %#v", option.Value)
 					}
 
-					workflowIdFound = true 
+					workflowIdFound = true
 
 					if !strings.Contains(option.Value, workflow.ID) {
 						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
@@ -125,7 +124,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 			datastoreCategoryConfigEdited = true
 		}
 
-		if datastoreCategoryConfigEdited { 
+		if datastoreCategoryConfigEdited {
 			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
 			if err != nil {
 				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
@@ -139,10 +138,10 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
 				categoryConfig = &DatastoreCategoryUpdate{
-					OrgId: user.ActiveOrg.Id,
-					Category: categoryCheck,
+					OrgId:       user.ActiveOrg.Id,
+					Category:    categoryCheck,
 					Automations: []DatastoreAutomation{},
-					Settings: DatastoreCategorySettings{},
+					Settings:    DatastoreCategorySettings{},
 				}
 			} else {
 				return err
@@ -169,51 +168,53 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		}
 
 		if !automationEnabled {
-			agentAutomation := DatastoreAutomation{ 
-				Name: "Run AI Agent",
+			agentAutomation := DatastoreAutomation{
+				Name:        "Run AI Agent",
 				Description: "Runs an AI Agent to process the updated value. Uses built-in ShuffleAI configs. Learn more: https://shuffler.io/docs/AI",
 				Options: []DatastoreAutomationOption{
 					DatastoreAutomationOption{
-						Key: "action",
-		                Value: "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'.   Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Some incidents are duds and should be closed quickly. Others are important ones. Others are missing important details. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.   If the incident has RELEVANT tasks that are not finished, modify them if necessary. Change the \"severity\" to info/low/medium/high/critical if relevant. When done, ALWAYS make sure the \"status\" is inProgress.",
+						Key:      "action",
+						Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.   If the incident has RELEVANT tasks that are not finished, modify them if necessary. Change the incident \"severity\" to info/low/medium/high/critical if relevant. When done, ALWAYS make sure the \"status\" is inProgress. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.",
+						Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
 						Disabled: false,
 					},
 					DatastoreAutomationOption{
-						Key: "action-2",
-		                Value: "Go through each task one by one if there are any. When starting them, self-assign yourself to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it.  Before starting, get key \"agent_permissions\" from category \"shuffle-security_configuration\". This has a list of permissions you NEED to follow if it exists. This extends the reach of tools and capabilities you are allowed to use. ONLY use the permissions that are enabled. If permissions do not exist, continue as per normal guidance.",
+						Key:      "action-2",
+						Value:    "Your goal is to solve the incident. If the incident is resolved, do nothing. If the incident has no tasks, do nothing. Otherwise go through each task one by one IF there are any, and update them one by one in realtime. When starting them, self-assign @AIAgent to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.",
+						Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
 						Disabled: false,
 					},
 				},
-				Type: "singul",      
-				Beta: true,
+				Type:     "singul",
+				Beta:     true,
 				Disabled: false,
-				Enabled: true,
+				Enabled:  true,
 			}
 
-			enrichAutomation:= DatastoreAutomation{ 
-				Name: "Enrich",
+			enrichAutomation := DatastoreAutomation{
+				Name:        "Enrich",
 				Description: "Enriches the data. Only runs on valid JSON data AND if the 'enrichment' field does not exist.",
-				Type: "singul",
-				Icon: "/images/logos/singul.svg",
-				Beta: false,
-				Disabled: false,
-				Enabled: true,
+				Type:        "singul",
+				Icon:        "/images/logos/singul.svg",
+				Beta:        false,
+				Disabled:    false,
+				Enabled:     true,
 			}
 
-			securityRuleAutomation := DatastoreAutomation{ 
-				Name: "Security Rules",
+			securityRuleAutomation := DatastoreAutomation{
+				Name:        "Security Rules",
 				Description: "Describes security rules that are validated BEFORE an update occurs. This is in order for bad writes to be avoided. Control: allow, deny, merge, overwrite. Logic: if, or, and. Functions: same_shape, is_superset, has_deleted_field",
 				Options: []DatastoreAutomationOption{
 					DatastoreAutomationOption{
-						Key: "rule",
+						Key:   "rule",
 						Value: "merge if always; deny if has_deleted_field",
 					},
 				},
-				Type: "",
-				Icon: "",
-				Beta: false,
+				Type:     "",
+				Icon:     "",
+				Beta:     false,
 				Disabled: false,
-				Enabled: true,
+				Enabled:  true,
 			}
 
 			// Adding them all
@@ -221,7 +222,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 			datastoreCategoryConfigEdited = true
 		}
 
-		if datastoreCategoryConfigEdited { 
+		if datastoreCategoryConfigEdited {
 			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
 			if err != nil {
 				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
@@ -233,10 +234,10 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
 				categoryConfig = &DatastoreCategoryUpdate{
-					OrgId: user.ActiveOrg.Id,
-					Category: categoryCheck,
+					OrgId:       user.ActiveOrg.Id,
+					Category:    categoryCheck,
 					Automations: []DatastoreAutomation{},
-					Settings: DatastoreCategorySettings{},
+					Settings:    DatastoreCategorySettings{},
 				}
 			} else {
 				return err
@@ -246,18 +247,18 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		datastoreCategoryConfigEdited := false
 
 		foundRunWorkflow := DatastoreAutomation{
-			Name: "Enrich",
+			Name:        "Enrich",
 			Description: "Enriches the data. Uses regex keys and runs a workflow in the background. Added to the 'enrichments' key.",
-			Type: "singul",
+			Type:        "singul",
 			Options: []DatastoreAutomationOption{
 				DatastoreAutomationOption{
-					Key: "",
+					Key:   "",
 					Value: "",
 				},
 			},
-			Beta: true, 
-			Icon: "/images/logos/singul.svg",
-			Enabled: true,
+			Beta:     true,
+			Icon:     "/images/logos/singul.svg",
+			Enabled:  true,
 			Disabled: false,
 		}
 
@@ -268,7 +269,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 					continue
 				}
 
-				automationFound = true 
+				automationFound = true
 				if !categoryConfig.Automations[automationIndex].Enabled {
 					datastoreCategoryConfigEdited = true
 					categoryConfig.Automations[automationIndex].Enabled = true
@@ -282,7 +283,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 			datastoreCategoryConfigEdited = true
 		}
 
-		if datastoreCategoryConfigEdited { 
+		if datastoreCategoryConfigEdited {
 			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
 			if err != nil {
 				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
@@ -294,10 +295,10 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
 				categoryConfig = &DatastoreCategoryUpdate{
-					OrgId: user.ActiveOrg.Id,
-					Category: categoryCheck,
+					OrgId:       user.ActiveOrg.Id,
+					Category:    categoryCheck,
 					Automations: []DatastoreAutomation{},
-					Settings: DatastoreCategorySettings{},
+					Settings:    DatastoreCategorySettings{},
 				}
 			} else {
 				return err
@@ -307,15 +308,15 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		datastoreCategoryConfigEdited := false
 
 		foundRunWorkflow := DatastoreAutomation{
-			Name: "Run workflow",
+			Name:        "Run workflow",
 			Description: "Runs one or more workflows with the updated value as runtime argument",
 			Options: []DatastoreAutomationOption{
 				DatastoreAutomationOption{
-					Key: "workflow_id",
+					Key:   "workflow_id",
 					Value: workflow.ID,
 				},
 			},
-			Icon: "",
+			Icon:    "",
 			Enabled: true,
 		}
 
@@ -334,11 +335,11 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 						continue
 					}
 
-					if debug { 
+					if debug {
 						log.Printf("[DEBUG] VALUE: %#v", option.Value)
 					}
 
-					workflowIdFound = true 
+					workflowIdFound = true
 
 					if !strings.Contains(option.Value, workflow.ID) {
 						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
@@ -362,10 +363,92 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 			datastoreCategoryConfigEdited = true
 		}
 
-		if datastoreCategoryConfigEdited { 
+		if datastoreCategoryConfigEdited {
 			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
 			if err != nil {
 				log.Printf("[ERROR] Failed to update category config for automation enablement (vuln comparison): %s", err)
+			}
+		}
+	} else if actionType == "assign_&_escalate" {
+		// This makes incident edits the actual trigger
+
+		categoryCheck := "shuffle-security_incidents"
+		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				categoryConfig = &DatastoreCategoryUpdate{
+					OrgId:       user.ActiveOrg.Id,
+					Category:    categoryCheck,
+					Automations: []DatastoreAutomation{},
+					Settings:    DatastoreCategorySettings{},
+				}
+			} else {
+				return err
+			}
+		}
+
+		datastoreCategoryConfigEdited := false
+
+		foundRunWorkflow := DatastoreAutomation{
+			Name:        "Run workflow",
+			Description: "Runs one or more workflows with the updated value as runtime argument",
+			Options: []DatastoreAutomationOption{
+				DatastoreAutomationOption{
+					Key:   "workflow_id",
+					Value: workflow.ID,
+				},
+			},
+			Icon:    "",
+			Enabled: true,
+		}
+
+		automationFound := false
+		if len(categoryConfig.Automations) > 0 {
+			for automationIndex, automation := range categoryConfig.Automations {
+				if strings.ToLower(automation.Name) != "run workflow" {
+					continue
+				}
+
+				automationFound = true
+
+				workflowIdFound := false
+				for optionIndex, option := range automation.Options {
+					if option.Key != "workflow_id" {
+						continue
+					}
+
+					if debug {
+						log.Printf("[DEBUG] VALUE: %#v", option.Value)
+					}
+
+					workflowIdFound = true
+
+					if !strings.Contains(option.Value, workflow.ID) {
+						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+					}
+
+					break
+				}
+
+				if !workflowIdFound {
+					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+				}
+
+				datastoreCategoryConfigEdited = true
+				categoryConfig.Automations[automationIndex].Enabled = true
+				break
+			}
+		}
+
+		if !automationFound {
+			categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
+			datastoreCategoryConfigEdited = true
+		}
+
+		if datastoreCategoryConfigEdited {
+			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+			if err != nil {
+				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
 			}
 		}
 	}
@@ -422,6 +505,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			actionEnv = "Shuffle"
 		}
 	}
+
+	//log.Printf("DEFAULT ENV: %#v", actionEnv)
 
 	if parsedActiontype == "correlate_categories" {
 		defaultWorkflow := Workflow{
@@ -501,37 +586,37 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				},
 			},
 			/*
-			Triggers: []Trigger{
-				Trigger{
-					ID:          startTriggerId,
-					Name:        "Webhook",
-					TriggerType: "WEBHOOK",
-					Label:       "Forwarding webhook",
-					Environment: triggerEnv,
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "url",
-							Value: "",
-						},
-						WorkflowAppActionParameter{
-							Name:  "tmp",
-							Value: "",
-						},
-						WorkflowAppActionParameter{
-							Name:  "auth_header",
-							Value: "",
-						},
-						WorkflowAppActionParameter{
-							Name:  "custom_response_body",
-							Value: "",
-						},
-						WorkflowAppActionParameter{
-							Name:  "await_response",
-							Value: "",
+				Triggers: []Trigger{
+					Trigger{
+						ID:          startTriggerId,
+						Name:        "Webhook",
+						TriggerType: "WEBHOOK",
+						Label:       "Forwarding webhook",
+						Environment: triggerEnv,
+						Parameters: []WorkflowAppActionParameter{
+							WorkflowAppActionParameter{
+								Name:  "url",
+								Value: "",
+							},
+							WorkflowAppActionParameter{
+								Name:  "tmp",
+								Value: "",
+							},
+							WorkflowAppActionParameter{
+								Name:  "auth_header",
+								Value: "",
+							},
+							WorkflowAppActionParameter{
+								Name:  "custom_response_body",
+								Value: "",
+							},
+							WorkflowAppActionParameter{
+								Name:  "await_response",
+								Value: "",
+							},
 						},
 					},
 				},
-			},
 			*/
 		}
 
@@ -784,13 +869,13 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					Label:       "IOC listing",
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
-							Name:  "category",
-							Value: "shuffle-security_ioc-config",
+							Name:     "category",
+							Value:    "shuffle-security_ioc-config",
 							Required: true,
 						},
 						WorkflowAppActionParameter{
-							Name:      "output_type",
-							Value:     "values",
+							Name:  "output_type",
+							Value: "values",
 						},
 					},
 				},
@@ -804,10 +889,10 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					Label:       "Add enrichments to entry",
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
-							Name:  "code",
-							Value: getIocParsingScript(),
+							Name:      "code",
+							Value:     getIocParsingScript(),
 							Multiline: true,
-							Required: true,
+							Required:  true,
 						},
 					},
 				},
@@ -850,8 +935,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 							Value: "shuffle-security_threat-feeds",
 						},
 						WorkflowAppActionParameter{
-							Name:      "output_type",
-							Value:     "values",
+							Name:  "output_type",
+							Value: "values",
 						},
 					},
 				},
@@ -865,13 +950,13 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					Label:       "IOC listing",
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
-							Name:  "category",
-							Value: "shuffle-security_ioc-config",
+							Name:     "category",
+							Value:    "shuffle-security_ioc-config",
 							Required: true,
 						},
 						WorkflowAppActionParameter{
-							Name:      "output_type",
-							Value:     "values",
+							Name:  "output_type",
+							Value: "values",
 						},
 					},
 				},
@@ -943,7 +1028,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					SourceID:      secondActionId,
 					DestinationID: thirdActionId,
 					ID:            uuid.NewV4().String(),
-					Conditions: []Condition{},
+					Conditions:    []Condition{},
 				},
 			},
 		}
@@ -951,14 +1036,16 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		// For now while testing
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
+
 	} else if parsedActiontype == "vulnerability_comparison" {
+		// FIXME: Work in progress during test: /workflows/c584fa73-e399-b395-c62d-a64d8bba67c4
 		defaultWorkflow := Workflow{
 			Name:        actionType,
 			Description: "Based on available vulnerabilities in the shuffle-security_sensors (and otherwise), checks these realtime against available ones.",
 			OrgId:       orgId,
 			Start:       startActionId,
-			UsecaseIds:  []string{"SIEM to ticket"},
-			Tags:        []string{"ingest", "automatic"},
+			UsecaseIds:  []string{"vulnerabilities"},
+			Tags:        []string{"ingest", "correlate", "automatic"},
 			Actions: []Action{
 				Action{
 					Name:        "execute_python",
@@ -970,15 +1057,271 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					Label:       "Add enrichments to entry",
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
-							Name:  "code",
-							Value: getVulnerabilityComparison(),
+							Name:      "code",
+							Value:     getVulnerabilityComparison(),
 							Multiline: true,
-							Required: true,
+							Required:  true,
 						},
 					},
 				},
 			},
 		}
+
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+
+	} else if parsedActiontype == "assign_&_escalate" {
+		relevantPeopleId := uuid.NewV4().String()
+		prepareAgentRun := uuid.NewV4().String()
+		aiAgentRun := uuid.NewV4().String()
+		addAgentResponse := uuid.NewV4().String()
+
+		// Test-workflow used to figure it out
+		// /workflows/25cd78f7-06a0-4f5e-8026-f1c25c74bf74
+
+		defaultWorkflow := Workflow{
+			Name:        actionType,
+			Description: "Assigns and escalates based on the /admin/users page's schedule.",
+			OrgId:       orgId,
+			Start:       startActionId,
+			UsecaseIds:  []string{},
+			Tags:        []string{"schedule", "assign", "automatic"},
+			Actions: []Action{
+				Action{
+					Name:        "get_datastore_value",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          startActionId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Get_assignment_schedules",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "key",
+							Value:     "assignment_schedules",
+							Multiline: false,
+							Required:  true,
+						},
+						WorkflowAppActionParameter{
+							Name:      "category",
+							Value:     "shuffle-security_configuration",
+							Multiline: false,
+							Required:  false,
+						},
+					},
+				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          relevantPeopleId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Find_relevant_people",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "code",
+							Multiline: true,
+							Required:  true,
+							Value:     getRelevantPeopleCode(),
+						},
+					},
+				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          prepareAgentRun,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Handle_AI_Agent_run",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "code",
+							Multiline: true,
+							Required:  true,
+							Value:     handleRelevantPeopleAgentPrepareCode(),
+						},
+					},
+				},
+				Action{
+					AppID:       "shuffle_agent",
+					Name:        "Run LLM",
+					AppName:     "AI Agent",
+					ID:          aiAgentRun,
+					AppVersion:  "1.0.0",
+					Environment: actionEnv,
+					Label:       "Run_questions",
+					LargeImage: "/icons/workflow-page/shuffle_agent.png",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "app_name",
+							Multiline: false,
+							Required:  true,
+							Value:     "Shuffle AI",
+						},
+						WorkflowAppActionParameter{
+							Name:      "input",
+							Multiline: true,
+							Required:  true,
+							Value: `**Answer this question:** $handle_ai_agent_run.message.agent.content
+
+**IMPORTANT:** JUST answer in the same language as the question. Do not ask questions. Do NOT lie. Keep the answer concise - no need to overexplain, nor underexplain. Escape any link in case it is malicious.
+
+**Full context:**
+$exec`,
+						},
+						WorkflowAppActionParameter{
+							Name:      "action",
+							Multiline: false,
+							Required:  false,
+							Value:     "Nothing",
+						},
+						WorkflowAppActionParameter{
+							Name:      "memory",
+							Multiline: false,
+							Required:  false,
+							Value:     "",
+						},
+						WorkflowAppActionParameter{
+							Name:      "knowledge",
+							Multiline: false,
+							Required:  false,
+							Value:     "",
+						},
+					},
+				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          addAgentResponse,
+					AppVersion:  "1.2.0",
+					Environment: addAgentResponse,
+					Label:       "Add_AI_response",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "code",
+							Multiline: true,
+							Required:  true,
+							Value:     handleRelevantPeopleAgentResponseCode(),
+						},
+					},
+				},
+			},
+			Branches: []Branch{
+				Branch{
+					SourceID:      startActionId,
+					DestinationID: relevantPeopleId,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "{{ $get_assignment_schedules.value.userSchedules | size }}",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "larger than",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "0",
+							},
+						},
+					},
+				},
+				Branch{
+					SourceID:      startActionId,
+					DestinationID: prepareAgentRun,
+					ID:            uuid.NewV4().String(),
+					Conditions:    []Condition{},
+				},
+				Branch{
+					SourceID:      relevantPeopleId,
+					DestinationID: prepareAgentRun,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{},
+				},
+				Branch{
+					SourceID:      prepareAgentRun,
+					DestinationID: aiAgentRun,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$handle_ai_agent_run.message.updated",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "equals",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "true",
+							},
+						},
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$handle_ai_agent_run.message.agent",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "is empty",
+								Configuration: true, // Opposite
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "",
+							},
+						},
+					},
+				},
+				Branch{
+					SourceID:      aiAgentRun,
+					DestinationID: addAgentResponse,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$run_questions.output",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "larger than",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "0",
+							},
+						},
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$run_questions.status",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "equals",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "FINISHED",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		//startActionId := uuid.NewV4().String()
+		//relevantPeopleId := uuid.NewV4().String()
+		//prepareAgentRun := uuid.NewV4().String()
+		//aiAgentRun := uuid.NewV4().String()
+		//addAgentResponse := uuid.NewV4().String()
 
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
@@ -990,9 +1333,9 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 	// Appends actions in the workflow
 	// This is done specifically for Singul ingests
-	positionAddition := float64(250)
+	positionAddition := float64(300)
 
-	//if debug { 
+	//if debug {
 	//log.Printf("ACTIONS: %d, TRIGGERS: %d, APPNAMES: %d, FIRSTACTION: %s, TRIGGER: %s", len(workflow.Actions), len(workflow.Triggers), len(appNames), workflow.Actions[0].AppName, workflow.Triggers[0].TriggerType)
 	//os.Exit(3)
 	//}
@@ -1035,7 +1378,6 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 			workflow.Branches = append(workflow.Branches, newBranch)
 		}
-
 
 		// Replicator
 		appNameSplit := strings.Split(appNames, ",")
@@ -1173,7 +1515,6 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 	return workflow, nil
 }
-
 
 func getSingulLogo() string {
 	return "/images/singul_green.png"
@@ -2179,11 +2520,15 @@ func GetTriggerData(triggerType string) string {
 	}
 }
 
+func getAssignmentCode() string {
+	return "Not implemented yet"
+}
+
 func getVulnerabilityComparison() string {
 	return "Not implemented yet"
 }
 
-// For realtime checks of existing objects. 
+// For realtime checks of existing objects.
 func getIocParsingScript() string {
 	return `import json
 import re
@@ -2252,6 +2597,7 @@ def findall_with_limit(pattern, text, max_matches=None, timeout_seconds=5):
 
     return results
 
+# These are the regex items from the datastore
 found_items = []
 for ioc_object in all_items:
   try:
@@ -2276,6 +2622,13 @@ for ioc_object in all_items:
   found = []
   for match in matches:
     if match in found:
+      continue
+
+    if "shuffler.io" in match:
+      continue
+
+    # Check if we match ip while in domain. Very basic check.
+    if ioc_object["name"] == "domain" and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", match):
       continue
     
     found.append(match)
@@ -2355,13 +2708,31 @@ for key in all_urls:
   if key["enabled"] != True:
     continue
 
+  parsed_headers = {}
+
+  if "headers" in key and len(key["headers"]) > 0:
+    # Split with = and newlines
+    headers = headers.split(";")
+    for header in headers:
+      if "=" in header:
+        header_parts = header.split("=")
+        parsed_headers[header_parts[0].strip()] = header_parts[1].strip()
+      else:
+        parsed_headers[header.strip()] = ""
+
   try:
-    resp = requests.get(key["url"], verify=False, timeout=3)
-    input_data.append({
+    resp = requests.get(key["url"], headers=parsed_headers, verify=False, timeout=3)
+    content = {
       "status": resp.status_code,
       "body": resp.text,
       "url": key["url"],
-    })
+    }
+
+    if "type" in key:
+      content["type"] = key["type"]
+
+    input_data.append(content)
+
   except Exception as e:
     pass
 	
@@ -2433,13 +2804,25 @@ for content in input_data:
   iocs = content["body"]
 
   found_type = ""
-  searchspace = iocs[0:1000]
-  for key, value in regexsearch.items():
-    value = sanitize_regex(value)
-    match = re.search(value, searchspace)
-    if match:
-      found_type = key
-      break
+  if "type" in content and len(content["type"]) > 0:
+    found_type = content["type"].lower()
+    found = False
+    for key, value in regexsearch.items():
+      if key == found_type:
+        found = True
+        break
+
+    if not found:
+      continue
+
+  if not found_type:
+    searchspace = iocs[0:1000]
+    for key, value in regexsearch.items():
+      value = sanitize_regex(value)
+      match = re.search(value, searchspace)
+      if match:
+        found_type = key
+        break
 
   if len(found_type) == 0:
     continue
@@ -2512,7 +2895,7 @@ for content in input_data:
 
     if key in all_items:
       if content["url"] not in all_items[found_type][key]["urls"]:
-              all_items[found_type][key] = all_items[found_type][key]["urls"].append(content["url"])
+        all_items[found_type][key] = all_items[found_type][key]["urls"].append(content["url"])
     else:
 
       # Silly workaround to ensure we got a good UUID
@@ -2527,8 +2910,10 @@ for content in input_data:
         stix_pattern = f"[file:hashes.SHA1 = '{key}']" 
       elif found_type == "sha256":
         stix_pattern = f"[file:hashes.SHA256 = '{key}']" 
-      elif found_type == "ip":
+      elif found_type == "ip" or found_type == "ipv4":
         stix_pattern = f"[ipv4-addr:value = '{key}']" 
+      elif found_type == "ipv6": 
+        stix_pattern = f"[ipv6-addr:value = '{key}']" 
       elif found_type == "domain":
         stix_pattern = f"[domain-name:value = '{key}']" 
       else:
@@ -2582,7 +2967,7 @@ for k, v in all_items.items():
         })
 
         cnt += 1
-        if cnt >= 500:
+        if cnt >= 1000:
             break
 
     if len(new_list) > 0:
@@ -3339,7 +3724,7 @@ func GetUsecaseData() string {
         "type": "Assets",
         "destination": "Case Management",
         "running": false,
-        "disabled": true,
+        "disabled": false,
         "id": "asset_management_case_management_vuln_1",
         "source_id": "asset_management",
         "target_id": "case_management",
@@ -3394,7 +3779,7 @@ func GetUsecaseData() string {
         "type": "Threat Intel",
         "destination": "Cloud",
         "running": false,
-        "disabled": true,
+        "disabled": false,
         "id": "threat_intel_cloud_1",
         "source_id": "threat_intel",
         "target_id": "cloud",
@@ -3428,4 +3813,246 @@ func GetUsecaseData() string {
     ]
   }
 ]`)
+}
+
+func getRelevantPeopleCode() string {
+	return `import json
+import random
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+
+cur_exec = json.loads(r"""$exec""")
+users = json.loads(r"""$get_assignment_schedules.value.userSchedules""")
+
+def is_user_active(user, now_utc):
+    if not user.get("enabled"):
+        return False
+
+    for sched in user.get("schedules", []):
+        tz = ZoneInfo(sched["timezone"])
+        now_local = now_utc.astimezone(tz)
+
+        # Date check
+        start_date = datetime.fromisoformat(sched["startDate"]).date()
+        end_date = datetime.fromisoformat(sched["endDate"]).date()
+        if not (start_date <= now_local.date() <= end_date):
+            continue
+
+        # Day of week check (Python: Monday=0 → convert to 1–7)
+        weekday = now_local.isoweekday()
+        if weekday not in sched["daysOfWeek"]:
+            continue
+
+        # Time check
+        start_time = time.fromisoformat(sched["startTime"])
+        end_time = time.fromisoformat(sched["endTime"])
+        if not (start_time <= now_local.time() <= end_time):
+            continue
+
+        return True
+
+    return False
+
+
+def main():
+    now_utc = datetime.now(tz=ZoneInfo("UTC"))
+
+    active_users = []
+    usernames = []
+    for user in users:
+        if is_user_active(user, now_utc):
+            active_users.append({
+                "userName": user["userName"],
+                "email": user["userEmail"],
+                "level": user["escalationLevel"]
+            })
+            
+            if user["userName"] not in usernames and not user["escalationLevel"] == "manager":
+              usernames.append(user["userName"])
+    
+    assignee = ""
+    if len(usernames) > 0 and "assignee" not in cur_exec or cur_exec["assignee"] == "":
+      # Chose from usernames
+      assignee = random.choice(usernames)
+
+    print(json.dumps({
+      "assign": assignee,
+      "all_available": active_users,
+    }))
+        
+main()
+`
+}
+
+func handleRelevantPeopleAgentPrepareCode() string {
+	return `import json
+
+# Make sure we are always up to date, even if the workflow is a bit late.
+cur_exec = self.get_key("$exec.shuffle_datastore.key", category="$exec.shuffle_datastore.category")
+if cur_exec["success"] and cur_exec["value"]:
+  cur_exec = cur_exec["value"]
+
+  if "finding_uid" in cur_exec and len(cur_exec["finding_uid"]) > 0:
+    pass
+  else:
+    print(json.dumps({
+      "success": False,
+      "reason": "No finding_uid in the incident. Not updating."
+    }))
+    exit()
+
+else:
+  print(json.dumps({
+    "success": False,
+    "reason": "Failed to find the incident"
+  }))
+  exit()
+
+activities = []
+if "activity" in cur_exec:
+  activities = cur_exec["activity"]
+
+ai_agent_activities = []
+activities_changed = False
+for activityIndex in range(len(activities)):
+  activity = activities[activityIndex]
+  if "ai_handled" not in activity or activity["ai_handled"] == False:
+    activity["ai_handled"] = True
+    activity["execution_id"] = self.current_execution_id
+
+    activities_changed = True
+    activities[activityIndex] = activity
+  else:
+    continue
+
+  if "content" not in activity or ("@aiagent" not in activity["content"].lower()):
+    continue
+
+  ai_agent_activities.append(activity)
+
+db_updated = False
+
+assignee = ""
+assignee_outer = json.loads(r"""$find_relevant_people""")
+if "message" in assignee_outer:
+  if "assign" in assignee_outer["message"]:
+    assignee = assignee_outer["message"]["assign"]
+
+if activities_changed or len(assignee) > 0:
+  # Update datastore
+  #db_updated = True
+  #cur_exec["activity"] = activities
+  #cur_exec = json.dumps(cur_exec)
+  parsed_activity = {}
+  if activities_changed:
+    parsed_activity["activity"] = activities
+
+  if len(assignee) > 0 and "@" in assignee:
+    parsed_activity["assignee"] = assignee
+
+  ret = self.set_key("$exec.shuffle_datastore.key", json.dumps(parsed_activity), category="$exec.shuffle_datastore.category")
+  if ret["success"]:
+    db_updated = True
+
+# Print the details of the key after it's been updated
+# To get the value, use self.get_key(key)["value"]
+if len(ai_agent_activities) > 0:
+  print(json.dumps({
+    "assignee": assignee,
+    "updated": db_updated,
+    "agent": ai_agent_activities[0],
+  }))
+else:
+    print(json.dumps({
+      "updated": db_updated,
+      "agent": "",
+    }))`
+}
+
+func handleRelevantPeopleAgentResponseCode() string {
+	return `import json
+import time
+
+# Make sure we are always up to date, even if the workflow is a bit late.
+cur_exec = self.get_key("$exec.shuffle_datastore.key", category="$exec.shuffle_datastore.category")
+if cur_exec["success"] and cur_exec["value"]:
+  cur_exec = cur_exec["value"]
+  
+  if "finding_uid" in cur_exec and len(cur_exec["finding_uid"]) > 0:
+    pass
+  else:
+    print(json.dumps({
+      "success": False,
+      "reason": "No finding_uid in the incident. Not updating."
+    }))
+    exit()
+    
+else:
+  print(json.dumps({
+    "success": False,
+    "reason": "Failed to find the incident"
+  }))
+  exit()
+  
+
+respond_to = json.loads(r"""$handle_ai_agent_run""")
+if respond_to["message"]["updated"] == False or len(respond_to["message"]["agent"]) == 0:
+  print(json.dumps({
+    "success": False,
+    "reason": "No comment to respond to"
+  }))
+  exit()
+
+currentuser = "@AIAgent"
+activities = cur_exec["activity"]
+agent_response = """$run_questions.output"""
+timenow = int(time.time())
+
+prepared_response = {
+  "ai_handled": True,
+  "attachments":[],
+  "content": agent_response,
+  "details":{},
+  "id":"comment-%d" % timenow,
+  "replyToId": respond_to["message"]["agent"]["id"], 
+  "replyToLabel": respond_to["message"]["agent"]["user"],
+  "timestamp": timenow,
+  "type":"comment",
+  "user":"@AIAgent",
+  "is_agent": True,
+  "execution_id": self.current_execution_id,
+}
+
+# In case we want to update an old one. New is better tho.
+for item in activities:  
+  if "replyToId" not in item:
+    continue
+  
+  if item["user"] == currentuser:
+    continue
+  
+  if "replyToId" == respond_to["message"]["agent"]["id"]:
+    if item["content"] == agent_response:
+      print(json.dumps({
+        "success": True,
+        "reason": "Already answered with this message"
+      }))
+      exit()
+
+# Update datastore 
+activities.append(prepared_response)
+ret = self.set_key("$exec.shuffle_datastore.key", json.dumps({"activity": activities}), category="$exec.shuffle_datastore.category")
+
+if ret["success"]:
+  print(json.dumps({
+    "success": True,
+    "updated": True,
+    "comment": prepared_response,
+  }))
+else:
+  print(json.dumps({
+    "success": False,
+    "updated": False,
+    "reason": "Failed to update the activity in the db",
+  }))`
 }

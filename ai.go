@@ -7109,8 +7109,8 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		Status:      "SUCCESS",
 		Result:      string(marshalledOutput),
 		Action:      startNode,
-		StartedAt:   time.Now().UnixMicro(),
-		CompletedAt: time.Now().UnixMicro(),
+		StartedAt:   time.Now().UnixMilli(),
+		CompletedAt: time.Now().UnixMilli(),
 	}
 
 	// Replace existing result for this node rather than appending,
@@ -7182,7 +7182,6 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool) (Action, error) {
-
 	aiStarttime := time.Now().Unix()
 	// A handler to ensure we ALWAYS focus on next actions if a node starts late
 	// or is missing context, but has previous decisions
@@ -7234,6 +7233,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				Result: fmt.Sprintf(`{"success": false, "reason": "%s"}`, err.Error()),
 				Action: startNode,
 			})
+
 			go SetWorkflowExecution(ctx, execution, true)
 			return startNode, err
 		}
@@ -7323,14 +7323,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 		if param.Name == "memory" {
 			// Handle memory injection (may use Singul?)
-			if debug {
+			if debug && len(param.Value) > 0 {
 				log.Printf("[DEBUG] Memory parameter found: %s", param.Value)
 			}
 		}
 
 		if param.Name == "storage" {
 			// Handle storage injection (how?)
-			if debug {
+			if debug && len(param.Value) > 0 {
 				log.Printf("[DEBUG] Storage parameter found: %s", param.Value)
 			}
 		}
@@ -7371,7 +7371,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			mappedResult := AgentOutput{}
 			err := json.Unmarshal([]byte(result.Result), &mappedResult)
 			if err != nil {
-				log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
+				log.Printf("[ERROR][%s] AI Agent (1): Failed unmarshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
 				break
 			}
 
@@ -7460,6 +7460,33 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 			if len(userMessage) == 0 && len(oldAgentOutput.OriginalInput) > 0 {
 				userMessage = oldAgentOutput.OriginalInput
+			}
+
+			// If the user continued the agent after a finish decision (via "Add more details"),
+			// the new input is stored in the "continue" field of the injected "ask" decision.
+			// Override userMessage so the LLM acts on the new instruction instead of the original one.
+			// Iterate from the end so we deterministically pick the most recent continuation.
+			for i := len(mappedResult.Decisions) - 1; i >= 0; i-- {
+				mappedDecision := mappedResult.Decisions[i]
+				if mappedDecision.Action != "ask" {
+					continue
+				}
+
+				foundContinuation := false
+				for _, field := range mappedDecision.Fields {
+					if field.Key == "continue" && len(field.Answer) > 0 {
+						if debug {
+							log.Printf("[DEBUG][%s] AI Agent continuation: overriding userMessage with 'continue' answer (length=%d)", execution.ExecutionId, len(field.Answer))
+						}
+
+						userMessage = field.Answer
+						foundContinuation = true
+						break
+					}
+				}
+				if foundContinuation {
+					break
+				}
 			}
 
 			if hasFailure {
@@ -7852,7 +7879,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			},
 			{
 				Role:    openai.ChatMessageRoleUser,
-				Content: fmt.Sprintf("USER CONTEXT:\n%s\n", metadata),
+				Content: fmt.Sprintf("USER CONTEXT:\n%s. Current time: %s\n", metadata, time.Now().Format(time.RFC3339)),
 			},
 		},
 
@@ -7879,6 +7906,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		}
 	}
 
+	// Fix e.g. injected JSON and other quote/newline mechanics that aren't compatible
+	// Problem: The input data itself can be a reference.
 	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
 		Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
@@ -7890,11 +7919,6 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			Content: fmt.Sprintf("HISTORY:\n%s", string(marshalledDecisions)),
 		})
 	}
-
-	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: fmt.Sprintf("Current time: %s\n", time.Now().Format(time.RFC3339)),
-	})
 
 	if failureInjection != "" {
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
@@ -7987,6 +8011,9 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	aiNode.SourceWorkflow = execution.Workflow.ID
 	aiNode.SourceExecution = execution.ExecutionId
 
+	// App run delay if needed (e.g. for debugging)
+	//aiNode.ExecutionDelay = 60
+
 	marshalledAction, err := json.Marshal(aiNode)
 	if err != nil {
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling action for AI Agent (first agent request): %s", execution.ExecutionId, err)
@@ -8041,9 +8068,9 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		}
 	}
 
-	fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization)
+	fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s&parent_node=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization, startNode.ID)
 	client := GetExternalClient(fullUrl)
-	client.Timeout = time.Minute * 3
+	client.Timeout = time.Minute * 5
 	req, err := http.NewRequest(
 		"POST",
 		fullUrl,
@@ -8082,11 +8109,12 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	resultMapping := ActionResult{}
 	err = json.Unmarshal(body, &resultMapping)
 	if err != nil {
-		log.Printf("[ERROR] AI Agent: Failed unmarshalling response into decisions. Response from sending AI Agent request: %d - %s", newresp.StatusCode, string(body))
+		log.Printf("[ERROR] AI Agent (2): Failed unmarshalling response into decisions. Response from sending AI Agent request: %d - %s", newresp.StatusCode, string(body))
 	}
 
 	resultMapping.ExecutionId = execution.ExecutionId
 	resultMapping.Authorization = execution.Authorization
+	// Waiting 3
 	resultMapping.Status = "WAITING"
 	resultMapping.Action = startNode
 	resultMapping.Action.Name = "agent"
@@ -8118,7 +8146,9 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 					continue
 				}
 
-				log.Printf("[DEBUG][%s] AI Agent: Found body parameter which MAY contain the right user input. LEN: %d", execution.ExecutionId, len(param.Value))
+				if debug { 
+					log.Printf("[DEBUG][%s] AI Agent: Found body parameter which MAY contain the right user input. LEN: %d", execution.ExecutionId, len(param.Value))
+				}
 
 				if len(param.Value) > 0 {
 					parsedAgentInput = param.Value
@@ -8137,7 +8167,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		outputMap := HTTPOutput{}
 		err = json.Unmarshal([]byte(resultMapping.Result), &outputMap)
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling response from sending request for stream during SKIPPED user input: %s. Body: %s", execution.ExecutionId, err, string(resultMapping.Result))
+			log.Printf("[ERROR][%s] AI Agent (3): Failed unmarshalling response from sending request for stream during SKIPPED user input: %s. Body: %s", execution.ExecutionId, err, string(resultMapping.Result))
 
 			execution.Status = "ABORTED"
 			execution.Results = append(execution.Results, ActionResult{
@@ -8162,7 +8192,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		if !ok {
 			log.Printf("[ERROR][%s] AI Agent: Failed to convert body to MAP in AI Agent response. Raw response: %s", execution.ExecutionId, string(resultMapping.Result))
 
-			choicesString = fmt.Sprintf("LLM Response Error: %s", string(resultMapping.Result))
+			//choicesString = fmt.Sprintf("LLM Response Error: %s", string(resultMapping.Result))
+			choicesString = fmt.Sprintf("%s", string(resultMapping.Result))
 		} else {
 			bodyString, err = json.Marshal(bodyMap)
 			if err != nil {
@@ -8183,17 +8214,19 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		openaiOutput := openai.ChatCompletionResponse{}
 		err = json.Unmarshal(bodyString, &openaiOutput)
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling response from OpenAI Agent request: %s", execution.ExecutionId, err)
+			log.Printf("[ERROR][%s] AI Agent (4): Failed unmarshalling response from OpenAI Agent request: %s", execution.ExecutionId, err)
 		}
 
 		// Edgecase handling for LLM not being available etc
 		if len(choicesString) > 0 {
-			log.Printf("\n\n[ERROR][%s] AI Agent: Found choicesString (1) in AI Agent response error handling: %s\n\n", execution.ExecutionId, choicesString)
+			if debug { 
+				log.Printf("[ERROR][%s] AI Agent: Found choicesString (1) in AI Agent response error handling: %s", execution.ExecutionId, choicesString)
+			}
 
 		} else if len(openaiOutput.Choices) == 0 {
 			log.Printf("[ERROR][%s] AI Agent: No choices found in AI agent response (1). Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
 
-			// FIXME: This is specific to OpenAI, but may work for others :thinking:
+			// This is specific to OpenAI, but may work for others 
 			newOutput := openai.ErrorResponse{}
 			err = json.Unmarshal(bodyString, &newOutput)
 			if err == nil && len(newOutput.Error.Message) > 0 {
@@ -8256,30 +8289,40 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		decisionString := FixContentOutput(choicesString)
 
 		// Find the first one and remove anything until that point
+		conditionText := "conditions must be correct"
 		if !strings.HasPrefix(decisionString, `[`) {
 			firstIndex := strings.Index(decisionString, "[")
 			if firstIndex != -1 {
 				decisionString = decisionString[firstIndex:]
 			} else {
-				log.Printf("[WARNING][%s] No '[' found in AI Agent response. Using full response: %s", execution.ExecutionId, decisionString)
+				if !strings.Contains(decisionString, conditionText) {
+					log.Printf("[WARNING][%s] No '[' found in AI Agent response. Using full response: %s", execution.ExecutionId, decisionString)
+				}
 			}
 		}
 
 		errorMessage := ""
 		err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
+			if !strings.Contains(decisionString, conditionText) {
+				log.Printf("[ERROR][%s] AI Agent (5): Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
+			}
 
 			if len(mappedDecisions) == 0 {
 				decisionString = strings.Replace(decisionString, `\"`, `"`, -1)
 
 				err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
-				if err != nil {
-					log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling decisions in AI Agent response (2): %s. String: %s", execution.ExecutionId, err, decisionString)
-					resultMapping.Status = "FAILURE"
+				if err != nil && !strings.Contains(decisionString, conditionText) {
+					log.Printf("[ERROR][%s] AI Agent (6): Failed unmarshalling decisions in AI Agent response (2): %s. String: %s", execution.ExecutionId, err, decisionString)
 
 					// Updating the OUTPUT in some way to help the user a bit.
-					errorMessage = fmt.Sprintf("The output from the LLM had no decisions. See the raw decisions tring for the response. Contact support@shuffler.io if you think this is wrong.")
+					if strings.Contains(decisionString, "conditions must be correct") { 
+						errorMessage = fmt.Sprintf("Condition failed. See decision_string for details")
+						resultMapping.Status = "SKIPPED"
+					} else {
+						resultMapping.Status = "FAILURE"
+						errorMessage = fmt.Sprintf("The output from the LLM had no decisions. See the raw decisions tring for the response. Contact support@shuffler.io if you think this is wrong.")
+					}
 				}
 			}
 		}
@@ -8305,7 +8348,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 			ExecutionId: execution.ExecutionId,
 			NodeId:      startNode.ID,
-			StartedAt:   time.Now().Unix(),
+			StartedAt:   time.Now().UnixMilli(),
+			CompletedAt: 0,
 
 			Memory: memorizationEngine,
 
@@ -8381,6 +8425,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 						execution.Results[resultIndex].Result = string(agentOutputMarshalled)
 					}
 
+					// Waiting 1 
 					execution.Results[resultIndex].Status = "WAITING"
 
 					// Update the result in cache as actions are self-corrective
@@ -8476,7 +8521,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 						fmt.Sprintf("/forms/%s?authorization=%s&reference_execution=%s&source_node=%s&decision_id=%s&backend_url=%s", execution.WorkflowId, execution.Authorization, execution.ExecutionId, startNode.ID, mappedDecision.RunDetails.Id, backendUrl),
 						execution.ExecutionOrg,
 						false,
-						"LOW",
+						"MEDIUM",
 						"agent_approval",
 					)
 
@@ -8486,6 +8531,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				}
 
 				decision.RunDetails.StartedAt = time.Now().Unix()
+
+				// Waiting 2
 				decision.RunDetails.Status = "WAITING"
 
 				agentOutput.Decisions[decisionIndex] = decision
@@ -8550,7 +8597,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 						execution.ExecutionOrg,
 						false,
 						"LOW",
-						"agent_question",
+						"agent_approval",
 					)
 
 					if err != nil {
@@ -8559,10 +8606,9 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				}
 
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
-				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
-
-
-
+				//agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+				agentOutput.Decisions[decisionIndex].RunDetails.Status = "WAITING"
+				agentOutput.Status = "WAITING"
 
 			} else if decision.Category != "standalone" {
 				// Do we run the singul action directly?
@@ -8601,6 +8647,13 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 							Result: string(marshalledDecision),
 						}
 
+						for _, action := range execution.Workflow.Actions {
+							if action.ID == actionResult.Action.ID {
+								actionResult.Action = action
+								break
+							}
+						}
+
 						// This is required as the result for the agent isn't set yet on the first run. Minor delay to wait up a bit
 						if decisionIndex == 0 {
 							go func() {
@@ -8631,7 +8684,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			decisionActionRan = true
 		}
 
-		if !decisionActionRan {
+		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
 			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Marking the agent as FAILURE.", execution.ExecutionId)
 		}
 
@@ -8854,7 +8907,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	initialising := false
-	workflow, workflowErr := GetWorkflow(ctx, workflowId)
+	workflow, workflowErr := GetWorkflow(ctx, workflowId, true)
 	if workflowErr != nil || workflow.ID == "" {
 		//log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, workflowErr)
 		initialising = true
@@ -8871,6 +8924,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", user.ActiveOrg.Id))
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", "", user.ActiveOrg.Id))
 		} else {
 			log.Printf("[INFO] No existing workflow with ID %s to remove for category '%s'", workflowId, categoryAction.Label)
 			resp.WriteHeader(http.StatusOK)
@@ -9080,7 +9134,10 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if len(workflow.Actions[actionIndex].LargeImage) == 0 {
-				if debug {
+
+				if strings.Contains(strings.ToLower(action.AppName), "agent") || strings.Contains(strings.ToLower(action.AppName), "singul") || strings.Contains(strings.ToLower(action.AppName), "integration") { 
+					workflow.Actions[actionIndex].LargeImage = "/icons/workflow-page/shuffle_agent.png"
+				} else if debug {
 					log.Printf("[DEBUG] Missing app image for app '%s'", action.AppName)
 				}
 			}
@@ -13082,7 +13139,7 @@ func RunMCPAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	workflowExecution, err := PrepareSingleAction(ctx, user, "agent", marshalledAction, false, "")
+	workflowExecution, err := PrepareSingleAction(ctx, request, user, "agent", marshalledAction, false, "")
 	if fileId == "agent_starter" {
 		log.Printf("[INFO] Returning early for agent_starter single action execution: %s", workflowExecution.ExecutionId)
 		resp.WriteHeader(200)

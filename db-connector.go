@@ -7,8 +7,8 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/hex"
-
 	"encoding/json"
+
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -342,8 +342,9 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 	return "", errors.New(fmt.Sprintf("No cache found for %s", name))
 }
 
-// Sets a key in cache. Expiration is in minutes.
-func SetCache(ctx context.Context, name string, data []byte, expiration int32) error {
+// Sets a key in cache. Expiration is in minutes, unless you pass in useMilliseconds=true
+// Added Millisecond timeout because some things like execution results may need more precise timing. Use by adding a true boolean as the last parameter.
+func SetCache(ctx context.Context, name string, data []byte, expiration int32, useMillisecondsInput ...bool) error {
 	// Set cache verbose
 	//if strings.Contains(name, "execution") || strings.Contains(name, "action") && len(data) > 1 {
 	//}
@@ -355,6 +356,13 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 
 	if len(data) == 0 {
 		log.Printf("[WARNING] Data is empty with key %s and expiration %d. Skipping cache", name, expiration)
+	}
+
+	useMilliseconds := false
+	if len(useMillisecondsInput) > 0 {
+		if useMillisecondsInput[0] {
+			useMilliseconds = true
+		}
 	}
 
 	// Maxsize ish~
@@ -393,6 +401,10 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 					Key:        keyname,
 					Value:      parsedData,
 					Expiration: time.Minute * time.Duration(expiration),
+				}
+
+				if useMilliseconds {
+					item.Expiration = time.Millisecond * time.Duration(expiration)
 				}
 
 				var err error
@@ -436,6 +448,10 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 				Expiration: time.Minute * time.Duration(expiration),
 			}
 
+			if useMilliseconds {
+				item.Expiration = time.Millisecond * time.Duration(expiration)
+			}
+
 			var err error
 			if len(memcached) > 0 {
 				newitem := &gomemcache.Item{
@@ -460,9 +476,18 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 
 		return nil
 	} else if project.Environment == "onprem" {
-		requestCache.Set(name, data, time.Minute*time.Duration(expiration))
+		if useMilliseconds {
+			requestCache.Set(name, data, time.Millisecond*time.Duration(expiration))
+		} else {
+			requestCache.Set(name, data, time.Minute*time.Duration(expiration))
+		}
 	} else {
-		requestCache.Set(name, data, time.Minute*time.Duration(expiration))
+		if useMilliseconds {
+			requestCache.Set(name, data, time.Millisecond*time.Duration(expiration))
+		} else {
+			requestCache.Set(name, data, time.Minute*time.Duration(expiration))
+		}
+
 	}
 
 	return nil
@@ -1978,6 +2003,16 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				continue
 			}
 
+			// There was some WAITING issue here. This is a hotfix from agent issues.
+			if innerresult.Status == "WAITING" && innerresult.Action.AppName == "Shuffle Tools" && innerresult.CompletedAt > 0 {
+				workflowExecution.Results[resultIndex].Status = "SUCCESS"
+			}
+
+			// Forcing it to become agent
+			if innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent" {
+				workflowExecution.Type = "AGENT"
+			}
+
 			if innerresult.Status != "WAITING" && innerresult.Status != "SUCCESS" {
 				found = true
 				result = innerresult
@@ -1986,30 +2021,45 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				//} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
 			} else if (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") && (innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent") {
 				if workflowExecution.Results[resultIndex].StartedAt == 0 {
-					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMicro()
+					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMilli()
+				}
+
+				// Somehow possible to get Nano()
+				if workflowExecution.Results[resultIndex].StartedAt > 17769710273568 {
+					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMilli()
 				}
 
 				// Auto fixing decision data based on cache for better decisionmaking
 				// Map the result into AgentOutput to check decisions
+				decisionsUpdated := false
+
 				mappedOutput := AgentOutput{}
 				err = json.Unmarshal([]byte(innerresult.Result), &mappedOutput)
 				if err != nil {
 					log.Printf("[WARNING] Agent mapping: Failed in mapped output mapping: %s", err)
-				}
+				} else {
+					// Handles "stuck" cases
+					if innerresult.Status == "WAITING" {
+						decisionFailedCheck := ResultChecker{}
+						err = json.Unmarshal([]byte(mappedOutput.DecisionString), &decisionFailedCheck)
+						if err == nil && len(decisionFailedCheck.Reason) > 0 && decisionFailedCheck.Success == false {
+							//if strings.Contains(decisionFailedCheck.Reason
+							//mappedOutput.Status = "SKIPPED"
+							mappedOutput.Status = "FINISHED"
 
-				decisionsUpdated := false
+							innerresult.Status = "SKIPPED"
+							workflowExecution.Results[resultIndex].Status = "SKIPPED"
+							decisionsUpdated = true
+						}
+					}
+				}
 
 				finishedDecisions := []string{}
 				failedFound := false
 				finishDecisionFound := false
-				// FIXME: Optimize it to not run too far past "FINISHED" on cache searches
 				for decisionIndex, decision := range mappedOutput.Decisions {
 					if decision.Action == "finish" {
 						finishDecisionFound = true
-					}
-
-					if decision.RunDetails.Status == "NOT IMPLEMENTED" {
-						continue
 					}
 
 					decisionId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
@@ -2024,7 +2074,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 						// Max runtime of a decision at 5 minutes
 						if decision.RunDetails.StartedAt > 0 && time.Now().Unix()-decision.RunDetails.StartedAt > 300 {
-							log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds", workflowExecution.ExecutionId, decision.Tool, decision.Action, time.Now().Unix()-decision.RunDetails.StartedAt)
+							if debug { 
+								log.Printf("[DEBUG] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds", workflowExecution.ExecutionId, decision.Tool, decision.Action, time.Now().Unix()-decision.RunDetails.StartedAt)
+							}
 
 							decisionsUpdated = true
 							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
@@ -3990,7 +4042,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 				return stats, nil
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for stats: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for stats: %s", err)
 		}
 	}
 
@@ -5383,6 +5435,10 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 	// Non indexed User data
 	if entity == "workflowexecution" {
 		log.Printf("[WARNING] DELETING workflowexecution: %s", value)
+	}
+
+	if entity == "org_cache" {
+		// FIXME: Add check in ngram to clean up correlations after deletions
 	}
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
@@ -6821,7 +6877,7 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 		}
 	}
 
-	if !found {
+	if !found && !user.SupportAccess {
 		user.Orgs = append(user.Orgs, user.ActiveOrg.Id)
 	}
 
@@ -6859,8 +6915,11 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 
 			if userFound {
 				org.Users[orgIndex] = innerUser
-			} else {
+			} else if !user.SupportAccess {
 				org.Users = append(org.Users, innerUser)
+			} else {
+				log.Printf("[DEBUG] Skipping org.Users update for support user %s (%s) in org %s — not an official member", user.Username, user.Id, orgId)
+				return
 			}
 
 			err = SetOrg(ctx, *org, org.Id)
@@ -8529,7 +8588,7 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 		executionRequest.ExecutionId = uuid.NewV4().String()
 	}
 
-	if executionRequest.CreatedAt == 0 { 
+	if executionRequest.CreatedAt == 0 {
 		executionRequest.CreatedAt = time.Now().Unix()
 	}
 
@@ -9723,6 +9782,8 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		// Find the key for "workflows_<workflow.org_id>" and update the cache for this one. If it doesn't exist, add it
 		// Get the cache for the workflows
 		cursor := ""
+		DeleteCache(ctx, fmt.Sprintf("%s_workflows", "", workflow.OrgId))
+
 		cacheKey = fmt.Sprintf("%s_%s_workflows", cursor, workflow.OrgId)
 		cache, err := GetCache(ctx, cacheKey)
 		if err != nil {
@@ -9732,10 +9793,13 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 			cacheData := []byte(cache.([]uint8))
 			//log.Printf("[INFO] Got cache for getworkflow '%s': %s", cacheKey, cacheData)
+			DeleteCache(ctx, cacheKey)
+
 			err = json.Unmarshal(cacheData, &workflows)
 			if err != nil {
 				log.Printf("[WARNING] Failed unmarshalling cache for getworkflow '%s': %s", cacheKey, err)
 			} else {
+
 				slice.Sort(workflows[:], func(i, j int) bool {
 					return workflows[i].Edited > workflows[j].Edited
 				})
@@ -12145,15 +12209,59 @@ func DeleteKeys(ctx context.Context, entity string, value []string) error {
 			DeleteKey(ctx, entity, item)
 		}
 	} else {
+		// Tons of helpers to ENSURE the key deletion happens properly
+		// This especially prominent for custom "Datastore" keys
 		keys := []*datastore.Key{}
 		for _, item := range value {
+			keys = append(keys, datastore.NameKey(entity, strings.ToLower(item), nil))
 			keys = append(keys, datastore.NameKey(entity, item, nil))
+			if len(item) > 127 {
+				keys = append(keys, datastore.NameKey(entity, strings.ToLower(item[:127]), nil))
+			}
 		}
+		
+		// Max 500 at a time => total max keys = 5000
+		prevStop := 0
+		iter := 0
+		finished := false
 
-		err := project.Dbclient.DeleteMulti(ctx, keys)
-		if err != nil {
-			log.Printf("[WARNING] Error deleting %s from %s: %s", value, entity, err)
-			return err
+		maxAmount := 500
+		for {
+			if iter > 10 || finished {  
+				break
+			}
+
+			iter += 1
+			currentKeys := []*datastore.Key{}
+			for cnt, key := range keys {
+				if cnt < prevStop {
+					continue
+				}
+
+				currentKeys = append(currentKeys, key)
+				if len(currentKeys) >= 500 {
+					prevStop = cnt
+					break
+				}
+
+				if cnt == len(keys)-1 {
+					finished = true
+				}
+			}
+
+			if len(currentKeys) == 0 {
+				break
+			}
+
+			err := project.Dbclient.DeleteMulti(ctx, currentKeys)
+			if err != nil {
+				log.Printf("[ERROR] Failed deleting %d values from '%s': %s", len(value), entity, err)
+				return err
+			}
+
+			if len(currentKeys) < maxAmount { 
+				break
+			}
 		}
 	}
 
@@ -12397,6 +12505,16 @@ func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExec
 		}
 	}
 
+	newExecutions := []WorkflowExecution{}
+	for _, execution := range executions {
+		if execution.Workflow.OrgId == "INTERNAL" && execution.Status != "FINISHED" {
+			continue
+		}
+
+		newExecutions = append(newExecutions, execution)
+	}
+	executions = newExecutions
+
 	slice.Sort(executions[:], func(i, j int) bool {
 		return executions[i].StartedAt > executions[j].StartedAt
 	})
@@ -12592,6 +12710,16 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 			return executions[i].StartedAt > executions[j].StartedAt
 		})
 	}
+
+	newExecutions := []WorkflowExecution{}
+	for _, execution := range executions {
+		if execution.Workflow.OrgId == "INTERNAL" && execution.Status != "FINISHED" {
+			continue
+		}
+
+		newExecutions = append(newExecutions, execution)
+	}
+	executions = newExecutions
 
 	// Gets the correct one from cache to make it appear to be correct everywhere
 	for execIndex, execution := range executions {
@@ -12884,6 +13012,16 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			}
 		}
 	}
+
+	newExecutions := []WorkflowExecution{}
+	for _, execution := range executions {
+		if execution.Workflow.OrgId == "INTERNAL" && execution.Status != "FINISHED" {
+			continue
+		}
+
+		newExecutions = append(newExecutions, execution)
+	}
+	executions = newExecutions
 
 	// Find difference between what's in the list and what is in cache
 	//log.Printf("\n\n[DEBUG] Checking local cache for executions. Got %d executions\n\n", len(executions))
@@ -13221,6 +13359,16 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			}
 		}
 	}
+
+	newExecutions := []WorkflowExecution{}
+	for _, execution := range executions {
+		if execution.Workflow.OrgId == "INTERNAL" && execution.Status != "FINISHED" {
+			continue
+		}
+
+		newExecutions = append(newExecutions, execution)
+	}
+	executions = newExecutions
 
 	slice.Sort(executions[:], func(i, j int) bool {
 		return executions[i].StartedAt > executions[j].StartedAt
@@ -14095,15 +14243,14 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			}
 
 			if len(cacheData.Enrichments) > 0 && len(cacheData.Value) == 0 {
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG] Having enrichments with empty value doesn't make sense, skipping enrichments for key %s in category %s", cacheData.Key, cacheData.Category)
 				}
-
 
 				cacheData.Value = config.Value
 			}
 
-			// Works on merging enrichments 
+			// Works on merging enrichments
 			if len(cacheData.Enrichments) > 0 {
 				timeNow := int64(time.Now().Unix())
 
@@ -14135,8 +14282,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				}
 
 				cacheData.Enrichments = newObservables
-				if debug { 
-					log.Printf("\n\n\nFound new enrichments: %d for key %s in category %s\n\n\n", len(newObservables), cacheData.Key, cacheData.Category)
+				if debug {
+					log.Printf("\n\n\n[DEBUG] Found new enrichments: %d for key '%s' in category '%s'\n\n\n", len(newObservables), cacheData.Key, cacheData.Category)
 				}
 			}
 
@@ -14219,7 +14366,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 				if len(cacheData.Enrichments) == 0 && len(config.Enrichments) > 0 {
 					cacheData.Enrichments = config.Enrichments
-				} 
+				}
 
 				if len(cacheData.Tags) == 0 {
 					cacheData.Tags = config.Tags
@@ -14533,7 +14680,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 	}
 
-	log.Printf("[DEBUG] SetDatastoreKeyBulk: Successfully set %d key(s) in category %s for org %s", len(newArray), mainCategory, orgId)
+	log.Printf("[INFO] SetDatastoreKeyBulk: Successfully set %d key(s) in category %s for org %s", len(newArray), mainCategory, orgId)
 
 	/*
 		if project.CacheDb {
@@ -14562,25 +14709,41 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 
 		if len(cacheData.Category) == 0 || len(cacheData.OrgId) == 0 {
+			if debug {
+				log.Printf("[DEBUG] No category/orgid. Continue")
+			}
 			continue
 		}
 
 		found := false
 		for _, existing := range existingInfo {
-			if existing.Key == cacheData.Key {
-				if existing.Existed {
-					found = true
-				}
+			if existing.Key != cacheData.Key {
+				continue
+			}
 
-				break
+			if existing.Existed {
+				found = true
+			}
+
+			break
+		}
+
+		// Only runs once per minute MAX except for enrichments.
+		enrichmentsOnly := false
+		if found {
+			cacheKey := fmt.Sprintf("ngram_check_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
+			data, err := GetCache(ctx, cacheKey)
+			if err == nil && data != nil {
+				if len(cacheData.Enrichments) > 0 {
+					enrichmentsOnly = true
+				}
+			} else {
+				enrichmentsOnly = false
+				SetCache(ctx, cacheKey, []byte("1"), 1)
 			}
 		}
 
-		if found {
-			continue
-		}
-
-		go crossCorrelateNGrams(context.Background(), cacheData.OrgId, cacheData.Category, cacheData.Key, cacheData.Value, cacheData.Enrichments)
+		go crossCorrelateNGrams(context.Background(), cacheData.OrgId, cacheData.Category, cacheData.Key, cacheData.Value, cacheData.Enrichments, enrichmentsOnly)
 	}
 
 	// Look for category triggers
@@ -14613,11 +14776,15 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						continue
 					}
 
-					if len(automation.Options) == 0 {
+					if automation.Name == "security_rules" || automation.Name == "Security Rules" {
 						continue
 					}
 
-					if automation.Name == "security_rules" || automation.Name == "Security Rules" {
+					if len(automation.Options) == 0 {
+						if debug {
+							log.Printf("\n\n\n[ERROR] Debug: Automation '%s' in category '%s' has no options, skipping\n\n\n", automation.Name, categoryConfig.Category)
+						}
+
 						continue
 					}
 
@@ -16218,7 +16385,7 @@ func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, 
 	return count, nil
 }
 
-func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int, inputcursor string) ([]CacheKeyData, string, error) {
+func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int, inputcursor string, cleanupDepthParam ...int) ([]CacheKeyData, string, error) {
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" {
 		if debug && category != "protected" {
 			log.Printf("[DEBUG] Disabled GetAllCacheKeys for '%s' in worker swarm mode", category)
@@ -16228,6 +16395,13 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	}
 
 	nameKey := "org_cache"
+	cleanupDepth := 0
+	if len(cleanupDepthParam) > 0 {
+		if cleanupDepthParam[0] > 0 {
+			cleanupDepth = cleanupDepthParam[0]
+		}
+	}
+
 	if strings.ToLower(category) == "default" {
 		category = ""
 	}
@@ -16244,15 +16418,19 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &cacheKeys)
 			if err == nil {
-				return cacheKeys, "", nil
+
+				// Avoids an issue with bad caching
+				if len(cacheKeys) > 1 {
+					return cacheKeys, "", nil
+				} 
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for appstats: %s", err)
 		}
 	}
 
-	if max > 10000 {
-		max = 10000
+	if max > 1000 {
+		max = 1000
 	}
 
 	// Look for
@@ -16470,6 +16648,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	}
 
 	// Get category settings and do stuff
+	skipCache := false
 	if len(categories) > 0 {
 		removedKeys := []string{}
 		for _, category := range categories {
@@ -16483,9 +16662,13 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 				// Check if any key is edited within this time
 				editedTime := time.Now().Unix() - int64(categoryConfig.Settings.Timeout)
 				backgroundCtx := context.Background()
+				deleteKeys := []string{}
 				newCacheKeys := []CacheKeyData{}
 				for _, cacheKey := range cacheKeys {
 					if cacheKey.Category != category {
+						if debug {
+							log.Printf("[WARNING] Cache key '%s' has category '%s' which doesn't match expected category '%s'. Skipping timeout check for this key.", cacheKey.Key, cacheKey.Category, category)
+						}
 						continue
 					}
 
@@ -16493,18 +16676,46 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 						newCacheKeys = append(newCacheKeys, cacheKey)
 					} else {
 						if debug {
-							log.Printf("[DEBUG] Should delete cache key '%s' with edited time %d. Timed out!", cacheKey.Key, cacheKey.Edited)
+							//log.Printf("[DEBUG] Should delete cache key '%s' with edited time %d. Timed out!", cacheKey.Key, cacheKey.Edited)
 						}
 
 						// URL encode the key
-						parsedRawkey := url.QueryEscape(cacheKey.Key)
-						parsedKey := fmt.Sprintf("%s_%s_%s", orgId, parsedRawkey, category)
-						//err = DeleteKey(backgroundCtx, nameKey, parsedKey)
-						//if err != nil {
-						//	log.Printf("[ERROR] Failed finding cache key %s: %s", parsedKey, err)
-						//}
-						go DeleteKey(backgroundCtx, nameKey, parsedKey)
+						// FIXME: Not sure why SOMETIMES it isn't QueryEscaped 
+						// and sometimes the Key doesn't match
+						//parsedRawkey := url.QueryEscape(cacheKey.Key)
+						parsedKey := fmt.Sprintf("%s_%s_%s", orgId, cacheKey.Key, category)
+
+						deleteKeys = append(deleteKeys, parsedKey)
 						removedKeys = append(removedKeys, cacheKey.Key+cacheKey.Category)
+						skipCache = true
+					}
+				}
+
+				//8aa779dd-773c-4e80-ac9d-e46944889777_<h1>index of /doc/misp/feed-osint</h1>_ioc_domain
+				//8aa779dd-773c-4e80-ac9d-e46944889777_<h1>index of /doc/misp/feed-osint</h1>_ioc_domain
+
+				if len(deleteKeys) > 0 {
+					cursor = ""
+					if debug {
+						log.Printf("[DEBUG] Removing %d cache keys for category '%s' in org '%s' due to timeout settings. This is an auto-fix for stale cache keys. Running recursion.", len(deleteKeys), category, orgId)
+					}
+
+					err = DeleteKeys(backgroundCtx, nameKey, deleteKeys)
+					if err != nil {
+						log.Printf("[ERROR] Failed deleting cache keys for category '%s' in org '%s': %s", category, orgId, err)
+					} else {
+						if len(deleteKeys) == max {
+							cleanupDepth += 1
+							if cleanupDepth >= 5 {
+								log.Printf("[WARNING] Cleanup depth for cache keys has reached %d. Stopping recursion to prevent potential infinite loop. Please investigate if there are many stale keys for category '%s' in org '%s'.", cleanupDepth, category, orgId)
+							} else {
+								// Makes sure we do a toooon of keys at once when cleanup is relevant
+								newKeys, _, err := GetAllCacheKeys(ctx, orgId, category, 500, "", cleanupDepth)
+								if err == nil { 
+									cacheKeys = newKeys
+								}
+							}
+						}
 					}
 				}
 			}
@@ -16584,7 +16795,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	// Only cache if NO cursor at all.
 	// Otherwise we need to track and clean up all cursors(?)
-	if project.CacheDb {
+	if project.CacheDb && !skipCache {
 		newcache, err := json.Marshal(cacheKeys)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
@@ -18137,6 +18348,16 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		}
 	}
 
+	newExecutions := []WorkflowExecution{}
+	for _, execution := range executions {
+		if execution.Workflow.OrgId == "INTERNAL" && execution.Status != "FINISHED" {
+			continue
+		}
+
+		newExecutions = append(newExecutions, execution)
+	}
+	executions = newExecutions
+
 	// Find difference between what's in the list and what is in cache
 
 	removeIndexes := []int{}
@@ -18530,7 +18751,7 @@ func getSyncApikey(ctx context.Context, apikey string) (string, error) {
 			return synckey.OrgId, nil
 		}
 	} else {
-		log.Printf("[INFO] Failed getting cache for syncKEY: %s", err)
+		//log.Printf("[INFO] Failed getting cache for syncKEY: %s", err)
 	}
 
 	dbclient, err := GetDatastoreClient(ctx, gceProject)
@@ -19375,7 +19596,7 @@ func ListVulnerabilities(ctx context.Context, ecosystem string, inputcursor stri
 		return nil, "", errors.New("Not implemented for opensearch. Use shuffler.io/api/v1/vulnerabilities")
 	} else {
 		q := datastore.NewQuery(nameKey)
-		if len(ecosystem) > 0 { 
+		if len(ecosystem) > 0 {
 			log.Printf("[DEBUG] Filtering vulnerabilities for ecosystem: '%s'", ecosystem)
 			q = q.Filter("Affected.Package.Ecosystem = ", ecosystem)
 		}
@@ -19386,7 +19607,7 @@ func ListVulnerabilities(ctx context.Context, ecosystem string, inputcursor stri
 			cursor, err := datastore.DecodeCursor(inputcursor)
 			if err != nil {
 				log.Printf("[WARNING] Invalid cursor provided to ListVulnerabilities: %s", err)
-			} else { 
+			} else {
 				q = q.Start(cursor)
 			}
 		}
@@ -19432,7 +19653,7 @@ func SetVulnerability(ctx context.Context, vuln OSVVulnerability) error {
 		return nil
 	}
 
-	if vuln.CreatedAt == 0 { 
+	if vuln.CreatedAt == 0 {
 		vuln.CreatedAt = time.Now().Unix()
 	}
 

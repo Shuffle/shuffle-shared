@@ -276,6 +276,7 @@ type WorkflowAppActionParameter struct {
 	Tags           []string         `json:"tags" datastore:"tags" yaml:"tags"`
 	Schema         SchemaDefinition `json:"schema" datastore:"schema" yaml:"schema"`
 	SkipMulticheck bool             `json:"skip_multicheck" datastore:"skip_multicheck" yaml:"skip_multicheck"`
+	CustomValue    bool             `json:"custom_value" datastore:"custom_value" yaml:"custom_value"`
 	ValueReplace   []Valuereplace   `json:"value_replace" datastore:"value_replace,noindex" yaml:"value_replace,omitempty"`
 	UniqueToggled  bool             `json:"unique_toggled" datastore:"unique_toggled" yaml:"unique_toggled"`
 	Error          string           `json:"error" datastore:"error" yaml:"error"`
@@ -1177,8 +1178,9 @@ type DatastoreAutomationOption struct {
 	Key   string `json:"key" datastore:"key"`
 	Value string `json:"value" datastore:"value,noindex"`
 
-	Description string `json:"description" datastore:"description"`
-	Disabled    bool   `json:"disabled" datastore:"disabled"`
+	Apps        []string `json:"apps" datastore:"apps"`
+	Description string   `json:"description" datastore:"description"`
+	Disabled    bool     `json:"disabled" datastore:"disabled"`
 }
 
 type DatastoreAutomation struct {
@@ -1238,7 +1240,7 @@ type CacheKeyDataMini struct {
 	Enrichments         []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 
 	OrgId              string   `json:"org_id,omitempty" datastore:"OrgId"`
-	ExecutionId        string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	ExecutionId        string   `json:"execution_id,omitempty" datastore:"ExecutionId"`
 	Authorization      string   `json:"authorization,omitempty" datastore:"Authorization"`
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 	Tags               []string `json:"tags,omitempty" datastore:"tags"`
@@ -1256,8 +1258,8 @@ type CacheKeyDataFallback struct {
 
 type CacheKeyData struct {
 	Success             bool         `json:"success,omitempty" datastore:"Success"`
-	WorkflowId          string       `json:"workflow_id," datastore:"WorkflowId"`
-	ExecutionId         string       `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	WorkflowId          string       `json:"workflow_id,omitempty" datastore:"WorkflowId"`
+	ExecutionId         string       `json:"execution_id,omitempty" datastore:"ExecutionId"`
 	Authorization       string       `json:"authorization,omitempty" datastore:"Authorization"`
 	OrgId               string       `json:"org_id,omitempty" datastore:"OrgId"`
 	Key                 string       `json:"key" datastore:"Key"`
@@ -5352,9 +5354,9 @@ type NVDProduct struct {
 }
 
 type NVDCPEItem struct {
-	CPEName      string    `json:"cpeName"`
-	Deprecated   bool      `json:"deprecated"`
-	LastModified string  `json:"lastModified"`
+	CPEName      string `json:"cpeName"`
+	Deprecated   bool   `json:"deprecated"`
+	LastModified string `json:"lastModified"`
 	Created      string `json:"created"`
 }
 
@@ -5371,8 +5373,8 @@ type NVDCVEItem struct {
 
 type NVDCVEDetail struct {
 	ID                    string           `json:"id"`
-	Published             string        `json:"published"`
-	LastModified          string        `json:"lastModified"`
+	Published             string           `json:"published"`
+	LastModified          string           `json:"lastModified"`
 	Descriptions          []NVDDescription `json:"descriptions"`
 	Metrics               NVDMetrics       `json:"metrics"`
 	Weaknesses            []NVDWeakness    `json:"weaknesses"`
@@ -5453,16 +5455,16 @@ type OSVEvent struct {
 
 // Keep appending as we find more missing fields
 type OSVDatabaseSpecific struct {
-	Source string `json:"source"`
-	CWEs   []string `json:"cwes,omitempty"`
-	Severity string `json:"severity,omitempty"`
-	GithubReviewed string `json:"github_reviewed,omitempty"`
+	Source         string   `json:"source"`
+	CWEs           []string `json:"cwes,omitempty"`
+	Severity       string   `json:"severity,omitempty"`
+	GithubReviewed string   `json:"github_reviewed,omitempty"`
 
 	GithubReviewedAt time.Time `json:"github_reviewed_at,omitempty"`
-	DateAdded	  string `json:"date_added,omitempty"`
-	ActionDue	 string `json:"action_due,omitempty"`
-	RequiredAction string `json:"required_action,omitempty"`
-	Vulnerability string `json:"vulnerability,omitempty"`
+	DateAdded        string    `json:"date_added,omitempty"`
+	ActionDue        string    `json:"action_due,omitempty"`
+	RequiredAction   string    `json:"required_action,omitempty"`
+	Vulnerability    string    `json:"vulnerability,omitempty"`
 }
 
 type OSVEcosystemSpecific struct {
@@ -5470,12 +5472,12 @@ type OSVEcosystemSpecific struct {
 }
 
 type OSVAffected struct {
-	Package           OSVPackage     `json:"package"`
-	Ranges            []OSVRange     `json:"ranges"`
-	Versions          []string       `json:"versions"`
+	Package  OSVPackage `json:"package"`
+	Ranges   []OSVRange `json:"ranges"`
+	Versions []string   `json:"versions"`
 
 	EcosystemSpecific OSVEcosystemSpecific `json:"ecosystem_specific,omitempty"`
-	DatabaseSpecific  OSVDatabaseSpecific `json:"database_specific,omitempty"`
+	DatabaseSpecific  OSVDatabaseSpecific  `json:"database_specific,omitempty"`
 }
 
 type OSVSeverity struct {
@@ -5484,17 +5486,17 @@ type OSVSeverity struct {
 }
 
 type OSVVulnerability struct {
-	ID               string         `json:"id"`
-	Summary          string         `json:"summary,omitempty" datastore:"summary,noindex"`
-	Details          string         `json:"details" datastore:"details,noindex"`
-	Aliases          []string       `json:"aliases"`
-	Modified         time.Time      `json:"modified"`
-	Published        time.Time      `json:"published"`
-	References       []OSVReference `json:"references,omitempty"`
-	Affected         []OSVAffected  `json:"affected,omitempty"`
-	Severity         []OSVSeverity  `json:"severity,omitempty"`
-	SchemaVersion    string         `json:"schema_version"`
-	Related          []string       `json:"related,omitempty"`
+	ID            string         `json:"id"`
+	Summary       string         `json:"summary,omitempty" datastore:"summary,noindex"`
+	Details       string         `json:"details" datastore:"details,noindex"`
+	Aliases       []string       `json:"aliases"`
+	Modified      time.Time      `json:"modified"`
+	Published     time.Time      `json:"published"`
+	References    []OSVReference `json:"references,omitempty"`
+	Affected      []OSVAffected  `json:"affected,omitempty"`
+	Severity      []OSVSeverity  `json:"severity,omitempty"`
+	SchemaVersion string         `json:"schema_version"`
+	Related       []string       `json:"related,omitempty"`
 
 	DatabaseSpecific OSVDatabaseSpecific `json:"database_specific,omitempty"`
 

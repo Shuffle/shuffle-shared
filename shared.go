@@ -4289,8 +4289,6 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("[DEBUG] Found %d executions for workflow %s", len(workflowExecutions), fileId)
-
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)
 		resp.Write([]byte("[]"))
@@ -13115,7 +13113,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		Id:   orgId,
 	})
 
-	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", parentOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", parentOrg.Id))
 
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
@@ -13159,7 +13156,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		newOrg.Users = append(newOrg.Users, loopUser)
 	}
 
-	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", newOrg.Id))
 	err = SetOrg(ctx, newOrg, newOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting new org %s: %s", newOrg.Id, err)
@@ -17413,9 +17409,9 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
 	_, err := GetCache(ctx, cacheKey)
 	if err == nil {
-		if debug {
-			log.Printf("[DEBUG][%s] Agent self-request for Agent Result '%s' with status '%s' has already been sent. Skipping.", workflowExecution.ExecutionId, actionResult.Action.ID, status)
-		}
+		//if debug {
+		//	log.Printf("[DEBUG][%s] Agent self-request for Agent Result '%s' with status '%s' has already been sent. Skipping.", workflowExecution.ExecutionId, actionResult.Action.ID, status)
+		//}
 
 		return nil
 	} else {
@@ -20399,8 +20395,6 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			isSuccess = false
 		}
 
-		log.Printf("KEY: %#v", cacheItem)
-
 		keys = []CacheKeyData{
 			*cacheItem,
 		}
@@ -20807,7 +20801,10 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", orgId, cacheData.Key))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", orgId, cacheData.Key, cacheData.Category))
 
-	log.Printf("[INFO] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
+	if debug { 
+		log.Printf("[DEBUG] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
+	}
+
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
 }
@@ -20935,8 +20932,8 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err != nil || len(cacheData.Key) == 0 {
 		log.Printf("[ERROR] Failed to DELETE cache key '%s' for org %s (delete) in category '%s'. Does it exist?", tmpData.Key, tmpData.OrgId, tmpData.Category)
-		resp.WriteHeader(400)
 
+		resp.WriteHeader(400)
 		result := ResultChecker{
 			Success: false,
 			Reason:  "Failed to get key. Does it exist? Correct category?",
@@ -21008,7 +21005,9 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		Reason:  fmt.Sprintf("Key '%s' deleted", tmpData.Key),
 	}
 
-	log.Printf("[INFO] Successfully Deleted key '%s' for org %s in category '%s'", tmpData.Key, tmpData.OrgId, tmpData.Category)
+	if debug { 
+		log.Printf("[DEBUG] Successfully Deleted key '%s' for org %s in category '%s'", tmpData.Key, tmpData.OrgId, tmpData.Category)
+	}
 
 	// Marshal
 	resp.WriteHeader(200)
@@ -21288,10 +21287,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 		cacheId = url.QueryEscape(cacheId)
 		parsedKey := fmt.Sprintf("org_cache_%s", cacheId)
-		DeleteCache(ctx, parsedKey)
-		if debug {
-			log.Printf("[DEBUG] Deleting cache key %s since it had no public auth but auth was required. Probably means cache problem.", parsedKey)
-		}
+		go DeleteCache(ctx, parsedKey)
 	}
 
 	if requireCacheAuth {
@@ -21426,7 +21422,6 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	user, usererr := HandleApiAuthentication(resp, request)
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
@@ -21483,6 +21478,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
+	user, usererr := HandleApiAuthentication(resp, request)
 	if usererr != nil || len(user.ActiveOrg.Id) == 0 {
 		sourceExecution, sourceExecutionOk := request.URL.Query()["execution_id"]
 		sourceAuth, sourceAuthOk := request.URL.Query()["authorization"]
@@ -21502,14 +21498,14 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 		if sourceAuth[0] != foundExec.Authorization {
 			log.Printf("[INFO] Execution auth %s and %s don't match", foundExec.Authorization, sourceAuth[0])
-			resp.WriteHeader(401)
+			resp.WriteHeader(403)
 			resp.Write([]byte(`{"success": false, "reason": "Failed authentication (3)"}`))
 			return
 		}
 
 		if len(foundExec.ExecutionOrg) == 0 {
 			log.Printf("[WARNING] Execution %s doesn't have an org set", foundExec.ExecutionId)
-			resp.WriteHeader(401)
+			resp.WriteHeader(403)
 			resp.Write([]byte(`{"success": false, "reason": "Failed authentication (4)"}`))
 			return
 		}
@@ -21797,7 +21793,7 @@ func CheckHookAuth(request *http.Request, auth string) error {
 }
 
 // Body = The action body received from the user to test.
-func PrepareSingleAction(ctx context.Context, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
+func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
 
 	workflowExecution := WorkflowExecution{}
 
@@ -21814,7 +21810,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 	if appId != action.AppID {
 
-		// Used for standalone runs stared on /agents
+		// Used for standalone runs controlled from /agents and /mcp
 		if appId == "agent_starter" {
 			workflowId := uuid.NewV4().String()
 			action.SourceWorkflow = workflowId
@@ -22336,7 +22332,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	// Fallback to inject creds if the user don't have any. This is for internal +
 	// AI oriented APIs only. Check IsShuffleApp() for details
 	isShuffleApp := IsShuffleApp(app)
-	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" {
+	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" && strings.ToLower(action.Environment) == "cloud" {
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -22450,11 +22446,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			action.Parameters[headerIndex].Value = fmt.Sprintf("%s\nOrg-Id: %s", action.Parameters[headerIndex].Value, workflowExecution.OrgId)
 		}
 
-		if debug {
-			log.Printf("\n\n\n\nFOUND SHUFFLE APP (%s)! URL: %s, APIKEY: %s, ORG: %s\n\n\n", app.Name, backendUrl, foundApikey, workflowExecution.OrgId)
-		}
-
-		// Custom AI injection when necessary
+	// Custom AI injection when necessary
 	} else if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
 		// cloud => only do it on cloud location
 		// This prevents local users from being able to see it
@@ -22513,9 +22505,11 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 					})
 				}
 
-				log.Printf("[AUDIT] Injected system AI credentials (fallback) for org %s", user.ActiveOrg.Id)
+				//log.Printf("[AUDIT] Injected system AI credentials (fallback) for org %s", user.ActiveOrg.Id)
 
 				// Mapping to internal so the execution itself is not referencable
+				// FIXME: This doesn't work well, so we're just filtering out these
+				// executions until FINISHED (AKA cleaned up)
 				if project.Environment == "cloud" {
 					workflow.ID = "INTERNAL"
 					workflow.OrgId = "INTERNAL"
@@ -22649,6 +22643,37 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 		workflowExecution.Results = newResults
+		for _, result := range newResults { 
+			workflowExecution.Workflow.FormControl.CleanupActions = append(workflowExecution.Workflow.FormControl.CleanupActions, result.Action.ID) 
+		}
+
+		// Special handler for AI Agent things.
+		parentActionId := ""
+		if parentRequest != nil && parentRequest.URL != nil {
+			// Check for parameter "parent_node"
+			queries := parentRequest.URL.Query()
+			if queries != nil {
+				parentNode := queries.Get("parent_node")
+				if len(parentNode) > 0 {
+					parentActionId = parentNode
+				}
+			}
+		}
+
+		if len(parentActionId) > 0 {
+			// Makes them 'required' to run. Makes it possible to have conditions
+			// for AI Agents in workflows primarily
+			for _, branch := range oldExec.Workflow.Branches { 
+				if branch.DestinationID != parentActionId { 
+					continue
+				}
+
+				modifiedBranch := branch
+				modifiedBranch.DestinationID = action.ID
+
+				workflowExecution.Workflow.Branches = append(workflowExecution.Workflow.Branches, modifiedBranch)
+			}
+		}
 
 		workflowExecution.WorkflowId = action.SourceWorkflow
 		workflowExecution.Workflow.ID = action.SourceWorkflow
@@ -22776,6 +22801,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 			// Execution reset
 			executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExec.ExecutionId)
+
 			DeleteCache(ctx, executionCacheKey)
 			marshalledTotalResult, err := json.Marshal(oldExec)
 			if err == nil {
@@ -25051,14 +25077,21 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						start = append(start, workflow.Actions[0].ID)
 						oldExecution.Results[0].Status = "WAITING"
 					} else {
-						log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Decision ID: %#v", workflow.ID, decisionId[0])
+
+						// Can loop for it
+						nodeIds, nodeIdsOk := request.URL.Query()["node_id"]
+						if len(nodeIds) > 0 && nodeIdsOk {
+							start = append(start, nodeIds[0])
+						} else {
+							log.Printf("[ERROR] No Agentic Start node found for workflow %s during workflow continuation. Pass in '&node_id={action.id}. Decision ID: %#v", workflow.ID, decisionId)
+						}
 					}
 				}
 			}
 
 			if len(start) == 0 {
 				log.Printf("[ERROR] No start node found for workflow %s during workflow continuation", workflow.ID)
-				return workflowExecution, ExecInfo{}, fmt.Sprintf("No start node found for workflow continuation %s", workflow.ID), errors.New("No start node found for workflow continuation")
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("No start node found for workflow continuation %s. Pass in node_id={action.id} to bypass", workflow.ID), errors.New("No start node found for workflow continuation")
 			}
 
 			//log.Printf("Result len: %d", len(oldExecution.Results))
@@ -26679,8 +26712,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	// Check if the actions are children of the startnode?
 	imageNames := []string{}
 	cloudExec := false
-	for actionIndex, action := range workflowExecution.Workflow.Actions {
 
+	prevEnvironment := ""
+	for actionIndex, action := range workflowExecution.Workflow.Actions {
 		// Verify if the action environment exists and append
 		found := false
 		for _, env := range allEnvs {
@@ -26698,21 +26732,32 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				log.Printf("[ERROR] No handler for environment type %s", env.Type)
 				return workflowExecution, ExecInfo{}, "No active environments found", errors.New(fmt.Sprintf("No handler for environment type %s", env.Type))
 			}
+
 			break
 		}
 
 		if !found {
-			if strings.ToLower(action.Environment) == "cloud" && project.Environment == "cloud" {
-				//log.Printf("[DEBUG] Couldn't find environment %s in cloud for some reason.", action.Environment)
+			if action.Environment == "Shuffle" && project.Environment == "cloud" {
+				action.Environment = "Cloud"
+				workflowExecution.Workflow.Actions[actionIndex].Environment = "Cloud"
+				cloudExec = true
 			} else {
-				if action.Environment == "Shuffle" && project.Environment == "cloud" {
+				if project.Environment == "cloud" { 
 					action.Environment = "Cloud"
 					workflowExecution.Workflow.Actions[actionIndex].Environment = "Cloud"
+					cloudExec = true
 				} else {
-					log.Printf("[WARNING][%s] Couldn't find environment '%s' when running workflow '%s'. Maybe it's inactive?", workflowExecution.ExecutionId, action.Environment, workflowExecution.Workflow.ID)
-					return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env '%s' in org '%s'", action.Environment, workflowExecution.ExecutionOrg))
+					action.Environment = "Shuffle"
+					workflowExecution.Workflow.Actions[actionIndex].Environment = "Shuffle"
 				}
 			}
+
+			if len(prevEnvironment) > 0 {
+				action.Environment = prevEnvironment
+				workflowExecution.Workflow.Actions[actionIndex].Environment = prevEnvironment
+			}
+		} else {
+			prevEnvironment = action.Environment
 		}
 
 		found = false
@@ -26866,10 +26911,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		log.Printf("\n\n[ERROR] No org found for execution. This should not happen.\n\n")
 	}
 
-	if len(org.Id) == 0 {
+	if len(org.Id) == 0 && workflowExecution.ExecutionOrg != "INTERNAL" {
 		org, err = GetOrg(ctx, workflowExecution.ExecutionOrg)
 		if err != nil {
-			log.Printf("[ERROR] Failed to get org: %s", err)
+			log.Printf("[ERROR] Failed to get org %#v (workflow exec): %s", workflowExecution.ExecutionOrg, err)
 		}
 	}
 
@@ -29163,8 +29208,6 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 		name = location[5]
 	}
 
-	log.Printf("\n\nIN HERE!\n\n")
-
 	ctx := GetContext(request)
 	usecase, err := GetUsecase(ctx, name)
 	if err != nil {
@@ -30139,9 +30182,9 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 		}
 
 		if foundCnt != 2 {
-			if debug {
-				log.Printf("[ERROR] Missing branch fullfillment for src + dst! Source: %s, Destination: %s, Branch: %#v", branch.SourceID, branch.DestinationID, branch)
-			}
+			//if debug {
+			//	log.Printf("[ERROR] Missing branch fullfillment for src + dst! Source: %s, Destination: %s, Branch: %#v", branch.SourceID, branch.DestinationID, branch)
+			//}
 		}
 	}
 
@@ -32735,7 +32778,7 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 
 	parentOrg.ChildOrgs = newChildOrg
 
-	suborgCacheKey := fmt.Sprintf("%s_childorgs", parentOrg.Id)
+	suborgCacheKey := fmt.Sprintf("%s__childorgs", parentOrg.Id)
 	DeleteCache(ctx, suborgCacheKey)
 	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", subOrg.Id))
 	parentOrg.SyncUsage.MultiTenant.Counter = int64(len(newChildOrg)) + 1
