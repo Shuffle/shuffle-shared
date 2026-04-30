@@ -21897,7 +21897,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			exec.Workflow.Actions[0] = action
 
 			newExec, err := GetWorkflowExecution(ctx, exec.ExecutionId)
-			log.Printf("[INFO][%s] AI Agent: %s Started standalone for org %s, execution id %s, workflow %s, with trace-id %s", exec.ExecutionId, caller, user.ActiveOrg.Id, exec.ExecutionId, exec.WorkflowId, traceID)
+			log.Printf("[INFO][%s] AI Agent: %s Started standalone for org %s, execution id %s, workflow %s", exec.ExecutionId, caller, user.ActiveOrg.Id, exec.ExecutionId, exec.WorkflowId)
 			if err != nil {
 				log.Printf("[ERROR] Failed to get workflow execution after starting agent: %s", err)
 			} else {
