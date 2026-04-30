@@ -175,11 +175,13 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 					DatastoreAutomationOption{
 						Key:      "action",
 						Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'.   Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Some incidents are duds and should be closed quickly. Others are important ones. Others are missing important details. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.   If the incident has RELEVANT tasks that are not finished, modify them if necessary. Change the \"severity\" to info/low/medium/high/critical if relevant. When done, ALWAYS make sure the \"status\" is inProgress.",
+						Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
 						Disabled: false,
 					},
 					DatastoreAutomationOption{
 						Key:      "action-2",
 						Value:    "Go through each task one by one if there are any. When starting them, self-assign yourself to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it.  Before starting, get key \"agent_permissions\" from category \"shuffle-security_configuration\". This has a list of permissions you NEED to follow if it exists. This extends the reach of tools and capabilities you are allowed to use. ONLY use the permissions that are enabled. If permissions do not exist, continue as per normal guidance.",
+						Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
 						Disabled: false,
 					},
 				},

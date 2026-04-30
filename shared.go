@@ -20395,8 +20395,6 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			isSuccess = false
 		}
 
-		log.Printf("KEY: %#v", cacheItem)
-
 		keys = []CacheKeyData{
 			*cacheItem,
 		}

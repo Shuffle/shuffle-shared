@@ -143,10 +143,6 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 		return errors.New("Invalid parameters for cross-correlate ngrams. All parameters must be set. orgId, category, key, value")
 	}
 
-	if debug {
-		log.Printf("IN CROSSCORRELATE FOR CATEGORY %s with key '%s'. Enrichments: %t and value:\n\n%s\n\n", category, datastoreKey, enrichmentsOnly, value)
-	}
-
 	// Skipping searchability for protected keys
 	if strings.ToLower(category) == "protected" {
 		return nil
@@ -168,7 +164,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 
 		// Simple workaround for dates, ids etc
 		// hardcoded for now just to remove certain things
-		skippableKeys := []string{"spec_version", "version", "pattern_type", "created", "edited", "creation", "status", "type", "id", "finding_uid", "uid", "uuid"}
+		skippableKeys := []string{"spec_version", "version", "pattern_type", "created", "edited", "creation", "status", "type", "id", "finding_uid", "uid", "uuid", "source", "class_name"}
 
 		// Types and patterns
 		skippableValues := []string{"indicator", "stix", "active", "false", "true", "inprogress", "new", "closed", "resolved", "escalated", "incidentfinding", "domain", "ip", "url", "file", "cve", "vulnerability", "threat-actor", "tool", "attack-pattern", "campaign", "malware", "indicator", "observable"}
@@ -239,7 +235,9 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 				continue
 			}
 
-			if isValidUUID(parsedValue) {
+			tmpValue := parsedValue
+			tmpValue = strings.TrimPrefix(tmpValue, "file_")
+			if isValidUUID(tmpValue) {
 				log.Printf("[DEBUG] Skipping value that is a valid UUID: %s", parsedValue)
 				continue
 			}

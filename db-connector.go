@@ -16392,6 +16392,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		return []CacheKeyData{}, "", errors.New("Not available in worker mode")
 	}
 
+	nameKey := "org_cache"
 	cleanupDepth := 0
 	if len(cleanupDepthParam) > 0 {
 		if cleanupDepthParam[0] > 0 {
@@ -16399,7 +16400,6 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		}
 	}
 
-	nameKey := "org_cache"
 	if strings.ToLower(category) == "default" {
 		category = ""
 	}
@@ -16416,15 +16416,19 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &cacheKeys)
 			if err == nil {
-				return cacheKeys, "", nil
+
+				// Avoids an issue with bad caching
+				if len(cacheKeys) > 1 {
+					return cacheKeys, "", nil
+				} 
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for appstats: %s", err)
 		}
 	}
 
-	if max > 10000 {
-		max = 10000
+	if max > 1000 {
+		max = 1000
 	}
 
 	// Look for
