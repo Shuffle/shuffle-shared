@@ -30196,7 +30196,6 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 	var updatedActions []string
 	for _, actionId := range nextActions {
 		skippedParents := 0
-		unfinishedParents := 0
 
 		if _, ok := parents[actionId]; !ok {
 			updatedActions = append(updatedActions, actionId)
@@ -30207,15 +30206,7 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 			_, result := GetActionResult(ctx, *workflowExecution, parent)
 			if result.Status == "SKIPPED" {
 				skippedParents += 1
-			} else if result.Action.ID == "" || result.Status == "EXECUTING" || result.Status == "WAITING" {
-				unfinishedParents += 1
 			}
-		}
-
-		// Don't dispatch if any parent hasn't finished yet
-		if unfinishedParents > 0 {
-			log.Printf("[DEBUG][%s] Holding %s — %d parent(s) not yet finished", workflowExecution.ExecutionId, actionId, unfinishedParents)
-			continue
 		}
 
 		if skippedParents >= len(parents[actionId]) && actionId != workflowExecution.Start {
