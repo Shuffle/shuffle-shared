@@ -180,7 +180,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 					},
 					DatastoreAutomationOption{
 						Key:      "action-2",
-						Value:    "Go through each task one by one if there are any. When starting them, self-assign yourself to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it.  Before starting, get key \"agent_permissions\" from category \"shuffle-security_configuration\". This has a list of permissions you NEED to follow if it exists. This extends the reach of tools and capabilities you are allowed to use. ONLY use the permissions that are enabled. If permissions do not exist, continue as per normal guidance.",
+						Value:    "Go through each task one by one if there are any. When starting them, self-assign yourself to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it.",
 						Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
 						Disabled: false,
 					},

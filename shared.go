@@ -22335,7 +22335,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 	// Fallback to inject creds if the user don't have any. This is for internal +
 	// AI oriented APIs only. Check IsShuffleApp() for details
 	isShuffleApp := IsShuffleApp(app)
-	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" && action.Environment == "cloud" {
+	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" && strings.ToLower(action.Environment) == "cloud" {
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
