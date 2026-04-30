@@ -9194,12 +9194,11 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		ctx = context.Background()
 	}
 
-	if len(strings.TrimSpace(info.Caller)) == 0 {
-		return "", errors.New("caller must be set in AiCallInfo before calling RunAiQuery")
-	}
-
-	callerName := info.Caller
 	org := info.OrgID
+	callerName := info.Caller
+	if len(strings.TrimSpace(info.Caller)) == 0 {
+		callerName = "unknown"
+	}
 
 	cnt := 0
 	maxCharacters := 100000
@@ -9376,7 +9375,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	maxRetries := 3
 	sleepTimer := time.Duration(2)
 	contentOutput := ""
-	log.Printf("[INFO] AI_QUERY: root_caller=%s org_id=%s system_tokens=%d user_tokens=%d total_tokens=%d model=%s", callerName, org, estSysTokens, estUserTokens, totalEst, model)
+	log.Printf("[INFO] AI_QUERY: caller=%s org_id=%s system_tokens=%d user_tokens=%d total_tokens=%d model=%s", callerName, org, estSysTokens, estUserTokens, totalEst, model)
 	for {
 		if cnt >= maxRetries {
 			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries for openapi info")
