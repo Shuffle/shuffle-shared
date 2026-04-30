@@ -4819,11 +4819,6 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		ctx = context.Background()
 	}
 
-	traceID, _ := ctx.Value("trace_id").(string)
-	if traceID == "" {
-		traceID = fmt.Sprintf("ROOT-%s", uuid.NewV4().String())
-	}
-
 	parsedName := strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_")
 
 	// These are ran pre-execution
@@ -4896,7 +4891,7 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		// november 2025 after adding graphic system to datastore
 
 	} else if parsedName == "run_ai_agent" {
-		log.Printf("[INFO] AI agent: Handling run_ai_agent automation for key %s in category %s with trace-id %s", cacheData.Key, cacheData.Category, traceID)
+		log.Printf("[INFO] AI agent: Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
 		if len(foundApikey) == 0 {
 			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
 			return errors.New("No admin user with API key found")
@@ -4986,7 +4981,6 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
 			req.Header.Set("Org-Id", cacheData.OrgId)
 			req.Header.Set("X-Internal-Caller", "handleRunDatastoreAutomation")
-			req.Header.Set("X-Trace-ID", traceID)
 
 			resp, err := client.Do(req)
 			if err != nil {

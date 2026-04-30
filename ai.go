@@ -7836,13 +7836,11 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 	if !createNextActions {
 		caller, _ := ctx.Value("caller").(string)
-    	traceID, _ := ctx.Value("trace_id").(string)
 		if strings.TrimSpace(caller) == "" {
-			log.Printf("ERROR[%s] AI agent: No caller function info provided for AI agent, aborting the request ...", execution.ExecutionId)
-			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "no_caller_info", "No caller function info provided for AI Agent start")
+			caller = "unknown"
 		}
 
-		log.Printf("[INFO][%s] AI_AGENT_START: org=%s workflow=%s user=%s caller=%s trace-id=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, execution.WorkflowId, initiatedBy, caller, traceID, len(userMessage))
+		log.Printf("[INFO][%s] AI_AGENT_START: org=%s workflow=%s user=%s caller=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, execution.WorkflowId, initiatedBy, caller, len(userMessage))
 	}
 
 	// Set model based on environment
