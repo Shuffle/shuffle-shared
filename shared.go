@@ -21287,10 +21287,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 		cacheId = url.QueryEscape(cacheId)
 		parsedKey := fmt.Sprintf("org_cache_%s", cacheId)
-		DeleteCache(ctx, parsedKey)
-		if debug {
-			log.Printf("[DEBUG] Deleting cache key %s since it had no public auth but auth was required. Probably means cache problem.", parsedKey)
-		}
+		go DeleteCache(ctx, parsedKey)
 	}
 
 	if requireCacheAuth {
@@ -21425,7 +21422,6 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	user, usererr := HandleApiAuthentication(resp, request)
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
@@ -21482,6 +21478,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
+	user, usererr := HandleApiAuthentication(resp, request)
 	if usererr != nil || len(user.ActiveOrg.Id) == 0 {
 		sourceExecution, sourceExecutionOk := request.URL.Query()["execution_id"]
 		sourceAuth, sourceAuthOk := request.URL.Query()["authorization"]
@@ -21501,14 +21498,14 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 		if sourceAuth[0] != foundExec.Authorization {
 			log.Printf("[INFO] Execution auth %s and %s don't match", foundExec.Authorization, sourceAuth[0])
-			resp.WriteHeader(401)
+			resp.WriteHeader(403)
 			resp.Write([]byte(`{"success": false, "reason": "Failed authentication (3)"}`))
 			return
 		}
 
 		if len(foundExec.ExecutionOrg) == 0 {
 			log.Printf("[WARNING] Execution %s doesn't have an org set", foundExec.ExecutionId)
-			resp.WriteHeader(401)
+			resp.WriteHeader(403)
 			resp.Write([]byte(`{"success": false, "reason": "Failed authentication (4)"}`))
 			return
 		}
@@ -22449,11 +22446,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			action.Parameters[headerIndex].Value = fmt.Sprintf("%s\nOrg-Id: %s", action.Parameters[headerIndex].Value, workflowExecution.OrgId)
 		}
 
-		if debug {
-			log.Printf("\n\n\n\nFOUND SHUFFLE APP (%s)! URL: %s, APIKEY: %s, ORG: %s\n\n\n", app.Name, backendUrl, foundApikey, workflowExecution.OrgId)
-		}
-
-		// Custom AI injection when necessary
+	// Custom AI injection when necessary
 	} else if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
 		// cloud => only do it on cloud location
 		// This prevents local users from being able to see it

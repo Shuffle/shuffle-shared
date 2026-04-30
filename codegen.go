@@ -4936,7 +4936,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			}
 
 			// 30 seconds
-			SetCache(ctx, cacheName, []byte("1"), 30000, true)
+			SetCache(ctx, cacheName, []byte("1"), 60000, true)
 			if !strings.Contains(option.Key, "action") {
 				log.Printf("[WARNING] Agent option key %s does not contain 'action' - skipping to avoid confusion. This may cause the agent to not run if no other options are present.", option.Key)
 				continue
@@ -4957,7 +4957,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			// option.Value += fmt.Sprintf("\n%s", cacheData.Value)
 			parsedParams = append(parsedParams, map[string]string{
 				"name":  "input",
-				"value": fmt.Sprintf("TASK: %s\nKey: %s\nCategory: %s\n\nUNTRUSTED DATA:\n%s", option.Value, cacheData.Key, cacheData.Category, cacheData.Value),
+				"value": fmt.Sprintf("TASK: %s\n\nKey: %s\nCategory: %s\n\nRAW DATA:\n%s", option.Value, cacheData.Key, cacheData.Category, cacheData.Value),
 			})
 
 			agentUrl := fmt.Sprintf("%s/api/v1/apps/agent_starter/run", backendUrl)

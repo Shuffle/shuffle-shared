@@ -7254,10 +7254,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	failureInjection := ""
 	memorizationEngine := "shuffle_db"
 	for _, param := range startNode.Parameters {
-		if debug { 
-			log.Printf("PARAM: %s => %s", param.Name, param.Value)
-		}
-
 		if param.Name == "app_name" {
 			appname = param.Value
 			if ArrayContains(openaiAllowedApps, strings.ToLower(param.Value)) {
