@@ -30196,6 +30196,7 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 	var updatedActions []string
 	for _, actionId := range nextActions {
 		skippedParents := 0
+		unfinishedParents := 0
 
 		if _, ok := parents[actionId]; !ok {
 			updatedActions = append(updatedActions, actionId)
@@ -30206,7 +30207,15 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 			_, result := GetActionResult(ctx, *workflowExecution, parent)
 			if result.Status == "SKIPPED" {
 				skippedParents += 1
+			} else if result.Action.ID == "" || result.Status == "EXECUTING" || result.Status == "WAITING" {
+				unfinishedParents += 1
 			}
+		}
+
+		// Don't dispatch if any parent hasn't finished yet
+		if unfinishedParents > 0 {
+			log.Printf("[DEBUG][%s] Holding %s — %d parent(s) not yet finished", workflowExecution.ExecutionId, actionId, unfinishedParents)
+			continue
 		}
 
 		if skippedParents >= len(parents[actionId]) && actionId != workflowExecution.Start {
@@ -35912,4 +35921,84 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 
 	SetCache(ctx, cacheKey, []byte(strconv.Itoa(foundNumber)), 1)
 	return false
+}
+
+// normalizeToMs coerces an ActionResult timestamp to milliseconds, regardless of
+// whether it was stored as seconds, ms, microseconds, or nanoseconds. Mirrors the
+// 10/13/19-digit handling in FixActionResultOutput, plus a 16-digit branch for
+// time.Now().UnixMicro() values written by db-connector.go and parts of shared.go.
+func normalizeToMs(ts int64) int64 {
+	switch len(strconv.FormatInt(ts, 10)) {
+	case 10:
+		return ts * 1000
+	case 13:
+		return ts
+	case 16:
+		return ts / 1000
+	case 19:
+		return ts / 1000000
+	default:
+		return ts
+	}
+}
+
+// ValidateExecutionChronology checks if actions in a workflow execution started
+// before all their parents completed. Returns violations with parent-child timing mismatches.
+func ValidateExecutionChronology(ctx context.Context, execution *WorkflowExecution) []ExecutionChronologyViolation {
+	var violations []ExecutionChronologyViolation
+	if execution == nil || len(execution.Results) == 0 {
+		return violations
+	}
+
+	// Build parent map: destID -> []srcID (same logic as CheckNextActions, skip decorators)
+	parents := make(map[string][]string)
+	for _, branch := range execution.Workflow.Branches {
+		if branch.Decorator {
+			continue
+		}
+		parents[branch.DestinationID] = append(parents[branch.DestinationID], branch.SourceID)
+	}
+
+	// Index results by action ID
+	resultsByID := make(map[string]ActionResult)
+	for _, result := range execution.Results {
+		if result.Action.ID != "" {
+			resultsByID[result.Action.ID] = result
+		}
+	}
+
+	// Check each executed action against its parents
+	for _, result := range execution.Results {
+		if result.Status == "SKIPPED" || result.Action.ID == "" || result.StartedAt == 0 {
+			continue
+		}
+
+		for _, parentID := range parents[result.Action.ID] {
+			parentResult, ok := resultsByID[parentID]
+			if !ok || parentResult.Status == "SKIPPED" || parentResult.CompletedAt == 0 {
+				// parent didn't run, was skipped, or is a trigger with no timing — not a dependency
+				continue
+			}
+
+			childMs := normalizeToMs(result.StartedAt)
+			parentMs := normalizeToMs(parentResult.CompletedAt)
+
+			if childMs < parentMs {
+				gapMs := parentMs - childMs
+				violations = append(violations, ExecutionChronologyViolation{
+					ActionID:    result.Action.ID,
+					ActionLabel: result.Action.Label,
+					ParentID:    parentID,
+					ActionStart: childMs,
+					ParentEnd:   parentMs,
+					GapMs:       gapMs,
+				})
+				log.Printf("[WARNING][%s] Ordering violation: %s started %.2fs before parent %s (%s) completed",
+					execution.ExecutionId, result.Action.Label,
+					float64(gapMs)/1000.0, parentID, parentResult.Action.Label)
+			}
+		}
+	}
+
+	return violations
 }

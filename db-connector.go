@@ -17279,6 +17279,15 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		workflowExecution.Status = "FINISHED"
 		HandleExecutionCacheIncrement(ctx, workflowExecution)
 
+		// Validate chronology of execution
+		violations := ValidateExecutionChronology(ctx, &workflowExecution)
+		if len(violations) > 0 {
+			log.Printf("[WARNING][%s] Found %d execution chronology violation(s)", workflowExecution.ExecutionId, len(violations))
+			for _, v := range violations {
+				log.Printf("[WARNING][%s] %s started %.2fs before parent %s completed", workflowExecution.ExecutionId, v.ActionLabel, float64(v.GapMs)/1000.0, v.ParentID[:8])
+			}
+		}
+
 		err = SetWorkflowExecution(ctx, workflowExecution, true)
 		if err != nil {
 			log.Printf("[ERROR] Failed to set execution during finalization %s: %s", workflowExecution.ExecutionId, err)
