@@ -4806,7 +4806,7 @@ func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte
 	return nil
 }
 
-func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAutomation) error {
+func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, automation DatastoreAutomation) error {
 	if len(cacheData.OrgId) == 0 {
 		return errors.New("CacheKeyData.OrgId is required for handleRunAutomation")
 	}
@@ -4814,8 +4814,11 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	if len(cacheData.Category) == 0 {
 		return errors.New("CacheKeyData.Category is required for handleRunAutomation")
 	}
+    
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	ctx := context.Background()
 	parsedName := strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_")
 
 	// These are ran pre-execution
@@ -4888,7 +4891,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		// november 2025 after adding graphic system to datastore
 
 	} else if parsedName == "run_ai_agent" {
-		log.Printf("[DEBUG] Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
+		log.Printf("[DEBUG] AI agent: Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
 		if len(foundApikey) == 0 {
 			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
 			return errors.New("No admin user with API key found")
@@ -4989,8 +4992,9 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 				return err
 			}
 
-			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
-			req.Header.Add("Org-Id", cacheData.OrgId)
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
+			req.Header.Set("Org-Id", cacheData.OrgId)
+			req.Header.Set("X-Internal-Caller", "handleRunDatastoreAutomation")
 
 			resp, err := client.Do(req)
 			if err != nil {

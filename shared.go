@@ -17407,6 +17407,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 	// Check if the request has been sent already (just in case)
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
+	// cacheKey := fmt.Sprintf("agent_request_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID)
 	_, err := GetCache(ctx, cacheKey)
 	if err == nil {
 		//if debug {
@@ -17415,7 +17416,12 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 		return nil
 	} else {
-		SetCache(ctx, cacheKey, []byte("1"), 1)
+		var cacheTTL int32 = 1 // 1 minute for non-terminal statuses
+		if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
+			cacheTTL = 1440 // 24 hours — execution outcome is permanent
+		}
+		SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
+		// SetCache(ctx, cacheKey, []byte(status), cacheTTL)
 	}
 
 	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
@@ -17595,6 +17601,8 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	if debug {
 		log.Printf("[DEBUG][%s] Got decision ID '%s' for agent '%s'. Ref: %s", workflowExecution.ExecutionId, decisionId, actionResult.Action.ID, actionResult.Status)
 	}
+
+	ctx := context.Background()
 
 	foundActionResultIndex := -1
 	for actionIndex, result := range workflowExecution.Results {
@@ -17819,7 +17827,6 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
 		}
 
-		ctx := context.Background()
 		agentRequestMemory, err := GetDatastoreKey(ctx, requestKey, "agent_requests")
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed to find request memory for updates", actionResult.ExecutionId)
@@ -17836,7 +17843,16 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		// Handle agent decisionmaking. Use the same
 		log.Printf("[INFO][%s] With the agent being finished, we are asking it whether it would like to do anything else", workflowExecution.ExecutionId)
 
-		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, actionResult.Action, true)
+		var originalAction Action
+		if foundActionResultIndex >= 0 && foundActionResultIndex < len(workflowExecution.Results) {
+			originalAction = workflowExecution.Results[foundActionResultIndex].Action
+		} else {
+			// Fallback in case of an issue
+			originalAction = actionResult.Action
+		}
+
+		callerName := "handleAgentDecisionStreamResult"
+		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, originalAction, true, callerName)
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed handling agent execution start: %s", workflowExecution.ExecutionId, err)
 		}
@@ -21797,6 +21813,9 @@ func CheckHookAuth(request *http.Request, auth string) error {
 func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
 
 	workflowExecution := WorkflowExecution{}
+	if ctx == nil {
+        ctx = context.Background() 
+    }
 
 	var action Action
 	err := json.Unmarshal(body, &action)
@@ -21861,13 +21880,15 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				}
 			}
 
-			action, err := HandleAiAgentExecutionStart(exec, action, false)
+			callerName := "PrepareSingleAction"
+			action, err := HandleAiAgentExecutionStart(exec, action, false, callerName)
 			if err != nil {
 				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
 			}
 			exec.Workflow.Actions[0] = action
 
 			newExec, err := GetWorkflowExecution(ctx, exec.ExecutionId)
+			log.Printf("[INFO][%s] AI Agent: %s Started standalone for org %s, execution id %s, workflow %s", exec.ExecutionId, callerName, user.ActiveOrg.Id, exec.ExecutionId, exec.WorkflowId)
 			if err != nil {
 				log.Printf("[ERROR] Failed to get workflow execution after starting agent: %s", err)
 			} else {
