@@ -22357,9 +22357,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 	// Fallback to inject creds if the user don't have any. This is for internal +
 	// AI oriented APIs only. Check IsShuffleApp() for details
 	isShuffleApp := IsShuffleApp(app)	
+
 	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" && strings.ToLower(action.Environment) == "cloud" {
 		shuffleAuthInjected = true
-
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -22478,13 +22478,19 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		shuffleAuthInjected = true 
 		// cloud => only do it on cloud location
 		// This prevents local users from being able to see it
-		if project.Environment != "cloud" || (project.Environment == "cloud" && action.Environment == "cloud") {
-			apiKey := os.Getenv("AI_API_KEY")
+		if project.Environment != "cloud" || (project.Environment == "cloud" && strings.ToLower(action.Environment) == "cloud") {
+			apiKey := os.Getenv("AGENT_LLM_API_KEY")
+			if apiKey == "" {
+				apiKey = os.Getenv("AI_API_KEY")
+			}
 			if apiKey == "" {
 				apiKey = os.Getenv("OPENAI_API_KEY")
 			}
 
-			apiUrl := os.Getenv("AI_API_URL")
+			apiUrl := os.Getenv("AGENT_LLM_API_URL")
+			if apiUrl == "" {
+				apiUrl = os.Getenv("AI_API_URL")
+			}
 			if apiUrl == "" {
 				apiUrl = os.Getenv("OPENAI_API_URL")
 			}
@@ -22493,7 +22499,20 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				apiUrl = "https://api.openai.com"
 			}
 
-			if len(apiKey) > 0 {
+			// Only inject system credentials if this request came from a legitimate agent execution. The one-time token is set by HandleAiAgentExecutionStart, consumed here on first use, and cannot be replayed.
+			agentTokenValid := false
+			if parentRequest != nil {
+				agentToken := parentRequest.Header.Get("X-Agent-Token")
+				if len(agentToken) > 0 {
+					agentTokenCacheKey := fmt.Sprintf("agent_onetime_token_%s", agentToken)
+					if cachedVal, err := GetCache(ctx, agentTokenCacheKey); err == nil && cachedVal != nil {
+						go DeleteCache(ctx, agentTokenCacheKey)
+						agentTokenValid = true
+					}
+				}
+			}
+
+			if len(apiKey) > 0 && agentTokenValid {
 				IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions", 1)
 
 				urlFound := false
@@ -22502,7 +22521,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 					// Cleanup to prevent bad functions from being injected
 					// Such as liquid
-					if project.Environment == "cloud" && action.Environment == "cloud" {
+					if project.Environment == "cloud" && strings.ToLower(action.Environment) == "cloud" {
 						action.Parameters[paramIndex].Value = strings.ReplaceAll(action.Parameters[paramIndex].Value, "${", "")
 						action.Parameters[paramIndex].Value = strings.ReplaceAll(action.Parameters[paramIndex].Value, "{{", "")
 						action.Parameters[paramIndex].Value = strings.ReplaceAll(action.Parameters[paramIndex].Value, "python", "")
@@ -22671,8 +22690,8 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		}
 
 		workflowExecution.Results = newResults
-		for _, result := range newResults { 
-			workflowExecution.Workflow.FormControl.CleanupActions = append(workflowExecution.Workflow.FormControl.CleanupActions, result.Action.ID) 
+		for _, result := range newResults {
+			workflowExecution.Workflow.FormControl.CleanupActions = append(workflowExecution.Workflow.FormControl.CleanupActions, result.Action.ID)
 		}
 
 		// Special handler for AI Agent things.
