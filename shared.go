@@ -19124,7 +19124,8 @@ func setExecutionVariable(actionResult ActionResult) bool {
 
 // Finds execution results and parameters that are too large to manage and reduces them / saves data partly
 func compressExecution(ctx context.Context, workflowExecution WorkflowExecution, saveLocationInfo string) (WorkflowExecution, bool) {
-	if project.Environment == "worker" {
+	workerCompressExecution := os.Getenv("SHUFFLE_WORKER_COMPRESS")
+	if project.Environment == "worker" && (len(workerCompressExecution) == 0 || workerCompressExecution == "false"){
 		log.Printf("[DEBUG][%s] No need to make this execution any smaller", workflowExecution.ExecutionId)
 		return workflowExecution, false
 	}
