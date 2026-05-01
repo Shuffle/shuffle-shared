@@ -7182,7 +7182,7 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
-func HandleAiAgentExecutionStart(ctx context.Context, execution WorkflowExecution, startNode Action, createNextActions bool) (Action, error) {
+func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string) (Action, error) {
 
 	aiStarttime := time.Now().Unix()
 	// A handler to ensure we ALWAYS focus on next actions if a node starts late
@@ -7221,9 +7221,7 @@ func HandleAiAgentExecutionStart(ctx context.Context, execution WorkflowExecutio
 		execution.Workflow.OrgId = execution.ExecutionOrg
 	}
 
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := context.Background()
 
 	// Validate On-Prem Configuration immediately
 	if project.Environment != "cloud" {
@@ -7835,12 +7833,11 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	}
 
 	if !createNextActions {
-		caller, _ := ctx.Value("caller").(string)
-		if strings.TrimSpace(caller) == "" {
-			caller = "unknown"
+		if strings.TrimSpace(callerName) == "" {
+			callerName = "unknown"
 		}
 
-		log.Printf("[INFO][%s] AI_AGENT_START: org=%s workflow=%s user=%s caller=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, execution.WorkflowId, initiatedBy, caller, len(userMessage))
+		log.Printf("[INFO][%s] AI_AGENT_START: org=%s workflow=%s user=%s caller=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, execution.WorkflowId, initiatedBy, callerName, len(userMessage))
 	}
 
 	// Set model based on environment

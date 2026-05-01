@@ -17851,7 +17851,8 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			originalAction = actionResult.Action
 		}
 
-		returnAction, err := HandleAiAgentExecutionStart(ctx, workflowExecution, originalAction, true)
+		callerName := "handleAgentDecisionStreamResult"
+		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, originalAction, true, callerName)
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed handling agent execution start: %s", workflowExecution.ExecutionId, err)
 		}
@@ -21883,21 +21884,15 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				}
 			}
 
-			caller, _ := ctx.Value("caller").(string)
-			if strings.TrimSpace(caller) == "" {
-				caller = "PrepareSingleAction"
-			}
-
-			ctx = context.WithValue(ctx, "caller", caller)
-
-			action, err := HandleAiAgentExecutionStart(ctx, exec, action, false)
+			callerName := "PrepareSingleAction"
+			action, err := HandleAiAgentExecutionStart(exec, action, false, callerName)
 			if err != nil {
 				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
 			}
 			exec.Workflow.Actions[0] = action
 
 			newExec, err := GetWorkflowExecution(ctx, exec.ExecutionId)
-			log.Printf("[INFO][%s] AI Agent: %s Started standalone for org %s, execution id %s, workflow %s", exec.ExecutionId, caller, user.ActiveOrg.Id, exec.ExecutionId, exec.WorkflowId)
+			log.Printf("[INFO][%s] AI Agent: %s Started standalone for org %s, execution id %s, workflow %s", exec.ExecutionId, callerName, user.ActiveOrg.Id, exec.ExecutionId, exec.WorkflowId)
 			if err != nil {
 				log.Printf("[ERROR] Failed to get workflow execution after starting agent: %s", err)
 			} else {
@@ -22351,14 +22346,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		workflowExecution.ExecutionOrg = user.ActiveOrg.Id
 		workflowExecution.OrgId = user.ActiveOrg.Id
 	}
-
-	// formattedAppName := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
-
-	// isInternalShuffleApp := false
-	// switch formattedAppName {
-	// case "shuffle_datastore", "shuffle_org_management", "shuffle_app_management", "shuffle_workflow_management":
-	// 	isInternalShuffleApp = true
-	// }
 
 	if len(app.Name) == 0 && len(action.AppName) > 0 {
 		app.Name = action.AppName
