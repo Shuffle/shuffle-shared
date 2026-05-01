@@ -7180,8 +7180,7 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string) (Action, error) {
-
-	aiStarttime := time.Now().Unix()
+	aiStarttime := time.Now().UnixMilli()
 	// A handler to ensure we ALWAYS focus on next actions if a node starts late
 	// or is missing context, but has previous decisions
 	for _, result := range execution.Results {
