@@ -2179,10 +2179,6 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	body := originalBody
 	defer resp.Body.Close()
 
-	if debug {
-		log.Printf("\n\n\n[DEBUG][%s] Agent decision response: %s\n\n\n", execution.ExecutionId, string(body))
-	}
-
 	// Try to map it into SchemalessOutput and grab "RawResponse"
 	outputMapped := SchemalessOutput{}
 	err = json.Unmarshal(body, &outputMapped)

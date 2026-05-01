@@ -2073,14 +2073,14 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
 
 						// Max runtime of a decision at 5 minutes
-						if decision.RunDetails.StartedAt > 0 && time.Now().Unix()-decision.RunDetails.StartedAt > 300 {
+						if decision.RunDetails.StartedAt > 0 && time.Now().UnixMilli()-decision.RunDetails.StartedAt > 300000 {
 							if debug { 
-								log.Printf("[DEBUG] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds", workflowExecution.ExecutionId, decision.Tool, decision.Action, time.Now().Unix()-decision.RunDetails.StartedAt)
+								log.Printf("[DEBUG] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds", workflowExecution.ExecutionId, decision.Tool, decision.Action, time.Now().UnixMilli()-decision.RunDetails.StartedAt)
 							}
 
 							decisionsUpdated = true
 							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
-							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
+							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
 							mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
 						}
 
@@ -2103,11 +2103,11 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							if decision.Action == "finish" && decision.RunDetails.Status == "" {
 								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 								if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
-									mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+									mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 								}
 
 								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
-								mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
+								mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
 								decisionsUpdated = true
 
 								marshalledDecision, err := json.Marshal(mappedOutput.Decisions[decisionIndex])

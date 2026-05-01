@@ -22329,10 +22329,15 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		app.ID = action.AppID
 	}
 
+	// Prevents overwriting of URL if auth injection is done 
+	shuffleAuthInjected := false 
+
 	// Fallback to inject creds if the user don't have any. This is for internal +
 	// AI oriented APIs only. Check IsShuffleApp() for details
-	isShuffleApp := IsShuffleApp(app)
+	isShuffleApp := IsShuffleApp(app)	
 	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" && strings.ToLower(action.Environment) == "cloud" {
+		shuffleAuthInjected = true
+
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -22448,6 +22453,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 	// Custom AI injection when necessary
 	} else if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
+		shuffleAuthInjected = true 
 		// cloud => only do it on cloud location
 		// This prevents local users from being able to see it
 		if project.Environment != "cloud" || (project.Environment == "cloud" && action.Environment == "cloud") {
@@ -22816,8 +22822,8 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		}
 	}
 
-	// Overwriting as auth may also do
-	if len(originalUrl) > 0 && len(workflowExecution.Workflow.Actions) > 0 {
+	// Overwriting, as the user should be in control 
+	if len(originalUrl) > 0 && len(workflowExecution.Workflow.Actions) > 0 && !shuffleAuthInjected {
 		for paramIndex, param := range workflowExecution.Workflow.Actions[0].Parameters {
 			if param.Name == "url" {
 				workflowExecution.Workflow.Actions[0].Parameters[paramIndex].Value = originalUrl
