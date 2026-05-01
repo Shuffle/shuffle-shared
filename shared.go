@@ -20411,8 +20411,6 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			isSuccess = false
 		}
 
-		log.Printf("KEY: %#v", cacheItem)
-
 		keys = []CacheKeyData{
 			*cacheItem,
 		}
@@ -20950,8 +20948,8 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err != nil || len(cacheData.Key) == 0 {
 		log.Printf("[ERROR] Failed to DELETE cache key '%s' for org %s (delete) in category '%s'. Does it exist?", tmpData.Key, tmpData.OrgId, tmpData.Category)
-		resp.WriteHeader(400)
 
+		resp.WriteHeader(400)
 		result := ResultChecker{
 			Success: false,
 			Reason:  "Failed to get key. Does it exist? Correct category?",
@@ -21305,10 +21303,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 		cacheId = url.QueryEscape(cacheId)
 		parsedKey := fmt.Sprintf("org_cache_%s", cacheId)
-		DeleteCache(ctx, parsedKey)
-		if debug {
-			log.Printf("[DEBUG] Deleting cache key %s since it had no public auth but auth was required. Probably means cache problem.", parsedKey)
-		}
+		go DeleteCache(ctx, parsedKey)
 	}
 
 	if requireCacheAuth {
@@ -21443,7 +21438,6 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	user, usererr := HandleApiAuthentication(resp, request)
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
@@ -21500,6 +21494,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
+	user, usererr := HandleApiAuthentication(resp, request)
 	if usererr != nil || len(user.ActiveOrg.Id) == 0 {
 		sourceExecution, sourceExecutionOk := request.URL.Query()["execution_id"]
 		sourceAuth, sourceAuthOk := request.URL.Query()["authorization"]
@@ -21519,14 +21514,14 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 		if sourceAuth[0] != foundExec.Authorization {
 			log.Printf("[INFO] Execution auth %s and %s don't match", foundExec.Authorization, sourceAuth[0])
-			resp.WriteHeader(401)
+			resp.WriteHeader(403)
 			resp.Write([]byte(`{"success": false, "reason": "Failed authentication (3)"}`))
 			return
 		}
 
 		if len(foundExec.ExecutionOrg) == 0 {
 			log.Printf("[WARNING] Execution %s doesn't have an org set", foundExec.ExecutionId)
-			resp.WriteHeader(401)
+			resp.WriteHeader(403)
 			resp.Write([]byte(`{"success": false, "reason": "Failed authentication (4)"}`))
 			return
 		}
@@ -21834,7 +21829,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 	if appId != action.AppID {
 
-		// Used for standalone runs stared on /agents
+		// Used for standalone runs controlled from /agents and /mcp
 		if appId == "agent_starter" {
 			workflowId := uuid.NewV4().String()
 			action.SourceWorkflow = workflowId
@@ -22355,10 +22350,15 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		app.ID = action.AppID
 	}
 
+	// Prevents overwriting of URL if auth injection is done 
+	shuffleAuthInjected := false 
+
 	// Fallback to inject creds if the user don't have any. This is for internal +
 	// AI oriented APIs only. Check IsShuffleApp() for details
-	isShuffleApp := IsShuffleApp(app)
-	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" && action.Environment == "cloud" {
+	isShuffleApp := IsShuffleApp(app)	
+	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" && strings.ToLower(action.Environment) == "cloud" {
+		shuffleAuthInjected = true
+
 		backendUrl := os.Getenv("BASE_URL")
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -22472,12 +22472,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			action.Parameters[headerIndex].Value = fmt.Sprintf("%s\nOrg-Id: %s", action.Parameters[headerIndex].Value, workflowExecution.OrgId)
 		}
 
-		if debug {
-			log.Printf("\n\n\n\nFOUND SHUFFLE APP (%s)! URL: %s, APIKEY: %s, ORG: %s\n\n\n", app.Name, backendUrl, foundApikey, workflowExecution.OrgId)
-		}
-
-		// Custom AI injection when necessary
+	// Custom AI injection when necessary
 	} else if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
+		shuffleAuthInjected = true 
 		// cloud => only do it on cloud location
 		// This prevents local users from being able to see it
 		if project.Environment != "cloud" || (project.Environment == "cloud" && action.Environment == "cloud") {
@@ -22846,8 +22843,8 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		}
 	}
 
-	// Overwriting as auth may also do
-	if len(originalUrl) > 0 && len(workflowExecution.Workflow.Actions) > 0 {
+	// Overwriting, as the user should be in control 
+	if len(originalUrl) > 0 && len(workflowExecution.Workflow.Actions) > 0 && !shuffleAuthInjected {
 		for paramIndex, param := range workflowExecution.Workflow.Actions[0].Parameters {
 			if param.Name == "url" {
 				workflowExecution.Workflow.Actions[0].Parameters[paramIndex].Value = originalUrl
@@ -25559,23 +25556,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								log.Printf("[INFO][%s] Triggering failure subflow %s for declined User Input '%s'", oldExecution.ExecutionId, failureSubflowId, result.Action.Label)
 
 								backendUrl := os.Getenv("BASE_URL")
-								if project.Environment != "cloud" {
-									port := 5001
-									if os.Getenv("BACKEND_PORT") != "" {
-										newPort, err := strconv.Atoi(os.Getenv("BACKEND_PORT"))
-										if err == nil {
-											port = newPort
-										}
-									}
-									backendUrl = fmt.Sprintf("http://localhost:%d", port)
-								}
-
-								if project.Environment == "cloud" && len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
-									backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
-								}
-
 								if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
 									backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+								} else if project.Environment == "cloud" && len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+									backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 								}
 
 								// Execution argument with decline context
@@ -25634,9 +25618,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 											userinputResp.DeclineSubflow.WorkflowID = failureSubflowId
 
 											frontendUrl := backendUrl
-											if strings.Contains(frontendUrl, ":5001") {
-												frontendUrl = strings.Replace(frontendUrl, ":5001", ":3001", 1)
-											}
 											if strings.Contains(frontendUrl, "appspot.com") || strings.Contains(frontendUrl, "run.app") {
 												frontendUrl = "https://shuffler.io"
 											}
@@ -26758,8 +26739,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	// Check if the actions are children of the startnode?
 	imageNames := []string{}
 	cloudExec := false
-	for actionIndex, action := range workflowExecution.Workflow.Actions {
 
+	prevEnvironment := ""
+	for actionIndex, action := range workflowExecution.Workflow.Actions {
 		// Verify if the action environment exists and append
 		found := false
 		for _, env := range allEnvs {
@@ -26777,21 +26759,32 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				log.Printf("[ERROR] No handler for environment type %s", env.Type)
 				return workflowExecution, ExecInfo{}, "No active environments found", errors.New(fmt.Sprintf("No handler for environment type %s", env.Type))
 			}
+
 			break
 		}
 
 		if !found {
-			if strings.ToLower(action.Environment) == "cloud" && project.Environment == "cloud" {
-				//log.Printf("[DEBUG] Couldn't find environment %s in cloud for some reason.", action.Environment)
+			if action.Environment == "Shuffle" && project.Environment == "cloud" {
+				action.Environment = "Cloud"
+				workflowExecution.Workflow.Actions[actionIndex].Environment = "Cloud"
+				cloudExec = true
 			} else {
-				if action.Environment == "Shuffle" && project.Environment == "cloud" {
+				if project.Environment == "cloud" { 
 					action.Environment = "Cloud"
 					workflowExecution.Workflow.Actions[actionIndex].Environment = "Cloud"
+					cloudExec = true
 				} else {
-					log.Printf("[WARNING][%s] Couldn't find environment '%s' when running workflow '%s'. Maybe it's inactive?", workflowExecution.ExecutionId, action.Environment, workflowExecution.Workflow.ID)
-					return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env '%s' in org '%s'", action.Environment, workflowExecution.ExecutionOrg))
+					action.Environment = "Shuffle"
+					workflowExecution.Workflow.Actions[actionIndex].Environment = "Shuffle"
 				}
 			}
+
+			if len(prevEnvironment) > 0 {
+				action.Environment = prevEnvironment
+				workflowExecution.Workflow.Actions[actionIndex].Environment = prevEnvironment
+			}
+		} else {
+			prevEnvironment = action.Environment
 		}
 
 		found = false
@@ -29241,8 +29234,6 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 
 		name = location[5]
 	}
-
-	log.Printf("\n\nIN HERE!\n\n")
 
 	ctx := GetContext(request)
 	usecase, err := GetUsecase(ctx, name)
@@ -35948,4 +35939,84 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 
 	SetCache(ctx, cacheKey, []byte(strconv.Itoa(foundNumber)), 1)
 	return false
+}
+
+// normalizeToMs coerces an ActionResult timestamp to milliseconds, regardless of
+// whether it was stored as seconds, ms, microseconds, or nanoseconds. Mirrors the
+// 10/13/19-digit handling in FixActionResultOutput, plus a 16-digit branch for
+// time.Now().UnixMicro() values written by db-connector.go and parts of shared.go.
+func normalizeToMs(ts int64) int64 {
+	switch len(strconv.FormatInt(ts, 10)) {
+	case 10:
+		return ts * 1000
+	case 13:
+		return ts
+	case 16:
+		return ts / 1000
+	case 19:
+		return ts / 1000000
+	default:
+		return ts
+	}
+}
+
+// ValidateExecutionChronology checks if actions in a workflow execution started
+// before all their parents completed. Returns violations with parent-child timing mismatches.
+func ValidateExecutionChronology(ctx context.Context, execution *WorkflowExecution) []ExecutionChronologyViolation {
+	var violations []ExecutionChronologyViolation
+	if execution == nil || len(execution.Results) == 0 {
+		return violations
+	}
+
+	// Build parent map: destID -> []srcID (same logic as CheckNextActions, skip decorators)
+	parents := make(map[string][]string)
+	for _, branch := range execution.Workflow.Branches {
+		if branch.Decorator {
+			continue
+		}
+		parents[branch.DestinationID] = append(parents[branch.DestinationID], branch.SourceID)
+	}
+
+	// Index results by action ID
+	resultsByID := make(map[string]ActionResult)
+	for _, result := range execution.Results {
+		if result.Action.ID != "" {
+			resultsByID[result.Action.ID] = result
+		}
+	}
+
+	// Check each executed action against its parents
+	for _, result := range execution.Results {
+		if result.Status == "SKIPPED" || result.Action.ID == "" || result.StartedAt == 0 {
+			continue
+		}
+
+		for _, parentID := range parents[result.Action.ID] {
+			parentResult, ok := resultsByID[parentID]
+			if !ok || parentResult.Status == "SKIPPED" || parentResult.CompletedAt == 0 {
+				// parent didn't run, was skipped, or is a trigger with no timing — not a dependency
+				continue
+			}
+
+			childMs := normalizeToMs(result.StartedAt)
+			parentMs := normalizeToMs(parentResult.CompletedAt)
+
+			if childMs < parentMs {
+				gapMs := parentMs - childMs
+				violations = append(violations, ExecutionChronologyViolation{
+					ActionID:    result.Action.ID,
+					ActionLabel: result.Action.Label,
+					ParentID:    parentID,
+					ActionStart: childMs,
+					ParentEnd:   parentMs,
+					GapMs:       gapMs,
+				})
+				log.Printf("[WARNING][%s] Ordering violation: %s started %.2fs before parent %s (%s) completed",
+					execution.ExecutionId, result.Action.Label,
+					float64(gapMs)/1000.0, parentID, parentResult.Action.Label)
+			}
+		}
+	}
+
+	return violations
 }

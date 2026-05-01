@@ -4898,7 +4898,7 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		}
 
 		// Already handled check
-		for _, option := range automation.Options {
+		for optionKey, option := range automation.Options {
 			// 'remove' icon in the UI does this
 			if option.Disabled {
 				continue
@@ -4914,6 +4914,21 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 				continue
 			}
 
+			// Check if previous has finished/timed out
+			// This allows next to run. Default agent cache timeout is 30 seconds~
+			if optionKey > 0 {
+				oldKey := automation.Options[optionKey-1]
+				oldCacheName := fmt.Sprintf("%s_%s_%s_%s", cacheData.Key, cacheData.Category, cacheData.OrgId, oldKey.Key)
+				_, err := GetCache(ctx, oldCacheName)
+				if err == nil {
+					if debug { 
+						log.Printf("[DEBUG] PREV agent cache hit for %s - skipping for now", oldCacheName)
+					}
+
+					continue
+				}
+			}
+
 			// As a fallback in case of slow datastore update
 			// Prevents super quick reruns
 			cacheName := fmt.Sprintf("%s_%s_%s_%s", cacheData.Key, cacheData.Category, cacheData.OrgId, option.Key)
@@ -4923,19 +4938,18 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 				continue
 			}
 
-			SetCache(ctx, cacheName, []byte("1"), 3)
-
+			// 30 seconds
+			SetCache(ctx, cacheName, []byte("1"), 60000, true)
 			if !strings.Contains(option.Key, "action") {
 				log.Printf("[WARNING] Agent option key %s does not contain 'action' - skipping to avoid confusion. This may cause the agent to not run if no other options are present.", option.Key)
 				continue
 			}
 
-			// FIXME: Make dynamic
-			aiAppname := "openai"
+			allowedApps := strings.Join(option.Apps, ",")
 			parsedParams := []map[string]string{
 				map[string]string{
 					"name":  "app_name",
-					"value": aiAppname,
+					"value": allowedApps,
 				},
 				map[string]string{
 					"name":  "action",
@@ -4946,7 +4960,7 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 			// option.Value += fmt.Sprintf("\n%s", cacheData.Value)
 			parsedParams = append(parsedParams, map[string]string{
 				"name":  "input",
-				"value": fmt.Sprintf("TASK: %s\nKey: %s\nCategory: %s\n\nUNTRUSTED DATA:\n%s", option.Value, cacheData.Key, cacheData.Category, cacheData.Value),
+				"value": fmt.Sprintf("TASK: %s\n\nKey: %s\nCategory: %s\n\nRAW DATA:\n%s", option.Value, cacheData.Key, cacheData.Category, cacheData.Value),
 			})
 
 			agentUrl := fmt.Sprintf("%s/api/v1/apps/agent_starter/run", backendUrl)

@@ -67,7 +67,7 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 
 		ngramItem, err := GetDatastoreNGramItem(ctx, searchKey)
 		if err != nil {
-			log.Printf("[WARNING] Failed to get ngram item in GetCorrelations for '%s': %s", searchKey, err)
+			//log.Printf("[WARNING] Failed to get ngram item in GetCorrelations for '%s': %s", searchKey, err)
 			resp.WriteHeader(404)
 			resp.Write([]byte(`{"success": false, "reason": "No correlations found"}`))
 			return
@@ -123,6 +123,11 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 
 }
 
+func isValidUUID(s string) bool {
+	_, err := uuid.FromString(s)
+	return err == nil
+}
+
 // Used to cross-correlate data
 // Not YET doing proper ngram by breaking everything down, but it's easy to
 // Modify this into doing that as well
@@ -157,9 +162,9 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 			}
 		}
 
-		// Simple workaround for dates
+		// Simple workaround for dates, ids etc
 		// hardcoded for now just to remove certain things
-		skippableKeys := []string{"spec_version", "version", "pattern_type", "created", "edited", "creation", "status"}
+		skippableKeys := []string{"spec_version", "version", "pattern_type", "created", "edited", "creation", "status", "type", "id", "finding_uid", "uid", "uuid", "source", "class_name"}
 
 		// Types and patterns
 		skippableValues := []string{"indicator", "stix", "active", "false", "true", "inprogress", "new", "closed", "resolved", "escalated", "incidentfinding", "domain", "ip", "url", "file", "cve", "vulnerability", "threat-actor", "tool", "attack-pattern", "campaign", "malware", "indicator", "observable"}
@@ -177,18 +182,18 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 				continue
 			}
 
+			// FIXME: Check here if it's a map, then recurse down (future)
 			if _, ok := val.(string); !ok {
-				// FIXME: Check here if it's a map, then recurse down
-				// to find more string
 				continue
 			}
 
 			parsedValue := val.(string)
 
+
 			// FIXME: Arbitrary limits
 			// About ngram: We will want to do additional splitting,
 			// but to start with, we just do the whole thing
-			if len(parsedValue) > 70 || len(parsedValue) < 2 {
+			if len(parsedValue) > 70 || len(parsedValue) < 5 {
 				continue
 			}
 
@@ -230,12 +235,15 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 				continue
 			}
 
-			u, err := uuid.FromString(parsedValue)
-			if err == nil || u == uuid.Nil { 
+			tmpValue := parsedValue
+			tmpValue = strings.TrimPrefix(tmpValue, "file_")
+			if isValidUUID(tmpValue) {
+				log.Printf("[DEBUG] Skipping value that is a valid UUID: %s", parsedValue)
 				continue
 			}
 
 			parsedCategory := strings.ToLower(strings.ReplaceAll(category, " ", "_"))
+
 
 			// Doing it WITHOUT the JSON key & Org, as we only want to partially cross-correlate to find items among each other
 			referenceKey := fmt.Sprintf("%s|%s", parsedCategory, datastoreKey)
