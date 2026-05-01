@@ -8274,6 +8274,14 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
 	}
 
+	// Generate a one-time-use token so PrepareSingleAction knows this request originated from a legitimate agent execution and is allowed to inject the system AI credentials.
+	agentOneTimeToken := uuid.NewV4().String()
+	agentTokenCacheKey := fmt.Sprintf("agent_onetime_token_%s", agentOneTimeToken)
+	if err := SetCache(ctx, agentTokenCacheKey, []byte("1"), 60); err != nil {
+		log.Printf("[WARNING][%s] Failed to set agent one-time token in cache: %s", execution.ExecutionId, err)
+	}
+	req.Header.Set("X-Agent-Token", agentOneTimeToken)
+
 	newresp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error=%s", execution.ExecutionId, execution.Workflow.OrgId, strings.Replace(err.Error(), `"`, `\"`, -1))
