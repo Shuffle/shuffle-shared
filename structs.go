@@ -1745,6 +1745,15 @@ type ActionResult struct {
 	Sanitized        bool            `json:"sanitized" datastore:"sanitized"`
 }
 
+type ExecutionChronologyViolation struct {
+	ActionID    string `json:"action_id"`
+	ActionLabel string `json:"action_label"`
+	ParentID    string `json:"parent_id"`
+	ActionStart int64  `json:"action_start"`
+	ParentEnd   int64  `json:"parent_end"`
+	GapMs       int64  `json:"gap_ms"`
+}
+
 type AuthenticationUsage struct {
 	WorkflowId string   `json:"workflow_id" datastore:"workflow_id"`
 	Nodes      []string `json:"nodes" datastore:"nodes"`
