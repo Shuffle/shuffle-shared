@@ -76,11 +76,6 @@ func EstimatePromptTokens(messages []openai.ChatCompletionMessage) int64 {
 	return (totalChars + 3) / 4
 }
 
-type AiCallInfo struct {
-	Caller string
-	OrgID  string
-}
-
 // Provide an incident triage and response plan for the reported incident finding. Make a short list of actions to perform in the following format: [{"title": "Title of the task", "category": "triage/containment/recovery/communication/documentation", "completed": false, "createdBy": "ai-agent@shuffler.io"}]. ONLY output as JSON array and nothing more. After the list is made, add these to the metadata.extensions.custom_attributes.tasks[] in the next action.
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {

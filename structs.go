@@ -5527,3 +5527,8 @@ type VulnerabilityQuery struct {
 	Version   string     `json:"version,omitempty"`
 	Package   OSVPackage `json:"package"`
 }
+
+type AiCallInfo struct {
+	Caller string
+	OrgID  string
+}
