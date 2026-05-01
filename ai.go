@@ -7056,7 +7056,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 	agentOutput := base
 	agentOutput.Status = "ABORTED"
 	agentOutput.Error = reason
-	agentOutput.CompletedAt = time.Now().Unix()
+	agentOutput.CompletedAt = time.Now().UnixMilli()
 
 	lastDecisionIsFinish := false
 	if len(agentOutput.Decisions) > 0 {
@@ -8488,7 +8488,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 					}
 				}
 
-				decision.RunDetails.StartedAt = time.Now().Unix()
+				decision.RunDetails.StartedAt = time.Now().UnixMilli()
 
 				// Waiting 2
 				decision.RunDetails.Status = "WAITING"
@@ -8501,7 +8501,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			if decision.Action == "finish" || decision.Category == "finish" {
 				log.Printf("[INFO][%s] Decision %d is a finish decision. Marking the agent as finished...", execution.ExecutionId, decision.I)
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = aiStarttime
-				agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
+				agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 
 				agentOutput.Output = decision.Reason
@@ -8521,7 +8521,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 				agentOutput.Decisions[decisionIndex] = decision
 				agentOutput.Status = "FINISHED"
-				agentOutput.CompletedAt = time.Now().Unix()
+				agentOutput.CompletedAt = time.Now().UnixMilli()
 
 			} else if decision.Action == "ask" || decision.Action == "question" {
 				// In case of bad parsing
@@ -8566,14 +8566,14 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 					}
 				}
 
-				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 				//agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "WAITING"
 				agentOutput.Status = "WAITING"
 
 			} else if decision.Category != "standalone" {
 				// Do we run the singul action directly?
-				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 
 				go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
@@ -8584,8 +8584,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				if decision.Category == "standalone" || decision.Action == "answer" {
 					// FIXME: Maybe need to send this to myself
 
-					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
-					agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().Unix()
+					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
+					agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
 					agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 
 					decision = agentOutput.Decisions[decisionIndex]
@@ -8635,10 +8635,10 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 					}
 
 				} else {
-					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 					agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 
-					log.Printf("\n\n\n\n\n[ERROR] AI Agent: Action '%s' with category '%s' is NOT supported in AI Agent decisions. Skipping...\n\n\n\n\n", decision.Action, decision.Category)
+					log.Printf("[ERROR][%s] AI Agent: Action '%s' with category '%s' is NOT supported in AI Agent decisions. Skipping...", execution.ExecutionId, decision.Action, decision.Category)
 				}
 			}
 
@@ -8766,7 +8766,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		for messageIndex, _ := range completionRequest.Messages {
 			if len(completionRequest.Messages[messageIndex].Name) == 0 {
-				completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().Unix())
+				completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().UnixMilli())
 			}
 		}
 
@@ -8924,7 +8924,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	initialising := false
-	workflow, workflowErr := GetWorkflow(ctx, workflowId)
+	workflow, workflowErr := GetWorkflow(ctx, workflowId, true)
 	if workflowErr != nil || workflow.ID == "" {
 		//log.Printf("[WARNING] Failed to get workflow by ID '%s' in GenerateSingulWorkflows: %s", workflowId, workflowErr)
 		initialising = true
@@ -8941,6 +8941,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", user.ActiveOrg.Id))
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", "", user.ActiveOrg.Id))
 		} else {
 			log.Printf("[INFO] No existing workflow with ID %s to remove for category '%s'", workflowId, categoryAction.Label)
 			resp.WriteHeader(http.StatusOK)
@@ -9149,7 +9150,10 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if len(workflow.Actions[actionIndex].LargeImage) == 0 {
-				if debug {
+
+				if strings.Contains(strings.ToLower(action.AppName), "agent") || strings.Contains(strings.ToLower(action.AppName), "singul") || strings.Contains(strings.ToLower(action.AppName), "integration") { 
+					workflow.Actions[actionIndex].LargeImage = "/icons/workflow-page/shuffle_agent.png"
+				} else if debug {
 					log.Printf("[DEBUG] Missing app image for app '%s'", action.AppName)
 				}
 			}

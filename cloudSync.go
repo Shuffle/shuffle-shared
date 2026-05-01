@@ -2179,10 +2179,6 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	body := originalBody
 	defer resp.Body.Close()
 
-	if debug {
-		log.Printf("\n\n\n[DEBUG][%s] Agent decision response: %s\n\n\n", execution.ExecutionId, string(body))
-	}
-
 	// Try to map it into SchemalessOutput and grab "RawResponse"
 	outputMapped := SchemalessOutput{}
 	err = json.Unmarshal(body, &outputMapped)
@@ -2732,9 +2728,9 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 	cacheKey := fmt.Sprintf("sensorupdate_%s_%s", sensorDetails.Hostname, sensorDetails.Arch)
 	GotCache, err := GetCache(ctx, cacheKey)
 	if err == nil && GotCache != nil {
-		if debug { 
-			log.Printf("[DEBUG] Skipping datastore update for sensor '%s' as it was updated recently (cache hit)", sensorDetails.Hostname)
-		}
+		//if debug { 
+		//	log.Printf("[DEBUG] Skipping datastore update for sensor '%s' as it was updated recently (cache hit)", sensorDetails.Hostname)
+		//}
 
 		return
 	}

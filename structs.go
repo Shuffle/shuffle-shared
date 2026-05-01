@@ -1178,8 +1178,9 @@ type DatastoreAutomationOption struct {
 	Key   string `json:"key" datastore:"key"`
 	Value string `json:"value" datastore:"value,noindex"`
 
-	Description string `json:"description" datastore:"description"`
-	Disabled    bool   `json:"disabled" datastore:"disabled"`
+	Apps        []string `json:"apps" datastore:"apps"`
+	Description string   `json:"description" datastore:"description"`
+	Disabled    bool     `json:"disabled" datastore:"disabled"`
 }
 
 type DatastoreAutomation struct {
@@ -1239,7 +1240,7 @@ type CacheKeyDataMini struct {
 	Enrichments         []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 
 	OrgId              string   `json:"org_id,omitempty" datastore:"OrgId"`
-	ExecutionId        string   `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	ExecutionId        string   `json:"execution_id,omitempty" datastore:"ExecutionId"`
 	Authorization      string   `json:"authorization,omitempty" datastore:"Authorization"`
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 	Tags               []string `json:"tags,omitempty" datastore:"tags"`
@@ -1257,8 +1258,8 @@ type CacheKeyDataFallback struct {
 
 type CacheKeyData struct {
 	Success             bool         `json:"success,omitempty" datastore:"Success"`
-	WorkflowId          string       `json:"workflow_id," datastore:"WorkflowId"`
-	ExecutionId         string       `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	WorkflowId          string       `json:"workflow_id,omitempty" datastore:"WorkflowId"`
+	ExecutionId         string       `json:"execution_id,omitempty" datastore:"ExecutionId"`
 	Authorization       string       `json:"authorization,omitempty" datastore:"Authorization"`
 	OrgId               string       `json:"org_id,omitempty" datastore:"OrgId"`
 	Key                 string       `json:"key" datastore:"Key"`
@@ -1742,6 +1743,15 @@ type ActionResult struct {
 	AttackTactics    []string        `json:"attack_tactics" datastore:"attack_tactics"`
 	SimilarActions   []SimilarAction `json:"similar_actions" datastore:"similar_actions"`
 	Sanitized        bool            `json:"sanitized" datastore:"sanitized"`
+}
+
+type ExecutionChronologyViolation struct {
+	ActionID    string `json:"action_id"`
+	ActionLabel string `json:"action_label"`
+	ParentID    string `json:"parent_id"`
+	ActionStart int64  `json:"action_start"`
+	ParentEnd   int64  `json:"parent_end"`
+	GapMs       int64  `json:"gap_ms"`
 }
 
 type AuthenticationUsage struct {

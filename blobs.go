@@ -174,12 +174,14 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				Options: []DatastoreAutomationOption{
 					DatastoreAutomationOption{
 						Key:      "action",
-						Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'.   Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Some incidents are duds and should be closed quickly. Others are important ones. Others are missing important details. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.   If the incident has RELEVANT tasks that are not finished, modify them if necessary. Change the \"severity\" to info/low/medium/high/critical if relevant. When done, ALWAYS make sure the \"status\" is inProgress.",
+						Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.   If the incident has RELEVANT tasks that are not finished, modify them if necessary. Change the incident \"severity\" to info/low/medium/high/critical if relevant. When done, ALWAYS make sure the \"status\" is inProgress. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.",
+						Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
 						Disabled: false,
 					},
 					DatastoreAutomationOption{
 						Key:      "action-2",
-						Value:    "Go through each task one by one if there are any. When starting them, self-assign yourself to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it.  Before starting, get key \"agent_permissions\" from category \"shuffle-security_configuration\". This has a list of permissions you NEED to follow if it exists. This extends the reach of tools and capabilities you are allowed to use. ONLY use the permissions that are enabled. If permissions do not exist, continue as per normal guidance.",
+						Value:    "Your goal is to solve the incident. If the incident is resolved, do nothing. If the incident has no tasks, do nothing. Otherwise go through each task one by one IF there are any, and update them one by one in realtime. When starting them, self-assign @AIAgent to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.",
+						Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
 						Disabled: false,
 					},
 				},
@@ -503,6 +505,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			actionEnv = "Shuffle"
 		}
 	}
+
+	//log.Printf("DEFAULT ENV: %#v", actionEnv)
 
 	if parsedActiontype == "correlate_categories" {
 		defaultWorkflow := Workflow{
@@ -1148,12 +1152,13 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					AppVersion:  "1.0.0",
 					Environment: actionEnv,
 					Label:       "Run_questions",
+					LargeImage: "/icons/workflow-page/shuffle_agent.png",
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:      "app_name",
 							Multiline: false,
 							Required:  true,
-							Value:     "",
+							Value:     "Shuffle AI",
 						},
 						WorkflowAppActionParameter{
 							Name:      "input",
@@ -1161,7 +1166,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 							Required:  true,
 							Value: `**Answer this question:** $handle_ai_agent_run.message.agent.content
 
-**IMPORTANT:** JUST answer in the same language as the question. Do not ask questions. Do NOT lie. Just try to answer the question. Escape any link so it's not 
+**IMPORTANT:** JUST answer in the same language as the question. Do not ask questions. Do NOT lie. Keep the answer concise - no need to overexplain, nor underexplain. Escape any link in case it is malicious.
 
 **Full context:**
 $exec`,
@@ -1170,7 +1175,7 @@ $exec`,
 							Name:      "action",
 							Multiline: false,
 							Required:  false,
-							Value:     "",
+							Value:     "Nothing",
 						},
 						WorkflowAppActionParameter{
 							Name:      "memory",
@@ -1246,7 +1251,7 @@ $exec`,
 						Condition{
 							Source: WorkflowAppActionParameter{
 								Name:  "source",
-								Value: "$handle_ai_agent_run.message.agent",
+								Value: "$handle_ai_agent_run.message.updated",
 							},
 							Condition: WorkflowAppActionParameter{
 								Name:  "condition",
@@ -2703,13 +2708,31 @@ for key in all_urls:
   if key["enabled"] != True:
     continue
 
+  parsed_headers = {}
+
+  if "headers" in key and len(key["headers"]) > 0:
+    # Split with = and newlines
+    headers = headers.split(";")
+    for header in headers:
+      if "=" in header:
+        header_parts = header.split("=")
+        parsed_headers[header_parts[0].strip()] = header_parts[1].strip()
+      else:
+        parsed_headers[header.strip()] = ""
+
   try:
-    resp = requests.get(key["url"], verify=False, timeout=3)
-    input_data.append({
+    resp = requests.get(key["url"], headers=parsed_headers, verify=False, timeout=3)
+    content = {
       "status": resp.status_code,
       "body": resp.text,
       "url": key["url"],
-    })
+    }
+
+    if "type" in key:
+      content["type"] = key["type"]
+
+    input_data.append(content)
+
   except Exception as e:
     pass
 	
@@ -2781,13 +2804,25 @@ for content in input_data:
   iocs = content["body"]
 
   found_type = ""
-  searchspace = iocs[0:1000]
-  for key, value in regexsearch.items():
-    value = sanitize_regex(value)
-    match = re.search(value, searchspace)
-    if match:
-      found_type = key
-      break
+  if "type" in content and len(content["type"]) > 0:
+    found_type = content["type"].lower()
+    found = False
+    for key, value in regexsearch.items():
+      if key == found_type:
+        found = True
+        break
+
+    if not found:
+      continue
+
+  if not found_type:
+    searchspace = iocs[0:1000]
+    for key, value in regexsearch.items():
+      value = sanitize_regex(value)
+      match = re.search(value, searchspace)
+      if match:
+        found_type = key
+        break
 
   if len(found_type) == 0:
     continue
@@ -2860,7 +2895,7 @@ for content in input_data:
 
     if key in all_items:
       if content["url"] not in all_items[found_type][key]["urls"]:
-              all_items[found_type][key] = all_items[found_type][key]["urls"].append(content["url"])
+        all_items[found_type][key] = all_items[found_type][key]["urls"].append(content["url"])
     else:
 
       # Silly workaround to ensure we got a good UUID
@@ -2875,8 +2910,10 @@ for content in input_data:
         stix_pattern = f"[file:hashes.SHA1 = '{key}']" 
       elif found_type == "sha256":
         stix_pattern = f"[file:hashes.SHA256 = '{key}']" 
-      elif found_type == "ip":
+      elif found_type == "ip" or found_type == "ipv4":
         stix_pattern = f"[ipv4-addr:value = '{key}']" 
+      elif found_type == "ipv6": 
+        stix_pattern = f"[ipv6-addr:value = '{key}']" 
       elif found_type == "domain":
         stix_pattern = f"[domain-name:value = '{key}']" 
       else:
@@ -2930,7 +2967,7 @@ for k, v in all_items.items():
         })
 
         cnt += 1
-        if cnt >= 500:
+        if cnt >= 1000:
             break
 
     if len(new_list) > 0:
@@ -3687,7 +3724,7 @@ func GetUsecaseData() string {
         "type": "Assets",
         "destination": "Case Management",
         "running": false,
-        "disabled": true,
+        "disabled": false,
         "id": "asset_management_case_management_vuln_1",
         "source_id": "asset_management",
         "target_id": "case_management",
@@ -3742,7 +3779,7 @@ func GetUsecaseData() string {
         "type": "Threat Intel",
         "destination": "Cloud",
         "running": false,
-        "disabled": true,
+        "disabled": false,
         "id": "threat_intel_cloud_1",
         "source_id": "threat_intel",
         "target_id": "cloud",
@@ -3871,7 +3908,9 @@ else:
   }))
   exit()
 
-activities = cur_exec["activity"]
+activities = []
+if "activity" in cur_exec:
+  activities = cur_exec["activity"]
 
 ai_agent_activities = []
 activities_changed = False
@@ -3886,7 +3925,7 @@ for activityIndex in range(len(activities)):
   else:
     continue
 
-  if "@AIAgent" not in activity["content"]:
+  if "content" not in activity or ("@aiagent" not in activity["content"].lower()):
     continue
 
   ai_agent_activities.append(activity)
