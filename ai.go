@@ -9191,7 +9191,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	org := info.OrgID
 	callerName := info.Caller
-	if len(strings.TrimSpace(info.Caller)) == 0 {
+	if len(strings.TrimSpace(callerName)) == 0 {
 		callerName = "unknown"
 	}
 
