@@ -7104,7 +7104,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 	// log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q", execution.ExecutionId, execution.Workflow.OrgId, abortLabel, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
 
 	abortResult := ActionResult{
-		Status:      "ABORTED",
+		Status:      "SUCCESS",
 		Result:      string(marshalledOutput),
 		Action:      startNode,
 		StartedAt:   time.Now().UnixMilli(),
@@ -7125,10 +7125,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		execution.Results = append(execution.Results, abortResult)
 	}
 
-	execution.Status = "ABORTED"
-
-	go sendAgentActionSelfRequest("ABORTED", execution, abortResult)
-	go SetWorkflowExecution(ctx, execution, true)
+	go sendAgentActionSelfRequest("SUCCESS", execution, abortResult)
 
 	return startNode, errors.New(reason)
 }
