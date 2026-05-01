@@ -4891,7 +4891,7 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		// november 2025 after adding graphic system to datastore
 
 	} else if parsedName == "run_ai_agent" {
-		log.Printf("[INFO] AI agent: Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
+		log.Printf("[DEBUG] AI agent: Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
 		if len(foundApikey) == 0 {
 			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
 			return errors.New("No admin user with API key found")
