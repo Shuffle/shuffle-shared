@@ -7436,7 +7436,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				relevantDecisions = append(relevantDecisions, mappedResult.Decisions[i])
 			}
 
-			log.Printf("[INFO][%s] AI_AGENT: org=%s decisions_total=%d failures=%d successes=%d last_index=%d", execution.ExecutionId, execution.Workflow.OrgId, len(mappedResult.Decisions), failureCount, successCount, lastFinishedIndex)
+			if debug {
+				log.Printf("[INFO][%s] AI_AGENT: org=%s decisions_total=%d failures=%d successes=%d last_index=%d", execution.ExecutionId, execution.Workflow.OrgId, len(mappedResult.Decisions), failureCount, successCount, lastFinishedIndex)
+			}
 
 			marshalledDecisions, err = json.Marshal(relevantDecisions)
 			if err != nil {
