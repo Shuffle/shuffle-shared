@@ -4754,6 +4754,8 @@ type AgentDecision struct {
 	Fields           []Valuereplace `json:"fields" datastore:"fields"`
 	Reason           string         `json:"reason" datastore:"reason"`
 	ApprovalRequired bool           `json:"approval_required" datastore:"approval_required"` // Set TRUE only for destructive/high-risk actions
+	DataFilter string `json:"data_filter,omitempty" datastore:"data_filter"` 	// DataFilter controls how the raw tool response is reduced before being fed back into the agent.
+	FieldsNeeded []string `json:"fields_needed,omitempty" datastore:"fields_needed"` 	// FieldsNeeded is set by the agent alongside data_filter:"list".
 
 	// Responses
 	RunDetails AgentDecisionRunDetails `json:"run_details" datastore:"run_details"`
