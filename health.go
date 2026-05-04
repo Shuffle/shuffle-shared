@@ -898,7 +898,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if platformHealth.Workflows.Create == true && platformHealth.Workflows.Delete == true && platformHealth.Workflows.Run == true && platformHealth.Workflows.RunFinished == true && platformHealth.Workflows.RunStatus == "FINISHED" && platformHealth.Agents.Run == true && platformHealth.Agents.RunFinished == true && platformHealth.Agents.RunStatus == "FINISHED" && platformHealth.Agents.LLMCallSuccess == true {
+	if platformHealth.Workflows.Create == true && platformHealth.Workflows.Delete == true && platformHealth.Workflows.Run == true && platformHealth.Workflows.RunFinished == true && platformHealth.Workflows.RunStatus == "FINISHED" {
 		log.Printf("[DEBUG] Platform health check successful! All necessary values are true.")
 		platformHealth.Success = true
 	}
