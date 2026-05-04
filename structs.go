@@ -5254,20 +5254,29 @@ type AppBuildRequest struct {
 	Image   string `datastore:"image"`
 }
 
+type AgentsOpsError struct {
+	Create             string `json:"create"`
+	Run                string `json:"run"`
+	Delete             string `json:"delete"`
+	RunFinished        string `json:"run_finished"`
+	AgentValidation string `json:"agent_validation"`
+}
+
 type AgentHealth struct {
-	Create             bool    `json:"create"`
-	Run                bool    `json:"run"`
-	BackendVersion     string  `json:"backend_version"`
-	RunFinished        bool    `json:"run_finished"`
-	ExecutionTook      float64 `json:"execution_took"`
-	RunStatus          string  `json:"run_status"`
-	Delete             bool    `json:"delete"`
-	ExecutionId        string  `json:"execution_id"`
-	WorkflowId         string  `json:"workflow_id"`
-	AgentNodeId        string  `json:"agent_node_id"`
-	AgentStatus        string  `json:"agent_status"`         // Status of the agent itself (RUNNING, FINISHED, ABORTED)
-	AgentDecisionCount int     `json:"agent_decision_count"` // Number of decisions made by the agent
-	LLMCallSuccess     bool    `json:"llm_call_success"`     // Whether the LLM call succeeded
+	Create             bool    			`json:"create"`
+	Run                bool    			`json:"run"`
+	BackendVersion     string  			`json:"backend_version"`
+	RunFinished        bool    			`json:"run_finished"`
+	ExecutionTook      float64 			`json:"execution_took"`
+	RunStatus          string  			`json:"run_status"`
+	Delete             bool    			`json:"delete"`
+	ExecutionId        string  			`json:"execution_id"`
+	WorkflowId         string  			`json:"workflow_id"`
+	AgentNodeId        string  			`json:"agent_node_id"`
+	AgentStatus        string  			`json:"agent_status"`         // Status of the agent itself (RUNNING, FINISHED, ABORTED)
+	AgentDecisionCount int     			`json:"agent_decision_count"` // Number of decisions made by the agent
+	LLMCallSuccess     bool    			`json:"llm_call_success"`     // Whether the LLM call succeeded
+	Error   		   AgentsOpsError 	`json:"error"`
 }
 
 type WttrResponse struct {

@@ -4612,7 +4612,7 @@ func startAgentExecution(baseUrl, apiKey, orgId string) (agentStartResult, error
 	requestBody := map[string]interface{}{
 		"params": map[string]interface{}{
 			"input": map[string]string{
-				"text": "Get the current weather of new york using https://wttr.in/New+York api and just output the current weather temperature without any commentary, just output the number in celcius and dont include the decimals, use action as custom_action, tool as api and category as singul keep the url as it and not needed for any other hallucinated params or headers, just include the url as is and the method name which is GET.",
+				"text": "Get the current weather of new york using https://wttr.in/New+York?format=%t api and just output the current weather temperature without any commentary, just output the number in celcius and dont include the decimals, use action as custom_action, tool as http and category as singul keep the url as it and not needed for any other hallucinated params or headers, just include the url as is and the method name which is GET.",
 			},
 		},
 	}
@@ -4713,12 +4713,21 @@ func fetchAgentExecutionResults(baseUrl, apiKey, orgId, executionId, authorizati
 
 
 func extractAgentOutputFromResults(execution WorkflowExecution) (AgentOutput, bool) {
-	for _, result := range execution.Results {
-		var agentOutput AgentOutput
-		if err := json.Unmarshal([]byte(result.Result), &agentOutput); err == nil && len(agentOutput.Decisions) > 0 {
+	var agentOutput AgentOutput
+
+	err := json.Unmarshal([]byte(execution.Result), &agentOutput)
+	if err == nil && len(agentOutput.Decisions) > 0 {
+		return agentOutput, true
+	}
+
+	//  maybe it's a JSON string inside ?
+	var inner string
+	if err := json.Unmarshal([]byte(execution.Result), &inner); err == nil {
+		if err := json.Unmarshal([]byte(inner), &agentOutput); err == nil && len(agentOutput.Decisions) > 0 {
 			return agentOutput, true
 		}
 	}
+	
 	return AgentOutput{}, false
 }
 
@@ -4736,6 +4745,7 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 	startResult, err := startAgentExecution(baseUrl, apiKey, orgId)
 	if err != nil {
 		log.Printf("[ERROR] Health check failed for startAgentExecution: %s", err)
+		agentHealth.Error.Create = fmt.Sprintf("Health check failed for startAgentExecution: %s", err)
 		return agentHealth, err
 	}
 
@@ -4748,6 +4758,7 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 		execution, err := fetchAgentExecutionResults(baseUrl, apiKey, orgId, startResult.ExecutionId, startResult.Authorization)
 		if err != nil {
 			log.Printf("[ERROR] Health check failed in fetchAgentExecutionResults: %s", err)
+			agentHealth.Error.Run = fmt.Sprintf("Health check failed in fetchAgentExecutionResults: %s", err)
 			return agentHealth, err
 		}
 
@@ -4796,6 +4807,7 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 		case <-timeout:
 			log.Printf("[ERROR] Timeout reached for agent health check")
 			agentHealth.RunStatus = "ABANDONED_BY_HEALTHCHECK"
+			agentHealth.Error.Run = "Timeout reached for agent health check"
 			return agentHealth, errors.New("timeout reached for agent health check")
 		default:
 		}
@@ -4810,26 +4822,25 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 
 func getRealTempC() (int, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get("https://wttr.in/New+York?format=j1")
+
+	resp, err := client.Get("https://wttr.in/New+York?format=%t")
 	if err != nil {
 		return 0, err
 	}
 	defer resp.Body.Close()
 
-	var data WttrResponse
-
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return 0, err
 	}
 
-	if len(data.CurrentCondition) > 0 {
-		// Parse as float first to handle "9.0" or "9.5" without crashing
-		val, err := strconv.ParseFloat(data.CurrentCondition[0].TempC, 64)
-		if err != nil {
-			return 0, err
-		}
-		return int(math.Round(val)), nil
+	str := strings.TrimSpace(string(body))
+	str = strings.Trim(str, "+°C")
+
+	val, err := strconv.Atoi(str)
+	if err != nil {
+		return 0, err
 	}
 
-	return 0, fmt.Errorf("no data")
+	return val, nil
 }
