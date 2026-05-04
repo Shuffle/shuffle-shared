@@ -3838,7 +3838,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 			}
 		} else {
 			if debug {
-				log.Printf("[DEBUG] Failed getting cache for workflow (2): %s", err)
+				//log.Printf("[DEBUG] Failed getting cache for workflow (2): %s", err)
 			}
 		}
 	}

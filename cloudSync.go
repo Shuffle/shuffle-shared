@@ -2184,7 +2184,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	err = json.Unmarshal(body, &outputMapped)
 	if err != nil {
 		log.Printf("[ERROR] AI Agent: Failed unmarshalling agent decision response: %s", err)
-		return body, debugUrl, appname, []string{}, "", err
+		return body, debugUrl, appname, []string{}, "", nil 
 	}
 
 	if val, ok := outputMapped.RawResponse.(string); ok {
@@ -2205,7 +2205,12 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	}
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR][%s] AI Agent: Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
+		if debug { 
+			log.Printf("[ERROR][%s] AI Agent: Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
+		} else {
+			log.Printf("[ERROR][%s] AI Agent: Failed running agent decision with status %d. Body: %d", execution.ExecutionId, resp.StatusCode, len(body))
+		}
+
 		return body, debugUrl, appname, []string{}, "", errors.New(fmt.Sprintf("Failed running agent decision (2). Status code %d", resp.StatusCode))
 	}
 
@@ -2269,7 +2274,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 	// Set it to this at the start
 	if decision.RunDetails.StartedAt <= 0 {
-		decision.RunDetails.StartedAt = time.Now().Unix()
+		decision.RunDetails.StartedAt = time.Now().UnixMilli()
 	}
 
 	decision.RunDetails.Status = "RUNNING"
@@ -2295,7 +2300,12 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		decision.RunDetails.ActionName = actionName
 
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
+			if debug { 
+				log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
+			} else {
+				log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision.RunDetails.Id, err)
+			}
+
 			decision.RunDetails.Status = "FAILURE"
 
 			if len(decision.RunDetails.RawResponse) == 0 {

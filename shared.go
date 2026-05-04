@@ -17810,7 +17810,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 		if len(foundDecisions) == len(finishedDecisions) {
 			mappedResult.Decisions[decisionId].RunDetails.Status = "RUNNING"
-			mappedResult.Decisions[decisionId].RunDetails.StartedAt = time.Now().Unix()
+			mappedResult.Decisions[decisionId].RunDetails.StartedAt = time.Now().UnixMilli()
 			go RunAgentDecisionAction(workflowExecution, mappedResult, curDecision)
 		}
 	}
@@ -22775,7 +22775,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				foundDecisionIndex = decisionIndex
 				mappedOutput.CompletedAt = 0
 				mappedOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
-				mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+				mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 				mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = 0
 				mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse = ""
 				mappedOutput.Decisions[decisionIndex].RunDetails.DebugUrl = ""
