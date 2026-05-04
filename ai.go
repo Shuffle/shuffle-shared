@@ -7414,6 +7414,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		metadata += fmt.Sprintf("Current user: %s\n", execution.Workflow.UpdatedBy)
 	}
 
+	metadata += fmt.Sprintf("Current time: %s\n", time.Now().Format(time.RFC3339))
+
 	categoryActions := GetAppCategories()
 	actionMetadata := "ALL Available actions sorted by category:\n"
 	for _, category := range categoryActions {
@@ -7516,11 +7518,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				} else {
 					metadata += fmt.Sprintf("- %s\n", strings.ReplaceAll(actionStr, " ", "_"))
 				}
-			}
-
-			if debug && len(param.Value) > 0 {
-				log.Printf("[DEBUG] PARAM (2): %s", param.Value)
-				log.Printf("[DEBUG] Systemmessage (2): %s", systemMessage)
 			}
 
 			systemMessage += "\n\n"
@@ -7728,11 +7725,32 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			metadata += fmt.Sprintf("Organization name: %s\n", org.Name)
 			admins := []string{}
 			users := []string{}
+
+			foundUserId := ""
 			for _, user := range org.Users {
+				if user.Username == execution.Workflow.UpdatedBy {
+					foundUserId = user.Id
+				}
+
 				if user.Role == "admin" {
 					admins = append(admins, user.Username)
 				} else {
 					users = append(users, user.Username)
+				}
+			}
+
+			if len(foundUserId) > 0 {
+				foundUser, err := GetUser(ctx, foundUserId) 
+				if err == nil && len(foundUser.Id) > 0 {
+					if len(foundUser.UserGeoInfo.Country.Name) > 0 {
+						metadata += fmt.Sprintf("Country: %s,", foundUser.UserGeoInfo.Country.Name)
+					}
+
+					if len(foundUser.UserGeoInfo.City.Name) > 0 {
+						metadata += fmt.Sprintf("City: %s", foundUser.UserGeoInfo.City.Name)
+					}
+
+					metadata += "\n"
 				}
 			}
 
@@ -8076,19 +8094,6 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		aiModel = newAiModel
 	}
 
-	// Liquid escapes necessary?
-	// FIXME: Added changes to sdk instead
-	//metadata = strings.ReplaceAll(metadata, "${", "{")
-
-	// Escape relevant... weird data 
-	//In case of previous escapes
-	//metadata = strings.ReplaceAll(metadata, "${", "{")
-	//metadata = strings.ReplaceAll(metadata, "\\$", "$")
-	//metadata = strings.ReplaceAll(metadata, "$", "\\$")
-	//userMessage = strings.ReplaceAll(userMessage, "${", "{")
-	//userMessage = strings.ReplaceAll(userMessage, "\\$", "$")
-	//userMessage = strings.ReplaceAll(userMessage, "$", "\\$")
-
 	completionRequest := openai.ChatCompletionRequest{
 		Model: aiModel,
 		Messages: []openai.ChatCompletionMessage{
@@ -8098,7 +8103,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			},
 			{
 				Role:    openai.ChatMessageRoleUser,
-				Content: fmt.Sprintf("USER CONTEXT:\n%s. Current time: %s\n", metadata, time.Now().Format(time.RFC3339)),
+				Content: fmt.Sprintf("USER CONTEXT:\n%s\n", metadata),
 			},
 		},
 
@@ -8309,7 +8314,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	resultMapping := ActionResult{}
 	err = json.Unmarshal(body, &resultMapping)
 	if err != nil {
-		log.Printf("[ERROR] AI Agent (2): Failed unmarshalling response into decisions. Response from sending AI Agent request: %d - %s", newresp.StatusCode, string(body))
+		log.Printf("[ERROR] AI Agent (2): Failed unmarshalling response into decisions. Response from sending AI Agent request to %s: %d - '%s'", fullUrl, newresp.StatusCode, string(body))
 	}
 
 	resultMapping.ExecutionId = execution.ExecutionId
@@ -8884,7 +8889,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 			// Properly mark the agent as failed
 			agentOutput.Status = "FAILURE"
-			agentOutput.CompletedAt = time.Now().Unix()
+			agentOutput.CompletedAt = time.Now().UnixMilli()
 
 			sentFailure := false
 			// Update the result status - finds the existing node entry in execution.Results
