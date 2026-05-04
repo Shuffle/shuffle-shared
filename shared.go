@@ -26193,7 +26193,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		if len(newStartnode) > 0 {
 			workflowExecution.Start = newStartnode
 		} else {
-			log.Printf("[WARNING][%s] Couldn't find startnode %s among %d actions in workflow '%s'. Remapping to %s", workflowExecution.ExecutionId, workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
+			log.Printf("[WARNING][%s] Couldn't find startnode %s among %d actions in workflow '%s'. ATEEMPTED remap to '%s'", workflowExecution.ExecutionId, workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
 
 			return workflowExecution, ExecInfo{}, fmt.Sprintf("Startnode couldn't be found"), errors.New("Startnode isn't defined in this workflow..")
 		}
