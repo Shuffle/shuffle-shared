@@ -4629,6 +4629,7 @@ func startAgentExecution(baseUrl, apiKey, orgId string) (agentStartResult, error
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Org-Id", orgId)
+	req.Header.Set("X-Internal-Caller", "RunOpsAgent")
 
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Do(req)

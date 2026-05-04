@@ -5276,6 +5276,12 @@ type WttrResponse struct {
 	} `json:"current_condition"`
 }
 
+type Parsed struct {
+	Success       bool   `json:"success"`
+	ExecutionId   string `json:"execution_id"`
+	Authorization string `json:"authorization"`
+}
+
 // Data sent FROM Orborus->Backend about sensor mode
 type SensorDetails struct {
 	SensorMode bool   `json:"sensor_mode,omitempty" datastore:"sensor_mode"`
