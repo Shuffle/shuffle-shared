@@ -3832,7 +3832,9 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 					}
 				}
 
-				return workflow, nil
+				if len(workflow.Actions) > 1 || len(workflow.Triggers) > 0 {
+					return workflow, nil
+				}
 			}
 		} else {
 			if debug {
@@ -3960,7 +3962,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 		//log.Printf("[DEBUG] Skipping healthcheck during exec.")
 	}
 
-	if project.CacheDb && workflow.ID != "" {
+	if project.CacheDb && workflow.ID != "" && (len(workflow.Actions) > 1 || len(workflow.Triggers) > 0) {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(workflow)
 		if err != nil {

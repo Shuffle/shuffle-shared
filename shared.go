@@ -3663,7 +3663,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		if err != nil {
 			// Due to execution auth
 			if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") {
-				log.Printf("[WARNING] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
+				if debug { 
+					log.Printf("[DEBUG] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
+				}
 			}
 
 			return User{}, err
@@ -7780,9 +7782,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	}
 
 	// Create / Delete / Modify tracking
-	//log.Printf("\n ===== Parent: %#v, Child: %#v =====\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", parentWorkflow.ID, oldWorkflow.ID, len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
-
-	// Use previous rev
 	lastParentRevision := Workflow{}
 	parentRevisions, err := ListWorkflowRevisions(ctx, parentWorkflow.ID, 2)
 	if err != nil {
