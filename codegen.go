@@ -3936,7 +3936,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.35"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.38"
 }
 
 // Removes JSON values from the input
@@ -4648,6 +4648,20 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType string) error {
 	var err error
 
+	// Dedup here with cache
+	cacheName := fmt.Sprintf("automation_%s_%s_%s", runType, cacheData.Category, cacheData.Key)
+	_, err = GetCache(ctx, cacheName)
+	if err == nil {
+		if debug { 
+			log.Printf("[DEBUG] Found existing cache for %s - skipping execution to prevent duplicates", cacheName)
+		}
+
+		return nil
+	}
+
+	// Makes sure we wait 2500ms
+	SetCache(ctx, cacheName, []byte("1"), 2500, true)
+
 	if runType == "run_workflow" {
 
 	} else if runType == "webhook" {
@@ -4792,7 +4806,7 @@ func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte
 	return nil
 }
 
-func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAutomation) error {
+func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, automation DatastoreAutomation) error {
 	if len(cacheData.OrgId) == 0 {
 		return errors.New("CacheKeyData.OrgId is required for handleRunAutomation")
 	}
@@ -4800,8 +4814,11 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	if len(cacheData.Category) == 0 {
 		return errors.New("CacheKeyData.Category is required for handleRunAutomation")
 	}
+    
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	ctx := context.Background()
 	parsedName := strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_")
 
 	// These are ran pre-execution
@@ -4874,14 +4891,14 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 		// november 2025 after adding graphic system to datastore
 
 	} else if parsedName == "run_ai_agent" {
-		log.Printf("[DEBUG] Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
+		log.Printf("[DEBUG] AI agent: Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
 		if len(foundApikey) == 0 {
 			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
 			return errors.New("No admin user with API key found")
 		}
 
 		// Already handled check
-		for _, option := range automation.Options {
+		for optionKey, option := range automation.Options {
 			// 'remove' icon in the UI does this
 			if option.Disabled {
 				continue
@@ -4897,6 +4914,21 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 				continue
 			}
 
+			// Check if previous has finished/timed out
+			// This allows next to run. Default agent cache timeout is 30 seconds~
+			if optionKey > 0 {
+				oldKey := automation.Options[optionKey-1]
+				oldCacheName := fmt.Sprintf("%s_%s_%s_%s", cacheData.Key, cacheData.Category, cacheData.OrgId, oldKey.Key)
+				_, err := GetCache(ctx, oldCacheName)
+				if err == nil {
+					if debug { 
+						log.Printf("[DEBUG] PREV agent cache hit for %s - skipping for now", oldCacheName)
+					}
+
+					continue
+				}
+			}
+
 			// As a fallback in case of slow datastore update
 			// Prevents super quick reruns
 			cacheName := fmt.Sprintf("%s_%s_%s_%s", cacheData.Key, cacheData.Category, cacheData.OrgId, option.Key)
@@ -4906,19 +4938,18 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 				continue
 			}
 
-			SetCache(ctx, cacheName, []byte("1"), 3)
-
+			// 30 seconds
+			SetCache(ctx, cacheName, []byte("1"), 60000, true)
 			if !strings.Contains(option.Key, "action") {
 				log.Printf("[WARNING] Agent option key %s does not contain 'action' - skipping to avoid confusion. This may cause the agent to not run if no other options are present.", option.Key)
 				continue
 			}
 
-			// FIXME: Make dynamic
-			aiAppname := "openai"
+			allowedApps := strings.Join(option.Apps, ",")
 			parsedParams := []map[string]string{
 				map[string]string{
 					"name":  "app_name",
-					"value": aiAppname,
+					"value": allowedApps,
 				},
 				map[string]string{
 					"name":  "action",
@@ -4929,7 +4960,7 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			// option.Value += fmt.Sprintf("\n%s", cacheData.Value)
 			parsedParams = append(parsedParams, map[string]string{
 				"name":  "input",
-				"value": fmt.Sprintf("TASK: %s\nKey: %s\nCategory: %s\n\nUNTRUSTED DATA:\n%s", option.Value, cacheData.Key, cacheData.Category, cacheData.Value),
+				"value": fmt.Sprintf("TASK: %s\n\nKey: %s\nCategory: %s\n\nRAW DATA:\n%s", option.Value, cacheData.Key, cacheData.Category, cacheData.Value),
 			})
 
 			agentUrl := fmt.Sprintf("%s/api/v1/apps/agent_starter/run", backendUrl)
@@ -4961,8 +4992,9 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 				return err
 			}
 
-			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
-			req.Header.Add("Org-Id", cacheData.OrgId)
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
+			req.Header.Set("Org-Id", cacheData.OrgId)
+			req.Header.Set("X-Internal-Caller", "handleRunDatastoreAutomation")
 
 			resp, err := client.Do(req)
 			if err != nil {
@@ -4994,11 +5026,18 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 	} else if parsedName == "enrich" {
 		// Prevent recursion
 		cacheKey := fmt.Sprintf("enrich_wait_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
+
+
+		// Validates if the data is the same. Need a proper data diff
+		//md5sum := Md5sum([]byte(cacheData.Value))
+		//log.Printf("VALUE (%s):\n\n%s\n\n", md5sum, cacheData.Value)
+
 		data, err := GetCache(ctx, cacheKey)
 		if err == nil && data != nil {
-			if debug { 
-				log.Printf("[DEBUG] Enrich automation recently run for key %s in category %s - skipping.", cacheData.Key, cacheData.Category)
-			}
+			//cacheData := []byte(data.([]uint8))
+			//if string(cacheData) == md5sum {
+			//	return nil
+			//}
 
 			return nil
 		}
@@ -5007,10 +5046,12 @@ func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAu
 			log.Printf("[DEBUG] Running enrich automation for key %s in category %s", cacheData.Key, cacheData.Category)
 		}
 
-		// Set cache key for 1 MINUTE to avoid re-running enrich too often
-		// This doesn't matter too much as it won't impact data.
-		SetCache(ctx, cacheKey, []byte("1"), 1)
-
+		//SetCache(ctx, cacheKey, []byte("1"), 1)
+		var timeout int32 = 5000 
+		if project.Environment != "cloud" {
+			timeout = 60000 
+		}
+		SetCache(ctx, cacheKey, []byte("1"), timeout, true)
 		if cacheData.Enrichments != nil && len(cacheData.Enrichments) > 0 {
 		}
 

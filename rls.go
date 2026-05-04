@@ -19,7 +19,20 @@ func EvalPolicyJSON(policy, oldJSON, newJSON string) (string, bool, string) {
 	var oldDoc, newDoc map[string]any
 
 	if err := json.Unmarshal([]byte(oldJSON), &oldDoc); err != nil {
-		return oldJSON, false, "invalid old JSON"
+		// Try a quick string replacement just in case 
+		// This is primarily because of python dicts
+		if strings.HasPrefix(oldJSON, "{'") {
+			fixed := strings.ReplaceAll(strings.ReplaceAll(oldJSON, "{'", "{\""), "'}", "\"}")
+			fixed = strings.ReplaceAll(fixed, "':", "\":")
+			fixed = strings.ReplaceAll(fixed, ",'", ",\"")
+			fixed = strings.ReplaceAll(fixed, ": True", ": true")
+			fixed = strings.ReplaceAll(fixed, ": False", ": false")
+			if err2 := json.Unmarshal([]byte(fixed), &oldDoc); err2 == nil {
+				return fixed, false, "invalid old JSON (single quotes)"
+			}
+		} else {
+			return oldJSON, false, "invalid old JSON"
+		}
 	}
 	if err := json.Unmarshal([]byte(newJSON), &newDoc); err != nil {
 		return oldJSON, false, "invalid new JSON"
