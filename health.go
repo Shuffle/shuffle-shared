@@ -4774,18 +4774,21 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 				agentTemp, err := strconv.Atoi(strings.TrimSpace(agentOutput.Output))
 				if err != nil {
 					log.Printf("[ERROR] Agent Health check failed due to atoi conversion failure: %s", err)
+					agentHealth.Error.Run = fmt.Sprintf("Agent Health check failed due to atoi conversion failure: %s", err)
 					agentHealth.LLMCallSuccess = false
 				}
 
 				realTemp, apiErr := getRealTempC()
 				if apiErr != nil {
 					log.Printf("[ERROR] Agent Health check failed due to weather api call failure: %s", apiErr)
+					agentHealth.Error.Run = fmt.Sprintf("Agent Health check failed due to weather api call failure: %s", apiErr)
 					agentHealth.LLMCallSuccess = false
 				} else {
 					diff := int(math.Abs(float64(agentTemp - realTemp)))
 					if diff > 1 {
 						agentHealth.LLMCallSuccess = false
 						log.Printf("[ERROR] Agent Health check - LLM Call was not successful. Expected: %d, Got: %d, Diff: %d", realTemp, agentTemp, diff)
+						agentHealth.Error.Run = fmt.Sprintf("Agent Health check - LLM Call was not successful. Expected: %d, Got: %d, Diff: %d", realTemp, agentTemp, diff)
 					} else {
 						agentHealth.LLMCallSuccess = true
 						log.Printf("[INFO] Agent Health check - LLM Call was successful. Expected: %d, Got: %d, Diff: %d", realTemp, agentTemp, diff)
