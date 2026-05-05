@@ -18,6 +18,7 @@ import (
 	"time"
 	"strconv"
 	"sync"
+	"encoding/base64"
 
 	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
@@ -2176,6 +2177,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		return []byte{}, debugUrl, appname, []string{}, "", err
 	}
 
+
 	body := originalBody
 	defer resp.Body.Close()
 
@@ -2184,11 +2186,16 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	err = json.Unmarshal(body, &outputMapped)
 	if err != nil {
 		log.Printf("[ERROR] AI Agent: Failed unmarshalling agent decision response: %s", err)
-		return body, debugUrl, appname, []string{}, "", err
+		return body, debugUrl, appname, []string{}, "", nil 
 	}
 
 	if val, ok := outputMapped.RawResponse.(string); ok {
-		body = []byte(val)
+		parsedVal, err := base64.StdEncoding.DecodeString(val)
+		if err == nil && (strings.HasPrefix(string(parsedVal), "{") && strings.HasSuffix(string(parsedVal), "}")) || (strings.HasPrefix(string(parsedVal), "[") && strings.HasSuffix(string(parsedVal), "]")) {
+			body = parsedVal
+		} else {
+			body = []byte(val)
+		}
 	} else if val, ok := outputMapped.RawResponse.([]byte); ok {
 		body = val
 	} else if val, ok := outputMapped.RawResponse.(map[string]interface{}); ok {
@@ -2205,7 +2212,12 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	}
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR][%s] AI Agent: Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
+		if debug { 
+			log.Printf("[ERROR][%s] AI Agent: Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
+		} else {
+			log.Printf("[ERROR][%s] AI Agent: Failed running agent decision with status %d. Body: %d", execution.ExecutionId, resp.StatusCode, len(body))
+		}
+
 		return body, debugUrl, appname, []string{}, "", errors.New(fmt.Sprintf("Failed running agent decision (2). Status code %d", resp.StatusCode))
 	}
 
@@ -2244,7 +2256,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 			// Mark decision as failed so agent doesn't get stuck
 			decision.RunDetails.Status = "FAILURE"
-			decision.RunDetails.CompletedAt = time.Now().Unix()
+			decision.RunDetails.CompletedAt = time.Now().UnixMilli()
 			decision.RunDetails.RawResponse = fmt.Sprintf("PANIC: %v", r)
 		}
 	}()
@@ -2269,7 +2281,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 	// Set it to this at the start
 	if decision.RunDetails.StartedAt <= 0 {
-		decision.RunDetails.StartedAt = time.Now().Unix()
+		decision.RunDetails.StartedAt = time.Now().UnixMilli()
 	}
 
 	decision.RunDetails.Status = "RUNNING"
@@ -2294,8 +2306,15 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		decision.RunDetails.CategoryLabels = categoryLabels
 		decision.RunDetails.ActionName = actionName
 
+		log.Printf("RawResp: %s", string(rawResponse))
+
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
+			if debug { 
+				log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
+			} else {
+				log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision.RunDetails.Id, err)
+			}
+
 			decision.RunDetails.Status = "FAILURE"
 
 			if len(decision.RunDetails.RawResponse) == 0 {
@@ -2310,6 +2329,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		if decision.RunDetails.CompletedAt > 0 && decision.RunDetails.StartedAt > 0 {
 			duration = decision.RunDetails.CompletedAt - decision.RunDetails.StartedAt
 		}
+
 		log.Printf("[INFO][%s] AI_AGENT_TOOL: org=%s tool=%s action=%s status=%s duration=%ds", execution.ExecutionId, execution.Workflow.OrgId, decision.Tool, decision.Action, decision.RunDetails.Status, duration)
 	}
 
@@ -2317,7 +2337,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	// Then the action itself should decide if it's done or not.
 	// Would it work to send JUST this decision result?
 	// This could start the next step(s) automatically?
-	decision.RunDetails.CompletedAt = time.Now().Unix()
+	decision.RunDetails.CompletedAt = time.Now().UnixMilli()
 	marshalledDecision, err = json.Marshal(decision)
 	if err != nil {
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling completed decision %s", execution.ExecutionId, decision.RunDetails.Id)
