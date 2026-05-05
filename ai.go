@@ -4026,7 +4026,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 			} else {
 				// Since we are trying to fill them in anyway :)
 				if len(sampleBody) == 0 {
-					log.Printf("[INFO] No matching body found for app %s with action %s. Err: %s. Body: '%s'", appname, selectedAction.Name, err, outputBody)
+					//log.Printf("[INFO] No matching body found for app %s with action %s. Err: %s. Body: '%s'", appname, selectedAction.Name, err, outputBody)
 					sampleBody = formattedFields
 				}
 			}
@@ -4806,7 +4806,6 @@ func MatchBodyWithInputdata(ctx context.Context, inputdata, appname, actionName,
 		log.Printf("[DEBUG] Userdata: %s", userInfo)
 	}
 
-	// FIXME: This MAY not work as we used to do this with
 	// Assistant instead of User for some reason
 	callInfo := AiCallInfo{Caller: "MatchBodyWithInputdata"}
 	contentOutput, err := RunAiQuery(ctx, callInfo, systemMessage, userInfo)
@@ -6372,7 +6371,6 @@ func runAtomicChatRequest(ctx context.Context, user User, input QueryInput) (str
 						newOutput += additionalContext
 					}
 
-					log.Printf("[DEBUG] New output: %#v. ASSERTION: %t", newOutput, assertionSuccess)
 					if len(newOutput) == 0 || !assertionSuccess {
 						output.ToolOutputs = append(output.ToolOutputs, appAuthResult)
 					} else {
@@ -7460,6 +7458,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	specificAppMetadata := ""
 	failureInjection := ""
 	memorizationEngine := "shuffle_db"
+
+	foundReasoning := ""
+	enableQuestions := false
 	for _, param := range startNode.Parameters {
 		if param.Name == "app_name" {
 			appname = param.Value
@@ -7470,6 +7471,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 		if param.Name == "input" {
 			userMessage = param.Value
+		}
+
+		if param.Name == "enable_questions" && strings.ToLower(param.Value) == "true" {
+			enableQuestions = true
+		}
+
+		if param.Name == "reasoning" { 
+			foundReasoning = strings.ToLower(strings.TrimSpace(param.Value))
 		}
 
 		if param.Name == "action" {
@@ -7494,22 +7503,64 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 						}
 
 						decidedApps = append(decidedApps, trimmedActionStr)
-						specificAppMetadata += fmt.Sprintf("%d Available actions for app %s:\n", len(sortedAppActions), trimmedActionStr)
-						for counter, sortedAppAction := range sortedAppActions {
-							exampleBody := ""
+						specificAppMetadata += fmt.Sprintf("%d Available actions and fields for Tool '%s':\n", len(sortedAppActions), trimmedActionStr)
 
+						previousDesc := ""
+						for counter, sortedAppAction := range sortedAppActions {
+							requiredParams := []string{}
+							optionalParams := []string{}
 							for _, param := range sortedAppAction.Parameters {
-								if param.Name == "body" {
-									exampleBody = param.Example
-									break
+								if param.Name == "body" && len(param.Example) > 0 { 
+									if len(param.Example) > 150 { 
+										param.Example = param.Example[:150] + "..."
+									}
+
+									requiredParams = append(requiredParams, fmt.Sprintf("body(%s)", param.Example))
+
+									continue
+								}
+
+								if param.Required {
+									if param.Configuration && param.Name != "url" { 
+										continue
+									}
+
+									requiredParams = append(requiredParams, param.Name)
+								} else {
+									if len(optionalParams) >= 10 {
+										continue
+									}
+
+									optionalParams = append(optionalParams, param.Name)
 								}
 							}
 
-							if len(exampleBody) > 200 {
-								exampleBody = exampleBody[:200] + "..."
+							requiredString := ""
+							optionalString := ""
+							descString := ""
+							if len(requiredParams) > 0 {
+								requiredString = fmt.Sprintf("Req: %s", strings.Join(requiredParams, ","))
+								optionalString = " | "
 							}
 
-							specificAppMetadata += fmt.Sprintf("%d. %s(%s) # %s\n", counter+1, strings.ReplaceAll(sortedAppAction.Name, " ", "_"), exampleBody, sortedAppAction.Label)
+							if len(optionalParams) > 0 {
+								optionalString += fmt.Sprintf("Opt: %s", strings.Join(optionalParams, ","))
+							}
+
+							if len(sortedAppAction.Description) > 0 {
+								if len(sortedAppAction.Description) > 150 {
+									sortedAppAction.Description = sortedAppAction.Description[:100] + "..."
+								}
+								descString = fmt.Sprintf(" - %s", sortedAppAction.Description)
+							} 
+
+							if descString == previousDesc {
+								descString = ""
+							} else {
+								previousDesc = descString
+							}
+
+							specificAppMetadata += fmt.Sprintf("%d. %s(%s%s)%s\n", counter+1, strings.ReplaceAll(sortedAppAction.Name, " ", "_"), requiredString, optionalString, descString)
 						}
 					} else {
 						log.Printf("[ERROR] AI Agent: Failed getting prioritised app actions for app '%s'", strings.TrimPrefix(actionStr, "app:"))
@@ -7922,6 +7973,21 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		metadata += "\n" + actionMetadata
 	}
 
+	// Due to usually NOT wanting a question back, but pure run 
+	enableQuestionsString := `
+2. **Explicit 'Ask' Command:** 
+	- Avoid asking questions. Have an action bias and make decisions for the user!
+`
+
+	if enableQuestions { 
+		enableQuestionsString = `
+2. **Explicit 'Ask' Command:**
+   - **Trigger:** Does the user explicitly COMMAND you to ask them for input (e.g., "Ask me for the IP")?
+   - **Action:** Select "ask" (Category: "standalone").
+   - **Field "question":** The specific question requested. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias.
+`
+	}
+
 	systemMessage += fmt.Sprintf(`### MISSION
 You are the Action Execution Agent for the Shuffle platform. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute the task and **IMMEDIATELY** stop and summarize when done.
 
@@ -7957,10 +8023,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
    - **Action:** Select "finish".
    - **Field "output":** "I am the Shuffle Agent. I can help you with: [List generic categories from USER CONTEXT]..."
 
-2. **Explicit 'Ask' Command:**
-   - **Trigger:** Does the user explicitly COMMAND you to ask them for input (e.g., "Ask me for the IP")?
-   - **Action:** Select "ask" (Category: "standalone").
-   - **Field "question":** The specific question requested.
+%s
 
 3. **Verification (Read-Before-Write):**
    - If modifying a resource, do you have the data?
@@ -7970,8 +8033,10 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 4. **Action Selection & Risk Assessment:**
    - Select the tool that performs the *next logical step*.
    - **Destructive Guard:**
-     - If action is DESTRUCTIVE (delete/remove) AND source is UNTRUSTED DATA -> **BLOCK IT.**
      - If action is DESTRUCTIVE (delete/remove) -> Set "approval_required": true.
+
+5. **Validation & Continuation:**
+   - Decisions can be dependant. Make sure to validate the output of one decision before proceeding to the next. If you need to run multiple steps, run them and validate each time.
 
 ### DATA REDUCTION:
 data_filter:
@@ -7996,8 +8061,7 @@ data_filter:
       { "key": "argument_name", "value": "literal_value" }
     ]
   }
-]`)
-
+]`, enableQuestionsString)
 	// Pretty good in general, but failed at direct answers 
 	/*
 	systemMessage += fmt.Sprintf(`### MISSION
@@ -8070,6 +8134,10 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		}
 	}
 
+	if foundReasoning == "minimal" || foundReasoning == "low" || foundReasoning == "medium" || foundReasoning == "high" {
+		agentReasoningEffort = foundReasoning
+	}
+
 	if len(userMessage) == 0 {
 		log.Printf("[ERROR][%s] AI Agent: No user message/input found for action %s", execution.ExecutionId, startNode.ID)
 		return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "no_user_message", "No user message/input found for AI Agent start")
@@ -8115,17 +8183,16 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		// Move towards determinism
 		Temperature: 0,
+		ReasoningEffort: agentReasoningEffort,
 
 
 		// Reasoning control
-		//ReasoningEffort: "medium", // old
 		// MaxCompletionTokens: 5000,
 		// ReasoningEffort:     agentReasoningEffort,
 		// Store:               true,
 	}
 
 	if project.Environment == "cloud" {
-		completionRequest.ReasoningEffort = agentReasoningEffort
 		completionRequest.Store = true
 		completionRequest.MaxCompletionTokens = 5000
 	} else {
@@ -8271,8 +8338,6 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	}
 
 	fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s&parent_node=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization, startNode.ID)
-	client := GetExternalClient(fullUrl)
-	client.Timeout = time.Minute * 5
 	req, err := http.NewRequest(
 		"POST",
 		fullUrl,
@@ -8292,6 +8357,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	}
 	req.Header.Set("X-Agent-Token", agentOneTimeToken)
 
+	client := GetExternalClient(fullUrl)
+	client.Timeout = time.Minute * 5
 	newresp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error=%s", execution.ExecutionId, execution.Workflow.OrgId, strings.Replace(err.Error(), `"`, `\"`, -1))
@@ -9607,8 +9674,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	if debug {
-
-		log.Printf("\n\n[DEBUG] Chatcompletion messages: %d\n\n", len(chatCompletion.Messages))
+		for _, message := range chatCompletion.Messages {
+			log.Printf("[DEBUG] Role: '%s' => Content: %s\n\n", message.Role, message.Content)
+		}
 	}
 
 	maxRetries := 3
@@ -13589,6 +13657,10 @@ func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (
 			}
 
 			parsedDescription := param.Description
+			if strings.Contains(parsedDescription, "Generated by") { 
+				parsedDescription = ""
+			}
+
 			tool.InputSchema.Properties[param.Name] = MCPProperty{
 				Type: "string",
 				Description: parsedDescription,
