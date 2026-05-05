@@ -2153,7 +2153,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 					/*
 						mappedOutput.Status = "FAILURE"
-						mappedOutput.CompletedAt = time.Now().Unix()
+						mappedOutput.CompletedAt = time.Now().UnixMilli()
 						workflowExecution.Results[resultIndex].Status = "ABORTED"
 
 						go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[resultIndex])
@@ -2179,7 +2179,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						log.Printf("[INFO][%s] All decisions finished for agent action %s - marking as FINISHED.", workflowExecution.ExecutionId, action.ID)
 
 						mappedOutput.Status = "FINISHED"
-						mappedOutput.CompletedAt = time.Now().Unix()
+						mappedOutput.CompletedAt = time.Now().UnixMilli()
 
 						workflowExecution.Results[resultIndex].Status = "SUCCESS"
 

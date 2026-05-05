@@ -4765,7 +4765,7 @@ type AgentDecision struct {
 type AgentOutput struct {
 	Status    string          `json:"status" datastore:"status"`
 	Error     string          `json:"error,omitempty" datastore:"error"`
-	Decisions []AgentDecision `json:"decisions" datastore:"decisions"`
+	Decisions []AgentDecision `json:"decisions,omitempty" datastore:"decisions"`
 
 	// For easy testing
 	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
@@ -4775,7 +4775,7 @@ type AgentOutput struct {
 	ExecutionId    string   `json:"execution_id,omitempty" datastore:"execution_id"`
 	NodeId         string   `json:"node_id,omitempty" datastore:"node_id"`
 	Memory         string   `json:"memory,omitempty" datastore:"memory"`
-	Input          string   `json:"input" datastore:"input"`
+	Input          string   `json:"input,omitempty" datastore:"input"`
 	OriginalInput  string   `json:"original_input,omitempty" datastore:"original_input"`
 	AllowedActions []string `json:"allowed_actions,omitempty" datastore:"allowed_actions"`
 	Output         string   `json:"output,omitempty" datastore:"output"`
@@ -5087,7 +5087,11 @@ type MCPRequest struct {
 			SessionID string `json:"session_id"`
 		} `json:"context"`
 		ToolID      string `json:"tool_id"`
+		
 		Environment string `json:"environment"`
+		EnableQuestions bool `json:"enable_questions"`
+		AuthenticationId string `json:"authentication_id"`
+		Reasoning string `json:"reasoning"`
 
 		// From testing in Lovable
 		ProtocolVersion string `json:"protocolVersion"`
@@ -5161,7 +5165,7 @@ type MCPTool struct {
 
 type MCPProperty struct {
 	Type        string `json:"type"`
-	Description string `json:"description"`
+	Description string `json:"description,omitempty"`
 }
 
 type MCPToolInputSchema struct {
