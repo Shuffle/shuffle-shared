@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"math"
 
 	"github.com/goccy/go-json"
 
@@ -4784,14 +4783,16 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 					agentHealth.Error.Run = fmt.Sprintf("Agent Health check failed due to weather api call failure: %s", apiErr)
 					agentHealth.LLMCallSuccess = false
 				} else {
-					diff := int(math.Abs(float64(agentTemp - realTemp)))
-					if diff > 1 {
-						agentHealth.LLMCallSuccess = false
-						log.Printf("[ERROR] Agent Health check - LLM Call was not successful. Expected: %d, Got: %d, Diff: %d", realTemp, agentTemp, diff)
-						agentHealth.Error.Run = fmt.Sprintf("Agent Health check - LLM Call was not successful. Expected: %d, Got: %d, Diff: %d", realTemp, agentTemp, diff)
-					} else {
+					realTempStr := strconv.Itoa(realTemp)
+					agentTempStr := strconv.Itoa(agentTemp)
+					// check if this real tmp value exists in the agentTemp
+					if strings.Contains(agentTempStr, realTempStr) {
 						agentHealth.LLMCallSuccess = true
-						log.Printf("[INFO] Agent Health check - LLM Call was successful. Expected: %d, Got: %d, Diff: %d", realTemp, agentTemp, diff)
+						log.Printf("[INFO] Agent Health check - LLM Call was successful. Expected: %d, Got: %d", realTemp, agentTemp)
+					} else {
+						agentHealth.LLMCallSuccess = false
+						log.Printf("[ERROR] Agent Health check - LLM Call was not successful. Expected: %d, Got: %d", realTemp, agentTemp)
+						agentHealth.Error.Run = fmt.Sprintf("Agent Health check - LLM Call was not successful. Expected: %d, Got: %d", realTemp, agentTemp)
 					}
 				}
 
