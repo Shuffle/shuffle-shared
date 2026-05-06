@@ -7450,7 +7450,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	// Don't think this matters much
 	// See: https://github.com/Shuffle/singul?tab=readme-ov-file#llm-controls
 	openaiAllowedApps := []string{"openai"}
-	runOpenaiRequest := false
+	// runOpenaiRequest := false
 	appname := ""
 	allowedActionString := ""
 
@@ -7465,7 +7465,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		if param.Name == "app_name" {
 			appname = param.Value
 			if ArrayContains(openaiAllowedApps, strings.ToLower(param.Value)) {
-				runOpenaiRequest = true
+				// runOpenaiRequest = true
 			}
 		}
 
@@ -7591,7 +7591,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	if len(appname) == 0 || appname == "Shuffle AI" {
 		appname = "openai"
-		runOpenaiRequest = true
+		// runOpenaiRequest = true
 	}
 
 	// If the fields are edited, don't forget to edit the AgentDecision struct
@@ -8239,11 +8239,10 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 	}
 
 	//go executeSpecificCloudApp(ctx, execution.ExecutionId, execution.Authorization, urls, startNode)
-	if !runOpenaiRequest {
-		
-		log.Printf("[ERROR] AI Agent: Unhandled Singul BODY for OpenAI agent (first request): %s. AI APPNAME (can't be empty): %#v", string(initialAgentRequestBody), appname)
-		return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "unsupported_app_not_openai", "Failed to start AI Agent (5): Failed initial AI request. Contact support@shuffler.io if this persists.")
-	}
+	// if !runOpenaiRequest {
+	// 	log.Printf("[ERROR] AI Agent: Unhandled Singul BODY for OpenAI agent (first request): %s. AI APPNAME (can't be empty): %#v", string(initialAgentRequestBody), appname)
+	// 	return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "unsupported_app_not_openai", "Failed to start AI Agent (5): Failed initial AI request. Contact support@shuffler.io if this persists.")
+	// }
 
 	if debug {
 		log.Printf("\n\n\n[DEBUG] BODY for AI Agent (first request): %s\n\n\n", string(initialAgentRequestBody))
