@@ -7652,6 +7652,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			hasFailure := false
 			failureCount := 0
 			successCount := 0
+			maxFailuresForOneTool := 0
 
 			for _, mappedDecision := range mappedResult.Decisions {
 				if mappedDecision.RunDetails.Status == "FAILURE" {
@@ -7700,6 +7701,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 						}
 					}
 					mappedDecision.Runs = fmt.Sprintf("%d", runsForThisDecision)
+					if runsForThisDecision > maxFailuresForOneTool {
+						maxFailuresForOneTool = runsForThisDecision
+					}
 				}
 
 				relevantDecisions = append(relevantDecisions, mappedDecision)
@@ -7751,16 +7755,18 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 
 			if hasFailure {
-				log.Printf("[WARNING][%s] AI Agent: Detected failure in previous decisions. Last finished index: %d", execution.ExecutionId, lastFinishedIndex)
+				log.Printf("[WARNING][%s] AI Agent: Detected failure in previous decisions. maxFailuresForOneTool=%d last_index=%d", execution.ExecutionId, maxFailuresForOneTool, lastFinishedIndex)
 
 				// HARD ABORT — code-side enforcement regardless of LLM behavior.
 				const maxAgentFailureRounds = 4
-				if successCount == 0 && failureCount >= maxAgentFailureRounds {
-					// oldAgentOutput carries the real decisions/token data for the audit log
-					return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "hard_abort_tool_failures", fmt.Sprintf("Agent hard-aborted after %d consecutive tool failures with 0 successes. The tool being called is failing (timeout or app out of date). Fix the app authentication/version and retry.", failureCount))
+				if maxFailuresForOneTool >= maxAgentFailureRounds {
+					return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "hard_abort_tool_failures", fmt.Sprintf("Agent hard-aborted: the same tool failed %d times. Fix the app authentication/version and retry.", maxFailuresForOneTool))
 				}
 
-				failureInjection = "\n\nSome of the previous decisions failed. Finalise the agent.\n\n"
+				// Warn the LLM once the retry limit is almost exhausted for a specific tool.
+				if maxFailuresForOneTool >= 3 {
+					failureInjection = "\n\nSome of the previous decisions failed. Finalise the agent.\n\n"
+				}
 			}
 		}
 	}
