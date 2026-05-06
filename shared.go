@@ -22862,8 +22862,8 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		}
 	}
 
-	// Overwriting, as the user should be in control 
-	if len(originalUrl) > 0 && len(workflowExecution.Workflow.Actions) > 0 && !shuffleAuthInjected {
+	// Overwriting, as the user should be in control
+	if len(originalUrl) > 0 && len(workflowExecution.Workflow.Actions) > 0 && !shuffleAuthInjected && len(action.AuthenticationId) == 0 {
 		for paramIndex, param := range workflowExecution.Workflow.Actions[0].Parameters {
 			if param.Name == "url" {
 				workflowExecution.Workflow.Actions[0].Parameters[paramIndex].Value = originalUrl
