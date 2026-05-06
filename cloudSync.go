@@ -3533,9 +3533,10 @@ BIN_URL="${BIN_BASE}/orborus-agent-${OS}-${ARCH}"
 # =========================
 INSTALL_PATH="/usr/local/bin/orborus"
 
-echo "Please input your sudo password to allow installation (required for service setup and sensor capabilities). Contact support@shuffler.io if you need help."
+echo "Download starting from $BIN_URL... This may take a minute."
 curl -fsSL "$BIN_URL" -o /tmp/orborus
 chmod +x /tmp/orborus
+echo "If prompted, please input your sudo password to allow installation (required for service setup and sensor capabilities). Contact support@shuffler.io if you need help."
 sudo mv /tmp/orborus "$INSTALL_PATH"
 
 echo "Installed binary to $INSTALL_PATH"
