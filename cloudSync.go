@@ -3483,6 +3483,11 @@ Write-Host "orborus-agent installed"`,
 		script = fmt.Sprintf(`#!/usr/bin/env bash
 set -e
 
+#if [ "$(id -u)" -ne 0 ]; then
+#  echo "Run installer as root."
+#  exit 1
+#fi
+
 # =========================
 # Detect OS + ARCH
 # =========================
@@ -3572,9 +3577,9 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-  systemctl daemon-reload
-  systemctl enable orborus
-  systemctl restart orborus
+  sudo systemctl daemon-reload
+  sudo systemctl enable orborus
+  sudo systemctl restart orborus
 }
 
 # =========================
@@ -3621,13 +3626,14 @@ EOF
 # =========================
 # Execute
 # =========================
-if [[ "$OS" == "linux" ]]; then
+if [ "$OS" = "linux" ]; then
   install_linux
-elif [[ "$OS" == "darwin" ]]; then
+  echo "orborus installed successfully"
+elif [ "$OS" = "darwin" ]; then
   install_macos
+  echo "orborus installed successfully"
 fi
 
-echo "orborus installed successfully"
 `,
 c.BaseURL,
 c.Queue,
