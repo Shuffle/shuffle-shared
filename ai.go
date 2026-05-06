@@ -8316,7 +8316,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		tokenLimit := int64(0)
 		if project.Environment == "cloud" {
-			tokenLimit = int64(10_000_000)
+			tokenLimit = int64(1_000_000)
 		}
 		if orgErr == nil && fullOrg != nil && fullOrg.SyncFeatures.AgentTokens.Active && fullOrg.SyncFeatures.AgentTokens.Limit > 0 {
 			tokenLimit = fullOrg.SyncFeatures.AgentTokens.Limit
