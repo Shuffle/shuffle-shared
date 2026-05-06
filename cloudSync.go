@@ -2552,7 +2552,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 				found = true
 				if timeNow > host.Checkin+hostRefresh || env.SensorHosts[hostIndex].Uuid != orborusData.Uuid {
 					if debug {
-						log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago", host.Hostname, env.Name, env.Id, timeNow-host.Checkin)
+						//log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago", host.Hostname, env.Name, env.Id, timeNow-host.Checkin)
 					}
 
 					updateMade = true
@@ -2609,7 +2609,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 
 		if updateMade && len(env.SensorHosts) >= 1 {
 			if debug { 
-				log.Printf("[DEBUG] Updating sensor host data for group environment '%s' (%s). Total hosts: %d. Checkin: %d seconds ago\n\n", env.Name, env.Id, len(env.SensorHosts), timeNow-env.Checkin)
+				//log.Printf("[DEBUG] Updating sensor host data for group environment '%s' (%s). Total hosts: %d. Checkin: %d seconds ago\n\n", env.Name, env.Id, len(env.SensorHosts), timeNow-env.Checkin)
 			}
 
 			// Sideloading from shuffle-security_sensors instead
