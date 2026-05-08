@@ -9149,6 +9149,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	referer := request.Header.Get("Referer")
+	if !strings.Contains(referer, "/forms/") {
+		workflow.Sharing = tmpworkflow.Sharing
+		workflow.InputQuestions = tmpworkflow.InputQuestions
+		workflow.FormControl = tmpworkflow.FormControl
+	}
+
 	if fileId != workflow.ID {
 		log.Printf("[ERROR] Path and request ID are NOT matching in workflow save: %s != %s. URL: %s", fileId, workflow.ID, request.URL.String())
 		resp.WriteHeader(400)
