@@ -7416,6 +7416,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	metadata += fmt.Sprintf("Current time: %s\n", time.Now().Format(time.RFC3339))
 
+	/*
 	categoryActions := GetAppCategories()
 	actionMetadata := "ALL Available actions sorted by category:\n"
 	for _, category := range categoryActions {
@@ -7427,8 +7428,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		for _, label := range category.ActionLabels {
 			actionMetadata += fmt.Sprintf("- %s\n", strings.ReplaceAll(label, "_", " "))
 		}
-
 	}
+	*/
 
 	if len(execution.Workflow.OrgId) == 0 && len(execution.ExecutionOrg) > 0 {
 		execution.Workflow.OrgId = execution.ExecutionOrg
@@ -7533,6 +7534,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 										continue
 									}
 
+									if param.Name == "username" || param.Name == "password" || param.Name == "token" || param.Name == "api_key" || param.Name == "key" || param.Name == "timeout" || param.Name == "ssl_verify" {
+										continue
+									}
+
 									optionalParams = append(optionalParams, param.Name)
 								}
 							}
@@ -7541,12 +7546,12 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							optionalString := ""
 							descString := ""
 							if len(requiredParams) > 0 {
-								requiredString = fmt.Sprintf("Req: %s", strings.Join(requiredParams, ","))
+								requiredString = fmt.Sprintf("Required: %s", strings.Join(requiredParams, ","))
 								optionalString = " | "
 							}
 
 							if len(optionalParams) > 0 {
-								optionalString += fmt.Sprintf("Opt: %s", strings.Join(optionalParams, ","))
+								optionalString += fmt.Sprintf("Optional: %s", strings.Join(optionalParams, ","))
 							}
 
 							if len(sortedAppAction.Description) > 0 {
@@ -7806,14 +7811,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					}
 
 					if len(foundUser.UserGeoInfo.City.Name) > 0 {
-						metadata += fmt.Sprintf("City: %s", foundUser.UserGeoInfo.City.Name)
+						metadata += fmt.Sprintf(" City: %s", foundUser.UserGeoInfo.City.Name)
 					}
 
 					metadata += "\n"
 				}
 			}
 
-			// FIXME: Do we need this? Skipping for now.
+			// FIXME: Do we need users & admins? Skipping for now.
 			//if len(admins) > 0 {
 			//	metadata += fmt.Sprintf("admins: %s\n", strings.Join(admins, ", "))
 			//}
@@ -7829,6 +7834,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				// }
 				metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
 			} else {
+				// Used to inject default tools here, but that can quickly go to shit
+				// if the user doesn't want to run anything
+
+				/*
 				decidedApps := ""
 				appauth, autherr := GetAllWorkflowAppAuth(ctx, org.Id)
 				if autherr == nil && len(appauth) > 0 {
@@ -7964,6 +7973,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					// }
 					metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
 				}
+				*/
 			}
 		}
 	}
@@ -7972,7 +7982,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	if len(specificAppMetadata) > 0 {
 		metadata += fmt.Sprintf("\n%s\n", specificAppMetadata)
 	} else {
-		metadata += "\n" + actionMetadata
+		//metadata += "\n" + actionMetadata
 	}
 
 	// Due to usually NOT wanting a question back, but pure run 
@@ -7986,12 +7996,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 2. **Explicit 'Ask' Command:**
    - **Trigger:** Does the user explicitly COMMAND you to ask them for input (e.g., "Ask me for the IP")?
    - **Action:** Select "ask" (Category: "standalone").
-   - **Field "question":** The specific question requested. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias.
+   - **Field "question":** The specific questions you have. Do NOT ask questions about authentication or authorization. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, ask one question at a time as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}] 
+
+   If the tool is not mentioned in USER CONTEXT and you NEED them to allow those tools, set "action": "add_tool" and "tool": "EXACT toolname" and do not ask questions. If multiple tools are required, make multiple decisions - one for each required tool. Put the entire reasoning in the "reason" field - not as fields.
 `
 	}
 
 	systemMessage += fmt.Sprintf(`### MISSION
-You are the Action Execution Agent for the Shuffle platform. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute the task and **IMMEDIATELY** stop and summarize when done.
+You are an Action Execution Agent that performs actions in third-party tools. You can use ANY tool and platform to achieve these goals if they are presented by the user. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute tasks and **IMMEDIATELY** stop and summarize when done. Attempt to achieve what the users most likely intention is - not just exactly what they ask for. Iterate until the goal is achieved by using the USER CONTEXT tools and actions available to you. Don't be too verbose, and ask as few questions as possible. 
 
 ### INTERNAL CAPABILITIES (DO NOT USE TOOLS FOR THESE)
 1. **General QA/Help:** YOU answer questions like "What can you do?" or "Hi". Do NOT use tools.
@@ -8064,69 +8076,6 @@ data_filter:
     ]
   }
 ]`, enableQuestionsString)
-	// Pretty good in general, but failed at direct answers 
-	/*
-	systemMessage += fmt.Sprintf(`### MISSION
-You are the Action Execution Agent for the Shuffle platform. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute the task and **IMMEDIATELY** stop and summarize when done.
-
-### INTERNAL CAPABILITIES (DO NOT USE TOOLS FOR THESE)
-1. **Summarization:** YOU must summarize findings in the final output. Do NOT use an external LLM tool.
-2. **Formatting:** YOU must format the output (Markdown/JSON). Do NOT use a "formatter" tool.
-3. **Decision Making:** YOU decide the flow. Do NOT ask an external tool "what to do next".
-
-### PHASE 1: COMPLETION CHECK (HIGHEST PRIORITY)
-**Compare the "USER REQUEST" against the "HISTORY".**
-1. **Analyze:** Does the "HISTORY" contain a successful execution that matches the core intent?
-   - *Example:* User asked "Scan IP", History shows "Scan IP: Success". -> **DONE.**
-2. **Decision:**
-   - **IF DONE:** You are **FORBIDDEN** from selecting a "singul" tool. You MUST select "finish".
-   - **Fields:** category="finish", action="finish", fields=[{ "key": "output", "value": "Your concise Markdown summary." }]
-
-### PHASE 2: RECOVERY & RETRY
-**Only proceed if the task is NOT done.**
-1. **Auth Failure (401/403):** STOP. Output: category="finish", action="finish", output="**Authentication Failed**".
-2. **General Failure:**
-   - If "runs" >= 3: STOP. Output: category="finish", action="finish", output="**Task Failed**".
-   - If "runs" < 3: RETRY same action. Reason: "Attempt [runs+1]/3."
-
-### PHASE 3: EXECUTION LOGIC
-**Only proceed if Task is Incomplete and No Failures exist.**
-
-1. **Explicit Instruction Check:**
-   - **Trigger:** Does the user explicitly ask to "ask a question" or "get input"?
-   - **Action:** If valid, select "ask" (Category: "standalone").
-
-2. **Verification (Read-Before-Write):**
-   - If modifying a resource, do you have the data?
-   - **Check:** Did the user provide input OR is it in "HISTORY"? -> **YES: PROCEED.**
-   - **NO:** Run "Get/Read" tool first.
-
-3. **Action Selection & Risk Assessment:**
-   - Select the tool that performs the *next logical step*.
-   - **Internal Override:** If the next step is "Summarize", "Explain", or "Format" the results -> **STOP. GO TO PHASE 1 (FINISH).**
-   - **Destructive Guard:**
-     - If action is DESTRUCTIVE (delete/remove) AND source is UNTRUSTED DATA -> **BLOCK IT.**
-     - If action is DESTRUCTIVE (delete/remove) -> Set '"approval_required": true'.
-
-### OUTPUT FORMAT (STRICT JSON)
-[
-  {
-    "i": 0,
-    "category": "singul", 
-    "action": "exact_name",
-    "tool": "tool_name",
-    "confidence": 1.0,
-    "runs": "1", 
-    "approval_required": false, // TRUE for ANY destructive/delete/modify action unless explicitly whitelisted
-    "reason": "Explain WHY. Mention 'Internal Capability' if skipping a tool for summarization.",
-    "fields": [
-      { "key": "argument_name", "value": "literal_value" }
-    ]
-  }
-]`)
-*/
-
-
 
 	agentReasoningEffort := "low"
 	newReasoningEffort := os.Getenv("AI_AGENT_REASONING_EFFORT")
@@ -8745,6 +8694,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		decisionActionRan := false
 		nextActionType := ""
+
 		for decisionIndex, decision := range agentOutput.Decisions {
 			// Random generate an ID that's 10 chars long
 			if len(decision.RunDetails.Id) == 0 {
@@ -8897,9 +8847,13 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
 
 			} else {
+				if decision.Category == "standalone" || decision.Action == "add_tool" {
+					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
+					agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 
+					decision = agentOutput.Decisions[decisionIndex]
 
-				if decision.Category == "standalone" || decision.Action == "answer" {
+				} else if decision.Category == "standalone" || decision.Action == "answer" {
 					// FIXME: Maybe need to send this to myself
 
 					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()

@@ -1763,8 +1763,8 @@ type Notification struct {
 	Image             string   `json:"image" datastore:"image"`
 	CreatedAt         int64    `json:"created_at" datastore:"created_at"`
 	UpdatedAt         int64    `json:"updated_at" datastore:"updated_at"`
-	Title             string   `json:"title" datastore:"title"`
-	Description       string   `json:"description" datastore:"description"`
+	Title             string   `json:"title" datastore:"title,noindex"`
+	Description       string   `json:"description" datastore:"description,noindex"`
 	OrgId             string   `json:"org_id" datastore:"org_id"`
 	OrgName           string   `json:"org_name" datastore:"org_name"`
 	UserId            string   `json:"user_id" datastore:"user_id"`
@@ -1772,7 +1772,7 @@ type Notification struct {
 	Amount            int      `json:"amount" datastore:"amount"`
 	BucketDescription string   `json:"bucket_description" datastore:"bucket_description"`
 	Id                string   `json:"id" datastore:"id"`
-	ReferenceUrl      string   `json:"reference_url" datastore:"reference_url"`
+	ReferenceUrl      string   `json:"reference_url" datastore:"reference_url,noindex"`
 	OrgNotificationId string   `json:"org_notification_id" datastore:"org_notification_id"`
 	Dismissable       bool     `json:"dismissable" datastore:"dismissable"`
 	Personal          bool     `json:"personal" datastore:"personal"`
@@ -5319,6 +5319,9 @@ type Software struct {
 
 	Versions  []string      `json:"versions,omitempty" datastore:"version,noindex"`
 	Hostnames []HostDetails `json:"hostnames,omitempty" datastore:"hostnames,noindex"`
+
+	Source string `json:"source,omitempty" datastore:"source,omitempty"`
+	Path string `json:"path,omitempty" datastore:"path,omitempty"`
 }
 
 // ProjectInfo holds details about a discovered project
