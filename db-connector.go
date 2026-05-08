@@ -10193,7 +10193,7 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 		//	return nil
 		//}
 
-		log.Printf("[DEBUG] Setting environment %s (%s) for org '%s'. Checkin: %d", env.Name, env.Id, env.OrgId, env.Checkin)
+		//log.Printf("[DEBUG] Setting environment %s (%s) for org '%s'. Checkin: %d", env.Name, env.Id, env.OrgId, env.Checkin)
 	}
 
 	data, err := json.Marshal(env)
@@ -14215,13 +14215,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		cnt += 1
 	}
 
-	if debug {
-		log.Printf("[DEBUG] Uploading and validating %d key(s) to datastore", cnt)
-	}
-
 	cacheKeys := make(chan CacheKeyData, cnt)
 	datastoreKeys := make(chan datastore.Key, cnt)
 	orgId := ""
+
 	for index, cacheData := range allKeys {
 		// 1. Get the key first.
 		// 2. Validate suborg distribution and other category configs
@@ -14301,17 +14298,16 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				}
 
 				cacheData.Enrichments = newObservables
-				if debug {
-					log.Printf("\n\n\n[DEBUG] Found new enrichments: %d for key '%s' in category '%s'\n\n\n", len(newObservables), cacheData.Key, cacheData.Category)
-				}
 			}
 
 			if getCacheError == nil && config.Created > 0 {
 
 				// Compares old vs new, checks if allowed
 
-				if cacheData.IgnoreSecurityRules {
-					//log.Printf("Ignoring security rules for %s", cacheData.Key)
+				if cacheData.IgnoreSecurityRules == true {
+					//if debug { 
+					//	log.Printf("[DEBUG] Ignoring security rules for %s => %s", cacheData.Key, cacheData.Category)
+					//}
 					//os.Exit(3)
 				} else {
 					categoryConfig, err := GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
@@ -14350,12 +14346,13 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 							newDoc := cacheData.Value
 							mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
 							if debug {
-								log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s): %#v. .\n\nError: %#v", foundRule, allowed, errString)
+								log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s). Org: '%s', Key: '%s', Category: '%s': %#v. .\n\nError: %#v", foundRule, cacheData.OrgId, cacheData.Key, cacheData.Category, allowed, errString)
 							}
 
 							// Since merge happens, can we trust it 100% of the time?
 							cacheData.Value = mergedJSON
 							ruleValid = true
+
 							//if allowed {
 							//	ruleValid = true
 							//	cacheData.Value = mergedJSON
@@ -14451,12 +14448,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			}
 
 			if sameValue {
-				if debug {
-					cacheData.Changed = false
-					//log.Printf("[DEBUG] SAME VALUE FOR KEY %s in category %s. SHOULD skip datastore write.", cacheData.Key, cacheData.Category)
-				}
+				// cacheData.Changed = false
 
-				// FIXME: Should NOT be returning keys
+				// FIXME: Should NOT be returning keys?
 				// This would overwrite keys otherwise which is...
 				// unnecessary. At least it makes edited => last seen
 				// This may mean to sen nil to datastoreKeys & cacheKeys
@@ -14483,15 +14477,18 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	skippedKeys := []string{}
 	for key := range cacheKeys {
 		if key.Key == "" {
+			//if debug { 
+			//	log.Printf("[DEBUG] Skipping empty key in category %s", key.Category)
+			//}
 			continue
 		}
 
 		// Assumes duplicates
 		checkKey := fmt.Sprintf("%s_%s", key.Key, key.Category)
 		if ArrayContains(handledKeys, checkKey) {
-			if debug {
-				log.Printf("[DEBUG] Skipping duplicate key %s in category %s", key.Key, key.Category)
-			}
+			//if debug {
+			//	log.Printf("[DEBUG] Skipping duplicate key %s in category %s", key.Key, key.Category)
+			//}
 
 			handledKeys = append(handledKeys, checkKey)
 			continue
@@ -14521,15 +14518,27 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	handledKeys = []string{}
 	for key := range datastoreKeys {
 		if key.Name == "" {
+			//if debug { 
+			//	log.Printf("[DEBUG] Skipping empty datastore key")
+			//}
+
 			continue
 		}
 
 		// Duplicate handler
 		if ArrayContains(handledKeys, key.Name) {
+			//if debug {
+			//	log.Printf("[DEBUG] Skipping duplicate datastore key %s", key.Name)
+			//}
+
 			continue
 		}
 
 		if ArrayContains(skippedKeys, key.Name) {
+			//if debug { 
+			//	log.Printf("[DEBUG] Skipping datastore key %s as it was marked as skipped due to no changes", key.Name)
+			//}
+
 			continue
 		}
 
@@ -14699,7 +14708,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 	}
 
-	log.Printf("[INFO] SetDatastoreKeyBulk: Successfully set %d key(s) in category %s for org %s", len(newArray), mainCategory, orgId)
+	if len(newArray) > 0 {
+		log.Printf("[INFO] SetDatastoreKeyBulk: Successfully set %d key(s) in category %s for org %s", len(newArray), mainCategory, orgId)
+	}
 
 	/*
 		if project.CacheDb {
