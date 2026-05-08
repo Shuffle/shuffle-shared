@@ -16,9 +16,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"crypto/sha256"
 
 	"sync"
-
 	"hash/fnv"
 	neturl "net/url"
 	"path"
@@ -42,6 +42,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/shirou/gopsutil/v3/process"
 
 	"regexp"
 	"strconv"
@@ -78,6 +79,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/Masterminds/semver"
+	"runtime"
 	dockerclient "github.com/docker/docker/client"
 )
 
@@ -36038,4 +36040,233 @@ func ValidateExecutionChronology(ctx context.Context, execution *WorkflowExecuti
 	}
 
 	return violations
+}
+
+func listProcessesWindows() ([]ProcessInfo, error) {
+	return collect()
+}
+
+func listProcessesDarwin() ([]ProcessInfo, error) {
+	return collect()
+}
+
+func listProcessesLinux() ([]ProcessInfo, error) {
+	return collect()
+}
+
+type cacheEntry struct {
+	hash  string
+	mtime time.Time
+	size  int64
+}
+
+var (
+	hashCache   = make(map[string]cacheEntry)
+	hashCacheMu sync.Mutex
+)
+
+// cachedHashFile returns the SHA256 of the file at path.
+// It only re-hashes if the file's mtime or size has changed since last call.
+func cachedHashFile(path string) string {
+	if path == "" {
+		return ""
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	mtime := info.ModTime()
+	size := info.Size()
+
+	hashCacheMu.Lock()
+	entry, ok := hashCache[path]
+	hashCacheMu.Unlock()
+
+	if ok && entry.mtime.Equal(mtime) && entry.size == size {
+		return entry.hash
+	}
+
+	// Cache miss or file changed — hash it.
+	hash := hashFile(path)
+	if hash == "" {
+		return ""
+	}
+
+	hashCacheMu.Lock()
+	hashCache[path] = cacheEntry{hash: hash, mtime: mtime, size: size}
+	hashCacheMu.Unlock()
+
+	return hash
+}
+
+// hashFile computes the SHA256 of a file by streaming it —
+// large binaries never fully land in memory.
+func hashFile(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func scrubArgs(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+
+	out := make([]string, len(args))
+	copy(out, args)
+
+	for i, arg := range out {
+		// Style 1: --flag=value or -f=value
+		if eq := indexByte(arg, '='); eq >= 0 {
+			key := arg[:eq]
+			if isSecretKey(key) {
+				out[i] = key + "=[REDACTED]"
+			}
+			continue
+		}
+
+		// Style 2/3: --flag value or -f value — redact the next element.
+		if isSecretKey(arg) && i+1 < len(out) {
+			out[i+1] = "[REDACTED]"
+		}
+	}
+
+	return out
+}
+
+var secretKeywords = []string{
+	"token",
+	"secret",
+	"password",
+	"passwd",
+	"apikey",
+	"api_key",
+	"api-key",
+	"auth",
+	"credential",
+	"private_key",
+	"private-key",
+	"access_key",
+	"access-key",
+	"signing_key",
+	"signing-key",
+}
+
+// isSecretKey returns true if the flag name contains a secret keyword.
+func isSecretKey(flag string) bool {
+	// Strip leading dashes so "--api-key" and "api-key" both match.
+	lower := strings.ToLower(strings.TrimLeft(flag, "-"))
+	for _, kw := range secretKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// indexByte returns the index of the first occurrence of c in s, or -1.
+// Using this instead of strings.IndexByte to avoid an extra import.
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
+// collect is identical on both platforms — gopsutil handles the syscall difference.
+func collect() ([]ProcessInfo, error) {
+	procs, err := process.Processes()
+	if err != nil {
+		return nil, fmt.Errorf("listing processes: %w", err)
+	}
+
+	out := make([]ProcessInfo, 0, len(procs))
+	for _, p := range procs {
+		ppid, err := p.Ppid()
+		if err != nil { 
+			ppid = 0
+		}
+
+		tty, err  := p.Terminal() // "" if no controlling terminal
+		if err != nil { 
+			tty = ""
+		}
+
+		cmd, err  := p.Name()     // argv[0] basename
+		if err != nil { 
+			cmd = ""
+		}
+
+		user, err := p.Username()
+		if err != nil { 
+			user = ""
+		}
+
+		exePath, err := p.Exe()
+		if err != nil {
+			exePath = ""
+		}
+
+		// kernel threads and SIP-protected processes.
+		args, err := p.CmdlineSlice()
+		if err != nil {
+			args = nil
+		}
+		args = scrubArgs(args)
+
+		createdAt, err := p.CreateTime()
+		if err != nil { 
+			createdAt = 0
+		}
+
+		out = append(out, ProcessInfo{
+			PID:     p.Pid,
+			PPID:    ppid,
+			TTY:     tty,
+			CommandLine: cmd,
+			User: user,
+			
+			Args: args,
+			CreationTime: createdAt,
+			ExePath:  exePath,
+
+			// Hash the binary on disk. Note: this is the file at rest, not the
+			// in-memory image — a binary replaced after launch won't be caught here.
+			SHA256:   cachedHashFile(exePath),
+		})
+	}
+
+	if debug { 
+		log.Printf("[INFO] Found %d processes", len(out))
+	}
+
+	return out, nil
+}
+
+
+// ListProcesses returns all running processes.
+// On macOS this calls sysctl kern.proc under the hood.
+// On Linux this reads /proc.
+func ListProcesses() ([]ProcessInfo, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		return listProcessesDarwin()
+	case "linux":
+		return listProcessesLinux()
+	case "windows":
+		return listProcessesWindows()
+	default:
+		return nil, fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
 }

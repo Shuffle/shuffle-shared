@@ -4753,9 +4753,9 @@ type AgentDecision struct {
 	Sources          string         `json:"sources,omitempty" datastore:"sources"`
 	Fields           []Valuereplace `json:"fields" datastore:"fields"`
 	Reason           string         `json:"reason" datastore:"reason"`
-	ApprovalRequired bool           `json:"approval_required" datastore:"approval_required"` // Set TRUE only for destructive/high-risk actions
-	DataFilter string `json:"data_filter,omitempty" datastore:"data_filter"` 	// DataFilter controls how the raw tool response is reduced before being fed back into the agent.
-	FieldsNeeded []string `json:"fields_needed,omitempty" datastore:"fields_needed"` 	// FieldsNeeded is set by the agent alongside data_filter:"list".
+	ApprovalRequired bool           `json:"approval_required" datastore:"approval_required"`   // Set TRUE only for destructive/high-risk actions
+	DataFilter       string         `json:"data_filter,omitempty" datastore:"data_filter"`     // DataFilter controls how the raw tool response is reduced before being fed back into the agent.
+	FieldsNeeded     []string       `json:"fields_needed,omitempty" datastore:"fields_needed"` // FieldsNeeded is set by the agent alongside data_filter:"list".
 
 	// Responses
 	RunDetails AgentDecisionRunDetails `json:"run_details" datastore:"run_details"`
@@ -4942,10 +4942,18 @@ type AuditLogEntry struct {
 }
 
 type ProcessInfo struct {
-	PID         int    `json:"pid"`
-	ProcessName string `json:"process_name"`
+	PID     int32 `json:"pid"`
+	PPID    int32 `json:"ppid,omitempty"`
+	TTY     string `json:"tty,omitempty"`
 	CommandLine string `json:"command_line,omitempty"`
-	ParentPID   int    `json:"parent_pid,omitempty"`
+	User string `json:"user,omitempty"`
+
+	Args []string `json:"args,omitempty"`
+	CreationTime int64 `json:"creation_time,omitempty"`
+	ExePath  string `json:"exe_path,omitempty"`
+	SHA256   string `json:"sha256,omitempty"`
+
+	ProcessName string `json:"process_name"`
 }
 
 type UserInfo struct {
@@ -5086,12 +5094,12 @@ type MCPRequest struct {
 		Context struct {
 			SessionID string `json:"session_id"`
 		} `json:"context"`
-		ToolID      string `json:"tool_id"`
-		
-		Environment string `json:"environment"`
-		EnableQuestions bool `json:"enable_questions"`
+		ToolID string `json:"tool_id"`
+
+		Environment      string `json:"environment"`
+		EnableQuestions  bool   `json:"enable_questions"`
 		AuthenticationId string `json:"authentication_id"`
-		Reasoning string `json:"reasoning"`
+		Reasoning        string `json:"reasoning"`
 
 		// From testing in Lovable
 		ProtocolVersion string `json:"protocolVersion"`
@@ -5276,6 +5284,7 @@ type SensorDetails struct {
 	HdEncrypted                string        `json:"hd_encrypted,omitempty" datastore:"hd_encrypted"`
 	LogForwarding              string        `json:"log_forwarding,omitempty" datastore:"log_forwarding"`
 	ResponseActions            string        `json:"response_actions,omitempty" datastore:"response_actions"`
+	ProcessList                []ProcessInfo `json:"process_list,omitempty" datastore:"process_list,noindex"`
 	InstalledSoftware          []Software    `json:"installed_software,omitempty" datastore:"installed_software,noindex"`
 	CodeScanner                []ProjectInfo `json:"code_scanner,omitempty" datastore:"code_scanner,noindex"`
 }
@@ -5285,6 +5294,7 @@ type SensorMode struct {
 	Enabled bool `json:"enabled" datastore:"enabled"`
 
 	// Compliance
+	ProcessListEnabled  string `json:"process_list_enabled" datastore:"process_list_enabled"`
 	SoftwareListEnabled string `json:"software_list_enabled" datastore:"software_list_enabled"`
 	CodeScannerEnabled  string `json:"code_scanner_enabled" datastore:"code_scanner_enabled"`
 	HdEncryptedCheck    string `json:"hd_encrypted_check" datastore:"hd_encrypted_check"`
@@ -5321,7 +5331,7 @@ type Software struct {
 	Hostnames []HostDetails `json:"hostnames,omitempty" datastore:"hostnames,noindex"`
 
 	Source string `json:"source,omitempty" datastore:"source,omitempty"`
-	Path string `json:"path,omitempty" datastore:"path,omitempty"`
+	Path   string `json:"path,omitempty" datastore:"path,omitempty"`
 }
 
 // ProjectInfo holds details about a discovered project
@@ -5347,6 +5357,7 @@ type OrborusDownloadConfig struct {
 	Queue               string `json:"queue"`
 	Auth                string `json:"auth"`
 	OrgID               string `json:"org_id"`
+	ProcessListEnabled  string `json:"process_list_enabled"`
 	SoftwareListEnabled bool   `json:"software_list_enabled"`
 	CodeScannerEnabled  bool   `json:"code_scanner_enabled"`
 	HDEncryptedCheck    bool   `json:"hd_encrypted_check"`
@@ -5483,6 +5494,7 @@ type OSVDatabaseSpecific struct {
 	ActionDue        string    `json:"action_due,omitempty"`
 	RequiredAction   string    `json:"required_action,omitempty"`
 	Vulnerability    string    `json:"vulnerability,omitempty"`
+	NvdPublishedAt  time.Time `json:"nvd_published_at,omitempty"`
 }
 
 type OSVEcosystemSpecific struct {

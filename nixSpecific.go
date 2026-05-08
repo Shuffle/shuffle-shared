@@ -759,7 +759,7 @@ func (c *AuditLogCollector) parseMacOSLogEntry(line string) {
 
 	if processID, ok := logData["processID"].(float64); ok {
 		entry.ProcessInfo = &ProcessInfo{
-			PID: int(processID),
+			PID: int32(processID),
 		}
 
 		if processImagePath, ok := logData["processImagePath"].(string); ok {
@@ -997,7 +997,7 @@ func (c *AuditLogCollector) parseJournalEntry(line string) {
 	if pid, ok := journalData["_PID"].(string); ok {
 		pidInt, _ := strconv.Atoi(pid)
 		entry.ProcessInfo = &ProcessInfo{
-			PID: pidInt,
+			PID: int32(pidInt),
 		}
 
 		if comm, ok := journalData["_COMM"].(string); ok {
@@ -2248,4 +2248,3 @@ func ListCodeScannerProjects() []ProjectInfo {
 
 	return parsedProjects 
 }
-
