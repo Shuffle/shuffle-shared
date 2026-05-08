@@ -19307,6 +19307,47 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 			}
 		} else {
 			// OpenSearch (on-premise) handling
+
+			// Offload execution_argument to file independently of total size.
+			// Lucene rejects terms > 32766 bytes, so any execution_argument
+			// larger than ~30KB will cause an illegal_argument_exception.
+			if len(workflowExecution.ExecutionArgument) > 30000 && !strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
+				dbSave = true
+				itemSize := len(workflowExecution.ExecutionArgument)
+				actionId := "execution_argument"
+
+				basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
+				if len(basepath) == 0 {
+					basepath = "files"
+				}
+
+				fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+				localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+
+				log.Printf("[DEBUG][%s] Offloading execution_argument (%d bytes) to file %s", workflowExecution.ExecutionId, itemSize, localPath)
+
+				replacementJson := fmt.Sprintf(`{
+					"success": false,
+					"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+					"size": %d,
+					"extra": "replace",
+					"id": "%s_%s"
+				}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+				if err := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); err != nil {
+					dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+					if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+						log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
+					} else if retryErr := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); retryErr != nil {
+						log.Printf("[WARNING] Failed writing execution_argument file after creating directory: %s", retryErr)
+					} else {
+						workflowExecution.ExecutionArgument = replacementJson
+					}
+				} else {
+					workflowExecution.ExecutionArgument = replacementJson
+				}
+			}
+
 			// log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
 			if len(tmpJson) >= 10000000 {
 				// Clean up results' actions
