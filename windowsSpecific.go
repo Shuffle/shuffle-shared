@@ -14,11 +14,16 @@ import (
 	"io"
 	"errors"
 	"fmt"
+	"regexp"
+	"path/filepath"
+	"bufio"
+	"io/fs"
 
 	"unsafe" // for pointer control. Not ideal, but ok
 	"syscall"
 	"os/exec"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
 
 func scanRegistryUninstall() []Software {
@@ -679,8 +684,633 @@ func unisolateHost() error {
 }
 
 
-func ListCodeScannerProjects() []ProjectInfo {
-	log.Printf("[WARNING] Codescanner not implemented on windows yet.")
+// ── Constructor ──────────────────────────────────────────────────────────────
 
-	return []ProjectInfo{}
+func NewScanner() *Scanner {
+	return &Scanner{
+		results: make(chan ProjectInfo),
+		visited: make(map[string]bool),
+	}
+}
+
+// ── Public entry point ───────────────────────────────────────────────────────
+
+func (s *Scanner) Scan(rootDir string) ([]ProjectInfo, error) {
+	absRoot, err := filepath.Abs(rootDir)
+	if err != nil {
+		return nil, fmt.Errorf("invalid root directory: %w", err)
+	}
+
+	s.wg.Add(1)
+	go s.scanDir(absRoot)
+
+	var results []ProjectInfo
+	done := make(chan struct{})
+	go func() {
+		for p := range s.results {
+			results = append(results, p)
+		}
+		close(done)
+	}()
+
+	s.wg.Wait()
+	close(s.results)
+	<-done
+
+	return results, nil
+}
+
+// ── Directory walker ─────────────────────────────────────────────────────────
+
+func (s *Scanner) scanDir(dir string) {
+	defer s.wg.Done()
+
+	// Resolve symlinks so we never visit the same inode twice.
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return
+	}
+
+	s.mu.Lock()
+	if s.visited[real] {
+		s.mu.Unlock()
+		return
+	}
+	s.visited[real] = true
+	s.mu.Unlock()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		if shouldSkip(entry.Name()) {
+			continue
+		}
+
+		fullPath := filepath.Join(dir, entry.Name())
+
+		if !entry.IsDir() {
+			continue
+		}
+
+		if projectType := detectProjectType(fullPath); projectType != "" {
+			packages := extractPackages(fullPath, projectType)
+			s.results <- ProjectInfo{
+				Path:     fullPath,
+				Type:     projectType,
+				Packages: packages,
+			}
+			// Do not recurse into found projects — avoids duplicates.
+			continue
+		}
+
+		s.wg.Add(1)
+		go s.scanDir(fullPath)
+	}
+}
+
+// ── Skip list ────────────────────────────────────────────────────────────────
+
+// skipDirs is the unified skip list for all platforms.
+// Windows-specific entries are appended at init time.
+var skipDirs = map[string]bool{
+	// VCS
+	".git": true,
+	".hg":  true,
+	".svn": true,
+
+	// Dependency caches
+	"node_modules": true,
+	"vendor":       true,
+	".venv":        true,
+	"venv":         true,
+	".env":         true,
+
+	// IDE / tooling
+	".vscode": true,
+	".idea":   true,
+
+	// Build output
+	"dist":   true,
+	"build":  true,
+	"target": true,
+	"out":    true,
+	"bin":    true,
+	"obj":    true, // .NET
+
+	// Caches
+	".cache":    true,
+	"__pycache__": true,
+}
+
+func init() {
+	if runtime.GOOS == "windows" {
+		// Windows system and user-profile noise — these directories sit under
+		// %USERPROFILE% but contain no user code.
+		for _, d := range []string{
+			"AppData",
+			"Application Data",
+			"Local Settings",
+			"MicrosoftEdgeBackups",
+			"OneDrive",         // mirror of cloud files, not local projects
+			"Windows",
+			"Program Files",
+			"Program Files (x86)",
+			"ProgramData",
+			"$Recycle.Bin",
+			"System Volume Information",
+			"Recovery",
+		} {
+			skipDirs[d] = true
+		}
+	}
+}
+
+func shouldSkip(name string) bool {
+	if skipDirs[name] {
+		return true
+	}
+	// Hidden directories (dot-prefixed) on Unix; also catches .git etc. on Windows.
+	if strings.HasPrefix(name, ".") && name != "." {
+		return true
+	}
+	return false
+}
+
+// ── Project detection ────────────────────────────────────────────────────────
+
+func detectProjectType(dir string) string {
+	if fileExists(filepath.Join(dir, "go.mod")) {
+		return "golang"
+	}
+	if fileExists(filepath.Join(dir, "pyproject.toml")) ||
+		fileExists(filepath.Join(dir, "requirements.txt")) ||
+		fileExists(filepath.Join(dir, "Pipfile")) {
+		return "python"
+	}
+	if fileExists(filepath.Join(dir, "package.json")) {
+		return "javascript"
+	}
+	if fileExists(filepath.Join(dir, "pom.xml")) ||
+		fileExists(filepath.Join(dir, "build.gradle")) ||
+		fileExists(filepath.Join(dir, "build.gradle.kts")) {
+		return "java"
+	}
+	if fileExists(filepath.Join(dir, "Gemfile")) ||
+		fileExists(filepath.Join(dir, "Rakefile")) {
+		return "ruby"
+	}
+	// .NET: must ReadDir — glob patterns are not valid os.Stat paths.
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			n := e.Name()
+			if strings.HasSuffix(n, ".csproj") ||
+				strings.HasSuffix(n, ".vbproj") ||
+				strings.HasSuffix(n, ".fsproj") {
+				return "dotnet"
+			}
+		}
+	}
+	return ""
+}
+
+// ── Dispatcher ───────────────────────────────────────────────────────────────
+
+func extractPackages(dir, projectType string) []Software {
+	switch projectType {
+	case "golang":
+		return extractGoPackages(dir)
+	case "python":
+		return extractPythonPackages(dir)
+	case "javascript":
+		return extractJavaScriptPackages(dir)
+	case "java":
+		return extractJavaPackages(dir)
+	case "ruby":
+		return extractRubyPackages(dir)
+	case "dotnet":
+		return extractDotnetPackages(dir)
+	}
+	return nil
+}
+
+// ── Go ───────────────────────────────────────────────────────────────────────
+
+func extractGoPackages(dir string) []Software {
+	f, err := os.Open(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var pkgs []Software
+	sc := bufio.NewScanner(f)
+	inBlock := false
+
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+
+		switch {
+		case line == "require (":
+			inBlock = true
+
+		case line == ")" && inBlock:
+			inBlock = false
+
+		case strings.HasPrefix(line, "require ") && !inBlock:
+			// Single-line form: require github.com/foo/bar v1.2.3
+			parts := strings.Fields(line)
+			if len(parts) == 3 {
+				pkgs = append(pkgs, Software{Name: parts[1], Version: parts[2]})
+			}
+
+		case inBlock && line != "" && !strings.HasPrefix(line, "//"):
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				pkgs = append(pkgs, Software{Name: parts[0], Version: parts[1]})
+			} else if len(parts) == 1 {
+				pkgs = append(pkgs, Software{Name: parts[0]})
+			}
+		}
+	}
+	return pkgs
+}
+
+// ── Python ───────────────────────────────────────────────────────────────────
+
+func extractPythonPackages(dir string) []Software {
+	if data, err := os.ReadFile(filepath.Join(dir, "pyproject.toml")); err == nil {
+		if pkgs := parsePyprojectToml(string(data)); len(pkgs) > 0 {
+			return pkgs
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "requirements.txt")); err == nil {
+		if pkgs := parseRequirementsTxt(string(data)); len(pkgs) > 0 {
+			return pkgs
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "Pipfile")); err == nil {
+		return parsePipfile(string(data))
+	}
+	return nil
+}
+
+// versionOps are Python version specifier operators, longest-match first.
+var versionOps = []string{">=", "<=", "==", "~=", "!=", ">", "<", ";"}
+
+func splitPyDep(dep string) (name, version string) {
+	minIdx := len(dep)
+	for _, op := range versionOps {
+		if idx := strings.Index(dep, op); idx >= 0 && idx < minIdx {
+			minIdx = idx
+		}
+	}
+	if minIdx < len(dep) {
+		return strings.TrimSpace(dep[:minIdx]), strings.TrimSpace(dep[minIdx:])
+	}
+	return strings.TrimSpace(dep), ""
+}
+
+func parseRequirementsTxt(content string) []Software {
+	var pkgs []Software
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "-") {
+			continue
+		}
+		// Strip inline comments.
+		if i := strings.Index(line, " #"); i >= 0 {
+			line = strings.TrimSpace(line[:i])
+		}
+		name, version := splitPyDep(line)
+		if name != "" {
+			pkgs = append(pkgs, Software{Name: name, Version: version})
+		}
+	}
+	return pkgs
+}
+
+func parsePyprojectToml(content string) []Software {
+	var pkgs []Software
+	inDeps := false
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+
+		if strings.Contains(line, "[tool.poetry.dependencies]") ||
+			strings.Contains(line, "[project]") && strings.Contains(line, "requires") {
+			inDeps = true
+			continue
+		}
+		// Any new section ends deps block.
+		if inDeps && strings.HasPrefix(line, "[") {
+			inDeps = false
+		}
+		// Array-style: "django>=3.0"
+		if inDeps && strings.HasPrefix(line, `"`) {
+			raw := strings.Trim(line, `",`)
+			name, version := splitPyDep(raw)
+			if name != "" {
+				pkgs = append(pkgs, Software{Name: name, Version: version})
+			}
+		}
+		// TOML key = "version" style: django = ">=3.0"
+		if inDeps && strings.Contains(line, "=") && !strings.HasPrefix(line, "[") {
+			parts := strings.SplitN(line, "=", 2)
+			name := strings.TrimSpace(parts[0])
+			version := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+			if name != "" && name != "python" {
+				pkgs = append(pkgs, Software{Name: name, Version: version})
+			}
+		}
+	}
+	return pkgs
+}
+
+func parsePipfile(content string) []Software {
+	var pkgs []Software
+	inPackages := false
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "[packages]" || line == "[dev-packages]" {
+			inPackages = true
+			continue
+		}
+		if inPackages && strings.HasPrefix(line, "[") {
+			inPackages = false
+		}
+		if inPackages && line != "" && strings.Contains(line, "=") {
+			parts := strings.SplitN(line, "=", 2)
+			name := strings.TrimSpace(parts[0])
+			version := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+			if name != "" {
+				pkgs = append(pkgs, Software{Name: name, Version: version})
+			}
+		}
+	}
+	return pkgs
+}
+
+// ── JavaScript / TypeScript ──────────────────────────────────────────────────
+
+func extractJavaScriptPackages(dir string) []Software {
+	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return nil
+	}
+	var pkg struct {
+		Dependencies    map[string]string `json:"dependencies"`
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return nil
+	}
+	var pkgs []Software
+	for n, v := range pkg.Dependencies {
+		pkgs = append(pkgs, Software{Name: n, Version: v})
+	}
+	for n, v := range pkg.DevDependencies {
+		pkgs = append(pkgs, Software{Name: n, Version: v})
+	}
+	return pkgs
+}
+
+// ── Java ─────────────────────────────────────────────────────────────────────
+
+func extractJavaPackages(dir string) []Software {
+	if data, err := os.ReadFile(filepath.Join(dir, "pom.xml")); err == nil {
+		return parsePomXml(string(data))
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "build.gradle")); err == nil {
+		return parseGradleBuild(string(data))
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "build.gradle.kts")); err == nil {
+		return parseGradleBuild(string(data))
+	}
+	return nil
+}
+
+// parsePomXml collects groupId:artifactId pairs from Maven pom.xml.
+// The original code only collected groupId, producing half-names like "org.springframework".
+func parsePomXml(content string) []Software {
+	var pkgs []Software
+	inDeps := false
+	var groupID, artifactID string
+
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+
+		if strings.Contains(line, "<dependencies>") {
+			inDeps = true
+			continue
+		}
+		if strings.Contains(line, "</dependencies>") {
+			inDeps = false
+			groupID, artifactID = "", ""
+			continue
+		}
+		if strings.Contains(line, "</dependency>") {
+			groupID, artifactID = "", ""
+			continue
+		}
+
+		if !inDeps {
+			continue
+		}
+
+		if groupID == "" {
+			if v := extractXmlValue(line, "groupId"); v != "" {
+				groupID = v
+			}
+		}
+		if artifactID == "" {
+			if v := extractXmlValue(line, "artifactId"); v != "" {
+				artifactID = v
+			}
+		}
+
+		if groupID != "" && artifactID != "" {
+			version := extractXmlValue(line, "version")
+			pkgs = append(pkgs, Software{
+				Name:    groupID + ":" + artifactID,
+				Version: version,
+			})
+			groupID, artifactID = "", ""
+		}
+	}
+	return pkgs
+}
+
+// gradleDepRe matches both groovy and Kotlin DSL dependency strings:
+//
+//	implementation 'group:artifact:version'
+//	implementation("group:artifact:version")
+var gradleDepRe = regexp.MustCompile(`(?:implementation|compile|api|testImplementation|runtimeOnly)\s*[\("']([^"']+)[\("']`)
+
+func parseGradleBuild(content string) []Software {
+	var pkgs []Software
+	for _, match := range gradleDepRe.FindAllStringSubmatch(content, -1) {
+		dep := match[1]
+		parts := strings.Split(dep, ":")
+		switch len(parts) {
+		case 3:
+			pkgs = append(pkgs, Software{Name: parts[0] + ":" + parts[1], Version: parts[2]})
+		case 2:
+			pkgs = append(pkgs, Software{Name: parts[0], Version: parts[1]})
+		}
+	}
+	return pkgs
+}
+
+// ── Ruby ─────────────────────────────────────────────────────────────────────
+
+// gemRe matches lines like:
+//
+//	gem 'rails', '~> 7.0'
+//	gem "devise", ">= 4.0"
+//	gem 'puma'
+var gemRe = regexp.MustCompile(`^\s*gem\s+['"]([^'"]+)['"](?:\s*,\s*['"]([^'"]+)['"])?`)
+
+func extractRubyPackages(dir string) []Software {
+	data, err := os.ReadFile(filepath.Join(dir, "Gemfile"))
+	if err != nil {
+		return nil
+	}
+	return parseGemfile(string(data))
+}
+
+func parseGemfile(content string) []Software {
+	var pkgs []Software
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := sc.Text()
+		if m := gemRe.FindStringSubmatch(line); m != nil {
+			pkgs = append(pkgs, Software{Name: m[1], Version: m[2]})
+		}
+	}
+	return pkgs
+}
+
+// ── .NET ─────────────────────────────────────────────────────────────────────
+
+func extractDotnetPackages(dir string) []Software {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if strings.HasSuffix(n, ".csproj") ||
+			strings.HasSuffix(n, ".vbproj") ||
+			strings.HasSuffix(n, ".fsproj") {
+			data, err := os.ReadFile(filepath.Join(dir, n))
+			if err != nil {
+				continue
+			}
+			return parseDotnetProjectFile(string(data))
+		}
+	}
+	return nil
+}
+
+func parseDotnetProjectFile(content string) []Software {
+	var pkgs []Software
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if !strings.Contains(line, "PackageReference") {
+			continue
+		}
+		name := extractXmlAttr(line, "Include")
+		version := extractXmlAttr(line, "Version")
+		if name != "" {
+			pkgs = append(pkgs, Software{Name: name, Version: version})
+		}
+	}
+	return pkgs
+}
+
+// ── XML helpers ──────────────────────────────────────────────────────────────
+
+// extractXmlValue extracts a simple tag value: <tag>value</tag>
+func extractXmlValue(line, tag string) string {
+	open := "<" + tag + ">"
+	close := "</" + tag + ">"
+	s := strings.Index(line, open)
+	e := strings.Index(line, close)
+	if s >= 0 && e > s {
+		return line[s+len(open) : e]
+	}
+	return ""
+}
+
+// extractXmlAttr extracts an XML attribute value: attr="value"
+func extractXmlAttr(line, attr string) string {
+	needle := attr + `="`
+	s := strings.Index(line, needle)
+	if s < 0 {
+		return ""
+	}
+	s += len(needle)
+	e := strings.Index(line[s:], `"`)
+	if e < 0 {
+		return ""
+	}
+	return line[s : s+e]
+}
+
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
+// goModCacheDir returns the OS-appropriate Go module cache path fragment
+// so we can filter it regardless of platform.
+func goModCacheDir() string {
+	// GOPATH may be set explicitly; fall back to the default ~/go.
+	gopath := os.Getenv("GOPATH")
+	if gopath == "" {
+		home, _ := os.UserHomeDir()
+		gopath = filepath.Join(home, "go")
+	}
+	return filepath.Join(gopath, "pkg", "mod")
+}
+
+//func ListCodeScannerProjects() []ProjectInfo {
+//	log.Printf("[WARNING] Codescanner not implemented on windows yet.")
+//
+//	return []ProjectInfo{}
+//}
+
+func ListCodeScannerProjects() []ProjectInfo {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
+		return nil
+	}
+
+	modCache := goModCacheDir()
+
+	sc := NewScanner()
+	projects, err := sc.Scan(homeDir)
+	if err != nil {
+		log.Printf("[ERROR] Problem in codescanner: %v\n", err)
+	}
+
+	var out []ProjectInfo
+	for _, p := range projects {
+		if p.Path == "" || len(p.Packages) == 0 {
+			continue
+		}
+		// Skip the Go module download cache — these are vendored copies,
+		// not the user's own projects.
+		if strings.HasPrefix(p.Path, modCache) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
