@@ -597,12 +597,6 @@ type osVersionInfoEx struct {
 	wReserved           byte
 }
 
-func ListCodeScannerProjects() []ProjectInfo {
-	log.Printf("[WARNING] Codescanner not implemented on windows yet.")
-
-	return []ProjectInfo{}
-}
-
 const (
 	backupFile = "C:\\Windows\\Temp\\firewall_backup_edr.wfw"
 )
@@ -682,4 +676,11 @@ func isolateHost(allowIPs []string) error {
 
 func unisolateHost() error {
 	return unisolateHostWindows()
+}
+
+
+func ListCodeScannerProjects() []ProjectInfo {
+	log.Printf("[WARNING] Codescanner not implemented on windows yet.")
+
+	return []ProjectInfo{}
 }
