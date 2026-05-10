@@ -1314,93 +1314,6 @@ func ListCodeScannerProjects() []ProjectInfo {
 	}
 	return out
 }
-
-func Screenshot() ([]ScreenshotWrapper, error) {
-	if err := checkInteractiveSession(); err != nil {
-		return nil, err
-	}
- 
-	// We need per-display images, so we capture each screen individually
-	// and collect metadata for all of them in one PowerShell call.
-	tmpDir := os.TempDir()
-	ts := time.Now().UnixNano()
- 
-	// The script does three things:
-	//   1. Captures each Screen individually to a temp file named by index.
-	//   2. Reads cursor position.
-	//   3. Emits a JSON array describing each screen (dimensions, cursor,
-	//      temp file path) so Go can read it back without more parsing.
-	script := fmt.Sprintf(`
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
- 
-$cursor = [System.Windows.Forms.Cursor]::Position
-$screens = [System.Windows.Forms.Screen]::AllScreens
-$results = @()
- 
-for ($i = 0; $i -lt $screens.Length; $i++) {
-    $s    = $screens[$i]
-    $path = "%s\edr-%d-d$i.png"
- 
-    $bmp = New-Object System.Drawing.Bitmap($s.Bounds.Width, $s.Bounds.Height)
-    $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-    $gfx.CopyFromScreen($s.Bounds.Left, $s.Bounds.Top, 0, 0, $bmp.Size)
-    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
-    $gfx.Dispose()
-    $bmp.Dispose()
- 
-    $results += [PSCustomObject]@{
-        Path    = $path
-        Width   = $s.Bounds.Width
-        Height  = $s.Bounds.Height
-        CursorX = $cursor.X
-        CursorY = $cursor.Y
-    }
-}
- 
-$results | ConvertTo-Json -Compress
-`, tmpDir, ts)
- 
-	out, err := exec.Command(
-		"powershell", "-NoProfile", "-NonInteractive", "-Command", script,
-	).Output()
-	if err != nil {
-		return nil, fmt.Errorf("screenshot script failed: %w", err)
-	}
- 
-	// PowerShell emits a bare object (not array) when there is exactly one
-	// screen. Normalise to array so json.Unmarshal always gets a slice.
-	trimmed := strings.TrimSpace(string(out))
-	if strings.HasPrefix(trimmed, "{") {
-		trimmed = "[" + trimmed + "]"
-	}
- 
-	var records []struct {
-		Path    string  `json:"Path"`
-		Width   int     `json:"Width"`
-		Height  int     `json:"Height"`
-		CursorX float64 `json:"CursorX"`
-		CursorY float64 `json:"CursorY"`
-	}
-	if err := json.Unmarshal([]byte(trimmed), &records); err != nil {
-		return nil, fmt.Errorf("parsing screenshot metadata: %w", err)
-	}
- 
-	wrappers := make([]ScreenshotWrapper, 0, len(records))
-	for i, r := range records {
-		data, err := os.ReadFile(r.Path)
-		os.Remove(r.Path) // clean up regardless of read outcome
-		if err != nil {
-			return nil, fmt.Errorf("reading screenshot for display %d: %w", i, err)
-		}
-		wrappers = append(wrappers, ScreenshotWrapper{
-			Image:      data,
-			ScreenSize: DisplaySize{DisplayID: i + 1, Width: r.Width, Height: r.Height},
-			Cursor:     Position{X: r.CursorX, Y: r.CursorY},
-		})
-	}
-	return wrappers, nil
-}
  
 // GetDisplaySizeWindows returns the dimensions of every active display.
 // Prefer calling Screenshot() if you need both image and size — it is cheaper.
@@ -1627,4 +1540,98 @@ func getString(m map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+func Screenshot() ([]ScreenshotWrapper, error) {
+	if err := checkInteractiveSession(); err != nil {
+		return nil, err
+	}
+ 
+	// We need per-display images, so we capture each screen individually
+	// and collect metadata for all of them in one PowerShell call.
+	tmpDir := os.TempDir()
+	ts := time.Now().UnixNano()
+ 
+	// The script does three things:
+	//   1. Captures each Screen individually to a temp file named by index.
+	//   2. Reads cursor position.
+	//   3. Emits a JSON array describing each screen (dimensions, cursor,
+	//      temp file path) so Go can read it back without more parsing.
+	script := fmt.Sprintf(`
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+ 
+$cursor = [System.Windows.Forms.Cursor]::Position
+$screens = [System.Windows.Forms.Screen]::AllScreens
+$results = @()
+ 
+for ($i = 0; $i -lt $screens.Length; $i++) {
+    $s    = $screens[$i]
+    $path = "%s\edr-%d-d$i.png"
+ 
+    $bmp = New-Object System.Drawing.Bitmap($s.Bounds.Width, $s.Bounds.Height)
+    $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+    $gfx.CopyFromScreen($s.Bounds.Left, $s.Bounds.Top, 0, 0, $bmp.Size)
+    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $gfx.Dispose()
+    $bmp.Dispose()
+ 
+    $results += [PSCustomObject]@{
+        Path    = $path
+        Width   = $s.Bounds.Width
+        Height  = $s.Bounds.Height
+        CursorX = $cursor.X
+        CursorY = $cursor.Y
+    }
+}
+ 
+$results | ConvertTo-Json -Compress
+`, tmpDir, ts)
+ 
+	command := exec.Command(
+		"powershell", "-WindowStyle", "Hidden", "-NoProfile", "-NonInteractive", "-Command", script,
+	)
+
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:     true,
+		CreationFlags:   0x08000000, // CREATE_NO_WINDOW
+	}
+
+	out, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("screenshot script failed: %w", err)
+	}
+ 
+	// PowerShell emits a bare object (not array) when there is exactly one
+	// screen. Normalise to array so json.Unmarshal always gets a slice.
+	trimmed := strings.TrimSpace(string(out))
+	if strings.HasPrefix(trimmed, "{") {
+		trimmed = "[" + trimmed + "]"
+	}
+ 
+	var records []struct {
+		Path    string  `json:"Path"`
+		Width   int     `json:"Width"`
+		Height  int     `json:"Height"`
+		CursorX float64 `json:"CursorX"`
+		CursorY float64 `json:"CursorY"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &records); err != nil {
+		return nil, fmt.Errorf("parsing screenshot metadata: %w", err)
+	}
+ 
+	wrappers := make([]ScreenshotWrapper, 0, len(records))
+	for i, r := range records {
+		data, err := os.ReadFile(r.Path)
+		os.Remove(r.Path) // clean up regardless of read outcome
+		if err != nil {
+			return nil, fmt.Errorf("reading screenshot for display %d: %w", i, err)
+		}
+		wrappers = append(wrappers, ScreenshotWrapper{
+			Image:      data,
+			ScreenSize: DisplaySize{DisplayID: i + 1, Width: r.Width, Height: r.Height},
+			Cursor:     Position{X: r.CursorX, Y: r.CursorY},
+		})
+	}
+	return wrappers, nil
 }

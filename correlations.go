@@ -545,7 +545,8 @@ func HandleSensorResponseAction(hostname string, sensorDetails SensorMode, incRe
 				out = "Host un-isolated successfully"
 				os.Setenv("HOST_ISOLATED", "false")
 			}
-		} else if strings.HasPrefix(command, "script:remote_control") { 
+
+		} else if strings.HasPrefix(command, "script:remote_control") && sensorDetails.ResponseActions == "full" { 
 			// Example Mouse Move: 
 			// script:remote_control {"actions":[{"op":"mouse.move","params":{"x":600,"y":400}},{"op":"mouse.click","params":{"x":600,"y":400,"button":"left","delay_ms":100}}]}
 
@@ -565,11 +566,11 @@ func HandleSensorResponseAction(hostname string, sensorDetails SensorMode, incRe
 				}
 			}
 
-		} else if strings.HasPrefix(command, "script:screenshot ") { 
+		} else if strings.HasPrefix(command, "script:screenshot") { 
 			out = fmt.Sprintf("Screenshot capture of '%s' is not available yet", hostname)
 			err = nil
 
-			screenshotOutput, err := Screenshot() 
+			screenshotOutput, err := Screenshot()
 			if err != nil { 
 				log.Printf("[ERROR] Failed to capture screenshot: %s", err)
 				out = fmt.Sprintf("Failed to capture screenshot: %s", err.Error())
@@ -628,8 +629,8 @@ func HandleSensorResponseAction(hostname string, sensorDetails SensorMode, incRe
 		} else {
 			log.Printf("[ERROR] Script-based response actions are not yet available. Cannot execute script: %s", command)
 
-			out = "Not available yet for this host"
-			err = fmt.Errorf("script-based response actions are not available yet for this host or the action is not recognized. Contact support@shuffler.io if this seems like a bug.")
+			out = "Command not available for this host"
+			err = fmt.Errorf("the action is not recognized or you do not have permission to perform this action. Contact support@shuffler.io if this seems like a bug.")
 		}
 	} else { 
 		if len(command) == 0 {
