@@ -7996,10 +7996,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 2. **Explicit 'Ask' Command:**
    - **Trigger:** Does the user explicitly COMMAND you to ask them for input (e.g., "Ask me for the IP")?
    - **Action:** Select "ask" (Category: "standalone").
-   - **Field "question":** The specific questions you have. Do NOT ask questions about authentication or authorization. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, ask one question at a time as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}] 
+   - **Field "question":** The specific questions you have. Do NOT ask questions about authentication or authorization. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, ask one question at a time as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}]`
 
-   If the tool is not mentioned in USER CONTEXT and you NEED them to allow those tools, set "action": "add_tool" and "tool": "EXACT toolname" and do not ask questions. If multiple tools are required, make multiple decisions - one for each required tool. Put the entire reasoning in the "reason" field - not as fields.
-`
+    // New feature for auto-generating and approving new apps 
+   	// If the tool is not mentioned in USER CONTEXT and you NEED them to allow those tools, set "action": "add_tool" and "tool": "EXACT toolname" and do not ask questions. If multiple tools are required, make multiple decisions - one for each required tool. Put the entire reasoning in the "reason" field - not as fields.
 	}
 
 	systemMessage += fmt.Sprintf(`### MISSION

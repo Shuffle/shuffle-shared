@@ -5487,7 +5487,7 @@ type OSVDatabaseSpecific struct {
 	Source         string   `json:"source"`
 	CWEs           []string `json:"cwes,omitempty"`
 	Severity       string   `json:"severity,omitempty"`
-	GithubReviewed string   `json:"github_reviewed,omitempty"`
+	GithubReviewed bool `json:"github_reviewed,omitempty"`
 
 	GithubReviewedAt time.Time `json:"github_reviewed_at,omitempty"`
 	DateAdded        string    `json:"date_added,omitempty"`
@@ -5495,6 +5495,7 @@ type OSVDatabaseSpecific struct {
 	RequiredAction   string    `json:"required_action,omitempty"`
 	Vulnerability    string    `json:"vulnerability,omitempty"`
 	NvdPublishedAt  time.Time `json:"nvd_published_at,omitempty"`
+	CweIds 		[]string  `json:"cwe_ids,omitempty"`
 }
 
 type OSVEcosystemSpecific struct {
