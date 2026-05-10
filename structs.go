@@ -5090,6 +5090,11 @@ type MCPRequest struct {
 		Input    struct {
 			Text  string `json:"text"`
 			Voice string `json:"voice"`
+
+			Images []struct {
+				URL    string `json:"url"`
+				Detail string `json:"detail,omitempty"`
+			}
 		} `json:"input"`
 		Context struct {
 			SessionID string `json:"session_id"`
