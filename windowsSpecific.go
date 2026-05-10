@@ -1592,7 +1592,7 @@ $results | ConvertTo-Json -Compress
 		"powershell", "-WindowStyle", "Hidden", "-NoProfile", "-NonInteractive", "-Command", script,
 	)
 
-	cmd.SysProcAttr = &syscall.SysProcAttr{
+	command.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:     true,
 		CreationFlags:   0x08000000, // CREATE_NO_WINDOW
 	}
