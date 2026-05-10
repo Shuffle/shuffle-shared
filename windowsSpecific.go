@@ -1314,3 +1314,317 @@ func ListCodeScannerProjects() []ProjectInfo {
 	}
 	return out
 }
+
+func Screenshot() ([]ScreenshotWrapper, error) {
+	if err := checkInteractiveSession(); err != nil {
+		return nil, err
+	}
+ 
+	// We need per-display images, so we capture each screen individually
+	// and collect metadata for all of them in one PowerShell call.
+	tmpDir := os.TempDir()
+	ts := time.Now().UnixNano()
+ 
+	// The script does three things:
+	//   1. Captures each Screen individually to a temp file named by index.
+	//   2. Reads cursor position.
+	//   3. Emits a JSON array describing each screen (dimensions, cursor,
+	//      temp file path) so Go can read it back without more parsing.
+	script := fmt.Sprintf(`
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+ 
+$cursor = [System.Windows.Forms.Cursor]::Position
+$screens = [System.Windows.Forms.Screen]::AllScreens
+$results = @()
+ 
+for ($i = 0; $i -lt $screens.Length; $i++) {
+    $s    = $screens[$i]
+    $path = "%s\edr-%d-d$i.png"
+ 
+    $bmp = New-Object System.Drawing.Bitmap($s.Bounds.Width, $s.Bounds.Height)
+    $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+    $gfx.CopyFromScreen($s.Bounds.Left, $s.Bounds.Top, 0, 0, $bmp.Size)
+    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $gfx.Dispose()
+    $bmp.Dispose()
+ 
+    $results += [PSCustomObject]@{
+        Path    = $path
+        Width   = $s.Bounds.Width
+        Height  = $s.Bounds.Height
+        CursorX = $cursor.X
+        CursorY = $cursor.Y
+    }
+}
+ 
+$results | ConvertTo-Json -Compress
+`, tmpDir, ts)
+ 
+	out, err := exec.Command(
+		"powershell", "-NoProfile", "-NonInteractive", "-Command", script,
+	).Output()
+	if err != nil {
+		return nil, fmt.Errorf("screenshot script failed: %w", err)
+	}
+ 
+	// PowerShell emits a bare object (not array) when there is exactly one
+	// screen. Normalise to array so json.Unmarshal always gets a slice.
+	trimmed := strings.TrimSpace(string(out))
+	if strings.HasPrefix(trimmed, "{") {
+		trimmed = "[" + trimmed + "]"
+	}
+ 
+	var records []struct {
+		Path    string  `json:"Path"`
+		Width   int     `json:"Width"`
+		Height  int     `json:"Height"`
+		CursorX float64 `json:"CursorX"`
+		CursorY float64 `json:"CursorY"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &records); err != nil {
+		return nil, fmt.Errorf("parsing screenshot metadata: %w", err)
+	}
+ 
+	wrappers := make([]ScreenshotWrapper, 0, len(records))
+	for i, r := range records {
+		data, err := os.ReadFile(r.Path)
+		os.Remove(r.Path) // clean up regardless of read outcome
+		if err != nil {
+			return nil, fmt.Errorf("reading screenshot for display %d: %w", i, err)
+		}
+		wrappers = append(wrappers, ScreenshotWrapper{
+			Image:      data,
+			ScreenSize: DisplaySize{DisplayID: i + 1, Width: r.Width, Height: r.Height},
+			Cursor:     Position{X: r.CursorX, Y: r.CursorY},
+		})
+	}
+	return wrappers, nil
+}
+ 
+// GetDisplaySizeWindows returns the dimensions of every active display.
+// Prefer calling Screenshot() if you need both image and size — it is cheaper.
+func GetDisplaySizeWindows() ([]DisplaySize, error) {
+	if err := checkInteractiveSession(); err != nil {
+		return nil, err
+	}
+ 
+	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", `
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Screen]::AllScreens |
+    Select-Object @{N='Width';E={$_.Bounds.Width}}, @{N='Height';E={$_.Bounds.Height}} |
+    ConvertTo-Json -Compress
+`).Output()
+	if err != nil {
+		return nil, fmt.Errorf("querying displays: %w", err)
+	}
+ 
+	trimmed := strings.TrimSpace(string(out))
+	if strings.HasPrefix(trimmed, "{") {
+		trimmed = "[" + trimmed + "]"
+	}
+ 
+	var records []struct {
+		Width  int `json:"Width"`
+		Height int `json:"Height"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &records); err != nil {
+		return nil, fmt.Errorf("parsing display sizes: %w", err)
+	}
+ 
+	sizes := make([]DisplaySize, len(records))
+	for i, r := range records {
+		sizes[i] = DisplaySize{DisplayID: i + 1, Width: r.Width, Height: r.Height}
+	}
+	return sizes, nil
+}
+ 
+// GetCursorPositionWindows returns the current cursor position.
+// Origin (0,0) is the top-left of the primary display.
+// Prefer calling Screenshot() if you need both image and cursor — it is cheaper.
+func GetCursorPositionWindows() (Position, error) {
+	if err := checkInteractiveSession(); err != nil {
+		return Position{}, err
+	}
+ 
+	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", `
+Add-Type -AssemblyName System.Windows.Forms
+$p = [System.Windows.Forms.Cursor]::Position
+Write-Output "$($p.X) $($p.Y)"`).Output()
+	if err != nil {
+		return Position{}, fmt.Errorf("querying cursor position: %w", err)
+	}
+ 
+	var x, y float64
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%f %f", &x, &y); err != nil {
+		return Position{}, fmt.Errorf("parsing cursor position %q: %w", out, err)
+	}
+	return Position{X: x, Y: y}, nil
+}
+ 
+// checkInteractiveSession returns an error if the process is running in
+// Windows Session 0 (the non-interactive service session). Session 0 has no
+// display, no cursor, and no desktop — all GUI calls will fail or hang there.
+func checkInteractiveSession() error {
+	out, err := exec.Command(
+		"powershell", "-NoProfile", "-NonInteractive", "-Command",
+		`(Get-Process -Id $PID).SessionId`,
+	).Output()
+	if err != nil {
+		// Can't determine session — proceed and let the caller handle failure.
+		return nil
+	}
+	var id int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &id); err != nil {
+		return nil
+	}
+	if id == 0 {
+		return fmt.Errorf("running in Session 0 (non-interactive service session) — no display available")
+	}
+	return nil
+}
+
+// ========================
+// Windows API bindings
+// ========================
+
+var (
+	user32           = windows.NewLazySystemDLL("user32.dll")
+
+	procSetCursorPos = user32.NewProc("SetCursorPos")
+	procMouseEvent   = user32.NewProc("mouse_event")
+	procKeybdEvent   = user32.NewProc("keybd_event")
+)
+
+// ========================
+// Mouse constants
+// ========================
+
+const (
+	MOUSE_LEFTDOWN  = 0x0002
+	MOUSE_LEFTUP    = 0x0004
+	MOUSE_RIGHTDOWN = 0x0008
+	MOUSE_RIGHTUP   = 0x0010
+)
+
+// ========================
+// RemoteControl methods
+// ========================
+
+func remoteControlBatch(batch RemoteControlActionBatch) error {
+	for _, a := range batch.Actions {
+		remoteControlExecute(a)
+	}
+
+	return nil
+}
+
+func remoteControlExecute(a RemoteControl) {
+	switch a.Op {
+
+	// -------- Mouse --------
+
+	case "mouse.move":
+		x := getInt(a.Params, "x")
+		y := getInt(a.Params, "y")
+		setCursor(x, y)
+
+	case "mouse.click":
+		x := getInt(a.Params, "x")
+		y := getInt(a.Params, "y")
+		button := getString(a.Params, "button")
+		delay := getInt(a.Params, "delay_ms")
+
+		setCursor(x, y)
+		time.Sleep(time.Duration(delay) * time.Millisecond)
+
+		mouseDown(button)
+		time.Sleep(50 * time.Millisecond)
+		mouseUp(button)
+
+	case "mouse.drag":
+		fx := getInt(a.Params, "from_x")
+		fy := getInt(a.Params, "from_y")
+		tx := getInt(a.Params, "to_x")
+		ty := getInt(a.Params, "to_y")
+		button := getString(a.Params, "button")
+
+		setCursor(fx, fy)
+		time.Sleep(50 * time.Millisecond)
+
+		mouseDown(button)
+		time.Sleep(50 * time.Millisecond)
+
+		setCursor(tx, ty)
+		time.Sleep(50 * time.Millisecond)
+
+		mouseUp(button)
+
+	// -------- Keyboard --------
+
+	case "keyboard.press":
+		key := getInt(a.Params, "key")
+		keyPress(uint16(key))
+
+	// -------- Utility --------
+
+	case "system.wait":
+		ms := getInt(a.Params, "ms")
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
+}
+
+// ========================
+// Windows input functions
+// ========================
+
+func setCursor(x, y int) {
+	procSetCursorPos.Call(uintptr(x), uintptr(y))
+}
+
+func mouseDown(button string) {
+	if button == "right" {
+		procMouseEvent.Call(MOUSE_RIGHTDOWN, 0, 0, 0, 0)
+		return
+	}
+	procMouseEvent.Call(MOUSE_LEFTDOWN, 0, 0, 0, 0)
+}
+
+func mouseUp(button string) {
+	if button == "right" {
+		procMouseEvent.Call(MOUSE_RIGHTUP, 0, 0, 0, 0)
+		return
+	}
+	procMouseEvent.Call(MOUSE_LEFTUP, 0, 0, 0, 0)
+}
+
+func keyPress(vk uint16) {
+	procKeybdEvent.Call(uintptr(vk), 0, 0, 0)
+	time.Sleep(30 * time.Millisecond)
+	procKeybdEvent.Call(uintptr(vk), 0, 2, 0)
+}
+
+// ========================
+// Helpers
+// ========================
+
+func getInt(m map[string]any, key string) int {
+	if v, ok := m[key]; ok {
+		switch t := v.(type) {
+		case float64:
+			return int(t)
+		case int:
+			return t
+		}
+	}
+	return 0
+}
+
+func getString(m map[string]any, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}

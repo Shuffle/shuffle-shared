@@ -4942,16 +4942,16 @@ type AuditLogEntry struct {
 }
 
 type ProcessInfo struct {
-	PID     int32 `json:"pid"`
-	PPID    int32 `json:"ppid,omitempty"`
-	TTY     string `json:"tty,omitempty"`
+	PID         int32  `json:"pid"`
+	PPID        int32  `json:"ppid,omitempty"`
+	TTY         string `json:"tty,omitempty"`
 	CommandLine string `json:"command_line,omitempty"`
-	User string `json:"user,omitempty"`
+	User        string `json:"user,omitempty"`
 
-	Args []string `json:"args,omitempty"`
-	CreationTime int64 `json:"creation_time,omitempty"`
-	ExePath  string `json:"exe_path,omitempty"`
-	SHA256   string `json:"sha256,omitempty"`
+	Args         []string `json:"args,omitempty"`
+	CreationTime int64    `json:"creation_time,omitempty"`
+	ExePath      string   `json:"exe_path,omitempty"`
+	SHA256       string   `json:"sha256,omitempty"`
 
 	ProcessName string `json:"process_name"`
 }
@@ -5487,15 +5487,15 @@ type OSVDatabaseSpecific struct {
 	Source         string   `json:"source"`
 	CWEs           []string `json:"cwes,omitempty"`
 	Severity       string   `json:"severity,omitempty"`
-	GithubReviewed bool `json:"github_reviewed,omitempty"`
+	GithubReviewed bool     `json:"github_reviewed,omitempty"`
 
 	GithubReviewedAt time.Time `json:"github_reviewed_at,omitempty"`
 	DateAdded        string    `json:"date_added,omitempty"`
 	ActionDue        string    `json:"action_due,omitempty"`
 	RequiredAction   string    `json:"required_action,omitempty"`
 	Vulnerability    string    `json:"vulnerability,omitempty"`
-	NvdPublishedAt  time.Time `json:"nvd_published_at,omitempty"`
-	CweIds 		[]string  `json:"cwe_ids,omitempty"`
+	NvdPublishedAt   time.Time `json:"nvd_published_at,omitempty"`
+	CweIds           []string  `json:"cwe_ids,omitempty"`
 }
 
 type OSVEcosystemSpecific struct {
@@ -5563,4 +5563,29 @@ type VulnerabilityQuery struct {
 type AiCallInfo struct {
 	Caller string
 	OrgID  string
+}
+
+type ScreenshotWrapper struct {
+	ScreenSize  DisplaySize `json:"screen_size"`
+	Cursor      Position    `json:"cursor"`
+	Image       []byte      `json:"image,omitempty"`
+	ImageBase64 string      `json:"image_base64"`
+}
+
+type DisplaySize struct {
+	DisplayID int `json:"display_id,omitempty"`
+	Width     int `json:"width"`
+	Height    int `json:"height"`
+
+	OffsetX int `json:"offset_x,omitempty"`
+	OffsetY int `json:"offset_y,omitempty"`
+}
+// Added remote control capabilities for windows
+type RemoteControl struct{
+	Op     string                 `json:"op"`
+	Params map[string]any        `json:"params"`
+}
+
+type RemoteControlActionBatch struct {
+	Actions []RemoteControl `json:"actions"`
 }
