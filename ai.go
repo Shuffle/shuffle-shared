@@ -7464,6 +7464,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	foundReasoning := ""
 	enableQuestions := false
+
+	imagesIncluded := []string{}
+	imageDetail := openai.ImageURLDetailAuto // low, high, original, auto (let the model decide)
 	for _, param := range startNode.Parameters {
 		if param.Name == "app_name" {
 			appname = param.Value
@@ -7482,6 +7485,31 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 		if param.Name == "reasoning" { 
 			foundReasoning = strings.ToLower(strings.TrimSpace(param.Value))
+		}
+
+		if param.Name == "image" { 
+			if strings.HasPrefix(param.Value, "http://") || strings.HasPrefix(param.Value, "https://") {
+				imagesIncluded = append(imagesIncluded, param.Value)
+			} else {
+				// Check for base64
+				if strings.HasPrefix(param.Value, "data:image") && strings.Contains(param.Value, "base64,") {
+					imagesIncluded = append(imagesIncluded, param.Value)
+				} else {
+					imagesIncluded = append(imagesIncluded, fmt.Sprintf("data:image;base64,%s", param.Value))
+				}
+			}
+		}
+
+		if param.Name == "image_detail" { 
+			if param.Value == "low" {
+				imageDetail = openai.ImageURLDetailLow
+			} else if param.Value == "high" {
+				imageDetail = openai.ImageURLDetailHigh
+			} else if param.Value == "original" {
+				imageDetail = openai.ImageURLDetail("original")
+			} else {
+				imageDetail = openai.ImageURLDetail(param.Value)
+			}
 		}
 
 		if param.Name == "action" {
@@ -7996,10 +8024,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 2. **Explicit 'Ask' Command:**
    - **Trigger:** Does the user explicitly COMMAND you to ask them for input (e.g., "Ask me for the IP")?
    - **Action:** Select "ask" (Category: "standalone").
-   - **Field "question":** The specific questions you have. Do NOT ask questions about authentication or authorization. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, ask one question at a time as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}] 
+   - **Field "question":** The specific questions you have. Do NOT ask questions about authentication or authorization. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, ask one question at a time as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}]`
 
-   If the tool is not mentioned in USER CONTEXT and you NEED them to allow those tools, set "action": "add_tool" and "tool": "EXACT toolname" and do not ask questions. If multiple tools are required, make multiple decisions - one for each required tool. Put the entire reasoning in the "reason" field - not as fields.
-`
+    // New feature for auto-generating and approving new apps 
+   	// If the tool is not mentioned in USER CONTEXT and you NEED them to allow those tools, set "action": "add_tool" and "tool": "EXACT toolname" and do not ask questions. If multiple tools are required, make multiple decisions - one for each required tool. Put the entire reasoning in the "reason" field - not as fields.
 	}
 
 	systemMessage += fmt.Sprintf(`### MISSION
@@ -8126,21 +8154,46 @@ data_filter:
 				Role:    openai.ChatMessageRoleSystem,
 				Content: systemMessage,
 			},
-			{
-				Role:    openai.ChatMessageRoleUser,
-				Content: fmt.Sprintf("USER CONTEXT:\n%s\n", metadata),
-			},
 		},
 
 		// Move towards determinism
 		Temperature: 0,
 		ReasoningEffort: agentReasoningEffort,
 
-
 		// Reasoning control
 		// MaxCompletionTokens: 5000,
 		// ReasoningEffort:     agentReasoningEffort,
 		// Store:               true,
+	}
+
+	preparedContent := fmt.Sprintf("USER CONTEXT:\n%s\n", metadata)
+	if len(imagesIncluded) == 0 {
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: preparedContent,
+		})
+	} else {
+		newMessage := openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			MultiContent: []openai.ChatMessagePart{
+				openai.ChatMessagePart{
+					Type: openai.ChatMessagePartTypeText, 
+					Text: preparedContent,
+				},
+			},
+		}
+
+		for _, imageIncluded := range imagesIncluded {
+			newMessage.MultiContent = append(newMessage.MultiContent, openai.ChatMessagePart{
+				Type: openai.ChatMessagePartTypeImageURL, 
+				ImageURL: &openai.ChatMessageImageURL{
+					URL:   imageIncluded,
+					Detail: imageDetail,
+				},
+			})
+		}
+
+		completionRequest.Messages = append(completionRequest.Messages, newMessage)
 	}
 
 	if project.Environment == "cloud" {

@@ -33613,7 +33613,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 						org.SyncFeatures.Branding.Active = features.Branding.Active
 
 						org.SyncFeatures.AppExecutions.Active = features.OnpremAppExecutions.Active
-						if features.AppExecutions.Limit < 25000 {
+						if features.OnpremAppExecutions.Limit < 25000 {
 							org.SyncFeatures.AppExecutions.Limit = 25000
 						} else {
 							org.SyncFeatures.AppExecutions.Limit = features.OnpremAppExecutions.Limit
@@ -33682,6 +33682,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 				org.SyncFeatures.Authentication.Active = features.Authentication.Active
 				org.SyncFeatures.Authentication.Limit = features.Authentication.Limit
+
+				org.SyncFeatures.WorkflowExecutions.Active = features.WorkflowExecutions.Active
+				org.SyncFeatures.WorkflowExecutions.Limit = features.WorkflowExecutions.Limit
 
 				org.SyncFeatures.Schedule.Active = features.Schedule.Active
 				org.SyncFeatures.Schedule.Limit = features.Schedule.Limit
