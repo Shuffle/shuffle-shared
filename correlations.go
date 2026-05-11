@@ -125,6 +125,10 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 }
 
 func isValidUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+
 	_, err := uuid.FromString(s)
 	return err == nil
 }
@@ -157,7 +161,10 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 
 		unmarshalled := map[string]interface{}{}
 		if err := json.Unmarshal([]byte(value), &unmarshalled); err != nil {
-			log.Printf("[WARNING] Failed unmarshalling value for cross-correlate ngrams: %s. Storing the key directly.", err)
+			//if debug { 
+			//	log.Printf("[ERROR] Debug: Failed unmarshalling value for cross-correlate ngrams: %s. Storing the key directly.", err)
+			//}
+
 			unmarshalled = map[string]interface{}{
 				"key": value,
 			}
@@ -239,7 +246,10 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 			tmpValue := parsedValue
 			tmpValue = strings.TrimPrefix(tmpValue, "file_")
 			if isValidUUID(tmpValue) {
-				log.Printf("[DEBUG] Skipping value that is a valid UUID: %s", parsedValue)
+				if debug { 
+					log.Printf("[DEBUG] Skipping value that is a valid UUID: %s", parsedValue)
+				}
+
 				continue
 			}
 

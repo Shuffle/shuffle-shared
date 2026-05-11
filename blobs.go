@@ -54,7 +54,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		categoryCheck := "shuffle-security_incidents"
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
 		if err != nil {
-			if strings.Contains(err.Error(), "not found") {
+			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
 				categoryConfig = &DatastoreCategoryUpdate{
 					OrgId:       user.ActiveOrg.Id,
 					Category:    categoryCheck,
@@ -132,11 +132,16 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		}
 
 	} else if actionType == "ingest_tickets" {
+
+		if debug { 
+			log.Printf("\n\n\n[DEBUG] Enabling Singul workflow for org %s (%s) with workflow ID %s\n\n\n", user.ActiveOrg.Name, user.ActiveOrg.Id, workflow.ID)
+		}
+
 		// Enables the automation IF it is not already enabled
 		categoryCheck := "shuffle-security_incidents"
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
 		if err != nil {
-			if strings.Contains(err.Error(), "not found") {
+			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
 				categoryConfig = &DatastoreCategoryUpdate{
 					OrgId:       user.ActiveOrg.Id,
 					Category:    categoryCheck,
@@ -144,6 +149,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 					Settings:    DatastoreCategorySettings{},
 				}
 			} else {
+				log.Printf("[ERROR] Failed to get category config for org %s (%s) in category %#v: %s", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck, err)
 				return err
 			}
 		}
@@ -156,69 +162,150 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 			datastoreCategoryConfigEdited = true
 		}
 
-		// JUST first time
-		automationEnabled := false
+		agentAutomation := DatastoreAutomation{
+			Name:        "Run AI Agent",
+			Description: "Runs an AI Agent to process the updated value. Uses built-in ShuffleAI configs. Learn more: https://shuffler.io/docs/AI",
+			Options: []DatastoreAutomationOption{
+				DatastoreAutomationOption{
+					Key:      "action",
+					Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.   If the incident has RELEVANT tasks that are not finished, modify them if necessary. Change the incident \"severity\" to info/low/medium/high/critical if relevant. When done, ALWAYS make sure the \"status\" is inProgress. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.\n\nWhen done sending the previous update, start tackling the tasks one by one if there are any, and update them in realtime. When starting them, self-assign @AIAgent to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.",
+					Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
+					Disabled: false,
+				},
+			},
+			Type:     "singul",
+			Beta:     true,
+			Disabled: false,
+			Enabled:  true,
+		}
+
+		enrichAutomation := DatastoreAutomation{
+			Name:        "Enrich",
+			Description: "Enriches the data. Only runs on valid JSON data AND if the 'enrichment' field does not exist.",
+			Type:        "singul",
+			Icon:        "/images/logos/singul.svg",
+			Beta:        false,
+			Disabled:    false,
+			Enabled:     true,
+		}
+
+		securityRuleAutomation := DatastoreAutomation{
+			Name:        "Security Rules",
+			Description: "Describes security rules that are validated BEFORE an update occurs. This is in order for bad writes to be avoided. Control: allow, deny, merge, overwrite. Logic: if, or, and. Functions: same_shape, is_superset, has_deleted_field",
+			Options: []DatastoreAutomationOption{
+				DatastoreAutomationOption{
+					Key:   "rule",
+					Value: "merge if always; deny if has_deleted_field",
+				},
+			},
+			Type:     "",
+			Icon:     "",
+			Beta:     false,
+			Disabled: false,
+			Enabled:  true,
+		}
+
+		agentFound := false
+		enrichFound := false
+		securityRuleFound := false
+
+		deleteIndex := []int{}
 		if len(categoryConfig.Automations) > 0 {
-			for _, automation := range categoryConfig.Automations {
-				if automation.Enabled && automation.Name != "Run workflow" && automation.Name != "Send to webhook" {
-					automationEnabled = true
-					break
+			for automationIndex, automation := range categoryConfig.Automations {
+				if strings.ToLower(automation.Name) == "run ai agent" {
+					if agentFound {
+						deleteIndex = append(deleteIndex, automationIndex)
+						continue
+					}
+
+					agentFound = true
+					if !automation.Enabled {
+						datastoreCategoryConfigEdited = true
+						categoryConfig.Automations[automationIndex].Enabled = true
+					}
+
+					// So we don't overwrite IF any changes have been made.
+					found := false
+					changed := false
+					for _, agentOption := range agentAutomation.Options {
+						for _, currentOptions := range automation.Options {
+							if len(currentOptions.Value) > 0 {
+								found = true
+								break
+							}
+						}
+
+						if !found {
+							automation.Options = append(automation.Options, agentOption)
+							changed = true
+						}
+					}
+
+					if changed {
+						datastoreCategoryConfigEdited = true
+						categoryConfig.Automations[automationIndex].Options = automation.Options
+						log.Printf("[INFO] Updated options for existing 'Run AI Agent' automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+					}
+
+				} else if strings.ToLower(automation.Name) == "enrich" {
+					if enrichFound {
+						deleteIndex = append(deleteIndex, automationIndex)
+						continue
+					}
+
+					if !automation.Enabled {
+						datastoreCategoryConfigEdited = true
+						categoryConfig.Automations[automationIndex].Enabled = true
+					}
+
+					enrichFound = true
+				} else if strings.ToLower(automation.Name) == "security rules" {
+					if securityRuleFound { 
+						deleteIndex = append(deleteIndex, automationIndex)
+						continue
+					}
+
+					if !automation.Enabled {
+						datastoreCategoryConfigEdited = true
+						categoryConfig.Automations[automationIndex].Enabled = true
+						categoryConfig.Automations[automationIndex].Options = securityRuleAutomation.Options
+					}
+
+					securityRuleFound = true
 				}
 			}
 		}
 
-		if !automationEnabled {
-			agentAutomation := DatastoreAutomation{
-				Name:        "Run AI Agent",
-				Description: "Runs an AI Agent to process the updated value. Uses built-in ShuffleAI configs. Learn more: https://shuffler.io/docs/AI",
-				Options: []DatastoreAutomationOption{
-					DatastoreAutomationOption{
-						Key:      "action",
-						Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.   If the incident has RELEVANT tasks that are not finished, modify them if necessary. Change the incident \"severity\" to info/low/medium/high/critical if relevant. When done, ALWAYS make sure the \"status\" is inProgress. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.",
-						Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
-						Disabled: false,
-					},
-					DatastoreAutomationOption{
-						Key:      "action-2",
-						Value:    "Your goal is to solve the incident. If the incident is resolved, do nothing. If the incident has no tasks, do nothing. Otherwise go through each task one by one IF there are any, and update them one by one in realtime. When starting them, self-assign @AIAgent to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.",
-						Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
-						Disabled: false,
-					},
-				},
-				Type:     "singul",
-				Beta:     true,
-				Disabled: false,
-				Enabled:  true,
-			}
-
-			enrichAutomation := DatastoreAutomation{
-				Name:        "Enrich",
-				Description: "Enriches the data. Only runs on valid JSON data AND if the 'enrichment' field does not exist.",
-				Type:        "singul",
-				Icon:        "/images/logos/singul.svg",
-				Beta:        false,
-				Disabled:    false,
-				Enabled:     true,
-			}
-
-			securityRuleAutomation := DatastoreAutomation{
-				Name:        "Security Rules",
-				Description: "Describes security rules that are validated BEFORE an update occurs. This is in order for bad writes to be avoided. Control: allow, deny, merge, overwrite. Logic: if, or, and. Functions: same_shape, is_superset, has_deleted_field",
-				Options: []DatastoreAutomationOption{
-					DatastoreAutomationOption{
-						Key:   "rule",
-						Value: "merge if always; deny if has_deleted_field",
-					},
-				},
-				Type:     "",
-				Icon:     "",
-				Beta:     false,
-				Disabled: false,
-				Enabled:  true,
-			}
-
+		if !agentFound { 
 			// Adding them all
-			categoryConfig.Automations = []DatastoreAutomation{agentAutomation, enrichAutomation, securityRuleAutomation}
+			categoryConfig.Automations = append(categoryConfig.Automations, agentAutomation)
+			datastoreCategoryConfigEdited = true
+		}
+
+		if !enrichFound { 
+			// Adding them all
+			categoryConfig.Automations = append(categoryConfig.Automations, enrichAutomation)
+			datastoreCategoryConfigEdited = true
+		}
+
+		if !securityRuleFound { 
+			categoryConfig.Automations = append(categoryConfig.Automations, securityRuleAutomation)
+			datastoreCategoryConfigEdited = true
+		}
+
+		// This is just a cleanup
+		if len(deleteIndex) > 0 { 
+			// Remove them by running backwards 
+			newAutomation := []DatastoreAutomation{}
+			for i := len(categoryConfig.Automations) - 1; i >= 0; i-- {
+				if ArrayContainsInt(deleteIndex, i) {
+					continue
+				}
+
+				newAutomation = append(newAutomation, categoryConfig.Automations[i])
+			}
+
+			categoryConfig.Automations = newAutomation
 			datastoreCategoryConfigEdited = true
 		}
 
@@ -232,7 +319,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		categoryCheck := "shuffle-security_incidents"
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
 		if err != nil {
-			if strings.Contains(err.Error(), "not found") {
+			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
 				categoryConfig = &DatastoreCategoryUpdate{
 					OrgId:       user.ActiveOrg.Id,
 					Category:    categoryCheck,
@@ -293,7 +380,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		categoryCheck := "shuffle-security_sensors"
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
 		if err != nil {
-			if strings.Contains(err.Error(), "not found") {
+			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
 				categoryConfig = &DatastoreCategoryUpdate{
 					OrgId:       user.ActiveOrg.Id,
 					Category:    categoryCheck,
@@ -375,7 +462,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		categoryCheck := "shuffle-security_incidents"
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
 		if err != nil {
-			if strings.Contains(err.Error(), "not found") {
+			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
 				categoryConfig = &DatastoreCategoryUpdate{
 					OrgId:       user.ActiveOrg.Id,
 					Category:    categoryCheck,
