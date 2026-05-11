@@ -9825,10 +9825,9 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 		// Find the key for "workflows_<workflow.org_id>" and update the cache for this one. If it doesn't exist, add it
 		// Get the cache for the workflows
-		cursor := ""
-		DeleteCache(ctx, fmt.Sprintf("%s_workflows", "", workflow.OrgId))
+		DeleteCache(ctx, fmt.Sprintf("%s_workflows", workflow.OrgId))
 
-		cacheKey = fmt.Sprintf("%s_%s_workflows", cursor, workflow.OrgId)
+		cacheKey = fmt.Sprintf("%s_workflows", workflow.OrgId)
 		cache, err := GetCache(ctx, cacheKey)
 		if err != nil {
 			//log.Printf("[WARNING] Failed getting cache for getworkflow '%s': %s", cacheKey, err)
