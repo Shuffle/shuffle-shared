@@ -17453,7 +17453,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		if agentOut.StartedAt > 0 && agentOut.CompletedAt > 0 {
 			duration = (agentOut.CompletedAt - agentOut.StartedAt) / 1000
 		} else if agentOut.StartedAt > 0 {
-			duration = time.Now().Unix() - agentOut.StartedAt/1000
+			duration = (time.Now().UnixMilli() - agentOut.StartedAt) / 1000
 		}
 
 		logStatus := status

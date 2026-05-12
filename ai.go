@@ -8450,7 +8450,7 @@ data_filter:
 		if err != nil {
 			// resultMapping.Result is not a valid HTTPOutput wrapper — this usually means the Shuffle HTTP action itself failed (timeout,  or something like connection refused etc) and returned a bare error string instead of its normal JSON response.
 			log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error_type=http_wrapper_parse_error unmarshal_err=%s raw_response=%s", execution.ExecutionId, execution.Workflow.OrgId, err, string(resultMapping.Result))
-			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "llm_response_unmarshal_failed", fmt.Sprintf("LLM request failed — raw response: %s", string(resultMapping.Result)))
+			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "llm_response_unmarshal_failed", fmt.Sprintf("LLM HTTP wrapper parse error: %s", err))
 		}
 
 		if outputMap.Status != 200 {

@@ -2075,7 +2075,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						// Max runtime of a decision at 5 minutes
 						if decision.RunDetails.StartedAt > 0 && time.Now().UnixMilli()-decision.RunDetails.StartedAt > 300000 {
 							timeoutFlagKey := fmt.Sprintf("agent-%s-%s-timeout-handled", workflowExecution.ExecutionId, decision.RunDetails.Id)
-							if _, alreadyHandled := GetCache(ctx, timeoutFlagKey); alreadyHandled == nil {
+							if _, err := GetCache(ctx, timeoutFlagKey); err == nil {
 								// Already handled this timeout in a previous check so just count it as finished.
 								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 								failedFound = true
