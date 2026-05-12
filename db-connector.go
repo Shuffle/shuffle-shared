@@ -2074,27 +2074,32 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 						// Max runtime of a decision at 5 minutes
 						if decision.RunDetails.StartedAt > 0 && time.Now().UnixMilli()-decision.RunDetails.StartedAt > 300000 {
-							if debug {
-								log.Printf("[DEBUG] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds", workflowExecution.ExecutionId, decision.Tool, decision.Action, time.Now().UnixMilli()-decision.RunDetails.StartedAt)
+							timeoutFlagKey := fmt.Sprintf("agent-%s-%s-timeout-handled", workflowExecution.ExecutionId, decision.RunDetails.Id)
+							if _, alreadyHandled := GetCache(ctx, timeoutFlagKey); alreadyHandled == nil {
+								// Already handled this timeout in a previous check so just count it as finished.
+								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+								failedFound = true
+							} else {
+								log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-decision.RunDetails.StartedAt)/1000)
+								SetCache(ctx, timeoutFlagKey, []byte("1"), 60) // 60 min TTL — long enough to outlive any recovery cycle
+
+								decisionsUpdated = true
+								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
+								mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
+								mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
+
+								// Write FAILURE back to the per-decision cache so the still-alive goroutine
+								// in RunAgentDecisionAction sees it and discards its late result instead of
+								// messing the recovery state.
+								timedOutDecision := mappedOutput.Decisions[decisionIndex]
+								if marshalledTimedOut, err := json.Marshal(timedOutDecision); err == nil {
+									go SetCache(ctx, decisionId, marshalledTimedOut, 300)
+								}
+
+								// Count as finished so the all-decisions-done check fires in this same check.
+								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+								failedFound = true
 							}
-
-							decisionsUpdated = true
-							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
-							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
-							mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
-
-							// lets write the FAILURE back to the decision cache now.
-							// so if in case the goroutine running RunAgentDecisionAction may still be alive (e.g. blocked in a long HTTP call). When it eventually wakes up it reads this same cache key, so
-							// setting  FAILURE here means its late POST to /api/v1/streams will carry the correct
-							// terminal state and won't mess the execution state produced by recovery.
-							timedOutDecision := mappedOutput.Decisions[decisionIndex]
-							if marshalledTimedOut, err := json.Marshal(timedOutDecision); err == nil {
-								go SetCache(ctx, decisionId, marshalledTimedOut, 300)
-							}
-
-							// Count this as finished + failed so recovery triggers in the same Fixexecution run
-							finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
-							failedFound = true
 						}
 					} else {
 						if decision.RunDetails.CompletedAt > 0 {
