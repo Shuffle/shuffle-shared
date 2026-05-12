@@ -2067,25 +2067,39 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						continue
 					} else if decision.RunDetails.Status == "FAILURE" {
-						//finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						failedFound = true
 						continue
 					} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
 
 						// Max runtime of a decision at 5 minutes
 						if decision.RunDetails.StartedAt > 0 && time.Now().UnixMilli()-decision.RunDetails.StartedAt > 300000 {
-							if debug { 
-								log.Printf("[DEBUG] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds", workflowExecution.ExecutionId, decision.Tool, decision.Action, time.Now().UnixMilli()-decision.RunDetails.StartedAt)
+							timeoutFlagKey := fmt.Sprintf("agent-%s-%s-timeout-handled", workflowExecution.ExecutionId, decision.RunDetails.Id)
+							if _, err := GetCache(ctx, timeoutFlagKey); err == nil {
+								// Already handled this timeout in a previous check so just count it as finished.
+								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+								failedFound = true
+							} else {
+								log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-decision.RunDetails.StartedAt)/1000)
+								SetCache(ctx, timeoutFlagKey, []byte("1"), 60) // 60 min TTL — long enough to outlive any recovery cycle
+
+								decisionsUpdated = true
+								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
+								mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
+								mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
+
+								// Write FAILURE back to the per-decision cache so the still-alive goroutine
+								// in RunAgentDecisionAction sees it and discards its late result instead of
+								// messing the recovery state.
+								timedOutDecision := mappedOutput.Decisions[decisionIndex]
+								if marshalledTimedOut, err := json.Marshal(timedOutDecision); err == nil {
+									go SetCache(ctx, decisionId, marshalledTimedOut, 300)
+								}
+
+								// Count as finished so the all-decisions-done check fires in this same check.
+								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+								failedFound = true
 							}
-
-							decisionsUpdated = true
-							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
-							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
-							mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
-
-							// Count this as finished + failed so recovery triggers in the same Fixexecution run
-							// finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
-							// failedFound = true
 						}
 					} else {
 						if decision.RunDetails.CompletedAt > 0 {
@@ -2198,19 +2212,23 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						if workflowExecution.Status == "FINISHED" {
 							workflowExecution.Status = "EXECUTING"
 						}
-						// To ensure the execution is actually updated
-						// Re-invoke the agent so the LLM can see the failure and produce a proper "finish" decision.
 
-						// capturedExec := workflowExecution
-						// capturedAction := action
+						// Marshal updated state now so the goroutine snapshot is consistent
+						if marshalledResult, err := json.Marshal(mappedOutput); err == nil {
+							workflowExecution.Results[resultIndex].Result = string(marshalledResult)
+						}
+
+						// Re-invoke the agent so the LLM can see the failure and produce a proper "finish" decision.
+						capturedExec := workflowExecution
+						capturedAction := action
 						go func() {
 							time.Sleep(1 * time.Second)
-							sendAgentActionSelfRequest("WAITING", workflowExecution, workflowExecution.Results[resultIndex])
-							// time.Sleep(2 * time.Second)
-							// _, err := HandleAiAgentExecutionStart(capturedExec, capturedAction, true)
-							// if err != nil {
-							// 	log.Printf("[ERROR][%s] Failed re-invoking agent after decisions completed for action %s: %s", capturedExec.ExecutionId, capturedAction.ID, err)
-							// }
+							sendAgentActionSelfRequest("WAITING", capturedExec, capturedExec.Results[resultIndex])
+							time.Sleep(2 * time.Second)
+							_, err := HandleAiAgentExecutionStart(capturedExec, capturedAction, true, "fixexecution_timeout_recovery")
+							if err != nil {
+								log.Printf("[ERROR][%s] Failed re-invoking agent after decisions completed for action %s: %s", capturedExec.ExecutionId, capturedAction.ID, err)
+							}
 						}()
 					}
 				} else if (result.Status == "" || result.Status == "WAITING") && mappedOutput.Status == "FINISHED" {

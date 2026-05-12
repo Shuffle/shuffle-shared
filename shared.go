@@ -17458,11 +17458,16 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		json.Unmarshal([]byte(actionResult.Result), &agentOut)
 		duration := int64(0)
 		if agentOut.StartedAt > 0 && agentOut.CompletedAt > 0 {
-			duration = agentOut.CompletedAt - agentOut.StartedAt
+			duration = (agentOut.CompletedAt - agentOut.StartedAt) / 1000
 		} else if agentOut.StartedAt > 0 {
-			duration = time.Now().Unix() - agentOut.StartedAt
+			duration = (time.Now().UnixMilli() - agentOut.StartedAt) / 1000
 		}
-		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=%s duration=%ds decisions=%d llm_calls=%d tokens_used=%d", workflowExecution.ExecutionId, workflowExecution.Workflow.OrgId, status, duration, len(agentOut.Decisions), agentOut.LLMCallCount, agentOut.TotalTokens)
+
+		logStatus := status
+		if agentOut.Status != "" && agentOut.Status != "RUNNING" {
+			logStatus = agentOut.Status
+		}
+		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=%s duration=%ds tool_calls=%d llm_calls=%d prompt_tokens=%d completion_tokens=%d total_tokens=%d", workflowExecution.ExecutionId, workflowExecution.Workflow.OrgId, logStatus, duration, len(agentOut.Decisions), agentOut.LLMCallCount, agentOut.PromptTokens, agentOut.CompletionTokens, agentOut.TotalTokens)
 	}
 
 	//log.Printf("[INFO][%s] Sending self-request for Agent Result '%s'. Status: %s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
@@ -17821,8 +17826,9 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		for _, foundDecision := range foundDecisions {
 			if foundDecision.RunDetails.Status == "RUNNING" {
 				continue
-			} else if foundDecision.RunDetails.Status == "FAILED" {
+			} else if foundDecision.RunDetails.Status == "FAILURE" || foundDecision.RunDetails.Status == "FAILED" {
 				failedDecisions = append(failedDecisions, foundDecision.RunDetails.Id)
+				finishedDecisions = append(finishedDecisions, foundDecision.RunDetails.Id)
 			} else if foundDecision.RunDetails.Status == "FINISHED" || foundDecision.RunDetails.Status == "IGNORED" {
 				finishedDecisions = append(finishedDecisions, foundDecision.RunDetails.Id)
 			} else {
