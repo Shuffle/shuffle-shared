@@ -8448,8 +8448,9 @@ data_filter:
 		outputMap := HTTPOutput{}
 		err = json.Unmarshal([]byte(resultMapping.Result), &outputMap)
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling response from sending request for stream during SKIPPED user input: %s. Body: %s", execution.ExecutionId, err, string(resultMapping.Result))
-			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "llm_response_unmarshal_failed", fmt.Sprintf("Failed to start AI Agent (1): %s", err.Error()))
+			// resultMapping.Result is not a valid HTTPOutput wrapper — this usually means the Shuffle HTTP action itself failed (timeout,  or something like connection refused etc) and returned a bare error string instead of its normal JSON response.
+			log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error_type=http_wrapper_parse_error unmarshal_err=%s raw_response=%s", execution.ExecutionId, execution.Workflow.OrgId, err, string(resultMapping.Result))
+			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "llm_response_unmarshal_failed", fmt.Sprintf("LLM request failed — raw response: %s", string(resultMapping.Result)))
 		}
 
 		if outputMap.Status != 200 {
@@ -8971,45 +8972,8 @@ data_filter:
 		}
 
 		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
-			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Marking the agent as FAILURE.", execution.ExecutionId)
-
-			// Properly mark the agent as failed
-			agentOutput.Status = "FAILURE"
-			agentOutput.CompletedAt = time.Now().UnixMilli()
-
-			sentFailure := false
-			// Update the result status - finds the existing node entry in execution.Results
-			for resultIndex, result := range execution.Results {
-				if result.Action.ID != startNode.ID {
-					continue
-				}
-
-				execution.Results[resultIndex].Status = "FAILURE"
-				execution.Results[resultIndex].CompletedAt = agentOutput.CompletedAt
-
-				marshalledAgentOutput, err := json.Marshal(agentOutput)
-				if err != nil {
-					log.Printf("[ERROR] AI Agent: Failed marshalling agent output for FAILURE: %s", err)
-				} else {
-					execution.Results[resultIndex].Result = string(marshalledAgentOutput)
-					resultMapping.Result = string(marshalledAgentOutput)
-				}
-
-				log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for FAILURE on agent action %s", execution.ExecutionId, startNode.ID)
-				go sendAgentActionSelfRequest("FAILURE", execution, execution.Results[resultIndex])
-				sentFailure = true
-				break
-			}
-
-			if !sentFailure {
-				log.Printf("[WARNING][%s] AI Agent: No result entry found in execution.Results, using resultMapping fallback", execution.ExecutionId)
-				fallbackOutput, merr := json.Marshal(agentOutput)
-				if merr == nil {
-					resultMapping.Status = "FAILURE"
-					resultMapping.Result = string(fallbackOutput)
-				}
-				go sendAgentActionSelfRequest("FAILURE", execution, resultMapping)
-			}
+			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent.", execution.ExecutionId)
+			return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_decision_action_ran", "Agent produced decisions but none could be executed. This may indicate an unsupported action type or a bug in decision parsing.")
 		}
 
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
