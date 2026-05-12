@@ -4205,13 +4205,18 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		cacheKey = fmt.Sprintf("%s_workflows", user.ActiveOrg.Id)
 	}
 
-	//if maxAmount != 250 {
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
+
 		if err == nil {
+
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflows)
 			if err == nil {
+				//if debug { 
+				//	log.Printf("\n\n[DEBUG] Cache FOUND for key '%s': %d workflows\n\n", cacheKey, len(workflows))
+				//}
+
 				return workflows, nil
 			}
 		}
@@ -5450,14 +5455,25 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 }
 
 // Index = Username
-func DeleteKey(ctx context.Context, entity string, value string) error {
+func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...string) error {
+
+	orgId := ""
+	if len(orgIdList) > 0 && len(orgIdList[0]) > 0 {
+		orgId = orgIdList[0]
+	}
+
 	// Non indexed User data
 	if entity == "workflowexecution" {
-		log.Printf("[WARNING] DELETING workflowexecution: %s", value)
+		log.Printf("[WARNING][%s] DELETING workflowexecution in org '%s'", value, orgId)
 	}
 
 	if entity == "org_cache" {
 		// FIXME: Add check in ngram to clean up correlations after deletions
+	}
+
+	if entity == "workflow" && len(orgId) > 0 {
+		DeleteCache(ctx, fmt.Sprintf("%s_workflows", orgId))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", orgId))
 	}
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
@@ -9706,6 +9722,9 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	// FIXME: Due to a possibility of ID reusage on duplication, we re-randomize ID's IF the workflow is new
 	// Due to caching, this is kind of fine.
+	nameKey := "workflow"
+	id = workflow.ID
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	foundWorkflow, err := GetWorkflow(ctx, id)
 	if (err != nil || foundWorkflow.ID == "") && !workflow.BackgroundProcessing {
 		log.Printf("[INFO] Workflow %s doesn't exist, randomizing IDs for Triggers during init", id)
@@ -9727,13 +9746,20 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 			workflow.Triggers[triggerIndex].ID = newTriggerId
 			workflow.Triggers[triggerIndex].Status = "stopped"
 		}
+	} 
+
+	if err != nil || foundWorkflow.ID == "" {
+		if debug { 
+			log.Printf("[DEBUG] Creating new workflow with ID %s. Clearing workflow cache.", id)
+		}
+
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", workflow.OrgId))
+		DeleteCache(ctx, fmt.Sprintf("%s_workflows", workflow.OrgId))
 	}
 
 	// Overwriting to be sure these are matching
 	// No real point in having id + workflow.ID anymore
-	id = workflow.ID
 
-	nameKey := "workflow"
 	timeNow := int64(time.Now().Unix())
 	workflow.Edited = timeNow
 	if workflow.Created == 0 {
@@ -9792,7 +9818,6 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	if project.CacheDb {
-		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getworkflow '%s': %s", cacheKey, err)
@@ -14153,6 +14178,20 @@ func SetDatastoreCategoryConfig(ctx context.Context, category DatastoreCategoryU
 	category.Id = uuid.Must(uuid.FromBytes(uuidBytes)).String()
 	if len(category.Id) != 36 {
 		return errors.New(fmt.Sprintf("Failed to generate valid UUID for category with orgId %s and category %s", category.OrgId, category.Category))
+	}
+
+	// Clean up empty fields
+	for automationIndex, automation := range category.Automations {
+		newOptions := []DatastoreAutomationOption{}
+		for _, option := range automation.Options {
+			if len(option.Value) == 0 { 
+				continue
+			}
+
+			newOptions = append(newOptions, option)
+		}
+
+		category.Automations[automationIndex].Options = newOptions
 	}
 
 	// New struct, to not add body, author etc

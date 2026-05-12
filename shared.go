@@ -148,7 +148,6 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			// Shuffle support
 			"https://cases.shuffler.io",
 			"https://security.shuffler.io",
-			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
 			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
 
 			// tbd
@@ -173,6 +172,28 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			for _, domain := range allowedDomains {
 				if origin[0] == domain {
 					allowed = true
+					break
+				}
+			}
+
+			// Since we are becoming more and more of a platform
+			if !allowed {
+				currentUrl := strings.ToLower(request.URL.String())
+				allowedUrls := []string{"/api/v1/", "/api/v2/"}
+				disallowedUrls := []string{"/settings", "/register", "/login_openid", "/login_sso"}
+				for _, allowedUrl := range allowedUrls {
+					if !strings.HasPrefix(currentUrl, allowedUrl) {
+						continue
+					}
+
+					allowed = true
+					for _, disallowedUrl := range disallowedUrls {
+						if strings.HasSuffix(currentUrl, disallowedUrl) {
+							allowed = false
+							break
+						}
+					}
+
 					break
 				}
 			}
@@ -35378,7 +35399,9 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 				newWorkflows = append(newWorkflows, workflowId)
 			}
 
-			categoryUpdate.Automations[automationId].Options[foundWorkflowIdIndex].Value = strings.Join(newWorkflows, ",")
+			if foundWorkflowIdIndex != -1 {
+				categoryUpdate.Automations[automationId].Options[foundWorkflowIdIndex].Value = strings.Join(newWorkflows, ",")
+			}
 		}
 	}
 

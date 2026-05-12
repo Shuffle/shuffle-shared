@@ -8075,7 +8075,7 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 4. **Action Selection & Risk Assessment:**
    - Select the tool that performs the *next logical step*.
    - **Destructive Guard:**
-     - If action is DESTRUCTIVE (delete/remove) -> Set "approval_required": true.
+     - If action is DESTRUCTIVE (stop/delete/remove) or otherwise seems required -> Set "approval_required": true.
 
 5. **Validation & Continuation:**
    - Decisions can be dependant. Make sure to validate the output of one decision before proceeding to the next. If you need to run multiple steps, run them and validate each time.
@@ -8336,7 +8336,7 @@ data_filter:
 			if totalTokensAfterRequest > tokenLimit {
 				log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: org=%s monthly_used=%d estimated_current=%d total_would_be=%d limit=%d", execution.ExecutionId, execution.Workflow.OrgId, monthlyTokensUsed, estimatedCurrentTokens, totalTokensAfterRequest, tokenLimit)
 				go sendAITokenLimitAlert(ctx, execution, fullOrg, tokenLimit, monthlyTokensUsed)
-				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("Would exceed token limit: %d + %d > %d", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit))
+				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit))
 			}
 		}
 	}
@@ -9260,13 +9260,20 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 		if workflowErr == nil && workflow.OrgId == user.ActiveOrg.Id {
 			// Delete the workflow
-			err = DeleteKey(ctx, "workflow", workflowId)
+			err = DeleteKey(ctx, "workflow", workflowId, user.ActiveOrg.Id)
 			if err != nil {
 				log.Printf("[ERROR] Failed deleting workflow with ID %s in GenerateSingulWorkflows: %s", workflowId, err)
 			}
 
-			DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", user.ActiveOrg.Id))
-			DeleteCache(ctx, fmt.Sprintf("%s_workflows", "", user.ActiveOrg.Id))
+			/*
+			if debug { 
+				log.Printf("[DEBUG] DELETING KEY: %s", deleteKey)
+				allWorkflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
+				if err == nil {
+					log.Printf("\n\n[DEBUG] FOUND WORKFLOWS AFTER DELETE: %d\n\n", len(allWorkflows))
+				}
+			}
+			*/
 		} else {
 			log.Printf("[INFO] No existing workflow with ID %s to remove for category '%s'", workflowId, categoryAction.Label)
 			resp.WriteHeader(http.StatusOK)
@@ -9499,6 +9506,15 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed to set workflow"}`))
 		return
 	}
+
+	/*
+	if debug { 
+		allWorkflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
+		if err == nil {
+			log.Printf("\n\n[DEBUG] FOUND WORKFLOWS POST CREATE: %d\n\n", len(allWorkflows))
+		}
+	}
+	*/
 
 	resp.WriteHeader(http.StatusOK)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Workflow generated", "id": "%s"}`, workflow.ID)))
