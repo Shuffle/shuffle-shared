@@ -1763,8 +1763,8 @@ type Notification struct {
 	Image             string   `json:"image" datastore:"image"`
 	CreatedAt         int64    `json:"created_at" datastore:"created_at"`
 	UpdatedAt         int64    `json:"updated_at" datastore:"updated_at"`
-	Title             string   `json:"title" datastore:"title"`
-	Description       string   `json:"description" datastore:"description"`
+	Title             string   `json:"title" datastore:"title,noindex"`
+	Description       string   `json:"description" datastore:"description,noindex"`
 	OrgId             string   `json:"org_id" datastore:"org_id"`
 	OrgName           string   `json:"org_name" datastore:"org_name"`
 	UserId            string   `json:"user_id" datastore:"user_id"`
@@ -1772,7 +1772,7 @@ type Notification struct {
 	Amount            int      `json:"amount" datastore:"amount"`
 	BucketDescription string   `json:"bucket_description" datastore:"bucket_description"`
 	Id                string   `json:"id" datastore:"id"`
-	ReferenceUrl      string   `json:"reference_url" datastore:"reference_url"`
+	ReferenceUrl      string   `json:"reference_url" datastore:"reference_url,noindex"`
 	OrgNotificationId string   `json:"org_notification_id" datastore:"org_notification_id"`
 	Dismissable       bool     `json:"dismissable" datastore:"dismissable"`
 	Personal          bool     `json:"personal" datastore:"personal"`
@@ -4755,9 +4755,9 @@ type AgentDecision struct {
 	Sources          string         `json:"sources,omitempty" datastore:"sources"`
 	Fields           []Valuereplace `json:"fields" datastore:"fields"`
 	Reason           string         `json:"reason" datastore:"reason"`
-	ApprovalRequired bool           `json:"approval_required" datastore:"approval_required"` // Set TRUE only for destructive/high-risk actions
-	DataFilter string `json:"data_filter,omitempty" datastore:"data_filter"` 	// DataFilter controls how the raw tool response is reduced before being fed back into the agent.
-	FieldsNeeded []string `json:"fields_needed,omitempty" datastore:"fields_needed"` 	// FieldsNeeded is set by the agent alongside data_filter:"list".
+	ApprovalRequired bool           `json:"approval_required" datastore:"approval_required"`   // Set TRUE only for destructive/high-risk actions
+	DataFilter       string         `json:"data_filter,omitempty" datastore:"data_filter"`     // DataFilter controls how the raw tool response is reduced before being fed back into the agent.
+	FieldsNeeded     []string       `json:"fields_needed,omitempty" datastore:"fields_needed"` // FieldsNeeded is set by the agent alongside data_filter:"list".
 
 	// Responses
 	RunDetails AgentDecisionRunDetails `json:"run_details" datastore:"run_details"`
@@ -4944,10 +4944,18 @@ type AuditLogEntry struct {
 }
 
 type ProcessInfo struct {
-	PID         int    `json:"pid"`
-	ProcessName string `json:"process_name"`
+	PID         int32  `json:"pid"`
+	PPID        int32  `json:"ppid,omitempty"`
+	TTY         string `json:"tty,omitempty"`
 	CommandLine string `json:"command_line,omitempty"`
-	ParentPID   int    `json:"parent_pid,omitempty"`
+	User        string `json:"user,omitempty"`
+
+	Args         []string `json:"args,omitempty"`
+	CreationTime int64    `json:"creation_time,omitempty"`
+	ExePath      string   `json:"exe_path,omitempty"`
+	SHA256       string   `json:"sha256,omitempty"`
+
+	ProcessName string `json:"process_name"`
 }
 
 type UserInfo struct {
@@ -5084,16 +5092,21 @@ type MCPRequest struct {
 		Input    struct {
 			Text  string `json:"text"`
 			Voice string `json:"voice"`
+
+			Images []struct {
+				URL    string `json:"url"`
+				Detail string `json:"detail,omitempty"`
+			}
 		} `json:"input"`
 		Context struct {
 			SessionID string `json:"session_id"`
 		} `json:"context"`
-		ToolID      string `json:"tool_id"`
-		
-		Environment string `json:"environment"`
-		EnableQuestions bool `json:"enable_questions"`
+		ToolID string `json:"tool_id"`
+
+		Environment      string `json:"environment"`
+		EnableQuestions  bool   `json:"enable_questions"`
 		AuthenticationId string `json:"authentication_id"`
-		Reasoning string `json:"reasoning"`
+		Reasoning        string `json:"reasoning"`
 
 		// From testing in Lovable
 		ProtocolVersion string `json:"protocolVersion"`
@@ -5315,6 +5328,7 @@ type SensorDetails struct {
 	HdEncrypted                string        `json:"hd_encrypted,omitempty" datastore:"hd_encrypted"`
 	LogForwarding              string        `json:"log_forwarding,omitempty" datastore:"log_forwarding"`
 	ResponseActions            string        `json:"response_actions,omitempty" datastore:"response_actions"`
+	ProcessList                []ProcessInfo `json:"process_list,omitempty" datastore:"process_list,noindex"`
 	InstalledSoftware          []Software    `json:"installed_software,omitempty" datastore:"installed_software,noindex"`
 	CodeScanner                []ProjectInfo `json:"code_scanner,omitempty" datastore:"code_scanner,noindex"`
 }
@@ -5324,6 +5338,7 @@ type SensorMode struct {
 	Enabled bool `json:"enabled" datastore:"enabled"`
 
 	// Compliance
+	ProcessListEnabled  string `json:"process_list_enabled" datastore:"process_list_enabled"`
 	SoftwareListEnabled string `json:"software_list_enabled" datastore:"software_list_enabled"`
 	CodeScannerEnabled  string `json:"code_scanner_enabled" datastore:"code_scanner_enabled"`
 	HdEncryptedCheck    string `json:"hd_encrypted_check" datastore:"hd_encrypted_check"`
@@ -5358,6 +5373,9 @@ type Software struct {
 
 	Versions  []string      `json:"versions,omitempty" datastore:"version,noindex"`
 	Hostnames []HostDetails `json:"hostnames,omitempty" datastore:"hostnames,noindex"`
+
+	Source string `json:"source,omitempty" datastore:"source,omitempty"`
+	Path   string `json:"path,omitempty" datastore:"path,omitempty"`
 }
 
 // ProjectInfo holds details about a discovered project
@@ -5383,6 +5401,7 @@ type OrborusDownloadConfig struct {
 	Queue               string `json:"queue"`
 	Auth                string `json:"auth"`
 	OrgID               string `json:"org_id"`
+	ProcessListEnabled  string `json:"process_list_enabled"`
 	SoftwareListEnabled bool   `json:"software_list_enabled"`
 	CodeScannerEnabled  bool   `json:"code_scanner_enabled"`
 	HDEncryptedCheck    bool   `json:"hd_encrypted_check"`
@@ -5512,13 +5531,15 @@ type OSVDatabaseSpecific struct {
 	Source         string   `json:"source"`
 	CWEs           []string `json:"cwes,omitempty"`
 	Severity       string   `json:"severity,omitempty"`
-	GithubReviewed string   `json:"github_reviewed,omitempty"`
+	GithubReviewed bool     `json:"github_reviewed,omitempty"`
 
 	GithubReviewedAt time.Time `json:"github_reviewed_at,omitempty"`
 	DateAdded        string    `json:"date_added,omitempty"`
 	ActionDue        string    `json:"action_due,omitempty"`
 	RequiredAction   string    `json:"required_action,omitempty"`
 	Vulnerability    string    `json:"vulnerability,omitempty"`
+	NvdPublishedAt   time.Time `json:"nvd_published_at,omitempty"`
+	CweIds           []string  `json:"cwe_ids,omitempty"`
 }
 
 type OSVEcosystemSpecific struct {
@@ -5586,4 +5607,29 @@ type VulnerabilityQuery struct {
 type AiCallInfo struct {
 	Caller string
 	OrgID  string
+}
+
+type ScreenshotWrapper struct {
+	ScreenSize  DisplaySize `json:"screen_size"`
+	Cursor      Position    `json:"cursor"`
+	Image       []byte      `json:"image,omitempty"`
+	ImageBase64 string      `json:"image_base64"`
+}
+
+type DisplaySize struct {
+	DisplayID int `json:"display_id,omitempty"`
+	Width     int `json:"width"`
+	Height    int `json:"height"`
+
+	OffsetX int `json:"offset_x,omitempty"`
+	OffsetY int `json:"offset_y,omitempty"`
+}
+// Added remote control capabilities for windows
+type RemoteControl struct{
+	Op     string                 `json:"op"`
+	Params map[string]any        `json:"params"`
+}
+
+type RemoteControlActionBatch struct {
+	Actions []RemoteControl `json:"actions"`
 }

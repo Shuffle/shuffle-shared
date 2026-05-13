@@ -14,12 +14,354 @@ import (
 	"io"
 	"errors"
 	"fmt"
+	"regexp"
+	"path/filepath"
+	"bufio"
+	"io/fs"
 
 	"unsafe" // for pointer control. Not ideal, but ok
 	"syscall"
 	"os/exec"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 )
+
+func scanRegistryUninstall() []Software {
+	roots := []struct {
+		key  registry.Key
+		path string
+		flag uint32
+		source string
+	}{
+		{registry.LOCAL_MACHINE, `Software\Microsoft\Windows\CurrentVersion\Uninstall`, registry.WOW64_64KEY, "registry-lm-64"},
+		{registry.LOCAL_MACHINE, `Software\Microsoft\Windows\CurrentVersion\Uninstall`, registry.WOW64_32KEY, "registry-lm-32"},
+		{registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Uninstall`, 0, "registry-cu"},
+	}
+
+	var out []Software
+
+	for _, r := range roots {
+		k, err := registry.OpenKey(r.key, r.path, registry.READ|r.flag)
+		if err != nil {
+			continue
+		}
+		defer k.Close()
+
+		names, _ := k.ReadSubKeyNames(-1)
+
+		for _, n := range names {
+			sk, err := registry.OpenKey(k, n, registry.READ|r.flag)
+			if err != nil {
+				continue
+			}
+
+			name, _, _ := sk.GetStringValue("DisplayName")
+			version, _, _ := sk.GetStringValue("DisplayVersion")
+			path, _, _ := sk.GetStringValue("InstallLocation")
+
+			sk.Close()
+
+			if name == "" {
+				continue
+			}
+
+			out = append(out, Software{
+				Name:    name,
+				Version: version,
+				Path:    path,
+				Source:  r.source,
+			})
+		}
+	}
+
+	return out
+}
+
+// Infrastructure package prefixes to drop.
+// These are runtime components, not user-installed apps.
+var appxSkipPrefixes = []string{
+    "Microsoft.NET.",
+    "Microsoft.VCLibs.",
+    "Microsoft.VCRedist.",
+    "Microsoft.UI.",
+    "Microsoft.Windows.",
+    "Microsoft.Xbox",
+    "Microsoft.Advertising.",
+    "Microsoft.Services.",
+    "Windows.",
+    "MicrosoftCorporationII.",
+}
+
+func scanAppx() []Software {
+    cmd := `Get-AppxPackage | Select Name, Version | ConvertTo-Json -Compress`
+    out, err := exec.Command("powershell", "-NoProfile", "-Command", cmd).Output()
+    if err != nil || len(out) == 0 {
+        return nil
+    }
+
+    type pkg struct {
+        Name    string
+        Version string
+    }
+
+    // ConvertTo-Json emits a bare object (not array) when there's exactly
+    // one result. Try array first, fall back to single object.
+    var packages []pkg
+    if err := json.Unmarshal(out, &packages); err != nil {
+        var single pkg
+        if err2 := json.Unmarshal(out, &single); err2 != nil {
+            return nil
+        }
+        packages = []pkg{single}
+    }
+
+    var res []Software
+    for _, p := range packages {
+        if isInfraAppx(p.Name) {
+            continue
+        }
+        res = append(res, Software{
+            Name:    p.Name,
+            Version: p.Version,
+            Source:  "appx",
+        })
+    }
+    return res
+}
+
+func isInfraAppx(name string) bool {
+    for _, prefix := range appxSkipPrefixes {
+        if strings.HasPrefix(name, prefix) {
+            return true
+        }
+    }
+    return false
+}
+
+var roots = []string{
+	`C:\Program Files`,
+	`C:\Program Files (x86)`,
+}
+
+func scanProgramFiles() []Software {
+	var out []Software
+
+	for _, root := range roots {
+		filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+
+			// limit depth (cheap heuristic)
+			if strings.Count(path, string(os.PathSeparator)) > 4 {
+				return filepath.SkipDir
+			}
+
+			if d.IsDir() {
+				return nil
+			}
+
+			if !strings.HasSuffix(strings.ToLower(d.Name()), ".exe") {
+				return nil
+			}
+
+			name, version := getFileVersion(path)
+			if name == "" {
+				return nil
+			}
+
+			out = append(out, Software{
+				Name:    name,
+				Version: version,
+				Path:    path,
+				Source:  "filesystem",
+			})
+
+			return nil
+		})
+	}
+
+	return out
+}
+
+var (
+    modVersion             = windows.NewLazySystemDLL("version.dll")
+    procGetFileVersionInfo = modVersion.NewProc("GetFileVersionInfoW")
+    procGetFileVersionSize = modVersion.NewProc("GetFileVersionInfoSizeW")
+    procVerQueryValue      = modVersion.NewProc("VerQueryValueW")
+)
+
+func getFileVersion(path string) (name, version string) {
+    pathPtr, err := windows.UTF16PtrFromString(path)
+    if err != nil {
+        return "", ""
+    }
+
+    // First call: get required buffer size
+    size, _, _ := procGetFileVersionSize.Call(
+        uintptr(unsafe.Pointer(pathPtr)),
+        0,
+    )
+    if size == 0 {
+        return "", ""
+    }
+
+    buf := make([]byte, size)
+
+    // Second call: fill the buffer
+    ret, _, _ := procGetFileVersionInfo.Call(
+        uintptr(unsafe.Pointer(pathPtr)),
+        0,
+        size,
+        uintptr(unsafe.Pointer(&buf[0])),
+    )
+    if ret == 0 {
+        return "", ""
+    }
+
+    // Query the translation table to find the right language/codepage pair
+    type langCodepage struct{ lang, codepage uint16 }
+    var translations *langCodepage
+    var transLen uint32
+
+    ret, _, _ = procVerQueryValue.Call(
+        uintptr(unsafe.Pointer(&buf[0])),
+        uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(`\VarFileInfo\Translation`))),
+        uintptr(unsafe.Pointer(&translations)),
+        uintptr(unsafe.Pointer(&transLen)),
+    )
+    if ret == 0 || transLen == 0 {
+        return "", ""
+    }
+
+    // Use the first available translation
+    lang := fmt.Sprintf(`\StringFileInfo\%04x%04x\`, translations.lang, translations.codepage)
+
+    name = queryStringValue(buf, lang+"ProductName")
+    version = queryStringValue(buf, lang+"ProductVersion")
+    return name, version
+}
+
+func queryStringValue(buf []byte, key string) string {
+    keyPtr, err := windows.UTF16PtrFromString(key)
+    if err != nil {
+        return ""
+    }
+    var valPtr uintptr
+    var valLen uint32
+    ret, _, _ := procVerQueryValue.Call(
+        uintptr(unsafe.Pointer(&buf[0])),
+        uintptr(unsafe.Pointer(keyPtr)),
+        uintptr(unsafe.Pointer(&valPtr)),
+        uintptr(unsafe.Pointer(&valLen)),
+    )
+    if ret == 0 || valLen == 0 {
+        return ""
+    }
+    // valPtr points into buf, valLen is in characters (UTF-16)
+    utf16Slice := unsafe.Slice((*uint16)(unsafe.Pointer(valPtr)), valLen)
+    return windows.UTF16ToString(utf16Slice)
+}
+
+
+func scanWinget() []Software {
+    out, err := exec.Command(
+        "winget", "list",
+        "--disable-interactivity",
+        "--accept-source-agreements",
+    ).Output()
+    if err != nil || len(out) == 0 {
+        return nil
+    }
+
+    lines := strings.Split(string(out), "\n")
+
+    // Find the header line — it contains "Name" and "Id"
+    headerIdx := -1
+    for i, l := range lines {
+        if strings.Contains(l, "Name") && strings.Contains(l, "Id") {
+            headerIdx = i
+            break
+        }
+    }
+    if headerIdx < 0 || headerIdx+2 >= len(lines) {
+        return nil
+    }
+
+    header := lines[headerIdx]
+
+    // Column start positions by header label
+    nameCol    := strings.Index(header, "Name")
+    idCol      := strings.Index(header, "Id")
+    versionCol := strings.Index(header, "Version")
+    sourceCol  := strings.Index(header, "Source")  // may be -1
+
+    if nameCol < 0 || idCol < 0 || versionCol < 0 {
+        return nil
+    }
+
+    // Skip header + separator line (headerIdx+1 is "----")
+    var res []Software
+    for _, line := range lines[headerIdx+2:] {
+        // Trim Windows line endings; skip short/empty lines
+        line = strings.TrimRight(line, "\r")
+        if len(line) < versionCol+1 {
+            continue
+        }
+
+        name    := columnSlice(line, nameCol, idCol)
+        version := columnSlice(line, versionCol, sourceCol)
+
+        if name == "" {
+            continue
+        }
+        res = append(res, Software{
+            Name:    name,
+            Version: version,
+            Source:  "winget",
+        })
+    }
+    return res
+}
+
+// columnSlice extracts text between start and end column positions,
+// trimming whitespace. If end is -1 (column not present), reads to EOL.
+func columnSlice(line string, start, end int) string {
+    if start >= len(line) {
+        return ""
+    }
+    if end < 0 || end >= len(line) {
+        return strings.TrimSpace(line[start:])
+    }
+    return strings.TrimSpace(line[start:end])
+}
+
+func dedupe(in []Software) []Software {
+	seen := map[string]bool{}
+	var out []Software
+
+	for _, s := range in {
+		key := strings.ToLower(s.Name + "|" + s.Version)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, s)
+	}
+
+	return out
+}
+
+func ListInstalledSoftware() []Software {
+	var all []Software
+
+	all = append(all, scanRegistryUninstall()...)
+	all = append(all, scanAppx()...)
+	all = append(all, scanProgramFiles()...)
+	all = append(all, scanWinget()...)
+
+	return dedupe(all)
+}
 
 func IsElevated() bool {
 	var token windows.Token
@@ -260,102 +602,6 @@ type osVersionInfoEx struct {
 	wReserved           byte
 }
 
-func getWindowsSoftware() (Software, error) {
-	// Load ntdll and RtlGetVersion (more reliable than GetVersionEx)
-	mod := syscall.NewLazyDLL("ntdll.dll")
-	proc := mod.NewProc("RtlGetVersion")
-
-	var info osVersionInfoEx
-	info.dwOSVersionInfoSize = uint32(unsafe.Sizeof(info))
-
-	r1, _, _ := proc.Call(uintptr(unsafe.Pointer(&info)))
-	if r1 != 0 {
-		return Software{}, fmt.Errorf("RtlGetVersion failed")
-	}
-
-	version := fmt.Sprintf("%d.%d.%d",
-		info.dwMajorVersion,
-		info.dwMinorVersion,
-		info.dwBuildNumber,
-	)
-
-	name := "Windows"
-
-	// Light mapping (best-effort, not official API)
-	switch {
-	case info.dwMajorVersion == 10 && info.dwBuildNumber >= 22000:
-		name = fmt.Sprintf("Windows 11 (Build %d)", info.dwBuildNumber)
-	case info.dwMajorVersion == 10:
-		name = fmt.Sprintf("Windows 10 (Build %d)", info.dwBuildNumber)
-	default:
-		name = fmt.Sprintf("Windows %d.%d (Build %d)",
-			info.dwMajorVersion,
-			info.dwMinorVersion,
-			info.dwBuildNumber,
-		)
-	}
-
-	return Software{
-		Name:    name,
-		Version: version,
-	}, nil
-}
-
-func listInstalledSoftwareRegistry() []Software {
-	cmd := `
-$paths = @(
-  "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
-  "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
-  "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
-)
-
-Get-ItemProperty $paths |
-Where-Object { $_.DisplayName } |
-Select-Object @{Name="name";Expression={$_.DisplayName}}, @{Name="version";Expression={$_.DisplayVersion}} |
-ConvertTo-Json -Depth 1 -Compress
-`
-
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", cmd).Output()
-	if err != nil {
-		return nil
-	}
-
-	data := bytes.TrimSpace(out)
-	if len(data) == 0 {
-		return nil
-	}
-
-	// normalize single object -> array
-	if data[0] == '{' {
-		data = append([]byte("["), append(data, ']')...)
-	}
-
-	var pkgs []Software
-	if err := json.Unmarshal(data, &pkgs); err != nil {
-		return nil
-	}
-
-	return pkgs
-}
-
-func ListInstalledSoftware() []Software {
-	allSoftware := []Software{}
-	localSoftware, err := getWindowsSoftware()
-	if err != nil {
-		log.Printf("[ERROR] getLocalSoftware load error: %v", err)
-	} else {
-		allSoftware = append(allSoftware, localSoftware)
-	}
-
-	return append(allSoftware, listInstalledSoftwareRegistry()...)
-}
-
-func ListCodeScannerProjects() []ProjectInfo {
-	log.Printf("[WARNING] Codescanner not implemented on windows yet.")
-
-	return []ProjectInfo{}
-}
-
 const (
 	backupFile = "C:\\Windows\\Temp\\firewall_backup_edr.wfw"
 )
@@ -435,4 +681,957 @@ func isolateHost(allowIPs []string) error {
 
 func unisolateHost() error {
 	return unisolateHostWindows()
+}
+
+
+// ── Constructor ──────────────────────────────────────────────────────────────
+
+func NewScanner() *Scanner {
+	return &Scanner{
+		results: make(chan ProjectInfo),
+		visited: make(map[string]bool),
+	}
+}
+
+// ── Public entry point ───────────────────────────────────────────────────────
+
+func (s *Scanner) Scan(rootDir string) ([]ProjectInfo, error) {
+	absRoot, err := filepath.Abs(rootDir)
+	if err != nil {
+		return nil, fmt.Errorf("invalid root directory: %w", err)
+	}
+
+	s.wg.Add(1)
+	go s.scanDir(absRoot)
+
+	var results []ProjectInfo
+	done := make(chan struct{})
+	go func() {
+		for p := range s.results {
+			results = append(results, p)
+		}
+		close(done)
+	}()
+
+	s.wg.Wait()
+	close(s.results)
+	<-done
+
+	return results, nil
+}
+
+// ── Directory walker ─────────────────────────────────────────────────────────
+
+func (s *Scanner) scanDir(dir string) {
+	defer s.wg.Done()
+
+	// Resolve symlinks so we never visit the same inode twice.
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return
+	}
+
+	s.mu.Lock()
+	if s.visited[real] {
+		s.mu.Unlock()
+		return
+	}
+	s.visited[real] = true
+	s.mu.Unlock()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		if shouldSkip(entry.Name()) {
+			continue
+		}
+
+		fullPath := filepath.Join(dir, entry.Name())
+
+		if !entry.IsDir() {
+			continue
+		}
+
+		if projectType := detectProjectType(fullPath); projectType != "" {
+			packages := extractPackages(fullPath, projectType)
+			s.results <- ProjectInfo{
+				Path:     fullPath,
+				Type:     projectType,
+				Packages: packages,
+			}
+			// Do not recurse into found projects — avoids duplicates.
+			continue
+		}
+
+		s.wg.Add(1)
+		go s.scanDir(fullPath)
+	}
+}
+
+// ── Skip list ────────────────────────────────────────────────────────────────
+
+// skipDirs is the unified skip list for all platforms.
+// Windows-specific entries are appended at init time.
+var skipDirs = map[string]bool{
+	// VCS
+	".git": true,
+	".hg":  true,
+	".svn": true,
+
+	// Dependency caches
+	"node_modules": true,
+	"vendor":       true,
+	".venv":        true,
+	"venv":         true,
+	".env":         true,
+
+	// IDE / tooling
+	".vscode": true,
+	".idea":   true,
+
+	// Build output
+	"dist":   true,
+	"build":  true,
+	"target": true,
+	"out":    true,
+	"bin":    true,
+	"obj":    true, // .NET
+
+	// Caches
+	".cache":    true,
+	"__pycache__": true,
+}
+
+func init() {
+	if runtime.GOOS == "windows" {
+		// Windows system and user-profile noise — these directories sit under
+		// %USERPROFILE% but contain no user code.
+		for _, d := range []string{
+			"AppData",
+			"Application Data",
+			"Local Settings",
+			"MicrosoftEdgeBackups",
+			"OneDrive",         // mirror of cloud files, not local projects
+			"Windows",
+			"Program Files",
+			"Program Files (x86)",
+			"ProgramData",
+			"$Recycle.Bin",
+			"System Volume Information",
+			"Recovery",
+		} {
+			skipDirs[d] = true
+		}
+	}
+}
+
+func shouldSkip(name string) bool {
+	if skipDirs[name] {
+		return true
+	}
+	// Hidden directories (dot-prefixed) on Unix; also catches .git etc. on Windows.
+	if strings.HasPrefix(name, ".") && name != "." {
+		return true
+	}
+	return false
+}
+
+// ── Project detection ────────────────────────────────────────────────────────
+
+func detectProjectType(dir string) string {
+	if fileExists(filepath.Join(dir, "go.mod")) {
+		return "golang"
+	}
+	if fileExists(filepath.Join(dir, "pyproject.toml")) ||
+		fileExists(filepath.Join(dir, "requirements.txt")) ||
+		fileExists(filepath.Join(dir, "Pipfile")) {
+		return "python"
+	}
+	if fileExists(filepath.Join(dir, "package.json")) {
+		return "javascript"
+	}
+	if fileExists(filepath.Join(dir, "pom.xml")) ||
+		fileExists(filepath.Join(dir, "build.gradle")) ||
+		fileExists(filepath.Join(dir, "build.gradle.kts")) {
+		return "java"
+	}
+	if fileExists(filepath.Join(dir, "Gemfile")) ||
+		fileExists(filepath.Join(dir, "Rakefile")) {
+		return "ruby"
+	}
+	// .NET: must ReadDir — glob patterns are not valid os.Stat paths.
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, e := range entries {
+			n := e.Name()
+			if strings.HasSuffix(n, ".csproj") ||
+				strings.HasSuffix(n, ".vbproj") ||
+				strings.HasSuffix(n, ".fsproj") {
+				return "dotnet"
+			}
+		}
+	}
+	return ""
+}
+
+// ── Dispatcher ───────────────────────────────────────────────────────────────
+
+func extractPackages(dir, projectType string) []Software {
+	switch projectType {
+	case "golang":
+		return extractGoPackages(dir)
+	case "python":
+		return extractPythonPackages(dir)
+	case "javascript":
+		return extractJavaScriptPackages(dir)
+	case "java":
+		return extractJavaPackages(dir)
+	case "ruby":
+		return extractRubyPackages(dir)
+	case "dotnet":
+		return extractDotnetPackages(dir)
+	}
+	return nil
+}
+
+// ── Go ───────────────────────────────────────────────────────────────────────
+
+func extractGoPackages(dir string) []Software {
+	f, err := os.Open(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var pkgs []Software
+	sc := bufio.NewScanner(f)
+	inBlock := false
+
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+
+		switch {
+		case line == "require (":
+			inBlock = true
+
+		case line == ")" && inBlock:
+			inBlock = false
+
+		case strings.HasPrefix(line, "require ") && !inBlock:
+			// Single-line form: require github.com/foo/bar v1.2.3
+			parts := strings.Fields(line)
+			if len(parts) == 3 {
+				pkgs = append(pkgs, Software{Name: parts[1], Version: parts[2]})
+			}
+
+		case inBlock && line != "" && !strings.HasPrefix(line, "//"):
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				pkgs = append(pkgs, Software{Name: parts[0], Version: parts[1]})
+			} else if len(parts) == 1 {
+				pkgs = append(pkgs, Software{Name: parts[0]})
+			}
+		}
+	}
+	return pkgs
+}
+
+// ── Python ───────────────────────────────────────────────────────────────────
+
+func extractPythonPackages(dir string) []Software {
+	if data, err := os.ReadFile(filepath.Join(dir, "pyproject.toml")); err == nil {
+		if pkgs := parsePyprojectToml(string(data)); len(pkgs) > 0 {
+			return pkgs
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "requirements.txt")); err == nil {
+		if pkgs := parseRequirementsTxt(string(data)); len(pkgs) > 0 {
+			return pkgs
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "Pipfile")); err == nil {
+		return parsePipfile(string(data))
+	}
+	return nil
+}
+
+// versionOps are Python version specifier operators, longest-match first.
+var versionOps = []string{">=", "<=", "==", "~=", "!=", ">", "<", ";"}
+
+func splitPyDep(dep string) (name, version string) {
+	minIdx := len(dep)
+	for _, op := range versionOps {
+		if idx := strings.Index(dep, op); idx >= 0 && idx < minIdx {
+			minIdx = idx
+		}
+	}
+	if minIdx < len(dep) {
+		return strings.TrimSpace(dep[:minIdx]), strings.TrimSpace(dep[minIdx:])
+	}
+	return strings.TrimSpace(dep), ""
+}
+
+func parseRequirementsTxt(content string) []Software {
+	var pkgs []Software
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "-") {
+			continue
+		}
+		// Strip inline comments.
+		if i := strings.Index(line, " #"); i >= 0 {
+			line = strings.TrimSpace(line[:i])
+		}
+		name, version := splitPyDep(line)
+		if name != "" {
+			pkgs = append(pkgs, Software{Name: name, Version: version})
+		}
+	}
+	return pkgs
+}
+
+func parsePyprojectToml(content string) []Software {
+	var pkgs []Software
+	inDeps := false
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+
+		if strings.Contains(line, "[tool.poetry.dependencies]") ||
+			strings.Contains(line, "[project]") && strings.Contains(line, "requires") {
+			inDeps = true
+			continue
+		}
+		// Any new section ends deps block.
+		if inDeps && strings.HasPrefix(line, "[") {
+			inDeps = false
+		}
+		// Array-style: "django>=3.0"
+		if inDeps && strings.HasPrefix(line, `"`) {
+			raw := strings.Trim(line, `",`)
+			name, version := splitPyDep(raw)
+			if name != "" {
+				pkgs = append(pkgs, Software{Name: name, Version: version})
+			}
+		}
+		// TOML key = "version" style: django = ">=3.0"
+		if inDeps && strings.Contains(line, "=") && !strings.HasPrefix(line, "[") {
+			parts := strings.SplitN(line, "=", 2)
+			name := strings.TrimSpace(parts[0])
+			version := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+			if name != "" && name != "python" {
+				pkgs = append(pkgs, Software{Name: name, Version: version})
+			}
+		}
+	}
+	return pkgs
+}
+
+func parsePipfile(content string) []Software {
+	var pkgs []Software
+	inPackages := false
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "[packages]" || line == "[dev-packages]" {
+			inPackages = true
+			continue
+		}
+		if inPackages && strings.HasPrefix(line, "[") {
+			inPackages = false
+		}
+		if inPackages && line != "" && strings.Contains(line, "=") {
+			parts := strings.SplitN(line, "=", 2)
+			name := strings.TrimSpace(parts[0])
+			version := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+			if name != "" {
+				pkgs = append(pkgs, Software{Name: name, Version: version})
+			}
+		}
+	}
+	return pkgs
+}
+
+// ── JavaScript / TypeScript ──────────────────────────────────────────────────
+
+func extractJavaScriptPackages(dir string) []Software {
+	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return nil
+	}
+	var pkg struct {
+		Dependencies    map[string]string `json:"dependencies"`
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return nil
+	}
+	var pkgs []Software
+	for n, v := range pkg.Dependencies {
+		pkgs = append(pkgs, Software{Name: n, Version: v})
+	}
+	for n, v := range pkg.DevDependencies {
+		pkgs = append(pkgs, Software{Name: n, Version: v})
+	}
+	return pkgs
+}
+
+// ── Java ─────────────────────────────────────────────────────────────────────
+
+func extractJavaPackages(dir string) []Software {
+	if data, err := os.ReadFile(filepath.Join(dir, "pom.xml")); err == nil {
+		return parsePomXml(string(data))
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "build.gradle")); err == nil {
+		return parseGradleBuild(string(data))
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, "build.gradle.kts")); err == nil {
+		return parseGradleBuild(string(data))
+	}
+	return nil
+}
+
+// parsePomXml collects groupId:artifactId pairs from Maven pom.xml.
+// The original code only collected groupId, producing half-names like "org.springframework".
+func parsePomXml(content string) []Software {
+	var pkgs []Software
+	inDeps := false
+	var groupID, artifactID string
+
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+
+		if strings.Contains(line, "<dependencies>") {
+			inDeps = true
+			continue
+		}
+		if strings.Contains(line, "</dependencies>") {
+			inDeps = false
+			groupID, artifactID = "", ""
+			continue
+		}
+		if strings.Contains(line, "</dependency>") {
+			groupID, artifactID = "", ""
+			continue
+		}
+
+		if !inDeps {
+			continue
+		}
+
+		if groupID == "" {
+			if v := extractXmlValue(line, "groupId"); v != "" {
+				groupID = v
+			}
+		}
+		if artifactID == "" {
+			if v := extractXmlValue(line, "artifactId"); v != "" {
+				artifactID = v
+			}
+		}
+
+		if groupID != "" && artifactID != "" {
+			version := extractXmlValue(line, "version")
+			pkgs = append(pkgs, Software{
+				Name:    groupID + ":" + artifactID,
+				Version: version,
+			})
+			groupID, artifactID = "", ""
+		}
+	}
+	return pkgs
+}
+
+// gradleDepRe matches both groovy and Kotlin DSL dependency strings:
+//
+//	implementation 'group:artifact:version'
+//	implementation("group:artifact:version")
+var gradleDepRe = regexp.MustCompile(`(?:implementation|compile|api|testImplementation|runtimeOnly)\s*[\("']([^"']+)[\("']`)
+
+func parseGradleBuild(content string) []Software {
+	var pkgs []Software
+	for _, match := range gradleDepRe.FindAllStringSubmatch(content, -1) {
+		dep := match[1]
+		parts := strings.Split(dep, ":")
+		switch len(parts) {
+		case 3:
+			pkgs = append(pkgs, Software{Name: parts[0] + ":" + parts[1], Version: parts[2]})
+		case 2:
+			pkgs = append(pkgs, Software{Name: parts[0], Version: parts[1]})
+		}
+	}
+	return pkgs
+}
+
+// ── Ruby ─────────────────────────────────────────────────────────────────────
+
+// gemRe matches lines like:
+//
+//	gem 'rails', '~> 7.0'
+//	gem "devise", ">= 4.0"
+//	gem 'puma'
+var gemRe = regexp.MustCompile(`^\s*gem\s+['"]([^'"]+)['"](?:\s*,\s*['"]([^'"]+)['"])?`)
+
+func extractRubyPackages(dir string) []Software {
+	data, err := os.ReadFile(filepath.Join(dir, "Gemfile"))
+	if err != nil {
+		return nil
+	}
+	return parseGemfile(string(data))
+}
+
+func parseGemfile(content string) []Software {
+	var pkgs []Software
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := sc.Text()
+		if m := gemRe.FindStringSubmatch(line); m != nil {
+			pkgs = append(pkgs, Software{Name: m[1], Version: m[2]})
+		}
+	}
+	return pkgs
+}
+
+// ── .NET ─────────────────────────────────────────────────────────────────────
+
+func extractDotnetPackages(dir string) []Software {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if strings.HasSuffix(n, ".csproj") ||
+			strings.HasSuffix(n, ".vbproj") ||
+			strings.HasSuffix(n, ".fsproj") {
+			data, err := os.ReadFile(filepath.Join(dir, n))
+			if err != nil {
+				continue
+			}
+			return parseDotnetProjectFile(string(data))
+		}
+	}
+	return nil
+}
+
+func parseDotnetProjectFile(content string) []Software {
+	var pkgs []Software
+	sc := bufio.NewScanner(strings.NewReader(content))
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if !strings.Contains(line, "PackageReference") {
+			continue
+		}
+		name := extractXmlAttr(line, "Include")
+		version := extractXmlAttr(line, "Version")
+		if name != "" {
+			pkgs = append(pkgs, Software{Name: name, Version: version})
+		}
+	}
+	return pkgs
+}
+
+// ── XML helpers ──────────────────────────────────────────────────────────────
+
+// extractXmlValue extracts a simple tag value: <tag>value</tag>
+func extractXmlValue(line, tag string) string {
+	open := "<" + tag + ">"
+	close := "</" + tag + ">"
+	s := strings.Index(line, open)
+	e := strings.Index(line, close)
+	if s >= 0 && e > s {
+		return line[s+len(open) : e]
+	}
+	return ""
+}
+
+// extractXmlAttr extracts an XML attribute value: attr="value"
+func extractXmlAttr(line, attr string) string {
+	needle := attr + `="`
+	s := strings.Index(line, needle)
+	if s < 0 {
+		return ""
+	}
+	s += len(needle)
+	e := strings.Index(line[s:], `"`)
+	if e < 0 {
+		return ""
+	}
+	return line[s : s+e]
+}
+
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
+// goModCacheDir returns the OS-appropriate Go module cache path fragment
+// so we can filter it regardless of platform.
+func goModCacheDir() string {
+	// GOPATH may be set explicitly; fall back to the default ~/go.
+	gopath := os.Getenv("GOPATH")
+	if gopath == "" {
+		home, _ := os.UserHomeDir()
+		gopath = filepath.Join(home, "go")
+	}
+	return filepath.Join(gopath, "pkg", "mod")
+}
+
+//func ListCodeScannerProjects() []ProjectInfo {
+//	log.Printf("[WARNING] Codescanner not implemented on windows yet.")
+//
+//	return []ProjectInfo{}
+//}
+
+func ListCodeScannerProjects() []ProjectInfo {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
+		return nil
+	}
+
+	modCache := goModCacheDir()
+
+	sc := NewScanner()
+	projects, err := sc.Scan(homeDir)
+	if err != nil {
+		log.Printf("[ERROR] Problem in codescanner: %v\n", err)
+	}
+
+	var out []ProjectInfo
+	for _, p := range projects {
+		if p.Path == "" || len(p.Packages) == 0 {
+			continue
+		}
+		// Skip the Go module download cache — these are vendored copies,
+		// not the user's own projects.
+		if strings.HasPrefix(p.Path, modCache) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+ 
+// GetDisplaySizeWindows returns the dimensions of every active display.
+// Prefer calling Screenshot() if you need both image and size — it is cheaper.
+func GetDisplaySizeWindows() ([]DisplaySize, error) {
+	if err := checkInteractiveSession(); err != nil {
+		return nil, err
+	}
+ 
+	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", `
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Screen]::AllScreens |
+    Select-Object @{N='Width';E={$_.Bounds.Width}}, @{N='Height';E={$_.Bounds.Height}} |
+    ConvertTo-Json -Compress
+`).Output()
+	if err != nil {
+		return nil, fmt.Errorf("querying displays: %w", err)
+	}
+ 
+	trimmed := strings.TrimSpace(string(out))
+	if strings.HasPrefix(trimmed, "{") {
+		trimmed = "[" + trimmed + "]"
+	}
+ 
+	var records []struct {
+		Width  int `json:"Width"`
+		Height int `json:"Height"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &records); err != nil {
+		return nil, fmt.Errorf("parsing display sizes: %w", err)
+	}
+ 
+	sizes := make([]DisplaySize, len(records))
+	for i, r := range records {
+		sizes[i] = DisplaySize{DisplayID: i + 1, Width: r.Width, Height: r.Height}
+	}
+	return sizes, nil
+}
+ 
+// GetCursorPositionWindows returns the current cursor position.
+// Origin (0,0) is the top-left of the primary display.
+// Prefer calling Screenshot() if you need both image and cursor — it is cheaper.
+func GetCursorPositionWindows() (Position, error) {
+	if err := checkInteractiveSession(); err != nil {
+		return Position{}, err
+	}
+ 
+	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", `
+Add-Type -AssemblyName System.Windows.Forms
+$p = [System.Windows.Forms.Cursor]::Position
+Write-Output "$($p.X) $($p.Y)"`).Output()
+	if err != nil {
+		return Position{}, fmt.Errorf("querying cursor position: %w", err)
+	}
+ 
+	var x, y float64
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%f %f", &x, &y); err != nil {
+		return Position{}, fmt.Errorf("parsing cursor position %q: %w", out, err)
+	}
+	return Position{X: x, Y: y}, nil
+}
+ 
+// checkInteractiveSession returns an error if the process is running in
+// Windows Session 0 (the non-interactive service session). Session 0 has no
+// display, no cursor, and no desktop — all GUI calls will fail or hang there.
+func checkInteractiveSession() error {
+	out, err := exec.Command(
+		"powershell", "-NoProfile", "-NonInteractive", "-Command",
+		`(Get-Process -Id $PID).SessionId`,
+	).Output()
+	if err != nil {
+		// Can't determine session — proceed and let the caller handle failure.
+		return nil
+	}
+	var id int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &id); err != nil {
+		return nil
+	}
+	if id == 0 {
+		return fmt.Errorf("running in Session 0 (non-interactive service session) — no display available")
+	}
+	return nil
+}
+
+// ========================
+// Windows API bindings
+// ========================
+
+var (
+	user32           = windows.NewLazySystemDLL("user32.dll")
+
+	procSetCursorPos = user32.NewProc("SetCursorPos")
+	procMouseEvent   = user32.NewProc("mouse_event")
+	procKeybdEvent   = user32.NewProc("keybd_event")
+)
+
+// ========================
+// Mouse constants
+// ========================
+
+const (
+	MOUSE_LEFTDOWN  = 0x0002
+	MOUSE_LEFTUP    = 0x0004
+	MOUSE_RIGHTDOWN = 0x0008
+	MOUSE_RIGHTUP   = 0x0010
+)
+
+// ========================
+// RemoteControl methods
+// ========================
+
+func remoteControlBatch(batch RemoteControlActionBatch) error {
+	for _, a := range batch.Actions {
+		remoteControlExecute(a)
+	}
+
+	return nil
+}
+
+func remoteControlExecute(a RemoteControl) {
+	switch a.Op {
+
+	// -------- Mouse --------
+
+	case "mouse.move":
+		x := getInt(a.Params, "x")
+		y := getInt(a.Params, "y")
+		setCursor(x, y)
+
+	case "mouse.click":
+		x := getInt(a.Params, "x")
+		y := getInt(a.Params, "y")
+		button := getString(a.Params, "button")
+		delay := getInt(a.Params, "delay_ms")
+
+		setCursor(x, y)
+		time.Sleep(time.Duration(delay) * time.Millisecond)
+
+		mouseDown(button)
+		time.Sleep(50 * time.Millisecond)
+		mouseUp(button)
+
+	case "mouse.drag":
+		fx := getInt(a.Params, "from_x")
+		fy := getInt(a.Params, "from_y")
+		tx := getInt(a.Params, "to_x")
+		ty := getInt(a.Params, "to_y")
+		button := getString(a.Params, "button")
+
+		setCursor(fx, fy)
+		time.Sleep(50 * time.Millisecond)
+
+		mouseDown(button)
+		time.Sleep(50 * time.Millisecond)
+
+		setCursor(tx, ty)
+		time.Sleep(50 * time.Millisecond)
+
+		mouseUp(button)
+
+	// -------- Keyboard --------
+
+	case "keyboard.press":
+		key := getInt(a.Params, "key")
+		keyPress(uint16(key))
+
+	// -------- Utility --------
+
+	case "system.wait":
+		ms := getInt(a.Params, "ms")
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
+}
+
+// ========================
+// Windows input functions
+// ========================
+
+func setCursor(x, y int) {
+	procSetCursorPos.Call(uintptr(x), uintptr(y))
+}
+
+func mouseDown(button string) {
+	if button == "right" {
+		procMouseEvent.Call(MOUSE_RIGHTDOWN, 0, 0, 0, 0)
+		return
+	}
+	procMouseEvent.Call(MOUSE_LEFTDOWN, 0, 0, 0, 0)
+}
+
+func mouseUp(button string) {
+	if button == "right" {
+		procMouseEvent.Call(MOUSE_RIGHTUP, 0, 0, 0, 0)
+		return
+	}
+	procMouseEvent.Call(MOUSE_LEFTUP, 0, 0, 0, 0)
+}
+
+func keyPress(vk uint16) {
+	procKeybdEvent.Call(uintptr(vk), 0, 0, 0)
+	time.Sleep(30 * time.Millisecond)
+	procKeybdEvent.Call(uintptr(vk), 0, 2, 0)
+}
+
+// ========================
+// Helpers
+// ========================
+
+func getInt(m map[string]any, key string) int {
+	if v, ok := m[key]; ok {
+		switch t := v.(type) {
+		case float64:
+			return int(t)
+		case int:
+			return t
+		}
+	}
+	return 0
+}
+
+func getString(m map[string]any, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func Screenshot() ([]ScreenshotWrapper, error) {
+	if err := checkInteractiveSession(); err != nil {
+		return nil, err
+	}
+ 
+	// We need per-display images, so we capture each screen individually
+	// and collect metadata for all of them in one PowerShell call.
+	tmpDir := os.TempDir()
+	ts := time.Now().UnixNano()
+ 
+	// The script does three things:
+	//   1. Captures each Screen individually to a temp file named by index.
+	//   2. Reads cursor position.
+	//   3. Emits a JSON array describing each screen (dimensions, cursor,
+	//      temp file path) so Go can read it back without more parsing.
+	script := fmt.Sprintf(`
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+ 
+$cursor = [System.Windows.Forms.Cursor]::Position
+$screens = [System.Windows.Forms.Screen]::AllScreens
+$results = @()
+ 
+for ($i = 0; $i -lt $screens.Length; $i++) {
+    $s    = $screens[$i]
+    $path = "%s\edr-%d-d$i.png"
+ 
+    $bmp = New-Object System.Drawing.Bitmap($s.Bounds.Width, $s.Bounds.Height)
+    $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+    $gfx.CopyFromScreen($s.Bounds.Left, $s.Bounds.Top, 0, 0, $bmp.Size)
+    $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $gfx.Dispose()
+    $bmp.Dispose()
+ 
+    $results += [PSCustomObject]@{
+        Path    = $path
+        Width   = $s.Bounds.Width
+        Height  = $s.Bounds.Height
+        CursorX = $cursor.X
+        CursorY = $cursor.Y
+    }
+}
+ 
+$results | ConvertTo-Json -Compress
+`, tmpDir, ts)
+ 
+	command := exec.Command(
+		"powershell", "-WindowStyle", "Hidden", "-NoProfile", "-NonInteractive", "-Command", script,
+	)
+
+	command.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:     true,
+		CreationFlags:   0x08000000, // CREATE_NO_WINDOW
+	}
+
+	out, err := command.Output()
+	if err != nil {
+		return nil, fmt.Errorf("screenshot script failed: %w", err)
+	}
+ 
+	// PowerShell emits a bare object (not array) when there is exactly one
+	// screen. Normalise to array so json.Unmarshal always gets a slice.
+	trimmed := strings.TrimSpace(string(out))
+	if strings.HasPrefix(trimmed, "{") {
+		trimmed = "[" + trimmed + "]"
+	}
+ 
+	var records []struct {
+		Path    string  `json:"Path"`
+		Width   int     `json:"Width"`
+		Height  int     `json:"Height"`
+		CursorX float64 `json:"CursorX"`
+		CursorY float64 `json:"CursorY"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &records); err != nil {
+		return nil, fmt.Errorf("parsing screenshot metadata: %w", err)
+	}
+ 
+	wrappers := make([]ScreenshotWrapper, 0, len(records))
+	for i, r := range records {
+		data, err := os.ReadFile(r.Path)
+		os.Remove(r.Path) // clean up regardless of read outcome
+		if err != nil {
+			return nil, fmt.Errorf("reading screenshot for display %d: %w", i, err)
+		}
+		wrappers = append(wrappers, ScreenshotWrapper{
+			Image:      data,
+			ScreenSize: DisplaySize{DisplayID: i + 1, Width: r.Width, Height: r.Height},
+			Cursor:     Position{X: r.CursorX, Y: r.CursorY},
+		})
+	}
+	return wrappers, nil
 }

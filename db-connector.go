@@ -2067,25 +2067,39 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						continue
 					} else if decision.RunDetails.Status == "FAILURE" {
-						//finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 						failedFound = true
 						continue
 					} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
 
 						// Max runtime of a decision at 5 minutes
 						if decision.RunDetails.StartedAt > 0 && time.Now().UnixMilli()-decision.RunDetails.StartedAt > 300000 {
-							if debug { 
-								log.Printf("[DEBUG] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds", workflowExecution.ExecutionId, decision.Tool, decision.Action, time.Now().UnixMilli()-decision.RunDetails.StartedAt)
+							timeoutFlagKey := fmt.Sprintf("agent-%s-%s-timeout-handled", workflowExecution.ExecutionId, decision.RunDetails.Id)
+							if _, err := GetCache(ctx, timeoutFlagKey); err == nil {
+								// Already handled this timeout in a previous check so just count it as finished.
+								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+								failedFound = true
+							} else {
+								log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-decision.RunDetails.StartedAt)/1000)
+								SetCache(ctx, timeoutFlagKey, []byte("1"), 60) // 60 min TTL — long enough to outlive any recovery cycle
+
+								decisionsUpdated = true
+								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
+								mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
+								mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
+
+								// Write FAILURE back to the per-decision cache so the still-alive goroutine
+								// in RunAgentDecisionAction sees it and discards its late result instead of
+								// messing the recovery state.
+								timedOutDecision := mappedOutput.Decisions[decisionIndex]
+								if marshalledTimedOut, err := json.Marshal(timedOutDecision); err == nil {
+									go SetCache(ctx, decisionId, marshalledTimedOut, 300)
+								}
+
+								// Count as finished so the all-decisions-done check fires in this same check.
+								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+								failedFound = true
 							}
-
-							decisionsUpdated = true
-							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
-							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
-							mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
-
-							// Count this as finished + failed so recovery triggers in the same Fixexecution run
-							// finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
-							// failedFound = true
 						}
 					} else {
 						if decision.RunDetails.CompletedAt > 0 {
@@ -2198,19 +2212,23 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						if workflowExecution.Status == "FINISHED" {
 							workflowExecution.Status = "EXECUTING"
 						}
-						// To ensure the execution is actually updated
-						// Re-invoke the agent so the LLM can see the failure and produce a proper "finish" decision.
 
-						// capturedExec := workflowExecution
-						// capturedAction := action
+						// Marshal updated state now so the goroutine snapshot is consistent
+						if marshalledResult, err := json.Marshal(mappedOutput); err == nil {
+							workflowExecution.Results[resultIndex].Result = string(marshalledResult)
+						}
+
+						// Re-invoke the agent so the LLM can see the failure and produce a proper "finish" decision.
+						capturedExec := workflowExecution
+						capturedAction := action
 						go func() {
 							time.Sleep(1 * time.Second)
-							sendAgentActionSelfRequest("WAITING", workflowExecution, workflowExecution.Results[resultIndex])
-							// time.Sleep(2 * time.Second)
-							// _, err := HandleAiAgentExecutionStart(capturedExec, capturedAction, true)
-							// if err != nil {
-							// 	log.Printf("[ERROR][%s] Failed re-invoking agent after decisions completed for action %s: %s", capturedExec.ExecutionId, capturedAction.ID, err)
-							// }
+							sendAgentActionSelfRequest("WAITING", capturedExec, capturedExec.Results[resultIndex])
+							time.Sleep(2 * time.Second)
+							_, err := HandleAiAgentExecutionStart(capturedExec, capturedAction, true, "fixexecution_timeout_recovery")
+							if err != nil {
+								log.Printf("[ERROR][%s] Failed re-invoking agent after decisions completed for action %s: %s", capturedExec.ExecutionId, capturedAction.ID, err)
+							}
 						}()
 					}
 				} else if (result.Status == "" || result.Status == "WAITING") && mappedOutput.Status == "FINISHED" {
@@ -4205,13 +4223,18 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		cacheKey = fmt.Sprintf("%s_workflows", user.ActiveOrg.Id)
 	}
 
-	//if maxAmount != 250 {
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
+
 		if err == nil {
+
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflows)
 			if err == nil {
+				//if debug { 
+				//	log.Printf("\n\n[DEBUG] Cache FOUND for key '%s': %d workflows\n\n", cacheKey, len(workflows))
+				//}
+
 				return workflows, nil
 			}
 		}
@@ -5450,14 +5473,25 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 }
 
 // Index = Username
-func DeleteKey(ctx context.Context, entity string, value string) error {
+func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...string) error {
+
+	orgId := ""
+	if len(orgIdList) > 0 && len(orgIdList[0]) > 0 {
+		orgId = orgIdList[0]
+	}
+
 	// Non indexed User data
 	if entity == "workflowexecution" {
-		log.Printf("[WARNING] DELETING workflowexecution: %s", value)
+		log.Printf("[WARNING][%s] DELETING workflowexecution in org '%s'", value, orgId)
 	}
 
 	if entity == "org_cache" {
 		// FIXME: Add check in ngram to clean up correlations after deletions
+	}
+
+	if entity == "workflow" && len(orgId) > 0 {
+		DeleteCache(ctx, fmt.Sprintf("%s_workflows", orgId))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", orgId))
 	}
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
@@ -9706,6 +9740,9 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	// FIXME: Due to a possibility of ID reusage on duplication, we re-randomize ID's IF the workflow is new
 	// Due to caching, this is kind of fine.
+	nameKey := "workflow"
+	id = workflow.ID
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	foundWorkflow, err := GetWorkflow(ctx, id)
 	if (err != nil || foundWorkflow.ID == "") && !workflow.BackgroundProcessing {
 		log.Printf("[INFO] Workflow %s doesn't exist, randomizing IDs for Triggers during init", id)
@@ -9727,13 +9764,20 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 			workflow.Triggers[triggerIndex].ID = newTriggerId
 			workflow.Triggers[triggerIndex].Status = "stopped"
 		}
+	} 
+
+	if err != nil || foundWorkflow.ID == "" {
+		if debug { 
+			log.Printf("[DEBUG] Creating new workflow with ID %s. Clearing workflow cache.", id)
+		}
+
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", workflow.OrgId))
+		DeleteCache(ctx, fmt.Sprintf("%s_workflows", workflow.OrgId))
 	}
 
 	// Overwriting to be sure these are matching
 	// No real point in having id + workflow.ID anymore
-	id = workflow.ID
 
-	nameKey := "workflow"
 	timeNow := int64(time.Now().Unix())
 	workflow.Edited = timeNow
 	if workflow.Created == 0 {
@@ -9792,7 +9836,6 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	if project.CacheDb {
-		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getworkflow '%s': %s", cacheKey, err)
@@ -9800,10 +9843,9 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 		// Find the key for "workflows_<workflow.org_id>" and update the cache for this one. If it doesn't exist, add it
 		// Get the cache for the workflows
-		cursor := ""
-		DeleteCache(ctx, fmt.Sprintf("%s_workflows", "", workflow.OrgId))
+		DeleteCache(ctx, fmt.Sprintf("%s_workflows", workflow.OrgId))
 
-		cacheKey = fmt.Sprintf("%s_%s_workflows", cursor, workflow.OrgId)
+		cacheKey = fmt.Sprintf("%s_workflows", workflow.OrgId)
 		cache, err := GetCache(ctx, cacheKey)
 		if err != nil {
 			//log.Printf("[WARNING] Failed getting cache for getworkflow '%s': %s", cacheKey, err)
@@ -14154,6 +14196,20 @@ func SetDatastoreCategoryConfig(ctx context.Context, category DatastoreCategoryU
 	category.Id = uuid.Must(uuid.FromBytes(uuidBytes)).String()
 	if len(category.Id) != 36 {
 		return errors.New(fmt.Sprintf("Failed to generate valid UUID for category with orgId %s and category %s", category.OrgId, category.Category))
+	}
+
+	// Clean up empty fields
+	for automationIndex, automation := range category.Automations {
+		newOptions := []DatastoreAutomationOption{}
+		for _, option := range automation.Options {
+			if len(option.Value) == 0 { 
+				continue
+			}
+
+			newOptions = append(newOptions, option)
+		}
+
+		category.Automations[automationIndex].Options = newOptions
 	}
 
 	// New struct, to not add body, author etc

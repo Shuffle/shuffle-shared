@@ -2333,6 +2333,21 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[INFO][%s] AI_AGENT_TOOL: org=%s tool=%s action=%s status=%s duration=%ds", execution.ExecutionId, execution.Workflow.OrgId, decision.Tool, decision.Action, decision.RunDetails.Status, duration)
 	}
 
+	// when there are late-returning goroutines like more than 5 mins then Fixexecution may have already stamped this decision as FAILURE (5-min timeout) and
+	// triggered a new agent cycle while we were blocked in the Singul HTTP call.
+	// Re-read the cache and bail out if Fixexecution already set a CompletedAt, so we don't POST a stale result that messes up the execution's state.
+	if freshCache, err := GetCache(ctx, decisionId); err == nil {
+		freshDecision := AgentDecision{}
+		if fcData, ok := freshCache.([]uint8); ok {
+			if json.Unmarshal(fcData, &freshDecision) == nil {
+				if freshDecision.RunDetails.Status == "FAILURE" && freshDecision.RunDetails.CompletedAt > 0 && decision.RunDetails.CompletedAt <= 0 {
+					log.Printf("[WARNING][%s] Decision %s was already timed out by Fixexecution (CompletedAt=%d). Discarding late result to avoid clobbering recovery state.", execution.ExecutionId, decision.RunDetails.Id, freshDecision.RunDetails.CompletedAt)
+					return
+				}
+			}
+		}
+	}
+
 	// 1. Send this back as a result for an action
 	// Then the action itself should decide if it's done or not.
 	// Would it work to send JUST this decision result?
