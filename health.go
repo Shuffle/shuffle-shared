@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"html"
+
 	//	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/goccy/go-json"
 	"io"
 	"io/ioutil"
 	"log"
@@ -18,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/goccy/go-json"
 
 	"github.com/Masterminds/semver"
 	"github.com/frikky/kin-openapi/openapi3"
@@ -759,7 +762,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 	// Use channel for getting RunOpsWorkflow function results
 	workflowHealthChannel := make(chan WorkflowHealth)
-	errorChannel := make(chan error, 6)
+	errorChannel := make(chan error, 7)
 	go func() {
 		if debug {
 			log.Printf("[DEBUG] Running workflowHealthChannel goroutine")
@@ -775,6 +778,28 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		workflowHealthChannel <- workflowHealth
 		errorChannel <- err
 	}()
+
+	// Agent health check
+	if project.Environment == "cloud" {
+		agentHealthChannel := make(chan AgentHealth)
+		go func() {
+			if debug {
+				log.Printf("[DEBUG] Health check Running agentHealthChannel goroutine")
+			}
+
+			agentHealth, err := RunOpsAgent(apiKey, orgId, "")
+			if err != nil {
+				if project.Environment == "cloud" {
+					log.Printf("[ERROR] Health check failed for the agent: %s", err)
+				}
+			}
+
+			agentHealthChannel <- agentHealth
+			errorChannel <- err
+		}()
+		
+		platformHealth.Agents = <-agentHealthChannel
+	}
 
 	if project.Environment != "cloud" {
 		opensearchHealthChannel := make(chan opensearchapi.ClusterHealthResp)
@@ -889,6 +914,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	HealthCheck.Datastore = platformHealth.Datastore
 	HealthCheck.FileOps = platformHealth.FileOps
 	HealthCheck.Apps = platformHealth.Apps
+	HealthCheck.Agents = platformHealth.Agents
 	// Add to database
 	err = SetPlatformHealth(ctx, HealthCheck)
 	if err != nil {
@@ -4440,14 +4466,14 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 			if err != nil {
 				log.Printf("[WARNING] Failed to get environment %s for org %s", fileId, user.ActiveOrg.Id)
 				resp.WriteHeader(401)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environment %s"}`, fileId)))
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environment %s"}`, html.EscapeString(fileId))))
 				return
 			}
 
 			if env.OrgId != user.ActiveOrg.Id {
 				log.Printf("[WARNING] %s (%s) doesn't have permission to stop all executions for environment %s", user.Username, user.Id, fileId)
 				resp.WriteHeader(401)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You don't have permission to stop environment executions for ID %s"}`, fileId)))
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You don't have permission to stop environment executions for ID %s"}`, html.EscapeString(fileId))))
 				return
 			}
 
@@ -4555,4 +4581,273 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully deleted and stopped %d executions"}`, total)))
+}
+
+func resolveAgentBaseUrl(cloudRunUrl string) string {
+	if project.Environment == "onprem" {
+		return "http://localhost:5001"
+	}
+
+	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	if len(baseUrl) > 0 {
+		return baseUrl
+	}
+
+	if len(cloudRunUrl) > 0 {
+		return cloudRunUrl
+	}
+
+	log.Printf("[DEBUG] Base url not set. Setting to default")
+	return "https://shuffler.io"
+}
+
+type agentStartResult struct {
+	ExecutionId   string
+	Authorization string
+}
+
+// startAgentExecution POSTs to /api/v1/agent and returns the execution ID and
+// authorization token needed to poll for results.
+func startAgentExecution(baseUrl, apiKey, orgId string) (agentStartResult, error) {
+	url := baseUrl + "/api/v1/agent"
+
+	requestBody := map[string]interface{}{
+		"params": map[string]interface{}{
+			"input": map[string]string{
+				"text": "Get the current weather of new york using https://wttr.in/New+York?format=%t api and just output the current weather temperature without any commentary, just output the number in celcius and dont include the decimals, use action as custom_action, tool as http and category as singul keep the url as it and not needed for any other hallucinated params or headers, just include the url as is and the method name which is GET.",
+			},
+		},
+	}
+
+	requestBodyJson, err := json.Marshal(requestBody)
+	if err != nil {
+		return agentStartResult{}, fmt.Errorf("failed marshalling agent start request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestBodyJson))
+	if err != nil {
+		return agentStartResult{}, fmt.Errorf("failed creating agent start HTTP request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Org-Id", orgId)
+	req.Header.Set("X-Internal-Caller", "RunOpsAgent")
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return agentStartResult{}, fmt.Errorf("failed sending agent start request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return agentStartResult{}, fmt.Errorf("failed reading agent start response body: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Agent start response body: %s", respBody)
+		return agentStartResult{}, fmt.Errorf("agent start failed with status %d", resp.StatusCode)
+	}
+
+	parsed := Parsed{}
+
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return agentStartResult{}, fmt.Errorf("failed parsing agent start response: %w", err)
+	}
+
+	if !parsed.Success || len(parsed.ExecutionId) == 0 {
+		return agentStartResult{}, errors.New("agent start returned success=false or empty execution ID")
+	}
+
+	log.Printf("[DEBUG] Health check for Agent execution started with ID: %s", parsed.ExecutionId)
+	return agentStartResult{
+		ExecutionId:   parsed.ExecutionId,
+		Authorization: parsed.Authorization,
+	}, nil
+}
+
+// fetchAgentExecutionResults POSTs to /api/v1/streams/results and returns the
+// current WorkflowExecution snapshot for the given execution.
+func fetchAgentExecutionResults(baseUrl, apiKey, orgId, executionId, authorization string) (WorkflowExecution, error) {
+	url := baseUrl + "/api/v1/streams/results"
+
+	reqBody := map[string]string{
+		"execution_id":  executionId,
+		"authorization": authorization,
+	}
+	reqBodyJson, err := json.Marshal(reqBody)
+	if err != nil {
+		return WorkflowExecution{}, fmt.Errorf("failed marshalling results request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBodyJson))
+	if err != nil {
+		return WorkflowExecution{}, fmt.Errorf("failed creating results HTTP request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Org-Id", orgId)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return WorkflowExecution{}, fmt.Errorf("failed sending results request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return WorkflowExecution{}, fmt.Errorf("failed reading results response body: %w", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return WorkflowExecution{}, fmt.Errorf("results endpoint returned status %d", resp.StatusCode)
+	}
+
+	var execution WorkflowExecution
+	if err := json.Unmarshal(respBody, &execution); err != nil {
+		return WorkflowExecution{}, fmt.Errorf("failed parsing execution results: %w", err)
+	}
+
+	return execution, nil
+}
+
+
+func extractAgentOutputFromResults(execution WorkflowExecution) (AgentOutput, bool) {
+	var agentOutput AgentOutput
+
+	err := json.Unmarshal([]byte(execution.Result), &agentOutput)
+	if err == nil && len(agentOutput.Decisions) > 0 {
+		return agentOutput, true
+	}
+
+	//  maybe it's a JSON string inside ?
+	var inner string
+	if err := json.Unmarshal([]byte(execution.Result), &inner); err == nil {
+		if err := json.Unmarshal([]byte(inner), &agentOutput); err == nil && len(agentOutput.Decisions) > 0 {
+			return agentOutput, true
+		}
+	}
+	
+	return AgentOutput{}, false
+}
+
+// RunOpsAgent runs a health check for AI agents by directly calling the agent
+// execution endpoint, polling for results, and verifying the agent completes
+func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, error) {
+	agentHealth := AgentHealth{
+		Create:         true, // Not creating workflow, but keeping for compatibility
+		BackendVersion: os.Getenv("SHUFFLE_BACKEND_VERSION"),
+		Delete:         true, 
+	}
+
+	baseUrl := resolveAgentBaseUrl(cloudRunUrl)
+
+	startResult, err := startAgentExecution(baseUrl, apiKey, orgId)
+	if err != nil {
+		log.Printf("[ERROR] Health check failed for startAgentExecution: %s", err)
+		agentHealth.Error.Create = fmt.Sprintf("Health check failed for startAgentExecution: %s", err)
+		return agentHealth, err
+	}
+
+	agentHealth.Run = true
+	agentHealth.ExecutionId = startResult.ExecutionId
+	startTime := time.Now()
+	timeout := time.After(5 * time.Minute)
+
+	for !agentHealth.RunFinished {
+		execution, err := fetchAgentExecutionResults(baseUrl, apiKey, orgId, startResult.ExecutionId, startResult.Authorization)
+		if err != nil {
+			log.Printf("[ERROR] Health check failed in fetchAgentExecutionResults: %s", err)
+			agentHealth.Error.Run = fmt.Sprintf("Health check failed in fetchAgentExecutionResults: %s", err)
+			return agentHealth, err
+		}
+
+		// Update run status whenever the execution is no longer EXECUTING.
+		if execution.Status != "EXECUTING" && execution.Status != "WAITING" {
+			log.Printf("[DEBUG] Health check for Agent execution status: %s (ID: %s)", execution.Status, agentHealth.ExecutionId)
+			agentHealth.RunFinished = true
+			agentHealth.RunStatus = execution.Status
+
+			// Extract agent-level output (decisions, LLM success) from action results.
+			if agentOutput, found := extractAgentOutputFromResults(execution); found {
+				agentHealth.AgentStatus = agentOutput.Status
+				agentTemp, err := strconv.Atoi(strings.TrimSpace(agentOutput.Output))
+				if err != nil {
+					log.Printf("[ERROR] Agent Health check failed due to atoi conversion failure: %s", err)
+					agentHealth.Error.Run = fmt.Sprintf("Agent Health check failed due to atoi conversion failure: %s", err)
+					agentHealth.LLMCallSuccess = false
+				}
+
+				realTemp, apiErr := getRealTempC()
+				if apiErr != nil {
+					log.Printf("[ERROR] Agent Health check failed due to weather api call failure: %s", apiErr)
+					agentHealth.Error.Run = fmt.Sprintf("Agent Health check failed due to weather api call failure: %s", apiErr)
+					agentHealth.LLMCallSuccess = false
+				} else {
+					realTempStr := strconv.Itoa(realTemp)
+					agentTempStr := strconv.Itoa(agentTemp)
+					// check if this real tmp value exists in the agentTemp
+					if strings.Contains(agentTempStr, realTempStr) {
+						agentHealth.LLMCallSuccess = true
+						log.Printf("[INFO] Agent Health check - LLM Call was successful. Expected: %d, Got: %d", realTemp, agentTemp)
+					} else {
+						agentHealth.LLMCallSuccess = false
+						log.Printf("[ERROR] Agent Health check - LLM Call was not successful. Expected: %d, Got: %d", realTemp, agentTemp)
+						agentHealth.Error.Run = fmt.Sprintf("Agent Health check - LLM Call was not successful. Expected: %d, Got: %d", realTemp, agentTemp)
+					}
+				}
+
+				agentHealth.AgentDecisionCount = len(agentOutput.Decisions)
+				log.Printf("[DEBUG] Health check for Agent made %d decisions, LLM call successful", len(agentOutput.Decisions))
+			}
+		}
+
+		if execution.Status == "FINISHED" {
+			log.Printf("[DEBUG] Health check for Agent execution finished successfully")
+			agentHealth.ExecutionTook = time.Since(startTime).Seconds()
+		}
+
+		// Check whether the overall health-check deadline has been hit.
+		select {
+		case <-timeout:
+			log.Printf("[ERROR] Timeout reached for agent health check")
+			agentHealth.RunStatus = "ABANDONED_BY_HEALTHCHECK"
+			agentHealth.Error.Run = "Timeout reached for agent health check"
+			return agentHealth, errors.New("timeout reached for agent health check")
+		default:
+		}
+
+		if !agentHealth.RunFinished {
+			time.Sleep(2 * time.Second)
+		}
+	}
+
+	return agentHealth, nil
+}
+
+func getRealTempC() (int, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	resp, err := client.Get("https://wttr.in/New+York?format=%t")
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, err
+	}
+
+	str := strings.TrimSpace(string(body))
+	str = strings.Trim(str, "+°C")
+
+	val, err := strconv.Atoi(str)
+	if err != nil {
+		return 0, err
+	}
+
+	return val, nil
 }
