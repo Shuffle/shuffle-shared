@@ -780,22 +780,26 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	}()
 
 	// Agent health check
-	agentHealthChannel := make(chan AgentHealth)
-	go func() {
-		if debug {
-			log.Printf("[DEBUG] Health check Running agentHealthChannel goroutine")
-		}
-
-		agentHealth, err := RunOpsAgent(apiKey, orgId, "")
-		if err != nil {
-			if project.Environment == "cloud" {
-				log.Printf("[ERROR] Health check failed for the agent: %s", err)
+	if project.Environment == "cloud" {
+		agentHealthChannel := make(chan AgentHealth)
+		go func() {
+			if debug {
+				log.Printf("[DEBUG] Health check Running agentHealthChannel goroutine")
 			}
-		}
 
-		agentHealthChannel <- agentHealth
-		errorChannel <- err
-	}()
+			agentHealth, err := RunOpsAgent(apiKey, orgId, "")
+			if err != nil {
+				if project.Environment == "cloud" {
+					log.Printf("[ERROR] Health check failed for the agent: %s", err)
+				}
+			}
+
+			agentHealthChannel <- agentHealth
+			errorChannel <- err
+		}()
+		
+		platformHealth.Agents = <-agentHealthChannel
+	}
 
 	if project.Environment != "cloud" {
 		opensearchHealthChannel := make(chan opensearchapi.ClusterHealthResp)
@@ -871,7 +875,6 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	platformHealth.FileOps = <-fileHealthChannel
 	platformHealth.Apps = <-openapiAppHealthChannel
 	platformHealth.Workflows = <-workflowHealthChannel
-	platformHealth.Agents = <-agentHealthChannel
 	err = <-errorChannel
 
 	if project.Environment != "cloud" {
