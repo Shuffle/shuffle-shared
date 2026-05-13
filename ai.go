@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"unicode/utf8"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -68,12 +69,13 @@ func init() {
 }
 
 func EstimatePromptTokens(messages []openai.ChatCompletionMessage) int64 {
-	totalChars := int64(0)
-	for _, msg := range messages {
-		totalChars += int64(len(msg.Content))
-	}
-	
-	return (totalChars + 3) / 4
+    totalChars := 0
+    for _, msg := range messages {
+        totalChars += utf8.RuneCountInString(msg.Content)
+        totalChars += 20 
+    }
+    
+    return int64((totalChars + 3) / 4)
 }
 
 // Provide an incident triage and response plan for the reported incident finding. Make a short list of actions to perform in the following format: [{"title": "Title of the task", "category": "triage/containment/recovery/communication/documentation", "completed": false, "createdBy": "ai-agent@shuffler.io"}]. ONLY output as JSON array and nothing more. After the list is made, add these to the metadata.extensions.custom_attributes.tasks[] in the next action.
@@ -7119,7 +7121,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		marshalledOutput = []byte(`{"status":"ABORTED","error":"marshal error"}`)
 	}
 
-	// log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q", execution.ExecutionId, execution.Workflow.OrgId, abortLabel, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
+	log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q", execution.ExecutionId, execution.Workflow.OrgId, abortLabel, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
 
 	abortResult := ActionResult{
 		Status:      "SUCCESS",
@@ -7414,6 +7416,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	metadata += fmt.Sprintf("Current time: %s\n", time.Now().Format(time.RFC3339))
 
+	/*
 	categoryActions := GetAppCategories()
 	actionMetadata := "ALL Available actions sorted by category:\n"
 	for _, category := range categoryActions {
@@ -7425,8 +7428,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		for _, label := range category.ActionLabels {
 			actionMetadata += fmt.Sprintf("- %s\n", strings.ReplaceAll(label, "_", " "))
 		}
-
 	}
+	*/
 
 	if len(execution.Workflow.OrgId) == 0 && len(execution.ExecutionOrg) > 0 {
 		execution.Workflow.OrgId = execution.ExecutionOrg
@@ -7461,6 +7464,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	foundReasoning := ""
 	enableQuestions := false
+
+	imagesIncluded := []string{}
+	imageDetail := openai.ImageURLDetailAuto // low, high, original, auto (let the model decide)
 	for _, param := range startNode.Parameters {
 		if param.Name == "app_name" {
 			appname = param.Value
@@ -7479,6 +7485,31 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 		if param.Name == "reasoning" { 
 			foundReasoning = strings.ToLower(strings.TrimSpace(param.Value))
+		}
+
+		if param.Name == "image" { 
+			if strings.HasPrefix(param.Value, "http://") || strings.HasPrefix(param.Value, "https://") {
+				imagesIncluded = append(imagesIncluded, param.Value)
+			} else {
+				// Check for base64
+				if strings.HasPrefix(param.Value, "data:image") && strings.Contains(param.Value, "base64,") {
+					imagesIncluded = append(imagesIncluded, param.Value)
+				} else {
+					imagesIncluded = append(imagesIncluded, fmt.Sprintf("data:image;base64,%s", param.Value))
+				}
+			}
+		}
+
+		if param.Name == "image_detail" { 
+			if param.Value == "low" {
+				imageDetail = openai.ImageURLDetailLow
+			} else if param.Value == "high" {
+				imageDetail = openai.ImageURLDetailHigh
+			} else if param.Value == "original" {
+				imageDetail = openai.ImageURLDetail("original")
+			} else {
+				imageDetail = openai.ImageURLDetail(param.Value)
+			}
 		}
 
 		if param.Name == "action" {
@@ -7531,6 +7562,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 										continue
 									}
 
+									if param.Name == "username" || param.Name == "password" || param.Name == "token" || param.Name == "api_key" || param.Name == "key" || param.Name == "timeout" || param.Name == "ssl_verify" {
+										continue
+									}
+
 									optionalParams = append(optionalParams, param.Name)
 								}
 							}
@@ -7539,12 +7574,12 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							optionalString := ""
 							descString := ""
 							if len(requiredParams) > 0 {
-								requiredString = fmt.Sprintf("Req: %s", strings.Join(requiredParams, ","))
+								requiredString = fmt.Sprintf("Required: %s", strings.Join(requiredParams, ","))
 								optionalString = " | "
 							}
 
 							if len(optionalParams) > 0 {
-								optionalString += fmt.Sprintf("Opt: %s", strings.Join(optionalParams, ","))
+								optionalString += fmt.Sprintf("Optional: %s", strings.Join(optionalParams, ","))
 							}
 
 							if len(sortedAppAction.Description) > 0 {
@@ -7804,14 +7839,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					}
 
 					if len(foundUser.UserGeoInfo.City.Name) > 0 {
-						metadata += fmt.Sprintf("City: %s", foundUser.UserGeoInfo.City.Name)
+						metadata += fmt.Sprintf(" City: %s", foundUser.UserGeoInfo.City.Name)
 					}
 
 					metadata += "\n"
 				}
 			}
 
-			// FIXME: Do we need this? Skipping for now.
+			// FIXME: Do we need users & admins? Skipping for now.
 			//if len(admins) > 0 {
 			//	metadata += fmt.Sprintf("admins: %s\n", strings.Join(admins, ", "))
 			//}
@@ -7827,6 +7862,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				// }
 				metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
 			} else {
+				// Used to inject default tools here, but that can quickly go to shit
+				// if the user doesn't want to run anything
+
+				/*
 				decidedApps := ""
 				appauth, autherr := GetAllWorkflowAppAuth(ctx, org.Id)
 				if autherr == nil && len(appauth) > 0 {
@@ -7962,6 +8001,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					// }
 					metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
 				}
+				*/
 			}
 		}
 	}
@@ -7970,7 +8010,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	if len(specificAppMetadata) > 0 {
 		metadata += fmt.Sprintf("\n%s\n", specificAppMetadata)
 	} else {
-		metadata += "\n" + actionMetadata
+		//metadata += "\n" + actionMetadata
 	}
 
 	// Due to usually NOT wanting a question back, but pure run 
@@ -7984,12 +8024,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 2. **Explicit 'Ask' Command:**
    - **Trigger:** Does the user explicitly COMMAND you to ask them for input (e.g., "Ask me for the IP")?
    - **Action:** Select "ask" (Category: "standalone").
-   - **Field "question":** The specific question requested. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias.
-`
+   - **Field "question":** The specific questions you have. Do NOT ask questions about authentication or authorization. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, ask one question at a time as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}]`
+
+    // New feature for auto-generating and approving new apps 
+   	// If the tool is not mentioned in USER CONTEXT and you NEED them to allow those tools, set "action": "add_tool" and "tool": "EXACT toolname" and do not ask questions. If multiple tools are required, make multiple decisions - one for each required tool. Put the entire reasoning in the "reason" field - not as fields.
 	}
 
 	systemMessage += fmt.Sprintf(`### MISSION
-You are the Action Execution Agent for the Shuffle platform. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute the task and **IMMEDIATELY** stop and summarize when done.
+You are an Action Execution Agent that performs actions in third-party tools. You can use ANY tool and platform to achieve these goals if they are presented by the user. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute tasks and **IMMEDIATELY** stop and summarize when done. Attempt to achieve what the users most likely intention is - not just exactly what they ask for. Iterate until the goal is achieved by using the USER CONTEXT tools and actions available to you. Don't be too verbose, and ask as few questions as possible. 
 
 ### INTERNAL CAPABILITIES (DO NOT USE TOOLS FOR THESE)
 1. **General QA/Help:** YOU answer questions like "What can you do?" or "Hi". Do NOT use tools.
@@ -8033,7 +8075,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 4. **Action Selection & Risk Assessment:**
    - Select the tool that performs the *next logical step*.
    - **Destructive Guard:**
-     - If action is DESTRUCTIVE (delete/remove) -> Set "approval_required": true.
+     - If action is DESTRUCTIVE (stop/delete/remove) or otherwise seems required -> Set "approval_required": true.
 
 5. **Validation & Continuation:**
    - Decisions can be dependant. Make sure to validate the output of one decision before proceeding to the next. If you need to run multiple steps, run them and validate each time.
@@ -8062,69 +8104,6 @@ data_filter:
     ]
   }
 ]`, enableQuestionsString)
-	// Pretty good in general, but failed at direct answers 
-	/*
-	systemMessage += fmt.Sprintf(`### MISSION
-You are the Action Execution Agent for the Shuffle platform. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute the task and **IMMEDIATELY** stop and summarize when done.
-
-### INTERNAL CAPABILITIES (DO NOT USE TOOLS FOR THESE)
-1. **Summarization:** YOU must summarize findings in the final output. Do NOT use an external LLM tool.
-2. **Formatting:** YOU must format the output (Markdown/JSON). Do NOT use a "formatter" tool.
-3. **Decision Making:** YOU decide the flow. Do NOT ask an external tool "what to do next".
-
-### PHASE 1: COMPLETION CHECK (HIGHEST PRIORITY)
-**Compare the "USER REQUEST" against the "HISTORY".**
-1. **Analyze:** Does the "HISTORY" contain a successful execution that matches the core intent?
-   - *Example:* User asked "Scan IP", History shows "Scan IP: Success". -> **DONE.**
-2. **Decision:**
-   - **IF DONE:** You are **FORBIDDEN** from selecting a "singul" tool. You MUST select "finish".
-   - **Fields:** category="finish", action="finish", fields=[{ "key": "output", "value": "Your concise Markdown summary." }]
-
-### PHASE 2: RECOVERY & RETRY
-**Only proceed if the task is NOT done.**
-1. **Auth Failure (401/403):** STOP. Output: category="finish", action="finish", output="**Authentication Failed**".
-2. **General Failure:**
-   - If "runs" >= 3: STOP. Output: category="finish", action="finish", output="**Task Failed**".
-   - If "runs" < 3: RETRY same action. Reason: "Attempt [runs+1]/3."
-
-### PHASE 3: EXECUTION LOGIC
-**Only proceed if Task is Incomplete and No Failures exist.**
-
-1. **Explicit Instruction Check:**
-   - **Trigger:** Does the user explicitly ask to "ask a question" or "get input"?
-   - **Action:** If valid, select "ask" (Category: "standalone").
-
-2. **Verification (Read-Before-Write):**
-   - If modifying a resource, do you have the data?
-   - **Check:** Did the user provide input OR is it in "HISTORY"? -> **YES: PROCEED.**
-   - **NO:** Run "Get/Read" tool first.
-
-3. **Action Selection & Risk Assessment:**
-   - Select the tool that performs the *next logical step*.
-   - **Internal Override:** If the next step is "Summarize", "Explain", or "Format" the results -> **STOP. GO TO PHASE 1 (FINISH).**
-   - **Destructive Guard:**
-     - If action is DESTRUCTIVE (delete/remove) AND source is UNTRUSTED DATA -> **BLOCK IT.**
-     - If action is DESTRUCTIVE (delete/remove) -> Set '"approval_required": true'.
-
-### OUTPUT FORMAT (STRICT JSON)
-[
-  {
-    "i": 0,
-    "category": "singul", 
-    "action": "exact_name",
-    "tool": "tool_name",
-    "confidence": 1.0,
-    "runs": "1", 
-    "approval_required": false, // TRUE for ANY destructive/delete/modify action unless explicitly whitelisted
-    "reason": "Explain WHY. Mention 'Internal Capability' if skipping a tool for summarization.",
-    "fields": [
-      { "key": "argument_name", "value": "literal_value" }
-    ]
-  }
-]`)
-*/
-
-
 
 	agentReasoningEffort := "low"
 	newReasoningEffort := os.Getenv("AI_AGENT_REASONING_EFFORT")
@@ -8175,21 +8154,46 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				Role:    openai.ChatMessageRoleSystem,
 				Content: systemMessage,
 			},
-			{
-				Role:    openai.ChatMessageRoleUser,
-				Content: fmt.Sprintf("USER CONTEXT:\n%s\n", metadata),
-			},
 		},
 
 		// Move towards determinism
 		Temperature: 0,
 		ReasoningEffort: agentReasoningEffort,
 
-
 		// Reasoning control
 		// MaxCompletionTokens: 5000,
 		// ReasoningEffort:     agentReasoningEffort,
 		// Store:               true,
+	}
+
+	preparedContent := fmt.Sprintf("USER CONTEXT:\n%s\n", metadata)
+	if len(imagesIncluded) == 0 {
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: preparedContent,
+		})
+	} else {
+		newMessage := openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			MultiContent: []openai.ChatMessagePart{
+				openai.ChatMessagePart{
+					Type: openai.ChatMessagePartTypeText, 
+					Text: preparedContent,
+				},
+			},
+		}
+
+		for _, imageIncluded := range imagesIncluded {
+			newMessage.MultiContent = append(newMessage.MultiContent, openai.ChatMessagePart{
+				Type: openai.ChatMessagePartTypeImageURL, 
+				ImageURL: &openai.ChatMessageImageURL{
+					URL:   imageIncluded,
+					Detail: imageDetail,
+				},
+			})
+		}
+
+		completionRequest.Messages = append(completionRequest.Messages, newMessage)
 	}
 
 	if project.Environment == "cloud" {
@@ -8319,7 +8323,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		tokenLimit := int64(0)
 		if project.Environment == "cloud" {
-			tokenLimit = int64(10_000_000)
+			tokenLimit = int64(1_000_000)
 		}
 		if orgErr == nil && fullOrg != nil && fullOrg.SyncFeatures.AgentTokens.Active && fullOrg.SyncFeatures.AgentTokens.Limit > 0 {
 			tokenLimit = fullOrg.SyncFeatures.AgentTokens.Limit
@@ -8332,7 +8336,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 			if totalTokensAfterRequest > tokenLimit {
 				log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: org=%s monthly_used=%d estimated_current=%d total_would_be=%d limit=%d", execution.ExecutionId, execution.Workflow.OrgId, monthlyTokensUsed, estimatedCurrentTokens, totalTokensAfterRequest, tokenLimit)
 				go sendAITokenLimitAlert(ctx, execution, fullOrg, tokenLimit, monthlyTokensUsed)
-				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("Would exceed token limit: %d + %d > %d", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit))
+				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit))
 			}
 		}
 	}
@@ -8444,8 +8448,9 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		outputMap := HTTPOutput{}
 		err = json.Unmarshal([]byte(resultMapping.Result), &outputMap)
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling response from sending request for stream during SKIPPED user input: %s. Body: %s", execution.ExecutionId, err, string(resultMapping.Result))
-			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "llm_response_unmarshal_failed", fmt.Sprintf("Failed to start AI Agent (1): %s", err.Error()))
+			// resultMapping.Result is not a valid HTTPOutput wrapper — this usually means the Shuffle HTTP action itself failed (timeout,  or something like connection refused etc) and returned a bare error string instead of its normal JSON response.
+			log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error_type=http_wrapper_parse_error unmarshal_err=%s raw_response=%s", execution.ExecutionId, execution.Workflow.OrgId, err, string(resultMapping.Result))
+			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "llm_response_unmarshal_failed", fmt.Sprintf("LLM HTTP wrapper parse error: %s", err))
 		}
 
 		if outputMap.Status != 200 {
@@ -8518,6 +8523,11 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 					cachedTokens = openaiOutput.Usage.PromptTokensDetails.CachedTokens
 				}
 
+				reasoningTokens := 0
+				if openaiOutput.Usage.CompletionTokensDetails != nil {
+					reasoningTokens = openaiOutput.Usage.CompletionTokensDetails.ReasoningTokens
+				}
+
 				inputTokens := int(openaiOutput.Usage.PromptTokens)
 				outputTokens := int(openaiOutput.Usage.CompletionTokens)
 				totalTokens := int(openaiOutput.Usage.TotalTokens)
@@ -8532,7 +8542,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 						IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_output_tokens", outputTokens)
 					}
 				}()
-				log.Printf("[AUDIT][%s] Incremented AI Agent usage for org=%s total=%d input=%d output=%d cached=%d", execution.ExecutionId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens)
+				log.Printf("[AUDIT][%s] Incremented AI Agent usage for org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
 			}
 
 			// Handles reasoning models for Refusal control edgecases
@@ -8738,6 +8748,7 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 
 		decisionActionRan := false
 		nextActionType := ""
+
 		for decisionIndex, decision := range agentOutput.Decisions {
 			// Random generate an ID that's 10 chars long
 			if len(decision.RunDetails.Id) == 0 {
@@ -8890,9 +8901,13 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 				go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
 
 			} else {
+				if decision.Category == "standalone" || decision.Action == "add_tool" {
+					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
+					agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 
+					decision = agentOutput.Decisions[decisionIndex]
 
-				if decision.Category == "standalone" || decision.Action == "answer" {
+				} else if decision.Category == "standalone" || decision.Action == "answer" {
 					// FIXME: Maybe need to send this to myself
 
 					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
@@ -8957,45 +8972,8 @@ You are the Action Execution Agent for the Shuffle platform. You receive tools (
 		}
 
 		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
-			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Marking the agent as FAILURE.", execution.ExecutionId)
-
-			// Properly mark the agent as failed
-			agentOutput.Status = "FAILURE"
-			agentOutput.CompletedAt = time.Now().UnixMilli()
-
-			sentFailure := false
-			// Update the result status - finds the existing node entry in execution.Results
-			for resultIndex, result := range execution.Results {
-				if result.Action.ID != startNode.ID {
-					continue
-				}
-
-				execution.Results[resultIndex].Status = "FAILURE"
-				execution.Results[resultIndex].CompletedAt = agentOutput.CompletedAt
-
-				marshalledAgentOutput, err := json.Marshal(agentOutput)
-				if err != nil {
-					log.Printf("[ERROR] AI Agent: Failed marshalling agent output for FAILURE: %s", err)
-				} else {
-					execution.Results[resultIndex].Result = string(marshalledAgentOutput)
-					resultMapping.Result = string(marshalledAgentOutput)
-				}
-
-				log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for FAILURE on agent action %s", execution.ExecutionId, startNode.ID)
-				go sendAgentActionSelfRequest("FAILURE", execution, execution.Results[resultIndex])
-				sentFailure = true
-				break
-			}
-
-			if !sentFailure {
-				log.Printf("[WARNING][%s] AI Agent: No result entry found in execution.Results, using resultMapping fallback", execution.ExecutionId)
-				fallbackOutput, merr := json.Marshal(agentOutput)
-				if merr == nil {
-					resultMapping.Status = "FAILURE"
-					resultMapping.Result = string(fallbackOutput)
-				}
-				go sendAgentActionSelfRequest("FAILURE", execution, resultMapping)
-			}
+			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent.", execution.ExecutionId)
+			return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_decision_action_ran", "Agent produced decisions but none could be executed. This may indicate an unsupported action type or a bug in decision parsing.")
 		}
 
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
@@ -9246,13 +9224,20 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 		if workflowErr == nil && workflow.OrgId == user.ActiveOrg.Id {
 			// Delete the workflow
-			err = DeleteKey(ctx, "workflow", workflowId)
+			err = DeleteKey(ctx, "workflow", workflowId, user.ActiveOrg.Id)
 			if err != nil {
 				log.Printf("[ERROR] Failed deleting workflow with ID %s in GenerateSingulWorkflows: %s", workflowId, err)
 			}
 
-			DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", user.ActiveOrg.Id))
-			DeleteCache(ctx, fmt.Sprintf("%s_workflows", "", user.ActiveOrg.Id))
+			/*
+			if debug { 
+				log.Printf("[DEBUG] DELETING KEY: %s", deleteKey)
+				allWorkflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
+				if err == nil {
+					log.Printf("\n\n[DEBUG] FOUND WORKFLOWS AFTER DELETE: %d\n\n", len(allWorkflows))
+				}
+			}
+			*/
 		} else {
 			log.Printf("[INFO] No existing workflow with ID %s to remove for category '%s'", workflowId, categoryAction.Label)
 			resp.WriteHeader(http.StatusOK)
@@ -9485,6 +9470,15 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed to set workflow"}`))
 		return
 	}
+
+	/*
+	if debug { 
+		allWorkflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
+		if err == nil {
+			log.Printf("\n\n[DEBUG] FOUND WORKFLOWS POST CREATE: %d\n\n", len(allWorkflows))
+		}
+	}
+	*/
 
 	resp.WriteHeader(http.StatusOK)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Workflow generated", "id": "%s"}`, workflow.ID)))

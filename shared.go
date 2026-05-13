@@ -16,9 +16,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"crypto/sha256"
 
 	"sync"
-
 	"hash/fnv"
 	neturl "net/url"
 	"path"
@@ -42,6 +42,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/shirou/gopsutil/v3/process"
 
 	"regexp"
 	"strconv"
@@ -78,6 +79,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/Masterminds/semver"
+	"runtime"
 	dockerclient "github.com/docker/docker/client"
 )
 
@@ -146,7 +148,6 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			// Shuffle support
 			"https://cases.shuffler.io",
 			"https://security.shuffler.io",
-			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
 			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
 
 			// tbd
@@ -171,6 +172,28 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			for _, domain := range allowedDomains {
 				if origin[0] == domain {
 					allowed = true
+					break
+				}
+			}
+
+			// Since we are becoming more and more of a platform
+			if !allowed {
+				currentUrl := strings.ToLower(request.URL.String())
+				allowedUrls := []string{"/api/v1/", "/api/v2/"}
+				disallowedUrls := []string{"/settings", "/register", "/login_openid", "/login_sso"}
+				for _, allowedUrl := range allowedUrls {
+					if !strings.HasPrefix(currentUrl, allowedUrl) {
+						continue
+					}
+
+					allowed = true
+					for _, disallowedUrl := range disallowedUrls {
+						if strings.HasSuffix(currentUrl, disallowedUrl) {
+							allowed = false
+							break
+						}
+					}
+
 					break
 				}
 			}
@@ -9149,6 +9172,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	referer := request.Header.Get("Referer")
+	if !strings.Contains(referer, "/forms/") {
+		workflow.Sharing = tmpworkflow.Sharing
+		workflow.InputQuestions = tmpworkflow.InputQuestions
+		workflow.FormControl = tmpworkflow.FormControl
+	}
+
 	if fileId != workflow.ID {
 		log.Printf("[ERROR] Path and request ID are NOT matching in workflow save: %s != %s. URL: %s", fileId, workflow.ID, request.URL.String())
 		resp.WriteHeader(400)
@@ -17428,11 +17458,16 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		json.Unmarshal([]byte(actionResult.Result), &agentOut)
 		duration := int64(0)
 		if agentOut.StartedAt > 0 && agentOut.CompletedAt > 0 {
-			duration = agentOut.CompletedAt - agentOut.StartedAt
+			duration = (agentOut.CompletedAt - agentOut.StartedAt) / 1000
 		} else if agentOut.StartedAt > 0 {
-			duration = time.Now().Unix() - agentOut.StartedAt
+			duration = (time.Now().UnixMilli() - agentOut.StartedAt) / 1000
 		}
-		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=%s duration=%ds decisions=%d llm_calls=%d tokens_used=%d", workflowExecution.ExecutionId, workflowExecution.Workflow.OrgId, status, duration, len(agentOut.Decisions), agentOut.LLMCallCount, agentOut.TotalTokens)
+
+		logStatus := status
+		if agentOut.Status != "" && agentOut.Status != "RUNNING" {
+			logStatus = agentOut.Status
+		}
+		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=%s duration=%ds tool_calls=%d llm_calls=%d prompt_tokens=%d completion_tokens=%d total_tokens=%d", workflowExecution.ExecutionId, workflowExecution.Workflow.OrgId, logStatus, duration, len(agentOut.Decisions), agentOut.LLMCallCount, agentOut.PromptTokens, agentOut.CompletionTokens, agentOut.TotalTokens)
 	}
 
 	//log.Printf("[INFO][%s] Sending self-request for Agent Result '%s'. Status: %s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
@@ -17791,8 +17826,9 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		for _, foundDecision := range foundDecisions {
 			if foundDecision.RunDetails.Status == "RUNNING" {
 				continue
-			} else if foundDecision.RunDetails.Status == "FAILED" {
+			} else if foundDecision.RunDetails.Status == "FAILURE" || foundDecision.RunDetails.Status == "FAILED" {
 				failedDecisions = append(failedDecisions, foundDecision.RunDetails.Id)
+				finishedDecisions = append(finishedDecisions, foundDecision.RunDetails.Id)
 			} else if foundDecision.RunDetails.Status == "FINISHED" || foundDecision.RunDetails.Status == "IGNORED" {
 				finishedDecisions = append(finishedDecisions, foundDecision.RunDetails.Id)
 			} else {
@@ -19307,188 +19343,133 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 			}
 		} else {
 			// OpenSearch (on-premise) handling
-			// log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
-			if len(tmpJson) >= 10000000 {
-				// Clean up results' actions
 
-				log.Printf("[DEBUG][%s](%s) ExecutionVariables size: %d, Result size: %d, executionArgument size: %d, Results size: %d", workflowExecution.ExecutionId, saveLocationInfo, len(workflowExecution.ExecutionVariables), len(workflowExecution.Result), len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
-
+			// Offload execution_argument to file independently of total size.
+			// Lucene rejects terms > 32766 bytes, so any execution_argument
+			// larger than 32500 bytes will cause an illegal_argument_exception.
+			if len(workflowExecution.ExecutionArgument) > 32500 && !strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
 				dbSave = true
-				//log.Printf("[WARNING][%s] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", workflowExecution.ExecutionId, len(tmpJson), saveLocationInfo)
+				itemSize := len(workflowExecution.ExecutionArgument)
 				actionId := "execution_argument"
 
-				// Arbitrary reduction size
-				maxSize := 5000000
 				basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
 				if len(basepath) == 0 {
 					basepath = "files"
 				}
 
-				log.Printf("[DEBUG] Execution Argument length is %d for execution Id %s (%s)", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId, saveLocationInfo)
+				fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+				localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
 
-				if len(workflowExecution.ExecutionArgument) > maxSize {
-					itemSize := len(workflowExecution.ExecutionArgument)
-					baseResult := fmt.Sprintf(`{
-								"success": false,
-								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-								"size": %d,
-								"extra": "",
-								"id": "%s_%s"
-							}`, itemSize, workflowExecution.ExecutionId, actionId)
+				log.Printf("[DEBUG][%s] Offloading execution_argument (%d bytes) to file %s", workflowExecution.ExecutionId, itemSize, localPath)
 
-					log.Printf("[DEBUG] len(executionArgument) is %d for execution Id %s", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId)
+				replacementJson := fmt.Sprintf(`{
+					"success": false,
+					"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+					"size": %d,
+					"extra": "replace",
+					"id": "%s_%s"
+				}`, itemSize, workflowExecution.ExecutionId, actionId)
 
-					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+				if err := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); err != nil {
+					dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+					if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+						log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
+					} else if retryErr := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); retryErr != nil {
+						log.Printf("[WARNING] Failed writing execution_argument file after creating directory: %s", retryErr)
+					} else {
+						workflowExecution.ExecutionArgument = replacementJson
+					}
+				} else {
+					workflowExecution.ExecutionArgument = replacementJson
+				}
+			}
+
+			// Offload individual Results[].Result to file independently of total size.
+			// Lucene rejects terms > 32766 bytes, so any action result
+			// larger than 32500 bytes will cause an illegal_argument_exception.
+			basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
+			if len(basepath) == 0 {
+				basepath = "files"
+			}
+
+			newResults := []ActionResult{}
+			for _, item := range workflowExecution.Results {
+				if len(item.Result) > 32500 && !strings.Contains(item.Result, "Result too large to handle") {
+					dbSave = true
+					itemSize := len(item.Result)
+
+					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
 					localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
 
-					// Write file to local filesystem
-					if err := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); err != nil {
-						// Try creating directory if write fails
-						dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-						if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-							log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
-							workflowExecution.ExecutionArgument = baseResult
-						} else {
-							// Retry write after creating directory
-							if retryErr := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); retryErr != nil {
-								log.Printf("[WARNING] Failed writing new exec file to local storage after creating directory: %s", retryErr)
-								workflowExecution.ExecutionArgument = baseResult
-							} else {
-								log.Printf("[DEBUG] Saved execution argument to local file %s", localPath)
-								workflowExecution.ExecutionArgument = fmt.Sprintf(`{
-									"success": false,
-									"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-									"size": %d,
-									"extra": "replace",
-									"id": "%s_%s"
-								}`, itemSize, workflowExecution.ExecutionId, actionId)
-							}
-						}
-					} else {
-						log.Printf("[DEBUG] Saved execution argument to local file %s", localPath)
-						workflowExecution.ExecutionArgument = fmt.Sprintf(`{
-							"success": false,
-							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-							"size": %d,
-							"extra": "replace",
-							"id": "%s_%s"
-						}`, itemSize, workflowExecution.ExecutionId, actionId)
-					}
-				}
+					log.Printf("[DEBUG][%s] Offloading result for action %s (%d bytes) to file %s", workflowExecution.ExecutionId, item.Action.Label, itemSize, localPath)
 
-				newResults := []ActionResult{}
-				//shuffle-large-executions
-				for _, item := range workflowExecution.Results {
-					log.Printf("[DEBUG] Result length is %d for execution Id %s (%s)", len(item.Result), workflowExecution.ExecutionId, saveLocationInfo)
-					if len(item.Result) > maxSize {
-						log.Printf("[WARNING][%s](%s) result length is larger than maxSize for %s (%d)", workflowExecution.ExecutionId, saveLocationInfo, item.Action.Label, len(item.Result))
-
-						itemSize := len(item.Result)
-						baseResult := fmt.Sprintf(`{
-								"success": false,
-								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-								"size": %d,
-								"extra": "",
-								"id": "%s_%s"
-							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
-
-						// 1. Get the value and set it instead if it exists
-						// 2. If it doesn't exist, add it
-						_, err := getExecutionFileValue(ctx, workflowExecution, item)
-						if err == nil {
-							//log.Printf("[DEBUG][%s] Found execution file locally for '%s'. Not saving another.", workflowExecution.ExecutionId, item.Action.Label)
-						} else {
-							fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
-							localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
-
-							// Try writing file, create directory if needed
-							if err := ioutil.WriteFile(localPath, []byte(item.Result), 0644); err != nil {
-								// Try creating directory if write fails
-								dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-								if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-									log.Printf("[WARNING][%s] Failed creating directory and writing file: %s (original: %s)", workflowExecution.ExecutionId, mkdirErr, err)
-									item.Result = baseResult
-									newResults = append(newResults, item)
-									continue
-								}
-
-								// Retry write after creating directory
-								if retryErr := ioutil.WriteFile(localPath, []byte(item.Result), 0644); retryErr != nil {
-									log.Printf("[WARNING][%s] Failed writing new exec file to local storage after creating directory: %s", workflowExecution.ExecutionId, retryErr)
-									item.Result = baseResult
-									newResults = append(newResults, item)
-									continue
-								}
-							}
-
-							log.Printf("[DEBUG] Saved action result to local file %s", localPath)
-						}
-
-						item.Result = fmt.Sprintf(`{
-								"success": false,
-								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-								"size": %d,
-								"extra": "replace",
-								"id": "%s_%s"
-							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
-					}
-
-					newResults = append(newResults, item)
-					// log.Printf("[DEBUG][%s] newResults: %d and item labelled %s length is: %d", workflowExecution.ExecutionId, len(newResults), item.Action.Label, len(item.Result))
-				}
-
-				// log.Printf("[DEBUG][%s](%s) Overwriting executions results now! newResults length: %d", workflowExecution.ExecutionId, saveLocationInfo, len(newResults))
-				workflowExecution.Results = newResults
-
-				// Handle WorkflowExecution.Result field if too large
-				if len(workflowExecution.Result) > maxSize {
-					log.Printf("[WARNING][%s] Result field is too large (%d bytes), saving to file", workflowExecution.ExecutionId, len(workflowExecution.Result))
-
-					itemSize := len(workflowExecution.Result)
-					actionId := "execution_result"
-					baseResult := fmt.Sprintf(`{
+					replacementJson := fmt.Sprintf(`{
 						"success": false,
 						"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
 						"size": %d,
-						"extra": "",
+						"extra": "replace",
 						"id": "%s_%s"
-					}`, itemSize, workflowExecution.ExecutionId, actionId)
+					}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
 
-					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
-					localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
-
-					// Write file to local filesystem
-					if err := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); err != nil {
-						// Try creating directory if write fails
+					if err := ioutil.WriteFile(localPath, []byte(item.Result), 0644); err != nil {
 						dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
 						if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-							log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
-							workflowExecution.Result = baseResult
+							log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
+						} else if retryErr := ioutil.WriteFile(localPath, []byte(item.Result), 0644); retryErr != nil {
+							log.Printf("[WARNING][%s] Failed writing result file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
 						} else {
-							// Retry write after creating directory
-							if retryErr := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); retryErr != nil {
-								log.Printf("[WARNING] Failed writing Result file to local storage after creating directory: %s", retryErr)
-								workflowExecution.Result = baseResult
-							} else {
-								log.Printf("[DEBUG] Saved Result field to local file %s", localPath)
-								workflowExecution.Result = fmt.Sprintf(`{
-									"success": false,
-									"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-									"size": %d,
-									"extra": "replace",
-									"id": "%s_%s"
-								}`, itemSize, workflowExecution.ExecutionId, actionId)
-							}
+							item.Result = replacementJson
 						}
 					} else {
-						log.Printf("[DEBUG] Saved Result field to local file %s", localPath)
-						workflowExecution.Result = fmt.Sprintf(`{
-							"success": false,
-							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-							"size": %d,
-							"extra": "replace",
-							"id": "%s_%s"
-						}`, itemSize, workflowExecution.ExecutionId, actionId)
+						item.Result = replacementJson
+					}
+				}
+				newResults = append(newResults, item)
+			}
+			workflowExecution.Results = newResults
+
+			// Offload workflowExecution.Result to file independently of total size.
+			// Lucene rejects terms > 32766 bytes, so the Result field
+			// larger than 32500 bytes will cause an illegal_argument_exception.
+			if len(workflowExecution.Result) > 32500 && !strings.Contains(workflowExecution.Result, "Result too large to handle") {
+				dbSave = true
+				itemSize := len(workflowExecution.Result)
+				actionId := "execution_result"
+
+				fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+				localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+
+				log.Printf("[DEBUG][%s] Offloading Result field (%d bytes) to file %s", workflowExecution.ExecutionId, itemSize, localPath)
+
+				replacementJson := fmt.Sprintf(`{
+					"success": false,
+					"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+					"size": %d,
+					"extra": "replace",
+					"id": "%s_%s"
+				}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+				if err := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); err != nil {
+					dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+					if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+						log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
+					} else if retryErr := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); retryErr != nil {
+						log.Printf("[WARNING] Failed writing Result file after creating directory: %s", retryErr)
+					} else {
+						workflowExecution.Result = replacementJson
+					}
+				} else {
+					workflowExecution.Result = replacementJson
+				}
+			}
+
+			// Trim action parameter values > 32500 bytes (Lucene keyword term limit).
+			// Parameters are keyword fields and hit the same 32766-byte Lucene limit.
+			for resultIndex, result := range workflowExecution.Results {
+				for paramIndex, param := range result.Action.Parameters {
+					if len(param.Value) > 32500 {
+						log.Printf("[DEBUG][%s] Trimming parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
+						workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
 					}
 				}
 			}
@@ -19497,26 +19478,6 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 			if err == nil {
 				if debug {
 					log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
-				}
-
-				if len(jsonString) > 5000000 {
-					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
-
-					for resultIndex, result := range workflowExecution.Results {
-						actionData, err := json.Marshal(result.Action)
-						if err == nil {
-							// log.Printf("[DEBUG] Result Size (%s - action: %d). Value size: %d", result.Action.Label, len(actionData), len(result.Result))
-						}
-
-						if len(actionData) > 1000000 {
-							for paramIndex, param := range result.Action.Parameters {
-								if len(param.Value) > 1000000 {
-									// log.Printf("[WARNING][%s] Parameter %s in action %s is too large (%d). Removing value.", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
-									workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
-								}
-							}
-						}
-					}
 				}
 			}
 		}
@@ -33563,7 +33524,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 						org.SyncFeatures.Branding.Active = features.Branding.Active
 
 						org.SyncFeatures.AppExecutions.Active = features.OnpremAppExecutions.Active
-						if features.AppExecutions.Limit < 25000 {
+						if features.OnpremAppExecutions.Limit < 25000 {
 							org.SyncFeatures.AppExecutions.Limit = 25000
 						} else {
 							org.SyncFeatures.AppExecutions.Limit = features.OnpremAppExecutions.Limit
@@ -33632,6 +33593,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 				org.SyncFeatures.Authentication.Active = features.Authentication.Active
 				org.SyncFeatures.Authentication.Limit = features.Authentication.Limit
+
+				org.SyncFeatures.WorkflowExecutions.Active = features.WorkflowExecutions.Active
+				org.SyncFeatures.WorkflowExecutions.Limit = features.WorkflowExecutions.Limit
 
 				org.SyncFeatures.Schedule.Active = features.Schedule.Active
 				org.SyncFeatures.Schedule.Limit = features.Schedule.Limit
@@ -35441,7 +35405,9 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 				newWorkflows = append(newWorkflows, workflowId)
 			}
 
-			categoryUpdate.Automations[automationId].Options[foundWorkflowIdIndex].Value = strings.Join(newWorkflows, ",")
+			if foundWorkflowIdIndex != -1 {
+				categoryUpdate.Automations[automationId].Options[foundWorkflowIdIndex].Value = strings.Join(newWorkflows, ",")
+			}
 		}
 	}
 
@@ -36038,4 +36004,233 @@ func ValidateExecutionChronology(ctx context.Context, execution *WorkflowExecuti
 	}
 
 	return violations
+}
+
+func listProcessesWindows() ([]ProcessInfo, error) {
+	return collect()
+}
+
+func listProcessesDarwin() ([]ProcessInfo, error) {
+	return collect()
+}
+
+func listProcessesLinux() ([]ProcessInfo, error) {
+	return collect()
+}
+
+type cacheEntry struct {
+	hash  string
+	mtime time.Time
+	size  int64
+}
+
+var (
+	hashCache   = make(map[string]cacheEntry)
+	hashCacheMu sync.Mutex
+)
+
+// cachedHashFile returns the SHA256 of the file at path.
+// It only re-hashes if the file's mtime or size has changed since last call.
+func cachedHashFile(path string) string {
+	if path == "" {
+		return ""
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	mtime := info.ModTime()
+	size := info.Size()
+
+	hashCacheMu.Lock()
+	entry, ok := hashCache[path]
+	hashCacheMu.Unlock()
+
+	if ok && entry.mtime.Equal(mtime) && entry.size == size {
+		return entry.hash
+	}
+
+	// Cache miss or file changed — hash it.
+	hash := hashFile(path)
+	if hash == "" {
+		return ""
+	}
+
+	hashCacheMu.Lock()
+	hashCache[path] = cacheEntry{hash: hash, mtime: mtime, size: size}
+	hashCacheMu.Unlock()
+
+	return hash
+}
+
+// hashFile computes the SHA256 of a file by streaming it —
+// large binaries never fully land in memory.
+func hashFile(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func scrubArgs(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+
+	out := make([]string, len(args))
+	copy(out, args)
+
+	for i, arg := range out {
+		// Style 1: --flag=value or -f=value
+		if eq := indexByte(arg, '='); eq >= 0 {
+			key := arg[:eq]
+			if isSecretKey(key) {
+				out[i] = key + "=[REDACTED]"
+			}
+			continue
+		}
+
+		// Style 2/3: --flag value or -f value — redact the next element.
+		if isSecretKey(arg) && i+1 < len(out) {
+			out[i+1] = "[REDACTED]"
+		}
+	}
+
+	return out
+}
+
+var secretKeywords = []string{
+	"token",
+	"secret",
+	"password",
+	"passwd",
+	"apikey",
+	"api_key",
+	"api-key",
+	"auth",
+	"credential",
+	"private_key",
+	"private-key",
+	"access_key",
+	"access-key",
+	"signing_key",
+	"signing-key",
+}
+
+// isSecretKey returns true if the flag name contains a secret keyword.
+func isSecretKey(flag string) bool {
+	// Strip leading dashes so "--api-key" and "api-key" both match.
+	lower := strings.ToLower(strings.TrimLeft(flag, "-"))
+	for _, kw := range secretKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// indexByte returns the index of the first occurrence of c in s, or -1.
+// Using this instead of strings.IndexByte to avoid an extra import.
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
+// collect is identical on both platforms — gopsutil handles the syscall difference.
+func collect() ([]ProcessInfo, error) {
+	procs, err := process.Processes()
+	if err != nil {
+		return nil, fmt.Errorf("listing processes: %w", err)
+	}
+
+	out := make([]ProcessInfo, 0, len(procs))
+	for _, p := range procs {
+		ppid, err := p.Ppid()
+		if err != nil { 
+			ppid = 0
+		}
+
+		tty, err  := p.Terminal() // "" if no controlling terminal
+		if err != nil { 
+			tty = ""
+		}
+
+		cmd, err  := p.Name()     // argv[0] basename
+		if err != nil { 
+			cmd = ""
+		}
+
+		user, err := p.Username()
+		if err != nil { 
+			user = ""
+		}
+
+		exePath, err := p.Exe()
+		if err != nil {
+			exePath = ""
+		}
+
+		// kernel threads and SIP-protected processes.
+		args, err := p.CmdlineSlice()
+		if err != nil {
+			args = nil
+		}
+		args = scrubArgs(args)
+
+		createdAt, err := p.CreateTime()
+		if err != nil { 
+			createdAt = 0
+		}
+
+		out = append(out, ProcessInfo{
+			PID:     p.Pid,
+			PPID:    ppid,
+			TTY:     tty,
+			CommandLine: cmd,
+			User: user,
+			
+			Args: args,
+			CreationTime: createdAt,
+			ExePath:  exePath,
+
+			// Hash the binary on disk. Note: this is the file at rest, not the
+			// in-memory image — a binary replaced after launch won't be caught here.
+			SHA256:   cachedHashFile(exePath),
+		})
+	}
+
+	if debug { 
+		log.Printf("[INFO] Found %d processes", len(out))
+	}
+
+	return out, nil
+}
+
+
+// ListProcesses returns all running processes.
+// On macOS this calls sysctl kern.proc under the hood.
+// On Linux this reads /proc.
+func ListProcesses() ([]ProcessInfo, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		return listProcessesDarwin()
+	case "linux":
+		return listProcessesLinux()
+	case "windows":
+		return listProcessesWindows()
+	default:
+		return nil, fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
 }

@@ -2333,6 +2333,21 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[INFO][%s] AI_AGENT_TOOL: org=%s tool=%s action=%s status=%s duration=%ds", execution.ExecutionId, execution.Workflow.OrgId, decision.Tool, decision.Action, decision.RunDetails.Status, duration)
 	}
 
+	// when there are late-returning goroutines like more than 5 mins then Fixexecution may have already stamped this decision as FAILURE (5-min timeout) and
+	// triggered a new agent cycle while we were blocked in the Singul HTTP call.
+	// Re-read the cache and bail out if Fixexecution already set a CompletedAt, so we don't POST a stale result that messes up the execution's state.
+	if freshCache, err := GetCache(ctx, decisionId); err == nil {
+		freshDecision := AgentDecision{}
+		if fcData, ok := freshCache.([]uint8); ok {
+			if json.Unmarshal(fcData, &freshDecision) == nil {
+				if freshDecision.RunDetails.Status == "FAILURE" && freshDecision.RunDetails.CompletedAt > 0 && decision.RunDetails.CompletedAt <= 0 {
+					log.Printf("[WARNING][%s] Decision %s was already timed out by Fixexecution (CompletedAt=%d). Discarding late result to avoid clobbering recovery state.", execution.ExecutionId, decision.RunDetails.Id, freshDecision.RunDetails.CompletedAt)
+					return
+				}
+			}
+		}
+	}
+
 	// 1. Send this back as a result for an action
 	// Then the action itself should decide if it's done or not.
 	// Would it work to send JUST this decision result?
@@ -2552,7 +2567,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 				found = true
 				if timeNow > host.Checkin+hostRefresh || env.SensorHosts[hostIndex].Uuid != orborusData.Uuid {
 					if debug {
-						log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago", host.Hostname, env.Name, env.Id, timeNow-host.Checkin)
+						//log.Printf("[DEBUG] Sensor '%s' in group environment '%s' (%s) is refreshing its checkin. Previous checkin: %d seconds ago", host.Hostname, env.Name, env.Id, timeNow-host.Checkin)
 					}
 
 					updateMade = true
@@ -2609,7 +2624,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 
 		if updateMade && len(env.SensorHosts) >= 1 {
 			if debug { 
-				log.Printf("[DEBUG] Updating sensor host data for group environment '%s' (%s). Total hosts: %d. Checkin: %d seconds ago\n\n", env.Name, env.Id, len(env.SensorHosts), timeNow-env.Checkin)
+				//log.Printf("[DEBUG] Updating sensor host data for group environment '%s' (%s). Total hosts: %d. Checkin: %d seconds ago\n\n", env.Name, env.Id, len(env.SensorHosts), timeNow-env.Checkin)
 			}
 
 			// Sideloading from shuffle-security_sensors instead
@@ -3483,6 +3498,11 @@ Write-Host "orborus-agent installed"`,
 		script = fmt.Sprintf(`#!/usr/bin/env bash
 set -e
 
+#if [ "$(id -u)" -ne 0 ]; then
+#  echo "Run installer as root."
+#  exit 1
+#fi
+
 # =========================
 # Detect OS + ARCH
 # =========================
@@ -3533,9 +3553,10 @@ BIN_URL="${BIN_BASE}/orborus-agent-${OS}-${ARCH}"
 # =========================
 INSTALL_PATH="/usr/local/bin/orborus"
 
-echo "Please input your sudo password to allow installation (required for service setup and sensor capabilities). Contact support@shuffler.io if you need help."
+echo "Download starting from $BIN_URL... This may take a minute."
 curl -fsSL "$BIN_URL" -o /tmp/orborus
 chmod +x /tmp/orborus
+echo "If prompted, please input your sudo password to allow installation (required for service setup and sensor capabilities). Contact support@shuffler.io if you need help."
 sudo mv /tmp/orborus "$INSTALL_PATH"
 
 echo "Installed binary to $INSTALL_PATH"
@@ -3571,9 +3592,9 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-  systemctl daemon-reload
-  systemctl enable orborus
-  systemctl restart orborus
+  sudo systemctl daemon-reload
+  sudo systemctl enable orborus
+  sudo systemctl restart orborus
 }
 
 # =========================
@@ -3620,13 +3641,14 @@ EOF
 # =========================
 # Execute
 # =========================
-if [[ "$OS" == "linux" ]]; then
+if [ "$OS" = "linux" ]; then
   install_linux
-elif [[ "$OS" == "darwin" ]]; then
+  echo "orborus installed successfully"
+elif [ "$OS" = "darwin" ]; then
   install_macos
+  echo "orborus installed successfully"
 fi
 
-echo "orborus installed successfully"
 `,
 c.BaseURL,
 c.Queue,

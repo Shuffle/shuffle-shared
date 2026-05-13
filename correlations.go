@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"io"
 	"net"
+	"encoding/base64"
 
 	uuid "github.com/satori/go.uuid"
 
@@ -124,6 +125,10 @@ func GetCorrelations(resp http.ResponseWriter, request *http.Request) {
 }
 
 func isValidUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+
 	_, err := uuid.FromString(s)
 	return err == nil
 }
@@ -156,7 +161,10 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 
 		unmarshalled := map[string]interface{}{}
 		if err := json.Unmarshal([]byte(value), &unmarshalled); err != nil {
-			log.Printf("[WARNING] Failed unmarshalling value for cross-correlate ngrams: %s. Storing the key directly.", err)
+			//if debug { 
+			//	log.Printf("[ERROR] Debug: Failed unmarshalling value for cross-correlate ngrams: %s. Storing the key directly.", err)
+			//}
+
 			unmarshalled = map[string]interface{}{
 				"key": value,
 			}
@@ -238,7 +246,10 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 			tmpValue := parsedValue
 			tmpValue = strings.TrimPrefix(tmpValue, "file_")
 			if isValidUUID(tmpValue) {
-				log.Printf("[DEBUG] Skipping value that is a valid UUID: %s", parsedValue)
+				if debug { 
+					log.Printf("[DEBUG] Skipping value that is a valid UUID: %s", parsedValue)
+				}
+
 				continue
 			}
 
@@ -544,6 +555,53 @@ func HandleSensorResponseAction(hostname string, sensorDetails SensorMode, incRe
 				out = "Host un-isolated successfully"
 				os.Setenv("HOST_ISOLATED", "false")
 			}
+
+		} else if strings.HasPrefix(command, "script:remote_control") && sensorDetails.ResponseActions == "full" { 
+			// Example Mouse Move: 
+			// script:remote_control {"actions":[{"op":"mouse.move","params":{"x":600,"y":400}},{"op":"mouse.click","params":{"x":600,"y":400,"button":"left","delay_ms":100}}]}
+
+			actualCommand := strings.TrimPrefix(command, "script:remote_control ")
+			log.Printf("[WARNING] Executing remote control command: %s", actualCommand)
+
+			parsedCommand := RemoteControlActionBatch{}
+			err := json.Unmarshal([]byte(actualCommand), &parsedCommand)
+			if err != nil {
+				out = fmt.Sprintf("Failed to parse remote control command JSON: %s", err.Error())
+			} else {
+				err = remoteControlBatch(parsedCommand)
+				if err != nil { 
+					out = fmt.Sprintf("Failed to execute remote control command: %s", err.Error())
+				} else {
+					out = fmt.Sprintf("Executed %d remote control commands", len(parsedCommand.Actions))
+				}
+			}
+
+		} else if strings.HasPrefix(command, "script:screenshot") { 
+			out = fmt.Sprintf("Screenshot capture of '%s' is not available yet", hostname)
+			err = nil
+
+			screenshotOutput, err := Screenshot()
+			if err != nil { 
+				log.Printf("[ERROR] Failed to capture screenshot: %s", err)
+				out = fmt.Sprintf("Failed to capture screenshot: %s", err.Error())
+			} else {
+				// Upload it here to the files API if possible
+				for scrIndex, screenshot := range screenshotOutput {
+					base64Encoded := base64.StdEncoding.EncodeToString(screenshot.Image)
+					screenshot.ImageBase64 = fmt.Sprintf("data:image/png;base64,%s", base64Encoded)
+					screenshot.Image = []byte{}
+					screenshotOutput[scrIndex] = screenshot
+				}
+
+				marshalledOutput, err := json.Marshal(screenshotOutput)
+				if err != nil {
+					log.Printf("[ERROR] Failed to marshal screenshot output: %s", err)
+					out = fmt.Sprintf("Failed to marshal screenshot output: %s", err.Error())
+				} else {
+					out = string(marshalledOutput)
+				}
+			}
+
 		} else if strings.HasPrefix(command, "script:cbom ") { 
 			filepath := strings.TrimPrefix(command, "script:cbom ")
 			out = fmt.Sprintf("CBOM scan of '%s' is not available yet", filepath)
@@ -581,8 +639,8 @@ func HandleSensorResponseAction(hostname string, sensorDetails SensorMode, incRe
 		} else {
 			log.Printf("[ERROR] Script-based response actions are not yet available. Cannot execute script: %s", command)
 
-			out = "Not available yet"
-			err = fmt.Errorf("script-based response actions are not available yet")
+			out = "Command not available for this host"
+			err = fmt.Errorf("the action is not recognized or you do not have permission to perform this action. Contact support@shuffler.io if this seems like a bug.")
 		}
 	} else { 
 		if len(command) == 0 {
@@ -604,7 +662,7 @@ func HandleSensorResponseAction(hostname string, sensorDetails SensorMode, incRe
 		)
 	}
 
-	if debug { 
+	if debug && len(out) < 10000 { 
 		log.Printf("[DEBUG] Command output: '%s'. Error: %s", out, err)
 	}
 
