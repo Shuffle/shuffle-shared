@@ -7667,11 +7667,12 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			previousAnswers := ""
 			relevantDecisions := []AgentDecision{}
 
-			// Check for existing RUNNING ask decisions - if found, return existing state without creating new decisions
+			// Check for existing RUNNING/WAITING ask decisions - if found, return existing state without creating new decisions
 			hasRunningAsk := false
 			for _, mappedDecision := range mappedResult.Decisions {
-				if mappedDecision.RunDetails.Status == "RUNNING" && (mappedDecision.Action == "ask" || mappedDecision.Action == "question") {
-					log.Printf("[DEBUG][%s] Found existing RUNNING ask decision at index %d - returning existing state", execution.ExecutionId, mappedDecision.I)
+				status := mappedDecision.RunDetails.Status
+				if (status == "RUNNING" || status == "WAITING") && (mappedDecision.Action == "ask" || mappedDecision.Action == "question") {
+					log.Printf("[DEBUG][%s] Found existing %s ask decision at index %d - returning existing state", execution.ExecutionId, status, mappedDecision.I)
 					hasRunningAsk = true
 					break
 				}
