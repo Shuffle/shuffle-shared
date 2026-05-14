@@ -32,7 +32,7 @@ import (
 var basepath = os.Getenv("SHUFFLE_FILE_LOCATION")
 var orgFileBucket = "shuffle_org_files"
 var maxFileSize = 10000000                            // raw 10mb max filesize on cloud
-var maxFileSizeCloudCustomer = 5 * 1024 * 1024 * 1024 // 5GB max for custom cloud installs
+var maxFileSizeCloudCustomer int64 = 5 * 1024 * 1024 * 1024 // 5GB max for custom cloud installs
 
 func init() {
 	if len(os.Getenv("SHUFFLE_ORG_BUCKET")) > 0 {
@@ -1317,7 +1317,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	bodySize := len(body)
 	if project.Environment == "cloud" && bodySize > maxFileSize {
 		foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
-		if err == nil && foundOrg.LeadInfo.Customer || foundOrg.LeadInfo.Internal || foundOrg.LeadInfo.POV && bodySize < maxFileSizeCloudCustomer {
+		if err == nil && foundOrg.LeadInfo.Customer || foundOrg.LeadInfo.Internal || foundOrg.LeadInfo.POV && int64(bodySize) < maxFileSizeCloudCustomer {
 			log.Printf("[AUDIT] Allowing larger file for customer/internal/POV org %s (%s). Filesize: %d", foundOrg.Name, foundOrg.Id, bodySize)
 		} else {
 			log.Printf("[ERROR] Max default size limit is 10MB. Please contact support@shuffler.io with details about your usecase if you want this extended.")
@@ -1497,7 +1497,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	bodySize := len(contents)
 	if project.Environment == "cloud" && len(contents) > maxFileSize {
 		foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
-		if err == nil && foundOrg.LeadInfo.Customer || foundOrg.LeadInfo.Internal || foundOrg.LeadInfo.POV && bodySize < maxFileSizeCloudCustomer {
+		if err == nil && foundOrg.LeadInfo.Customer || foundOrg.LeadInfo.Internal || foundOrg.LeadInfo.POV && int64(bodySize) < maxFileSizeCloudCustomer {
 			log.Printf("[AUDIT] Allowing larger file for customer/internal/POV org %s (%s). Filesize: %d", foundOrg.Name, foundOrg.Id, bodySize)
 		} else {
 			log.Printf("[ERROR] Max default size limit is 10MB. Please contact support@shuffler.io with details about your usecase if you want this extended.")
