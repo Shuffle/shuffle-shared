@@ -15658,6 +15658,24 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
+	orgIdHeader := request.Header.Get("Org-Id")
+	if len(orgIdHeader) == 0 {
+		orgIdHeader = request.URL.Query().Get("org_id")
+		if len(orgIdHeader) == 0 {
+			orgIdHeader = request.Header.Get("OrgId")
+		}
+	}
+
+	if len(orgIdHeader) > 0 {
+		_, orgErr := GetOrg(ctx, orgIdHeader)
+		if orgErr != nil {
+			log.Printf("[ERROR] Org-Id '%s' from header does not exist in provision request by user %s: %s", orgIdHeader, user.Username, orgErr)
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Org-Id '%s' does not exist. Verify the org ID and try again."}`, orgIdHeader)))
+			return
+		}
+	}
+
 	// check if user is in a partner org
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
