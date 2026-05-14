@@ -8532,7 +8532,15 @@ data_filter:
 
 				// resultMapping.Status = "FAILURE"
 				// LLM returned a proper error (401 invalid key, 429 rate limit, 500 server error, etc.)
-				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
+				if outputMap.Status == 429 {
+					rateLimitKey := "openai_rate_limit_log"
+					if _, cacheErr := GetCache(ctx, rateLimitKey); cacheErr != nil {
+						log.Printf("[ERROR][%s] AI_OPENAI_RATE_LIMIT: org=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, newOutput.Error.Message)
+						_ = SetCache(ctx, rateLimitKey, []byte("1"), 60*60*6)
+					}
+				} else {
+					log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
+				}
 				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_http_error", fmt.Sprintf("LLM error (HTTP %d %s): %s", outputMap.Status, newOutput.Error.Type, newOutput.Error.Message))
 			} else {
 				log.Printf("[ERROR][%s] AI Agent: No choices, nor error found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
