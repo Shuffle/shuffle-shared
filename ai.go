@@ -8314,29 +8314,58 @@ data_filter:
 	}
 
 	if len(execution.Workflow.OrgId) > 0 {
-		orgStats, statsErr := GetOrgStatistics(ctx, execution.Workflow.OrgId)
+		currentOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId)
+
+		// Bill against the parent org if this is a sub-org.
+		// Check CreatorOrg first, fall back to ManagerOrgs[0] for older sub-orgs.
+		billingOrgId := execution.Workflow.OrgId
+		billingOrg := currentOrg
+		parentOrgId := ""
+		if orgErr == nil && currentOrg != nil {
+			if len(currentOrg.CreatorOrg) > 0 {
+				parentOrgId = currentOrg.CreatorOrg
+			} else if len(currentOrg.ManagerOrgs) > 0 && len(currentOrg.ManagerOrgs[0].Id) > 0 {
+				parentOrgId = currentOrg.ManagerOrgs[0].Id
+			}
+		}
+		if len(parentOrgId) > 0 {
+			parentOrg, parentErr := GetOrg(ctx, parentOrgId)
+			if parentErr == nil && parentOrg != nil && len(parentOrg.Id) > 0 {
+				billingOrgId = parentOrgId
+				billingOrg = parentOrg
+			} else {
+				log.Printf("[WARNING][%s] AI Agent: Failed getting parent org %s, falling back to current org for billing: %s", execution.ExecutionId, parentOrgId, parentErr)
+			}
+		}
+
+		orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
 		monthlyTokensUsed := int64(0)
 		if statsErr == nil && orgStats != nil {
 			monthlyTokensUsed = orgStats.MonthlyAgentTokens
 		}
 
-		fullOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId)
-
 		tokenLimit := int64(0)
 		if project.Environment == "cloud" {
 			tokenLimit = int64(1_000_000)
 		}
-		if orgErr == nil && fullOrg != nil && fullOrg.SyncFeatures.AgentTokens.Active && fullOrg.SyncFeatures.AgentTokens.Limit > 0 {
-			tokenLimit = fullOrg.SyncFeatures.AgentTokens.Limit
+		if billingOrg != nil && billingOrg.SyncFeatures.AgentTokens.Active && billingOrg.SyncFeatures.AgentTokens.Limit > 0 {
+			tokenLimit = billingOrg.SyncFeatures.AgentTokens.Limit
 		}
 
 		if tokenLimit > 0 {
 			estimatedCurrentTokens := EstimatePromptTokens(completionRequest.Messages)
 			totalTokensAfterRequest := monthlyTokensUsed + estimatedCurrentTokens
+			usagePercentage := (monthlyTokensUsed * 100) / tokenLimit
+
+			log.Printf("[INFO][%s] AI_AGENT_TOKEN_USAGE: billing_org=%s exec_org=%s monthly_used=%d limit=%d usage_percent=%d%%", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, tokenLimit, usagePercentage)
 
 			if totalTokensAfterRequest > tokenLimit {
-				log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: org=%s monthly_used=%d estimated_current=%d total_would_be=%d limit=%d", execution.ExecutionId, execution.Workflow.OrgId, monthlyTokensUsed, estimatedCurrentTokens, totalTokensAfterRequest, tokenLimit)
-				go sendAITokenLimitAlert(ctx, execution, fullOrg, tokenLimit, monthlyTokensUsed)
+				throttleKey := fmt.Sprintf("token_limit_log_%s", billingOrgId)
+				if _, cacheErr := GetCache(ctx, throttleKey); cacheErr != nil {
+					log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: billing_org=%s exec_org=%s monthly_used=%d estimated_current=%d total_would_be=%d limit=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, estimatedCurrentTokens, totalTokensAfterRequest, tokenLimit)
+					_ = SetCache(ctx, throttleKey, []byte("1"), 60*60*6)
+					go sendAITokenLimitAlert(ctx, execution, billingOrg, tokenLimit, monthlyTokensUsed)
+				}
 				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit))
 			}
 		}
@@ -8533,17 +8562,27 @@ data_filter:
 				outputTokens := int(openaiOutput.Usage.CompletionTokens)
 				totalTokens := int(openaiOutput.Usage.TotalTokens)
 
+				tokenBillingOrgId := execution.Workflow.OrgId
+				tokenBillingOrg, tokenOrgErr := GetOrg(ctx, execution.Workflow.OrgId)
+				if tokenOrgErr == nil && tokenBillingOrg != nil {
+					if len(tokenBillingOrg.CreatorOrg) > 0 {
+						tokenBillingOrgId = tokenBillingOrg.CreatorOrg
+					} else if len(tokenBillingOrg.ManagerOrgs) > 0 && len(tokenBillingOrg.ManagerOrgs[0].Id) > 0 {
+						tokenBillingOrgId = tokenBillingOrg.ManagerOrgs[0].Id
+					}
+				}
+
 				go func() {
 					time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
-					IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_tokens", totalTokens)
+					IncrementCacheDump(ctx, tokenBillingOrgId, "agent_tokens", totalTokens)
 					if inputTokens > 0 {
-						IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_input_tokens", inputTokens)
+						IncrementCacheDump(ctx, tokenBillingOrgId, "agent_input_tokens", inputTokens)
 					}
 					if outputTokens > 0 {
-						IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_output_tokens", outputTokens)
+						IncrementCacheDump(ctx, tokenBillingOrgId, "agent_output_tokens", outputTokens)
 					}
 				}()
-				log.Printf("[AUDIT][%s] Incremented AI Agent usage for org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
+				log.Printf("[AUDIT][%s] Incremented AI Agent usage for billing_org=%s exec_org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, tokenBillingOrgId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
 			}
 
 			// Handles reasoning models for Refusal control edgecases

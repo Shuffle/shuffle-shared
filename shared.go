@@ -1160,6 +1160,12 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			orgChanged = true
 		}
 
+		if project.Environment == "cloud" && len(org.CreatorOrg) == 0 && org.SyncFeatures.AgentTokens.Limit == 0 {
+			org.SyncFeatures.AgentTokens.Limit = 1_000_000
+			org.SyncFeatures.AgentTokens.Active = true
+			orgChanged = true
+		}
+
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
 		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
@@ -1201,6 +1207,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		info, err := GetOrgStatistics(ctx, fileId)
 		if err == nil {
 			org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
+			org.SyncFeatures.AgentTokens.Usage = info.MonthlyAgentTokens
 		}
 
 		envs, err := GetEnvironments(ctx, fileId)
