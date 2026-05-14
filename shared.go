@@ -35558,17 +35558,29 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 		}
 	}
 
-	if len(returnActions) <= maxAmount {
-		for _, action := range foundApp.Actions {
-			if len(returnActions) >= maxAmount {
+	// Append the rest from the top (~semi-random)
+	for _, action := range foundApp.Actions {
+		if len(returnActions) >= maxAmount {
+			break
+		}
+
+		if action.Name == "custom_action" {
+			continue
+		}
+
+		// Dedup
+		found := false
+		for _, existingAction := range returnActions {
+			if existingAction.Name == action.Name {
+				found = true
 				break
 			}
+		}
 
-			if action.Name == "custom_action" {
-				continue
-			}
-
+		if !found {
 			returnActions = append(returnActions, action)
+		} else {
+			log.Printf("NOT adding; %#v", action.Name) 
 		}
 	}
 

@@ -14866,6 +14866,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						continue
 					}
 
+					/*
 					if len(automation.Options) == 0 {
 						if debug {
 							log.Printf("\n\n\n[ERROR] Debug: Automation '%s' in category '%s' has no options, skipping\n\n\n", automation.Name, categoryConfig.Category)
@@ -14873,6 +14874,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 						continue
 					}
+					*/
 
 					//if debug {
 					//	log.Printf("[DEBUG] Found automation '%s' to run (2). Value: '%s'", automation.Name, automation.Options[0].Value)

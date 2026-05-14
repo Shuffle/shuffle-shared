@@ -4891,6 +4891,11 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		// november 2025 after adding graphic system to datastore
 
 	} else if parsedName == "run_ai_agent" {
+		if len(automation.Options) == 0 {
+			log.Printf("[ERROR] AI agent: No options provided for run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
+			return errors.New("No options provided for run_ai_agent automation")
+		}
+
 		log.Printf("[DEBUG] AI agent: Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
 		if len(foundApikey) == 0 {
 			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
@@ -5159,6 +5164,11 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		}
 
 	} else if parsedName == "run_workflow" {
+		if len(automation.Options) == 0 {
+			log.Printf("[ERROR] No options provided for 'run_workflow' automation for key %s in category %s", cacheData.Key, cacheData.Category)
+			return errors.New("No options provided for 'run_workflow' automation")
+		}
+
 		for _, option := range automation.Options {
 			if option.Key != "workflow_id" {
 				continue
@@ -5198,8 +5208,9 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		}
 
 	} else if parsedName == "send_webhook" {
-		if debug {
-			log.Printf("[DEBUG] Sending webhook for url %s", automation.Options[0].Value)
+		if len(automation.Options) == 0 {
+			log.Printf("[ERROR] No options provided for 'run_workflow' automation for key %s in category %s", cacheData.Key, cacheData.Category)
+			return errors.New("No options provided for 'run_workflow' automation")
 		}
 
 		return handleDatastoreAutomationWebhook(ctx, marshalledBody, cacheData, automation, "/api/v1/apps/HTTP/run", "webhook")

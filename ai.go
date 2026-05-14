@@ -7526,7 +7526,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				if strings.HasPrefix(actionStr, "app:") {
 
 					trimmedActionStr := strings.TrimPrefix(actionStr, "app:")
-					sortedAppActions := getPrioritisedAppActions(ctx, trimmedActionStr, 10)
+					sortedAppActions := getPrioritisedAppActions(ctx, trimmedActionStr, 15)
+
 					if len(sortedAppActions) > 0 {
 						// Cuts off the potential md5:appname prefix
 						if len(trimmedActionStr) > 33 && string(trimmedActionStr[32]) == ":" {
@@ -7546,7 +7547,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 										param.Example = param.Example[:150] + "..."
 									}
 
-									requiredParams = append(requiredParams, fmt.Sprintf("body(%s)", param.Example))
+									if strings.HasPrefix(param.Example, "{") || strings.HasPrefix(param.Example, "[") {
+										requiredParams = append(requiredParams, fmt.Sprintf("body=%s", param.Example))
+									} else {
+										requiredParams = append(requiredParams, fmt.Sprintf("body"))
+									}
 
 									continue
 								}
@@ -7574,19 +7579,25 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							optionalString := ""
 							descString := ""
 							if len(requiredParams) > 0 {
-								requiredString = fmt.Sprintf("Required: %s", strings.Join(requiredParams, ","))
-								optionalString = " | "
+								requiredString = fmt.Sprintf("%s", strings.Join(requiredParams, ", "))
+								optionalString = ","
 							}
 
 							if len(optionalParams) > 0 {
-								optionalString += fmt.Sprintf("Optional: %s", strings.Join(optionalParams, ","))
+								for _, optionalParam := range optionalParams {
+									optionalString += fmt.Sprintf("%s=\"\", ", optionalParam)
+								}
+
+								optionalString = strings.TrimSuffix(optionalString, ", ")
+							} else {
+								optionalString = ""
 							}
 
 							if len(sortedAppAction.Description) > 0 {
 								if len(sortedAppAction.Description) > 150 {
 									sortedAppAction.Description = sortedAppAction.Description[:100] + "..."
 								}
-								descString = fmt.Sprintf(" - %s", sortedAppAction.Description)
+								descString = fmt.Sprintf(" # %s", sortedAppAction.Description)
 							} 
 
 							if descString == previousDesc {
@@ -7597,6 +7608,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 							specificAppMetadata += fmt.Sprintf("%d. %s(%s%s)%s\n", counter+1, strings.ReplaceAll(sortedAppAction.Name, " ", "_"), requiredString, optionalString, descString)
 						}
+
 					} else {
 						log.Printf("[ERROR] AI Agent: Failed getting prioritised app actions for app '%s'", strings.TrimPrefix(actionStr, "app:"))
 					}
@@ -7608,6 +7620,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 			systemMessage += "\n\n"
 		}
+
 
 		if param.Name == "memory" {
 			// Handle memory injection (may use Singul?)
@@ -8021,10 +8034,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	if enableQuestions { 
 		enableQuestionsString = `
-2. **Explicit 'Ask' Command:**
-   - **Trigger:** Does the user explicitly COMMAND you to ask them for input (e.g., "Ask me for the IP")?
+5. **Explicit 'Ask' Command:**
+   - **Trigger:** LOWEST PRIORITY. Does the user explicitly COMMAND you to ask them for input (e.g., "Ask me for the IP")?
    - **Action:** Select "ask" (Category: "standalone").
-   - **Field "question":** The specific questions you have. Do NOT ask questions about authentication or authorization. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, ask one question at a time as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}]`
+   - **Field "question":** The specific questions you have. Make decisions FOR the user instead of asking. Do NOT ask questions about authentication or authorization. Do NOT ask to confirm the obvious. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, ask one question at a time as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}]`
 
     // New feature for auto-generating and approving new apps 
    	// If the tool is not mentioned in USER CONTEXT and you NEED them to allow those tools, set "action": "add_tool" and "tool": "EXACT toolname" and do not ask questions. If multiple tools are required, make multiple decisions - one for each required tool. Put the entire reasoning in the "reason" field - not as fields.
@@ -8032,6 +8045,13 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	systemMessage += fmt.Sprintf(`### MISSION
 You are an Action Execution Agent that performs actions in third-party tools. You can use ANY tool and platform to achieve these goals if they are presented by the user. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute tasks and **IMMEDIATELY** stop and summarize when done. Attempt to achieve what the users most likely intention is - not just exactly what they ask for. Iterate until the goal is achieved by using the USER CONTEXT tools and actions available to you. Don't be too verbose, and ask as few questions as possible. 
+
+### PRIMARY RULES:
+1. Use tools and their actions to achieve the user request.
+2. Do NOT ask unnecessary questions. Make assumptions for the user.
+3. DO NOT LIE. Only say you did something if you actually did.
+4. "action" should be the EXACT name of the function, without paranthesis or parameters.
+5. If future scheduling may be necessary, ignore it and run it right now. Scheduling is a separate process.
 
 ### INTERNAL CAPABILITIES (DO NOT USE TOOLS FOR THESE)
 1. **General QA/Help:** YOU answer questions like "What can you do?" or "Hi". Do NOT use tools.
@@ -8065,20 +8085,20 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
    - **Action:** Select "finish".
    - **Field "output":** "I am the Shuffle Agent. I can help you with: [List generic categories from USER CONTEXT]..."
 
-%s
-
-3. **Verification (Read-Before-Write):**
+2. **Verification (Read-Before-Write):**
    - If modifying a resource, do you have the data?
    - **Check:** Did the user provide input OR is it in "HISTORY"? -> **YES: PROCEED.**
    - **NO:** Run "Get/Read" tool first.
 
-4. **Action Selection & Risk Assessment:**
+3. **Action Selection & Risk Assessment:**
    - Select the tool that performs the *next logical step*.
    - **Destructive Guard:**
-     - If action is DESTRUCTIVE (stop/delete/remove) or otherwise seems required -> Set "approval_required": true.
+     - If action is DESTRUCTIVE (stop/delete/remove) -> Set "approval_required": true on the action/tool. 
 
-5. **Validation & Continuation:**
+4. **Validation & Continuation:**
    - Decisions can be dependant. Make sure to validate the output of one decision before proceeding to the next. If you need to run multiple steps, run them and validate each time.
+
+%s
 
 ### DATA REDUCTION:
 data_filter:
@@ -8089,14 +8109,14 @@ data_filter:
 
 [
   {
-    "i": 0,
-    "category": "singul", // Use "finish" if done/answering, Use "standalone" ONLY if asking
-    "action": "exact_name", // Use "finish" if done/answering, "ask" if asking
-    "tool": "tool_name", // Use "core" for finish/ask
+    "i": 0, // For paralell actions, re-use the same index for related actions 
+    "category": "singul", // Use "singul" for actions. Use "finish" if done. Use "standalone" ONLY if asking
+    "action": "exact_name", // Name of the function/action WITHOUT parameters. Use "finish" if done/answering, "ask" if asking
+    "tool": "tool_name", // Name of the tool. Use "core" for finish/ask
     "confidence": 1.0,
     "runs": "1", 
-    "approval_required": false, 
-    "data_filter": "list", // use this for fetch/list/search: "list" | "full"
+    "approval_required": false, // true IF the action seems risky or destructive and requires user approval. Otherwise false.
+    "data_filter": "list", // for fetch list/search: "list" | "full"
     "fields_needed": ["<List of fields>"], // use this when data_filter is "list": exact fields you need from each item
     "reason": "Explain WHY.",
     "fields": [
