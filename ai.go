@@ -8337,7 +8337,7 @@ data_filter:
 				billingOrgId = parentOrgId
 				billingOrg = parentOrg
 			} else {
-				log.Printf("[WARNING][%s] AI Agent: Failed getting parent org %s, falling back to current org for billing: %s", execution.ExecutionId, parentOrgId, parentErr)
+				log.Printf("[WARNING][%s] AI Agent: Failed getting parent org %s, falling back to current org for billing: %v", execution.ExecutionId, parentOrgId, parentErr)
 			}
 		}
 
@@ -8366,7 +8366,7 @@ data_filter:
 				throttleKey := fmt.Sprintf("token_limit_log_%s", billingOrgId)
 				if _, cacheErr := GetCache(ctx, throttleKey); cacheErr != nil {
 					log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: billing_org=%s exec_org=%s monthly_used=%d estimated_current=%d total_would_be=%d limit=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, estimatedCurrentTokens, totalTokensAfterRequest, tokenLimit)
-					_ = SetCache(ctx, throttleKey, []byte("1"), 6*60)
+					_ = SetCache(ctx, throttleKey, []byte("1"), 2*60)
 					go sendAITokenLimitAlert(ctx, execution, billingOrg, tokenLimit, monthlyTokensUsed)
 				}
 				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit))
@@ -8539,7 +8539,7 @@ data_filter:
 					rateLimitKey := "openai_rate_limit_log"
 					if _, cacheErr := GetCache(ctx, rateLimitKey); cacheErr != nil {
 						log.Printf("[ERROR][%s] AI_OPENAI_RATE_LIMIT: org=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, newOutput.Error.Message)
-						_ = SetCache(ctx, rateLimitKey, []byte("1"), 60*60*6)
+						_ = SetCache(ctx, rateLimitKey, []byte("1"), 30)
 					}
 				} else {
 					log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
