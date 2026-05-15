@@ -8349,7 +8349,7 @@ data_filter:
 
 		tokenLimit := int64(0)
 		if project.Environment == "cloud" {
-			tokenLimit = int64(1_000_000)
+			tokenLimit = int64(10_000_000)
 		}
 		if billingOrg != nil && billingOrg.SyncFeatures.AgentTokens.Active && billingOrg.SyncFeatures.AgentTokens.Limit > 0 {
 			tokenLimit = billingOrg.SyncFeatures.AgentTokens.Limit

@@ -1161,7 +1161,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if project.Environment == "cloud" && len(org.CreatorOrg) == 0 && org.SyncFeatures.AgentTokens.Limit == 0 {
-			org.SyncFeatures.AgentTokens.Limit = 1_000_000
+			org.SyncFeatures.AgentTokens.Limit = 10_000_000
 			org.SyncFeatures.AgentTokens.Active = true
 			orgChanged = true
 		}
