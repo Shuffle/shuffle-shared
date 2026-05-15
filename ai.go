@@ -8360,7 +8360,7 @@ data_filter:
 			totalTokensAfterRequest := monthlyTokensUsed + estimatedCurrentTokens
 			//usagePercentage := (monthlyTokensUsed * 100) / tokenLimit
 
-			//log.Printf("[INFO][%s] AI_AGENT_TOKEN_USAGE: billing_org=%s exec_org=%s monthly_used=%d limit=%d usage_percent=%d%%", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, tokenLimit, usagePercentage)
+			//log.Printf("[DEBUG][%s] AI_AGENT_TOKEN_USAGE: billing_org=%s exec_org=%s monthly_used=%d limit=%d usage_percent=%d%%", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, tokenLimit, usagePercentage)
 
 			if totalTokensAfterRequest > tokenLimit {
 				throttleKey := fmt.Sprintf("token_limit_log_%s", billingOrgId)
