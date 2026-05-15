@@ -7153,8 +7153,10 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, fullOrg *Org, tokenLimit, monthlyTokensUsed int64) {
 	admins := []string{}
 	orgName := execution.Workflow.OrgId
+	billingOrgId := execution.Workflow.OrgId
 	if fullOrg != nil {
 		orgName = fullOrg.Name
+		billingOrgId = fullOrg.Id
 		for _, user := range fullOrg.Users {
 			if user.Role == "admin" {
 				admins = append(admins, user.Username)
@@ -7170,9 +7172,9 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 		}
 	}
 
-	cacheKey := generateAlertCacheKey(execution.Workflow.OrgId, "agent_token_limit_exceeded", admins)
+	cacheKey := generateAlertCacheKey(billingOrgId, "agent_token_limit_exceeded", admins)
 	if !checkAndSetAlertCache(ctx, cacheKey) {
-		log.Printf("[DEBUG] Skipping duplicate AI token limit alert for org %s - already sent recently", execution.Workflow.OrgId)
+		log.Printf("[DEBUG] Skipping duplicate AI token limit alert for org %s - already sent recently", billingOrgId)
 		return
 	}
 
@@ -7182,18 +7184,18 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 	Your organization <strong>%s</strong> (ID: %s) has exceeded the monthly AI Agent token limit of <strong>%d</strong> tokens.
 
 	<strong>Current usage:</strong> %d tokens.
-	
+
 	As a result, your AI Agent runs will be temporarily blocked until the start of the next billing cycle.
 	If you need to increase your token limit, please reach out to us at <a href="mailto:support@shuffler.io">support@shuffler.io</a>.
 	
 	Best regards, 
-	The Shuffler Team`, orgName, execution.Workflow.OrgId, tokenLimit, monthlyTokensUsed)
+	The Shuffler Team`, orgName, billingOrgId, tokenLimit, monthlyTokensUsed)
 
 	errMail := sendMailSendgrid(admins, subject, message, false, []string{})
 	if errMail != nil {
-		log.Printf("[ERROR] Failed sending AI token limit alert email to %v for org %s: %s", admins, execution.Workflow.OrgId, errMail)
+		log.Printf("[ERROR] Failed sending AI token limit alert email to %v for org %s: %s", admins, billingOrgId, errMail)
 	} else {
-		log.Printf("[INFO] Sent AI token limit alert email to %v of org %s", admins, execution.Workflow.OrgId)
+		log.Printf("[INFO] Sent AI token limit alert email to %v of org %s", admins, billingOrgId)
 	}
 }
 
