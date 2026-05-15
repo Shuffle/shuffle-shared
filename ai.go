@@ -7153,8 +7153,10 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, fullOrg *Org, tokenLimit, monthlyTokensUsed int64) {
 	admins := []string{}
 	orgName := execution.Workflow.OrgId
+	billingOrgId := execution.Workflow.OrgId
 	if fullOrg != nil {
 		orgName = fullOrg.Name
+		billingOrgId = fullOrg.Id
 		for _, user := range fullOrg.Users {
 			if user.Role == "admin" {
 				admins = append(admins, user.Username)
@@ -7170,9 +7172,9 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 		}
 	}
 
-	cacheKey := generateAlertCacheKey(execution.Workflow.OrgId, "agent_token_limit_exceeded", admins)
+	cacheKey := generateAlertCacheKey(billingOrgId, "agent_token_limit_exceeded", admins)
 	if !checkAndSetAlertCache(ctx, cacheKey) {
-		log.Printf("[DEBUG] Skipping duplicate AI token limit alert for org %s - already sent recently", execution.Workflow.OrgId)
+		log.Printf("[DEBUG] Skipping duplicate AI token limit alert for org %s - already sent recently", billingOrgId)
 		return
 	}
 
@@ -7182,18 +7184,18 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 	Your organization <strong>%s</strong> (ID: %s) has exceeded the monthly AI Agent token limit of <strong>%d</strong> tokens.
 
 	<strong>Current usage:</strong> %d tokens.
-	
+
 	As a result, your AI Agent runs will be temporarily blocked until the start of the next billing cycle.
 	If you need to increase your token limit, please reach out to us at <a href="mailto:support@shuffler.io">support@shuffler.io</a>.
 	
 	Best regards, 
-	The Shuffler Team`, orgName, execution.Workflow.OrgId, tokenLimit, monthlyTokensUsed)
+	The Shuffler Team`, orgName, billingOrgId, tokenLimit, monthlyTokensUsed)
 
 	errMail := sendMailSendgrid(admins, subject, message, false, []string{})
 	if errMail != nil {
-		log.Printf("[ERROR] Failed sending AI token limit alert email to %v for org %s: %s", admins, execution.Workflow.OrgId, errMail)
+		log.Printf("[ERROR] Failed sending AI token limit alert email to %v for org %s: %s", admins, billingOrgId, errMail)
 	} else {
-		log.Printf("[INFO] Sent AI token limit alert email to %v of org %s", admins, execution.Workflow.OrgId)
+		log.Printf("[INFO] Sent AI token limit alert email to %v of org %s", admins, billingOrgId)
 	}
 }
 
@@ -7680,11 +7682,12 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			previousAnswers := ""
 			relevantDecisions := []AgentDecision{}
 
-			// Check for existing RUNNING ask decisions - if found, return existing state without creating new decisions
+			// Check for existing RUNNING/WAITING ask decisions - if found, return existing state without creating new decisions
 			hasRunningAsk := false
 			for _, mappedDecision := range mappedResult.Decisions {
-				if mappedDecision.RunDetails.Status == "RUNNING" && (mappedDecision.Action == "ask" || mappedDecision.Action == "question") {
-					log.Printf("[DEBUG][%s] Found existing RUNNING ask decision at index %d - returning existing state", execution.ExecutionId, mappedDecision.I)
+				status := mappedDecision.RunDetails.Status
+				if (status == "RUNNING" || status == "WAITING") && (mappedDecision.Action == "ask" || mappedDecision.Action == "question") {
+					log.Printf("[DEBUG][%s] Found existing %s ask decision at index %d - returning existing state", execution.ExecutionId, status, mappedDecision.I)
 					hasRunningAsk = true
 					break
 				}
@@ -8332,30 +8335,60 @@ data_filter:
 		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
+	billingOrgId := execution.Workflow.OrgId
+	var billingOrg *Org
 	if len(execution.Workflow.OrgId) > 0 {
-		orgStats, statsErr := GetOrgStatistics(ctx, execution.Workflow.OrgId)
+		currentOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId)
+		billingOrg = currentOrg
+
+		// Bill against the parent org if this is a sub-org.
+		// Check CreatorOrg first, fall back to ManagerOrgs[0] for older sub-orgs.
+		parentOrgId := ""
+		if orgErr == nil && currentOrg != nil {
+			if len(currentOrg.CreatorOrg) > 0 {
+				parentOrgId = currentOrg.CreatorOrg
+			} else if len(currentOrg.ManagerOrgs) > 0 && len(currentOrg.ManagerOrgs[0].Id) > 0 {
+				parentOrgId = currentOrg.ManagerOrgs[0].Id
+			}
+		}
+		if len(parentOrgId) > 0 {
+			parentOrg, parentErr := GetOrg(ctx, parentOrgId)
+			if parentErr == nil && parentOrg != nil && len(parentOrg.Id) > 0 {
+				billingOrgId = parentOrgId
+				billingOrg = parentOrg
+			} else {
+				log.Printf("[WARNING][%s] AI Agent: Failed getting parent org %s, falling back to current org for billing: %v", execution.ExecutionId, parentOrgId, parentErr)
+			}
+		}
+
+		orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
 		monthlyTokensUsed := int64(0)
 		if statsErr == nil && orgStats != nil {
 			monthlyTokensUsed = orgStats.MonthlyAgentTokens
 		}
 
-		fullOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId)
-
 		tokenLimit := int64(0)
 		if project.Environment == "cloud" {
-			tokenLimit = int64(1_000_000)
+			tokenLimit = int64(10_000_000)
 		}
-		if orgErr == nil && fullOrg != nil && fullOrg.SyncFeatures.AgentTokens.Active && fullOrg.SyncFeatures.AgentTokens.Limit > 0 {
-			tokenLimit = fullOrg.SyncFeatures.AgentTokens.Limit
+		if billingOrg != nil && billingOrg.SyncFeatures.AgentTokens.Active && billingOrg.SyncFeatures.AgentTokens.Limit > 0 {
+			tokenLimit = billingOrg.SyncFeatures.AgentTokens.Limit
 		}
 
 		if tokenLimit > 0 {
 			estimatedCurrentTokens := EstimatePromptTokens(completionRequest.Messages)
 			totalTokensAfterRequest := monthlyTokensUsed + estimatedCurrentTokens
+			//usagePercentage := (monthlyTokensUsed * 100) / tokenLimit
+
+			//log.Printf("[DEBUG][%s] AI_AGENT_TOKEN_USAGE: billing_org=%s exec_org=%s monthly_used=%d limit=%d usage_percent=%d%%", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, tokenLimit, usagePercentage)
 
 			if totalTokensAfterRequest > tokenLimit {
-				log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: org=%s monthly_used=%d estimated_current=%d total_would_be=%d limit=%d", execution.ExecutionId, execution.Workflow.OrgId, monthlyTokensUsed, estimatedCurrentTokens, totalTokensAfterRequest, tokenLimit)
-				go sendAITokenLimitAlert(ctx, execution, fullOrg, tokenLimit, monthlyTokensUsed)
+				throttleKey := fmt.Sprintf("token_limit_log_%s", billingOrgId)
+				if _, cacheErr := GetCache(ctx, throttleKey); cacheErr != nil {
+					log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: billing_org=%s exec_org=%s monthly_used=%d estimated_current=%d total_would_be=%d limit=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, estimatedCurrentTokens, totalTokensAfterRequest, tokenLimit)
+					_ = SetCache(ctx, throttleKey, []byte("1"), 2*60)
+					go sendAITokenLimitAlert(ctx, execution, billingOrg, tokenLimit, monthlyTokensUsed)
+				}
 				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit))
 			}
 		}
@@ -8522,7 +8555,15 @@ data_filter:
 
 				// resultMapping.Status = "FAILURE"
 				// LLM returned a proper error (401 invalid key, 429 rate limit, 500 server error, etc.)
-				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
+				if outputMap.Status == 429 {
+					rateLimitKey := "openai_rate_limit_log"
+					if _, cacheErr := GetCache(ctx, rateLimitKey); cacheErr != nil {
+						log.Printf("[ERROR][%s] AI_OPENAI_RATE_LIMIT: org=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, newOutput.Error.Message)
+						_ = SetCache(ctx, rateLimitKey, []byte("1"), 30)
+					}
+				} else {
+					log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
+				}
 				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_http_error", fmt.Sprintf("LLM error (HTTP %d %s): %s", outputMap.Status, newOutput.Error.Type, newOutput.Error.Message))
 			} else {
 				log.Printf("[ERROR][%s] AI Agent: No choices, nor error found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
@@ -8554,15 +8595,15 @@ data_filter:
 
 				go func() {
 					time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
-					IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_tokens", totalTokens)
+					IncrementCacheDump(ctx, billingOrgId, "agent_tokens", totalTokens)
 					if inputTokens > 0 {
-						IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_input_tokens", inputTokens)
+						IncrementCacheDump(ctx, billingOrgId, "agent_input_tokens", inputTokens)
 					}
 					if outputTokens > 0 {
-						IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_output_tokens", outputTokens)
+						IncrementCacheDump(ctx, billingOrgId, "agent_output_tokens", outputTokens)
 					}
 				}()
-				log.Printf("[AUDIT][%s] Incremented AI Agent usage for org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
+				log.Printf("[AUDIT][%s] Incremented AI Agent usage for billing_org=%s exec_org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
 			}
 
 			// Handles reasoning models for Refusal control edgecases
