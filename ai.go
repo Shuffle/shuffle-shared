@@ -8315,13 +8315,14 @@ data_filter:
 		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
+	billingOrgId := execution.Workflow.OrgId
+	var billingOrg *Org
 	if len(execution.Workflow.OrgId) > 0 {
 		currentOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId)
+		billingOrg = currentOrg
 
 		// Bill against the parent org if this is a sub-org.
 		// Check CreatorOrg first, fall back to ManagerOrgs[0] for older sub-orgs.
-		billingOrgId := execution.Workflow.OrgId
-		billingOrg := currentOrg
 		parentOrgId := ""
 		if orgErr == nil && currentOrg != nil {
 			if len(currentOrg.CreatorOrg) > 0 {
@@ -8572,27 +8573,17 @@ data_filter:
 				outputTokens := int(openaiOutput.Usage.CompletionTokens)
 				totalTokens := int(openaiOutput.Usage.TotalTokens)
 
-				tokenBillingOrgId := execution.Workflow.OrgId
-				tokenBillingOrg, tokenOrgErr := GetOrg(ctx, execution.Workflow.OrgId)
-				if tokenOrgErr == nil && tokenBillingOrg != nil {
-					if len(tokenBillingOrg.CreatorOrg) > 0 {
-						tokenBillingOrgId = tokenBillingOrg.CreatorOrg
-					} else if len(tokenBillingOrg.ManagerOrgs) > 0 && len(tokenBillingOrg.ManagerOrgs[0].Id) > 0 {
-						tokenBillingOrgId = tokenBillingOrg.ManagerOrgs[0].Id
-					}
-				}
-
 				go func() {
 					time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
-					IncrementCacheDump(ctx, tokenBillingOrgId, "agent_tokens", totalTokens)
+					IncrementCacheDump(ctx, billingOrgId, "agent_tokens", totalTokens)
 					if inputTokens > 0 {
-						IncrementCacheDump(ctx, tokenBillingOrgId, "agent_input_tokens", inputTokens)
+						IncrementCacheDump(ctx, billingOrgId, "agent_input_tokens", inputTokens)
 					}
 					if outputTokens > 0 {
-						IncrementCacheDump(ctx, tokenBillingOrgId, "agent_output_tokens", outputTokens)
+						IncrementCacheDump(ctx, billingOrgId, "agent_output_tokens", outputTokens)
 					}
 				}()
-				log.Printf("[AUDIT][%s] Incremented AI Agent usage for billing_org=%s exec_org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, tokenBillingOrgId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
+				log.Printf("[AUDIT][%s] Incremented AI Agent usage for billing_org=%s exec_org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
 			}
 
 			// Handles reasoning models for Refusal control edgecases
