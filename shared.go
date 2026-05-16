@@ -180,7 +180,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			if !allowed {
 				currentUrl := strings.ToLower(request.URL.String())
 				allowedUrls := []string{"/api/v1/", "/api/v2/"}
-				disallowedUrls := []string{"/settings", "/register", "/login_openid", "/login_sso"}
+				disallowedUrls := []string{"/settings", "/register", "/login_openid", "/login_sso", "/generateapikey", "/passwordchange", "/updateuser"}
 				for _, allowedUrl := range allowedUrls {
 					if !strings.HasPrefix(currentUrl, allowedUrl) {
 						continue
@@ -20502,11 +20502,6 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			*cacheItem,
 		}
 	} else {
-
-		if debug {
-			log.Printf("[DEBUG] Looking for keys in org %s and category %s", org.Id, category)
-		}
-
 		keys, newCursor, err = GetAllCacheKeys(ctx, org.Id, category, maxAmount, cursor)
 		if err != nil {
 			isSuccess = false
@@ -20904,6 +20899,10 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", orgId, cacheData.Key))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", orgId, cacheData.Key, cacheData.Category))
 
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_50", entity, orgId, cacheData.Category))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_100", entity, orgId, cacheData.Category))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_1000", entity, orgId, cacheData.Category))
+
 	if debug { 
 		log.Printf("[DEBUG] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
 	}
@@ -21034,7 +21033,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err != nil || len(cacheData.Key) == 0 {
-		log.Printf("[ERROR] Failed to DELETE cache key '%s' for org %s (delete) in category '%s'. Does it exist?", tmpData.Key, tmpData.OrgId, tmpData.Category)
+		//log.Printf("[WARNING] Failed to DELETE cache key '%s' for org %s (delete) in category '%s'. Does it exist?", tmpData.Key, tmpData.OrgId, tmpData.Category)
 
 		resp.WriteHeader(400)
 		result := ResultChecker{
@@ -21073,7 +21072,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	entity := "org_cache"
 	err = DeleteKey(ctx, entity, cacheId)
 	if err != nil {
-		log.Printf("[WARNING] Failed to DELETE cache key '%s' for org %s (delete) (2)", cacheId, tmpData.OrgId)
+		//log.Printf("[WARNING] Failed to DELETE cache key '%s' (2) for org %s (delete) (2)", cacheId, tmpData.OrgId)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to delete key"}`))
 		return
@@ -21099,9 +21098,12 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	if normalizedCategory == "default" {
 		normalizedCategory = ""
 	}
-	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s", entity, org.Id, normalizedCategory))
 	DeleteCache(ctx, fmt.Sprintf("%s__%s_", entity, org.Id))
 	DeleteCache(ctx, fmt.Sprintf("%s__%s", entity, org.Id))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s", entity, org.Id, normalizedCategory))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_50", entity, org.Id, normalizedCategory))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_100", entity, org.Id, normalizedCategory))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_1000", entity, org.Id, normalizedCategory))
 
 	result := ResultChecker{
 		Success: true,
@@ -21344,7 +21346,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (get) and cacheId %s", tmpData.Key, tmpData.OrgId, cacheId)
 		// Doing a last resort search, e.g. to handle spaces and the like
 		limit := 50
-		// HOT FIX FOR UJIMA ALERT
 		if os.Getenv("SHUFFLE_GCEPROJECT") == "shuffle-europe-west3" {
 			limit = 2000
 		}
@@ -30859,6 +30860,15 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 		return org.Priorities, nil
 	}
 
+	org, updated = AddPriority(*org, Priority{
+		Name:        fmt.Sprintf("Try Shuffle Security"),
+		Description: fmt.Sprintf("Automatically handle alerts and vulnerabilities!"), 
+		Type:        "security",
+		Active:      true,
+		URL:         fmt.Sprintf("https://security.shuffler.io"),
+		Severity:    3,
+	}, updated)
+
 	if len(org.Defaults.NotificationWorkflow) == 0 {
 		org, updated = AddPriority(*org, Priority{
 			Name:        fmt.Sprintf("You haven't defined a notification workflow yet."),
@@ -30920,7 +30930,7 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 	if len(org.MainPriority) == 0 {
 		// Just choosing something for them, e.g. basic usecase building
 
-		org.MainPriority = "1. Collect"
+		org.MainPriority = "1. Ingest"
 		orgUpdated = true
 	}
 
