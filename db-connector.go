@@ -14910,7 +14910,11 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, "", orgId, mainCategory)
 	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, fmt.Sprintf("%s_50", cacheKey))
+	DeleteCache(ctx, fmt.Sprintf("%s_100", cacheKey))
+	DeleteCache(ctx, fmt.Sprintf("%s_1000", cacheKey))
 	DeleteCache(ctx, fmt.Sprintf("datastore_category_%s", orgId))
+
 	return existingInfo, nil
 }
 
@@ -16494,31 +16498,42 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		category = ""
 	}
 
+	if max > 1000 {
+		max = 1000
+	}
+
+	if max <= 0 {
+		max = 1
+	}
+
 	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
 	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, inputcursor, orgId, category)
+	if max == 50 || max == 100 || max == 1000 { 
+		cacheKey = fmt.Sprintf("%s_%d", cacheKey, max)
+	}
 
 	// Find cache and return instantly
 	cacheKeys := []CacheKeyData{}
+	cacheReturn := CacheReturn{ 
+		Cursor: "",
+		Keys: []CacheKeyData{},
+	}
 	//if project.CacheDb && category == "protected" {
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &cacheKeys)
+			err = json.Unmarshal(cacheData, &cacheReturn)
 			if err == nil {
 
 				// Avoids an issue with bad caching
-				if len(cacheKeys) > 1 {
-					return cacheKeys, "", nil
+				if len(cacheReturn.Keys) > 1 {
+					return cacheReturn.Keys, cacheReturn.Cursor, nil
 				} 
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for appstats: %s", err)
 		}
-	}
-
-	if max > 1000 {
-		max = 1000
 	}
 
 	// Look for
@@ -16720,7 +16735,6 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 				//cursorStr = nextCursor
 				//break
 			}
-
 		}
 	}
 
@@ -16884,7 +16898,12 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	// Only cache if NO cursor at all.
 	// Otherwise we need to track and clean up all cursors(?)
 	if project.CacheDb && !skipCache {
-		newcache, err := json.Marshal(cacheKeys)
+		cacheReturn = CacheReturn{ 
+			Cursor: cursor,
+			Keys: cacheKeys,
+		}
+
+		newcache, err := json.Marshal(cacheReturn)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
 			return cacheKeys, cursor, nil

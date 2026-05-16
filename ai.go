@@ -7452,9 +7452,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	// Don't think this matters much
 	// See: https://github.com/Shuffle/singul?tab=readme-ov-file#llm-controls
-	openaiAllowedApps := []string{"openai"}
+	//openaiAllowedApps := []string{"openai"}
 	// runOpenaiRequest := false
-	appname := ""
+	chosenAiApp := ""
 	allowedActionString := ""
 
 	decidedApps := []string{}
@@ -7468,13 +7468,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	imagesIncluded := []string{}
 	imageDetail := openai.ImageURLDetailAuto // low, high, original, auto (let the model decide)
 	for _, param := range startNode.Parameters {
-		if param.Name == "app_name" {
-			appname = param.Value
-			if ArrayContains(openaiAllowedApps, strings.ToLower(param.Value)) {
-				// runOpenaiRequest = true
-			}
-		}
-
 		if param.Name == "input" {
 			userMessage = param.Value
 		}
@@ -7512,6 +7505,18 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 		}
 
+		if param.Name == "app_name" {
+			if debug { 
+				log.Printf("[DEBUG] Rewriting app_name to action")
+			}
+
+			param.Name = "action"
+			//chosenAiApp = param.Value
+			//if ArrayContains(openaiAllowedApps, strings.ToLower(param.Value)) {
+			//	// runOpenaiRequest = true
+			//}
+		}
+
 		if param.Name == "action" {
 			param.Value = strings.ReplaceAll(param.Value, "app:undefined:api,", "")
 			param.Value = strings.ReplaceAll(param.Value, "app:undefined:api", "")
@@ -7519,7 +7524,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			allowedActionString = param.Value
 			for _, actionStr := range strings.Split(param.Value, ",") {
 				actionStr = strings.ToLower(strings.TrimSpace(actionStr))
-				if actionStr == "" || actionStr == "nothing" {
+				if actionStr == "" || actionStr == "nothing" || actionStr == "shuffle ai" || actionStr == "api" {
 					continue
 				}
 
@@ -7637,8 +7642,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		}
 	}
 
-	if len(appname) == 0 || appname == "Shuffle AI" {
-		appname = "openai"
+	chosenAiApp = ""
+	if len(chosenAiApp) == 0 || chosenAiApp == "Shuffle AI" {
+		chosenAiApp = "openai"
 		// runOpenaiRequest = true
 	}
 
@@ -8389,7 +8395,7 @@ data_filter:
 		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_http_failure", fmt.Sprintf("LLM call failed after %ds: %s", int(client.Timeout.Seconds()), err.Error()))
 	}
 
-	log.Printf("[INFO][%s] Started AI Agent action %s with app %s. Waiting for results...", execution.ExecutionId, startNode.ID, appname)
+	log.Printf("[INFO][%s] Started AI Agent action %s with app %s. Waiting for results...", execution.ExecutionId, startNode.ID, chosenAiApp)
 
 	// Set timestamp as soon as it's ready
 	// https://pkg.go.dev/github.com/sashabaranov/go-openai#ChatCompletionMessage
