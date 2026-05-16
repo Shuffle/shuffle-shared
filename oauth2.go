@@ -1753,7 +1753,32 @@ func fetchWellKnownConfig(ctx context.Context, issuer string, openIdAuthUrl stri
 }
 
 // IdTokenClaims represents the claims extracted from a verified ID token
+func DecodeIdTokenClaims(idToken string) (*IdTokenClaims, error) {
+	parts := strings.Split(idToken, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("invalid id_token: expected 3 parts, got %d", len(parts))
+	}
+
+	payload := parts[1]
+	if m := len(payload) % 4; m != 0 {
+		payload += strings.Repeat("=", 4-m)
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to base64 decode id_token payload: %w", err)
+	}
+
+	var claims IdTokenClaims
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal id_token claims: %w", err)
+	}
+
+	return &claims, nil
+}
+
 type IdTokenClaims struct {
+	Issuer        string   `json:"iss"`
 	Sub           string   `json:"sub"`
 	Email         string   `json:"email"`
 	EmailVerified bool     `json:"email_verified"`

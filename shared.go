@@ -1166,6 +1166,12 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			orgChanged = true
 		}
 
+		if project.Environment == "cloud" && len(org.CreatorOrg) == 0 && org.SyncFeatures.AgentTokens.Limit == 0 {
+			org.SyncFeatures.AgentTokens.Limit = 10_000_000
+			org.SyncFeatures.AgentTokens.Active = true
+			orgChanged = true
+		}
+
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
 		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
@@ -1207,6 +1213,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		info, err := GetOrgStatistics(ctx, fileId)
 		if err == nil {
 			org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
+			org.SyncFeatures.AgentTokens.Usage = info.MonthlyAgentTokens
 		}
 
 		envs, err := GetEnvironments(ctx, fileId)
@@ -15658,6 +15665,24 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
+	orgIdHeader := request.Header.Get("Org-Id")
+	if len(orgIdHeader) == 0 {
+		orgIdHeader = request.URL.Query().Get("org_id")
+		if len(orgIdHeader) == 0 {
+			orgIdHeader = request.Header.Get("OrgId")
+		}
+	}
+
+	if len(orgIdHeader) > 0 {
+		_, orgErr := GetOrg(ctx, orgIdHeader)
+		if orgErr != nil {
+			log.Printf("[ERROR] Org-Id '%s' from header does not exist in provision request by user %s: %s", orgIdHeader, user.Username, orgErr)
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Org-Id '%s' does not exist. Verify the org ID and try again."}`, orgIdHeader)))
+			return
+		}
+	}
+
 	// check if user is in a partner org
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
@@ -24095,68 +24120,46 @@ func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Fetch userinfo using well-known discovery
-	// Derive issuer from authorization URL by stripping the path
-	parsedAuthUrl, parseErr := url.Parse(org.SSOConfig.OpenIdAuthorization)
-	if parseErr != nil {
-		log.Printf("[ERROR] Invalid OpenIdAuthorization URL: %s", parseErr)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Invalid SSO configuration"}`))
-		return
-	}
-
-	// For Okta-style URLs, issuer includes /oauth2/default; for Auth0/others, it's just the origin
-	// Derive a base issuer URL, then try to get the canonical issuer from well-known config
-	issuer := fmt.Sprintf("%s://%s", parsedAuthUrl.Scheme, parsedAuthUrl.Host)
-	if strings.Contains(parsedAuthUrl.Path, "/oauth2/") {
-		parts := strings.Split(parsedAuthUrl.Path, "/oauth2/")
-		if len(parts) > 1 {
-			oauthPath := strings.Split(parts[1], "/")
-			issuer = fmt.Sprintf("%s://%s/oauth2/%s", parsedAuthUrl.Scheme, parsedAuthUrl.Host, oauthPath[0])
-		}
-	}
-
-	// Use well-known discovery to get the canonical issuer (handles trailing slash mismatches)
-	wellKnownConfig, wellKnownErr := fetchWellKnownConfig(ctx, issuer, org.SSOConfig.OpenIdAuthorization)
-	if wellKnownErr == nil {
-		if canonical, ok := wellKnownConfig["issuer"].(string); ok && len(canonical) > 0 {
-			issuer = canonical
-		}
-	}
-	userInfo, err := fetchUserInfoFromToken(ctx, openid.AccessToken, issuer, org.SSOConfig.OpenIdAuthorization)
-	if err != nil {
-		log.Printf("[ERROR] Failed to fetch userinfo: %s", err)
+	if openid.IdToken == "" {
+		log.Printf("[ERROR] No id_token in OpenID token response for org %s", foundOrg)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to fetch user information"}`))
+		resp.Write([]byte(`{"success": false, "reason": "No id_token in token response. Ensure 'openid' scope is requested."}`))
 		return
 	}
 
-	body, err = json.Marshal(userInfo)
+	// Decode first to extract the issuer, then verify with OIDC
+	unverified, err := DecodeIdTokenClaims(openid.IdToken)
 	if err != nil {
-		log.Printf("[ERROR] Failed to marshal userinfo: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to process user information"}`))
-		return
-	}
-
-	log.Printf("[DEBUG] OpenID userinfo response: %s", string(body))
-
-	err = json.Unmarshal(body, &openidUser)
-	if err != nil {
-		log.Printf("[WARNING] Error in Openid marshal (2): %s", err)
+		log.Printf("[ERROR] Failed to decode id_token: %s", err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed to decode id_token"}`))
 		return
 	}
 
-	// Extract roles from ID token using proper JWT verification
-	if openid.IdToken != "" && org.SSOConfig.OpenIdClientId != "" {
-		extractedRoles, err := ExtractRolesFromIdToken(ctx, openid.IdToken, issuer, org.SSOConfig.OpenIdClientId)
-		if err != nil {
-			log.Printf("[WARNING] Failed to extract roles from ID token: %s", err)
-		} else if len(extractedRoles) > 0 {
-			log.Printf("[DEBUG] Extracted roles from ID token: %v", extractedRoles)
-			openidUser.Roles = extractedRoles
+	idTokenClaims, err := VerifyIdTokenWithOIDC(ctx, openid.IdToken, unverified.Issuer, org.SSOConfig.OpenIdClientId)
+	if err != nil {
+		log.Printf("[ERROR] OIDC id_token verification failed: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to verify id_token"}`))
+		return
+	}
+
+	openidUser.Sub = idTokenClaims.Sub
+	openidUser.Email = idTokenClaims.Email
+
+	if len(idTokenClaims.Roles) > 0 || len(idTokenClaims.Groups) > 0 || len(idTokenClaims.RealmAccess.Roles) > 0 {
+		roleSet := make(map[string]bool)
+		for _, r := range idTokenClaims.Roles {
+			roleSet[r] = true
+		}
+		for _, g := range idTokenClaims.Groups {
+			roleSet[g] = true
+		}
+		for _, r := range idTokenClaims.RealmAccess.Roles {
+			roleSet[r] = true
+		}
+		for role := range roleSet {
+			openidUser.Roles = append(openidUser.Roles, role)
 		}
 	}
 
@@ -24908,45 +24911,31 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		// Automated replacement
-		userInfoUrlSplit := strings.Split(org.SSOConfig.OpenIdAuthorization, "/")
-		userinfoEndpoint := strings.Join(userInfoUrlSplit[0:len(userInfoUrlSplit)-1], "/") + "/userinfo"
-		//userinfoEndpoint := strings.Replace(org.SSOConfig.OpenIdAuthorization, "/authorize", "/userinfo", -1)
-		log.Printf("Userinfo endpoint: %s", userinfoEndpoint)
-		client := &http.Client{}
-		req, err := http.NewRequest(
-			"GET",
-			userinfoEndpoint,
-			nil,
-		)
-
-		//req.Header.Add("accept", "application/json")
-		//req.Header.Add("cache-control", "no-cache")
-		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", openid.AccessToken))
-		res, err := client.Do(req)
-		if err != nil {
-			log.Printf("[WARNING] OpenID client DO (2): %s", err)
+		if openid.IdToken == "" {
+			log.Printf("[ERROR] No id_token in OpenID token response for org %s", foundOrg)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed userinfo request"}`))
+			resp.Write([]byte(`{"success": false, "reason": "No id_token in token response. Ensure 'openid' scope is requested."}`))
 			return
 		}
 
-		defer res.Body.Close()
-		body, err = ioutil.ReadAll(res.Body)
+		unverified, err := DecodeIdTokenClaims(openid.IdToken)
 		if err != nil {
-			log.Printf("[WARNING] OpenID client Body (2): %s", err)
+			log.Printf("[ERROR] Failed to decode id_token: %s", err)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed userinfo body parsing"}`))
+			resp.Write([]byte(`{"success": false, "reason": "Failed to decode id_token"}`))
 			return
 		}
 
-		err = json.Unmarshal(body, &openidUser)
+		idTokenClaims, err := VerifyIdTokenWithOIDC(ctx, openid.IdToken, unverified.Issuer, org.SSOConfig.OpenIdClientId)
 		if err != nil {
-			log.Printf("[WARNING] Error in Openid marshal (2): %s", err)
+			log.Printf("[ERROR] OIDC id_token verification failed: %s", err)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
+			resp.Write([]byte(`{"success": false, "reason": "Failed to verify id_token"}`))
 			return
 		}
+
+		openidUser.Sub = idTokenClaims.Sub
+		openidUser.Email = idTokenClaims.Email
 	}
 
 	if len(openidUser.Sub) == 0 && len(openidUser.Email) == 0 {
