@@ -2458,7 +2458,21 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		return
 	}
 
-	log.Printf("[ERROR][%s] AI Agent: All %d attempts to POST decision %s to streams failed. Last error: %v", execution.ExecutionId, maxStreamRetries, decision.RunDetails.Id, lastStreamErr)
+	log.Printf("[ERROR][%s] AI Agent: All %d attempts to POST decision %s to streams failed. Last error: %v. Falling back to in-process handler.", execution.ExecutionId, maxStreamRetries, decision.RunDetails.Id, lastStreamErr)
+    // Well this failure is pretty bad, but at least we can try to not let the agent get completely stuck. The most likely scenario here is that the streams API is temporarily unreachable, so we can try to call the handler directly as a fallback. This is not ideal, but it allows for some level of resilience in the face of transient issues with the streams API.
+
+	freshExec, err := GetWorkflowExecution(context.Background(), execution.ExecutionId)
+	if err != nil {
+		log.Printf("[ERROR][%s] AI Agent: Fallback in-process handler: failed to get fresh execution: %v", execution.ExecutionId, err)
+		return
+	}
+
+	_, _, err = handleAgentDecisionStreamResult(*freshExec, parsedAction)
+	if err != nil {
+		log.Printf("[ERROR][%s] AI Agent: Fallback in-process handler also failed for decision %s: %v", execution.ExecutionId, decision.RunDetails.Id, err)
+	} else {
+		log.Printf("[INFO][%s] AI Agent: Fallback in-process handler succeeded for decision %s", execution.ExecutionId, decision.RunDetails.Id)
+	}
 }
 
 func HandleCloudSyncAuthentication(resp http.ResponseWriter, request *http.Request) (SyncKey, error) {
