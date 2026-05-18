@@ -2466,8 +2466,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	}
 
 	log.Printf("[ERROR][%s] AI Agent: All %d attempts to POST decision %s to streams failed (serverReceived=%v). Last error: %v. Falling back to in-process handler.", execution.ExecutionId, maxStreamRetries, decision.RunDetails.Id, serverReceivedRequest, lastStreamErr)
-    // Well this failure is pretty bad, but at least we can try to not let the agent get completely stuck. so we can try to call the handler directly as a fallback. This is not ideal, but it allows for some level of resilience in the face of transient issues with the streams API.
-
+ 	// Try the in-process handler to keep the agent moving when the streams API is unavailable.
 	freshExec, err := GetWorkflowExecution(context.Background(), execution.ExecutionId)
 	if err != nil {
 		log.Printf("[ERROR][%s] AI Agent: Fallback in-process handler: failed to get fresh execution: %v", execution.ExecutionId, err)
