@@ -2136,7 +2136,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}
 
 							if debug {
-								log.Printf("[DEBUG][%s] Decision %s for agent action %s is still RUNNING but no completed at timestamp. Checking cache for updates.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID)
+								log.Printf("[DEBUG][%s] Decision %s (action=%s, status='%s') has no CompletedAt yet. Checking cache for updates.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID, decision.RunDetails.Status)
 							}
 						}
 					}
