@@ -2299,7 +2299,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 
-	go SetCache(ctx, decisionId, marshalledDecision, 300)
+	go SetCache(ctx, decisionId, marshalledDecision, 600)
 
 	if decision.Action == "user_input" || decision.Action == "answer" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" || decision.Category == "standalone" {
 	} else {
@@ -2367,7 +2367,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling completed decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 
-	go SetCache(ctx, decisionId, marshalledDecision, 300)
+	go SetCache(ctx, decisionId, marshalledDecision, 600)
 
 	// 1. Send an /api/v1/streams request? Due to concurrency, I think this is the only way (?)
 	// 2. On the streams API, make sure to:
@@ -2421,32 +2421,72 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		return
 	}
 
-	req, err := http.NewRequest(
-		"POST",
-		url,
-		bytes.NewBuffer(marshalledAction),
-	)
+	const maxStreamRetries = 3
+	var req *http.Request
+	var lastStreamErr error
+	serverReceivedRequest := false
+	
+	for attempt := 0; attempt < maxStreamRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(attempt*attempt) * time.Second
+			log.Printf("[WARNING][%s] AI Agent: Retrying streams POST for decision %s (attempt %d/%d) after %s: %v", execution.ExecutionId, decision.RunDetails.Id, attempt+1, maxStreamRetries, backoff, lastStreamErr)
+			time.Sleep(backoff)
+		}
 
+		req, err = http.NewRequest(
+			"POST",
+			url,
+			bytes.NewBuffer(marshalledAction),
+		)
+		if err != nil {
+			log.Printf("[ERROR][%s] AI Agent: Failed agent decision request creation on retry %d: %s", execution.ExecutionId, attempt+1, err)
+			lastStreamErr = err
+			continue
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[ERROR][%s] AI Agent: Failed sending agent decision result (attempt %d): %s", execution.ExecutionId, attempt+1, err)
+			lastStreamErr = err
+			continue
+		}
+
+		serverReceivedRequest = true
+
+		foundBody, err := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			log.Printf("[WARNING][%s] AI Agent: Decision %s POSTed to streams (status %d) but failed reading response body: %s. Treating as success.", execution.ExecutionId, decision.RunDetails.Id, resp.StatusCode, err)
+			return
+		}
+
+		if resp.StatusCode == 200 {
+			return
+		}
+
+		log.Printf("[ERROR][%s] AI Agent: Status %d for decision %s (attempt %d). Body: %s", execution.ExecutionId, resp.StatusCode, decision.RunDetails.Id, attempt+1, string(foundBody))
+		lastStreamErr = fmt.Errorf("streams POST returned status %d", resp.StatusCode)
+
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			break
+		}
+
+	}
+
+	log.Printf("[ERROR][%s] AI Agent: All %d attempts to POST decision %s to streams failed (serverReceived=%v). Last error: %v. Falling back to in-process handler.", execution.ExecutionId, maxStreamRetries, decision.RunDetails.Id, serverReceivedRequest, lastStreamErr)
+ 	// Try the in-process handler to keep the agent moving when the streams API is unavailable.
+	freshExec, err := GetWorkflowExecution(context.Background(), execution.ExecutionId)
 	if err != nil {
-		log.Printf("[ERROR][%s] AI Agent: Failed agent decision request creation: %s", execution.ExecutionId, err)
+		log.Printf("[ERROR][%s] AI Agent: Fallback in-process handler: failed to get fresh execution: %v", execution.ExecutionId, err)
 		return
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
+	_, _, err = handleAgentDecisionStreamResult(*freshExec, parsedAction)
 	if err != nil {
-		log.Printf("[ERROR][%s] AI Agent: Failed sending agent decision result: %s", execution.ExecutionId, err)
-		return
-	}
-
-	foundBody, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[ERROR][%s] AI Agent: Failed reading body from agent decision: %s", execution.ExecutionId, err)
-		return
-	}
-
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR][%s] AI Agent: Status %d for decision %s. Body: %s", execution.ExecutionId, resp.StatusCode, decision.RunDetails.Id, string(foundBody))
+		log.Printf("[ERROR][%s] AI Agent: Fallback in-process handler also failed for decision %s: %v", execution.ExecutionId, decision.RunDetails.Id, err)
+	} else {
+		log.Printf("[INFO][%s] AI Agent: Fallback in-process handler succeeded for decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 }
 

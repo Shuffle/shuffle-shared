@@ -51,8 +51,10 @@ import (
 )
 
 var requestCache = cache.New(60*time.Minute, 60*time.Minute)
+
 var memcached = os.Getenv("SHUFFLE_MEMCACHED")
 var mc = gomemcache.New(memcached)
+
 var gceProject = os.Getenv("SHUFFLE_GCEPROJECT")
 var propagateUrl = os.Getenv("SHUFFLE_PROPAGATE_URL")
 var propagateToken = os.Getenv("SHUFFLE_PROPAGATE_TOKEN")
@@ -2134,7 +2136,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}
 
 							if debug {
-								log.Printf("[DEBUG][%s] Decision %s for agent action %s is still RUNNING but no completed at timestamp. Checking cache for updates.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID)
+								log.Printf("[DEBUG][%s] Decision %s (action=%s, status='%s') has no CompletedAt yet. Checking cache for updates.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID, decision.RunDetails.Status)
 							}
 						}
 					}
@@ -4859,6 +4861,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 }
 
 func init() {
+	mc.Timeout = 2000 * time.Millisecond
 
 	isValid := checkImportPath()
 	if !isValid {
