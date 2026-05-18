@@ -2686,6 +2686,7 @@ def findall_with_limit(pattern, text, max_matches=None, timeout_seconds=5):
 
 # These are the regex items from the datastore
 found_items = []
+found_types = {}
 for ioc_object in all_items:
   try:
     ioc_object = json.loads(ioc_object)
@@ -2723,6 +2724,11 @@ for ioc_object in all_items:
       "value": match,
       "type": ioc_object["name"],
     })
+	    
+    if ioc_object["name"] not in found_types:
+      found_types[ioc_object["name"]] = 1
+    else:
+      found_types[ioc_object["name"]] += 1
 
 full_body = [{
   "key": "$exec.shuffle_datastore.key",
@@ -2744,6 +2750,7 @@ try:
     print(json.dumps({
       "success": True, 
       "reason": "Uploaded '$exec.shuffle_datastore.key' in '$exec.shuffle_datastore.category' with %d indicators" % (len(found_items)),
+	  "types": found_types,
     }))
   else:
     print(json.dumps({
