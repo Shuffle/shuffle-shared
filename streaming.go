@@ -15,7 +15,11 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	//// Removed check here as it may be a public workflow
+	resp.WriteHeader(http.StatusOK)
+	resp.Write([]byte(`{"success": true}`))
+	return
+
+	// Removed check here as it may be a public workflow
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[AUDIT] Api authentication failed in getting specific workflow (stream update): %s. Continuing because it may be public.", err)
@@ -107,6 +111,10 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if cors {
 		return
 	}
+
+	resp.WriteHeader(http.StatusOK)
+	resp.Write([]byte(`{"success": true}`))
+	return
 
 	//// Removed check here as it may be a public workflow
 	user, err := HandleApiAuthentication(resp, request)

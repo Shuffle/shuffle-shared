@@ -51,8 +51,10 @@ import (
 )
 
 var requestCache = cache.New(60*time.Minute, 60*time.Minute)
+
 var memcached = os.Getenv("SHUFFLE_MEMCACHED")
 var mc = gomemcache.New(memcached)
+
 var gceProject = os.Getenv("SHUFFLE_GCEPROJECT")
 var propagateUrl = os.Getenv("SHUFFLE_PROPAGATE_URL")
 var propagateToken = os.Getenv("SHUFFLE_PROPAGATE_TOKEN")
@@ -4858,6 +4860,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 }
 
 func init() {
+	mc.Timeout = 2000 * time.Millisecond
 
 	isValid := checkImportPath()
 	if !isValid {
