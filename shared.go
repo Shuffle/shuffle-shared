@@ -17583,6 +17583,11 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		return nil
 	}
 
+	if os.Getenv("SHUFFLE_DISABLE_AGENT_SELFREQUEST") == "true" {
+		log.Printf("[WARNING][%s] Agent self-request disabled via env — skipping '%s'", workflowExecution.ExecutionId, status)
+		return nil
+	}
+
 	ctx := context.Background()
 
 	// Check if the request has been sent already (just in case)
