@@ -2415,6 +2415,8 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	const maxStreamRetries = 3
 	var req *http.Request
 	var lastStreamErr error
+	serverReceivedRequest := false
+	
 	for attempt := 0; attempt < maxStreamRetries; attempt++ {
 		if attempt > 0 {
 			backoff := time.Duration(attempt*attempt) * time.Second
@@ -2441,24 +2443,29 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			continue
 		}
 
+		serverReceivedRequest = true
+
 		foundBody, err := ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed reading body from agent decision (attempt %d): %s", execution.ExecutionId, attempt+1, err)
-			lastStreamErr = err
-			continue
+			log.Printf("[WARNING][%s] AI Agent: Decision %s POSTed to streams (status %d) but failed reading response body: %s. Treating as success.", execution.ExecutionId, decision.RunDetails.Id, resp.StatusCode, err)
+			return
 		}
 
-		if resp.StatusCode != 200 {
-			log.Printf("[ERROR][%s] AI Agent: Status %d for decision %s (attempt %d). Body: %s", execution.ExecutionId, resp.StatusCode, decision.RunDetails.Id, attempt+1, string(foundBody))
-			lastStreamErr = fmt.Errorf("streams POST returned status %d", resp.StatusCode)
-			continue
+		if resp.StatusCode == 200 {
+			return
 		}
 
-		return
+		log.Printf("[ERROR][%s] AI Agent: Status %d for decision %s (attempt %d). Body: %s", execution.ExecutionId, resp.StatusCode, decision.RunDetails.Id, attempt+1, string(foundBody))
+		lastStreamErr = fmt.Errorf("streams POST returned status %d", resp.StatusCode)
+
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			break
+		}
+
 	}
 
-	log.Printf("[ERROR][%s] AI Agent: All %d attempts to POST decision %s to streams failed. Last error: %v. Falling back to in-process handler.", execution.ExecutionId, maxStreamRetries, decision.RunDetails.Id, lastStreamErr)
+	log.Printf("[ERROR][%s] AI Agent: All %d attempts to POST decision %s to streams failed (serverReceived=%v). Last error: %v. Falling back to in-process handler.", execution.ExecutionId, maxStreamRetries, decision.RunDetails.Id, serverReceivedRequest, lastStreamErr)
     // Well this failure is pretty bad, but at least we can try to not let the agent get completely stuck. so we can try to call the handler directly as a fallback. This is not ideal, but it allows for some level of resilience in the face of transient issues with the streams API.
 
 	freshExec, err := GetWorkflowExecution(context.Background(), execution.ExecutionId)
