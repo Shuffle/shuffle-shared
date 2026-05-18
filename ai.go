@@ -8621,6 +8621,12 @@ data_filter:
 			}
 		}
 
+		// LLM is occasionaly appending freeform text like (e.g. "Summary: ...") after the closing bracket. Truncate everything past the last ']' so the JSON
+		// parser doesn't dont break due to that.
+		if lastBracket := strings.LastIndex(decisionString, "]"); lastBracket != -1 {
+			decisionString = decisionString[:lastBracket+1]
+		}
+
 		errorMessage := ""
 		err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
 		if err != nil {
