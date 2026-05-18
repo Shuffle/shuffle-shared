@@ -2182,13 +2182,14 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					// Check if requests was recently sent or not
 					cacheId := fmt.Sprintf("agent-%s-%s-fixexec-finished-check", workflowExecution.ExecutionId, action.ID)
 					if _, err := GetCache(ctx, cacheId); err == nil {
-						// Recently sent, skip
-						//log.Printf("[INFO][%s] Recently handled all decisions finished for agent action %s - skipping.", workflowExecution.ExecutionId, action.ID)
 						continue
 					}
 
-					// Set cache to prevent multiple sends
-					SetCache(ctx, cacheId, []byte("handled"), 1)
+					// Set cache to prevent multiple sends — if cache is down, skip to prevent retry storm
+					if cacheErr := SetCache(ctx, cacheId, []byte("handled"), 1); cacheErr != nil {
+						log.Printf("[WARNING][%s] Memcache down — skipping fixexec agent self-request for action %s to prevent retry storm", workflowExecution.ExecutionId, action.ID)
+						continue
+					}
 
 					decisionsUpdated = true
 					if finishDecisionFound {

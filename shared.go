@@ -17587,21 +17587,19 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 	// Check if the request has been sent already (just in case)
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
-	// cacheKey := fmt.Sprintf("agent_request_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID)
 	_, err := GetCache(ctx, cacheKey)
 	if err == nil {
-		//if debug {
-		//	log.Printf("[DEBUG][%s] Agent self-request for Agent Result '%s' with status '%s' has already been sent. Skipping.", workflowExecution.ExecutionId, actionResult.Action.ID, status)
-		//}
-
 		return nil
 	} else {
 		var cacheTTL int32 = 1 // 1 minute for non-terminal statuses
 		if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
 			cacheTTL = 1440 // 24 hours — execution outcome is permanent
 		}
-		SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
-		// SetCache(ctx, cacheKey, []byte(status), cacheTTL)
+		cacheErr := SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
+		if cacheErr != nil && (status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED") {
+			log.Printf("[WARNING][%s] Memcache down — skipping agent self-request for '%s' to prevent retry storm", workflowExecution.ExecutionId, status)
+			return nil
+		}
 	}
 
 	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
