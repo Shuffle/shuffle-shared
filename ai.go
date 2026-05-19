@@ -8474,6 +8474,35 @@ data_filter:
 
 	// Store the completion request in datastore?
 	if len(resultMapping.Result) > 0 {
+		if strings.Contains(strings.ToLower(resultMapping.Result), "minimum of one branch") {
+			branchSkipOutput := AgentOutput{
+				Status:      "FINISHED",
+				Output:      resultMapping.Result,
+				CompletedAt: time.Now().UnixMilli(),
+			}
+			marshalledOutput, _ := json.Marshal(branchSkipOutput)
+
+			successResult := ActionResult{
+				Status:        "SUCCESS",
+				Result:        string(marshalledOutput),
+				Action:        startNode,
+				ExecutionId:   execution.ExecutionId,
+				Authorization: execution.Authorization,
+				StartedAt:     time.Now().UnixMilli(),
+				CompletedAt:   time.Now().UnixMilli(),
+			}
+
+			for i, r := range execution.Results {
+				if r.Action.ID == startNode.ID {
+					execution.Results[i] = successResult
+					break
+				}
+			}
+
+			go sendAgentActionSelfRequest("SUCCESS", execution, successResult)
+			return startNode, nil
+		}
+
 		// 1. Map it to a Shuffle HTTP Result
 		// 2. Find the content: $ai_agent_1.body.choices.#.message.content
 		// 3. Map the content into the AgentOutput struct
