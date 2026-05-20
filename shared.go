@@ -19626,15 +19626,6 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				}
 			}
 
-			for actionIndex, action := range workflowExecution.Workflow.Actions {
-				for paramIndex, param := range action.Parameters {
-					if len(param.Value) > 32500 {
-						log.Printf("[DEBUG][%s] Trimming workflow parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, action.Label, len(param.Value))
-						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
-					}
-				}
-			}
-
 			jsonString, err := json.Marshal(workflowExecution)
 			if err == nil {
 				if debug {
