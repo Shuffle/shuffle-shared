@@ -8500,6 +8500,35 @@ data_filter:
 
 	// Store the completion request in datastore?
 	if len(resultMapping.Result) > 0 {
+		if strings.Contains(strings.ToLower(resultMapping.Result), "minimum of one branch") {
+			branchSkipOutput := AgentOutput{
+				Status:      "FINISHED",
+				Output:      resultMapping.Result,
+				CompletedAt: time.Now().UnixMilli(),
+			}
+			marshalledOutput, _ := json.Marshal(branchSkipOutput)
+
+			successResult := ActionResult{
+				Status:        "SUCCESS",
+				Result:        string(marshalledOutput),
+				Action:        startNode,
+				ExecutionId:   execution.ExecutionId,
+				Authorization: execution.Authorization,
+				StartedAt:     time.Now().UnixMilli(),
+				CompletedAt:   time.Now().UnixMilli(),
+			}
+
+			for i, r := range execution.Results {
+				if r.Action.ID == startNode.ID {
+					execution.Results[i] = successResult
+					break
+				}
+			}
+
+			go sendAgentActionSelfRequest("SUCCESS", execution, successResult)
+			return startNode, nil
+		}
+
 		// 1. Map it to a Shuffle HTTP Result
 		// 2. Find the content: $ai_agent_1.body.choices.#.message.content
 		// 3. Map the content into the AgentOutput struct
@@ -8599,14 +8628,25 @@ data_filter:
 				outputTokens := int(openaiOutput.Usage.CompletionTokens)
 				totalTokens := int(openaiOutput.Usage.TotalTokens)
 
+				subOrgId := execution.Workflow.OrgId
 				go func() {
 					time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
 					IncrementCacheDump(ctx, billingOrgId, "agent_tokens", totalTokens)
 					if inputTokens > 0 {
-						IncrementCacheDump(ctx, billingOrgId, "agent_input_tokens", inputTokens)
+						IncrementCache(ctx, billingOrgId, "agent_input_tokens", inputTokens)
 					}
 					if outputTokens > 0 {
-						IncrementCacheDump(ctx, billingOrgId, "agent_output_tokens", outputTokens)
+						IncrementCache(ctx, billingOrgId, "agent_output_tokens", outputTokens)
+					}
+
+					if billingOrgId != subOrgId {
+						IncrementCache(ctx, subOrgId, "agent_tokens", totalTokens)
+						if inputTokens > 0 {
+							IncrementCache(ctx, subOrgId, "agent_input_tokens", inputTokens)
+						}
+						if outputTokens > 0 {
+							IncrementCache(ctx, subOrgId, "agent_output_tokens", outputTokens)
+						}
 					}
 				}()
 				log.Printf("[AUDIT][%s] Incremented AI Agent usage for billing_org=%s exec_org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
