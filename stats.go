@@ -1681,7 +1681,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 
 			AppRunsPercentage := float64(totalAppExecutions) / float64(org.SyncFeatures.AppExecutions.Limit) * 100
 			appRunsUsagePercentageStr := fmt.Sprintf("%d%% of your app runs limit", int64(AppRunsPercentage))
-			Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your account %s", appRunsUsagePercentageStr, firstAdmin)
+			Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your tenant %s", appRunsUsagePercentageStr, org.Name)
 
 			substitutions := map[string]interface{}{
 				"app_runs_usage":            totalAppExecutions,
