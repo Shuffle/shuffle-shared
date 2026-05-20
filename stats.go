@@ -40,6 +40,9 @@ var PredictableDataTypes = []string{
 	"workflow_executions_onprem",
 	"api_usage",
 	"ai_executions",
+	"agent_tokens",
+	"agent_input_tokens",
+	"agent_output_tokens",
 }
 
 func HandleGetWidget(resp http.ResponseWriter, request *http.Request) {
