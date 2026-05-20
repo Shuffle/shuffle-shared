@@ -981,6 +981,11 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 							Value: "",
 						},
 						currentAction,
+						WorkflowAppActionParameter{
+							Name:      "fields",
+							Value:     "$exec",
+							Multiline: true,
+						},
 					},
 				},
 			},
