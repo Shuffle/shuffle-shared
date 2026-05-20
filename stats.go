@@ -1402,6 +1402,8 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyAIUsage = 0
 		executionInfo.MonthlyAgentExecutions = 0
 		executionInfo.MonthlyAgentTokens = 0
+		executionInfo.MonthlyAgentInputTokens = 0
+		executionInfo.MonthlyAgentOutputTokens = 0
 		executionInfo.LastMonthlyResetMonth = currentMonth
 		executionInfo.LastUsageAlertThreshold = 0
 
