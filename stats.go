@@ -40,6 +40,9 @@ var PredictableDataTypes = []string{
 	"workflow_executions_onprem",
 	"api_usage",
 	"ai_executions",
+	"agent_tokens",
+	"agent_input_tokens",
+	"agent_output_tokens",
 }
 
 func HandleGetWidget(resp http.ResponseWriter, request *http.Request) {
@@ -1399,6 +1402,8 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyAIUsage = 0
 		executionInfo.MonthlyAgentExecutions = 0
 		executionInfo.MonthlyAgentTokens = 0
+		executionInfo.MonthlyAgentInputTokens = 0
+		executionInfo.MonthlyAgentOutputTokens = 0
 		executionInfo.LastMonthlyResetMonth = currentMonth
 		executionInfo.LastUsageAlertThreshold = 0
 

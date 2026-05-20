@@ -22002,7 +22002,11 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				}
 			}
 
-			callerName := "PrepareSingleAction"
+			callerName := parentRequest.Header.Get("X-Internal-Caller")
+			if callerName == "" {
+				callerName = "PrepareSingleAction"
+			}
+
 			action, err := HandleAiAgentExecutionStart(exec, action, false, callerName)
 			if err != nil {
 				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
