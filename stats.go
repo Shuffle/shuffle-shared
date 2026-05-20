@@ -1660,25 +1660,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		if int64(AlertThreshold.Count) < totalAppExecutions && !sendAlert && shouldSendAlert {
 
 			allAdmins := []string{}
-			firstAdmin := ""
-			allShufflerEmails := true
-
 			for _, user := range org.Users {
 				if user.Role == "admin" {
 					allAdmins = append(allAdmins, user.Username)
-
-					if firstAdmin == "" && !strings.Contains(user.Username, "shuffler.io") {
-						firstAdmin = user.Username
-					}
-
-					if !strings.Contains(user.Username, "shuffler.io") {
-						allShufflerEmails = false
-					}
 				}
-			}
-
-			if allShufflerEmails && firstAdmin == "" && len(allAdmins) > 0 {
-				firstAdmin = allAdmins[0]
 			}
 
 			if !ArrayContains(allAdmins, "chris@shuffler.io") {
@@ -1706,7 +1691,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				"ai_tokens_limit":           org.SyncFeatures.AgentTokens.Limit,
 				"org_name":                  org.Name,
 				"org_id":                    org.Id,
-				"admin_email":               firstAdmin,
+				"admin_email":               org.Name,
 				"app_runs_usage_percentage": int64(AppRunsPercentage),
 			}
 

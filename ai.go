@@ -7152,7 +7152,6 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 
 func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, fullOrg *Org, tokenLimit, monthlyTokensUsed int64) {
 	admins := []string{}
-	firstAdmin := ""
 	orgName := execution.Workflow.OrgId
 	billingOrgId := execution.Workflow.OrgId
 	if fullOrg != nil {
@@ -7161,15 +7160,8 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 		for _, user := range fullOrg.Users {
 			if user.Role == "admin" {
 				admins = append(admins, user.Username)
-				if firstAdmin == "" && !strings.Contains(user.Username, "shuffler.io") {
-					firstAdmin = user.Username
-				}
 			}
 		}
-	}
-
-	if firstAdmin == "" && len(admins) > 0 {
-		firstAdmin = admins[0]
 	}
 
 	aiPercentage := float64(monthlyTokensUsed) / float64(tokenLimit) * 100
@@ -7191,7 +7183,7 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 	}
 
 	subjectLine := fmt.Sprintf("%d%% of your AI token limit", int64(aiPercentage))
-	Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your account %s", subjectLine, firstAdmin)
+	Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your tenant %s", subjectLine, orgName)
 	AiRecommendation := "Tip: <a href=\"https://shuffler.io/admin?tab=app_auth\" style=\"color: #FF8444; text-decoration: none; font-weight: bold;\">Connect your own AI provider app</a> to use your own keys and bypass the AI token limit entirely."
 	substitutions := map[string]interface{}{
 		"app_runs_usage":            totalAppExecutions,
@@ -7201,7 +7193,7 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 		"ai_tokens_limit":           tokenLimit,
 		"org_name":                  orgName,
 		"org_id":                    billingOrgId,
-		"admin_email":               firstAdmin,
+		"admin_email":               orgName,
 		"app_runs_usage_percentage": int64(aiPercentage),
 		"ai_recommendation":         AiRecommendation,
 	}
