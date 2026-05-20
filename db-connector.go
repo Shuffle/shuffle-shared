@@ -933,42 +933,6 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 					}
 				}
 
-				hasTrimmed := false
-				for _, action := range workflowExecution.Workflow.Actions {
-					for _, param := range action.Parameters {
-						if param.Value == "Size too large. Removed." {
-							hasTrimmed = true
-							break
-						}
-					}
-					if hasTrimmed {
-						break
-					}
-				}
-
-				if hasTrimmed {
-					origWorkflow, err := GetWorkflow(ctx, workflowExecution.Workflow.ID, false)
-					if err == nil {
-						for actionIndex, action := range workflowExecution.Workflow.Actions {
-							for paramIndex, param := range action.Parameters {
-								if param.Value == "Size too large. Removed." {
-									for _, origAction := range origWorkflow.Actions {
-										if origAction.ID == action.ID {
-											for _, origParam := range origAction.Parameters {
-												if origParam.Name == param.Name {
-													workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = origParam.Value
-													break
-												}
-											}
-											break
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-
 				// Fixes missing pieces
 				newexec, _ := Fixexecution(ctx, *workflowExecution)
 				workflowExecution = &newexec
@@ -1075,42 +1039,6 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	}
 
 	//log.Printf("[DEBUG] Returned execution %s with %d results (1)", id, len(workflowExecution.Results))
-
-	hasTrimmed := false
-	for _, action := range workflowExecution.Workflow.Actions {
-		for _, param := range action.Parameters {
-			if param.Value == "Size too large. Removed." {
-				hasTrimmed = true
-				break
-			}
-		}
-		if hasTrimmed {
-			break
-		}
-	}
-
-	if hasTrimmed {
-		origWorkflow, err := GetWorkflow(ctx, workflowExecution.Workflow.ID, false)
-		if err == nil {
-			for actionIndex, action := range workflowExecution.Workflow.Actions {
-				for paramIndex, param := range action.Parameters {
-					if param.Value == "Size too large. Removed." {
-						for _, origAction := range origWorkflow.Actions {
-							if origAction.ID == action.ID {
-								for _, origParam := range origAction.Parameters {
-									if origParam.Name == param.Name {
-										workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = origParam.Value
-										break
-									}
-								}
-								break
-							}
-						}
-					}
-				}
-			}
-		}
-	}
 
 	// Fixes missing pieces
 	newexec, _ := Fixexecution(ctx, *workflowExecution)
@@ -3925,8 +3853,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 					}
 				}
 
-				if len(workflow.Actions) > 0 || len(workflow.Triggers) > 0 {
-					getWorkflowFileValue(ctx, workflow)
+				if len(workflow.Actions) > 1 || len(workflow.Triggers) > 0 {
 					return workflow, nil
 				}
 			}
@@ -4070,7 +3997,6 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 		}
 	}
 
-	getWorkflowFileValue(ctx, workflow)
 	return workflow, nil
 }
 
@@ -9881,7 +9807,6 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	workflow = FixWorkflowPosition(ctx, workflow)
 	trimOversizedWorkflowImages(&workflow)
-	compressWorkflow(&workflow)
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflow)
@@ -10017,82 +9942,6 @@ func shouldStripWorkflowImage(value string) bool {
 	}
 
 	return false
-}
-
-func compressWorkflow(workflow *Workflow) {
-	if workflow == nil || project.DbType != "opensearch" || os.Getenv("SHUFFLE_WORKFLOW_COMPRESSION") != "true" {
-		return
-	}
-
-	basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
-	if len(basepath) == 0 {
-		basepath = "files"
-	}
-
-	for actionIndex, action := range workflow.Actions {
-		for paramIndex, param := range action.Parameters {
-			if len(param.Value) > 32500 && !strings.Contains(param.Value, "Param too large to store") {
-				fileKey := fmt.Sprintf("%s_%s", action.ID, url.QueryEscape(param.Name))
-				dirPath := fmt.Sprintf("%s/large_workflows/%s", basepath, workflow.ID)
-				localPath := fmt.Sprintf("%s/%s", dirPath, fileKey)
-
-				log.Printf("[DEBUG] Offloading workflow parameter %s in action %s (%d bytes) to %s", param.Name, action.Label, len(param.Value), localPath)
-
-				replacementJson := fmt.Sprintf(`{"success": false, "reason": "Param too large to store", "size": %d, "extra": "replace", "id": "%s"}`, len(param.Value), fileKey)
-
-				if err := os.WriteFile(localPath, []byte(param.Value), 0644); err != nil {
-					if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-						log.Printf("[WARNING] Failed creating directory %s: %s", dirPath, mkdirErr)
-						continue
-					}
-					if retryErr := os.WriteFile(localPath, []byte(param.Value), 0644); retryErr != nil {
-						log.Printf("[WARNING] Failed writing large workflow param after mkdir: %s", retryErr)
-						continue
-					}
-				}
-
-				workflow.Actions[actionIndex].Parameters[paramIndex].Value = replacementJson
-			}
-		}
-	}
-}
-
-func getWorkflowFileValue(ctx context.Context, workflow *Workflow) {
-	if workflow == nil || project.DbType != "opensearch" || os.Getenv("SHUFFLE_WORKFLOW_COMPRESSION") != "true" {
-		return
-	}
-
-	basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
-	if len(basepath) == 0 {
-		basepath = "files"
-	}
-
-	for actionIndex, action := range workflow.Actions {
-		for paramIndex, param := range action.Parameters {
-			if !strings.Contains(param.Value, "Param too large to store") || !strings.Contains(param.Value, `"extra"`) {
-				continue
-			}
-
-			var ref map[string]interface{}
-			if err := json.Unmarshal([]byte(param.Value), &ref); err != nil {
-				continue
-			}
-
-			fileKey, ok := ref["id"].(string)
-			if !ok {
-				continue
-			}
-
-			fullPath := fmt.Sprintf("large_workflows/%s/%s", workflow.ID, fileKey)
-			localPath := fmt.Sprintf("%s/%s", basepath, fullPath)
-			data, err := os.ReadFile(localPath)
-			if err == nil {
-				workflow.Actions[actionIndex].Parameters[paramIndex].Value = string(data)
-			} else {
-				log.Printf("[WARNING] Failed reading offloaded workflow param from %s: %s", localPath, err)
-			}
-		}
-	}
 }
 
 func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthenticationStorage, id string) error {
