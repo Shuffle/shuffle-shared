@@ -10020,7 +10020,7 @@ func shouldStripWorkflowImage(value string) bool {
 }
 
 func compressWorkflow(workflow *Workflow) {
-	if workflow == nil || project.DbType != "opensearch" {
+	if workflow == nil || project.DbType != "opensearch" || os.Getenv("SHUFFLE_WORKFLOW_COMPRESSION") != "true" {
 		return
 	}
 
@@ -10058,7 +10058,7 @@ func compressWorkflow(workflow *Workflow) {
 }
 
 func getWorkflowFileValue(ctx context.Context, workflow *Workflow) {
-	if workflow == nil || project.DbType != "opensearch" {
+	if workflow == nil || project.DbType != "opensearch" || os.Getenv("SHUFFLE_WORKFLOW_COMPRESSION") != "true" {
 		return
 	}
 
