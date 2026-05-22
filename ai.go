@@ -7072,7 +7072,7 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 
 // abortAgentExecution is the single, canonical way to terminate an agent run early.
 // Callers must return immediately after this call.
-func abortAgentExecution(ctx context.Context, execution WorkflowExecution, startNode Action, base AgentOutput, abortLabel, reason string) (Action, error) {
+func abortAgentExecution(ctx context.Context, execution WorkflowExecution, startNode Action, base AgentOutput, abortLabel, reason string, suppressLog ...bool) (Action, error) {
 	agentOutput := base
 	agentOutput.Status = "ABORTED"
 	agentOutput.Error = reason
@@ -7121,7 +7121,9 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		marshalledOutput = []byte(`{"status":"ABORTED","error":"marshal error"}`)
 	}
 
-	log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q", execution.ExecutionId, execution.Workflow.OrgId, abortLabel, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
+	if len(suppressLog) == 0 || !suppressLog[0] {
+		log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q", execution.ExecutionId, execution.Workflow.OrgId, abortLabel, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
+	}
 
 	abortResult := ActionResult{
 		Status:      "SUCCESS",
@@ -7682,15 +7684,21 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					break
 				} else if status == "RUNNING" {
 					startedAt := mappedDecision.RunDetails.StartedAt
-					if startedAt > 0 && (now-startedAt) < staleThreshold {
+					if startedAt == 0 {
+						log.Printf("[WARNING][%s] Decision at index %d (action=%s) has RUNNING status but startedAt=0 - treating as stale, allowing re-dispatch", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
+						break
+					}
+
+					runningForMs := now - startedAt
+					if runningForMs < staleThreshold {
 						if debug {
-							log.Printf("[DEBUG][%s] Decision at index %d (action=%s) has been RUNNING for %dms - returning existing state", execution.ExecutionId, mappedDecision.I, mappedDecision.Action, now-startedAt)
+							log.Printf("[DEBUG][%s] Decision at index %d (action=%s) has been RUNNING for %dms - returning existing state", execution.ExecutionId, mappedDecision.I, mappedDecision.Action, runningForMs)
 						}
 						hasActiveDecision = true
 						break
 					}
 
-					log.Printf("[WARNING][%s] Decision at index %d (action=%s) has been RUNNING for %dms (startedAt=%d) - treating as stale, allowing re-dispatch", execution.ExecutionId, mappedDecision.I, mappedDecision.Action, now-startedAt, startedAt)
+					//log.Printf("[WARNING][%s] Decision at index %d (action=%s) has been RUNNING for %dms - treating as stale, allowing re-dispatch", execution.ExecutionId, mappedDecision.I, mappedDecision.Action, runningForMs)
 				}
 			}
 
@@ -8381,12 +8389,14 @@ data_filter:
 
 			if totalTokensAfterRequest > tokenLimit {
 				throttleKey := fmt.Sprintf("token_limit_log_%s", billingOrgId)
-				if _, cacheErr := GetCache(ctx, throttleKey); cacheErr != nil {
+				_, cacheErr := GetCache(ctx, throttleKey)
+				alreadyThrottled := cacheErr == nil
+				if !alreadyThrottled {
 					log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: billing_org=%s exec_org=%s monthly_used=%d estimated_current=%d total_would_be=%d limit=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, estimatedCurrentTokens, totalTokensAfterRequest, tokenLimit)
 					_ = SetCache(ctx, throttleKey, []byte("1"), 2*60)
 					go sendAITokenLimitAlert(ctx, execution, billingOrg, tokenLimit, monthlyTokensUsed)
 				}
-				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit))
+				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit), alreadyThrottled)
 			}
 		}
 	}
