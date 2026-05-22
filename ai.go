@@ -7670,18 +7670,31 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			relevantDecisions := []AgentDecision{}
 
 			// Check for existing RUNNING/WAITING ask decisions - if found, return existing state without creating new decisions
-			hasRunningAsk := false
+			const staleThreshold = int64(299 * 1000) // 4 min 59 sec in ms :-)
+			now := time.Now().UnixMilli()
+			hasActiveDecision := false
 			for _, mappedDecision := range mappedResult.Decisions {
 				status := mappedDecision.RunDetails.Status
-				if (status == "RUNNING" || status == "WAITING") && (mappedDecision.Action == "ask" || mappedDecision.Action == "question") {
-					log.Printf("[DEBUG][%s] Found existing %s ask decision at index %d - returning existing state", execution.ExecutionId, status, mappedDecision.I)
-					hasRunningAsk = true
+				if status == "WAITING" {
+					// WAITING is only ever set for human-input scenarios (ask/question and approval-required)
+					log.Printf("[DEBUG][%s] Found existing WAITING decision at index %d (action=%s) - returning existing state", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
+					hasActiveDecision = true
 					break
+				} else if status == "RUNNING" {
+					startedAt := mappedDecision.RunDetails.StartedAt
+					if startedAt > 0 && (now-startedAt) < staleThreshold {
+						if debug {
+							log.Printf("[DEBUG][%s] Decision at index %d (action=%s) has been RUNNING for %dms - returning existing state", execution.ExecutionId, mappedDecision.I, mappedDecision.Action, now-startedAt)
+						}
+						hasActiveDecision = true
+						break
+					}
+
+					log.Printf("[WARNING][%s] Decision at index %d (action=%s) has been RUNNING for %dms (startedAt=%d) - treating as stale, allowing re-dispatch", execution.ExecutionId, mappedDecision.I, mappedDecision.Action, now-startedAt, startedAt)
 				}
 			}
 
-			// If there's a running ask decision, return the existing agent output without modification
-			if hasRunningAsk {
+			if hasActiveDecision {
 				return startNode, nil
 			}
 
@@ -8134,6 +8147,10 @@ data_filter:
 	if !createNextActions {
 		if strings.TrimSpace(callerName) == "" {
 			callerName = "unknown"
+		}
+
+		for _, terminalStatus := range []string{"FINISHED", "SUCCESS", "FAILURE", "ABORTED"} {
+			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_%s", execution.ExecutionId, startNode.ID, terminalStatus))
 		}
 
 		log.Printf("[INFO][%s] AI_AGENT_START: org=%s workflow=%s user=%s caller=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, execution.WorkflowId, initiatedBy, callerName, len(userMessage))

@@ -17524,34 +17524,49 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	go SetCache(context.Background(), actionResultCacheId, marshalledResult, 35)
 
 	fullUrl := fmt.Sprintf("%s/api/v1/streams", baseUrl)
-	req, err := http.NewRequest(
-		"POST",
-		fullUrl,
-		bytes.NewBuffer(marshalledResult),
-	)
-
-	if err != nil {
-		log.Printf("[ERROR][%s] Error building agent '%s' request: %s", workflowExecution.ExecutionId, status, err)
-		return err
-	}
-
 	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[ERROR] Error running agent '%s' request (%s): %s", workflowExecution.ExecutionId, status, err)
-		return err
+
+	var streamErr error
+	var body []byte
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+
+		req, err := http.NewRequest("POST", fullUrl, bytes.NewBuffer(marshalledResult))
+		if err != nil {
+			log.Printf("[ERROR][%s] Error building agent '%s' request: %s", workflowExecution.ExecutionId, status, err)
+			return err
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[WARNING][%s]  Error on agent '%s' request (attempt %d/3): %s", workflowExecution.ExecutionId, status, attempt+1, err)
+			streamErr = err
+			continue
+		}
+
+		body, err = ioutil.ReadAll(resp.Body)
+		resp.Body.Close() // no defer since we need to close it before the next attempt : )
+		if err != nil {
+			log.Printf("[WARNING][%s] Failed reading agent '%s' body (attempt %d/3): %s", workflowExecution.ExecutionId, status, attempt+1, err)
+			streamErr = err
+			continue
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			log.Printf("[WARNING][%s] Non-2xx (%d) from /api/v1/streams for agent '%s' (attempt %d/3): %s", workflowExecution.ExecutionId, resp.StatusCode, status, attempt+1, string(body))
+			streamErr = errors.New(fmt.Sprintf("No result in %s request for agent", status))
+			continue
+		}
+
+		streamErr = nil
+		break
 	}
 
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[ERROR][%s] Failed reading agent '%s' body: %s", workflowExecution.ExecutionId, status, err)
-		return err
-	}
-
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR][%s] Failed sending self-request with '%s' for agent: %s", workflowExecution.ExecutionId, status, string(body))
-		return errors.New(fmt.Sprintf("No result in %s request for agent", status))
+	if streamErr != nil {
+		log.Printf("[ERROR][%s] Failed sending self-request with '%s' for agent after 3 attempts: %s", workflowExecution.ExecutionId, status, streamErr)
+		return streamErr
 	}
 
 	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
@@ -21961,6 +21976,8 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				callerName = "PrepareSingleAction"
 			}
 
+			log.Printf("[INFO][%s] AI Agent: %s Started standalone for org %s, execution id %s, workflow %s", exec.ExecutionId, callerName, user.ActiveOrg.Id, exec.ExecutionId, exec.WorkflowId)
+
 			action, err := HandleAiAgentExecutionStart(exec, action, false, callerName)
 			if err != nil {
 				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
@@ -21968,7 +21985,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			exec.Workflow.Actions[0] = action
 
 			newExec, err := GetWorkflowExecution(ctx, exec.ExecutionId)
-			log.Printf("[INFO][%s] AI Agent: %s Started standalone for org %s, execution id %s, workflow %s", exec.ExecutionId, callerName, user.ActiveOrg.Id, exec.ExecutionId, exec.WorkflowId)
 			if err != nil {
 				log.Printf("[ERROR] Failed to get workflow execution after starting agent: %s", err)
 			} else {
@@ -22921,10 +22937,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			DeleteCache(ctx, fmt.Sprintf("agent-%s-%s", oldExec.ExecutionId, decisionId))
 
 			// Decision run reset
-			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_FINISHED", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
-			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_SUCCESS", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
-			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_ABORTED", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
-			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_FAILURE", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
+			for _, terminalStatus := range []string{"FINISHED", "SUCCESS", "ABORTED", "FAILURE"} {
+				go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_%s", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID, terminalStatus))
+			}
 
 			// Execution reset
 			executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExec.ExecutionId)
