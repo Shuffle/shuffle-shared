@@ -9028,13 +9028,15 @@ data_filter:
 				go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
 
 			} else {
-				if decision.Category == "standalone" || decision.Action == "add_tool" {
+				// 	if decision.Category == "standalone" || decision.Action == "add_tool" {
+				// if we are already in this block then we know that this is standalone so again adding standalone as OR means it will swallow everthing right here.
+				if decision.Action == "add_tool" {
 					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 					agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 
 					decision = agentOutput.Decisions[decisionIndex]
 
-				} else if decision.Category == "standalone" || decision.Action == "answer" {
+				} else if decision.Action == "answer" {
 					// FIXME: Maybe need to send this to myself
 
 					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
@@ -9089,9 +9091,12 @@ data_filter:
 
 				} else {
 					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
-					agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+					agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
+					agentOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
+					agentOutput.Decisions[decisionIndex].RunDetails.RawResponse = fmt.Sprintf("Invalid standalone decision. Action '%s' must use category 'singul' or 'finish'.", decision.Action)
+					decision = agentOutput.Decisions[decisionIndex]
 
-					log.Printf("[ERROR][%s] AI Agent: Action '%s' with category '%s' is NOT supported in AI Agent decisions. Skipping...", execution.ExecutionId, decision.Action, decision.Category)
+					log.Printf("[ERROR][%s] AI Agent: Invalid standalone decision for action '%s'. Marked as failure.", execution.ExecutionId, decision.Action)
 				}
 			}
 
