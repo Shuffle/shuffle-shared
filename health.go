@@ -915,6 +915,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	HealthCheck.FileOps = platformHealth.FileOps
 	HealthCheck.Apps = platformHealth.Apps
 	HealthCheck.Agents = platformHealth.Agents
+	HealthCheck.Opensearch = platformHealth.OpensearchOps
 	// Add to database
 	err = SetPlatformHealth(ctx, HealthCheck)
 	if err != nil {
