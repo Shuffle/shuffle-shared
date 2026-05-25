@@ -1030,6 +1030,7 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	limit := request.URL.Query().Get("limit")
 	before := request.URL.Query().Get("before")
 	after := request.URL.Query().Get("after")
+	isOnprem := request.URL.Query().Get("onprem")
 
 	// convert all to int64
 	limitInt, err := strconv.Atoi(limit)
@@ -1048,6 +1049,47 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	afterInt, err := strconv.Atoi(after)
 	if err != nil {
 		afterInt = int(time.Now().AddDate(0, 0, -30).Unix())
+	}
+
+	if isOnprem == "true" {
+		onpremServerUrl := os.Getenv("SHUFFLE_ONPREM_SERVER_URL")
+		if len(onpremServerUrl) == 0 {
+			log.Printf("[ERROR] onprem is set to true but SHUFFLE_ONPREM_SERVER_URL is not set")
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "onprem is set to true but SHUFFLE_ONPREM_SERVER_URL is not set"}`))
+			return
+		}
+
+		url := onpremServerUrl + "/api/v1/health/stats?limit=" + strconv.Itoa(limitInt) + "&before=" + strconv.Itoa(beforeInt) + "&after=" + strconv.Itoa(afterInt)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			log.Printf("[ERROR] Failed creating HTTP request to onprem server: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed creating HTTP request to onprem server."}`))
+			return
+		}
+
+		client := &http.Client{Timeout: 180 * time.Second}
+		response, err := client.Do(req)
+		if err != nil {
+			log.Printf("[ERROR] Failed sending HTTP request to onprem server: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed sending HTTP request to onprem server."}`))
+			return
+		}
+
+		defer response.Body.Close()
+		body, err := ioutil.ReadAll(response.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading response body from onprem server: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed reading response body from onprem server."}`))
+			return
+		}
+
+		resp.WriteHeader(response.StatusCode)
+		resp.Write(body)
+		return
 	}
 
 	healthChecks, err := GetPlatformHealth(ctx, afterInt, beforeInt, limitInt)
