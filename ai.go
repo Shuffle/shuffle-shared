@@ -8158,7 +8158,7 @@ data_filter:
 		}
 
 		for _, terminalStatus := range []string{"FINISHED", "SUCCESS", "FAILURE", "ABORTED"} {
-			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_%s", execution.ExecutionId, startNode.ID, terminalStatus))
+			DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_%s", execution.ExecutionId, startNode.ID, terminalStatus))
 		}
 
 		log.Printf("[INFO][%s] AI_AGENT_START: org=%s workflow=%s user=%s caller=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, execution.WorkflowId, initiatedBy, callerName, len(userMessage))
