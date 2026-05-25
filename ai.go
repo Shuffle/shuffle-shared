@@ -8900,6 +8900,19 @@ data_filter:
 
 			nextActionType = decision.Action
 
+			normalizedAction := strings.ToLower(strings.TrimSpace(decision.Action))
+			normalizedCategory := strings.ToLower(strings.TrimSpace(decision.Category))
+			expected := expectedCategory(normalizedAction)
+
+			if normalizedCategory != expected {
+				decision.Category = expected
+				if debug {
+					log.Printf("[WARNING][%s] AI Agent corrected decision %d category from '%s' to '%s' for action '%s'", execution.ExecutionId, decision.I, normalizedCategory, expected, decision.Action)
+				}
+			}
+
+			agentOutput.Decisions[decisionIndex] = decision
+
 			// Handles approvals
 			if decision.ApprovalRequired && decision.Action != "ask" && decision.Action != "question" && (decision.Category == "singul" || decision.Category == "standalone") && (decision.RunDetails.Status == "" || decision.RunDetails.Status == "RUNNING") {
 				log.Printf("[DEBUG] Decision %d requires approval. SHOULD mark as waiting for approval (not implemented)...", decision.I)
@@ -9237,6 +9250,17 @@ data_filter:
 
 	return startNode, nil
 
+}
+
+func expectedCategory(action string) string {
+	switch action {
+	case "finish":
+		return "finish"
+	case "ask", "question", "answer", "add_tool":
+		return "standalone"
+	default:
+		return "singul"
+	}
 }
 
 // Generates Workflows based on Singul
