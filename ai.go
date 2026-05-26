@@ -7072,7 +7072,7 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 
 // abortAgentExecution is the single, canonical way to terminate an agent run early.
 // Callers must return immediately after this call.
-func abortAgentExecution(ctx context.Context, execution WorkflowExecution, startNode Action, base AgentOutput, abortLabel, reason string) (Action, error) {
+func abortAgentExecution(ctx context.Context, execution WorkflowExecution, startNode Action, base AgentOutput, abortLabel, reason string, suppressLog ...bool) (Action, error) {
 	agentOutput := base
 	agentOutput.Status = "ABORTED"
 	agentOutput.Error = reason
@@ -7121,7 +7121,9 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		marshalledOutput = []byte(`{"status":"ABORTED","error":"marshal error"}`)
 	}
 
-	log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q", execution.ExecutionId, execution.Workflow.OrgId, abortLabel, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
+	if len(suppressLog) == 0 || !suppressLog[0] {
+		log.Printf("[ERROR][%s] AI_AGENT_ABORT: org=%s label=%s decisions=%d llm_calls=%d total_tokens=%d reason=%q", execution.ExecutionId, execution.Workflow.OrgId, abortLabel, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens, reason)
+	}
 
 	abortResult := ActionResult{
 		Status:      "SUCCESS",
@@ -7689,18 +7691,37 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			relevantDecisions := []AgentDecision{}
 
 			// Check for existing RUNNING/WAITING ask decisions - if found, return existing state without creating new decisions
-			hasRunningAsk := false
+			const staleThreshold = int64(299 * 1000) // 4 min 59 sec in ms :-)
+			now := time.Now().UnixMilli()
+			hasActiveDecision := false
 			for _, mappedDecision := range mappedResult.Decisions {
 				status := mappedDecision.RunDetails.Status
-				if (status == "RUNNING" || status == "WAITING") && (mappedDecision.Action == "ask" || mappedDecision.Action == "question") {
-					log.Printf("[DEBUG][%s] Found existing %s ask decision at index %d - returning existing state", execution.ExecutionId, status, mappedDecision.I)
-					hasRunningAsk = true
+				if status == "WAITING" {
+					// WAITING is only ever set for human-input scenarios (ask/question and approval-required)
+					log.Printf("[DEBUG][%s] Found existing WAITING decision at index %d (action=%s) - returning existing state", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
+					hasActiveDecision = true
 					break
+				} else if status == "RUNNING" {
+					startedAt := mappedDecision.RunDetails.StartedAt
+					if startedAt == 0 {
+						log.Printf("[WARNING][%s] Decision at index %d (action=%s) has RUNNING status but startedAt=0 - treating as stale, allowing re-dispatch", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
+						break
+					}
+
+					runningForMs := now - startedAt
+					if runningForMs < staleThreshold {
+						if debug {
+							log.Printf("[DEBUG][%s] Decision at index %d (action=%s) has been RUNNING for %dms - returning existing state", execution.ExecutionId, mappedDecision.I, mappedDecision.Action, runningForMs)
+						}
+						hasActiveDecision = true
+						break
+					}
+
+					//log.Printf("[WARNING][%s] Decision at index %d (action=%s) has been RUNNING for %dms - treating as stale, allowing re-dispatch", execution.ExecutionId, mappedDecision.I, mappedDecision.Action, runningForMs)
 				}
 			}
 
-			// If there's a running ask decision, return the existing agent output without modification
-			if hasRunningAsk {
+			if hasActiveDecision {
 				return startNode, nil
 			}
 
@@ -8162,6 +8183,10 @@ data_filter:
 			callerName = "unknown"
 		}
 
+		for _, terminalStatus := range []string{"FINISHED", "SUCCESS", "FAILURE", "ABORTED"} {
+			DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_%s", execution.ExecutionId, startNode.ID, terminalStatus))
+		}
+
 		log.Printf("[INFO][%s] AI_AGENT_START: org=%s workflow=%s user=%s caller=%s input_length=%d", execution.ExecutionId, execution.Workflow.OrgId, execution.WorkflowId, initiatedBy, callerName, len(userMessage))
 	}
 
@@ -8390,12 +8415,14 @@ data_filter:
 
 			if totalTokensAfterRequest > tokenLimit {
 				throttleKey := fmt.Sprintf("token_limit_log_%s", billingOrgId)
-				if _, cacheErr := GetCache(ctx, throttleKey); cacheErr != nil {
+				_, cacheErr := GetCache(ctx, throttleKey)
+				alreadyThrottled := cacheErr == nil
+				if !alreadyThrottled {
 					log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: billing_org=%s exec_org=%s monthly_used=%d estimated_current=%d total_would_be=%d limit=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, estimatedCurrentTokens, totalTokensAfterRequest, tokenLimit)
 					_ = SetCache(ctx, throttleKey, []byte("1"), 2*60)
 					go sendAITokenLimitAlert(ctx, execution, billingOrg, tokenLimit, monthlyTokensUsed)
 				}
-				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit))
+				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit), alreadyThrottled)
 			}
 		}
 	}
@@ -8899,6 +8926,19 @@ data_filter:
 
 			nextActionType = decision.Action
 
+			normalizedAction := strings.ToLower(strings.TrimSpace(decision.Action))
+			normalizedCategory := strings.ToLower(strings.TrimSpace(decision.Category))
+			expected := expectedCategory(normalizedAction)
+
+			if normalizedCategory != expected {
+				decision.Category = expected
+				if debug {
+					log.Printf("[WARNING][%s] AI Agent corrected decision %d category from '%s' to '%s' for action '%s'", execution.ExecutionId, decision.I, normalizedCategory, expected, decision.Action)
+				}
+			}
+
+			agentOutput.Decisions[decisionIndex] = decision
+
 			// Handles approvals
 			if decision.ApprovalRequired && decision.Action != "ask" && decision.Action != "question" && (decision.Category == "singul" || decision.Category == "standalone") && (decision.RunDetails.Status == "" || decision.RunDetails.Status == "RUNNING") {
 				log.Printf("[DEBUG] Decision %d requires approval. SHOULD mark as waiting for approval (not implemented)...", decision.I)
@@ -9014,13 +9054,15 @@ data_filter:
 				go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
 
 			} else {
-				if decision.Category == "standalone" || decision.Action == "add_tool" {
+				// 	if decision.Category == "standalone" || decision.Action == "add_tool" {
+				// if we are already in this block then we know that this is standalone so again adding standalone as OR means it will swallow everthing right here.
+				if decision.Action == "add_tool" {
 					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 					agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 
 					decision = agentOutput.Decisions[decisionIndex]
 
-				} else if decision.Category == "standalone" || decision.Action == "answer" {
+				} else if decision.Action == "answer" {
 					// FIXME: Maybe need to send this to myself
 
 					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
@@ -9075,9 +9117,12 @@ data_filter:
 
 				} else {
 					agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
-					agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+					agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
+					agentOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
+					agentOutput.Decisions[decisionIndex].RunDetails.RawResponse = fmt.Sprintf("Invalid standalone decision. Action '%s' must use category 'singul' or 'finish'.", decision.Action)
+					decision = agentOutput.Decisions[decisionIndex]
 
-					log.Printf("[ERROR][%s] AI Agent: Action '%s' with category '%s' is NOT supported in AI Agent decisions. Skipping...", execution.ExecutionId, decision.Action, decision.Category)
+					log.Printf("[ERROR][%s] AI Agent: Invalid standalone decision for action '%s'. Marked as failure.", execution.ExecutionId, decision.Action)
 				}
 			}
 
@@ -9236,6 +9281,17 @@ data_filter:
 
 	return startNode, nil
 
+}
+
+func expectedCategory(action string) string {
+	switch action {
+	case "finish":
+		return "finish"
+	case "ask", "question", "answer", "add_tool":
+		return "standalone"
+	default:
+		return "singul"
+	}
 }
 
 // Generates Workflows based on Singul
