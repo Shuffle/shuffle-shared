@@ -17427,6 +17427,88 @@ func RunExecutionTranslation(ctx context.Context, actionResult ActionResult) {
 	//log.Printf("\n\n[DEBUG] Found body in action result of length: %d", len(parsedBody))
 }
 
+// helper function to do request with retry but unused yet.
+func DoRequestWithRetry(client *http.Client, req *http.Request, maxAttempts int) (*http.Response, []byte, error) {
+	if client == nil {
+		return nil, nil, errors.New("http client is nil")
+	}
+
+	if req == nil {
+		return nil, nil, errors.New("http request is nil")
+	}
+
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+
+	var requestBody []byte
+	var err error
+	if req.GetBody == nil && req.Body != nil {
+		requestBody, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		req.Body.Close()
+		req.Body = io.NopCloser(bytes.NewReader(requestBody))
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+
+		clonedReq := req.Clone(req.Context())
+		if req.GetBody != nil {
+			clonedReq.Body, err = req.GetBody()
+			if err != nil {
+				return nil, nil, err
+			}
+		} else if requestBody != nil {
+			clonedReq.Body = io.NopCloser(bytes.NewReader(requestBody))
+			clonedReq.ContentLength = int64(len(requestBody))
+		}
+
+		resp, err := client.Do(clonedReq)
+		if err != nil {
+			if resp != nil {
+				if resp.Body != nil {
+					resp.Body.Close()
+				}
+
+				return resp, nil, err
+			}
+
+			lastErr = err
+			if attempt+1 < maxAttempts {
+				continue
+			}
+
+			return nil, nil, err
+		}
+
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return resp, nil, readErr
+		}
+
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return resp, body, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+		}
+
+		return resp, body, nil
+	}
+
+	if lastErr == nil {
+		lastErr = errors.New("request failed without a concrete error")
+	}
+
+	return nil, nil, lastErr
+}
+
 func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecution, actionResult ActionResult) error {
 	if project.Environment == "worker" {
 		return nil
@@ -17436,6 +17518,11 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 	// Check if the request has been sent already (just in case)
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
+	var cacheTTL int32 = 1 // 1 minute for non-terminal statuses
+	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
+		cacheTTL = 1440 
+	}
+
 	// cacheKey := fmt.Sprintf("agent_request_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID)
 	_, err := GetCache(ctx, cacheKey)
 	if err == nil {
@@ -17444,13 +17531,6 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		//}
 
 		return nil
-	} else {
-		var cacheTTL int32 = 1 // 1 minute for non-terminal statuses
-		if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
-			cacheTTL = 1440 // 24 hours — execution outcome is permanent
-		}
-		SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
-		// SetCache(ctx, cacheKey, []byte(status), cacheTTL)
 	}
 
 	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
@@ -17568,6 +17648,9 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		log.Printf("[ERROR][%s] Failed sending self-request with '%s' for agent after 3 attempts: %s", workflowExecution.ExecutionId, status, streamErr)
 		return streamErr
 	}
+
+	SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
+	// SetCache(ctx, cacheKey, []byte(status), cacheTTL)
 
 	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
 		// Check if this workflow is running in different env (not cloud)

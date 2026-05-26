@@ -2353,7 +2353,9 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		if !toolAllowed {
 			decision.RunDetails.Status = "FAILURE"
 			decision.RunDetails.RawResponse = fmt.Sprintf("Tool '%s' is not allowed for this run. Allowed tools: %s", decision.Tool, strings.Join(allowedTools, ", "))
-			log.Printf("[WARNING][%s] AI Agent blocked disallowed tool '%s' for decision %s. Allowed tools: %s", execution.ExecutionId, decision.Tool, decision.RunDetails.Id, strings.Join(allowedTools, ", "))
+			if debug {
+				log.Printf("[WARNING][%s] AI Agent blocked disallowed tool '%s' for decision %s. Allowed tools: %s", execution.ExecutionId, decision.Tool, decision.RunDetails.Id, strings.Join(allowedTools, ", "))
+			}
 		} else {
 		// Singul handler
 			rawResponse, debugUrl, appname, categoryLabels, actionName, err := RunAgentDecisionSingulActionHandler(execution, decision)
@@ -2367,7 +2369,9 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			decision.RunDetails.CategoryLabels = categoryLabels
 			decision.RunDetails.ActionName = actionName
 
-			log.Printf("RawResp: %s", string(rawResponse))
+			if debug {
+				log.Printf("RawResp: %s", string(rawResponse))
+			}
 
 			if err != nil {
 				if debug { 

@@ -7679,7 +7679,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				status := mappedDecision.RunDetails.Status
 				if status == "WAITING" {
 					// WAITING is only ever set for human-input scenarios (ask/question and approval-required)
-					log.Printf("[DEBUG][%s] Found existing WAITING decision at index %d (action=%s) - returning existing state", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
+					if debug {
+						log.Printf("[DEBUG][%s] Found existing WAITING decision at index %d (action=%s) - returning existing state", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
+					}
+					
 					hasActiveDecision = true
 					break
 				} else if status == "RUNNING" {
