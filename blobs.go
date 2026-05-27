@@ -538,6 +538,22 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
 			}
 		}
+	} else if actionType == "notification" || actionType == "notifications" || actionType == "forward_notification" || actionType == "forward_notifications" {
+		// Update the orgs' notification settings to include the workflow as a notification action
+		foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil || foundOrg.Id == "" {
+			log.Printf("[ERROR] Failed to get org for notification workflow update: %s", err)
+			return err
+		}
+
+		if foundOrg.Defaults.NotificationWorkflow != workflow.ID {
+			foundOrg.Defaults.NotificationWorkflow = workflow.ID
+			err = SetOrg(ctx, *foundOrg, foundOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed to update org for notification workflow update: %s", err)
+				return err
+			}
+		}
 	}
 
 	return nil
@@ -934,6 +950,51 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				}
 			}
 		}
+	} else if parsedActiontype == "notification" || parsedActiontype == "notifications" || parsedActiontype == "forward_notification" || parsedActiontype == "forward_notifications" {
+		actionName := "communication"
+		currentAction := WorkflowAppActionParameter{
+			Name:  "action",
+			Value: "Send message",
+			Options: []string{},
+		}
+
+		defaultWorkflow := Workflow{
+			Name:        "Notification Workflow",
+			Description: "A workflow that forwards notifications to a specified apps",
+			OrgId:       orgId,
+			Start:       startActionId,
+			UsecaseIds:  []string{"Notifications"},
+			Tags:        []string{"forward", "notification", "automatic", "usecase"},
+			Actions: []Action{
+				Action{
+					Name:        actionName,
+					AppID:       "integration",
+					AppName:     "Singul",
+					LargeImage:  getSingulLogo(),
+					ID:          startActionId,
+					AppVersion:  "1.0.0",
+					Environment: actionEnv,
+					Label:       "Send Notification",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "app_name",
+							Value: "",
+						},
+						currentAction,
+						WorkflowAppActionParameter{
+							Name:      "fields",
+							Value:     "$exec",
+							Multiline: true,
+						},
+					},
+				},
+			},
+			Branches: []Branch{},
+		}
+
+		// For now while testing
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
 
 	} else if parsedActiontype == "threatlist_monitor_webhook" {
 		secondActionId := uuid.NewV4().String()
@@ -2686,6 +2747,7 @@ def findall_with_limit(pattern, text, max_matches=None, timeout_seconds=5):
 
 # These are the regex items from the datastore
 found_items = []
+found_types = {}
 for ioc_object in all_items:
   try:
     ioc_object = json.loads(ioc_object)
@@ -2723,6 +2785,11 @@ for ioc_object in all_items:
       "value": match,
       "type": ioc_object["name"],
     })
+	    
+    if ioc_object["name"] not in found_types:
+      found_types[ioc_object["name"]] = 1
+    else:
+      found_types[ioc_object["name"]] += 1
 
 full_body = [{
   "key": "$exec.shuffle_datastore.key",
@@ -2744,6 +2811,7 @@ try:
     print(json.dumps({
       "success": True, 
       "reason": "Uploaded '$exec.shuffle_datastore.key' in '$exec.shuffle_datastore.category' with %d indicators" % (len(found_items)),
+	  "types": found_types,
     }))
   else:
     print(json.dumps({
@@ -3402,7 +3470,7 @@ func GetUsecaseData() string {
       {
         "name": "SIEM alerts",
         "type": "SIEM",
-        "destination": "Case Management",
+        "destination": "Cases",
         "running": false,
         "disabled": false,
         "id": "siem_case_management_1",
@@ -3422,7 +3490,7 @@ func GetUsecaseData() string {
       {
         "name": "EDR alerts",
         "type": "EDR",
-        "destination": "Case Management",
+        "destination": "Cases",
         "running": false,
         "disabled": false,
         "id": "edr_case_management_1",
@@ -3441,7 +3509,7 @@ func GetUsecaseData() string {
       {
         "name": "Email reports",
         "type": "Email",
-        "destination": "Case Management",
+        "destination": "Cases",
         "running": false,
         "disabled": false,
         "id": "email_case_management_1",
@@ -3511,6 +3579,29 @@ func GetUsecaseData() string {
         "agentic_description": "An agent normalises endpoint telemetry from diverse agents, tags each event with asset criticality and owner from the CMDB, and forwards structured logs to the SIEM with context that tunes alert priority.",
         "automation_area": "automatic_ingestion",
         "manual_verification": true
+      },
+      {
+        "name": "Vulnerability Ingestion",
+        "type": "Assets",
+        "destination": "Cases",
+        "running": false,
+        "disabled": true,
+        "id": "vulnerability_ingestion_1",
+        "source_id": "asset_management",
+        "target_id": "case_management",
+        "tags": [
+          "Ingest",
+          "Vulnerability",
+          "Logs"
+        ],
+        "description": "Ingest vulnerability findings (CVEs, misconfigurations, missing patches) from your scanners into a unified inventory so they can be correlated with assets and incidents.",
+        "agentic_description": "An agent normalizes scanner output across vendors, deduplicates findings per asset, enriches each CVE with exploitability and threat intel, and keeps the vulnerability inventory continuously up to date.",
+        "automation_area": "automatic_ingestion",
+        "custom_action": {
+          "label": "Configure Vulnerabilities",
+          "href": "/vulnerabilities",
+          "description": "Open the vulnerability inventory to ingest CVEs from your scanners."
+        }
       }
     ]
   },
@@ -3525,7 +3616,7 @@ func GetUsecaseData() string {
         "name": "IOC feeds",
         "type": "Threat Intel",
         "destination": "Network",
-        "running": false,
+        "running": true,
         "disabled": true,
         "id": "threat_intel_network_1",
         "source_id": "threat_intel",
@@ -3537,13 +3628,15 @@ func GetUsecaseData() string {
         ],
         "description": "Threat intel feeds pushed to network devices include IPs, domains, URLs, and ASNs for perimeter blocking, as well as MITRE ATT&CK techniques used to inform detection rule tuning on IDS/IPS and NDR sensors. Network controls act at layer 3–7, so indicator types must be network-observable.",
         "agentic_description": "An agent curates and validates IOC feeds before pushing, deduplicates against existing block rules, removes expired indicators, and maps active techniques to IDS/IPS signatures — ensuring network policy stays accurate without manual review.",
+        "automation_label": "Enable Threat feeds",
+        "automation_category": "cases",
         "automation_area": "threat_intel"
       },
       {
         "name": "IOC feeds",
         "type": "Threat Intel",
         "destination": "EDR",
-        "running": false,
+        "running": true,
         "disabled": true,
         "id": "threat_intel_edr_1",
         "source_id": "threat_intel",
@@ -3556,11 +3649,13 @@ func GetUsecaseData() string {
         ],
         "description": "Endpoint-targeted IOC feeds include file hashes (MD5/SHA256), process names, registry keys, certificate thumbprints, and parent-child process trees for behavioral blocking. MITRE ATT&CK technique mappings inform custom detection rules. Unlike network devices, EDR can act on host-observable artifacts invisible to the perimeter.",
         "agentic_description": "An agent validates hash and behavioral indicator accuracy against multiple intel sources, maps techniques to EDR rule coverage gaps, prioritizes by threat severity, and generates a blocking report with rollback instructions.",
+        "automation_label": "Enable Threat feeds",
+        "automation_category": "cases",
         "automation_area": "threat_intel"
       },
       {
         "name": "Notifications",
-        "type": "Case Management",
+        "type": "Cases",
         "destination": "Communication",
         "running": false,
         "disabled": false,
@@ -3579,7 +3674,7 @@ func GetUsecaseData() string {
       },
       {
         "name": "Disable accounts",
-        "type": "Case Management",
+        "type": "Cases",
         "destination": "IAM",
         "running": false,
         "disabled": true,
@@ -3596,7 +3691,7 @@ func GetUsecaseData() string {
       },
       {
         "name": "Containment",
-        "type": "Case Management",
+        "type": "Cases",
         "destination": "EDR",
         "running": false,
         "disabled": true,
@@ -3613,7 +3708,7 @@ func GetUsecaseData() string {
       },
       {
         "name": "Cloud response",
-        "type": "Case Management",
+        "type": "Cases",
         "destination": "Cloud",
         "running": false,
         "disabled": true,
@@ -3630,7 +3725,7 @@ func GetUsecaseData() string {
       },
       {
         "name": "Block rules",
-        "type": "Case Management",
+        "type": "Cases",
         "destination": "Network",
         "running": false,
         "disabled": true,
@@ -3648,7 +3743,7 @@ func GetUsecaseData() string {
       },
       {
         "name": "Quarantine",
-        "type": "Case Management",
+        "type": "Cases",
         "destination": "Email",
         "running": false,
         "disabled": true,
@@ -3665,8 +3760,8 @@ func GetUsecaseData() string {
       },
       {
         "name": "Forward Tickets",
-        "type": "Case Management",
-        "destination": "Case Management",
+        "type": "Cases",
+        "destination": "Cases",
         "running": false,
         "disabled": false,
         "id": "case_management_cases_forward_1",
@@ -3684,8 +3779,8 @@ func GetUsecaseData() string {
       },
       {
         "name": "Assign & Escalate",
-        "type": "Case Management",
-        "destination": "Case Management",
+        "type": "Cases",
+        "destination": "Cases",
         "running": false,
         "disabled": false,
         "id": "case_management_assign_escalate_1",
@@ -3703,8 +3798,31 @@ func GetUsecaseData() string {
         "automation_area": "assign_escalate"
       },
       {
-        "name": "Add Host-Sensors",
-        "type": "Case Management",
+        "name": "Vulnerability Response",
+        "type": "Assets",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "asset_management_case_management_vuln_response_1",
+        "source_id": "asset_management",
+        "target_id": "case_management",
+        "tags": [
+          "Response",
+          "Vulnerability",
+          "Remediation"
+        ],
+        "description": "Automatically open remediation tasks, patch tickets, or compensating-control workflows for vulnerabilities discovered during incident investigation — closing the loop between detection and fix.",
+        "agentic_description": "An agent triages each confirmed exploitable CVE on an affected host, opens a remediation ticket with owner and SLA, applies a compensating control where possible, and tracks the fix back to the originating incident.",
+        "automation_area": "response",
+        "custom_action": {
+          "label": "Configure Vulnerabilities",
+          "href": "/vulnerabilities",
+          "description": "Open the vulnerability inventory to wire up remediation workflows."
+        }
+      },
+      {
+        "name": "Add Host-Monitors",
+        "type": "Cases",
         "destination": "Assets",
         "running": false,
         "disabled": false,
@@ -3720,7 +3838,36 @@ func GetUsecaseData() string {
         "agentic_description": "An agent identifies hosts missing monitor coverage, generates the appropriate deployment command for each platform, tracks rollout status, and verifies telemetry is flowing back into the platform after install.",
         "automation_label": "Add Monitors",
         "automation_category": "cases",
-        "automation_area": "response"
+        "automation_area": "response",
+        "custom_action": {
+          "label": "Add Monitor",
+          "href": "/monitors?add_host=true",
+          "description": "Open the monitor deployment dialog to register a new host."
+        }
+      },
+      {
+        "name": "AI Incident Handling",
+        "type": "Cases",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "case_management_agent_ai_incident_handling_1",
+        "source_id": "case_management",
+        "target_id": "case_management",
+        "tags": [
+          "Response",
+          "AI",
+          "Agent",
+          "Triage"
+        ],
+        "description": "Hand off new incidents to an AI Agent that triages, enriches, and resolves them end-to-end — assigning owners, gathering observables, executing safe response actions, and escalating only the cases that need a human.",
+        "agentic_description": "An AI Agent picks up every new incident, builds full context from connected tools, decides the next-best action (assign, enrich, contain, close), executes the safe ones automatically, and queues high-impact actions for analyst approval.",
+        "automation_area": "response",
+        "custom_action": {
+          "label": "Configure AI Agents",
+          "href": "/agents",
+          "description": "Open the Agents page to enable AI incident handling and choose which tools the agent may use."
+        }
       }
     ]
   },
@@ -3772,8 +3919,8 @@ func GetUsecaseData() string {
       {
         "name": "Enrichment",
         "type": "Threat Intel",
-        "destination": "Case Management",
-        "running": false,
+        "destination": "Cases",
+        "running": true,
         "disabled": false,
         "id": "threat_intel_case_management_1",
         "source_id": "threat_intel",
@@ -3792,7 +3939,7 @@ func GetUsecaseData() string {
       {
         "name": "Asset context",
         "type": "Assets",
-        "destination": "Case Management",
+        "destination": "Cases",
         "running": false,
         "disabled": true,
         "id": "asset_management_case_management_1",
@@ -3809,7 +3956,7 @@ func GetUsecaseData() string {
       {
         "name": "Vulnerability Correlation",
         "type": "Assets",
-        "destination": "Case Management",
+        "destination": "Cases",
         "running": false,
         "disabled": false,
         "id": "asset_management_case_management_vuln_1",
@@ -3822,7 +3969,12 @@ func GetUsecaseData() string {
         ],
         "description": "Correlate known vulnerabilities (CVEs, misconfigurations, missing patches) on affected assets with active incidents — surfacing exploitable weaknesses that elevate risk and guide containment priorities.",
         "agentic_description": "An agent matches observables and affected hosts in a case against the vulnerability inventory, identifies exploitable CVEs aligned with the attack technique, recalculates incident severity, and recommends remediation or compensating controls.",
-        "automation_area": "correlation"
+        "automation_area": "correlation",
+        "custom_action": {
+          "label": "Configure Vulnerabilities",
+          "href": "/vulnerabilities",
+          "description": "Open the vulnerability inventory to ingest CVEs from your scanners."
+        }
       },
       {
         "name": "Phishing IOCs",
@@ -3865,7 +4017,7 @@ func GetUsecaseData() string {
         "name": "IOC feeds",
         "type": "Threat Intel",
         "destination": "Cloud",
-        "running": false,
+        "running": true,
         "disabled": false,
         "id": "threat_intel_cloud_1",
         "source_id": "threat_intel",
@@ -3877,6 +4029,8 @@ func GetUsecaseData() string {
         ],
         "description": "Pushing IOC feeds to cloud-native security tools (GuardDuty, Sentinel, SCC) enables detection of known-malicious activity within cloud workloads.",
         "agentic_description": "An agent maps threat intel IOCs to active cloud workloads, identifies which resources are communicating with known-malicious infrastructure, and auto-creates remediation tasks in cloud security tools.",
+        "automation_label": "Enable Threat feeds",
+        "automation_category": "cases",
         "automation_area": "threat_intel"
       },
       {
@@ -3896,6 +4050,29 @@ func GetUsecaseData() string {
         "agentic_description": "An agent continuously reconciles cloud inventory with the CMDB, flags newly exposed resources, identifies shadow IT, and marks assets with missing security controls for immediate action.",
         "automation_area": "correlation",
         "manual_verification": true
+      },
+      {
+        "name": "Incident Routing",
+        "type": "Cases",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "case_management_incident_routing_1",
+        "source_id": "case_management",
+        "target_id": "case_management",
+        "tags": [
+          "Context",
+          "Correlation",
+          "Routing"
+        ],
+        "description": "Route incoming incidents to the right sub-organization based on tenant, source, severity, observables, or any field in the incident payload. Keeps multi-tenant environments tidy and ensures the right team owns each incident from the start.",
+        "agentic_description": "An agent evaluates each new incident against your routing rules, decides which sub-organization should own it, and either suggests or executes the move with full audit trail.",
+        "automation_area": "correlation",
+        "custom_action": {
+          "label": "Configure Routing",
+          "href": "/preferences?tab=routing",
+          "description": "Open Organization Preferences to manage incident routing rules."
+        }
       }
     ]
   }

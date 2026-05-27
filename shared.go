@@ -180,7 +180,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			if !allowed {
 				currentUrl := strings.ToLower(request.URL.String())
 				allowedUrls := []string{"/api/v1/", "/api/v2/"}
-				disallowedUrls := []string{"/settings", "/register", "/login_openid", "/login_sso"}
+				disallowedUrls := []string{"/settings", "/register", "/login_openid", "/login_sso", "/generateapikey", "/passwordchange", "/updateuser"}
 				for _, allowedUrl := range allowedUrls {
 					if !strings.HasPrefix(currentUrl, allowedUrl) {
 						continue
@@ -308,7 +308,13 @@ func ConstructSessionCookie(value string, expires time.Time) *http.Cookie {
 
 	if project.Environment == "cloud" {
 		c.Domain = ".shuffler.io"
+		if len(os.Getenv("SHUFFLE_COOKIE_DOMAIN")) > 0 {
+			c.Domain = os.Getenv("SHUFFLE_COOKIE_DOMAIN")
+		}
 		c.Secure = true
+		if os.Getenv("SHUFFLE_COOKIE_SECURE") == "false" {
+			c.Secure = false
+		}
 		//c.SameSite = http.SameSiteLaxMode
 		c.SameSite = http.SameSiteNoneMode
 	}
@@ -9179,6 +9185,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	referer := request.Header.Get("Referer")
+	if !strings.Contains(referer, "/forms/") {
+		workflow.Sharing = tmpworkflow.Sharing
+		workflow.InputQuestions = tmpworkflow.InputQuestions
+		workflow.FormControl = tmpworkflow.FormControl
+	}
+
 	if fileId != workflow.ID {
 		log.Printf("[ERROR] Path and request ID are NOT matching in workflow save: %s != %s. URL: %s", fileId, workflow.ID, request.URL.String())
 		resp.WriteHeader(400)
@@ -12793,7 +12806,10 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] OpenID login for %s", org.Id)
 			redirectKey = "SSO_REDIRECT"
 
-			baseSSOUrl = GetOpenIdUrl(request, *org)
+			baseSSOUrl, err = GetOpenIdUrl(request, *org, user, "")
+			if err != nil {
+				log.Printf("[ERROR] Failed getting OpenID URL for org %s: %s", org.Id, err)
+			}
 		}
 
 		if skipSSO || len(baseSSOUrl) == 0 {
@@ -15485,73 +15501,139 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 }
 
 func verifier() (*CodeVerifier, error) {
-	r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
-	b := make([]byte, 32, 32)
-	for i := 0; i < 32; i++ {
-		b[i] = byte(r.Intn(255))
+	b := make([]byte, 32)
+	_, err := rand.Read(b)
+	if err != nil {
+		return nil, err
 	}
 	return CreateCodeVerifierFromBytes(b)
 }
 
-func GetOpenIdUrl(request *http.Request, org Org) string {
+// GetOpenIdUrl generates an OpenID Connect authorization URL.
+// On cloud: supports mode-based flows (login vs setup), stores PKCE verifier on user.
+// On-prem: original logic with form_post support when client_secret exists.
+// The user and mode params are only used on cloud — on-prem callers can pass User{} and "".
+func GetOpenIdUrl(request *http.Request, org Org, user User, mode string) (string, error) {
+	if project.Environment == "cloud" {
+		return getOpenIdUrlCloud(request, org, user, mode)
+	}
+	return getOpenIdUrlOnPrem(request, org)
+}
+
+func getOpenIdUrlOnPrem(request *http.Request, org Org) (string, error) {
 	baseSSOUrl := org.SSOConfig.OpenIdAuthorization
 
 	codeChallenge := uuid.NewV4().String()
-	//h.Write([]byte(v.Value))
 	verifier, verifiererr := verifier()
 	if verifiererr == nil {
 		codeChallenge = verifier.Value
 	}
 
-	//log.Printf("[DEBUG] Got challenge value %s (pre state)", codeChallenge)
-
-	// https://192.168.55.222:3443/api/v1/login_openid
-	//location := strings.Split(request.URL.String(), "/")
-	//redirectUrl := url.QueryEscape("http://localhost:5001/api/v1/login_openid")
 	redirectUrl := url.QueryEscape(fmt.Sprintf("http://%s/api/v1/login_openid", request.Host))
-	if project.Environment == "cloud" {
-		redirectUrl = url.QueryEscape(fmt.Sprintf("https://shuffler.io/api/v1/login_openid"))
-	}
 
-	//Redirect url for onprem
-	if project.Environment != "cloud" && strings.Contains(request.Host, "shuffle-backend") && !strings.Contains(os.Getenv("BASE_URL"), "shuffle-backend") {
+	if strings.Contains(request.Host, "shuffle-backend") && !strings.Contains(os.Getenv("BASE_URL"), "shuffle-backend") {
 		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("BASE_URL")))
 	} else {
-		//check if base url exist if exist then assign the base url. This is for local testing when request.Host is is not "shuffle-backend"
-		if project.Environment != "cloud" && len(os.Getenv("BASE_URL")) > 0 {
+		if len(os.Getenv("BASE_URL")) > 0 {
 			redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("BASE_URL")))
-		} else if project.Environment != "cloud" {
-			//if base url not exist then assign hardcoded url for the onprem, user should not reach here but in case not set the base url hardcode it.
+		} else {
 			redirectUrl = url.QueryEscape(fmt.Sprintf("http://localhost:5001/api/v1/login_openid"))
 		}
 	}
 
-	//In any case redirect url should not be the SSO_REDIRECT_URL as it is the frontend url where user will be redirected after login.
-	if project.Environment != "cloud" && len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+	if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
 		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("SSO_REDIRECT_URL")))
 	}
 
 	state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
 
-	// has to happen after initial value is stored
 	if verifiererr == nil {
 		codeChallenge = verifier.CodeChallengeS256()
 	}
 
 	if len(org.SSOConfig.OpenIdClientSecret) > 0 {
-
-		//baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid&redirect_uri=%s&state=%s&client_secret=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, org.SSOConfig.OpenIdClientSecret)
 		state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&redirect=%s&challenge=%s", org.Id, redirectUrl, org.SSOConfig.OpenIdClientSecret)))
 		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=id_token&scope=openid email&redirect_uri=%s&state=%s&response_mode=form_post&nonce=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, state)
-		//baseSSOUrl += fmt.Sprintf("&client_secret=%s", org.SSOConfig.OpenIdClientSecret)
 	} else {
 		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid email&redirect_uri=%s&state=%s&code_challenge_method=S256&code_challenge=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, codeChallenge)
 	}
 
-	return baseSSOUrl
+	return baseSSOUrl, nil
 }
 
-/*
+func getOpenIdUrlCloud(request *http.Request, org Org, user User, mode string) (string, error) {
+	baseSSOUrl := org.SSOConfig.OpenIdAuthorization
+
+	signIn := mode == "signin" || mode == "login"
+
+	verifier, verifiererr := verifier()
+	if verifiererr != nil {
+		return "", verifiererr
+	}
+
+	codeChallenge := verifier.CodeChallengeS256()
+
+	if !signIn {
+		user.InitSSOInfos()
+
+		existingSSOInfo, _ := user.GetSSOInfo(org.Id)
+		user.SetSSOInfo(org.Id, SSOInfo{
+			Sub:             existingSSOInfo.Sub,
+			ClientID:        org.SSOConfig.OpenIdClientId,
+			CodeVerifier:    verifier.Value,
+			ChallengeExpiry: time.Now().Add(60 * time.Minute),
+		})
+
+		ctx := context.Background()
+		err := SetUser(ctx, &user, true)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		log.Printf("[DEBUG] Generating SSO login link for all non-logged in users using the org")
+	}
+
+	baseUrl := "https://shuffler.io"
+	if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+		baseUrl = os.Getenv("SSO_REDIRECT_URL")
+	}
+	redirectUrl := fmt.Sprintf("%s/api/v1/login_openid", baseUrl)
+
+	state := ""
+	if !signIn {
+		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
+	} else {
+		state = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&mode=login&redirect=%s", org.Id, redirectUrl)))
+	}
+
+	isMicrosoft := strings.Contains(org.SSOConfig.OpenIdAuthorization, "login.microsoftonline.com")
+
+	scopes := []string{"openid", "email"}
+	if isMicrosoft {
+		scopes = append(scopes, "User.Read")
+	}
+
+	usePKCE := !signIn
+
+	params := url.Values{}
+	params.Set("client_id", org.SSOConfig.OpenIdClientId)
+	params.Set("response_type", "code")
+	params.Set("scope", strings.Join(scopes, " "))
+	params.Set("state", state)
+	params.Set("redirect_uri", redirectUrl)
+
+	if usePKCE {
+		params.Set("code_challenge_method", "S256")
+		params.Set("code_challenge", codeChallenge)
+	}
+
+	baseSSOUrl = baseSSOUrl + "?" + params.Encode()
+
+	log.Printf("[DEBUG] Generated SSO URL: %s", baseSSOUrl)
+
+	return baseSSOUrl, nil
+}
+
 func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -15581,6 +15663,24 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Admin access required"}`))
 		return
+	}
+
+	orgIdHeader := request.Header.Get("Org-Id")
+	if len(orgIdHeader) == 0 {
+		orgIdHeader = request.URL.Query().Get("org_id")
+		if len(orgIdHeader) == 0 {
+			orgIdHeader = request.Header.Get("OrgId")
+		}
+	}
+
+	if len(orgIdHeader) > 0 {
+		_, orgErr := GetOrg(ctx, orgIdHeader)
+		if orgErr != nil {
+			log.Printf("[ERROR] Org-Id '%s' from header does not exist in provision request by user %s: %s", orgIdHeader, user.Username, orgErr)
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Org-Id '%s' does not exist. Verify the org ID and try again."}`, orgIdHeader)))
+			return
+		}
 	}
 
 	// check if user is in a partner org
@@ -15698,7 +15798,56 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 	}
 
 	if existingUser.Id != "" {
-		if existingUser.ProvisionedByOrg == org.Id {
+		provisionedByParent := ""
+		if existingUser.ProvisionedByOrg != org.Id {
+			provOrg, err := GetOrg(ctx, existingUser.ProvisionedByOrg)
+			if err == nil {
+				provisionedByParent = provOrg.CreatorOrg
+				if len(provisionedByParent) == 0 {
+					provisionedByParent = provOrg.Id
+				}
+			}
+		}
+
+		if existingUser.ProvisionedByOrg == org.Id || provisionedByParent == validationOrg.Id {
+			// If user is from a sibling org, add them to this org
+			if existingUser.ProvisionedByOrg != org.Id {
+				foundInOrg := false
+				for _, userOrg := range existingUser.Orgs {
+					if userOrg == org.Id {
+						foundInOrg = true
+						break
+					}
+				}
+
+				if !foundInOrg {
+					existingUser.Orgs = append(existingUser.Orgs, org.Id)
+					org.Users = append(org.Users, User{
+						Id:       existingUser.Id,
+						Username: existingUser.Username,
+						Role:     "user",
+					})
+
+					err = SetUser(ctx, existingUser, true)
+					if err != nil {
+						log.Printf("[ERROR] Failed to add user %s to org %s: %s", existingUser.Id, org.Id, err)
+						resp.WriteHeader(500)
+						resp.Write([]byte(`{"success": false, "reason": "Failed to add user to organization"}`))
+						return
+					}
+
+					err = SetOrg(ctx, *org, org.Id)
+					if err != nil {
+						log.Printf("[ERROR] Failed to update org %s after adding user: %s", org.Id, err)
+						resp.WriteHeader(500)
+						resp.Write([]byte(`{"success": false, "reason": "Failed to update organization"}`))
+						return
+					}
+
+					log.Printf("[AUDIT] Added user %s to sibling org %s (originally provisioned by %s)", existingUser.Username, org.Id, existingUser.ProvisionedByOrg)
+				}
+			}
+
 			existingUser.InitSSOInfos()
 			ssoInfo, exists := existingUser.GetSSOInfo(org.Id)
 
@@ -15804,7 +15953,6 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 		"user_id": "%s",
 	}`, ssoUrl, newUser.Id)))
 }
-*/
 
 func GetRequestIp(r *http.Request) string {
 	// Check the actual IP that is inbound
@@ -16104,7 +16252,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[INFO] OpenID login for %s", org.Id)
 				redirectKey = "SSO_REDIRECT"
 
-				baseSSOUrl = GetOpenIdUrl(request, *org)
+				baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata, "signin")
+				if err != nil {
+					log.Printf("[ERROR] Failed getting OpenID URL for org %s: %s", org.Id, err)
+				}
 			}
 
 			if !orgFound && len(baseSSOUrl) > 0 {
@@ -17514,25 +17665,28 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		return nil
 	}
 
+	if os.Getenv("SHUFFLE_DISABLE_AGENT_SELFREQUEST") == "true" {
+		log.Printf("[WARNING][%s] Agent self-request disabled via env — skipping '%s'", workflowExecution.ExecutionId, status)
+		return nil
+	}
+
 	ctx := context.Background()
 
 	// Check if the request has been sent already (just in case)
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
-	// cacheKey := fmt.Sprintf("agent_request_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID)
 	_, err := GetCache(ctx, cacheKey)
 	if err == nil {
-		//if debug {
-		//	log.Printf("[DEBUG][%s] Agent self-request for Agent Result '%s' with status '%s' has already been sent. Skipping.", workflowExecution.ExecutionId, actionResult.Action.ID, status)
-		//}
-
 		return nil
 	} else {
 		var cacheTTL int32 = 1 // 1 minute for non-terminal statuses
 		if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
 			cacheTTL = 1440 // 24 hours — execution outcome is permanent
 		}
-		SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
-		// SetCache(ctx, cacheKey, []byte(status), cacheTTL)
+		cacheErr := SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
+		if cacheErr != nil && (status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED") {
+			log.Printf("[WARNING][%s] Memcache down — skipping agent self-request for '%s' to prevent retry storm", workflowExecution.ExecutionId, status)
+			return nil
+		}
 	}
 
 	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
@@ -19443,8 +19597,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 			// Offload execution_argument to file independently of total size.
 			// Lucene rejects terms > 32766 bytes, so any execution_argument
-			// larger than ~30KB will cause an illegal_argument_exception.
-			if len(workflowExecution.ExecutionArgument) > 30000 && !strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
+			// larger than 32500 bytes will cause an illegal_argument_exception.
+			if len(workflowExecution.ExecutionArgument) > 32500 && !strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
 				dbSave = true
 				itemSize := len(workflowExecution.ExecutionArgument)
 				actionId := "execution_argument"
@@ -19481,188 +19635,90 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				}
 			}
 
-			// log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
-			if len(tmpJson) >= 10000000 {
-				// Clean up results' actions
+			// Offload individual Results[].Result to file independently of total size.
+			// Lucene rejects terms > 32766 bytes, so any action result
+			// larger than 32500 bytes will cause an illegal_argument_exception.
+			basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
+			if len(basepath) == 0 {
+				basepath = "files"
+			}
 
-				log.Printf("[DEBUG][%s](%s) ExecutionVariables size: %d, Result size: %d, executionArgument size: %d, Results size: %d", workflowExecution.ExecutionId, saveLocationInfo, len(workflowExecution.ExecutionVariables), len(workflowExecution.Result), len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
+			newResults := []ActionResult{}
+			for _, item := range workflowExecution.Results {
+				if len(item.Result) > 32500 && !strings.Contains(item.Result, "Result too large to handle") {
+					dbSave = true
+					itemSize := len(item.Result)
 
-				dbSave = true
-				//log.Printf("[WARNING][%s] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", workflowExecution.ExecutionId, len(tmpJson), saveLocationInfo)
-				actionId := "execution_argument"
-
-				// Arbitrary reduction size
-				maxSize := 5000000
-				basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
-				if len(basepath) == 0 {
-					basepath = "files"
-				}
-
-				log.Printf("[DEBUG] Execution Argument length is %d for execution Id %s (%s)", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId, saveLocationInfo)
-
-				if len(workflowExecution.ExecutionArgument) > maxSize {
-					itemSize := len(workflowExecution.ExecutionArgument)
-					baseResult := fmt.Sprintf(`{
-								"success": false,
-								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-								"size": %d,
-								"extra": "",
-								"id": "%s_%s"
-							}`, itemSize, workflowExecution.ExecutionId, actionId)
-
-					log.Printf("[DEBUG] len(executionArgument) is %d for execution Id %s", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId)
-
-					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
 					localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
 
-					// Write file to local filesystem
-					if err := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); err != nil {
-						// Try creating directory if write fails
-						dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-						if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-							log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
-							workflowExecution.ExecutionArgument = baseResult
-						} else {
-							// Retry write after creating directory
-							if retryErr := ioutil.WriteFile(localPath, []byte(workflowExecution.ExecutionArgument), 0644); retryErr != nil {
-								log.Printf("[WARNING] Failed writing new exec file to local storage after creating directory: %s", retryErr)
-								workflowExecution.ExecutionArgument = baseResult
-							} else {
-								log.Printf("[DEBUG] Saved execution argument to local file %s", localPath)
-								workflowExecution.ExecutionArgument = fmt.Sprintf(`{
-									"success": false,
-									"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-									"size": %d,
-									"extra": "replace",
-									"id": "%s_%s"
-								}`, itemSize, workflowExecution.ExecutionId, actionId)
-							}
-						}
-					} else {
-						log.Printf("[DEBUG] Saved execution argument to local file %s", localPath)
-						workflowExecution.ExecutionArgument = fmt.Sprintf(`{
-							"success": false,
-							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-							"size": %d,
-							"extra": "replace",
-							"id": "%s_%s"
-						}`, itemSize, workflowExecution.ExecutionId, actionId)
-					}
-				}
+					log.Printf("[DEBUG][%s] Offloading result for action %s (%d bytes) to file %s", workflowExecution.ExecutionId, item.Action.Label, itemSize, localPath)
 
-				newResults := []ActionResult{}
-				//shuffle-large-executions
-				for _, item := range workflowExecution.Results {
-					log.Printf("[DEBUG] Result length is %d for execution Id %s (%s)", len(item.Result), workflowExecution.ExecutionId, saveLocationInfo)
-					if len(item.Result) > maxSize {
-						log.Printf("[WARNING][%s](%s) result length is larger than maxSize for %s (%d)", workflowExecution.ExecutionId, saveLocationInfo, item.Action.Label, len(item.Result))
-
-						itemSize := len(item.Result)
-						baseResult := fmt.Sprintf(`{
-								"success": false,
-								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-								"size": %d,
-								"extra": "",
-								"id": "%s_%s"
-							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
-
-						// 1. Get the value and set it instead if it exists
-						// 2. If it doesn't exist, add it
-						_, err := getExecutionFileValue(ctx, workflowExecution, item)
-						if err == nil {
-							//log.Printf("[DEBUG][%s] Found execution file locally for '%s'. Not saving another.", workflowExecution.ExecutionId, item.Action.Label)
-						} else {
-							fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
-							localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
-
-							// Try writing file, create directory if needed
-							if err := ioutil.WriteFile(localPath, []byte(item.Result), 0644); err != nil {
-								// Try creating directory if write fails
-								dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
-								if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-									log.Printf("[WARNING][%s] Failed creating directory and writing file: %s (original: %s)", workflowExecution.ExecutionId, mkdirErr, err)
-									item.Result = baseResult
-									newResults = append(newResults, item)
-									continue
-								}
-
-								// Retry write after creating directory
-								if retryErr := ioutil.WriteFile(localPath, []byte(item.Result), 0644); retryErr != nil {
-									log.Printf("[WARNING][%s] Failed writing new exec file to local storage after creating directory: %s", workflowExecution.ExecutionId, retryErr)
-									item.Result = baseResult
-									newResults = append(newResults, item)
-									continue
-								}
-							}
-
-							log.Printf("[DEBUG] Saved action result to local file %s", localPath)
-						}
-
-						item.Result = fmt.Sprintf(`{
-								"success": false,
-								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-								"size": %d,
-								"extra": "replace",
-								"id": "%s_%s"
-							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
-					}
-
-					newResults = append(newResults, item)
-					// log.Printf("[DEBUG][%s] newResults: %d and item labelled %s length is: %d", workflowExecution.ExecutionId, len(newResults), item.Action.Label, len(item.Result))
-				}
-
-				// log.Printf("[DEBUG][%s](%s) Overwriting executions results now! newResults length: %d", workflowExecution.ExecutionId, saveLocationInfo, len(newResults))
-				workflowExecution.Results = newResults
-
-				// Handle WorkflowExecution.Result field if too large
-				if len(workflowExecution.Result) > maxSize {
-					log.Printf("[WARNING][%s] Result field is too large (%d bytes), saving to file", workflowExecution.ExecutionId, len(workflowExecution.Result))
-
-					itemSize := len(workflowExecution.Result)
-					actionId := "execution_result"
-					baseResult := fmt.Sprintf(`{
+					replacementJson := fmt.Sprintf(`{
 						"success": false,
 						"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
 						"size": %d,
-						"extra": "",
+						"extra": "replace",
 						"id": "%s_%s"
-					}`, itemSize, workflowExecution.ExecutionId, actionId)
+					}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
 
-					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
-					localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
-
-					// Write file to local filesystem
-					if err := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); err != nil {
-						// Try creating directory if write fails
+					if err := ioutil.WriteFile(localPath, []byte(item.Result), 0644); err != nil {
 						dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
 						if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
-							log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
-							workflowExecution.Result = baseResult
+							log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
+						} else if retryErr := ioutil.WriteFile(localPath, []byte(item.Result), 0644); retryErr != nil {
+							log.Printf("[WARNING][%s] Failed writing result file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
 						} else {
-							// Retry write after creating directory
-							if retryErr := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); retryErr != nil {
-								log.Printf("[WARNING] Failed writing Result file to local storage after creating directory: %s", retryErr)
-								workflowExecution.Result = baseResult
-							} else {
-								log.Printf("[DEBUG] Saved Result field to local file %s", localPath)
-								workflowExecution.Result = fmt.Sprintf(`{
-									"success": false,
-									"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-									"size": %d,
-									"extra": "replace",
-									"id": "%s_%s"
-								}`, itemSize, workflowExecution.ExecutionId, actionId)
-							}
+							item.Result = replacementJson
 						}
 					} else {
-						log.Printf("[DEBUG] Saved Result field to local file %s", localPath)
-						workflowExecution.Result = fmt.Sprintf(`{
-							"success": false,
-							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-							"size": %d,
-							"extra": "replace",
-							"id": "%s_%s"
-						}`, itemSize, workflowExecution.ExecutionId, actionId)
+						item.Result = replacementJson
+					}
+				}
+				newResults = append(newResults, item)
+			}
+			workflowExecution.Results = newResults
+
+			// Offload workflowExecution.Result to file independently of total size.
+			// Lucene rejects terms > 32766 bytes, so the Result field
+			// larger than 32500 bytes will cause an illegal_argument_exception.
+			if len(workflowExecution.Result) > 32500 && !strings.Contains(workflowExecution.Result, "Result too large to handle") {
+				dbSave = true
+				itemSize := len(workflowExecution.Result)
+				actionId := "execution_result"
+
+				fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+				localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+
+				log.Printf("[DEBUG][%s] Offloading Result field (%d bytes) to file %s", workflowExecution.ExecutionId, itemSize, localPath)
+
+				replacementJson := fmt.Sprintf(`{
+					"success": false,
+					"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+					"size": %d,
+					"extra": "replace",
+					"id": "%s_%s"
+				}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+				if err := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); err != nil {
+					dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+					if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+						log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
+					} else if retryErr := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); retryErr != nil {
+						log.Printf("[WARNING] Failed writing Result file after creating directory: %s", retryErr)
+					} else {
+						workflowExecution.Result = replacementJson
+					}
+				} else {
+					workflowExecution.Result = replacementJson
+				}
+			}
+
+			for resultIndex, result := range workflowExecution.Results {
+				for paramIndex, param := range result.Action.Parameters {
+					if len(param.Value) > 32500 {
+						log.Printf("[DEBUG][%s] Trimming parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
+						workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
 					}
 				}
 			}
@@ -19671,26 +19727,6 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 			if err == nil {
 				if debug {
 					log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
-				}
-
-				if len(jsonString) > 5000000 {
-					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
-
-					for resultIndex, result := range workflowExecution.Results {
-						actionData, err := json.Marshal(result.Action)
-						if err == nil {
-							// log.Printf("[DEBUG] Result Size (%s - action: %d). Value size: %d", result.Action.Label, len(actionData), len(result.Result))
-						}
-
-						if len(actionData) > 1000000 {
-							for paramIndex, param := range result.Action.Parameters {
-								if len(param.Value) > 1000000 {
-									// log.Printf("[WARNING][%s] Parameter %s in action %s is too large (%d). Removing value.", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
-									workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
-								}
-							}
-						}
-					}
 				}
 			}
 		}
@@ -20589,11 +20625,6 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			*cacheItem,
 		}
 	} else {
-
-		if debug {
-			log.Printf("[DEBUG] Looking for keys in org %s and category %s", org.Id, category)
-		}
-
 		keys, newCursor, err = GetAllCacheKeys(ctx, org.Id, category, maxAmount, cursor)
 		if err != nil {
 			isSuccess = false
@@ -20991,6 +21022,10 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", orgId, cacheData.Key))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", orgId, cacheData.Key, cacheData.Category))
 
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_50", entity, orgId, cacheData.Category))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_100", entity, orgId, cacheData.Category))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_1000", entity, orgId, cacheData.Category))
+
 	if debug { 
 		log.Printf("[DEBUG] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
 	}
@@ -21121,7 +21156,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err != nil || len(cacheData.Key) == 0 {
-		log.Printf("[ERROR] Failed to DELETE cache key '%s' for org %s (delete) in category '%s'. Does it exist?", tmpData.Key, tmpData.OrgId, tmpData.Category)
+		//log.Printf("[WARNING] Failed to DELETE cache key '%s' for org %s (delete) in category '%s'. Does it exist?", tmpData.Key, tmpData.OrgId, tmpData.Category)
 
 		resp.WriteHeader(400)
 		result := ResultChecker{
@@ -21160,7 +21195,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	entity := "org_cache"
 	err = DeleteKey(ctx, entity, cacheId)
 	if err != nil {
-		log.Printf("[WARNING] Failed to DELETE cache key '%s' for org %s (delete) (2)", cacheId, tmpData.OrgId)
+		//log.Printf("[WARNING] Failed to DELETE cache key '%s' (2) for org %s (delete) (2)", cacheId, tmpData.OrgId)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to delete key"}`))
 		return
@@ -21186,9 +21221,12 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	if normalizedCategory == "default" {
 		normalizedCategory = ""
 	}
-	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s", entity, org.Id, normalizedCategory))
 	DeleteCache(ctx, fmt.Sprintf("%s__%s_", entity, org.Id))
 	DeleteCache(ctx, fmt.Sprintf("%s__%s", entity, org.Id))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s", entity, org.Id, normalizedCategory))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_50", entity, org.Id, normalizedCategory))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_100", entity, org.Id, normalizedCategory))
+	DeleteCache(ctx, fmt.Sprintf("%s__%s_%s_1000", entity, org.Id, normalizedCategory))
 
 	result := ResultChecker{
 		Success: true,
@@ -21431,7 +21469,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (get) and cacheId %s", tmpData.Key, tmpData.OrgId, cacheId)
 		// Doing a last resort search, e.g. to handle spaces and the like
 		limit := 50
-		// HOT FIX FOR UJIMA ALERT
 		if os.Getenv("SHUFFLE_GCEPROJECT") == "shuffle-europe-west3" {
 			limit = 2000
 		}
@@ -24032,6 +24069,798 @@ func fixCertificate(parsedX509Key string) string {
 	return parsedX509Key
 }
 
+// handleOpenIdCloud handles the OpenID Connect callback for cloud environments.
+// Supports mode-based flows (login vs setup/registration), PKCE verification,
+// proper OIDC token verification, and SSO identity validation.
+func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
+	ctx := GetContext(request)
+
+	codeChallenge := ""
+	foundMode := ""
+
+	openidUser := OpenidUserinfo{}
+	org := &Org{}
+	code := request.URL.Query().Get("code")
+	if len(code) == 0 {
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must enable PKCE to use shuffle SSO"}`)))
+		resp.WriteHeader(401)
+		return
+	}
+
+	state := request.URL.Query().Get("state")
+	if len(state) == 0 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No state specified"}`)))
+		return
+	}
+
+	stateBase, err := base64.StdEncoding.DecodeString(state)
+	if err != nil {
+		log.Printf("[ERROR] Failed base64 decode OpenID state: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed base64 decoding of state"}`)))
+		return
+	}
+
+	log.Printf("State: %s", stateBase)
+	foundOrg := ""
+	foundRedir := ""
+	foundChallenge := ""
+	stateSplit := strings.Split(string(stateBase), "&")
+	for _, innerstate := range stateSplit {
+		itemsplit := strings.Split(innerstate, "=")
+		if len(itemsplit) <= 1 {
+			log.Printf("[WARNING] No key:value: %s", innerstate)
+			continue
+		}
+
+		if itemsplit[0] == "org" {
+			foundOrg = strings.TrimSpace(itemsplit[1])
+		}
+
+		if itemsplit[0] == "redirect" {
+			foundRedir = strings.TrimSpace(itemsplit[1])
+		}
+
+		if itemsplit[0] == "challenge" {
+			foundChallenge = strings.TrimSpace(itemsplit[1])
+		}
+
+		if itemsplit[0] == "mode" {
+			foundMode = strings.TrimSpace(itemsplit[1])
+		}
+	}
+
+	log.Printf("challenge: %s", foundChallenge)
+	log.Printf("code sent: %s", code)
+	log.Printf("mode: %s", foundMode)
+
+	if len(foundOrg) == 0 {
+		log.Printf("[ERROR] No org specified in state")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No org specified in state"}`)))
+		return
+	}
+
+	org, err = GetOrg(ctx, foundOrg)
+	if err != nil {
+		log.Printf("[WARNING] Error getting org in OpenID: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Couldn't find the org for sign-in in Shuffle"}`))
+		return
+	}
+
+	clientId := org.SSOConfig.OpenIdClientId
+	tokenUrl := org.SSOConfig.OpenIdToken
+	if len(tokenUrl) == 0 {
+		log.Printf("[ERROR] No token URL specified for OpenID. OrgID: %s", foundOrg)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No token URL specified in org %s. Please make sure to specify a token URL in the /admin panel in Shuffle for OpenID Connect"}`, foundOrg)))
+		return
+	}
+
+	// Handle login mode (no PKCE) vs registration mode (with PKCE)
+	var foundVerifier string
+	if foundMode == "login" {
+		log.Printf("[INFO] Login mode detected, skipping PKCE verification")
+		foundVerifier = "login_mode"
+	} else {
+		log.Printf("[DEBUG] Searching %d org users for PKCE verifier matching challenge %s", len(org.Users), foundChallenge)
+		for _, userInOrg := range org.Users {
+			fullUser, err := GetUser(ctx, userInOrg.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed to load user %s in org %s during PKCE search: %s", userInOrg.Id, org.Id, err)
+				continue
+			}
+			ssoInfo, exists := fullUser.GetSSOInfo(org.Id)
+			if !exists {
+				log.Printf("[DEBUG] User %s (%s) has no SSOInfo for org %s", fullUser.Username, fullUser.Id, org.Id)
+				continue
+			}
+			if ssoInfo.CodeVerifier == "" {
+				log.Printf("[DEBUG] User %s (%s) has SSOInfo but empty CodeVerifier", fullUser.Username, fullUser.Id)
+				continue
+			}
+			verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
+			computed := verifierObj.CodeChallengeS256()
+			log.Printf("[DEBUG] User %s (%s): stored verifier hash=%s, expected=%s, match=%t", fullUser.Username, fullUser.Id, computed, foundChallenge, computed == foundChallenge)
+			if computed == foundChallenge {
+				foundVerifier = ssoInfo.CodeVerifier
+				break
+			}
+		}
+
+		if foundVerifier == "" {
+			log.Printf("[ERROR] No verifier found for challenge %s in org %s (searched %d users)", foundChallenge, org.Id, len(org.Users))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Invalid PKCE challenge"}`))
+			return
+		}
+	}
+
+	verifierToUse := foundVerifier
+	if foundMode == "login" {
+		verifierToUse = ""
+	}
+
+	body, err := RunOpenidLogin(ctx, clientId, tokenUrl, foundRedir, code, verifierToUse, org.SSOConfig.OpenIdClientSecret)
+	if err != nil {
+		log.Printf("[WARNING] Error with body read of OpenID Connect: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	codeChallenge = foundChallenge
+
+	openid := OpenidResp{}
+	err = json.Unmarshal(body, &openid)
+	if err != nil {
+		log.Printf("[WARNING] Error in Openid marshal: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if openid.IdToken == "" {
+		log.Printf("[ERROR] No id_token in OpenID token response for org %s", foundOrg)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "No id_token in token response. Ensure 'openid' scope is requested."}`))
+		return
+	}
+
+	// Decode first to extract the issuer, then verify with OIDC
+	unverified, err := DecodeIdTokenClaims(openid.IdToken)
+	if err != nil {
+		log.Printf("[ERROR] Failed to decode id_token: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to decode id_token"}`))
+		return
+	}
+
+	idTokenClaims, err := VerifyIdTokenWithOIDC(ctx, openid.IdToken, unverified.Issuer, org.SSOConfig.OpenIdClientId)
+	if err != nil {
+		log.Printf("[ERROR] OIDC id_token verification failed: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to verify id_token"}`))
+		return
+	}
+
+	openidUser.Sub = idTokenClaims.Sub
+	openidUser.Email = idTokenClaims.Email
+
+	if len(idTokenClaims.Roles) > 0 || len(idTokenClaims.Groups) > 0 || len(idTokenClaims.RealmAccess.Roles) > 0 {
+		roleSet := make(map[string]bool)
+		for _, r := range idTokenClaims.Roles {
+			roleSet[r] = true
+		}
+		for _, g := range idTokenClaims.Groups {
+			roleSet[g] = true
+		}
+		for _, r := range idTokenClaims.RealmAccess.Roles {
+			roleSet[r] = true
+		}
+		for role := range roleSet {
+			openidUser.Roles = append(openidUser.Roles, role)
+		}
+	}
+
+	if len(openidUser.Sub) == 0 && len(openidUser.Email) == 0 {
+		log.Printf("[WARNING] No user found in openid login (2)")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	userName := strings.ToLower(strings.TrimSpace(openidUser.Email))
+	if !strings.Contains(userName, "@") {
+		log.Printf("[ERROR] Bad username, but allowing due to OpenID: %s. Full Subject: %#v", userName, openidUser)
+	}
+
+	redirectUrl := "https://shuffler.io/workflows"
+	if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+		baseUrl := os.Getenv("SSO_REDIRECT_URL")
+		if strings.Contains(baseUrl, "/api/v1/login_openid") {
+			redirectUrl = strings.Replace(baseUrl, "/api/v1/login_openid", "/workflows", 1)
+		} else if !strings.HasSuffix(baseUrl, "/workflows") {
+			redirectUrl = fmt.Sprintf("%s/workflows", baseUrl)
+		} else {
+			redirectUrl = baseUrl
+		}
+	}
+
+	if len(userName) == 0 {
+		log.Printf("[ERROR] Username (%v) is empty in OpenID login for org: %v", userName, org.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Username is empty"}`))
+		return
+	}
+
+	// Login mode: skip code challenge validation
+	if foundMode != "login" && len(codeChallenge) == 0 {
+		log.Printf("[ERROR] Code challenge (%v) is empty in OpenID login for org: %v", codeChallenge, org.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Code challenge is empty"}`))
+		return
+	}
+
+	// Generated user lookup
+	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
+	if err == nil && len(users) > 0 {
+		for _, user := range users {
+			if user.GeneratedUsername == userName {
+				foundOrgInUser := false
+				for _, userOrg := range user.Orgs {
+					if userOrg == org.Id {
+						foundOrgInUser = true
+						break
+					}
+				}
+
+				foundUserInOrg := false
+				for _, usr := range org.Users {
+					if usr.Id == user.Id {
+						foundUserInOrg = true
+						break
+					}
+				}
+
+				// don't be confused. "AutoProvision" acts like "DisableAutoProvision"
+				if (!foundOrgInUser || !foundUserInOrg) && org.SSOConfig.AutoProvision {
+					log.Printf("[WARNING] User %s (%s) is not in org %s (%s). Please contact the administrator - (1)", user.Username, user.Id, org.Name, org.Id)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
+					return
+				} else if !foundOrgInUser || !foundUserInOrg {
+					log.Printf("[INFO] User %s (%s) is not in org %s (%s). Auto-provisioning is enabled. Adding user to org - (1)", user.Username, user.Id, org.Name, org.Id)
+					if !foundOrgInUser {
+						user.Orgs = append(user.Orgs, org.Id)
+					}
+					if !foundUserInOrg {
+						org.Users = append(org.Users, user)
+					}
+				} else {
+					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login! - (1)", user.Username, user.Id, userName)
+				}
+
+				if org.SSOConfig.RoleRequired {
+					foundRole := false
+					for _, role := range openidUser.Roles {
+						if role == "shuffle-admin" || role == "shuffle-user" || role == "shuffle-org-reader" {
+							foundRole = true
+						}
+					}
+
+					if !foundRole {
+						log.Printf("[WARNING] User %s (%s) role is missing in respone for org %s (%s). Please contact the administrator - (1)", user.Username, user.Id, org.Name, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Role detail is missing. Please contact the administrator of org."}`)))
+						return
+					}
+				}
+
+				role := user.Role
+				roleChange := false
+				if len(openidUser.Roles) > 0 {
+					for _, newRole := range openidUser.Roles {
+						if newRole == "shuffle-admin" {
+							role = "admin"
+							user.Role = "admin"
+							roleChange = true
+							break
+						}
+						if newRole == "shuffle-user" {
+							role = "user"
+							user.Role = "user"
+							roleChange = true
+							break
+						}
+						if newRole == "shuffle-org-reader" {
+							role = "org-reader"
+							user.Role = "org-reader"
+							roleChange = true
+							break
+						}
+					}
+				}
+
+				user.ActiveOrg = OrgMini{
+					Name: org.Name,
+					Id:   org.Id,
+					Role: role,
+				}
+
+				// SSO validation
+				ssoErrors := []string{}
+				if foundMode != "login" {
+					user.InitSSOInfos()
+					ssoInfo, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						ssoErrors = append(ssoErrors, "no_sso_info_for_org")
+					} else {
+						if ssoInfo.ClientID != org.SSOConfig.OpenIdClientId {
+							ssoErrors = append(ssoErrors, "client mismatch")
+						}
+						if ssoInfo.CodeVerifier == "" {
+							ssoErrors = append(ssoErrors, "no code verifier stored")
+						} else {
+							verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
+							expectedChallenge := verifierObj.CodeChallengeS256()
+							if expectedChallenge != codeChallenge {
+								log.Printf("[WARNING] Challenge mismatch for user %s. Expected: %s, Got: %s", user.Id, expectedChallenge, codeChallenge)
+								ssoErrors = append(ssoErrors, "challenge mismatch")
+							} else {
+								log.Printf("[INFO] Challenge verified for user %s. %s == %s", user.Id, expectedChallenge, codeChallenge)
+							}
+						}
+						if time.Now().After(ssoInfo.ChallengeExpiry) {
+							ssoErrors = append(ssoErrors, "challenge expired")
+						}
+					}
+
+					if len(ssoErrors) > 0 {
+						log.Printf("[WARNING] SSO validation failed for user %s: %s -- (1)", user.Id, strings.Join(ssoErrors, ", "))
+						if exists {
+							ssoInfo.CodeVerifier = ""
+							ssoInfo.ChallengeExpiry = time.Time{}
+							user.SetSSOInfo(org.Id, ssoInfo)
+							SetUser(ctx, &user, false)
+						}
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO validation failed"}`))
+						return
+					}
+				} else {
+					// Login mode: validate complete SSO identity match
+					user.InitSSOInfos()
+					_, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						log.Printf("[ERROR] No SSO info found for user %s in org %s", user.Id, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO info not found"}`))
+						return
+					}
+
+					validatedUser, err := FindUserBySSOIdentity(ctx, openidUser.Sub, org.SSOConfig.OpenIdClientId, org.Id, openidUser.Email)
+					if err != nil {
+						log.Printf("[ERROR] SSO identity validation failed: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity validation failed"}`))
+						return
+					}
+
+					if validatedUser.Id != user.Id {
+						log.Printf("[ERROR] SSO identity validation returned different user. Expected: %s, Got: %s", user.Id, validatedUser.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity mismatch"}`))
+						return
+					}
+
+					log.Printf("[INFO] Login mode: Complete SSO identity validated for user %s", user.Id)
+				}
+
+				// Update SSO info
+				orgSSOInfo, _ := user.GetSSOInfo(org.Id)
+				if foundMode != "login" {
+					orgSSOInfo.CodeVerifier = ""
+					orgSSOInfo.ChallengeExpiry = time.Time{}
+
+					currentClientID := org.SSOConfig.OpenIdClientId
+					var existingSubForClient string
+					for _, ssoInfo := range user.SSOInfos {
+						if ssoInfo.ClientID == currentClientID && ssoInfo.Sub != "" && ssoInfo.OrgID != org.Id {
+							existingSubForClient = ssoInfo.Sub
+							break
+						}
+					}
+
+					if existingSubForClient != "" && existingSubForClient != openidUser.Sub {
+						log.Printf("[ERROR] User %s attempted to use Sub %s with client ID %s, but already has Sub %s for this client ID", user.Id, openidUser.Sub, currentClientID, existingSubForClient)
+						resp.WriteHeader(409)
+						resp.Write([]byte(`{"success": false, "reason": "You must use the same SSO account that you first registered with for this SSO provider"}`))
+						return
+					}
+
+					if orgSSOInfo.Sub == "" {
+						orgSSOInfo.Sub = openidUser.Sub
+						log.Printf("[INFO] Initial SSO binding for user %s to sub %s in org %s with client ID %s", user.Id, openidUser.Sub, org.Id, currentClientID)
+					} else if orgSSOInfo.Sub != openidUser.Sub {
+						log.Printf("[WARNING] Sub changed for user %s in org %s: %s -> %s", user.Id, org.Id, orgSSOInfo.Sub, openidUser.Sub)
+					}
+
+					orgSSOInfo.ClientID = org.SSOConfig.OpenIdClientId
+					user.SetSSOInfo(org.Id, orgSSOInfo)
+					log.Printf("[INFO] SSO info updated for user %s", user.Id)
+				} else {
+					log.Printf("[INFO] Login mode: skipping SSO info update for user %s", user.Id)
+				}
+
+				// Session management
+				expiration := time.Now().Add(8 * time.Hour)
+				if len(user.Session) == 0 {
+					log.Printf("[INFO] User does NOT have session - creating - (1)")
+					sessionToken := uuid.NewV4().String()
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
+					http.SetCookie(resp, newCookie)
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+					user.Session = sessionToken
+				} else {
+					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (1)", userName)
+					sessionToken := user.Session
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
+					http.SetCookie(resp, newCookie)
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+				}
+
+				user.LoginInfo = append(user.LoginInfo, LoginInfo{
+					IP:        GetRequestIp(request),
+					Timestamp: time.Now().Unix(),
+				})
+				user.UsersLastSession = user.Session
+
+				err = SetUser(ctx, &user, true)
+				if err != nil {
+					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "Failed user update during session storage (2)"}`))
+					return
+				}
+
+				if roleChange {
+					for i, usr := range org.Users {
+						if usr.Id == user.Id {
+							org.Users[i].Role = role
+							break
+						}
+					}
+				}
+
+				if !foundUserInOrg || roleChange {
+					err = SetOrg(ctx, *org, org.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating org when setting user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "Failed org update during user storage (2)"}`))
+						return
+					}
+				}
+
+				http.Redirect(resp, request, redirectUrl+"?type=sso_login", http.StatusSeeOther)
+				return
+			}
+		}
+	}
+
+	// Normal user lookup
+	users, err = FindUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
+	if err == nil && len(users) > 0 {
+		for _, user := range users {
+			if user.Username == userName {
+				foundOrgInUser := false
+				for _, userOrg := range user.Orgs {
+					if userOrg == org.Id {
+						foundOrgInUser = true
+						break
+					}
+				}
+
+				foundUserInOrg := false
+				for _, usr := range org.Users {
+					if usr.Id == user.Id {
+						foundUserInOrg = true
+						break
+					}
+				}
+
+				if (!foundOrgInUser || !foundUserInOrg) && org.SSOConfig.AutoProvision {
+					log.Printf("[WARNING] User %s (%s) is not in org %s (%s). Please contact the administrator - (2)", user.Username, user.Id, org.Name, org.Id)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
+					return
+				} else if !foundOrgInUser || !foundUserInOrg {
+					log.Printf("[INFO] User %s (%s) is not in org %s (%s). Auto-provisioning is enabled. Adding user to org - (2)", user.Username, user.Id, org.Name, org.Id)
+					if !foundOrgInUser {
+						user.Orgs = append(user.Orgs, org.Id)
+					}
+					if !foundUserInOrg {
+						org.Users = append(org.Users, user)
+					}
+				} else {
+					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s", user.Username, user.Id, userName)
+				}
+
+				if org.SSOConfig.RoleRequired {
+					foundRole := false
+					for _, role := range openidUser.Roles {
+						if role == "shuffle-admin" || role == "shuffle-user" || role == "shuffle-org-reader" {
+							foundRole = true
+						}
+					}
+
+					if !foundRole {
+						log.Printf("[WARNING] User %s (%s) role is missing in respone for org %s (%s). Please contact the administrator - (2)", user.Username, user.Id, org.Name, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Role detail is missing. Please contact the administrator of org."}`)))
+						return
+					}
+				}
+
+				role := user.Role
+				roleChange := false
+				if len(openidUser.Roles) > 0 {
+					for _, newRole := range openidUser.Roles {
+						if newRole == "shuffle-admin" {
+							role = "admin"
+							user.Role = "admin"
+							roleChange = true
+							break
+						}
+						if newRole == "shuffle-user" {
+							role = "user"
+							user.Role = "user"
+							roleChange = true
+							break
+						}
+						if newRole == "shuffle-org-reader" {
+							role = "org-reader"
+							user.Role = "org-reader"
+							roleChange = true
+							break
+						}
+					}
+				}
+
+				user.ActiveOrg = OrgMini{
+					Name: org.Name,
+					Id:   org.Id,
+					Role: role,
+				}
+
+				// SSO validation
+				ssoErrors := []string{}
+				if foundMode != "login" {
+					user.InitSSOInfos()
+					ssoInfo, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						ssoErrors = append(ssoErrors, "no_sso_info_for_org")
+					} else {
+						if ssoInfo.ClientID != org.SSOConfig.OpenIdClientId {
+							ssoErrors = append(ssoErrors, "client mismatch")
+						}
+						if ssoInfo.CodeVerifier == "" {
+							ssoErrors = append(ssoErrors, "no code verifier stored")
+						} else {
+							verifierObj := &CodeVerifier{Value: ssoInfo.CodeVerifier}
+							expectedChallenge := verifierObj.CodeChallengeS256()
+							if expectedChallenge != codeChallenge {
+								log.Printf("[DEBUG] Challenge mismatch for user %s: expected %s, got %s", user.Id, expectedChallenge, codeChallenge)
+								ssoErrors = append(ssoErrors, "challenge mismatch")
+							}
+						}
+						if time.Now().After(ssoInfo.ChallengeExpiry) {
+							ssoErrors = append(ssoErrors, "challenge expired")
+						}
+					}
+
+					if len(ssoErrors) > 0 {
+						log.Printf("[WARNING] SSO validation failed for user %s: %s -- (2)", user.Id, strings.Join(ssoErrors, ", "))
+						if exists {
+							ssoInfo.CodeVerifier = ""
+							ssoInfo.ChallengeExpiry = time.Time{}
+							user.SetSSOInfo(org.Id, ssoInfo)
+							SetUser(ctx, &user, false)
+						}
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO validation failed"}`))
+						return
+					}
+				} else {
+					user.InitSSOInfos()
+					_, exists := user.GetSSOInfo(org.Id)
+					if !exists {
+						log.Printf("[ERROR] No SSO info found for user %s in org %s", user.Id, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO info not found"}`))
+						return
+					}
+
+					validatedUser, err := FindUserBySSOIdentity(ctx, openidUser.Sub, org.SSOConfig.OpenIdClientId, org.Id, openidUser.Email)
+					if err != nil {
+						log.Printf("[ERROR] SSO identity validation failed: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity validation failed"}`))
+						return
+					}
+
+					if validatedUser.Id != user.Id {
+						log.Printf("[ERROR] SSO identity validation returned different user. Expected: %s, Got: %s", user.Id, validatedUser.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "SSO identity mismatch"}`))
+						return
+					}
+
+					log.Printf("[INFO] Login mode: Complete SSO identity validated for user %s", user.Id)
+				}
+
+				// Update SSO info
+				orgSSOInfo, _ := user.GetSSOInfo(org.Id)
+				orgSSOInfo.CodeVerifier = ""
+				orgSSOInfo.ChallengeExpiry = time.Time{}
+
+				currentClientID := org.SSOConfig.OpenIdClientId
+				var existingSubForClient string
+				for _, ssoInfo := range user.SSOInfos {
+					if ssoInfo.ClientID == currentClientID && ssoInfo.Sub != "" && ssoInfo.OrgID != org.Id {
+						existingSubForClient = ssoInfo.Sub
+						break
+					}
+				}
+
+				if existingSubForClient != "" && existingSubForClient != openidUser.Sub {
+					log.Printf("[ERROR] User %s attempted to use Sub %s with client ID %s, but already has Sub %s for this client ID", user.Id, openidUser.Sub, currentClientID, existingSubForClient)
+					resp.WriteHeader(409)
+					resp.Write([]byte(`{"success": false, "reason": "You must use the same SSO account that you first registered with for this SSO provider"}`))
+					return
+				}
+
+				if orgSSOInfo.Sub == "" {
+					orgSSOInfo.Sub = openidUser.Sub
+					log.Printf("[INFO] Initial SSO binding for user %s to sub %s in org %s", user.Id, openidUser.Sub, org.Id)
+				} else if orgSSOInfo.Sub != openidUser.Sub {
+					log.Printf("[WARNING] Sub changed for user %s in org %s: %s -> %s", user.Id, org.Id, orgSSOInfo.Sub, openidUser.Sub)
+				}
+
+				user.SetSSOInfo(org.Id, orgSSOInfo)
+
+				// Session management
+				expiration := time.Now().Add(8 * time.Hour)
+				if len(user.Session) == 0 {
+					log.Printf("[INFO] User does NOT have session - creating - (2)")
+					sessionToken := uuid.NewV4().String()
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
+					http.SetCookie(resp, newCookie)
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+					user.Session = sessionToken
+				} else {
+					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
+					sessionToken := user.Session
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
+					http.SetCookie(resp, newCookie)
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+				}
+
+				user.LoginInfo = append(user.LoginInfo, LoginInfo{
+					IP:        GetRequestIp(request),
+					Timestamp: time.Now().Unix(),
+				})
+				user.UsersLastSession = user.Session
+
+				err = SetUser(ctx, &user, true)
+				if err != nil {
+					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "Failed user update during session storage (2)"}`))
+					return
+				}
+
+				if roleChange {
+					for i, usr := range org.Users {
+						if usr.Id == user.Id {
+							org.Users[i].Role = role
+							break
+						}
+					}
+				}
+
+				if !foundUserInOrg || roleChange {
+					err = SetOrg(ctx, *org, org.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating org when setting session: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "Failed org update during session storage (2)"}`))
+						return
+					}
+				}
+
+				http.Redirect(resp, request, redirectUrl+"?type=sso_login", http.StatusSeeOther)
+				return
+			}
+		}
+	}
+
+	// New user creation is disabled on cloud
+	if len(org.Id) == 0 {
+		log.Printf("[WARNING] Failed finding a valid org (default) without suborgs during SSO setup")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding valid SSO auto org"}`)))
+		return
+	}
+
+	if org.SSOConfig.AutoProvision {
+		log.Printf("[INFO] Auto-provisioning user is not allow for org %s (%s) - can not add new user %s - (3)", org.Name, org.Id, userName)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
+		return
+	}
+
+	if org.SSOConfig.RoleRequired {
+		foundRole := false
+		for _, role := range openidUser.Roles {
+			if role == "shuffle-admin" || role == "shuffle-user" || role == "shuffle-org-reader" {
+				foundRole = true
+			}
+		}
+
+		if !foundRole {
+			log.Printf("[WARNING] Role is missing in respone for username %s. Please contact the administrator - (3)", userName)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Role detail is missing. Please contact the administrator of org."}`)))
+			return
+		}
+	}
+
+	log.Printf("[AUDIT] Disabled new user creation")
+	resp.WriteHeader(http.StatusForbidden)
+	resp.Write([]byte(`{"success": false, "reason": "New user creation is disabled"}`))
+	return
+}
+
 // Example implementation of SSO, including a redirect for the user etc
 // Should make this stuff only possible after login
 func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
@@ -24040,10 +24869,12 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//https://dev-18062475.okta.com/oauth2/default/v1/authorize?client_id=oa3romteykJ2aMgx5d7&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
-	// http://localhost:5001/api/v1/login_openid#id_token=asdasd&session_state=asde9d78d8-6535-45fe-848d-0efa9f119595
+	if project.Environment == "cloud" {
+		handleOpenIdCloud(resp, request)
+		return
+	}
 
-	//code -> Token
+	// On-prem path below
 	ctx := GetContext(request)
 
 	skipValidation := false
@@ -24182,45 +25013,31 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		// Automated replacement
-		userInfoUrlSplit := strings.Split(org.SSOConfig.OpenIdAuthorization, "/")
-		userinfoEndpoint := strings.Join(userInfoUrlSplit[0:len(userInfoUrlSplit)-1], "/") + "/userinfo"
-		//userinfoEndpoint := strings.Replace(org.SSOConfig.OpenIdAuthorization, "/authorize", "/userinfo", -1)
-		log.Printf("Userinfo endpoint: %s", userinfoEndpoint)
-		client := &http.Client{}
-		req, err := http.NewRequest(
-			"GET",
-			userinfoEndpoint,
-			nil,
-		)
-
-		//req.Header.Add("accept", "application/json")
-		//req.Header.Add("cache-control", "no-cache")
-		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", openid.AccessToken))
-		res, err := client.Do(req)
-		if err != nil {
-			log.Printf("[WARNING] OpenID client DO (2): %s", err)
+		if openid.IdToken == "" {
+			log.Printf("[ERROR] No id_token in OpenID token response for org %s", foundOrg)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed userinfo request"}`))
+			resp.Write([]byte(`{"success": false, "reason": "No id_token in token response. Ensure 'openid' scope is requested."}`))
 			return
 		}
 
-		defer res.Body.Close()
-		body, err = ioutil.ReadAll(res.Body)
+		unverified, err := DecodeIdTokenClaims(openid.IdToken)
 		if err != nil {
-			log.Printf("[WARNING] OpenID client Body (2): %s", err)
+			log.Printf("[ERROR] Failed to decode id_token: %s", err)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed userinfo body parsing"}`))
+			resp.Write([]byte(`{"success": false, "reason": "Failed to decode id_token"}`))
 			return
 		}
 
-		err = json.Unmarshal(body, &openidUser)
+		idTokenClaims, err := VerifyIdTokenWithOIDC(ctx, openid.IdToken, unverified.Issuer, org.SSOConfig.OpenIdClientId)
 		if err != nil {
-			log.Printf("[WARNING] Error in Openid marshal (2): %s", err)
+			log.Printf("[ERROR] OIDC id_token verification failed: %s", err)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
+			resp.Write([]byte(`{"success": false, "reason": "Failed to verify id_token"}`))
 			return
 		}
+
+		openidUser.Sub = idTokenClaims.Sub
+		openidUser.Email = idTokenClaims.Email
 	}
 
 	if len(openidUser.Sub) == 0 && len(openidUser.Email) == 0 {
@@ -30134,6 +30951,15 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 		return org.Priorities, nil
 	}
 
+	org, updated = AddPriority(*org, Priority{
+		Name:        fmt.Sprintf("Try Shuffle Security"),
+		Description: fmt.Sprintf("Automatically handle alerts and vulnerabilities!"), 
+		Type:        "security",
+		Active:      true,
+		URL:         fmt.Sprintf("https://security.shuffler.io"),
+		Severity:    3,
+	}, updated)
+
 	if len(org.Defaults.NotificationWorkflow) == 0 {
 		org, updated = AddPriority(*org, Priority{
 			Name:        fmt.Sprintf("You haven't defined a notification workflow yet."),
@@ -30195,7 +31021,7 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 	if len(org.MainPriority) == 0 {
 		// Just choosing something for them, e.g. basic usecase building
 
-		org.MainPriority = "1. Collect"
+		org.MainPriority = "1. Ingest"
 		orgUpdated = true
 	}
 
@@ -35775,17 +36601,29 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 		}
 	}
 
-	if len(returnActions) <= maxAmount {
-		for _, action := range foundApp.Actions {
-			if len(returnActions) >= maxAmount {
+	// Append the rest from the top (~semi-random)
+	for _, action := range foundApp.Actions {
+		if len(returnActions) >= maxAmount {
+			break
+		}
+
+		if action.Name == "custom_action" {
+			continue
+		}
+
+		// Dedup
+		found := false
+		for _, existingAction := range returnActions {
+			if existingAction.Name == action.Name {
+				found = true
 				break
 			}
+		}
 
-			if action.Name == "custom_action" {
-				continue
-			}
-
+		if !found {
 			returnActions = append(returnActions, action)
+		} else {
+			log.Printf("NOT adding; %#v", action.Name) 
 		}
 	}
 

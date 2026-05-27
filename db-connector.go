@@ -51,8 +51,10 @@ import (
 )
 
 var requestCache = cache.New(60*time.Minute, 60*time.Minute)
+
 var memcached = os.Getenv("SHUFFLE_MEMCACHED")
 var mc = gomemcache.New(memcached)
+
 var gceProject = os.Getenv("SHUFFLE_GCEPROJECT")
 var propagateUrl = os.Getenv("SHUFFLE_PROPAGATE_URL")
 var propagateToken = os.Getenv("SHUFFLE_PROPAGATE_TOKEN")
@@ -2180,13 +2182,14 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					// Check if requests was recently sent or not
 					cacheId := fmt.Sprintf("agent-%s-%s-fixexec-finished-check", workflowExecution.ExecutionId, action.ID)
 					if _, err := GetCache(ctx, cacheId); err == nil {
-						// Recently sent, skip
-						//log.Printf("[INFO][%s] Recently handled all decisions finished for agent action %s - skipping.", workflowExecution.ExecutionId, action.ID)
 						continue
 					}
 
-					// Set cache to prevent multiple sends
-					SetCache(ctx, cacheId, []byte("handled"), 1)
+					// Set cache to prevent multiple sends — if cache is down, skip to prevent retry storm
+					if cacheErr := SetCache(ctx, cacheId, []byte("handled"), 1); cacheErr != nil {
+						log.Printf("[WARNING][%s] Memcache down — skipping fixexec agent self-request for action %s to prevent retry storm", workflowExecution.ExecutionId, action.ID)
+						continue
+					}
 
 					decisionsUpdated = true
 					if finishDecisionFound {
@@ -4231,7 +4234,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflows)
 			if err == nil {
-				//if debug { 
+				//if debug {
 				//	log.Printf("\n\n[DEBUG] Cache FOUND for key '%s': %d workflows\n\n", cacheKey, len(workflows))
 				//}
 
@@ -4858,6 +4861,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 }
 
 func init() {
+	mc.Timeout = 2000 * time.Millisecond
 
 	isValid := checkImportPath()
 	if !isValid {
@@ -9764,10 +9768,10 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 			workflow.Triggers[triggerIndex].ID = newTriggerId
 			workflow.Triggers[triggerIndex].Status = "stopped"
 		}
-	} 
+	}
 
 	if err != nil || foundWorkflow.ID == "" {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Creating new workflow with ID %s. Clearing workflow cache.", id)
 		}
 
@@ -12280,7 +12284,7 @@ func DeleteKeys(ctx context.Context, entity string, value []string) error {
 				keys = append(keys, datastore.NameKey(entity, strings.ToLower(item[:127]), nil))
 			}
 		}
-		
+
 		// Max 500 at a time => total max keys = 5000
 		prevStop := 0
 		iter := 0
@@ -12288,7 +12292,7 @@ func DeleteKeys(ctx context.Context, entity string, value []string) error {
 
 		maxAmount := 500
 		for {
-			if iter > 10 || finished {  
+			if iter > 10 || finished {
 				break
 			}
 
@@ -12320,7 +12324,7 @@ func DeleteKeys(ctx context.Context, entity string, value []string) error {
 				return err
 			}
 
-			if len(currentKeys) < maxAmount { 
+			if len(currentKeys) < maxAmount {
 				break
 			}
 		}
@@ -14202,7 +14206,7 @@ func SetDatastoreCategoryConfig(ctx context.Context, category DatastoreCategoryU
 	for automationIndex, automation := range category.Automations {
 		newOptions := []DatastoreAutomationOption{}
 		for _, option := range automation.Options {
-			if len(option.Value) == 0 { 
+			if len(option.Value) == 0 {
 				continue
 			}
 
@@ -14361,7 +14365,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				// Compares old vs new, checks if allowed
 
 				if cacheData.IgnoreSecurityRules == true {
-					//if debug { 
+					//if debug {
 					//	log.Printf("[DEBUG] Ignoring security rules for %s => %s", cacheData.Key, cacheData.Category)
 					//}
 					//os.Exit(3)
@@ -14533,7 +14537,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	skippedKeys := []string{}
 	for key := range cacheKeys {
 		if key.Key == "" {
-			//if debug { 
+			//if debug {
 			//	log.Printf("[DEBUG] Skipping empty key in category %s", key.Category)
 			//}
 			continue
@@ -14574,7 +14578,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	handledKeys = []string{}
 	for key := range datastoreKeys {
 		if key.Name == "" {
-			//if debug { 
+			//if debug {
 			//	log.Printf("[DEBUG] Skipping empty datastore key")
 			//}
 
@@ -14591,7 +14595,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		}
 
 		if ArrayContains(skippedKeys, key.Name) {
-			//if debug { 
+			//if debug {
 			//	log.Printf("[DEBUG] Skipping datastore key %s as it was marked as skipped due to no changes", key.Name)
 			//}
 
@@ -14866,13 +14870,15 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						continue
 					}
 
-					if len(automation.Options) == 0 {
-						if debug {
-							log.Printf("\n\n\n[ERROR] Debug: Automation '%s' in category '%s' has no options, skipping\n\n\n", automation.Name, categoryConfig.Category)
-						}
+					/*
+						if len(automation.Options) == 0 {
+							if debug {
+								log.Printf("\n\n\n[ERROR] Debug: Automation '%s' in category '%s' has no options, skipping\n\n\n", automation.Name, categoryConfig.Category)
+							}
 
-						continue
-					}
+							continue
+						}
+					*/
 
 					//if debug {
 					//	log.Printf("[DEBUG] Found automation '%s' to run (2). Value: '%s'", automation.Name, automation.Options[0].Value)
@@ -14908,7 +14914,11 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, "", orgId, mainCategory)
 	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, fmt.Sprintf("%s_50", cacheKey))
+	DeleteCache(ctx, fmt.Sprintf("%s_100", cacheKey))
+	DeleteCache(ctx, fmt.Sprintf("%s_1000", cacheKey))
 	DeleteCache(ctx, fmt.Sprintf("datastore_category_%s", orgId))
+
 	return existingInfo, nil
 }
 
@@ -16492,31 +16502,42 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		category = ""
 	}
 
+	if max > 1000 {
+		max = 1000
+	}
+
+	if max <= 0 {
+		max = 1
+	}
+
 	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
 	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, inputcursor, orgId, category)
+	if max == 50 || max == 100 || max == 1000 {
+		cacheKey = fmt.Sprintf("%s_%d", cacheKey, max)
+	}
 
 	// Find cache and return instantly
 	cacheKeys := []CacheKeyData{}
+	cacheReturn := CacheReturn{
+		Cursor: "",
+		Keys:   []CacheKeyData{},
+	}
 	//if project.CacheDb && category == "protected" {
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			err = json.Unmarshal(cacheData, &cacheKeys)
+			err = json.Unmarshal(cacheData, &cacheReturn)
 			if err == nil {
 
 				// Avoids an issue with bad caching
-				if len(cacheKeys) > 1 {
-					return cacheKeys, "", nil
-				} 
+				if len(cacheReturn.Keys) > 1 {
+					return cacheReturn.Keys, cacheReturn.Cursor, nil
+				}
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for appstats: %s", err)
 		}
-	}
-
-	if max > 1000 {
-		max = 1000
 	}
 
 	// Look for
@@ -16718,7 +16739,6 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 				//cursorStr = nextCursor
 				//break
 			}
-
 		}
 	}
 
@@ -16766,7 +16786,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 						}
 
 						// URL encode the key
-						// FIXME: Not sure why SOMETIMES it isn't QueryEscaped 
+						// FIXME: Not sure why SOMETIMES it isn't QueryEscaped
 						// and sometimes the Key doesn't match
 						//parsedRawkey := url.QueryEscape(cacheKey.Key)
 						parsedKey := fmt.Sprintf("%s_%s_%s", orgId, cacheKey.Key, category)
@@ -16797,7 +16817,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 							} else {
 								// Makes sure we do a toooon of keys at once when cleanup is relevant
 								newKeys, _, err := GetAllCacheKeys(ctx, orgId, category, 500, "", cleanupDepth)
-								if err == nil { 
+								if err == nil {
 									cacheKeys = newKeys
 								}
 							}
@@ -16882,7 +16902,12 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	// Only cache if NO cursor at all.
 	// Otherwise we need to track and clean up all cursors(?)
 	if project.CacheDb && !skipCache {
-		newcache, err := json.Marshal(cacheKeys)
+		cacheReturn = CacheReturn{
+			Cursor: cursor,
+			Keys:   cacheKeys,
+		}
+
+		newcache, err := json.Marshal(cacheReturn)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
 			return cacheKeys, cursor, nil

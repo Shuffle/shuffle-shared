@@ -3936,7 +3936,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.38"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.39"
 }
 
 // Removes JSON values from the input
@@ -4891,6 +4891,11 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		// november 2025 after adding graphic system to datastore
 
 	} else if parsedName == "run_ai_agent" {
+		if len(automation.Options) == 0 {
+			log.Printf("[ERROR] AI agent: No options provided for run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
+			return errors.New("No options provided for run_ai_agent automation")
+		}
+
 		log.Printf("[DEBUG] AI agent: Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
 		if len(foundApikey) == 0 {
 			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
@@ -5159,6 +5164,11 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		}
 
 	} else if parsedName == "run_workflow" {
+		if len(automation.Options) == 0 {
+			log.Printf("[ERROR] No options provided for 'run_workflow' automation for key %s in category %s", cacheData.Key, cacheData.Category)
+			return errors.New("No options provided for 'run_workflow' automation")
+		}
+
 		for _, option := range automation.Options {
 			if option.Key != "workflow_id" {
 				continue
@@ -5198,8 +5208,9 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		}
 
 	} else if parsedName == "send_webhook" {
-		if debug {
-			log.Printf("[DEBUG] Sending webhook for url %s", automation.Options[0].Value)
+		if len(automation.Options) == 0 {
+			log.Printf("[ERROR] No options provided for 'run_workflow' automation for key %s in category %s", cacheData.Key, cacheData.Category)
+			return errors.New("No options provided for 'run_workflow' automation")
 		}
 
 		return handleDatastoreAutomationWebhook(ctx, marshalledBody, cacheData, automation, "/api/v1/apps/HTTP/run", "webhook")
