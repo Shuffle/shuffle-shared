@@ -7707,7 +7707,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				} else if status == "RUNNING" {
 					startedAt := mappedDecision.RunDetails.StartedAt
 					if startedAt == 0 {
-						log.Printf("[WARNING][%s] Decision at index %d (action=%s) has RUNNING status but startedAt=0 - treating as stale, allowing re-dispatch", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
+						if debug {
+							log.Printf("[WARNING][%s] Decision at index %d (action=%s) has RUNNING status but startedAt=0 - treating as stale, allowing re-dispatch", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
+						}
 						break
 					}
 
