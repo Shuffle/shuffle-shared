@@ -2376,8 +2376,6 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			decision.RunDetails.CategoryLabels = categoryLabels
 			decision.RunDetails.ActionName = actionName
 
-			log.Printf("RawResp: %s", string(rawResponse))
-
 			if err != nil {
 				if debug { 
 					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
