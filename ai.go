@@ -7682,6 +7682,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	oldActionResult := ActionResult{}
 	_ = oldActionResult
 	oldAgentOutput := AgentOutput{}
+	previousAnswers := ""
 
 	marshalledDecisions := []byte{}
 	if createNextActions == true {
@@ -7702,7 +7703,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 
 			oldAgentOutput = mappedResult
-			previousAnswers := ""
 			relevantDecisions := []AgentDecision{}
 
 			// Check for existing RUNNING/WAITING ask decisions - if found, return existing state without creating new decisions
@@ -7716,13 +7716,18 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 				if status == "WAITING" {
 					// WAITING is only ever set for human-input scenarios (ask/question and approval-required)
-					log.Printf("[DEBUG][%s] Found existing WAITING decision at index %d (action=%s) - returning existing state", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
+					if debug {
+						log.Printf("[DEBUG][%s] Found existing WAITING decision at index %d (action=%s) - returning existing state", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
+					}
+					
 					hasActiveDecision = true
 					break
 				} else if status == "RUNNING" {
 					startedAt := mappedDecision.RunDetails.StartedAt
 					if startedAt == 0 {
-						log.Printf("[WARNING][%s] Decision at index %d (action=%s) has RUNNING status but startedAt=0 - treating as stale, allowing re-dispatch", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
+						if debug {
+							log.Printf("[WARNING][%s] Decision at index %d (action=%s) has RUNNING status but startedAt=0 - treating as stale, allowing re-dispatch", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
+						}
 						break
 					}
 
@@ -8110,7 +8115,8 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 ### INPUT PROTOCOL
 1. **USER CONTEXT:** Available actions/tools.
 2. **USER REQUEST:** Task to process.
-3. **HISTORY:** JSON list of previous executions (Newest First).
+3. **USER ANSWERS:** Explicit answers already provided by the user to prior agent questions. Treat these as authoritative context.
+4. **HISTORY:** JSON list of previous executions (Newest First).
 
 ### PHASE 1: COMPLETION CHECK (HIGHEST PRIORITY)
 **Compare the "USER REQUEST" against the "HISTORY".**
@@ -8139,12 +8145,16 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
    - **Check:** Did the user provide input OR is it in "HISTORY"? -> **YES: PROCEED.**
    - **NO:** Run "Get/Read" tool first.
 
-3. **Action Selection & Risk Assessment:**
+4. **Answered-Question Handling:**
+	- If "USER ANSWERS" or answered question fields in "HISTORY" already contain the missing value, use that value directly.
+	- Do NOT ask the same question again when an answer already exists in prior context.
+
+5. **Action Selection & Risk Assessment:**
    - Select the tool that performs the *next logical step*.
    - **Destructive Guard:**
      - If action is DESTRUCTIVE (stop/delete/remove) -> Set "approval_required": true on the action/tool. 
 
-4. **Validation & Continuation:**
+6. **Validation & Continuation:**
    - Decisions can be dependant. Make sure to validate the output of one decision before proceeding to the next. If you need to run multiple steps, run them and validate each time.
 
 %s
@@ -8288,6 +8298,13 @@ data_filter:
 		Role:    openai.ChatMessageRoleUser,
 		Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
 	})
+
+	if len(previousAnswers) > 0 {
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: fmt.Sprintf("USER ANSWERS:\n%s", previousAnswers),
+		})
+	}
 
 	if len(marshalledDecisions) > 4 { 
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage {
