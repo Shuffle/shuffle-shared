@@ -50,6 +50,7 @@ var model = "gpt-5-mini"
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
 var docsVectorStoreID = os.Getenv("OPENAI_DOCS_VS_ID")
+var skipAgentWait = os.Getenv("SHUFFLE_SKIP_AGENT_WAIT") 
 var assistantModel = model
 
 var aiMaxTokens = 4096 // Controllable with AI_MAX_TOKENS env
@@ -7398,8 +7399,15 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
-func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string) (Action, error) {
+func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string, aiResponseWrapper ...[]byte) (Action, error) {
+	ctx := context.Background()
 	aiStarttime := time.Now().UnixMilli()
+
+	replacedExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)
+	if err == nil && len(replacedExecution.Results) > 0 && (execution.Status == "EXECUTING" || execution.Status == "WAITING") { 
+		execution = *replacedExecution
+	}
+
 	// A handler to ensure we ALWAYS focus on next actions if a node starts late
 	// or is missing context, but has previous decisions
 	for _, result := range execution.Results {
@@ -7409,6 +7417,18 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 		createNextActions = true
 		break
+	}
+
+	llmResponse := []byte{} 
+	if len(aiResponseWrapper) > 0 { 
+		if len(aiResponseWrapper[0]) > 0 { 
+			llmResponse = aiResponseWrapper[0]
+			createNextActions = true 
+		}
+	}
+
+	if execution.Status != "EXECUTING" && execution.Status != "WAITING" { 
+		return startNode, errors.New("Agent run already finished") 
 	}
 
 	// Metadata = org-specific context
@@ -7439,7 +7459,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		execution.Workflow.OrgId = execution.ExecutionOrg
 	}
 
-	ctx := context.Background()
 
 	// Validate On-Prem Configuration immediately
 	if project.Environment != "cloud" {
@@ -7510,15 +7529,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		}
 
 		if param.Name == "app_name" {
-			if debug { 
-				log.Printf("[DEBUG] Rewriting app_name to action")
-			}
+			//if debug { 
+			//	log.Printf("[DEBUG] Rewriting app_name to action")
+			//}
 
 			param.Name = "action"
-			//chosenAiApp = param.Value
-			//if ArrayContains(openaiAllowedApps, strings.ToLower(param.Value)) {
-			//	// runOpenaiRequest = true
-			//}
 		}
 
 		if param.Name == "action" {
@@ -7694,8 +7709,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			const staleThreshold = int64(299 * 1000) // 4 min 59 sec in ms :-)
 			now := time.Now().UnixMilli()
 			hasActiveDecision := false
+
+			//finishFound := false
 			for _, mappedDecision := range mappedResult.Decisions {
 				status := mappedDecision.RunDetails.Status
+
 				if status == "WAITING" {
 					// WAITING is only ever set for human-input scenarios (ask/question and approval-required)
 					if debug {
@@ -8177,7 +8195,8 @@ data_filter:
 		agentReasoningEffort = foundReasoning
 	}
 
-	if len(userMessage) == 0 {
+	if skipAgentWait == "true" { 
+	} else if len(userMessage) == 0 {
 		log.Printf("[ERROR][%s] AI Agent: No user message/input found for action %s", execution.ExecutionId, startNode.ID)
 		return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "no_user_message", "No user message/input found for AI Agent start")
 	}
@@ -8188,7 +8207,8 @@ data_filter:
 		initiatedBy = "system"
 	}
 
-	if !createNextActions {
+	if len(llmResponse) > 0 { 
+	} else if !createNextActions {
 		if strings.TrimSpace(callerName) == "" {
 			callerName = "unknown"
 		}
@@ -8445,55 +8465,90 @@ data_filter:
 	}
 
 	fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s&parent_node=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization, startNode.ID)
-	req, err := http.NewRequest(
-		"POST",
-		fullUrl,
-		bytes.NewBuffer([]byte(marshalledAction)),
-	)
-
-	if err != nil {
-		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed creating request during LLM setup: %s", execution.ExecutionId, err)
-		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
-	}
-
-	// Generate a one-time-use token so PrepareSingleAction knows this request originated from a legitimate agent execution and is allowed to inject the system AI credentials.
-	agentOneTimeToken := uuid.NewV4().String()
-	agentTokenCacheKey := fmt.Sprintf("agent_onetime_token_%s", agentOneTimeToken)
-	if err := SetCache(ctx, agentTokenCacheKey, []byte("1"), 60); err != nil {
-		log.Printf("[WARNING][%s] Failed to set agent one-time token in cache: %s", execution.ExecutionId, err)
-	}
-	req.Header.Set("X-Agent-Token", agentOneTimeToken)
-
 	client := GetExternalClient(fullUrl)
-	client.Timeout = time.Minute * 5
-	newresp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error=%s", execution.ExecutionId, execution.Workflow.OrgId, strings.Replace(err.Error(), `"`, `\"`, -1))
-		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_http_failure", fmt.Sprintf("LLM call failed after %ds: %s", int(client.Timeout.Seconds()), err.Error()))
-	}
+	body := []byte{}
+	llmStatusCode := 0
 
-	log.Printf("[INFO][%s] Started AI Agent action %s with app %s. Waiting for results...", execution.ExecutionId, startNode.ID, chosenAiApp)
+	if skipAgentWait == "true" && len(llmResponse) > 0 {
+		body = llmResponse
+	} else {
 
-	// Set timestamp as soon as it's ready
-	// https://pkg.go.dev/github.com/sashabaranov/go-openai#ChatCompletionMessage
-	for messageIndex, _ := range completionRequest.Messages {
-		if len(completionRequest.Messages[messageIndex].Name) == 0 {
-			completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().Unix())
+		client.Timeout = time.Minute * 5
+
+		// Test for whether we can ignore response wait time 
+		// This is to drastically reduce CPU use of Agent requests
+		// 1 second = enough to read the body, which is the only major
+		// obstacle
+		if skipAgentWait == "true" { 
+			//client.Timeout = time.Second * 1 
+			client.Timeout = time.Millisecond * 1000 
+			fullUrl += "&skip_result_wait=true"
 		}
-	}
 
-	defer newresp.Body.Close()
-	body, err := ioutil.ReadAll(newresp.Body)
-	if err != nil {
-		log.Printf("[ERROR][%s] AI Agent: Failed reading response body from LLM: %s", execution.ExecutionId, err)
-		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_body_read_failed", fmt.Sprintf("Failed to read LLM response body: %s", err.Error()))
+		req, err := http.NewRequest(
+			"POST",
+			fullUrl,
+			bytes.NewBuffer([]byte(marshalledAction)),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed creating request during LLM setup: %s", execution.ExecutionId, err)
+			return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
+		}
+
+		// Generate a one-time-use token so PrepareSingleAction knows this request originated from a legitimate agent execution and is allowed to inject the system AI credentials.
+		agentOneTimeToken := uuid.NewV4().String()
+		agentTokenCacheKey := fmt.Sprintf("agent_onetime_token_%s", agentOneTimeToken)
+		if err := SetCache(ctx, agentTokenCacheKey, []byte("1"), 60); err != nil {
+			log.Printf("[WARNING][%s] Failed to set agent one-time token in cache: %s", execution.ExecutionId, err)
+		}
+
+		req.Header.Set("X-Agent-Token", agentOneTimeToken)
+		newresp, err := client.Do(req)
+
+		log.Printf("[INFO][%s] Started AI Agent action %s with app '%s'. Waiting for results...", execution.ExecutionId, startNode.ID, chosenAiApp)
+
+		if err != nil {
+			if skipAgentWait == "true" && strings.Contains(strings.ToLower(err.Error()), "timeout") { 
+
+				// Question when we return here:
+				// How do we get back to EXACTLY here when the AI is done?
+				// Point being: we need the same data anyway.
+
+				return startNode, nil
+			} else {
+				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error=%s", execution.ExecutionId, execution.Workflow.OrgId, strings.Replace(err.Error(), `"`, `\"`, -1))
+				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_http_failure", fmt.Sprintf("LLM call failed after %ds: %s", int(client.Timeout.Seconds()), err.Error()))
+			}
+		}
+
+		if skipAgentWait == "true" {
+			return startNode, nil
+		}
+
+		// Set timestamp as soon as it's ready
+		// https://pkg.go.dev/github.com/sashabaranov/go-openai#ChatCompletionMessage
+		for messageIndex, _ := range completionRequest.Messages {
+			if len(completionRequest.Messages[messageIndex].Name) == 0 {
+				completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().Unix())
+			}
+		}
+
+		defer newresp.Body.Close()
+		body, err = ioutil.ReadAll(newresp.Body)
+		if err != nil {
+			log.Printf("[ERROR][%s] AI Agent: Failed reading response body from LLM: %s", execution.ExecutionId, err)
+			return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_body_read_failed", fmt.Sprintf("Failed to read LLM response body: %s", err.Error()))
+		}
+	
+		llmStatusCode = newresp.StatusCode
 	}
 
 	// Maps OpenAI -> Result struct so we can handle it
 	resultMapping := ActionResult{}
 	err = json.Unmarshal(body, &resultMapping)
 	if err != nil {
-		log.Printf("[ERROR] AI Agent (2): Failed unmarshalling response into decisions. Response from sending AI Agent request to %s: %d - '%s'", fullUrl, newresp.StatusCode, string(body))
+		log.Printf("[ERROR] AI Agent (2): Failed unmarshalling response into decisions. Response from sending AI Agent request to %s: %d - '%s'. Err: %s", fullUrl, llmStatusCode, string(body), err)
 	}
 
 	resultMapping.ExecutionId = execution.ExecutionId
@@ -8653,9 +8708,9 @@ data_filter:
 			}
 		} else {
 			choicesString = openaiOutput.Choices[0].Message.Content
-			if debug {
-				log.Printf("[DEBUG] Found choices string (2) in AI Agent response - len: %d: %s", len(choicesString), choicesString)
-			}
+			//if debug {
+			//	log.Printf("[DEBUG] Found choices string (2) in AI Agent response - len: %d: %s", len(choicesString), choicesString)
+			//}
 
 			if openaiOutput.Usage.TotalTokens > 0 && len(execution.Workflow.OrgId) > 0 {
 				cachedTokens := 0
@@ -9221,8 +9276,8 @@ data_filter:
 
 	} else {
 		// LLM returned an empty result body — this is a failure
-		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Empty result body from LLM response (status %d). Aborting agent.", execution.ExecutionId, newresp.StatusCode)
-		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "empty_llm_result", fmt.Sprintf("LLM returned empty response body with HTTP status %d", newresp.StatusCode))
+		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Empty result body from LLM response (status %d). Aborting agent.", execution.ExecutionId, llmStatusCode)
+		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "empty_llm_result", fmt.Sprintf("LLM returned empty response body with HTTP status %d", llmStatusCode))
 	}
 
 	if memorizationEngine == "shuffle_db" {
