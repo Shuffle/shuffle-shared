@@ -17651,9 +17651,6 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		return streamErr
 	}
 
-	SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
-	// SetCache(ctx, cacheKey, []byte(status), cacheTTL)
-
 	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
 		// Check if this workflow is running in different env (not cloud)
 		fullExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
