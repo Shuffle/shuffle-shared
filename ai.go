@@ -7408,6 +7408,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		execution = *replacedExecution
 	}
 
+	llmResponse := []byte{} 
+	if len(aiResponseWrapper) > 0 { 
+		if len(aiResponseWrapper[0]) > 0 { 
+			llmResponse = aiResponseWrapper[0]
+			//createNextActions = false 
+		}
+	}
+
 	// A handler to ensure we ALWAYS focus on next actions if a node starts late
 	// or is missing context, but has previous decisions
 	for _, result := range execution.Results {
@@ -7417,14 +7425,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 		createNextActions = true
 		break
-	}
-
-	llmResponse := []byte{} 
-	if len(aiResponseWrapper) > 0 { 
-		if len(aiResponseWrapper[0]) > 0 { 
-			llmResponse = aiResponseWrapper[0]
-			createNextActions = true 
-		}
 	}
 
 	if execution.Status != "EXECUTING" && execution.Status != "WAITING" { 
@@ -8092,7 +8092,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
    - **Action:** Select "ask" (Category: "standalone").
    - **Field "question":** The specific questions you have. Make decisions FOR the user instead of asking. Do NOT ask questions about authentication or authorization. Do NOT ask to confirm the obvious. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, ask one question at a time as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}]`
 
-    // New feature for auto-generating and approving new apps 
+   // FIXME: Uncomment below and add to the enableQuestionsString. New feature for auto-generating and approving new apps. The generate API docs API supports this
+
    	// If the tool is not mentioned in USER CONTEXT and you NEED them to allow those tools, set "action": "add_tool" and "tool": "EXACT toolname" and do not ask questions. If multiple tools are required, make multiple decisions - one for each required tool. Put the entire reasoning in the "reason" field - not as fields.
 	}
 
@@ -8105,7 +8106,7 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 3. DO NOT LIE. Only say you did something if you actually did.
 4. "action" should be the EXACT name of the function, without paranthesis or parameters.
 5. If future scheduling may be necessary, ignore it and run it right now. Scheduling is a separate process.
-6. Actions show up in the python format. Put the function name in the 'action' field and the function parameters as fields.
+6. App Actions show up in the python function format. Put the function name in the 'action' field and the parameters in 'fields' array. Don't add empty fields.
 
 ### INTERNAL CAPABILITIES (DO NOT USE TOOLS FOR THESE)
 1. **General QA/Help:** YOU answer questions like "What can you do?" or "Hi". Do NOT use tools.
@@ -8514,7 +8515,6 @@ data_filter:
 
 		if err != nil {
 			if skipAgentWait == "true" && strings.Contains(strings.ToLower(err.Error()), "timeout") { 
-
 				// Question when we return here:
 				// How do we get back to EXACTLY here when the AI is done?
 				// Point being: we need the same data anyway.
