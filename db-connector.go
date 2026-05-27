@@ -2083,8 +2083,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					innerresult.Status = "SUCCESS"
 					workflowExecution.Results[resultIndex].Status = "SUCCESS"
 					// go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
-				
-					log.Printf("[INFO][%s] Agent status changed to finished during cleanup!", workflowExecution.ExecutionId)
 				}
 
 				if !finishFound && innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" {

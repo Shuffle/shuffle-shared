@@ -18110,6 +18110,15 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
+			if startNode.Name == "" && foundParentExec.Start != "" { 
+				for _, action := range foundParentExec.Workflow.Actions { 
+					if action.ID == foundParentExec.Start { 
+						startNode = action
+						break
+					}
+				}
+			}
+
 			if startNode.Name != "" { 
 				skipAgentContinue := false
 				if strings.Contains(actionResult.Result, "success") { 
@@ -22001,10 +22010,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		return workflowExecution, err
 	}
 
-	if debug {
-		log.Printf("[DEBUG] Action: %#v (%s)", action.Name, action.AppID)
-	}
-
 	if appId != action.AppID {
 
 		// Used for standalone runs controlled from /agents and /mcp
@@ -23103,7 +23108,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 	// VERY short sleeptime here on purpose
 	startTime := time.Now().Unix()
-	maxSeconds := 15
+	maxSeconds := 15 
 	if project.Environment != "cloud" {
 		maxSeconds = 180
 	}
@@ -23119,6 +23124,15 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	addedParams := []string{}
 	sleeptime := 100
 	for {
+		// Use startTime instead:
+		if time.Now().Unix()-startTime > int64(maxSeconds) {
+
+			returnBody.Success = true
+			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
+
+			break
+		}
+
 		time.Sleep(time.Duration(sleeptime) * time.Millisecond)
 
 		newExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
@@ -23209,16 +23223,6 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		}
 
 		cnt += 1
-
-		// Use startTime instead:
-		//if cnt == (maxSeconds * (maxSeconds * 100 / sleeptime)) {
-		if time.Now().Unix()-startTime > int64(maxSeconds) {
-
-			returnBody.Success = true
-			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
-
-			break
-		}
 	}
 
 	if debug {

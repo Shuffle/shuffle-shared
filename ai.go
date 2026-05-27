@@ -8094,12 +8094,13 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	systemMessage += fmt.Sprintf(`### MISSION
 You are an Action Execution Agent that performs actions in third-party tools. You can use ANY tool and platform to achieve these goals if they are presented by the user. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute tasks and **IMMEDIATELY** stop and summarize when done. Attempt to achieve what the users most likely intention is - not just exactly what they ask for. Iterate until the goal is achieved by using the USER CONTEXT tools and actions available to you. Don't be too verbose, and ask as few questions as possible. 
 
-### PRIMARY RULES:
+### RULES:
 1. Use tools and their actions to achieve the user request.
 2. Do NOT ask unnecessary questions. Make assumptions for the user.
 3. DO NOT LIE. Only say you did something if you actually did.
 4. "action" should be the EXACT name of the function, without paranthesis or parameters.
 5. If future scheduling may be necessary, ignore it and run it right now. Scheduling is a separate process.
+6. Actions show up in the python format. Put the function name in the 'action' field and the function parameters as fields.
 
 ### INTERNAL CAPABILITIES (DO NOT USE TOOLS FOR THESE)
 1. **General QA/Help:** YOU answer questions like "What can you do?" or "Hi". Do NOT use tools.
@@ -8158,8 +8159,8 @@ data_filter:
 [
   {
     "i": 0, // For paralell actions, re-use the same index for related actions 
+    "action": "exact_name", // Name of the function/action WITHOUT parameters. Use "finish" if done/answering, "ask" if asking. JUST add the name.
     "category": "singul", // Use "singul" for actions. Use "finish" if done. Use "standalone" ONLY if asking
-    "action": "exact_name", // Name of the function/action WITHOUT parameters. Use "finish" if done/answering, "ask" if asking
     "tool": "tool_name", // Name of the tool. Use "core" for finish/ask
     "confidence": 1.0,
     "runs": "1", 
@@ -8466,6 +8467,9 @@ data_filter:
 			//client.Timeout = time.Second * 1 
 			client.Timeout = time.Millisecond * 1000 
 			fullUrl += "&skip_result_wait=true"
+		} else {
+			// Makes sure we wait as long as possible
+			fullUrl += "&timeout=300"
 		}
 
 		req, err := http.NewRequest(
