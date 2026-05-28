@@ -18159,10 +18159,68 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	actionResult.Sanitized = false
 	actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
 
-	// Done elsewhere
+	// Special handler for AI Agent -> App run
 	setCache := true
-	if actionResult.Action.AppName == "shuffle-subflow" {
+	if skipAgentWait == "true" && actionResult.Action.AppName == "openai" && len(workflowExecution.ExecutionParent) > 0 { 
 
+		foundParentExec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionParent)
+		if err != nil { 
+			log.Printf("[ERROR][%s] Failed to find AI Parent exec %s", workflowExecution.ExecutionId, workflowExecution.ExecutionParent)
+		} else {
+			startNode := Action{}
+			for _, innerresult := range foundParentExec.Results { 
+				if innerresult.Status != "EXECUTING" && innerresult.Status != "WAITING" { 
+					continue
+				}
+			
+				if innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent" {
+					startNode = innerresult.Action
+					break
+				}
+			}
+
+			if startNode.Name == "" && foundParentExec.Start != "" { 
+				for _, action := range foundParentExec.Workflow.Actions { 
+					if action.ID == foundParentExec.Start { 
+						startNode = action
+						break
+					}
+				}
+			}
+
+			if startNode.Name != "" { 
+				skipAgentContinue := false
+				if strings.Contains(actionResult.Result, "success") { 
+					quickUnmarshal := ResultChecker{}
+					err := json.Unmarshal([]byte(actionResult.Result), &quickUnmarshal)
+					if err == nil && quickUnmarshal.Success == false {
+						skipAgentContinue = true
+						oldAgentOutput := AgentOutput{}
+						foundError := fmt.Sprintf("LLM received call failed from app: ")
+						if len(quickUnmarshal.Reason) > 0 { 
+							foundError += fmt.Sprintf(quickUnmarshal.Reason)
+						}
+
+						go abortAgentExecution(ctx, *foundParentExec, startNode, oldAgentOutput, "llm_received_failure", foundError)
+					}
+				}
+
+				if !skipAgentContinue { 
+					callerName := "LLMResponse"
+					marshalledResult, err := json.Marshal(actionResult)
+					if err != nil { 
+						log.Printf("[ERROR] AI Agent (10): Failed marshalling actionResult: %s", err)
+					} else {
+						go HandleAiAgentExecutionStart(*foundParentExec, startNode, false, callerName, marshalledResult) 
+					}
+				}
+			} else {
+				log.Printf("[ERROR][%s] Could not find agent to run in parent exec %s", actionResult.ExecutionId, workflowExecution.ExecutionParent)
+			}
+		}
+	}
+
+	if actionResult.Action.AppName == "shuffle-subflow" {
 		// Verifying if the userinput should be sent properly or not
 		if actionResult.Action.Name == "run_userinput" && actionResult.Status != "SKIPPED" {
 			// log.Printf("\n\n[INFO] Inside userinput default return! Return data: %s", actionResult.Result)
@@ -22021,10 +22079,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		return workflowExecution, err
 	}
 
-	if debug {
-		log.Printf("[DEBUG] Action: %#v (%s)", action.Name, action.AppID)
-	}
-
 	if appId != action.AppID {
 
 		// Used for standalone runs controlled from /agents and /mcp
@@ -23123,7 +23177,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 	// VERY short sleeptime here on purpose
 	startTime := time.Now().Unix()
-	maxSeconds := 15
+	maxSeconds := 15 
 	if project.Environment != "cloud" {
 		maxSeconds = 180
 	}
@@ -23139,6 +23193,15 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	addedParams := []string{}
 	sleeptime := 100
 	for {
+		// Use startTime instead:
+		if time.Now().Unix()-startTime > int64(maxSeconds) {
+
+			returnBody.Success = true
+			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
+
+			break
+		}
+
 		time.Sleep(time.Duration(sleeptime) * time.Millisecond)
 
 		newExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
@@ -23229,16 +23292,6 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		}
 
 		cnt += 1
-
-		// Use startTime instead:
-		//if cnt == (maxSeconds * (maxSeconds * 100 / sleeptime)) {
-		if time.Now().Unix()-startTime > int64(maxSeconds) {
-
-			returnBody.Success = true
-			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
-
-			break
-		}
 	}
 
 	if debug {
@@ -36618,7 +36671,9 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 		if !found {
 			returnActions = append(returnActions, action)
 		} else {
-			log.Printf("NOT adding; %#v", action.Name) 
+			if debug { 
+				log.Printf("[DEBUG] NOT adding priority; %#v", action.Name) 
+			}
 		}
 	}
 

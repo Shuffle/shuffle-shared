@@ -50,6 +50,7 @@ var model = "gpt-5-mini"
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
 var docsVectorStoreID = os.Getenv("OPENAI_DOCS_VS_ID")
+var skipAgentWait = os.Getenv("SHUFFLE_SKIP_AGENT_WAIT") 
 var assistantModel = model
 
 var aiMaxTokens = 4096 // Controllable with AI_MAX_TOKENS env
@@ -7398,8 +7399,23 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
-func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string) (Action, error) {
+func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string, aiResponseWrapper ...[]byte) (Action, error) {
+	ctx := context.Background()
 	aiStarttime := time.Now().UnixMilli()
+
+	replacedExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)
+	if err == nil && len(replacedExecution.Results) > 0 && (execution.Status == "EXECUTING" || execution.Status == "WAITING") { 
+		execution = *replacedExecution
+	}
+
+	llmResponse := []byte{} 
+	if len(aiResponseWrapper) > 0 { 
+		if len(aiResponseWrapper[0]) > 0 { 
+			llmResponse = aiResponseWrapper[0]
+			//createNextActions = false 
+		}
+	}
+
 	// A handler to ensure we ALWAYS focus on next actions if a node starts late
 	// or is missing context, but has previous decisions
 	for _, result := range execution.Results {
@@ -7409,6 +7425,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 		createNextActions = true
 		break
+	}
+
+	if execution.Status != "EXECUTING" && execution.Status != "WAITING" { 
+		return startNode, errors.New("Agent run already finished") 
 	}
 
 	// Metadata = org-specific context
@@ -7439,7 +7459,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		execution.Workflow.OrgId = execution.ExecutionOrg
 	}
 
-	ctx := context.Background()
 
 	// Validate On-Prem Configuration immediately
 	if project.Environment != "cloud" {
@@ -7510,15 +7529,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		}
 
 		if param.Name == "app_name" {
-			if debug { 
-				log.Printf("[DEBUG] Rewriting app_name to action")
-			}
+			//if debug { 
+			//	log.Printf("[DEBUG] Rewriting app_name to action")
+			//}
 
 			param.Name = "action"
-			//chosenAiApp = param.Value
-			//if ArrayContains(openaiAllowedApps, strings.ToLower(param.Value)) {
-			//	// runOpenaiRequest = true
-			//}
 		}
 
 		if param.Name == "action" {
@@ -7694,8 +7709,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			const staleThreshold = int64(299 * 1000) // 4 min 59 sec in ms :-)
 			now := time.Now().UnixMilli()
 			hasActiveDecision := false
+
+			//finishFound := false
 			for _, mappedDecision := range mappedResult.Decisions {
 				status := mappedDecision.RunDetails.Status
+
 				if status == "WAITING" {
 					// WAITING is only ever set for human-input scenarios (ask/question and approval-required)
 					if debug {
@@ -8074,19 +8092,21 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
    - **Action:** Select "ask" (Category: "standalone").
    - **Field "question":** The specific questions you have. Make decisions FOR the user instead of asking. Do NOT ask questions about authentication or authorization. Do NOT ask to confirm the obvious. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, ask one question at a time as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}]`
 
-    // New feature for auto-generating and approving new apps 
+   // FIXME: Uncomment below and add to the enableQuestionsString. New feature for auto-generating and approving new apps. The generate API docs API supports this
+
    	// If the tool is not mentioned in USER CONTEXT and you NEED them to allow those tools, set "action": "add_tool" and "tool": "EXACT toolname" and do not ask questions. If multiple tools are required, make multiple decisions - one for each required tool. Put the entire reasoning in the "reason" field - not as fields.
 	}
 
 	systemMessage += fmt.Sprintf(`### MISSION
 You are an Action Execution Agent that performs actions in third-party tools. You can use ANY tool and platform to achieve these goals if they are presented by the user. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute tasks and **IMMEDIATELY** stop and summarize when done. Attempt to achieve what the users most likely intention is - not just exactly what they ask for. Iterate until the goal is achieved by using the USER CONTEXT tools and actions available to you. Don't be too verbose, and ask as few questions as possible. 
 
-### PRIMARY RULES:
+### RULES:
 1. Use tools and their actions to achieve the user request.
 2. Do NOT ask unnecessary questions. Make assumptions for the user.
 3. DO NOT LIE. Only say you did something if you actually did.
 4. "action" should be the EXACT name of the function, without paranthesis or parameters.
 5. If future scheduling may be necessary, ignore it and run it right now. Scheduling is a separate process.
+6. App Actions show up in the python function format. Put the function name in the 'action' field and the parameters in 'fields' array. Don't add empty fields.
 
 ### INTERNAL CAPABILITIES (DO NOT USE TOOLS FOR THESE)
 1. **General QA/Help:** YOU answer questions like "What can you do?" or "Hi". Do NOT use tools.
@@ -8150,8 +8170,8 @@ data_filter:
 [
   {
     "i": 0, // For paralell actions, re-use the same index for related actions 
+    "action": "exact_name", // Name of the function/action WITHOUT parameters. Use "finish" if done/answering, "ask" if asking. JUST add the name.
     "category": "singul", // Use "singul" for actions. Use "finish" if done. Use "standalone" ONLY if asking
-    "action": "exact_name", // Name of the function/action WITHOUT parameters. Use "finish" if done/answering, "ask" if asking
     "tool": "tool_name", // Name of the tool. Use "core" for finish/ask
     "confidence": 1.0,
     "runs": "1", 
@@ -8177,7 +8197,8 @@ data_filter:
 		agentReasoningEffort = foundReasoning
 	}
 
-	if len(userMessage) == 0 {
+	if skipAgentWait == "true" { 
+	} else if len(userMessage) == 0 {
 		log.Printf("[ERROR][%s] AI Agent: No user message/input found for action %s", execution.ExecutionId, startNode.ID)
 		return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "no_user_message", "No user message/input found for AI Agent start")
 	}
@@ -8188,7 +8209,8 @@ data_filter:
 		initiatedBy = "system"
 	}
 
-	if !createNextActions {
+	if len(llmResponse) > 0 { 
+	} else if !createNextActions {
 		if strings.TrimSpace(callerName) == "" {
 			callerName = "unknown"
 		}
@@ -8445,55 +8467,92 @@ data_filter:
 	}
 
 	fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s&parent_node=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization, startNode.ID)
-	req, err := http.NewRequest(
-		"POST",
-		fullUrl,
-		bytes.NewBuffer([]byte(marshalledAction)),
-	)
-
-	if err != nil {
-		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed creating request during LLM setup: %s", execution.ExecutionId, err)
-		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
-	}
-
-	// Generate a one-time-use token so PrepareSingleAction knows this request originated from a legitimate agent execution and is allowed to inject the system AI credentials.
-	agentOneTimeToken := uuid.NewV4().String()
-	agentTokenCacheKey := fmt.Sprintf("agent_onetime_token_%s", agentOneTimeToken)
-	if err := SetCache(ctx, agentTokenCacheKey, []byte("1"), 60); err != nil {
-		log.Printf("[WARNING][%s] Failed to set agent one-time token in cache: %s", execution.ExecutionId, err)
-	}
-	req.Header.Set("X-Agent-Token", agentOneTimeToken)
-
 	client := GetExternalClient(fullUrl)
-	client.Timeout = time.Minute * 5
-	newresp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error=%s", execution.ExecutionId, execution.Workflow.OrgId, strings.Replace(err.Error(), `"`, `\"`, -1))
-		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_http_failure", fmt.Sprintf("LLM call failed after %ds: %s", int(client.Timeout.Seconds()), err.Error()))
-	}
+	body := []byte{}
+	llmStatusCode := 0
 
-	log.Printf("[INFO][%s] Started AI Agent action %s with app %s. Waiting for results...", execution.ExecutionId, startNode.ID, chosenAiApp)
+	if skipAgentWait == "true" && len(llmResponse) > 0 {
+		body = llmResponse
+	} else {
 
-	// Set timestamp as soon as it's ready
-	// https://pkg.go.dev/github.com/sashabaranov/go-openai#ChatCompletionMessage
-	for messageIndex, _ := range completionRequest.Messages {
-		if len(completionRequest.Messages[messageIndex].Name) == 0 {
-			completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().Unix())
+		client.Timeout = time.Minute * 5
+
+		// Test for whether we can ignore response wait time 
+		// This is to drastically reduce CPU use of Agent requests
+		// 1 second = enough to read the body, which is the only major
+		// obstacle
+		if skipAgentWait == "true" { 
+			//client.Timeout = time.Second * 1 
+			client.Timeout = time.Millisecond * 1000 
+			fullUrl += "&skip_result_wait=true"
+		} else {
+			// Makes sure we wait as long as possible
+			fullUrl += "&timeout=300"
 		}
-	}
 
-	defer newresp.Body.Close()
-	body, err := ioutil.ReadAll(newresp.Body)
-	if err != nil {
-		log.Printf("[ERROR][%s] AI Agent: Failed reading response body from LLM: %s", execution.ExecutionId, err)
-		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_body_read_failed", fmt.Sprintf("Failed to read LLM response body: %s", err.Error()))
+		req, err := http.NewRequest(
+			"POST",
+			fullUrl,
+			bytes.NewBuffer([]byte(marshalledAction)),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed creating request during LLM setup: %s", execution.ExecutionId, err)
+			return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
+		}
+
+		// Generate a one-time-use token so PrepareSingleAction knows this request originated from a legitimate agent execution and is allowed to inject the system AI credentials.
+		agentOneTimeToken := uuid.NewV4().String()
+		agentTokenCacheKey := fmt.Sprintf("agent_onetime_token_%s", agentOneTimeToken)
+		if err := SetCache(ctx, agentTokenCacheKey, []byte("1"), 60); err != nil {
+			log.Printf("[WARNING][%s] Failed to set agent one-time token in cache: %s", execution.ExecutionId, err)
+		}
+
+		req.Header.Set("X-Agent-Token", agentOneTimeToken)
+		newresp, err := client.Do(req)
+
+		log.Printf("[INFO][%s] Started AI Agent action %s with app '%s'. Waiting for results...", execution.ExecutionId, startNode.ID, chosenAiApp)
+
+		if err != nil {
+			if skipAgentWait == "true" && strings.Contains(strings.ToLower(err.Error()), "timeout") { 
+				// Question when we return here:
+				// How do we get back to EXACTLY here when the AI is done?
+				// Point being: we need the same data anyway.
+
+				return startNode, nil
+			} else {
+				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error=%s", execution.ExecutionId, execution.Workflow.OrgId, strings.Replace(err.Error(), `"`, `\"`, -1))
+				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_http_failure", fmt.Sprintf("LLM call failed after %ds: %s", int(client.Timeout.Seconds()), err.Error()))
+			}
+		}
+
+		if skipAgentWait == "true" {
+			return startNode, nil
+		}
+
+		// Set timestamp as soon as it's ready
+		// https://pkg.go.dev/github.com/sashabaranov/go-openai#ChatCompletionMessage
+		for messageIndex, _ := range completionRequest.Messages {
+			if len(completionRequest.Messages[messageIndex].Name) == 0 {
+				completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().Unix())
+			}
+		}
+
+		defer newresp.Body.Close()
+		body, err = ioutil.ReadAll(newresp.Body)
+		if err != nil {
+			log.Printf("[ERROR][%s] AI Agent: Failed reading response body from LLM: %s", execution.ExecutionId, err)
+			return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_body_read_failed", fmt.Sprintf("Failed to read LLM response body: %s", err.Error()))
+		}
+	
+		llmStatusCode = newresp.StatusCode
 	}
 
 	// Maps OpenAI -> Result struct so we can handle it
 	resultMapping := ActionResult{}
 	err = json.Unmarshal(body, &resultMapping)
 	if err != nil {
-		log.Printf("[ERROR] AI Agent (2): Failed unmarshalling response into decisions. Response from sending AI Agent request to %s: %d - '%s'", fullUrl, newresp.StatusCode, string(body))
+		log.Printf("[ERROR] AI Agent (2): Failed unmarshalling response into decisions. Response from sending AI Agent request to %s: %d - '%s'. Err: %s", fullUrl, llmStatusCode, string(body), err)
 	}
 
 	resultMapping.ExecutionId = execution.ExecutionId
@@ -8653,9 +8712,9 @@ data_filter:
 			}
 		} else {
 			choicesString = openaiOutput.Choices[0].Message.Content
-			if debug {
-				log.Printf("[DEBUG] Found choices string (2) in AI Agent response - len: %d: %s", len(choicesString), choicesString)
-			}
+			//if debug {
+			//	log.Printf("[DEBUG] Found choices string (2) in AI Agent response - len: %d: %s", len(choicesString), choicesString)
+			//}
 
 			if openaiOutput.Usage.TotalTokens > 0 && len(execution.Workflow.OrgId) > 0 {
 				cachedTokens := 0
@@ -9221,8 +9280,8 @@ data_filter:
 
 	} else {
 		// LLM returned an empty result body — this is a failure
-		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Empty result body from LLM response (status %d). Aborting agent.", execution.ExecutionId, newresp.StatusCode)
-		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "empty_llm_result", fmt.Sprintf("LLM returned empty response body with HTTP status %d", newresp.StatusCode))
+		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Empty result body from LLM response (status %d). Aborting agent.", execution.ExecutionId, llmStatusCode)
+		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "empty_llm_result", fmt.Sprintf("LLM returned empty response body with HTTP status %d", llmStatusCode))
 	}
 
 	if memorizationEngine == "shuffle_db" {
