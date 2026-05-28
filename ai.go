@@ -7167,38 +7167,52 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 		}
 	}
 
-	if len(admins) == 0 {
-		admins = append(admins, "support@shuffler.io")
-	} else {
-		if !ArrayContains(admins, "support@shuffler.io") {
-			admins = append(admins, "support@shuffler.io")
-		}
-	}
+	aiPercentage := float64(monthlyTokensUsed) / float64(tokenLimit) * 100
 
-	cacheKey := generateAlertCacheKey(billingOrgId, "agent_token_limit_exceeded", admins)
-	if !checkAndSetAlertCache(ctx, cacheKey) {
-		log.Printf("[DEBUG] Skipping duplicate AI token limit alert for org %s - already sent recently", billingOrgId)
+	pctCacheKey := generateAlertCacheKey(billingOrgId, fmt.Sprintf("ai_token_pct_%d", int64(100)), admins)
+	if !checkAndSetAlertCache(ctx, pctCacheKey) {
+		log.Printf("[DEBUG] Skipping duplicate AI token alert for org %s, threshold %d%% - already sent recently", billingOrgId, int64(aiPercentage))
 		return
 	}
 
-	subject := fmt.Sprintf("AI Agent Token Limit Exceeded for Org %s", orgName)
-	message := fmt.Sprintf(`Dear Team,
+	totalAppExecutions := int64(0)
+	appRunsLimit := int64(0)
+	orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
+	if statsErr == nil && orgStats != nil {
+		totalAppExecutions = orgStats.MonthlyAppExecutions + orgStats.MonthlyChildAppExecutions
+	}
+	if fullOrg != nil {
+		appRunsLimit = fullOrg.SyncFeatures.AppExecutions.Limit
+	}
 
-	Your organization <strong>%s</strong> (ID: %s) has exceeded the monthly AI Agent token limit of <strong>%d</strong> tokens.
+	subjectLine := fmt.Sprintf("%d%% of your AI token limit", int64(aiPercentage))
+	Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your tenant %s", subjectLine, orgName)
+	AiRecommendation := "Tip: <a href=\"https://shuffler.io/admin?tab=app_auth\" style=\"color: #FF8444; text-decoration: none; font-weight: bold;\">Connect your own AI provider app</a> to use your own keys and bypass the AI token limit entirely."
+	substitutions := map[string]interface{}{
+		"app_runs_usage":            totalAppExecutions,
+		"app_runs_limit":            appRunsLimit,
+		"subject_string":            subjectLine,
+		"ai_tokens_usage":           monthlyTokensUsed,
+		"ai_tokens_limit":           tokenLimit,
+		"org_name":                  orgName,
+		"org_id":                    billingOrgId,
+		"admin_email":               orgName,
+		"app_runs_usage_percentage": int64(aiPercentage),
+		"ai_recommendation":         AiRecommendation,
+	}
 
-	<strong>Current usage:</strong> %d tokens.
-
-	As a result, your AI Agent runs will be temporarily blocked until the start of the next billing cycle.
-	If you need to increase your token limit, please reach out to us at <a href="mailto:support@shuffler.io">support@shuffler.io</a>.
-	
-	Best regards, 
-	The Shuffler Team`, orgName, billingOrgId, tokenLimit, monthlyTokensUsed)
-
-	errMail := sendMailSendgrid(admins, subject, message, false, []string{})
-	if errMail != nil {
-		log.Printf("[ERROR] Failed sending AI token limit alert email to %v for org %s: %s", admins, billingOrgId, errMail)
+	err := sendMailSendgridV2(
+		[]string{"support@shuffler.io"},
+		Subject,
+		substitutions,
+		false,
+		"d-3678d48b2b7144feb4b0b4cff7045016",
+		admins,
+	)
+	if err != nil {
+		log.Printf("[ERROR] Failed sending AI token alert email to %v for org %s: %s", admins, billingOrgId, err)
 	} else {
-		log.Printf("[INFO] Sent AI token limit alert email to %v of org %s", admins, billingOrgId)
+		log.Printf("[INFO] Sent AI token %d%% alert email to %v of org %s", int64(aiPercentage), admins, billingOrgId)
 	}
 }
 
