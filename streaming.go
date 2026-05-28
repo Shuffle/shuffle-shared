@@ -1,13 +1,20 @@
 package shuffle
 
 import (
+	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// streamPresenceInterval: presence update every 100 poll iterations (~10s at 100ms/poll)
+var streamPresenceInterval = 100
+var streamPresenceTTL int32 = 5
+var streamPresenceStaleMs int64 = 30000 // 30 seconds stale threshold
 
 func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -61,9 +68,6 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		if workflow.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (SET workflow stream)", user.Username, workflow.ID)
 
-			//} else if workflow.Public {
-			//log.Printf("[AUDIT] Letting user %s access workflow %s for streaming because it's public (SET workflow stream)", user.Username, workflow.ID)
-
 		} else if project.Environment == "cloud" && user.Verified == true && user.SupportAccess == true && user.Role == "admin" {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
 
@@ -75,7 +79,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		}
 	}
 
-	body, err := ioutil.ReadAll(request.Body)
+	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Error with body read in workflow stream: %s", err)
 		resp.WriteHeader(401)
@@ -83,19 +87,103 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	/*
-		streamKey := fmt.Sprintf("%s_stream_users", workflow.ID)
-		cache, err = GetCache(ctx, streamKey, user.Id, 30)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
-		} else {
-			// We are here to get the users in the stream
-			cacheData := []byte(cache.([]uint8))
-		}
-	*/
+	// Try to parse as a single operation and assign sequence + timestamp
+	var op StreamWorkflowOperation
+	if err := json.Unmarshal(body, &op); err == nil && len(op.Item) > 0 {
+		op.Timestamp = time.Now().UnixMilli()
 
-	// FIXME: Should append to the stream and keep some items in memory
-	// Not just purely overwrite it
+		if len(op.UserID) == 0 && len(user.Id) > 0 {
+			op.UserID = user.Id
+		}
+
+		sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
+		var state StreamWorkflowState
+
+		cache, err := GetCache(ctx, sessionKey)
+		if err == nil {
+			cacheData, ok := cache.([]uint8)
+			if !ok {
+				log.Printf("[WARNING] Unexpected cache type for stream state %s", sessionKey)
+			} else if err := json.Unmarshal(cacheData, &state); err != nil {
+				log.Printf("[WARNING] Failed to unmarshal stream state for %s: %s", workflow.ID, err)
+			}
+		}
+
+		op.Sequence = state.LastSeq + 1
+		state.Operations = append(state.Operations, op)
+		state.LastSeq = op.Sequence
+
+		if len(state.Operations) > 100 {
+			state.Operations = state.Operations[len(state.Operations)-100:]
+		}
+
+		stateBytes, err := json.Marshal(state)
+		if err != nil {
+			log.Printf("[WARNING] Failed to marshal stream state: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		err = SetCache(ctx, sessionKey, stateBytes, 120)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for stream: %s", err)
+		}
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(fmt.Sprintf(`{"success": true, "sequence": %d}`, op.Sequence)))
+		return
+	}
+
+	// Fallback: batch of operations
+	var ops []StreamWorkflowOperation
+	if err := json.Unmarshal(body, &ops); err == nil && len(ops) > 0 {
+		sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
+		var state StreamWorkflowState
+
+		cache, err := GetCache(ctx, sessionKey)
+		if err == nil {
+			cacheData, ok := cache.([]uint8)
+			if !ok {
+				log.Printf("[WARNING] Unexpected cache type for stream state %s", sessionKey)
+			} else if err := json.Unmarshal(cacheData, &state); err != nil {
+				log.Printf("[WARNING] Failed to unmarshal stream state for %s: %s", workflow.ID, err)
+			}
+		}
+
+		for i := range ops {
+			ops[i].Sequence = state.LastSeq + 1
+			state.LastSeq = ops[i].Sequence
+			ops[i].Timestamp = time.Now().UnixMilli()
+			if len(ops[i].UserID) == 0 && len(user.Id) > 0 {
+				ops[i].UserID = user.Id
+			}
+			state.Operations = append(state.Operations, ops[i])
+		}
+
+		if len(state.Operations) > 100 {
+			state.Operations = state.Operations[len(state.Operations)-100:]
+		}
+
+		stateBytes, err := json.Marshal(state)
+		if err != nil {
+			log.Printf("[WARNING] Failed to marshal stream state: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		err = SetCache(ctx, sessionKey, stateBytes, 120)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for stream: %s", err)
+		}
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(fmt.Sprintf(`{"success": true, "sequence": %d, "count": %d}`, state.LastSeq, len(ops))))
+		return
+	}
+
+	// Legacy fallback: raw body overwrite (backwards compat for old clients)
 	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
 	err = SetCache(ctx, sessionKey, body, 30)
 	if err != nil {
@@ -112,11 +200,6 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	resp.WriteHeader(http.StatusOK)
-	resp.Write([]byte(`{"success": true}`))
-	return
-
-	//// Removed check here as it may be a public workflow
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[AUDIT] Api authentication failed in getting specific workflow (stream): %s. Continuing because it may be public.", err)
@@ -145,7 +228,6 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//ctx := GetContext(request)
 	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
@@ -157,8 +239,8 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 
-		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
-			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (stream edit workflow)", user.Username, workflow.ID)
+		if workflow.OrgId == user.ActiveOrg.Id && user.Role != "" {
+			log.Printf("[AUDIT] User %s is accessing workflow %s as org member (get workflow stream)", user.Username, workflow.ID)
 
 		} else if workflow.Public {
 			log.Printf("[AUDIT] Letting user %s access workflow %s for streaming because it's public (get workflow stream)", user.Username, workflow.ID)
@@ -173,8 +255,6 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// FIXME: If public, it should ONLY allow you to set certain actions
-
 	resp.Header().Set("Connection", "Keep-Alive")
 	resp.Header().Set("X-Content-Type-Options", "nosniff")
 
@@ -188,48 +268,128 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	resp.Header().Set("Content-Type", "text/event-stream")
 	resp.WriteHeader(http.StatusOK)
 
+	sinceStr := request.URL.Query().Get("since")
+	var sinceSeq int64
+	if len(sinceStr) > 0 {
+		sinceSeq, _ = strconv.ParseInt(sinceStr, 10, 64)
+	}
+
 	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
-	previousCache := []byte{}
+	presenceKey := fmt.Sprintf("%s_presence", workflow.ID)
+	var lastSentSeq int64 = sinceSeq
+	var pollCount int
+
 	for {
-		cache, err := GetCache(ctx, sessionKey)
-		if err == nil {
-
-			cacheData := []byte(cache.([]uint8))
-			if string(previousCache) == string(cacheData) {
-				//log.Printf("[DEBUG] Still same cache for %s", user.Id)
-			} else {
-
-				// A way to only check for data from other people
-				if (len(user.Id) > 0 && !strings.Contains(string(cacheData), user.Id)) || len(user.Id) == 0 {
-					//log.Printf("[DEBUG] NEW cache for %s (1) - sending: %s.", user.Id, cacheData)
-
-					//fw.Write(cacheData)
-					//w.Write(cacheData)
-
-					_, err := fmt.Fprintf(resp, "%s", string(cacheData))
-					if err != nil {
-						log.Printf("[ERROR] Failed in writing stream to user '%s' (%s): %s", user.Username, user.Id, err)
-
-						if strings.Contains(err.Error(), "broken pipe") {
-							break
-						}
-					} else {
-						previousCache = cacheData
-						conn.Flush()
-					}
-
-				} else {
-					//log.Printf("[ERROR] NEW cache for %s (2) - NOT sending: %s.", user.Id, cacheData)
-
-					previousCache = cacheData
+		pollCount++
+		if pollCount%streamPresenceInterval == 1 {
+			var presence StreamPresenceState
+			presenceCache, err := GetCache(ctx, presenceKey)
+			if err == nil {
+				presenceData, ok := presenceCache.([]uint8)
+				if !ok {
+					log.Printf("[WARNING] Unexpected cache type for presence %s", presenceKey)
+				} else if err := json.Unmarshal(presenceData, &presence); err != nil {
+					log.Printf("[WARNING] Failed to unmarshal presence for %s: %s", workflow.ID, err)
 				}
-
 			}
-		} else {
-			//log.Printf("[DEBUG] Failed getting cache for %s: %s", user.Id, err)
+
+			now := time.Now().UnixMilli()
+			updated := false
+			activeUsers := []StreamPresenceEntry{}
+			for _, entry := range presence.Users {
+				if now-entry.LastSeen > streamPresenceStaleMs {
+					continue
+				}
+				if entry.UserID == user.Id {
+					entry.LastSeen = now
+					if len(user.Username) > 0 {
+						entry.Username = user.Username
+					}
+					updated = true
+				}
+				activeUsers = append(activeUsers, entry)
+			}
+			if !updated && len(user.Id) > 0 {
+				activeUsers = append(activeUsers, StreamPresenceEntry{
+					UserID:   user.Id,
+					Username: user.Username,
+					LastSeen: now,
+				})
+			}
+			presence.Users = activeUsers
+
+			presenceBytes, _ := json.Marshal(presence)
+			if err := SetCache(ctx, presenceKey, presenceBytes, streamPresenceTTL); err != nil {
+				log.Printf("[WARNING] Failed setting presence cache for %s: %s", workflow.ID, err)
+			}
+
+			// Send presence to client
+			type presenceOp struct {
+				Item  string                `json:"item"`
+				Users []StreamPresenceEntry `json:"users"`
+			}
+			presenceOpBytes, _ := json.Marshal(presenceOp{Item: "presence", Users: presence.Users})
+			_, err = fmt.Fprintf(resp, "%s\n", string(presenceOpBytes))
+			if err != nil {
+				if strings.Contains(err.Error(), "broken pipe") {
+					return
+				}
+			}
+			conn.Flush()
 		}
 
-		// FIXME: This is a hack to make sure we don't fully utilize the thread
+		cache, err := GetCache(ctx, sessionKey)
+		if err == nil {
+			cacheData, ok := cache.([]uint8)
+			if !ok {
+				log.Printf("[WARNING] Unexpected cache type for stream state %s", sessionKey)
+			} else {
+				var state StreamWorkflowState
+				if err := json.Unmarshal(cacheData, &state); err == nil {
+					for _, op := range state.Operations {
+						if op.Sequence <= lastSentSeq {
+							continue
+						}
+
+						// Skip ops from this user (they already applied them locally)
+						if len(user.Id) > 0 && op.UserID == user.Id {
+							lastSentSeq = op.Sequence
+							continue
+						}
+
+						opBytes, err := json.Marshal(op)
+						if err != nil {
+							continue
+						}
+
+						_, err = fmt.Fprintf(resp, "%s\n", string(opBytes))
+						if err != nil {
+							if strings.Contains(err.Error(), "broken pipe") {
+								return
+							}
+						}
+						lastSentSeq = op.Sequence
+						conn.Flush()
+					}
+				} else {
+					// Legacy format: raw body (backwards compat)
+					if lastSentSeq == 0 {
+						if (len(user.Id) > 0 && !strings.Contains(string(cacheData), user.Id)) || len(user.Id) == 0 {
+							_, err := fmt.Fprintf(resp, "%s", string(cacheData))
+							if err != nil {
+								if strings.Contains(err.Error(), "broken pipe") {
+									return
+								}
+							} else {
+								conn.Flush()
+							}
+						}
+						lastSentSeq = 1
+					}
+				}
+			}
+		}
+
 		time.Sleep(100 * time.Millisecond)
 	}
 }
