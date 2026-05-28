@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"strings"
 
@@ -1136,7 +1137,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:  "cron",
-							Value: "0 0 * * *",
+							Value: fmt.Sprintf("%d %d * * *", rand.Intn(60), rand.Intn(24)),
 						},
 						WorkflowAppActionParameter{
 							Name:  "execution_argument",
