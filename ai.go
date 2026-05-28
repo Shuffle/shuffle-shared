@@ -9342,20 +9342,11 @@ data_filter:
 		return startNode, err
 	}
 
-	streamResp, err := client.Do(streamReq)
-	if err != nil {
-		log.Printf("[ERROR] AI Agent: Failed sending request for stream during SKIPPED user input: %s", err)
-		return startNode, err
+	_, _, streamErr := DoRequestWithRetry(client, streamReq, 3)
+	if streamErr != nil {
+		log.Printf("[ERROR] AI Agent: Failed sending request for stream during SKIPPED user input: %s", streamErr)
+		return startNode, streamErr
 	}
-
-	defer streamResp.Body.Close()
-	streamBody, err := ioutil.ReadAll(streamResp.Body)
-	if err != nil {
-		log.Printf("[ERROR] AI Agent: Failed reading response from sending request for stream during SKIPPED user input: %s", err)
-		return startNode, err
-	}
-
-	log.Printf("[INFO] Response from sending request for stream during SKIPPED user input: %d - %s", streamResp.StatusCode, string(streamBody))
 
 	return startNode, nil
 

@@ -17594,6 +17594,7 @@ func DoRequestWithRetry(client *http.Client, req *http.Request, maxAttempts int)
 
 	var requestBody []byte
 	var err error
+
 	if req.GetBody == nil && req.Body != nil {
 		requestBody, err = io.ReadAll(req.Body)
 		if err != nil {
@@ -17605,12 +17606,14 @@ func DoRequestWithRetry(client *http.Client, req *http.Request, maxAttempts int)
 	}
 
 	var lastErr error
+
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 		}
 
 		clonedReq := req.Clone(req.Context())
+
 		if req.GetBody != nil {
 			clonedReq.Body, err = req.GetBody()
 			if err != nil {
@@ -17622,16 +17625,19 @@ func DoRequestWithRetry(client *http.Client, req *http.Request, maxAttempts int)
 		}
 
 		resp, err := client.Do(clonedReq)
-		if err != nil {
-			if resp != nil {
-				if resp.Body != nil {
-					resp.Body.Close()
-				}
 
-				return resp, nil, err
+		if err != nil {
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
+
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				return nil, nil, err
 			}
 
 			lastErr = err
+
 			if attempt+1 < maxAttempts {
 				continue
 			}
@@ -17641,11 +17647,23 @@ func DoRequestWithRetry(client *http.Client, req *http.Request, maxAttempts int)
 
 		body, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
+
 		if readErr != nil {
-			return resp, nil, readErr
+			return nil, nil, readErr
 		}
 
 		resp.Body = io.NopCloser(bytes.NewReader(body))
+
+		if resp.StatusCode == 429 {
+			lastErr = fmt.Errorf("rate limited: %s", string(body))
+
+			if attempt+1 < maxAttempts {
+				continue
+			}
+
+			return resp, body, lastErr
+		}
+
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return resp, body, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
 		}
@@ -17762,44 +17780,13 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	fullUrl := fmt.Sprintf("%s/api/v1/streams", baseUrl)
 	client := &http.Client{}
 
-	var streamErr error
-	var body []byte
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			time.Sleep(time.Duration(attempt) * 2 * time.Second)
-		}
-
-		req, err := http.NewRequest("POST", fullUrl, bytes.NewBuffer(marshalledResult))
-		if err != nil {
-			log.Printf("[ERROR][%s] Error building agent '%s' request: %s", workflowExecution.ExecutionId, status, err)
-			return err
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[WARNING][%s]  Error on agent '%s' request (attempt %d/3): %s", workflowExecution.ExecutionId, status, attempt+1, err)
-			streamErr = err
-			continue
-		}
-
-		body, err = ioutil.ReadAll(resp.Body)
-		resp.Body.Close() // no defer since we need to close it before the next attempt : )
-		if err != nil {
-			log.Printf("[WARNING][%s] Failed reading agent '%s' body (attempt %d/3): %s", workflowExecution.ExecutionId, status, attempt+1, err)
-			streamErr = err
-			continue
-		}
-
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			log.Printf("[WARNING][%s] Non-2xx (%d) from /api/v1/streams for agent '%s' (attempt %d/3): %s", workflowExecution.ExecutionId, resp.StatusCode, status, attempt+1, string(body))
-			streamErr = errors.New(fmt.Sprintf("No result in %s request for agent", status))
-			continue
-		}
-
-		streamErr = nil
-		break
+	streamReq, err := http.NewRequest("POST", fullUrl, bytes.NewBuffer(marshalledResult))
+	if err != nil {
+		log.Printf("[ERROR][%s] Error building agent '%s' request: %s", workflowExecution.ExecutionId, status, err)
+		return err
 	}
 
+	_, _, streamErr := DoRequestWithRetry(client, streamReq, 3)
 	if streamErr != nil {
 		log.Printf("[ERROR][%s] Failed sending self-request with '%s' for agent after 3 attempts: %s", workflowExecution.ExecutionId, status, streamErr)
 		return streamErr
@@ -32297,6 +32284,14 @@ func GetExternalClient(baseUrl string) *http.Client {
 		Timeout:   time.Second * 60,
 	}
 
+	return client
+}
+
+func GetExternalClientWithTimeout(baseUrl string, responseHeaderTimeout time.Duration) *http.Client {
+	client := GetExternalClient(baseUrl)
+	if t, ok := client.Transport.(*http.Transport); ok {
+		t.ResponseHeaderTimeout = responseHeaderTimeout
+	}
 	return client
 }
 

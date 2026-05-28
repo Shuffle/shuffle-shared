@@ -2010,8 +2010,8 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	requestUrl := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
 	// Change timeout to be 300 seconds (just in case)
-	// Allows for reruns and self-correcting
-	client := GetExternalClient(requestUrl)
+	// Allows for reruns and self-correcting.
+	client := GetExternalClientWithTimeout(requestUrl, 0)
 	client.Timeout = 300 * time.Second
 
 	newFields := []schemaless.Valuereplace{}
@@ -2487,60 +2487,17 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		return
 	}
 
-	const maxStreamRetries = 3
-	var req *http.Request
-	var lastStreamErr error
-	serverReceivedRequest := false
-	
-	for attempt := 0; attempt < maxStreamRetries; attempt++ {
-		if attempt > 0 {
-			backoff := time.Duration(attempt*attempt) * time.Second
-			log.Printf("[WARNING][%s] AI Agent: Retrying streams POST for decision %s (attempt %d/%d) after %s: %v", execution.ExecutionId, decision.RunDetails.Id, attempt+1, maxStreamRetries, backoff, lastStreamErr)
-			time.Sleep(backoff)
-		}
-
-		req, err = http.NewRequest(
-			"POST",
-			url,
-			bytes.NewBuffer(marshalledAction),
-		)
-		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed agent decision request creation on retry %d: %s", execution.ExecutionId, attempt+1, err)
-			lastStreamErr = err
-			continue
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed sending agent decision result (attempt %d): %s", execution.ExecutionId, attempt+1, err)
-			lastStreamErr = err
-			continue
-		}
-
-		serverReceivedRequest = true
-
-		foundBody, err := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			log.Printf("[WARNING][%s] AI Agent: Decision %s POSTed to streams (status %d) but failed reading response body: %s. Treating as success.", execution.ExecutionId, decision.RunDetails.Id, resp.StatusCode, err)
+	streamReq, err := http.NewRequest("POST", url, bytes.NewBuffer(marshalledAction))
+	if err != nil {
+		log.Printf("[ERROR][%s] AI Agent: Failed agent decision request creation: %s", execution.ExecutionId, err)
+	} else {
+		streamReq.Header.Set("Content-Type", "application/json")
+		_, _, streamErr := DoRequestWithRetry(client, streamReq, 3)
+		if streamErr == nil {
 			return
 		}
-
-		if resp.StatusCode == 200 {
-			return
-		}
-
-		log.Printf("[ERROR][%s] AI Agent: Status %d for decision %s (attempt %d). Body: %s", execution.ExecutionId, resp.StatusCode, decision.RunDetails.Id, attempt+1, string(foundBody))
-		lastStreamErr = fmt.Errorf("streams POST returned status %d", resp.StatusCode)
-
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			break
-		}
-
+		log.Printf("[ERROR][%s] AI Agent: All attempts to POST decision %s to streams failed: %v. Falling back to in-process handler.", execution.ExecutionId, decision.RunDetails.Id, streamErr)
 	}
-
-	log.Printf("[ERROR][%s] AI Agent: All %d attempts to POST decision %s to streams failed (serverReceived=%v). Last error: %v. Falling back to in-process handler.", execution.ExecutionId, maxStreamRetries, decision.RunDetails.Id, serverReceivedRequest, lastStreamErr)
  	// Try the in-process handler to keep the agent moving when the streams API is unavailable.
 	freshExec, err := GetWorkflowExecution(context.Background(), execution.ExecutionId)
 	if err != nil {
