@@ -7699,6 +7699,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			err := json.Unmarshal([]byte(result.Result), &mappedResult)
 			if err != nil {
 				log.Printf("[ERROR][%s] AI Agent (1): Failed unmarshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
+				if debug { 
+					log.Printf("[WARNING] FAILED AI AGENT THING: %s", result.Result)
+				}
 				break
 			}
 
@@ -8518,7 +8521,6 @@ data_filter:
 				// Question when we return here:
 				// How do we get back to EXACTLY here when the AI is done?
 				// Point being: we need the same data anyway.
-
 				return startNode, nil
 			} else {
 				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error=%s", execution.ExecutionId, execution.Workflow.OrgId, strings.Replace(err.Error(), `"`, `\"`, -1))

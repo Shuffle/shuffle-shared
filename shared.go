@@ -18177,24 +18177,21 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	if skipAgentWait == "true" && actionResult.Action.AppName == "openai" && len(workflowExecution.ExecutionParent) > 0 { 
 
 		foundParentExec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionParent)
-		if err != nil { 
+		if err != nil || len(foundParentExec.ExecutionId) == 0 { 
 			log.Printf("[ERROR][%s] Failed to find AI Parent exec %s", workflowExecution.ExecutionId, workflowExecution.ExecutionParent)
 		} else {
+			// Question: How does it know where to send it?
+			// None of these methods work. 
+			// Since it's based on Parent => Node, it should be ExecutionSourceNode being the AI one
+			// ExecutionSourceNode string         `json:"execution_source_node" yaml:"execution_source_node"`
 			startNode := Action{}
-			for _, innerresult := range foundParentExec.Results { 
-				if innerresult.Status != "EXECUTING" && innerresult.Status != "WAITING" { 
-					continue
-				}
-			
-				if innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent" {
-					startNode = innerresult.Action
-					break
-				}
-			}
-
-			if startNode.Name == "" && foundParentExec.Start != "" { 
+			if len(workflowExecution.ExecutionSourceNode) == 0 { 
+				log.Printf("[ERROR][%s] Agent run is missing ExecutionSourceNode from parent execution %s", workflowExecution.ExecutionId, foundParentExec.ExecutionId)
+			} else {
+				// This doesn't work due to e.g. having multiple nodes in the same one
+				// AKA it's guessing
 				for _, action := range foundParentExec.Workflow.Actions { 
-					if action.ID == foundParentExec.Start { 
+					if action.ID == workflowExecution.ExecutionSourceNode { 
 						startNode = action
 						break
 					}
@@ -22977,6 +22974,8 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		}
 
 		if len(parentActionId) > 0 {
+			workflowExecution.ExecutionSourceNode = parentActionId
+
 			// Makes them 'required' to run. Makes it possible to have conditions
 			// for AI Agents in workflows primarily
 			for _, branch := range oldExec.Workflow.Branches { 
@@ -34030,7 +34029,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 
 	// Here to check access rights
 	ctx := GetContext(request)
-	if len(search.WorkflowId) > 0 {
+	if len(search.WorkflowId) > 0 && search.WorkflowId != "AGENT" {
 		workflow, err := GetWorkflow(ctx, search.WorkflowId)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting the workflow %s locally (search workflow runs): %s", search.WorkflowId, err)
@@ -34051,7 +34050,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 			} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 				log.Printf("[AUDIT] Letting verified support admin %s access workflow run debug search for %s", user.Username, workflow.ID)
 			} else {
-				log.Printf("[AUDIT] Wrong user (%s) for workflow %s (workflow run search). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+				log.Printf("[AUDIT] Wrong user (%s) for workflow '%s' (workflow run search). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false}`))
 				return
