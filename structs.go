@@ -5048,6 +5048,7 @@ type StreamPresenceEntry struct {
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
 	LastSeen int64  `json:"last_seen"`
+	Color    string `json:"color"`
 }
 
 type StreamPresenceState struct {
