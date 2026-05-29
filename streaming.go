@@ -11,6 +11,16 @@ import (
 	"time"
 )
 
+var streamPresenceColors = []string{
+	"#F24E1E", "#1ABCFE", "#0ACF83", "#FF7262", "#A259FF",
+	"#FFD700", "#FF3CAC", "#00CFFD", "#F5A623", "#6EE7B7",
+	"#818CF8", "#FB923C",
+}
+
+func presenceColor(userID string, slotIndex int) string {
+	return streamPresenceColors[slotIndex%len(streamPresenceColors)]
+}
+
 // streamPresenceInterval: presence update every 100 poll iterations (~10s at 100ms/poll)
 var streamPresenceInterval = 100
 var streamPresenceTTL int32 = 5
@@ -22,11 +32,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	resp.WriteHeader(http.StatusOK)
-	resp.Write([]byte(`{"success": true}`))
-	return
-
-	// Removed check here as it may be a public workflow
+	//// Removed check here as it may be a public workflow
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[AUDIT] Api authentication failed in getting specific workflow (stream update): %s. Continuing because it may be public.", err)
@@ -314,6 +320,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 					UserID:   user.Id,
 					Username: user.Username,
 					LastSeen: now,
+					Color:    presenceColor(user.Id, len(activeUsers)),
 				})
 			}
 			presence.Users = activeUsers
