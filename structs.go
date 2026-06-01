@@ -5033,6 +5033,7 @@ type StreamWorkflowOperation struct {
 	Type      string          `json:"type"`               // "add", "move", "remove", "select", "unselect", "hover", "configure", "save", "enter"
 	ID        string          `json:"id"`                 // node/edge/workflow ID
 	UserID    string          `json:"user_id"`            // who performed the op (user ID or "agent")
+	Username  string          `json:"username,omitempty"` // display name of the user
 	Data      json.RawMessage `json:"data,omitempty"`     // full node/edge data for "add" ops
 	Location  *Position       `json:"location,omitempty"` // position for "move"/"add" ops
 	Fields    []Valuereplace  `json:"fields,omitempty"`   // for "configure" ops

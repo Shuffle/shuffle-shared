@@ -108,6 +108,9 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		if len(op.UserID) == 0 && len(user.Id) > 0 {
 			op.UserID = user.Id
 		}
+		if len(user.Username) > 0 {
+			op.Username = user.Username
+		}
 
 		sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
 		var state StreamWorkflowState
@@ -413,4 +416,87 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in getting workflow stream history: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+		fileId = location[4]
+	}
+
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID is not valid"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow."}`))
+		return
+	}
+
+	if user.Id != workflow.Owner {
+		if workflow.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
+			// org member — allowed
+		} else if project.Environment == "cloud" && user.Verified && user.Active && user.SupportAccess && strings.HasSuffix(user.Username, "@shuffler.io") {
+			// support admin — allowed
+		} else {
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (stream history)", user.Username, workflow.ID)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	org, err := GetOrg(ctx, workflow.OrgId)
+	if err != nil || !org.SyncFeatures.Multiplayer.Active {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
+	var state StreamWorkflowState
+	cache, err := GetCache(ctx, sessionKey)
+	if err == nil {
+		cacheData, ok := cache.([]uint8)
+		if ok {
+			json.Unmarshal(cacheData, &state)
+		}
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	result, _ := json.Marshal(map[string]interface{}{
+		"success":    true,
+		"operations": state.Operations,
+	})
+	resp.Write(result)
 }
