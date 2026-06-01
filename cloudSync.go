@@ -3656,6 +3656,8 @@ ExecStart=$INSTALL_PATH \
   --screenlock_check=$SCREENLOCK_CHECK \
   --log_forwarding=$LOG_FORWARDING \
   --response_actions=$RESPONSE_ACTIONS
+StandardOutput=append:/var/log/orborus.log
+StandardError=append:/var/log/orborus.log
 
 Restart=always
 RestartSec=5
@@ -3702,6 +3704,13 @@ install_macos() {
 
   <key>RunAtLoad</key>
   <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/orborus.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/orborus.log</string>
+
 </dict>
 </plist>
 EOF
