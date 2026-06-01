@@ -85,6 +85,13 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		}
 	}
 
+	org, err := GetOrg(ctx, workflow.OrgId)
+	if err != nil || !org.SyncFeatures.Multiplayer.Active {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Error with body read in workflow stream: %s", err)
@@ -259,6 +266,13 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+	}
+
+	org, err := GetOrg(ctx, workflow.OrgId)
+	if err != nil || !org.SyncFeatures.Multiplayer.Active {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	resp.Header().Set("Connection", "Keep-Alive")

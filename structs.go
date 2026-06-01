@@ -1395,6 +1395,7 @@ type SyncFeatures struct {
 	Branding            SyncData    `json:"branding" datastore:"branding"`
 	AgentExecutions     SyncData    `json:"agent_executions" datastore:"agent_executions"`
 	AgentTokens         SyncData    `json:"agent_tokens" datastore:"agent_tokens"`
+	Multiplayer         SyncData    `json:"multiplayer" datastore:"multiplayer"`
 }
 
 type SyncData struct {
