@@ -7174,7 +7174,18 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 
 	cacheKey := generateAlertCacheKey(billingOrgId, "agent_token_limit_exceeded", admins)
 	if !checkAndSetAlertCache(ctx, cacheKey) {
-		log.Printf("[DEBUG] Skipping duplicate AI token limit alert for org %s - already sent recently", billingOrgId)
+		log.Printf("[DEBUG] Skipping duplicate AI token limit alert for org %s - already sent recently (1)", billingOrgId)
+		return
+	}
+
+	orgStats, err := GetOrgStatistics(ctx, billingOrgId)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get org stats for AI token limit alert for org %s: %s", billingOrgId, err)
+		return
+	}
+
+	if orgStats.MonthlyAIUsageAlertSent {
+		log.Printf("[DEBUG] Skipping duplicate AI token limit alert for org %s - already sent recently (2)", billingOrgId)
 		return
 	}
 
@@ -7196,6 +7207,11 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 		log.Printf("[ERROR] Failed sending AI token limit alert email to %v for org %s: %s", admins, billingOrgId, errMail)
 	} else {
 		log.Printf("[INFO] Sent AI token limit alert email to %v of org %s", admins, billingOrgId)
+		orgStats.MonthlyAIUsageAlertSent = true
+		errStats := SetOrgStatistics(ctx, *orgStats, billingOrgId)
+		if errStats != nil {
+			log.Printf("[ERROR] Failed to update org stats after sending AI token limit alert for org %s: %s", billingOrgId, errStats)
+		}
 	}
 }
 
