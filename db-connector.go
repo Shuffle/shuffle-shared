@@ -16540,9 +16540,15 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	nameKey := "org_cache"
 	cleanupDepth := 0
+	parentOrgDepth := 0
 	if len(cleanupDepthParam) > 0 {
 		if cleanupDepthParam[0] > 0 {
 			cleanupDepth = cleanupDepthParam[0]
+		}
+	}
+	if len(cleanupDepthParam) > 1 {
+		if cleanupDepthParam[1] > 0 {
+			parentOrgDepth = cleanupDepthParam[1]
 		}
 	}
 
@@ -16864,7 +16870,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 								log.Printf("[WARNING] Cleanup depth for cache keys has reached %d. Stopping recursion to prevent potential infinite loop. Please investigate if there are many stale keys for category '%s' in org '%s'.", cleanupDepth, category, orgId)
 							} else {
 								// Makes sure we do a toooon of keys at once when cleanup is relevant
-								newKeys, _, err := GetAllCacheKeys(ctx, orgId, category, 500, "", cleanupDepth)
+								newKeys, _, err := GetAllCacheKeys(ctx, orgId, category, 500, "", cleanupDepth, parentOrgDepth)
 								if err == nil {
 									cacheKeys = newKeys
 								}
@@ -16915,13 +16921,20 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	foundOrg, err := GetOrg(ctx, orgId)
 	if err == nil && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
+		if parentOrgDepth >= 3 {
+			log.Printf("[ERROR] Reached maximum parent org lookup depth (%d) for org %s. Skipping parent org cache lookup to prevent infinite recursion.", parentOrgDepth, orgId)
+		} else {
 		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
 		if err != nil {
-			log.Printf("[ERROR] Failed finding parent org %s for org %s: %s", foundOrg.CreatorOrg, orgId, err)
+				if debug {
+					log.Printf("[DEBUG] Could not find parent org %s for org %s (possibly in different region): %s", foundOrg.CreatorOrg, orgId, err)
+				}
 		} else {
-			parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, "", max, inputcursor)
+				parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, "", max, inputcursor, cleanupDepth, parentOrgDepth+1)
 			if err != nil {
-				log.Printf("[ERROR] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
+					if debug {
+						log.Printf("[DEBUG] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
+					}
 			} else {
 				if debug {
 					//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
@@ -16942,6 +16955,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 					parentCache.PublicAuthorization = ""
 					parentCache.SuborgDistribution = []string{orgId}
 					cacheKeys = append(cacheKeys, parentCache)
+					}
 				}
 			}
 		}
