@@ -18151,6 +18151,20 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			originalAction = actionResult.Action
 		}
 
+		// If the execution is already FINISHED but a continuation was injected (user asked  the agent to do more on top of what it already did), we need to reset the status back to EXECUTING so that HandleAiAgentExecutionStart doesn't exit with "Agent run already finished". We also persist this to cache so the guard in
+		if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
+			log.Printf("[INFO][%s] Agent continuation: resetting execution status from '%s' to 'EXECUTING' for continuation", workflowExecution.ExecutionId, workflowExecution.Status)
+			workflowExecution.Status = "EXECUTING"
+			workflowExecution.CompletedAt = 0
+
+			executionCacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
+			DeleteCache(ctx, executionCacheKey)
+			marshalledExec, marshalErr := json.Marshal(workflowExecution)
+			if marshalErr == nil {
+				SetCache(ctx, executionCacheKey, marshalledExec, 30)
+			}
+		}
+
 		callerName := "handleAgentDecisionStreamResult"
 		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, originalAction, true, callerName)
 		if err != nil {
