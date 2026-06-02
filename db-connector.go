@@ -1993,6 +1993,10 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		workflowExecution.Workflow.Validation = validation
 	}
 
+	//if debug { 
+	//	log.Printf("\n\n[DEBUG][%s] EXEC CHECK? Actions: %d, Results: %d\n\n", workflowExecution.ExecutionId, len(workflowExecution.Workflow.Actions), len(workflowExecution.Results))
+	//}
+
 	// Make sure to not having missing items in the execution
 	lastexecVar := map[string]ActionResult{}
 	for actionIndex, action := range workflowExecution.Workflow.Actions {
@@ -2002,6 +2006,14 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		workflowExecution.Workflow.Actions[actionIndex].LargeImage = ""
 		workflowExecution.Workflow.Actions[actionIndex].SmallImage = ""
 		for resultIndex, innerresult := range workflowExecution.Results {
+
+			// Very weird edgecase handling for agent cleanup
+			// This is for auto-correctiveness of executions
+			if len(workflowExecution.Workflow.Actions) == 1 && action.Name == "agent" && innerresult.Action.Name == "agent" && innerresult.Action.ID == "" { 
+				innerresult.Action.ID = action.ID
+				innerresult.Action.AppName = "AI Agent"
+			}
+
 			if innerresult.Action.ID != action.ID {
 				continue
 			}
@@ -2019,24 +2031,14 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 			if innerresult.Status != "WAITING" && innerresult.Status != "SUCCESS" {
 				found = true
 				result = innerresult
-				break
+			}
 
-				//} else if innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
-			} else if (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") && (innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent") {
-				if workflowExecution.Results[resultIndex].StartedAt == 0 {
-					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMilli()
-				}
+			// Special cleanup for agents
+			if innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent" {
 
-				// Somehow possible to get Nano()
-				if workflowExecution.Results[resultIndex].StartedAt > 17769710273568 {
-					workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMilli()
-				}
-
-				// Auto fixing decision data based on cache for better decisionmaking
-				// Map the result into AgentOutput to check decisions
-				decisionsUpdated := false
-
+				// Starting autocorrections
 				mappedOutput := AgentOutput{}
+				decisionsUpdated := false
 				err = json.Unmarshal([]byte(innerresult.Result), &mappedOutput)
 				if err != nil {
 					log.Printf("[WARNING] Agent mapping: Failed in mapped output mapping: %s", err)
@@ -2057,187 +2059,233 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					}
 				}
 
-				finishedDecisions := []string{}
-				failedFound := false
-				finishDecisionFound := false
-				for decisionIndex, decision := range mappedOutput.Decisions {
-					if decision.Action == "finish" {
-						finishDecisionFound = true
+				finishFound := false
+				for decisionIndex, decision := range mappedOutput.Decisions { 
+					if decision.Action == "finish" || decision.Category == "finish" { 
+
+						if decision.RunDetails.Status != "FINISHED" {  
+							if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 { 
+								mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli() 
+							}
+
+							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli() 
+							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+							decisionsUpdated = true
+						}
+				
+						finishFound = true
+					}
+				}
+
+				if finishFound { 
+					mappedOutput.Status = "FINISHED"
+
+					result.Status = "SUCCESS"
+					innerresult.Status = "SUCCESS"
+					workflowExecution.Results[resultIndex].Status = "SUCCESS"
+					// go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+				}
+
+				if !finishFound && innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" {
+					if workflowExecution.Results[resultIndex].StartedAt == 0 {
+						workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMilli()
 					}
 
-					decisionId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
-					if decision.RunDetails.Status == "FINISHED" || decision.RunDetails.Status == "IGNORED" {
-						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
-						continue
-					} else if decision.RunDetails.Status == "FAILURE" {
-						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
-						failedFound = true
-						continue
-					} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
+					// Somehow possible to get Nano()
+					if workflowExecution.Results[resultIndex].StartedAt > 17769710273568 {
+						workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMilli()
+					}
 
-						// Max runtime of a decision at 5 minutes
-						if decision.RunDetails.StartedAt > 0 && time.Now().UnixMilli()-decision.RunDetails.StartedAt > 300000 {
-							timeoutFlagKey := fmt.Sprintf("agent-%s-%s-timeout-handled", workflowExecution.ExecutionId, decision.RunDetails.Id)
-							if _, err := GetCache(ctx, timeoutFlagKey); err == nil {
-								// Already handled this timeout in a previous check so just count it as finished.
-								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
-								failedFound = true
-							} else {
-								log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-decision.RunDetails.StartedAt)/1000)
-								SetCache(ctx, timeoutFlagKey, []byte("1"), 60) // 60 min TTL — long enough to outlive any recovery cycle
+					// Auto fixing decision data based on cache for better decisionmaking
+					// Map the result into AgentOutput to check decisions
 
-								decisionsUpdated = true
-								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
-								mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
-								mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
+					finishedDecisions := []string{}
+					failedFound := false
+					finishDecisionFound := false
+					for decisionIndex, decision := range mappedOutput.Decisions {
+						if decision.Action == "finish" {
+							finishDecisionFound = true
 
-								// Write FAILURE back to the per-decision cache so the still-alive goroutine
-								// in RunAgentDecisionAction sees it and discards its late result instead of
-								// messing the recovery state.
-								timedOutDecision := mappedOutput.Decisions[decisionIndex]
-								if marshalledTimedOut, err := json.Marshal(timedOutDecision); err == nil {
-									go SetCache(ctx, decisionId, marshalledTimedOut, 300)
-								}
-
-								// Count as finished so the all-decisions-done check fires in this same check.
-								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
-								failedFound = true
+							if decision.RunDetails.Status == "" { 
+								decision.RunDetails.Status = "FINISHED"
+								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 							}
 						}
-					} else {
-						if decision.RunDetails.CompletedAt > 0 {
-							if debug {
-								log.Printf("[DEBUG] Rewriting decision %s to FINISHED based on completed at timestamp.", decision.RunDetails.Id)
-							}
 
-							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+						decisionId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
+						if decision.RunDetails.Status == "FINISHED" || decision.RunDetails.Status == "IGNORED" {
 							finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
-							decisionsUpdated = true
-
-							marshalledDecision, err := json.Marshal(mappedOutput.Decisions[decisionIndex])
-							if err == nil {
-								err = SetCache(ctx, decisionId, marshalledDecision, 60)
-							}
 							continue
+						} else if decision.RunDetails.Status == "FAILURE" {
+							finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+							failedFound = true
+							continue
+						} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
+
+							// Max runtime of a decision at 5 minutes
+							if decision.RunDetails.StartedAt > 0 && time.Now().UnixMilli()-decision.RunDetails.StartedAt > 300000 {
+								timeoutFlagKey := fmt.Sprintf("agent-%s-%s-timeout-handled", workflowExecution.ExecutionId, decision.RunDetails.Id)
+								if _, err := GetCache(ctx, timeoutFlagKey); err == nil {
+									// Already handled this timeout in a previous check so just count it as finished.
+									finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+									failedFound = true
+								} else {
+									log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-decision.RunDetails.StartedAt)/1000)
+									SetCache(ctx, timeoutFlagKey, []byte("1"), 60) // 60 min TTL — long enough to outlive any recovery cycle
+
+									decisionsUpdated = true
+									mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
+									mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
+									mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
+
+									// Write FAILURE back to the per-decision cache so the still-alive goroutine
+									// in RunAgentDecisionAction sees it and discards its late result instead of
+									// messing the recovery state.
+									timedOutDecision := mappedOutput.Decisions[decisionIndex]
+									if marshalledTimedOut, err := json.Marshal(timedOutDecision); err == nil {
+										go SetCache(ctx, decisionId, marshalledTimedOut, 300)
+									}
+
+									// Count as finished so the all-decisions-done check fires in this same check.
+									finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+									failedFound = true
+								}
+							}
 						} else {
-							if decision.Action == "finish" && decision.RunDetails.Status == "" {
-								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
-								if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
-									mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
+							if decision.RunDetails.CompletedAt > 0 {
+								if debug {
+									log.Printf("[DEBUG] Rewriting decision %s to FINISHED based on completed at timestamp.", decision.RunDetails.Id)
 								}
 
+								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 								finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
-								mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
 								decisionsUpdated = true
 
 								marshalledDecision, err := json.Marshal(mappedOutput.Decisions[decisionIndex])
 								if err == nil {
 									err = SetCache(ctx, decisionId, marshalledDecision, 60)
 								}
+								continue
+							} else {
+								if decision.Action == "finish" && decision.RunDetails.Status == "" {
+									mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+									if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
+										mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
+									}
+
+									finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+									mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
+									decisionsUpdated = true
+
+									marshalledDecision, err := json.Marshal(mappedOutput.Decisions[decisionIndex])
+									if err == nil {
+										err = SetCache(ctx, decisionId, marshalledDecision, 60)
+									}
+								}
+
+								//if debug {
+								//	log.Printf("[DEBUG][%s] Decision %s (action=%s, status='%s') has no CompletedAt yet. Checking cache for updates.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID, decision.RunDetails.Status)
+								//}
 							}
-
-							if debug {
-								log.Printf("[DEBUG][%s] Decision %s (action=%s, status='%s') has no CompletedAt yet. Checking cache for updates.", workflowExecution.ExecutionId, decision.RunDetails.Id, action.ID, decision.RunDetails.Status)
-							}
-						}
-					}
-
-					//log.Printf("[DEBUG] Check cache for %s with status %s", decision.RunDetails.Id, decision.RunDetails.Status)
-					cache, err := GetCache(ctx, decisionId)
-					if err == nil {
-						foundDecision := AgentDecision{}
-						cacheData := []byte(cache.([]uint8))
-						err = json.Unmarshal(cacheData, &foundDecision)
-						if err != nil {
-							log.Printf("[ERROR][%s] Faled mapping foundDecision: %s", workflowExecution.ExecutionId, foundDecision.RunDetails.Id)
-						} else {
-							if foundDecision.RunDetails.Status != "" {
-								decisionsUpdated = true
-								mappedOutput.Decisions[decisionIndex] = foundDecision
-							}
-						}
-					}
-				}
-
-				// FIXME: Is failure hadnling here necessary?
-				// Changed it to do failure handling better in the agent itself
-				// due to having a 'finish' action that should handle it properly
-				if failedFound {
-					decisionsUpdated = true
-					//if debug {
-					//	log.Printf("[DEBUG][%s] Failure found for agent %s. Should we exit?", workflowExecution.ExecutionId, action.ID)
-					//}
-
-					/*
-						mappedOutput.Status = "FAILURE"
-						mappedOutput.CompletedAt = time.Now().UnixMilli()
-						workflowExecution.Results[resultIndex].Status = "ABORTED"
-
-						go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[resultIndex])
-					*/
-
-				}
-
-				if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
-
-					// Check if requests was recently sent or not
-					cacheId := fmt.Sprintf("agent-%s-%s-fixexec-finished-check", workflowExecution.ExecutionId, action.ID)
-					if _, err := GetCache(ctx, cacheId); err == nil {
-						continue
-					}
-
-					// Set cache to prevent multiple sends — if cache is down, skip to prevent retry storm
-					if cacheErr := SetCache(ctx, cacheId, []byte("handled"), 1); cacheErr != nil {
-						log.Printf("[WARNING][%s] Memcache down — skipping fixexec agent self-request for action %s to prevent retry storm", workflowExecution.ExecutionId, action.ID)
-						continue
-					}
-
-					decisionsUpdated = true
-					if finishDecisionFound {
-						log.Printf("[INFO][%s] All decisions finished for agent action %s - marking as FINISHED.", workflowExecution.ExecutionId, action.ID)
-
-						mappedOutput.Status = "FINISHED"
-						mappedOutput.CompletedAt = time.Now().UnixMilli()
-
-						workflowExecution.Results[resultIndex].Status = "SUCCESS"
-
-						go func() {
-							time.Sleep(1 * time.Second)
-							go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
-						}()
-					} else {
-						log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found, marking as WAITING.", workflowExecution.ExecutionId, action.ID)
-						//log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found. Re-invoking agent to finalize (failedFound: %t).", workflowExecution.ExecutionId, action.ID, failedFound)
-
-						mappedOutput.Status = "RUNNING"
-						mappedOutput.CompletedAt = 0
-						workflowExecution.Results[resultIndex].Status = "WAITING"
-
-						if workflowExecution.Status == "FINISHED" {
-							workflowExecution.Status = "EXECUTING"
 						}
 
-						// Marshal updated state now so the goroutine snapshot is consistent
-						if marshalledResult, err := json.Marshal(mappedOutput); err == nil {
-							workflowExecution.Results[resultIndex].Result = string(marshalledResult)
-						}
-
-						// Re-invoke the agent so the LLM can see the failure and produce a proper "finish" decision.
-						capturedExec := workflowExecution
-						capturedAction := action
-						go func() {
-							time.Sleep(1 * time.Second)
-							sendAgentActionSelfRequest("WAITING", capturedExec, capturedExec.Results[resultIndex])
-							time.Sleep(2 * time.Second)
-							_, err := HandleAiAgentExecutionStart(capturedExec, capturedAction, true, "fixexecution_timeout_recovery")
+						//log.Printf("[DEBUG] Check cache for %s with status %s", decision.RunDetails.Id, decision.RunDetails.Status)
+						cache, err := GetCache(ctx, decisionId)
+						if err == nil {
+							foundDecision := AgentDecision{}
+							cacheData := []byte(cache.([]uint8))
+							err = json.Unmarshal(cacheData, &foundDecision)
 							if err != nil {
-								log.Printf("[ERROR][%s] Failed re-invoking agent after decisions completed for action %s: %s", capturedExec.ExecutionId, capturedAction.ID, err)
+								log.Printf("[ERROR][%s] Faled mapping foundDecision: %s", workflowExecution.ExecutionId, foundDecision.RunDetails.Id)
+							} else {
+								if foundDecision.RunDetails.Status != "" {
+									decisionsUpdated = true
+									mappedOutput.Decisions[decisionIndex] = foundDecision
+								}
 							}
-						}()
+						}
 					}
-				} else if (result.Status == "" || result.Status == "WAITING") && mappedOutput.Status == "FINISHED" {
-					workflowExecution.Results[resultIndex].Status = "SUCCESS"
-					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+
+					// FIXME: Is failure hadnling here necessary?
+					// Changed it to do failure handling better in the agent itself
+					// due to having a 'finish' action that should handle it properly
+					if failedFound {
+						decisionsUpdated = true
+						//if debug {
+						//	log.Printf("[DEBUG][%s] Failure found for agent %s. Should we exit?", workflowExecution.ExecutionId, action.ID)
+						//}
+
+						/*
+							mappedOutput.Status = "FAILURE"
+							mappedOutput.CompletedAt = time.Now().UnixMilli()
+							workflowExecution.Results[resultIndex].Status = "ABORTED"
+
+							go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[resultIndex])
+						*/
+
+					}
+
+					if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
+
+						// Check if requests was recently sent or not
+						cacheId := fmt.Sprintf("agent-%s-%s-fixexec-finished-check", workflowExecution.ExecutionId, action.ID)
+						if _, err := GetCache(ctx, cacheId); err == nil {
+							continue
+						}
+
+						// Set cache to prevent multiple sends — if cache is down, skip to prevent retry storm
+						if cacheErr := SetCache(ctx, cacheId, []byte("handled"), 1); cacheErr != nil {
+							log.Printf("[WARNING][%s] Memcache down — skipping fixexec agent self-request for action %s to prevent retry storm", workflowExecution.ExecutionId, action.ID)
+							continue
+						}
+
+						decisionsUpdated = true
+						if finishDecisionFound {
+							log.Printf("[INFO][%s] All decisions finished for agent action %s - marking as FINISHED.", workflowExecution.ExecutionId, action.ID)
+
+							mappedOutput.Status = "FINISHED"
+							mappedOutput.CompletedAt = time.Now().UnixMilli()
+
+							workflowExecution.Results[resultIndex].Status = "SUCCESS"
+
+							go func() {
+								time.Sleep(1 * time.Second)
+								go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+							}()
+						} else {
+							log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found, marking as WAITING.", workflowExecution.ExecutionId, action.ID)
+							//log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found. Re-invoking agent to finalize (failedFound: %t).", workflowExecution.ExecutionId, action.ID, failedFound)
+
+							mappedOutput.Status = "RUNNING"
+							mappedOutput.CompletedAt = 0
+							workflowExecution.Results[resultIndex].Status = "WAITING"
+
+							if workflowExecution.Status == "FINISHED" {
+								workflowExecution.Status = "EXECUTING"
+							}
+
+							// Marshal updated state now so the goroutine snapshot is consistent
+							if marshalledResult, err := json.Marshal(mappedOutput); err == nil {
+								workflowExecution.Results[resultIndex].Result = string(marshalledResult)
+							}
+
+							// Re-invoke the agent so the LLM can see the failure and produce a proper "finish" decision.
+							capturedExec := workflowExecution
+							capturedAction := action
+							go func() {
+								time.Sleep(1 * time.Second)
+								sendAgentActionSelfRequest("WAITING", capturedExec, capturedExec.Results[resultIndex])
+								time.Sleep(2 * time.Second)
+								_, err := HandleAiAgentExecutionStart(capturedExec, capturedAction, true, "fixexecution_timeout_recovery")
+								if err != nil {
+									log.Printf("[ERROR][%s] Failed re-invoking agent after decisions completed for action %s: %s", capturedExec.ExecutionId, capturedAction.ID, err)
+								}
+							}()
+						}
+					} else if (result.Status == "" || result.Status == "WAITING") && mappedOutput.Status == "FINISHED" {
+						workflowExecution.Results[resultIndex].Status = "SUCCESS"
+						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+					}
 				}
 
 				if decisionsUpdated {

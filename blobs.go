@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"strings"
 
@@ -21,8 +22,8 @@ import (
 func IsShuffleApp(app WorkflowApp) bool {
 	parsedAppname := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
 
-	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors"}
-	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448"}
+	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors"}
+	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75"}
 
 	isShuffleApp := false
 	if project.Environment == "cloud" && len(app.ID) > 0 {
@@ -1136,7 +1137,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:  "cron",
-							Value: "0 0 * * *",
+							Value: fmt.Sprintf("%d %d * * *", rand.Intn(60), rand.Intn(24)),
 						},
 						WorkflowAppActionParameter{
 							Name:  "execution_argument",

@@ -17578,6 +17578,106 @@ func RunExecutionTranslation(ctx context.Context, actionResult ActionResult) {
 	//log.Printf("\n\n[DEBUG] Found body in action result of length: %d", len(parsedBody))
 }
 
+// helper function to do request with retry but unused yet.
+func DoRequestWithRetry(client *http.Client, req *http.Request, maxAttempts int) (*http.Response, []byte, error) {
+	if client == nil {
+		return nil, nil, errors.New("http client is nil")
+	}
+
+	if req == nil {
+		return nil, nil, errors.New("http request is nil")
+	}
+
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+
+	var requestBody []byte
+	var err error
+
+	if req.GetBody == nil && req.Body != nil {
+		requestBody, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		req.Body.Close()
+		req.Body = io.NopCloser(bytes.NewReader(requestBody))
+	}
+
+	var lastErr error
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+
+		clonedReq := req.Clone(req.Context())
+
+		if req.GetBody != nil {
+			clonedReq.Body, err = req.GetBody()
+			if err != nil {
+				return nil, nil, err
+			}
+		} else if requestBody != nil {
+			clonedReq.Body = io.NopCloser(bytes.NewReader(requestBody))
+			clonedReq.ContentLength = int64(len(requestBody))
+		}
+
+		resp, err := client.Do(clonedReq)
+
+		if err != nil {
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
+
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				return nil, nil, err
+			}
+
+			lastErr = err
+
+			if attempt+1 < maxAttempts {
+				continue
+			}
+
+			return nil, nil, err
+		}
+
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if readErr != nil {
+			return nil, nil, readErr
+		}
+
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+
+		if resp.StatusCode == 429 {
+			lastErr = fmt.Errorf("rate limited: %s", string(body))
+
+			if attempt+1 < maxAttempts {
+				continue
+			}
+
+			return resp, body, lastErr
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return resp, body, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(body))
+		}
+
+		return resp, body, nil
+	}
+
+	if lastErr == nil {
+		lastErr = errors.New("request failed without a concrete error")
+	}
+
+	return nil, nil, lastErr
+}
+
 func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecution, actionResult ActionResult) error {
 	if project.Environment == "worker" {
 		return nil
@@ -17678,34 +17778,18 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	go SetCache(context.Background(), actionResultCacheId, marshalledResult, 35)
 
 	fullUrl := fmt.Sprintf("%s/api/v1/streams", baseUrl)
-	req, err := http.NewRequest(
-		"POST",
-		fullUrl,
-		bytes.NewBuffer(marshalledResult),
-	)
+	client := &http.Client{}
 
+	streamReq, err := http.NewRequest("POST", fullUrl, bytes.NewBuffer(marshalledResult))
 	if err != nil {
 		log.Printf("[ERROR][%s] Error building agent '%s' request: %s", workflowExecution.ExecutionId, status, err)
 		return err
 	}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[ERROR] Error running agent '%s' request (%s): %s", workflowExecution.ExecutionId, status, err)
-		return err
-	}
-
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[ERROR][%s] Failed reading agent '%s' body: %s", workflowExecution.ExecutionId, status, err)
-		return err
-	}
-
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR][%s] Failed sending self-request with '%s' for agent: %s", workflowExecution.ExecutionId, status, string(body))
-		return errors.New(fmt.Sprintf("No result in %s request for agent", status))
+	_, _, streamErr := DoRequestWithRetry(client, streamReq, 3)
+	if streamErr != nil {
+		log.Printf("[ERROR][%s] Failed sending self-request with '%s' for agent after 3 attempts: %s", workflowExecution.ExecutionId, status, streamErr)
+		return streamErr
 	}
 
 	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
@@ -18075,10 +18159,65 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	actionResult.Sanitized = false
 	actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
 
-	// Done elsewhere
+	// Special handler for AI Agent -> App run
 	setCache := true
-	if actionResult.Action.AppName == "shuffle-subflow" {
+	if skipAgentWait == "true" && actionResult.Action.AppName == "openai" && len(workflowExecution.ExecutionParent) > 0 { 
 
+		foundParentExec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionParent)
+		if err != nil || len(foundParentExec.ExecutionId) == 0 { 
+			log.Printf("[ERROR][%s] Failed to find AI Parent exec %s", workflowExecution.ExecutionId, workflowExecution.ExecutionParent)
+		} else {
+			// Question: How does it know where to send it?
+			// None of these methods work. 
+			// Since it's based on Parent => Node, it should be ExecutionSourceNode being the AI one
+			// ExecutionSourceNode string         `json:"execution_source_node" yaml:"execution_source_node"`
+			startNode := Action{}
+			if len(workflowExecution.ExecutionSourceNode) == 0 { 
+				log.Printf("[ERROR][%s] Agent run is missing ExecutionSourceNode from parent execution %s", workflowExecution.ExecutionId, foundParentExec.ExecutionId)
+			} else {
+				// This doesn't work due to e.g. having multiple nodes in the same one
+				// AKA it's guessing
+				for _, action := range foundParentExec.Workflow.Actions { 
+					if action.ID == workflowExecution.ExecutionSourceNode { 
+						startNode = action
+						break
+					}
+				}
+			}
+
+			if startNode.Name != "" { 
+				skipAgentContinue := false
+				if strings.Contains(actionResult.Result, "success") { 
+					quickUnmarshal := ResultChecker{}
+					err := json.Unmarshal([]byte(actionResult.Result), &quickUnmarshal)
+					if err == nil && quickUnmarshal.Success == false {
+						skipAgentContinue = true
+						oldAgentOutput := AgentOutput{}
+						foundError := fmt.Sprintf("LLM received call failed from app: ")
+						if len(quickUnmarshal.Reason) > 0 { 
+							foundError += fmt.Sprintf(quickUnmarshal.Reason)
+						}
+
+						go abortAgentExecution(ctx, *foundParentExec, startNode, oldAgentOutput, "llm_received_failure", foundError)
+					}
+				}
+
+				if !skipAgentContinue { 
+					callerName := "LLMResponse"
+					marshalledResult, err := json.Marshal(actionResult)
+					if err != nil { 
+						log.Printf("[ERROR] AI Agent (10): Failed marshalling actionResult: %s", err)
+					} else {
+						go HandleAiAgentExecutionStart(*foundParentExec, startNode, false, callerName, marshalledResult) 
+					}
+				}
+			} else {
+				log.Printf("[ERROR][%s] Could not find agent to run in parent exec %s", actionResult.ExecutionId, workflowExecution.ExecutionParent)
+			}
+		}
+	}
+
+	if actionResult.Action.AppName == "shuffle-subflow" {
 		// Verifying if the userinput should be sent properly or not
 		if actionResult.Action.Name == "run_userinput" && actionResult.Status != "SKIPPED" {
 			// log.Printf("\n\n[INFO] Inside userinput default return! Return data: %s", actionResult.Result)
@@ -21937,10 +22076,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		return workflowExecution, err
 	}
 
-	if debug {
-		log.Printf("[DEBUG] Action: %#v (%s)", action.Name, action.AppID)
-	}
-
 	if appId != action.AppID {
 
 		// Used for standalone runs controlled from /agents and /mcp
@@ -21998,6 +22133,8 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				callerName = "PrepareSingleAction"
 			}
 
+			log.Printf("[INFO][%s] AI Agent: %s Started standalone for org %s, execution id %s, workflow %s", exec.ExecutionId, callerName, user.ActiveOrg.Id, exec.ExecutionId, exec.WorkflowId)
+
 			action, err := HandleAiAgentExecutionStart(exec, action, false, callerName)
 			if err != nil {
 				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
@@ -22005,7 +22142,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			exec.Workflow.Actions[0] = action
 
 			newExec, err := GetWorkflowExecution(ctx, exec.ExecutionId)
-			log.Printf("[INFO][%s] AI Agent: %s Started standalone for org %s, execution id %s, workflow %s", exec.ExecutionId, callerName, user.ActiveOrg.Id, exec.ExecutionId, exec.WorkflowId)
 			if err != nil {
 				log.Printf("[ERROR] Failed to get workflow execution after starting agent: %s", err)
 			} else {
@@ -22825,6 +22961,8 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		}
 
 		if len(parentActionId) > 0 {
+			workflowExecution.ExecutionSourceNode = parentActionId
+
 			// Makes them 'required' to run. Makes it possible to have conditions
 			// for AI Agents in workflows primarily
 			for _, branch := range oldExec.Workflow.Branches { 
@@ -22958,10 +23096,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			DeleteCache(ctx, fmt.Sprintf("agent-%s-%s", oldExec.ExecutionId, decisionId))
 
 			// Decision run reset
-			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_FINISHED", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
-			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_SUCCESS", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
-			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_ABORTED", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
-			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_FAILURE", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
+			for _, terminalStatus := range []string{"FINISHED", "SUCCESS", "ABORTED", "FAILURE"} {
+				go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_%s", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID, terminalStatus))
+			}
 
 			// Execution reset
 			executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExec.ExecutionId)
@@ -23039,7 +23176,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 	// VERY short sleeptime here on purpose
 	startTime := time.Now().Unix()
-	maxSeconds := 15
+	maxSeconds := 15 
 	if project.Environment != "cloud" {
 		maxSeconds = 180
 	}
@@ -23055,6 +23192,15 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	addedParams := []string{}
 	sleeptime := 100
 	for {
+		// Use startTime instead:
+		if time.Now().Unix()-startTime > int64(maxSeconds) {
+
+			returnBody.Success = true
+			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
+
+			break
+		}
+
 		time.Sleep(time.Duration(sleeptime) * time.Millisecond)
 
 		newExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
@@ -23145,16 +23291,6 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		}
 
 		cnt += 1
-
-		// Use startTime instead:
-		//if cnt == (maxSeconds * (maxSeconds * 100 / sleeptime)) {
-		if time.Now().Unix()-startTime > int64(maxSeconds) {
-
-			returnBody.Success = true
-			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
-
-			break
-		}
 	}
 
 	if debug {
@@ -32151,6 +32287,14 @@ func GetExternalClient(baseUrl string) *http.Client {
 	return client
 }
 
+func GetExternalClientWithTimeout(baseUrl string, responseHeaderTimeout time.Duration) *http.Client {
+	client := GetExternalClient(baseUrl)
+	if t, ok := client.Transport.(*http.Transport); ok {
+		t.ResponseHeaderTimeout = responseHeaderTimeout
+	}
+	return client
+}
+
 // Function with the name RemoveFromArray to remove a string from a string array
 func RemoveFromArray(array []string, element string) []string {
 	for i, v := range array {
@@ -33880,7 +34024,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 
 	// Here to check access rights
 	ctx := GetContext(request)
-	if len(search.WorkflowId) > 0 {
+	if len(search.WorkflowId) > 0 && search.WorkflowId != "AGENT" {
 		workflow, err := GetWorkflow(ctx, search.WorkflowId)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting the workflow %s locally (search workflow runs): %s", search.WorkflowId, err)
@@ -33901,7 +34045,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 			} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 				log.Printf("[AUDIT] Letting verified support admin %s access workflow run debug search for %s", user.Username, workflow.ID)
 			} else {
-				log.Printf("[AUDIT] Wrong user (%s) for workflow %s (workflow run search). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+				log.Printf("[AUDIT] Wrong user (%s) for workflow '%s' (workflow run search). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false}`))
 				return
@@ -36526,7 +36670,9 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 		if !found {
 			returnActions = append(returnActions, action)
 		} else {
-			log.Printf("NOT adding; %#v", action.Name) 
+			if debug { 
+				log.Printf("[DEBUG] NOT adding priority; %#v", action.Name) 
+			}
 		}
 	}
 

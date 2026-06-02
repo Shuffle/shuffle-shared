@@ -1666,25 +1666,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		if int64(AlertThreshold.Count) < totalAppExecutions && !sendAlert && shouldSendAlert {
 
 			allAdmins := []string{}
-			firstAdmin := ""
-			allShufflerEmails := true
-
 			for _, user := range org.Users {
 				if user.Role == "admin" {
 					allAdmins = append(allAdmins, user.Username)
-
-					if firstAdmin == "" && !strings.Contains(user.Username, "shuffler.io") {
-						firstAdmin = user.Username
-					}
-
-					if !strings.Contains(user.Username, "shuffler.io") {
-						allShufflerEmails = false
-					}
 				}
-			}
-
-			if allShufflerEmails && firstAdmin == "" && len(allAdmins) > 0 {
-				firstAdmin = allAdmins[0]
 			}
 
 			if !ArrayContains(allAdmins, "chris@shuffler.io") {
@@ -1700,17 +1685,20 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				continue
 			}
 
-			Subject := fmt.Sprintf("[Shuffle]: You've reached the app-runs threshold limit for your account %s", firstAdmin)
-
 			AppRunsPercentage := float64(totalAppExecutions) / float64(org.SyncFeatures.AppExecutions.Limit) * 100
+			appRunsUsagePercentageStr := fmt.Sprintf("%d%% of your app runs limit", int64(AppRunsPercentage))
+			Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your tenant %s", appRunsUsagePercentageStr, org.Name)
 
 			substitutions := map[string]interface{}{
 				"app_runs_usage":            totalAppExecutions,
 				"app_runs_limit":            org.SyncFeatures.AppExecutions.Limit,
-				"app_runs_usage_percentage": int64(AppRunsPercentage),
+				"subject_string":            appRunsUsagePercentageStr,
+				"ai_tokens_usage":           orgStatistics.MonthlyAgentTokens,
+				"ai_tokens_limit":           org.SyncFeatures.AgentTokens.Limit,
 				"org_name":                  org.Name,
 				"org_id":                    org.Id,
-				"admin_email":               firstAdmin,
+				"admin_email":               org.Name,
+				"app_runs_usage_percentage": int64(AppRunsPercentage),
 			}
 
 			err = sendMailSendgridV2(
@@ -1864,7 +1852,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			}
 
 			// send mail use different subject line as it will sent only to the team
-			Subject := fmt.Sprintf("[Shuffle]: You've reached the app-runs threshold limit for your account %s", firstAdmin)
+			totalAppExecutions := validationOrgStatistics.MonthlyAppExecutions + validationOrgStatistics.MonthlyChildAppExecutions
+			AppRunsPercentage := float64(totalAppExecutions) / float64(validationOrg.SyncFeatures.AppExecutions.Limit) * 100
+			appRunsUsagePercentageStr := fmt.Sprintf("%d%% of your app runs limit", int64(AppRunsPercentage))
+			Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your account %s", appRunsUsagePercentageStr, firstAdmin)
 			leadInfo := ""
 			if validationOrg.LeadInfo.POV {
 				leadInfo = "POC"
@@ -1879,7 +1870,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			}
 
 			if len(leadInfo) > 0 && (currentThreshold > 100) {
-				Subject = fmt.Sprintf("[Shuffle] %s: You've reached the app-runs threshold limit for your account %s", leadInfo, firstAdmin)
+				Subject = fmt.Sprintf("[Shuffle] %s: You've reached %s for your account %s", leadInfo, appRunsUsagePercentageStr, firstAdmin)
 			}
 
 			if len(leadInfo) == 0 && !ArrayContains(newEmailList, "jay@shuffler.io") {
@@ -1894,16 +1885,16 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			if !checkAndSetAlertCache(ctx, cacheKey) {
 				log.Printf("[DEBUG] Skipping duplicate percentage threshold alert for org %s, threshold %d%% - alert sent within last minute", validationOrg.Id, currentThreshold)
 			} else {
-				totalAppExecutions := validationOrgStatistics.MonthlyAppExecutions + validationOrgStatistics.MonthlyChildAppExecutions
-				AppRunsPercentage := float64(totalAppExecutions) / float64(validationOrg.SyncFeatures.AppExecutions.Limit) * 100
-
 				substitutions := map[string]interface{}{
 					"app_runs_usage":            totalAppExecutions,
 					"app_runs_limit":            validationOrg.SyncFeatures.AppExecutions.Limit,
-					"app_runs_usage_percentage": int64(AppRunsPercentage),
+					"subject_string":            appRunsUsagePercentageStr,
+					"ai_tokens_usage":           validationOrgStatistics.MonthlyAgentTokens,
+					"ai_tokens_limit":           validationOrg.SyncFeatures.AgentTokens.Limit,
 					"org_name":                  validationOrg.Name,
 					"org_id":                    validationOrg.Id,
 					"admin_email":               firstAdmin,
+					"app_runs_usage_percentage": int64(AppRunsPercentage),
 				}
 
 				if currentThreshold > 100 {
@@ -1933,20 +1924,20 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 					log.Printf("[DEBUG] Skipping duplicate second alert for org %s, threshold %d%% - alert sent within last minute", validationOrg.Id, currentThreshold)
 				} else {
 					if len(leadInfo) > 0 {
-						Subject = fmt.Sprintf("[Shuffle] %s: You've reached the app-runs threshold limit for your account %s", leadInfo, firstAdmin)
+						Subject = fmt.Sprintf("[Shuffle] %s: You've reached %s for your account %s", leadInfo, appRunsUsagePercentageStr, firstAdmin)
 					}
-
-					totalAppExecutions := validationOrgStatistics.MonthlyAppExecutions + validationOrgStatistics.MonthlyChildAppExecutions
-					AppRunsPercentage := float64(totalAppExecutions) / float64(validationOrg.SyncFeatures.AppExecutions.Limit) * 100
 
 					substitutions := map[string]interface{}{
 						"app_runs_usage":            totalAppExecutions,
 						"app_runs_limit":            validationOrg.SyncFeatures.AppExecutions.Limit,
-						"app_runs_usage_percentage": int64(AppRunsPercentage),
+						"subject_string":            appRunsUsagePercentageStr,
+						"ai_tokens_usage":           validationOrgStatistics.MonthlyAgentTokens,
+						"ai_tokens_limit":           validationOrg.SyncFeatures.AgentTokens.Limit,
 						"org_name":                  validationOrg.Name,
 						"org_id":                    validationOrg.Id,
 						"admin_email":               firstAdmin,
 						"lead_info":                 leadInfo,
+						"app_runs_usage_percentage": int64(AppRunsPercentage),
 					}
 
 					log.Printf("[DEBUG] Sending second alert mail for child org %s to parent org %s (2)", validationOrg.Name, validationOrg.Name)

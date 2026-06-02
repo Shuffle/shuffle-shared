@@ -2010,8 +2010,8 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	requestUrl := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
 	// Change timeout to be 300 seconds (just in case)
-	// Allows for reruns and self-correcting
-	client := GetExternalClient(requestUrl)
+	// Allows for reruns and self-correcting.
+	client := GetExternalClientWithTimeout(requestUrl, 0)
 	client.Timeout = 300 * time.Second
 
 	newFields := []schemaless.Valuereplace{}
@@ -2252,6 +2252,61 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	return body, debugUrl, appname, outputMapped.CategoryLabels, outputMapped.ActionName, nil
 }
 
+func normalizeAgentToolName(tool string) string {
+	tool = strings.ToLower(strings.TrimSpace(tool))
+	tool = strings.TrimPrefix(tool, "app:")
+	tool = strings.TrimPrefix(tool, "tool:")
+
+	if len(tool) > 33 && tool[32] == ':' {
+		tool = tool[33:]
+	}
+
+	tool = strings.TrimSpace(tool)
+	tool = strings.ReplaceAll(tool, "_", " ")
+	tool = strings.Join(strings.Fields(tool), " ")
+
+	return tool
+}
+
+func getAllowedAgentTools(allowedActions []string) []string {
+	allowedTools := []string{}
+
+	for _, allowedAction := range allowedActions {
+		normalized := normalizeAgentToolName(allowedAction)
+		if normalized == "" || normalized == "nothing" {
+			continue
+		}
+
+		if ArrayContains(allowedTools, normalized) {
+			continue
+		}
+
+		allowedTools = append(allowedTools, normalized)
+	}
+
+	return allowedTools
+}
+
+func isAgentToolAllowed(agentOutput AgentOutput, decision AgentDecision) (bool, []string) {
+	allowedTools := getAllowedAgentTools(agentOutput.AllowedActions)
+	if len(allowedTools) == 0 {
+		return true, nil
+	}
+
+	requestedTool := normalizeAgentToolName(decision.Tool)
+	if requestedTool == "" {
+		return true, nil
+	}
+
+	for _, allowedTool := range allowedTools {
+		if allowedTool == requestedTool {
+			return true, nil
+		}
+	}
+
+	return false, allowedTools
+}
+
 // Runs an Agent Decision -> returns the result from it
 // FIXME: Handle types: https://www.figma.com/board/V6Kg7KxbmuhIUyTImb20t1/Shuffle-AI-Agent-system?node-id=0-1&p=f&t=yIGaSXQYsYReR8cI-0
 // This function should handle:
@@ -2303,34 +2358,45 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 	if decision.Action == "user_input" || decision.Action == "answer" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" || decision.Category == "standalone" {
 	} else {
-		// Singul handler
-		rawResponse, debugUrl, appname, categoryLabels, actionName, err := RunAgentDecisionSingulActionHandler(execution, decision)
-
-		if len(appname) > 0 {
-			decision.Tool = appname
-		}
-
-		decision.RunDetails.RawResponse = string(rawResponse)
-		decision.RunDetails.DebugUrl = debugUrl
-		decision.RunDetails.CategoryLabels = categoryLabels
-		decision.RunDetails.ActionName = actionName
-
-		log.Printf("RawResp: %s", string(rawResponse))
-
-		if err != nil {
-			if debug { 
-				log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
-			} else {
-				log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision.RunDetails.Id, err)
-			}
-
+		toolAllowed, allowedTools := isAgentToolAllowed(agentOutput, decision)
+		if !toolAllowed {
 			decision.RunDetails.Status = "FAILURE"
-
-			if len(decision.RunDetails.RawResponse) == 0 {
-				decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start decision action. Raw Error: %s", err)
+			decision.RunDetails.RawResponse = fmt.Sprintf("Tool '%s' is not allowed for this run. Allowed tools: %s", decision.Tool, strings.Join(allowedTools, ", "))
+			if debug {
+				log.Printf("[WARNING][%s] AI Agent blocked disallowed tool '%s' for decision %s. Allowed tools: %s", execution.ExecutionId, decision.Tool, decision.RunDetails.Id, strings.Join(allowedTools, ", "))
 			}
 		} else {
-			decision.RunDetails.Status = "FINISHED"
+		// Singul handler
+			rawResponse, debugUrl, appname, categoryLabels, actionName, err := RunAgentDecisionSingulActionHandler(execution, decision)
+
+			if len(appname) > 0 {
+				decision.Tool = appname
+			}
+
+			decision.RunDetails.RawResponse = string(rawResponse)
+			decision.RunDetails.DebugUrl = debugUrl
+			decision.RunDetails.CategoryLabels = categoryLabels
+			decision.RunDetails.ActionName = actionName
+
+			if debug {
+				log.Printf("RawResp: %s", string(rawResponse))
+			}
+
+			if err != nil {
+				if debug { 
+					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
+				} else {
+					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision.RunDetails.Id, err)
+				}
+
+				decision.RunDetails.Status = "FAILURE"
+
+				if len(decision.RunDetails.RawResponse) == 0 {
+					decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start decision action. Raw Error: %s", err)
+				}
+			} else {
+				decision.RunDetails.Status = "FINISHED"
+			}
 		}
 
 		// Log individual tool execution result
@@ -2421,60 +2487,17 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		return
 	}
 
-	const maxStreamRetries = 3
-	var req *http.Request
-	var lastStreamErr error
-	serverReceivedRequest := false
-	
-	for attempt := 0; attempt < maxStreamRetries; attempt++ {
-		if attempt > 0 {
-			backoff := time.Duration(attempt*attempt) * time.Second
-			log.Printf("[WARNING][%s] AI Agent: Retrying streams POST for decision %s (attempt %d/%d) after %s: %v", execution.ExecutionId, decision.RunDetails.Id, attempt+1, maxStreamRetries, backoff, lastStreamErr)
-			time.Sleep(backoff)
-		}
-
-		req, err = http.NewRequest(
-			"POST",
-			url,
-			bytes.NewBuffer(marshalledAction),
-		)
-		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed agent decision request creation on retry %d: %s", execution.ExecutionId, attempt+1, err)
-			lastStreamErr = err
-			continue
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[ERROR][%s] AI Agent: Failed sending agent decision result (attempt %d): %s", execution.ExecutionId, attempt+1, err)
-			lastStreamErr = err
-			continue
-		}
-
-		serverReceivedRequest = true
-
-		foundBody, err := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			log.Printf("[WARNING][%s] AI Agent: Decision %s POSTed to streams (status %d) but failed reading response body: %s. Treating as success.", execution.ExecutionId, decision.RunDetails.Id, resp.StatusCode, err)
+	streamReq, err := http.NewRequest("POST", url, bytes.NewBuffer(marshalledAction))
+	if err != nil {
+		log.Printf("[ERROR][%s] AI Agent: Failed agent decision request creation: %s", execution.ExecutionId, err)
+	} else {
+		streamReq.Header.Set("Content-Type", "application/json")
+		_, _, streamErr := DoRequestWithRetry(client, streamReq, 3)
+		if streamErr == nil {
 			return
 		}
-
-		if resp.StatusCode == 200 {
-			return
-		}
-
-		log.Printf("[ERROR][%s] AI Agent: Status %d for decision %s (attempt %d). Body: %s", execution.ExecutionId, resp.StatusCode, decision.RunDetails.Id, attempt+1, string(foundBody))
-		lastStreamErr = fmt.Errorf("streams POST returned status %d", resp.StatusCode)
-
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			break
-		}
-
+		log.Printf("[ERROR][%s] AI Agent: All attempts to POST decision %s to streams failed: %v. Falling back to in-process handler.", execution.ExecutionId, decision.RunDetails.Id, streamErr)
 	}
-
-	log.Printf("[ERROR][%s] AI Agent: All %d attempts to POST decision %s to streams failed (serverReceived=%v). Last error: %v. Falling back to in-process handler.", execution.ExecutionId, maxStreamRetries, decision.RunDetails.Id, serverReceivedRequest, lastStreamErr)
  	// Try the in-process handler to keep the agent moving when the streams API is unavailable.
 	freshExec, err := GetWorkflowExecution(context.Background(), execution.ExecutionId)
 	if err != nil {
