@@ -4950,7 +4950,16 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 				continue
 			}
 
+			requiredApps := []string{"internal_datastore", "shuffle-datastore"}
+			for _, req := range requiredApps {
+
+				if !ArrayContains(option.Apps, req) {
+					option.Apps = append(option.Apps, req)
+				}
+			}
+
 			allowedApps := strings.Join(option.Apps, ",")
+
 			parsedParams := []map[string]string{
 				map[string]string{
 					"name":  "app_name",
