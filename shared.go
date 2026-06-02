@@ -1912,7 +1912,30 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	newAuth := []AppAuthenticationStorage{}
 	for _, auth := range allAuths {
 		newAuthField := auth
+
 		for index, _ := range auth.Fields {
+			// Allowing these fields specifically, as they typically aren't 
+			// sensitive, and the API is authenticated.
+			if auth.Fields[index].Key == "url" || auth.Fields[index].Key == "model" {
+
+				// Decrypt on the fly in the return
+				if !auth.Encrypted {
+					continue
+				}
+
+				field := auth.Fields[index]
+				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
+				newValue, err := HandleKeyDecryption([]byte(auth.Fields[index].Value), parsedKey)
+				if err != nil {
+					log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+				} else {
+					//log.Printf("Decrypted value: %s", newValue)
+					newAuthField.Fields[index].Value = string(newValue)
+				}
+
+				continue
+			}
+
 			newAuthField.Fields[index].Value = "Secret. Replaced during app execution!"
 		}
 
@@ -2355,6 +2378,9 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 			appAuth.Fields = originalAuth.Fields
 		} else {
+			// Removing as being strict on EXTRA fields don't matter much
+			// Apps can handle this anyway
+			/*
 			// Check if the items are correct
 			for _, field := range appAuth.Fields {
 				found := false
@@ -2372,6 +2398,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 			}
+			*/
 		}
 	}
 
@@ -22206,11 +22233,11 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				break
 			}
 
-			if param.Name == "hosts" {
-				foundHosts = strings.Split(param.Value, ",")
-			} else if param.Name == "action" {
+			if param.Name == "action" {
 				foundAction = param.Value
-			} else if param.Name == "sensor_group" {
+			} else if param.Name == "hosts" || param.Name == "host" || param.Name == "sensor" || param.Name == "sensors" || param.Name == "monitor" || param.Name == "target" || param.Name == "targets" {
+				foundHosts = strings.Split(param.Value, ",")
+			} else if param.Name == "sensor_group" || param.Name == "monitor_group" || param.Name == "host_group" {
 				foundSensorGroup = param.Value
 			}
 		}
@@ -22237,6 +22264,23 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			}
 
 			if env.Name != foundEnv {
+				// Fallback if no group is supplied
+				found := false
+				for _, sensor := range env.SensorHosts {
+					for _, foundHost := range foundHosts { 
+						if sensor.Hostname == foundHost { 
+							found = true
+							break
+						}
+					}
+
+					// Fallback
+					if found { 
+						parsedEnv = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), env.OrgId)
+						break
+					}
+				}
+					
 				continue
 			}
 
