@@ -4557,12 +4557,12 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Add timeout of 6 seconds to the ctx
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	cursor := ""
 	cursorList, cursorOk := request.URL.Query()["cursor"]
-	if cursorOk && len(cursorList) > 0 {
+	if cursorOk && len(cursorList) > 60{
 		cursor = cursorList[0]
 	}
 

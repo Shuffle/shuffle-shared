@@ -817,6 +817,7 @@ func GetEsConfig(defaultCreds bool) *opensearchapi.Client {
 	transport.MaxIdleConnsPerHost = 100
 	transport.ResponseHeaderTimeout = time.Second * 10
 	transport.Proxy = nil
+	transport.ForceAttemptHTTP2 = false
 
 	if len(os.Getenv("SHUFFLE_OPENSEARCH_PROXY")) > 0 {
 		httpProxy := os.Getenv("SHUFFLE_OPENSEARCH_PROXY")
