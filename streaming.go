@@ -323,7 +323,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 						if op.Sequence <= lastSaveSeq {
 							continue
 						}
-						// Skip ephemeral ops — they reflect transient UI state, not structural changes
+
 						if op.Type == "select" || op.Type == "unselect" || op.Type == "hover" || op.Type == "enter" {
 							continue
 						}
@@ -338,7 +338,6 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		// Signal to the client that catch-up is done — it can now arm its time filter
 		fmt.Fprintf(resp, "%s\n", `{"item":"system","type":"init_complete"}`)
 		conn.Flush()
 	}
