@@ -19804,6 +19804,29 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
 					}
 				}
+
+				for paramIndex, param := range result.Action.InvalidParameters {
+					if len(param.Value) > 32500 {
+						log.Printf("[DEBUG][%s] Trimming invalid parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
+						workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = "Size too large. Removed."
+					}
+				}
+			}
+
+			for actionIndex, action := range workflowExecution.Workflow.Actions {
+				for paramIndex, param := range action.Parameters {
+					if len(param.Value) > 32500 {
+						log.Printf("[DEBUG][%s] Trimming workflow parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, action.Label, len(param.Value))
+						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+					}
+				}
+
+				for paramIndex, param := range action.InvalidParameters {
+					if len(param.Value) > 32500 {
+						log.Printf("[DEBUG][%s] Trimming workflow invalid parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, action.Label, len(param.Value))
+						workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
+					}
+				}
 			}
 
 			jsonString, err := json.Marshal(workflowExecution)

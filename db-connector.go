@@ -702,8 +702,81 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 		err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
 		if err != nil {
-			log.Printf("[ERROR] Failed saving new execution %s: %s", workflowExecution.ExecutionId, err)
-			return err
+			if strings.Contains(err.Error(), "immense term") {
+				retried := false
+
+				if len(workflowExecution.ExecutionArgument) > 32500 {
+					workflowExecution.ExecutionArgument = "Size too large. Removed."
+					retried = true
+				}
+
+				if len(workflowExecution.Result) > 32500 {
+					workflowExecution.Result = "Size too large. Removed."
+					retried = true
+				}
+
+				for resultIndex, result := range workflowExecution.Results {
+					if len(result.Result) > 32500 {
+						workflowExecution.Results[resultIndex].Result = "Size too large. Removed."
+						retried = true
+					}
+
+					for paramIndex, param := range result.Action.Parameters {
+						if len(param.Value) > 32500 {
+							workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+
+					for paramIndex, param := range result.Action.InvalidParameters {
+						if len(param.Value) > 32500 {
+							workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				for actionIndex, action := range workflowExecution.Workflow.Actions {
+					for paramIndex, param := range action.Parameters {
+						if len(param.Value) > 32500 {
+							workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+
+					for paramIndex, param := range action.InvalidParameters {
+						if len(param.Value) > 32500 {
+							workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				for triggerIndex, trigger := range workflowExecution.Workflow.Triggers {
+					for paramIndex, param := range trigger.Parameters {
+						if len(param.Value) > 32500 {
+							workflowExecution.Workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				if retried {
+					executionData, err = json.Marshal(workflowExecution)
+					if err != nil {
+						log.Printf("[ERROR] Failed marshalling execution for ES retry: %s", err)
+						return err
+					}
+
+					log.Printf("[DEBUG][%s] Retrying OpenSearch save after trimming remaining oversized values", workflowExecution.ExecutionId)
+					err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
+				}
+			}
+
+			if err != nil {
+				log.Printf("[ERROR] Failed saving new execution %s: %s", workflowExecution.ExecutionId, err)
+				return err
+			}
 		}
 
 		//log.Printf("[INFO] Successfully saved new execution %s. Timestamp: %d!", workflowExecution.ExecutionId, workflowExecution.StartedAt)
@@ -5018,7 +5091,11 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 				}
 			}
 		} else {
-			log.Printf("[ERROR] Error getting response from Opensearch (index ES) - 1: %s", err)
+			if strings.Contains(err.Error(), "immense term") {
+				log.Printf("[WARNING] Error getting response from Opensearch (index ES) - 1: %s", err)
+			} else {
+				log.Printf("[ERROR] Error getting response from Opensearch (index ES) - 1: %s", err)
+			}
 		}
 
 		return err
