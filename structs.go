@@ -1395,6 +1395,7 @@ type SyncFeatures struct {
 	Branding            SyncData    `json:"branding" datastore:"branding"`
 	AgentExecutions     SyncData    `json:"agent_executions" datastore:"agent_executions"`
 	AgentTokens         SyncData    `json:"agent_tokens" datastore:"agent_tokens"`
+	Multiplayer         SyncData    `json:"multiplayer" datastore:"multiplayer"`
 }
 
 type SyncData struct {
@@ -5025,6 +5026,35 @@ type StreamData struct {
 	Type  string `json:"type"` // "chunk", "done", "error"
 	Chunk string `json:"chunk,omitempty"`
 	Data  string `json:"data,omitempty"` // For the final ID or error
+}
+
+type StreamWorkflowOperation struct {
+	Item      string          `json:"item"`               // "node", "edge", "workflow"
+	Type      string          `json:"type"`               // "add", "move", "remove", "select", "unselect", "hover", "configure", "save", "enter"
+	ID        string          `json:"id"`                 // node/edge/workflow ID
+	UserID    string          `json:"user_id"`            // who performed the op (user ID or "agent")
+	Username  string          `json:"username,omitempty"` // display name of the user
+	Data      json.RawMessage `json:"data,omitempty"`     // full node/edge data for "add" ops
+	Location  *Position       `json:"location,omitempty"` // position for "move"/"add" ops
+	Fields    []Valuereplace  `json:"fields,omitempty"`   // for "configure" ops
+	Sequence  int64           `json:"sequence"`           // monotonic ordering per workflow
+	Timestamp int64           `json:"timestamp"`          // unix ms
+}
+
+type StreamWorkflowState struct {
+	Operations []StreamWorkflowOperation `json:"operations"`
+	LastSeq    int64                     `json:"last_seq"`
+}
+
+type StreamPresenceEntry struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	LastSeen int64  `json:"last_seen"`
+	Color    string `json:"color"`
+}
+
+type StreamPresenceState struct {
+	Users []StreamPresenceEntry `json:"users"`
 }
 
 type MockToolCall struct {

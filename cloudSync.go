@@ -2379,7 +2379,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			decision.RunDetails.ActionName = actionName
 
 			if debug {
-				log.Printf("RawResp: %s", string(rawResponse))
+				log.Printf("[DEBUG] RawResp: %s", string(rawResponse))
 			}
 
 			if err != nil {

@@ -1912,7 +1912,30 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	newAuth := []AppAuthenticationStorage{}
 	for _, auth := range allAuths {
 		newAuthField := auth
+
 		for index, _ := range auth.Fields {
+			// Allowing these fields specifically, as they typically aren't 
+			// sensitive, and the API is authenticated.
+			if auth.Fields[index].Key == "url" || auth.Fields[index].Key == "model" {
+
+				// Decrypt on the fly in the return
+				if !auth.Encrypted {
+					continue
+				}
+
+				field := auth.Fields[index]
+				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
+				newValue, err := HandleKeyDecryption([]byte(auth.Fields[index].Value), parsedKey)
+				if err != nil {
+					log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+				} else {
+					//log.Printf("Decrypted value: %s", newValue)
+					newAuthField.Fields[index].Value = string(newValue)
+				}
+
+				continue
+			}
+
 			newAuthField.Fields[index].Value = "Secret. Replaced during app execution!"
 		}
 
@@ -2355,6 +2378,9 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 			appAuth.Fields = originalAuth.Fields
 		} else {
+			// Removing as being strict on EXTRA fields don't matter much
+			// Apps can handle this anyway
+			/*
 			// Check if the items are correct
 			for _, field := range appAuth.Fields {
 				found := false
@@ -2372,6 +2398,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 			}
+			*/
 		}
 	}
 
@@ -4530,12 +4557,12 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Add timeout of 6 seconds to the ctx
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	cursor := ""
 	cursorList, cursorOk := request.URL.Query()["cursor"]
-	if cursorOk && len(cursorList) > 0 {
+	if cursorOk && len(cursorList) > 60{
 		cursor = cursorList[0]
 	}
 
@@ -19777,6 +19804,29 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
 					}
 				}
+
+				for paramIndex, param := range result.Action.InvalidParameters {
+					if len(param.Value) > 32500 {
+						log.Printf("[DEBUG][%s] Trimming invalid parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
+						workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = "Size too large. Removed."
+					}
+				}
+			}
+
+			for actionIndex, action := range workflowExecution.Workflow.Actions {
+				for paramIndex, param := range action.Parameters {
+					if len(param.Value) > 32500 {
+						log.Printf("[DEBUG][%s] Trimming workflow parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, action.Label, len(param.Value))
+						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+					}
+				}
+
+				for paramIndex, param := range action.InvalidParameters {
+					if len(param.Value) > 32500 {
+						log.Printf("[DEBUG][%s] Trimming workflow invalid parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, action.Label, len(param.Value))
+						workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
+					}
+				}
 			}
 
 			jsonString, err := json.Marshal(workflowExecution)
@@ -22220,11 +22270,11 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				break
 			}
 
-			if param.Name == "hosts" {
-				foundHosts = strings.Split(param.Value, ",")
-			} else if param.Name == "action" {
+			if param.Name == "action" {
 				foundAction = param.Value
-			} else if param.Name == "sensor_group" {
+			} else if param.Name == "hosts" || param.Name == "host" || param.Name == "sensor" || param.Name == "sensors" || param.Name == "monitor" || param.Name == "target" || param.Name == "targets" {
+				foundHosts = strings.Split(param.Value, ",")
+			} else if param.Name == "sensor_group" || param.Name == "monitor_group" || param.Name == "host_group" {
 				foundSensorGroup = param.Value
 			}
 		}
@@ -22251,6 +22301,23 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			}
 
 			if env.Name != foundEnv {
+				// Fallback if no group is supplied
+				found := false
+				for _, sensor := range env.SensorHosts {
+					for _, foundHost := range foundHosts { 
+						if sensor.Hostname == foundHost { 
+							found = true
+							break
+						}
+					}
+
+					// Fallback
+					if found { 
+						parsedEnv = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), env.OrgId)
+						break
+					}
+				}
+					
 				continue
 			}
 

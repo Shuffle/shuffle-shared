@@ -7651,13 +7651,18 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							requiredParams := []string{}
 							optionalParams := []string{}
 							for _, param := range sortedAppAction.Parameters {
+								if param.Name == "url" { 
+									continue
+								}
+
 								if param.Name == "body" && len(param.Example) > 0 { 
 									if len(param.Example) > 150 { 
 										param.Example = param.Example[:150] + "..."
 									}
 
 									if strings.HasPrefix(param.Example, "{") || strings.HasPrefix(param.Example, "[") {
-										requiredParams = append(requiredParams, fmt.Sprintf("body=%s", param.Example))
+										newExample := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(param.Example, "\n", ""), "\t", ""), "  ", ""), "\\\"", "\"")
+										requiredParams = append(requiredParams, fmt.Sprintf("body=%s", newExample))
 									} else {
 										requiredParams = append(requiredParams, fmt.Sprintf("body"))
 									}
@@ -7676,7 +7681,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 										continue
 									}
 
-									if param.Name == "username" || param.Name == "password" || param.Name == "token" || param.Name == "api_key" || param.Name == "key" || param.Name == "timeout" || param.Name == "ssl_verify" {
+									if param.Name == "url" || param.Name == "username" || param.Name == "password" || param.Name == "token" || param.Name == "api_key" || param.Name == "key" || param.Name == "timeout" || param.Name == "ssl_verify" || param.Name == "to_file" {
 										continue
 									}
 
@@ -7689,12 +7694,12 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							descString := ""
 							if len(requiredParams) > 0 {
 								requiredString = fmt.Sprintf("%s", strings.Join(requiredParams, ", "))
-								optionalString = ","
+								optionalString = ", "
 							}
 
 							if len(optionalParams) > 0 {
 								for _, optionalParam := range optionalParams {
-									optionalString += fmt.Sprintf("%s=\"\", ", optionalParam)
+									optionalString += fmt.Sprintf(`%s="", `, optionalParam)
 								}
 
 								optionalString = strings.TrimSuffix(optionalString, ", ")
@@ -7723,7 +7728,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					}
 
 				} else {
-					metadata += fmt.Sprintf("- %s\n", strings.ReplaceAll(actionStr, " ", "_"))
+					//metadata += fmt.Sprintf("- %s\n", strings.ReplaceAll(actionStr, " ", "_"))
 				}
 			}
 
@@ -7863,6 +7868,32 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							previousAnswers += fmt.Sprintf("'%s': '%s'\n", field.Value, field.Answer)
 						} else {
 							log.Printf("[WARNING][%s] No answer found for question '%s'. Index: %d", execution.ExecutionId, field.Value, fieldIndex)
+						}
+					}
+				}
+
+				// FIXME: Clean up headers here. Are they useful? Usually not.
+				if strings.Contains(mappedDecision.RunDetails.RawResponse, "headers") || strings.Contains(mappedDecision.RunDetails.RawResponse, "cookies") {
+					if debug {
+						log.Printf("[DEBUG][%s] Decision at index %d contains 'headers' in raw response - consider cleaning up if not needed for future decisions", execution.ExecutionId, mappedDecision.I)
+					}
+
+					//type HTTPOutput struct {
+					parsedOutput := HTTPOutput{}
+					err := json.Unmarshal([]byte(mappedDecision.RunDetails.RawResponse), &parsedOutput)
+					if err != nil {
+						log.Printf("[ERROR][%s] Failed to unmarshal raw response for decision at index %d: %s", execution.ExecutionId, mappedDecision.I, err)
+					}
+
+					if parsedOutput.Status <= 0 && parsedOutput.Reason == "" { 
+					} else {
+						parsedOutput.Headers = map[string]string{}
+						parsedOutput.Cookies = map[string]string{}
+						marshalledBody, err := json.Marshal(parsedOutput)
+						if err != nil {
+							log.Printf("[ERROR][%s] Failed to marshal cleaned HTTP output for decision at index %d: %s", execution.ExecutionId, mappedDecision.I, err)
+						} else {
+							mappedDecision.RunDetails.RawResponse = string(marshalledBody)
 						}
 					}
 				}
@@ -8189,12 +8220,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 You are an Action Execution Agent that performs actions in third-party tools. You can use ANY tool and platform to achieve these goals if they are presented by the user. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute tasks and **IMMEDIATELY** stop and summarize when done. Attempt to achieve what the users most likely intention is - not just exactly what they ask for. Iterate until the goal is achieved by using the USER CONTEXT tools and actions available to you. Don't be too verbose, and ask as few questions as possible. 
 
 ### RULES:
-1. Use tools and their actions to achieve the user request.
-2. Do NOT ask unnecessary questions. Make assumptions for the user.
-3. DO NOT LIE. Only say you did something if you actually did.
-4. "action" should be the EXACT name of the function, without paranthesis or parameters.
-5. If future scheduling may be necessary, ignore it and run it right now. Scheduling is a separate process.
-6. App Actions show up in the python function format. Put the function name in the 'action' field and the parameters in 'fields' array. Don't add empty fields.
+1. Look at user intent, not just words. Do NOT stop until the user intent has been fulfilled. This means rewriting the original user intent for them to make it more clear what they most likely wanted.
+2. Use tools and their actions to achieve the user request.
+3. Do NOT ask unnecessary questions. Make assumptions for the user.
+4. DO NOT LIE. Only say you did something if you actually did.
+5. "action" should be the EXACT name of the function, without paranthesis or parameters.
+6. If future scheduling may be necessary, ignore it and run it right now. Scheduling is a separate process.
+8. App Actions show up in the python function format. Put the function name in the 'action' field and the parameters in 'fields' array. Don't add empty fields.
+9. IF an App Action parameter contains a value, use it and fill it in with relevant values. Ask questions, if important data is missing. Do not add random values to nested JSON bodies unless necessary.
 
 ### INTERNAL CAPABILITIES (DO NOT USE TOOLS FOR THESE)
 1. **General QA/Help:** YOU answer questions like "What can you do?" or "Hi". Do NOT use tools.

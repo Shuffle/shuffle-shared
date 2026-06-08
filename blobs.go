@@ -820,7 +820,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			Description: "Ingest tickets through a webhook",
 			OrgId:       orgId,
 			Start:       startActionId,
-			UsecaseIds:  []string{"SIEM to ticket"},
+			UsecaseIds:  []string{"SIEM to ticket", "SIEM alerts", "EDR alerts"},
 			Tags:        []string{"ingest", "webhook", "automatic"},
 			Actions: []Action{
 				Action{
@@ -1484,13 +1484,7 @@ $exec`,
 	// This is done specifically for Singul ingests
 	positionAddition := float64(300)
 
-	//if debug {
-	//log.Printf("ACTIONS: %d, TRIGGERS: %d, APPNAMES: %d, FIRSTACTION: %s, TRIGGER: %s", len(workflow.Actions), len(workflow.Triggers), len(appNames), workflow.Actions[0].AppName, workflow.Triggers[0].TriggerType)
-	//os.Exit(3)
-	//}
-
-	//if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && len(workflow.Triggers) == 1 && workflow.Triggers[0].TriggerType == "SCHEDULE" {
-	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") {
+	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && workflow.Actions[0].Name != "Translate standard" {
 		actionTemplate := workflow.Actions[0]
 
 		// Pre-defining it with a startnode that does nothing
@@ -1601,8 +1595,7 @@ $exec`,
 
 	if len(workflow.Actions) > 0 {
 		for _, action := range workflow.Actions {
-			if action.AppID == "integration" || action.AppName == "Singul" {
-
+			if action.Name != "Translate standard" && (action.AppID == "integration" || action.AppName == "Singul") {
 				for _, param := range action.Parameters {
 					if (param.Name == "app_name" || param.Name == "appName") && len(param.Value) == 0 {
 						log.Printf("[DEBUG] Should verify if an app of type '%s' exists", action.Name)
