@@ -271,8 +271,8 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		newNotifications = append(newNotifications, notification)
 	}
 
-	sort.Slice(notifications[:], func(i, j int) bool {
-		return notifications[i].UpdatedAt > notifications[j].UpdatedAt
+	sort.Slice(newNotifications[:], func(i, j int) bool {
+		return newNotifications[i].UpdatedAt > newNotifications[j].UpdatedAt
 	})
 
 	notificationResponse := NotificationResponse{

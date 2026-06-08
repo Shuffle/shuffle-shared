@@ -11581,6 +11581,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			"sort": map[string]interface{}{
 				"updated_at": map[string]interface{}{
 					"order": "desc",
+					"unmapped_type": "long",
 				},
 			},
 			"query": map[string]interface{}{
