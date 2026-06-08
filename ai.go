@@ -7071,6 +7071,77 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 	return contentOutput
 }
 
+func RunAgentFinishVerifier(ctx context.Context, orgId string, executionId string, originalInput string, decisions []AgentDecision, proposedOutput string) AgentVerifierResult {
+
+	if len(strings.TrimSpace(originalInput)) == 0 {
+		log.Printf("[WARNING][%s] Finish verifier skipped: no originalInput", executionId)
+		return AgentVerifierResult{Skipped: true}
+	}
+
+	// Build a compact summary of what the agent actually tried so the
+	// verifier can distinguish "tool failed" from "agent didn't try".
+	toolSummary := ""
+	for _, d := range decisions {
+		if d.Action == "finish" || d.Action == "propose_finish" || d.Action == "ask" {
+			continue
+		}
+		status := d.RunDetails.Status
+		toolSummary += fmt.Sprintf("- tool=%s action=%s status=%s\n", d.Tool, d.Action, status)
+		if status == "FAILURE" && len(d.RunDetails.RawResponse) > 0 {
+			raw := d.RunDetails.RawResponse
+			if len(raw) > 200 {
+				raw = raw[:200] + "…"
+			}
+			toolSummary += fmt.Sprintf("  failure_reason: %s\n", raw)
+		}
+	}
+
+		verifierSystem := `You are a completion verifier for an AI agent system. Reply with ONLY valid JSON, no markdown:
+	{"pass": true, "reason": "one sentence"} or {"pass": false, "reason": "one sentence"}
+
+	Rules:
+	- PASS if the output fully satisfies the request, including correct conditional logic (e.g. "notify IF temp > 40C" and temp was 30C → stopping is correct → PASS).
+	- PASS if every required tool was attempted but failed due to infrastructure/auth issues outside the agent's control (the agent did the right thing, the environment failed).
+	- FAIL only if the agent skipped an unconditional required step it could have taken, or gave a clearly wrong answer.
+	- Do NOT invent requirements not present in the original request.`
+
+	verifierUser := fmt.Sprintf(
+		"Original request:\n%s\n\nTools attempted:\n%s\nAgent proposed output:\n%s",
+		originalInput,
+		toolSummary,
+		proposedOutput,
+	)
+
+	callInfo := AiCallInfo{Caller: "finishVerifier", OrgID: orgId}
+	raw, err := RunAiQuery(ctx, callInfo, verifierSystem, verifierUser)
+	if err != nil {
+		log.Printf("[WARNING][%s] Finish verifier LLM call failed (accepting finish): %s", executionId, err)
+		return AgentVerifierResult{Skipped: true}
+	}
+
+	// Strip markdown code fences if the LLM wrapped its JSON
+	cleaned := strings.TrimSpace(raw)
+	if strings.HasPrefix(cleaned, "```") {
+		firstNL := strings.Index(cleaned, "\n")
+		lastFence := strings.LastIndex(cleaned, "```")
+		if firstNL > 0 && lastFence > firstNL {
+			cleaned = strings.TrimSpace(cleaned[firstNL:lastFence])
+		}
+	}
+
+	type verifierResponse struct {
+		Pass   bool   `json:"pass"`
+		Reason string `json:"reason"`
+	}
+	var vr verifierResponse
+	if parseErr := json.Unmarshal([]byte(cleaned), &vr); parseErr != nil {
+		log.Printf("[WARNING][%s] Finish verifier parse failed (accepting finish): %s — raw: %s", executionId, parseErr, raw)
+		return AgentVerifierResult{Skipped: true}
+	}
+
+	return AgentVerifierResult{Pass: vr.Pass, Reason: vr.Reason}
+}
+
 // abortAgentExecution is the single, canonical way to terminate an agent run early.
 // Callers must return immediately after this call.
 func abortAgentExecution(ctx context.Context, execution WorkflowExecution, startNode Action, base AgentOutput, abortLabel, reason string, suppressLog ...bool) (Action, error) {

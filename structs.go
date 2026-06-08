@@ -5633,3 +5633,9 @@ type RemoteControl struct{
 type RemoteControlActionBatch struct {
 	Actions []RemoteControl `json:"actions"`
 }
+
+type AgentVerifierResult struct {
+	Pass   bool
+	Reason string 	// Skipped is true when the verifier was not run (missing input, LLM error, parse error). In that case the caller should accept the finish as-is.
+	Skipped bool
+}
