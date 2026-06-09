@@ -996,6 +996,15 @@ type LeadInfo struct {
 	ChannelPartner      bool `json:"channel_partner,omitempty" datastore:"channel_partner"`
 
 	Creator bool `json:"creator,omitempty" datastore:"creator"`
+
+	ShuffleEnterpriseLicenseOldCustomer bool `json:"shuffle_enterprise_license_old_customer,omitempty" datastore:"shuffle_enterprise_license_old_customer"`
+	ScaleLicenseCloudTrial              bool `json:"scale_license_cloud_trial,omitempty" datastore:"scale_license_cloud_trial"`
+	ScaleLicenseCloudCustomer           bool `json:"scale_license_cloud_customer,omitempty" datastore:"scale_license_cloud_customer"`
+	ScaleLicenseOnpremCustomer          bool `json:"scale_license_onprem_customer,omitempty" datastore:"scale_license_onprem_customer"`
+	BusinessLicenseCloud                bool `json:"business_license_cloud,omitempty" datastore:"business_license_cloud"`
+	BusinessLicenseOnprem               bool `json:"business_license_onprem,omitempty" datastore:"business_license_onprem"`
+	EnterpriseLicenseCloud              bool `json:"enterprise_license_cloud,omitempty" datastore:"enterprise_license_cloud"`
+	EnterpriseLicenseOnprem             bool `json:"enterprise_license_onprem,omitempty" datastore:"enterprise_license_onprem"`
 }
 
 // Partners Structs

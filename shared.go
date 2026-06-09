@@ -13812,8 +13812,32 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	if len(tmpData.LeadInfo) > 0 && user.SupportAccess {
 		//log.Printf("[INFO] Updating lead info for %s to %s", org.Id, tmpData.LeadInfo)
 
-		// Make a new one, as to start with all from false
-		newLeadinfo := LeadInfo{}
+		newLeadinfo := org.LeadInfo
+		newLeadinfo.POV = false
+		newLeadinfo.ShuffleEnterpriseLicenseOldCustomer = false
+		newLeadinfo.ScaleLicenseCloudTrial = false
+		newLeadinfo.ScaleLicenseCloudCustomer = false
+		newLeadinfo.ScaleLicenseOnpremCustomer = false
+		newLeadinfo.BusinessLicenseCloud = false
+		newLeadinfo.BusinessLicenseOnprem = false
+		newLeadinfo.EnterpriseLicenseCloud = false
+		newLeadinfo.EnterpriseLicenseOnprem = false
+		newLeadinfo.IntegrationPartner = false
+		newLeadinfo.ServicePartner = false
+		newLeadinfo.ChannelPartner = false
+		newLeadinfo.TechPartner = false
+		newLeadinfo.Contacted = false
+		newLeadinfo.Lead = false
+		newLeadinfo.DemoDone = false
+		newLeadinfo.Customer = false
+		newLeadinfo.OldCustomer = false
+		newLeadinfo.OldLead = false
+		newLeadinfo.OpenSource = false
+		newLeadinfo.Internal = false
+		newLeadinfo.Student = false
+		newLeadinfo.Creator = false
+		newLeadinfo.TestingShuffle = false
+		newLeadinfo.DistributionPartner = false
 
 		for _, lead := range tmpData.LeadInfo {
 			if lead == "testing shuffle" || lead == "testing_shuffle" {
@@ -13864,11 +13888,11 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				newLeadinfo.Creator = true
 			}
 
-			if lead == "tech partner" {
+			if lead == "tech partner" || lead == "Technology Partner" {
 				newLeadinfo.TechPartner = true
 			}
 
-			if lead == "integration partner" {
+			if lead == "integration partner" || lead == "Integration Partner" {
 				newLeadinfo.IntegrationPartner = true
 			}
 
@@ -13876,16 +13900,142 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				newLeadinfo.DistributionPartner = true
 			}
 
-			if lead == "service partner" {
+			if lead == "service partner" || lead == "Service Partner" {
 				newLeadinfo.ServicePartner = true
 			}
 
-			if lead == "channel partner" {
+			if lead == "channel partner" || lead == "Channel Partner" {
 				newLeadinfo.ChannelPartner = true
+			}
+
+			if lead == "Contacted" {
+				newLeadinfo.Contacted = true
+			}
+
+			if lead == "Lead" {
+				newLeadinfo.Lead = true
+			}
+
+			if lead == "Demo Done" {
+				newLeadinfo.DemoDone = true
+			}
+
+			if lead == "Customer" {
+				newLeadinfo.Customer = true
+			}
+
+			if lead == "Old Customer" {
+				newLeadinfo.OldCustomer = true
+			}
+
+			if lead == "Old Lead" {
+				newLeadinfo.OldLead = true
+			}
+
+			if lead == "Open Source" {
+				newLeadinfo.OpenSource = true
+			}
+
+			if lead == "Internal" {
+				newLeadinfo.Internal = true
+			}
+
+			if lead == "Sub Org" {
+				newLeadinfo.SubOrg = true
+			}
+
+			if lead == "Student" {
+				newLeadinfo.Student = true
+			}
+
+			if lead == "Creator" {
+				newLeadinfo.Creator = true
+			}
+
+			if lead == "Testing Shuffle" {
+				newLeadinfo.TestingShuffle = true
+			}
+
+			if lead == "Distribution Partner" {
+				newLeadinfo.DistributionPartner = true
+			}
+
+			if lead == "POC License" {
+				newLeadinfo.POV = true
+			}
+
+			if lead == "Shuffle Enterprise License" {
+				newLeadinfo.ShuffleEnterpriseLicenseOldCustomer = true
+			}
+
+			if lead == "Scale License Cloud Trial" {
+				newLeadinfo.ScaleLicenseCloudTrial = true
+			}
+
+			if lead == "Scale License Cloud" {
+				newLeadinfo.ScaleLicenseCloudCustomer = true
+			}
+
+			if lead == "Scale License Onprem" {
+				newLeadinfo.ScaleLicenseOnpremCustomer = true
+			}
+
+			if lead == "Business License Cloud" {
+				newLeadinfo.BusinessLicenseCloud = true
+			}
+
+			if lead == "Business License Onprem" {
+				newLeadinfo.BusinessLicenseOnprem = true
+			}
+
+			if lead == "Enterprise License Cloud" {
+				newLeadinfo.EnterpriseLicenseCloud = true
+			}
+
+			if lead == "Enterprise License Onprem" {
+				newLeadinfo.EnterpriseLicenseOnprem = true
 			}
 		}
 
+		if newLeadinfo.ShuffleEnterpriseLicenseOldCustomer ||
+			newLeadinfo.ScaleLicenseCloudCustomer ||
+			newLeadinfo.ScaleLicenseOnpremCustomer ||
+			newLeadinfo.BusinessLicenseCloud ||
+			newLeadinfo.BusinessLicenseOnprem ||
+			newLeadinfo.EnterpriseLicenseCloud ||
+			newLeadinfo.EnterpriseLicenseOnprem {
+			newLeadinfo.Customer = true
+		}
+
+		if newLeadinfo.ScaleLicenseOnpremCustomer || newLeadinfo.BusinessLicenseOnprem || newLeadinfo.EnterpriseLicenseOnprem {
+			newLeadinfo.OpenSource = true
+		}
+
 		org.LeadInfo = newLeadinfo
+
+		if newLeadinfo.EnterpriseLicenseCloud ||
+			newLeadinfo.BusinessLicenseCloud ||
+			newLeadinfo.ShuffleEnterpriseLicenseOldCustomer {
+			org.SyncFeatures.AppExecutions.Limit = 300000
+			org.SyncFeatures.MultiEnv.Limit = 250
+			org.SyncFeatures.MultiTenant.Limit = 1000
+			log.Printf("[INFO] Set limits to 300000 app runs / 250 envs / 1000 tenants for org %s (enterprise/business)", org.Id)
+		} else if newLeadinfo.POV {
+			org.SyncFeatures.AppExecutions.Limit = 10000
+			org.SyncFeatures.MultiEnv.Limit = 1
+			org.SyncFeatures.MultiTenant.Limit = 3
+			log.Printf("[INFO] Set limits to 10000 app runs / 1 env / 3 tenants for org %s (POC license)", org.Id)
+		} else if newLeadinfo.ScaleLicenseCloudTrial {
+			org.SyncFeatures.AppExecutions.Limit = 2000
+			org.SyncFeatures.MultiEnv.Limit = 1
+			org.SyncFeatures.MultiTenant.Limit = 3
+			log.Printf("[INFO] Set limits to 2000 app runs / 1 env / 3 tenants for org %s (Scale free trial)", org.Id)
+		} else {
+			org.SyncFeatures.AppExecutions.Limit = 2000
+			org.SyncFeatures.MultiEnv.Limit = 1
+			org.SyncFeatures.MultiTenant.Limit = 3
+			log.Printf("[INFO] Reset limits to defaults (2000 app runs / 1 env / 3 tenants) for org %s (no license)", org.Id)
+		}
 
 		// Check for ORG_CHANGE_WEBHOOK
 		orgWebhook := os.Getenv("ORG_CHANGE_WEBHOOK")
