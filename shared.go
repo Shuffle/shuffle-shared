@@ -25,6 +25,7 @@ import (
 	"sort"
 	"unicode"
 
+	openai "github.com/sashabaranov/go-openai"
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
 	"google.golang.org/api/cloudfunctions/v1"
@@ -18237,6 +18238,36 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						foundError := fmt.Sprintf("LLM received call failed from app: ")
 						if len(quickUnmarshal.Reason) > 0 { 
 							foundError += fmt.Sprintf(quickUnmarshal.Reason)
+						}
+
+						// Tries to map it in from the openai request 
+						if len(oldAgentOutput.OriginalInput) == 0 {
+							for _, param := range actionResult.Action.Parameters { 
+								if param.Name != "body" { 
+									continue
+								}
+
+								// Marshal into openai conversation request 
+								openaiReq := openai.ChatCompletionRequest{}
+								unmarshalledErr := json.Unmarshal([]byte(param.Value), &openaiReq)
+								if unmarshalledErr != nil {
+									log.Printf("[ERROR] Failed unmarshalling body into openai request: %s", unmarshalledErr)
+									break
+								} 
+
+								if len(openaiReq.Messages) > 0 {
+									for _, userMessage := range openaiReq.Messages {
+										if !strings.HasPrefix(userMessage.Content, "USER REQUEST:") { 
+											continue
+										}
+
+										oldAgentOutput.OriginalInput = userMessage.Content
+										break
+									}
+								}
+
+								break
+							}
 						}
 
 						go abortAgentExecution(ctx, *foundParentExec, startNode, oldAgentOutput, "llm_received_failure", foundError)

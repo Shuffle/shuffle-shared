@@ -246,10 +246,6 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 			tmpValue := parsedValue
 			tmpValue = strings.TrimPrefix(tmpValue, "file_")
 			if isValidUUID(tmpValue) {
-				if debug { 
-					log.Printf("[DEBUG] Skipping value that is a valid UUID: %s", parsedValue)
-				}
-
 				continue
 			}
 

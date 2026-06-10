@@ -44,7 +44,8 @@ import (
 var standalone bool
 
 // var model = "gpt-5-mini"
-var model = "gpt-5-mini"
+//var model = "gpt-5-mini"
+var model = "gpt-5.4-nano"
 //var model = "gpt-5.2-codex"
 
 var fallbackModel = ""
@@ -7079,6 +7080,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 	agentOutput.Error = reason
 	agentOutput.CompletedAt = time.Now().UnixMilli()
 
+	// How do we find the original input?
 	lastDecisionIsFinish := false
 	if len(agentOutput.Decisions) > 0 {
 		last := agentOutput.Decisions[len(agentOutput.Decisions)-1]
@@ -7090,6 +7092,11 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		}
 	}
 
+	// FIXME: Where do we find original_input?
+	// What if it doesn't exist?
+	if len(agentOutput.OriginalInput) == 0 { 
+	}
+
 	if !lastDecisionIsFinish {
 		nextIndex := len(agentOutput.Decisions)
 		b := make([]byte, 6)
@@ -7097,6 +7104,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		if _, randErr := rand.Read(b); randErr == nil {
 			finishId = base64.RawURLEncoding.EncodeToString(b)
 		}
+
 		syntheticFinish := AgentDecision{
 			I:        nextIndex,
 			Action:   "finish",
@@ -7112,9 +7120,14 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 				CompletedAt: agentOutput.CompletedAt,
 			},
 		}
+
 		agentOutput.Decisions = append(agentOutput.Decisions, syntheticFinish)
 	}
+
 	agentOutput.Output = reason
+	if strings.Contains(reason, "Minimum of one branch") {
+		agentOutput.Output = "The agent did not start due to the workflow not reaching this point."
+	}
 
 	marshalledOutput, marshalErr := json.Marshal(agentOutput)
 	if marshalErr != nil {
@@ -7144,6 +7157,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 			break
 		}
 	}
+
 	if !replaced {
 		execution.Results = append(execution.Results, abortResult)
 	}
