@@ -8610,6 +8610,13 @@ data_filter:
 
 		bodyString = []byte(output)
 		resultMapping.Result = output
+		resultMapping.ExecutionId = execution.ExecutionId
+		resultMapping.Authorization = execution.Authorization
+		// Waiting 3
+		resultMapping.Status = "WAITING"
+		resultMapping.Action = startNode
+		resultMapping.Action.Name = "agent"
+
 		decisionString = output
 		skipHttpParsing = true
 
