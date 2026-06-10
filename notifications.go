@@ -1040,13 +1040,13 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			}
 
 			workflow, err := GetWorkflow(ctx, org.Defaults.NotificationWorkflow)
-			if err != nil {
-				log.Printf("[WARNING] Failed getting workflow with ID %s: %s", org.Defaults.NotificationWorkflow, err)
+			if err != nil || len(workflow.ID) == 0 {
+				log.Printf("[WARNING] Failed getting notification workflow with ID '%s': %s", org.Defaults.NotificationWorkflow, err)
 				return err
 			}
 
 			if workflow.OrgId != mainNotification.OrgId {
-				log.Printf("[WARNING] Can't access workflow %s with org %s (%s): %#v", workflow.ID, mainNotification.OrgName, mainNotification.OrgId, workflow.Org)
+				log.Printf("[WARNING] Can't access workflow '%s' (notification create) with org %s (%s): %#v", workflow.ID, mainNotification.OrgName, mainNotification.OrgId, workflow.Org)
 
 				// Get parent org if it exists and check too
 				if len(org.ManagerOrgs) > 0 {

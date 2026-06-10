@@ -14927,7 +14927,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 		if len(cacheData.Category) == 0 || len(cacheData.OrgId) == 0 {
 			if debug {
-				log.Printf("[DEBUG] No category/orgid. Continue")
+				log.Printf("[DEBUG] ERROR: No category/orgid for key '%s'. Continue", cacheData.Key)
 			}
 			continue
 		}

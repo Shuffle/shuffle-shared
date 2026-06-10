@@ -2527,7 +2527,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 	for _, action := range workflow.Actions {
 		if action.AppID == "integration" || action.AppID == "shuffle_agent" {
 			actionName := "Singul"
-			if action.AppID == "shuffle_agent" {
+			if action.AppID == "shuffle_agent" || strings.Contains(strings.ToLower(action.AppID), "agent") {
 				actionName = "Shuffle Agent"
 			}
 
@@ -2542,6 +2542,10 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 			for _, field := range action.Parameters {
 				if (field.Name == "app_name" || field.Name == "appname") && (field.Value == "" || field.Value == "noapp") {
+
+					if actionName == "Shuffle Agent" { 
+						continue
+					}
 
 					parsedError := fmt.Sprintf("%s action %s requires an app to use", actionName, action.Label)
 					if !ArrayContains(workflow.Errors, parsedError) {
