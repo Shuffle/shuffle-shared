@@ -25,6 +25,7 @@ import (
 	"sort"
 	"unicode"
 
+	openai "github.com/sashabaranov/go-openai"
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
 	"google.golang.org/api/cloudfunctions/v1"
@@ -1912,7 +1913,30 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	newAuth := []AppAuthenticationStorage{}
 	for _, auth := range allAuths {
 		newAuthField := auth
+
 		for index, _ := range auth.Fields {
+			// Allowing these fields specifically, as they typically aren't 
+			// sensitive, and the API is authenticated.
+			if auth.Fields[index].Key == "url" || auth.Fields[index].Key == "model" {
+
+				// Decrypt on the fly in the return
+				if !auth.Encrypted {
+					continue
+				}
+
+				field := auth.Fields[index]
+				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
+				newValue, err := HandleKeyDecryption([]byte(auth.Fields[index].Value), parsedKey)
+				if err != nil {
+					log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+				} else {
+					//log.Printf("Decrypted value: %s", newValue)
+					newAuthField.Fields[index].Value = string(newValue)
+				}
+
+				continue
+			}
+
 			newAuthField.Fields[index].Value = "Secret. Replaced during app execution!"
 		}
 
@@ -2355,6 +2379,9 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 			appAuth.Fields = originalAuth.Fields
 		} else {
+			// Removing as being strict on EXTRA fields don't matter much
+			// Apps can handle this anyway
+			/*
 			// Check if the items are correct
 			for _, field := range appAuth.Fields {
 				found := false
@@ -2372,6 +2399,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 			}
+			*/
 		}
 	}
 
@@ -4530,12 +4558,12 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Add timeout of 6 seconds to the ctx
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	cursor := ""
 	cursorList, cursorOk := request.URL.Query()["cursor"]
-	if cursorOk && len(cursorList) > 0 {
+	if cursorOk && len(cursorList) > 60{
 		cursor = cursorList[0]
 	}
 
@@ -18124,6 +18152,20 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			originalAction = actionResult.Action
 		}
 
+		// If the execution is already FINISHED but a continuation was injected (user asked  the agent to do more on top of what it already did), we need to reset the status back to EXECUTING so that HandleAiAgentExecutionStart doesn't exit with "Agent run already finished". We also persist this to cache so the guard in
+		if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
+			log.Printf("[INFO][%s] Agent continuation: resetting execution status from '%s' to 'EXECUTING' for continuation", workflowExecution.ExecutionId, workflowExecution.Status)
+			workflowExecution.Status = "EXECUTING"
+			workflowExecution.CompletedAt = 0
+
+			executionCacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
+			DeleteCache(ctx, executionCacheKey)
+			marshalledExec, marshalErr := json.Marshal(workflowExecution)
+			if marshalErr == nil {
+				SetCache(ctx, executionCacheKey, marshalledExec, 30)
+			}
+		}
+
 		callerName := "handleAgentDecisionStreamResult"
 		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, originalAction, true, callerName)
 		if err != nil {
@@ -18196,6 +18238,36 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						foundError := fmt.Sprintf("LLM received call failed from app: ")
 						if len(quickUnmarshal.Reason) > 0 { 
 							foundError += fmt.Sprintf(quickUnmarshal.Reason)
+						}
+
+						// Tries to map it in from the openai request 
+						if len(oldAgentOutput.OriginalInput) == 0 {
+							for _, param := range actionResult.Action.Parameters { 
+								if param.Name != "body" { 
+									continue
+								}
+
+								// Marshal into openai conversation request 
+								openaiReq := openai.ChatCompletionRequest{}
+								unmarshalledErr := json.Unmarshal([]byte(param.Value), &openaiReq)
+								if unmarshalledErr != nil {
+									log.Printf("[ERROR] Failed unmarshalling body into openai request: %s", unmarshalledErr)
+									break
+								} 
+
+								if len(openaiReq.Messages) > 0 {
+									for _, userMessage := range openaiReq.Messages {
+										if !strings.HasPrefix(userMessage.Content, "USER REQUEST:") { 
+											continue
+										}
+
+										oldAgentOutput.OriginalInput = userMessage.Content
+										break
+									}
+								}
+
+								break
+							}
 						}
 
 						go abortAgentExecution(ctx, *foundParentExec, startNode, oldAgentOutput, "llm_received_failure", foundError)
@@ -19761,6 +19833,29 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					if len(param.Value) > 32500 {
 						log.Printf("[DEBUG][%s] Trimming parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
 						workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
+					}
+				}
+
+				for paramIndex, param := range result.Action.InvalidParameters {
+					if len(param.Value) > 32500 {
+						log.Printf("[DEBUG][%s] Trimming invalid parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
+						workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = "Size too large. Removed."
+					}
+				}
+			}
+
+			for actionIndex, action := range workflowExecution.Workflow.Actions {
+				for paramIndex, param := range action.Parameters {
+					if len(param.Value) > 32500 {
+						log.Printf("[DEBUG][%s] Trimming workflow parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, action.Label, len(param.Value))
+						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+					}
+				}
+
+				for paramIndex, param := range action.InvalidParameters {
+					if len(param.Value) > 32500 {
+						log.Printf("[DEBUG][%s] Trimming workflow invalid parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, action.Label, len(param.Value))
+						workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
 					}
 				}
 			}
@@ -22180,10 +22275,12 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		if len(decision) > 0 {
 			decisionId = decision[0]
 		}
+
 	} else if strings.ToLower(appId) == "integration" || strings.ToLower(appId) == "singul" {
 		log.Printf("[INFO] Running single action for 'integration' app => Singul")
 
 		// Related to sensor groups for Orborus
+
 	} else if strings.ToLower(appId) == "sensors" && action.Name == "run_action" {
 		if len(user.ActiveOrg.Id) == 0 {
 			return workflowExecution, errors.New("No org ID supplied for sensor execution")
@@ -22206,11 +22303,11 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				break
 			}
 
-			if param.Name == "hosts" {
-				foundHosts = strings.Split(param.Value, ",")
-			} else if param.Name == "action" {
+			if param.Name == "action" {
 				foundAction = param.Value
-			} else if param.Name == "sensor_group" {
+			} else if param.Name == "hosts" || param.Name == "host" || param.Name == "sensor" || param.Name == "sensors" || param.Name == "monitor" || param.Name == "target" || param.Name == "targets" {
+				foundHosts = strings.Split(param.Value, ",")
+			} else if param.Name == "sensor_group" || param.Name == "monitor_group" || param.Name == "host_group" {
 				foundSensorGroup = param.Value
 			}
 		}
@@ -22237,6 +22334,23 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			}
 
 			if env.Name != foundEnv {
+				// Fallback if no group is supplied
+				found := false
+				for _, sensor := range env.SensorHosts {
+					for _, foundHost := range foundHosts { 
+						if sensor.Hostname == foundHost { 
+							found = true
+							break
+						}
+					}
+
+					// Fallback
+					if found { 
+						parsedEnv = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), env.OrgId)
+						break
+					}
+				}
+					
 				continue
 			}
 
@@ -26044,6 +26158,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		var execution ExecutionRequest
 		err = json.Unmarshal(body, &execution)
 		if err != nil {
+			if debug { 
+				log.Printf("[DEBUG] JSON parsing problem in run workflow: %s", err)
+			}
+
 			if len(string(body)) < 100 {
 				log.Printf("[WARNING] Failed execution POST unmarshaling - continuing anyway: '%s'. Err: %s", string(body), err)
 			} else {
@@ -26054,14 +26172,22 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		// Ensuring it works even if startpoint isn't defined
 		if execution.Start == "" && len(body) > 0 && len(execution.ExecutionSource) == 0 && len(execution.ExecutionArgument) == 0 {
 			// Check if "execution_argument" in body
+			if debug { 
+				log.Printf("[DEBUG] Fallback to full body usage for exec arg")
+			}
+
 			execution.ExecutionArgument = string(body)
 		}
 
 		// FIXME - this should have "execution_argument" from executeWorkflow frontend
 		//log.Printf("EXEC: %s", execution)
-		if len(execution.ExecutionArgument) > 0 {
+		if len(execution.ExecutionArgument) > 0 && len(workflowExecution.ExecutionArgument) == 0 {
 			workflowExecution.ExecutionArgument = execution.ExecutionArgument
 		}
+
+		//if debug { 
+		//	log.Printf("\n\n\n\n\n[DEBUG] INPUT BODY: %s \n\n\n\n\n", string(body))
+		//}
 
 		if len(execution.ExecutionSource) > 0 {
 			workflowExecution.ExecutionSource = execution.ExecutionSource

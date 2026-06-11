@@ -702,8 +702,81 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 		err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
 		if err != nil {
-			log.Printf("[ERROR] Failed saving new execution %s: %s", workflowExecution.ExecutionId, err)
-			return err
+			if strings.Contains(err.Error(), "immense term") {
+				retried := false
+
+				if len(workflowExecution.ExecutionArgument) > 32500 {
+					workflowExecution.ExecutionArgument = "Size too large. Removed."
+					retried = true
+				}
+
+				if len(workflowExecution.Result) > 32500 {
+					workflowExecution.Result = "Size too large. Removed."
+					retried = true
+				}
+
+				for resultIndex, result := range workflowExecution.Results {
+					if len(result.Result) > 32500 {
+						workflowExecution.Results[resultIndex].Result = "Size too large. Removed."
+						retried = true
+					}
+
+					for paramIndex, param := range result.Action.Parameters {
+						if len(param.Value) > 32500 {
+							workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+
+					for paramIndex, param := range result.Action.InvalidParameters {
+						if len(param.Value) > 32500 {
+							workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				for actionIndex, action := range workflowExecution.Workflow.Actions {
+					for paramIndex, param := range action.Parameters {
+						if len(param.Value) > 32500 {
+							workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+
+					for paramIndex, param := range action.InvalidParameters {
+						if len(param.Value) > 32500 {
+							workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				for triggerIndex, trigger := range workflowExecution.Workflow.Triggers {
+					for paramIndex, param := range trigger.Parameters {
+						if len(param.Value) > 32500 {
+							workflowExecution.Workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				if retried {
+					executionData, err = json.Marshal(workflowExecution)
+					if err != nil {
+						log.Printf("[ERROR] Failed marshalling execution for ES retry: %s", err)
+						return err
+					}
+
+					log.Printf("[DEBUG][%s] Retrying OpenSearch save after trimming remaining oversized values", workflowExecution.ExecutionId)
+					err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
+				}
+			}
+
+			if err != nil {
+				log.Printf("[ERROR] Failed saving new execution %s: %s", workflowExecution.ExecutionId, err)
+				return err
+			}
 		}
 
 		//log.Printf("[INFO] Successfully saved new execution %s. Timestamp: %d!", workflowExecution.ExecutionId, workflowExecution.StartedAt)
@@ -817,6 +890,7 @@ func GetEsConfig(defaultCreds bool) *opensearchapi.Client {
 	transport.MaxIdleConnsPerHost = 100
 	transport.ResponseHeaderTimeout = time.Second * 10
 	transport.Proxy = nil
+	transport.ForceAttemptHTTP2 = false
 
 	if len(os.Getenv("SHUFFLE_OPENSEARCH_PROXY")) > 0 {
 		httpProxy := os.Getenv("SHUFFLE_OPENSEARCH_PROXY")
@@ -5017,7 +5091,11 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 				}
 			}
 		} else {
-			log.Printf("[ERROR] Error getting response from Opensearch (index ES) - 1: %s", err)
+			if strings.Contains(err.Error(), "immense term") {
+				log.Printf("[WARNING] Error getting response from Opensearch (index ES) - 1: %s", err)
+			} else {
+				log.Printf("[ERROR] Error getting response from Opensearch (index ES) - 1: %s", err)
+			}
 		}
 
 		return err
@@ -11503,6 +11581,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			"sort": map[string]interface{}{
 				"updated_at": map[string]interface{}{
 					"order": "desc",
+					"unmapped_type": "long",
 				},
 			},
 			"query": map[string]interface{}{
@@ -14848,7 +14927,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 		if len(cacheData.Category) == 0 || len(cacheData.OrgId) == 0 {
 			if debug {
-				log.Printf("[DEBUG] No category/orgid. Continue")
+				log.Printf("[DEBUG] ERROR: No category/orgid for key '%s'. Continue", cacheData.Key)
 			}
 			continue
 		}
@@ -16540,9 +16619,15 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	nameKey := "org_cache"
 	cleanupDepth := 0
+	parentOrgDepth := 0
 	if len(cleanupDepthParam) > 0 {
 		if cleanupDepthParam[0] > 0 {
 			cleanupDepth = cleanupDepthParam[0]
+		}
+	}
+	if len(cleanupDepthParam) > 1 {
+		if cleanupDepthParam[1] > 0 {
+			parentOrgDepth = cleanupDepthParam[1]
 		}
 	}
 
@@ -16864,7 +16949,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 								log.Printf("[WARNING] Cleanup depth for cache keys has reached %d. Stopping recursion to prevent potential infinite loop. Please investigate if there are many stale keys for category '%s' in org '%s'.", cleanupDepth, category, orgId)
 							} else {
 								// Makes sure we do a toooon of keys at once when cleanup is relevant
-								newKeys, _, err := GetAllCacheKeys(ctx, orgId, category, 500, "", cleanupDepth)
+								newKeys, _, err := GetAllCacheKeys(ctx, orgId, category, 500, "", cleanupDepth, parentOrgDepth)
 								if err == nil {
 									cacheKeys = newKeys
 								}
@@ -16915,13 +17000,20 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	foundOrg, err := GetOrg(ctx, orgId)
 	if err == nil && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
+		if parentOrgDepth >= 3 {
+			log.Printf("[ERROR] Reached maximum parent org lookup depth (%d) for org %s. Skipping parent org cache lookup to prevent infinite recursion.", parentOrgDepth, orgId)
+		} else {
 		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
 		if err != nil {
-			log.Printf("[ERROR] Failed finding parent org %s for org %s: %s", foundOrg.CreatorOrg, orgId, err)
+				if debug {
+					log.Printf("[DEBUG] Could not find parent org %s for org %s (possibly in different region): %s", foundOrg.CreatorOrg, orgId, err)
+				}
 		} else {
-			parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, "", max, inputcursor)
+				parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, "", max, inputcursor, cleanupDepth, parentOrgDepth+1)
 			if err != nil {
-				log.Printf("[ERROR] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
+					if debug {
+						log.Printf("[DEBUG] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
+					}
 			} else {
 				if debug {
 					//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
@@ -16942,6 +17034,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 					parentCache.PublicAuthorization = ""
 					parentCache.SuborgDistribution = []string{orgId}
 					cacheKeys = append(cacheKeys, parentCache)
+					}
 				}
 			}
 		}

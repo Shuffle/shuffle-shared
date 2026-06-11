@@ -820,7 +820,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			Description: "Ingest tickets through a webhook",
 			OrgId:       orgId,
 			Start:       startActionId,
-			UsecaseIds:  []string{"SIEM to ticket"},
+			UsecaseIds:  []string{"SIEM to ticket", "SIEM alerts", "EDR alerts"},
 			Tags:        []string{"ingest", "webhook", "automatic"},
 			Actions: []Action{
 				Action{
@@ -1224,6 +1224,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		prepareAgentRun := uuid.NewV4().String()
 		aiAgentRun := uuid.NewV4().String()
 		addAgentResponse := uuid.NewV4().String()
+		assignedAppsId := uuid.NewV4().String()
 
 		// Test-workflow used to figure it out
 		// /workflows/25cd78f7-06a0-4f5e-8026-f1c25c74bf74
@@ -1254,6 +1255,29 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 						WorkflowAppActionParameter{
 							Name:      "category",
 							Value:     "shuffle-security_configuration",
+							Multiline: false,
+							Required:  false,
+						},
+					},
+				},
+				Action{
+					Name:        "get_datastore_value",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          assignedAppsId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Get_assigned_apps",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "key",
+							Value:     "config",
+							Multiline: false,
+							Required:  true,
+						},
+						WorkflowAppActionParameter{
+							Name:      "category",
+							Value:     "shuffle-security_agent_tools",
 							Multiline: false,
 							Required:  false,
 						},
@@ -1307,7 +1331,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 							Name:      "app_name",
 							Multiline: false,
 							Required:  true,
-							Value:     "Shuffle AI",
+							Value:     "$handle_ai_agent_run.message.assigned_apps",
 						},
 						WorkflowAppActionParameter{
 							Name:      "input",
@@ -1320,11 +1344,13 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 **Full context:**
 $exec`,
 						},
+
+						/*
 						WorkflowAppActionParameter{
 							Name:      "action",
 							Multiline: false,
 							Required:  false,
-							Value:     "Nothing",
+							Value:     "",
 						},
 						WorkflowAppActionParameter{
 							Name:      "memory",
@@ -1338,6 +1364,7 @@ $exec`,
 							Required:  false,
 							Value:     "",
 						},
+						*/
 					},
 				},
 				Action{
@@ -1382,6 +1409,18 @@ $exec`,
 				},
 				Branch{
 					SourceID:      startActionId,
+					DestinationID: assignedAppsId,
+					ID:            uuid.NewV4().String(),
+					Conditions:    []Condition{},
+				},
+				Branch{
+					SourceID:      startActionId,
+					DestinationID: prepareAgentRun,
+					ID:            uuid.NewV4().String(),
+					Conditions:    []Condition{},
+				},
+				Branch{
+					SourceID: assignedAppsId,
 					DestinationID: prepareAgentRun,
 					ID:            uuid.NewV4().String(),
 					Conditions:    []Condition{},
@@ -1426,6 +1465,21 @@ $exec`,
 								Value: "",
 							},
 						},
+						//Condition{
+						//	Source: WorkflowAppActionParameter{
+						//		Name:  "source",
+						//		Value: "$handle_ai_agent_run.success",
+						//	},
+						//	Condition: WorkflowAppActionParameter{
+						//		Name:  "condition",
+						//		Value: "does not equal",
+						//		Configuration: true, // Opposite
+						//	},
+						//	Destination: WorkflowAppActionParameter{
+						//		Name:  "destination",
+						//		Value: "false",
+						//	},
+						//},
 					},
 				},
 				Branch{
@@ -1484,13 +1538,7 @@ $exec`,
 	// This is done specifically for Singul ingests
 	positionAddition := float64(300)
 
-	//if debug {
-	//log.Printf("ACTIONS: %d, TRIGGERS: %d, APPNAMES: %d, FIRSTACTION: %s, TRIGGER: %s", len(workflow.Actions), len(workflow.Triggers), len(appNames), workflow.Actions[0].AppName, workflow.Triggers[0].TriggerType)
-	//os.Exit(3)
-	//}
-
-	//if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && len(workflow.Triggers) == 1 && workflow.Triggers[0].TriggerType == "SCHEDULE" {
-	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") {
+	if len(workflow.Actions) == 1 && (workflow.Actions[0].AppName == "Singul" || workflow.Actions[0].AppID == "integration") && workflow.Actions[0].Name != "Translate standard" {
 		actionTemplate := workflow.Actions[0]
 
 		// Pre-defining it with a startnode that does nothing
@@ -1601,8 +1649,7 @@ $exec`,
 
 	if len(workflow.Actions) > 0 {
 		for _, action := range workflow.Actions {
-			if action.AppID == "integration" || action.AppName == "Singul" {
-
+			if action.Name != "Translate standard" && (action.AppID == "integration" || action.AppName == "Singul") {
 				for _, param := range action.Parameters {
 					if (param.Name == "app_name" || param.Name == "appName") && len(param.Value) == 0 {
 						log.Printf("[DEBUG] Should verify if an app of type '%s' exists", action.Name)
@@ -4156,16 +4203,6 @@ func handleRelevantPeopleAgentPrepareCode() string {
 cur_exec = self.get_key("$exec.shuffle_datastore.key", category="$exec.shuffle_datastore.category")
 if cur_exec["success"] and cur_exec["value"]:
   cur_exec = cur_exec["value"]
-
-  if "finding_uid" in cur_exec and len(cur_exec["finding_uid"]) > 0:
-    pass
-  else:
-    print(json.dumps({
-      "success": False,
-      "reason": "No finding_uid in the incident. Not updating."
-    }))
-    exit()
-
 else:
   print(json.dumps({
     "success": False,
@@ -4177,6 +4214,7 @@ activities = []
 if "activity" in cur_exec:
   activities = cur_exec["activity"]
 
+agent_name = ""
 ai_agent_activities = []
 activities_changed = False
 for activityIndex in range(len(activities)):
@@ -4193,6 +4231,7 @@ for activityIndex in range(len(activities)):
   if "content" not in activity or ("@aiagent" not in activity["content"].lower()):
     continue
 
+  agent_name = "default"
   ai_agent_activities.append(activity)
 
 db_updated = False
@@ -4218,6 +4257,24 @@ if activities_changed or len(assignee) > 0:
   ret = self.set_key("$exec.shuffle_datastore.key", json.dumps(parsed_activity), category="$exec.shuffle_datastore.category")
   if ret["success"]:
     db_updated = True
+    
+available_apps = ""
+assigned_apps = json.loads(r"""$get_assigned_apps""")
+if "success" in assigned_apps and assigned_apps["success"] == True and "value" in assigned_apps and len(str(assigned_apps["value"])) > 0:
+  try:
+    assigned_apps["value"] = json.loads(assigned_apps["value"])
+  except:
+    pass
+  
+  for agent_config in assigned_apps["value"]:
+    if agent_config["agent"] != agent_name:
+      continue
+    
+    for tool in agent_config["tools"]:
+      available_apps += tool["name"]+","
+      
+    if len(available_apps) > 0:
+      available_apps = available_apps[:-1] 
 
 # Print the details of the key after it's been updated
 # To get the value, use self.get_key(key)["value"]
@@ -4226,12 +4283,13 @@ if len(ai_agent_activities) > 0:
     "assignee": assignee,
     "updated": db_updated,
     "agent": ai_agent_activities[0],
+    "assigned_apps": available_apps,
   }))
 else:
-    print(json.dumps({
-      "updated": db_updated,
-      "agent": "",
-    }))`
+  print(json.dumps({
+    "updated": db_updated,
+    "agent": "",
+  }))`
 }
 
 func handleRelevantPeopleAgentResponseCode() string {
