@@ -4776,7 +4776,6 @@ func extractAgentOutputFromResults(execution WorkflowExecution) (AgentOutput, bo
 					for _, f := range d.Fields {
 						if f.Key == "output" && f.Value != "" {
 							agentOutput.Output = f.Value
-							log.Printf("[DEBUG] Agent health check: extracted output %q from finish decision fields (top-level output field was empty)", agentOutput.Output)
 							break
 						}
 					}
