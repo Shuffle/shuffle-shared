@@ -12274,6 +12274,22 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 	return workflow, nil
 }
 
+func isSensitiveParameter(paramName string) bool {
+	lowerName := strings.ToLower(strings.TrimSpace(paramName))
+	sensitiveKeywords := []string{
+		"apikey", "api_key", "key", "token", "password", "secret",
+		"auth", "credential", "authorization", "bearer", "api",
+		"privatekey", "private_key", "accesskey", "access_key",
+		"secretkey", "secret_key", "clientsecret", "client_secret",
+	}
+	for _, keyword := range sensitiveKeywords {
+		if strings.Contains(lowerName, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
 func buildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
 	if w == nil {
 		return nil
@@ -12283,45 +12299,106 @@ func buildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
 	for _, a := range w.Actions {
 		var params []MinimalParameter
 		for _, p := range a.Parameters {
-			params = append(params, MinimalParameter{Name: p.Name, Value: p.Value})
+			paramValue := p.Value
+			// Redact sensitive parameter values
+			if isSensitiveParameter(p.Name) {
+				paramValue = "[REDACTED]"
+			}
+			params = append(params, MinimalParameter{Name: p.Name, Value: paramValue})
 		}
+		
+		// Check if this action is the start node
+		isStart := false
+		if len(w.Start) > 0 && w.Start == a.ID {
+			isStart = true
+		}
+		// Also check the IsStartNode field on the action itself
+		if a.IsStartNode {
+			isStart = true
+		}
+		
 		minActs = append(minActs, MinimalAction{
 			AppName:    a.AppName,
+			AppID:      a.AppID,
 			ID:         a.ID,
 			Label:      a.Label,
 			Name:       a.Name,
 			Parameters: params,
 			Errors:     a.Errors,
+			X:          int64(a.Position.X),
+			Y:          int64(a.Position.Y),
+			IsStart:    isStart,
 		})
 	}
 
 	var minBrs []MinimalBranch
 	for _, b := range w.Branches {
+		var minConditions []MinimalCondition
+		for _, cond := range b.Conditions {
+			minConditions = append(minConditions, MinimalCondition{
+				Source: MinimalConditionParam{
+					ID:    cond.Source.ID,
+					Name:  cond.Source.Name,
+					Value: cond.Source.Value,
+				},
+				Condition: MinimalConditionParam{
+					ID:    cond.Condition.ID,
+					Name:  cond.Condition.Name,
+					Value: cond.Condition.Value,
+				},
+				Destination: MinimalConditionParam{
+					ID:    cond.Destination.ID,
+					Name:  cond.Destination.Name,
+					Value: cond.Destination.Value,
+				},
+			})
+		}
+
 		minBrs = append(minBrs, MinimalBranch{
 			ID:            b.ID,
 			SourceID:      b.SourceID,
 			DestinationID: b.DestinationID,
+			Label:         b.Label,
+			Conditions:    minConditions,
 		})
 	}
 
 	var minTrigs []MinimalTrigger
+	startTriggerID := ""
 	for _, t := range w.Triggers {
 		var params []MinimalParameter
 		for _, p := range t.Parameters {
-			params = append(params, MinimalParameter{Name: p.Name, Value: p.Value})
+			paramValue := p.Value
+			// Redact sensitive parameter values
+			if isSensitiveParameter(p.Name) {
+				paramValue = "[REDACTED]"
+			}
+			params = append(params, MinimalParameter{Name: p.Name, Value: paramValue})
 		}
+		
+		isStart := false
+		if len(w.Start) > 0 && w.Start == t.ID {
+			isStart = true
+			startTriggerID = t.ID
+		}
+		
 		minTrigs = append(minTrigs, MinimalTrigger{
+			ID:         t.ID,
 			AppName:    t.AppName,
 			Label:      t.Label,
 			Parameters: params,
+			X:          int64(t.Position.X),
+			Y:          int64(t.Position.Y),
+			IsStart:    isStart,
 		})
 	}
 
 	return &MinimalWorkflow{
-		Actions:  minActs,
-		Branches: minBrs,
-		Triggers: minTrigs,
-		Errors:   w.Errors,
+		Actions:        minActs,
+		Branches:       minBrs,
+		Triggers:       minTrigs,
+		Errors:         w.Errors,
+		StartTriggerID: startTriggerID,
 	}
 }
 
