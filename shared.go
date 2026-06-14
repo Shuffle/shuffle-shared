@@ -37464,3 +37464,322 @@ func ListProcesses() ([]ProcessInfo, error) {
 		return nil, fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
 }
+
+func GetWorkflowAppsSummary(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in GetWorkflowAppsSummary: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Get prioritized apps
+	apps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting apps for agent: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Build summary list - name + description only
+	appSummaries := []AppSummary{}
+	maxApps := 150
+	count := 0
+
+	for _, app := range apps {
+		// Skip empty apps
+		if len(strings.TrimSpace(app.Name)) == 0 || len(app.ID) == 0 {
+			continue
+		}
+
+		if count >= maxApps {
+			break
+		}
+
+		appSummaries = append(appSummaries, AppSummary{
+			Name:        app.Name,
+			Description: app.Description,
+			ID:          app.ID,
+		})
+		count++
+	}
+
+	log.Printf("[DEBUG] Returning %d apps for agent (user: %s, org: %s)", count, user.Username, user.ActiveOrg.Id)
+
+	// Marshal to JSON
+	responseData, err := json.Marshal(appSummaries)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling app summaries: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write(responseData)
+}
+
+func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in GetWorkflowAppActions: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Parse request body
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading request body: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid request body"}`))
+		return
+	}
+	defer request.Body.Close()
+
+	type ActionRequest struct {
+		AppNames []string `json:"app_names"`
+		AppIDs   []string `json:"app_ids"`
+	}
+
+	var actionReq ActionRequest
+	err = json.Unmarshal(body, &actionReq)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshaling action request: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid JSON"}`))
+		return
+	}
+
+	// Validate that at least one search method was provided
+	if len(actionReq.AppNames) == 0 && len(actionReq.AppIDs) == 0 {
+		log.Printf("[WARNING] No app_names or app_ids provided")
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Provide either app_names or app_ids"}`))
+		return
+	}
+
+	// Get all prioritized apps
+	allApps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting apps: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Find matching apps based on provided names or IDs
+	matchedApps := []WorkflowApp{}
+
+	// Search by IDs first (more direct)
+	if len(actionReq.AppIDs) > 0 {
+		for _, appID := range actionReq.AppIDs {
+			for _, app := range allApps {
+				if app.ID == appID && len(app.Name) > 0 {
+					matchedApps = append(matchedApps, app)
+					break
+				}
+			}
+		}
+	}
+
+	// Search by names (case-insensitive)
+	if len(actionReq.AppNames) > 0 {
+		for _, appName := range actionReq.AppNames {
+			lowerName := strings.ToLower(strings.TrimSpace(appName))
+			for _, app := range allApps {
+				if strings.ToLower(app.Name) == lowerName && len(app.ID) > 0 {
+					// Check if already added via ID search
+					alreadyAdded := false
+					for _, matched := range matchedApps {
+						if matched.ID == app.ID {
+							alreadyAdded = true
+							break
+						}
+					}
+					if !alreadyAdded {
+						matchedApps = append(matchedApps, app)
+					}
+					break
+				}
+			}
+		}
+	}
+
+	if len(matchedApps) == 0 {
+		if debug {
+			log.Printf("[DEBUG] No apps found matching criteria for user %s", user.Username)
+		}
+
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "No matching apps found"}`))
+		return
+	}
+
+	// Build response with actions for each matched app
+	responses := []AppActionResponse{}
+
+	for _, app := range matchedApps {
+		if len(app.Actions) == 0 {
+			if debug {
+				log.Printf("[DEBUG] Skipping app %s because len(Actions) is 0", app.Name)
+			}
+			continue
+		}
+
+		appResp := AppActionResponse{
+			AppName: app.Name,
+			AppID:   app.ID,
+			Actions: []ActionSummary{},
+		}
+
+		// Extract minimal action info
+		for _, action := range app.Actions {
+			if len(action.Name) == 0 {
+				continue
+			}
+
+			// Build parameter list
+			params := []ActionParameter{}
+			for _, param := range action.Parameters {
+				if len(param.Name) == 0 {
+					continue
+				}
+
+				params = append(params, ActionParameter{
+					Name:        param.Name,
+					Description: param.Description,
+					Required:    param.Required,
+				})
+			}
+
+			appResp.Actions = append(appResp.Actions, ActionSummary{
+				Name:        action.Name,
+				Description: action.Description,
+				Parameters:  params,
+			})
+		}
+
+		if len(appResp.Actions) > 0 {
+			responses = append(responses, appResp)
+		}
+	}
+
+	if len(responses) == 0 {
+		if debug {
+			log.Printf("[DEBUG] No actions found for matched apps")
+		}
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "No actions found in matched apps"}`))
+		return
+	}
+
+	if debug {
+		log.Printf("[DEBUG] Returning %d apps with actions for user %s", len(responses), user.Username)
+	}
+
+	responseData, err := json.Marshal(responses)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling action responses: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write(responseData)
+}
+
+func GetWorkflowMinimal(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in GetWorkflowMinimal: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Extract workflow ID from URL
+	location := strings.Split(request.URL.String(), "/")
+	var workflowId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Invalid URL"}`))
+			return
+		}
+		workflowId = location[4]
+	}
+
+	if len(workflowId) != 36 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid workflow ID"}`))
+		return
+	}
+
+	// Fetch workflow
+	workflow, err := GetWorkflow(ctx, workflowId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflow %s: %s", workflowId, err)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+		return
+	}
+
+	// Permission check: user owns it OR user is in same org
+	if user.Id != workflow.Owner {
+		if workflow.OrgId != user.ActiveOrg.Id {
+			log.Printf("[WARNING] User %s (%s) unauthorized to view workflow %s (owner: %s, org: %s)", 
+				user.Username, user.Id, workflowId, workflow.Owner, workflow.OrgId)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Unauthorized"}`))
+			return
+		}
+	}
+
+	// Build minimal workflow
+	minimalWorkflow := buildMinimalWorkflow(workflow)
+	if minimalWorkflow == nil {
+		log.Printf("[ERROR] Failed building minimal workflow %s", workflowId)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("[DEBUG] Returning minimal workflow %s for user %s (%s)", workflowId, user.Username, user.Id)
+
+	responseData, err := json.Marshal(minimalWorkflow)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling minimal workflow: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write(responseData)
+}
