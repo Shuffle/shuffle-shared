@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -206,6 +207,85 @@ func enrichTriggerFromApp(minTrig *MinimalTrigger, environment string) (Trigger,
 	}
 }
 
+func broadcastToStream(workflowID string, operation WorkflowOperation, userID string, username string, authHeader string) {
+	// Convert SetOps operation to StreamOps format
+	item := "node" // default
+	switch operation.Op {
+	case "add_branch", "edit_branch", "delete_branch":
+		item = "branch"
+	case "add_condition", "edit_condition", "delete_condition":
+		item = "condition"
+	}
+
+	if len(userID) == 0 {
+		userID = "agent"
+	}
+	if len(username) == 0 {
+		username = "agent"
+	}
+
+	streamOp := StreamWorkflowOperation{
+		Item:      item,
+		Type:      operation.Op,
+		ID:        operation.ID,
+		UserID:    userID,
+		Username:  username,
+		Data:      operation.Data,
+		Timestamp: time.Now().UnixMilli(),
+	}
+
+	// Marshal to JSON
+	payload, err := json.Marshal(streamOp)
+	if err != nil {
+		log.Printf("[WARNING] Failed to marshal stream operation for workflow %s: %s", workflowID, err)
+		return
+	}
+
+	baseURL := os.Getenv("BASE_URL")
+	if len(baseURL) == 0 {
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			baseURL = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		} else {
+			port := os.Getenv("PORT")
+			if len(port) == 0 {
+				port = "5001"
+			}
+			baseURL = fmt.Sprintf("http://localhost:%s", port)
+		}
+	}
+
+	streamURL := fmt.Sprintf("%s/api/v1/workflows/%s/stream", baseURL, workflowID)
+
+	// Create HTTP POST request
+	req, err := http.NewRequest("POST", streamURL, strings.NewReader(string(payload)))
+	if err != nil {
+		log.Printf("[WARNING] Failed to create stream request for workflow %s: %s", workflowID, err)
+		return
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	if len(authHeader) > 0 {
+		req.Header.Set("Authorization", authHeader)
+	}
+
+	// Make request with timeout
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] Failed to broadcast to stream for workflow %s: %s", workflowID, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Log result
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		log.Printf("[DEBUG] Streamed operation %s to workflow %s", operation.Op, workflowID)
+	} else {
+		log.Printf("[WARNING] Stream endpoint returned status %d for workflow %s", resp.StatusCode, workflowID)
+	}
+}
+
 func HandleWorkflowSetOps(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -358,7 +438,16 @@ func HandleWorkflowSetOps(resp http.ResponseWriter, request *http.Request) {
 	responseData, _ := json.Marshal(response)
 	resp.Write(responseData)
 
-	log.Printf("[INFO] Applied %d operations to workflow %s for user %s (cached)", len(setOpsReq.Operations), workflowID, user.Username)
+	// Broadcast operations to stream endpoint (agent gets response immediately, streaming happens in background)
+	// Extract auth header from incoming request to pass to stream endpoint
+	authHeader := request.Header.Get("Authorization")
+	for _, operation := range setOpsReq.Operations {
+		go broadcastToStream(workflowID, operation, user.Id, user.Username, authHeader)
+	}
+
+	if debug{
+		log.Printf("[INFO] Applied %d operations to workflow %s for user %s", len(setOpsReq.Operations), workflowID, user.Username)
+	}
 }
 
 
