@@ -286,7 +286,7 @@ func broadcastToStream(workflowID string, operation WorkflowOperation, userID st
 	}
 }
 
-func HandleWorkflowSetOps(resp http.ResponseWriter, request *http.Request) {
+func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -295,7 +295,7 @@ func HandleWorkflowSetOps(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("[WARNING] Api authentication failed in HandleWorkflowSetOps: %s", userErr)
+		log.Printf("[WARNING] Api authentication failed in HandleAgentWorkflowSave: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
 		return
