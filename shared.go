@@ -13392,7 +13392,7 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 	if project.Environment == "cloud" {
 		// Cloud licenses
 		if monthlyExecLimit >= 300000 {
-			planName = "Cloud Enterprise License"
+			planName = "Business License (Cloud)"
 			supportLevel = "Enterprise Support"
 			features = []string{
 				"∞ Days Workflow Backup",
@@ -13408,7 +13408,7 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 			}
 			amount = "870" // Just for placeholder
 		} else if monthlyExecLimit >= 12000 {
-			planName = "Cloud Scale License"
+			planName = "Scale License (Cloud)"
 			supportLevel = "Standard Support"
 			features = []string{
 				"30 Days workflow run history",
@@ -13418,7 +13418,7 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 			}
 			amount = fmt.Sprintf("%d", int64(((monthlyExecLimit-2000)/10000)*32)) // Calculate based on app runs: (paid_runs / 10k) * $32
 		} else if monthlyExecLimit >= 2000 && monthlyExecLimit < 12000 {
-			planName = "Free License"
+			planName = "Scale License (Cloud Trial)"
 			supportLevel = "Community Support"
 			features = []string{
 				"All 2500+ Apps",
@@ -13688,6 +13688,34 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true}`))
+		return
+	}
+
+	if tmpData.Editing == "subscription_delete" && !user.SupportAccess {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Support access required"}`))
+		return
+	}
+
+	if tmpData.Editing == "subscription_delete" {
+		var filtered []PaymentSubscription
+		for _, sub := range org.Subscriptions {
+			if sub.Id != tmpData.SubscriptionIndex {
+				filtered = append(filtered, sub)
+			}
+		}
+		org.Subscriptions = filtered
+
+		if err := SetOrg(ctx, *org, org.Id); err != nil {
+			log.Printf("[WARNING] Failed to delete subscription for org %s: %s", org.Id, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		log.Printf("[AUDIT] Support user %s deleted subscription %s from org %s", user.Username, tmpData.SubscriptionIndex, org.Id)
 		resp.WriteHeader(200)
 		resp.Write([]byte(`{"success": true}`))
 		return
@@ -14035,6 +14063,43 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			org.SyncFeatures.MultiEnv.Limit = 1
 			org.SyncFeatures.MultiTenant.Limit = 3
 			log.Printf("[INFO] Reset limits to defaults (2000 app runs / 1 env / 3 tenants) for org %s (no license)", org.Id)
+		}
+
+		// Update active subscription name to match the new license status
+		subName := ""
+		if newLeadinfo.EnterpriseLicenseCloud {
+			subName = "Enterprise License (Cloud)"
+		} else if newLeadinfo.EnterpriseLicenseOnprem {
+			subName = "Enterprise License (OnPrem)"
+		} else if newLeadinfo.ShuffleEnterpriseLicenseOldCustomer {
+			subName = "Enterprise License (Legacy)"
+		} else if newLeadinfo.BusinessLicenseCloud {
+			subName = "Business License (Cloud)"
+		} else if newLeadinfo.BusinessLicenseOnprem {
+			subName = "Business License (OnPrem)"
+		} else if newLeadinfo.ScaleLicenseOnpremCustomer {
+			subName = "Scale License (OnPrem)"
+		} else if newLeadinfo.ScaleLicenseCloudCustomer {
+			subName = "Scale License (Cloud)"
+		} else if newLeadinfo.ScaleLicenseCloudTrial {
+			subName = "Scale License (Cloud Trial)"
+		} else if newLeadinfo.POV {
+			subName = "POC License (Limited Period)"
+		}
+		if subName != "" {
+			isAnnualPlan := strings.Contains(subName, "Business") || strings.Contains(subName, "Enterprise")
+			for i := range org.Subscriptions {
+				if org.Subscriptions[i].Active {
+					org.Subscriptions[i].Name = subName
+					if isAnnualPlan {
+						if org.Subscriptions[i].Startdate == 0 {
+							org.Subscriptions[i].Startdate = time.Now().Unix()
+						}
+						org.Subscriptions[i].Enddate = org.Subscriptions[i].Startdate + 365*24*60*60
+					}
+				}
+			}
+			log.Printf("[INFO] Updated active subscription name to %s for org %s", subName, org.Id)
 		}
 
 		// Check for ORG_CHANGE_WEBHOOK
