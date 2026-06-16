@@ -37504,9 +37504,14 @@ func GetWorkflowAppsSummary(resp http.ResponseWriter, request *http.Request) {
 			break
 		}
 
+		desc := app.Description
+		if len(desc) > 150 {
+			desc = desc[:150] + "..."
+		}
+
 		appSummaries = append(appSummaries, AppSummary{
 			Name:        app.Name,
-			Description: app.Description,
+			Description: desc,
 			ID:          app.ID,
 		})
 		count++
@@ -37664,14 +37669,18 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 
 				params = append(params, ActionParameter{
 					Name:        param.Name,
-					Description: param.Description,
 					Required:    param.Required,
 				})
 			}
 
+			desc := action.Description
+			if len(desc) > 100 {
+				desc = desc[:100] + "..."
+			}
+
 			appResp.Actions = append(appResp.Actions, ActionSummary{
 				Name:        action.Name,
-				Description: action.Description,
+				Description: desc,
 				Parameters:  params,
 			})
 		}
