@@ -8755,6 +8755,23 @@ data_filter:
 			log.Printf("[ERROR] AI Agent (2): Failed unmarshalling response into decisions. Response from sending AI Agent request to %s: %d - '%s'. Err: %s", fullUrl, llmStatusCode, string(body), err)
 		}
 
+		// Fallback: if resultMapping.Result is still empty after standard unmarshal, the Shuffle HTTP wrapper may have returned the "result" field as a raw nested  JSON object (not a properly-escaped string), which causes Go's JSON decoder to skip the field entirely. Extract it via json.RawMessage so we get the bytes regardless of whether the value is a string or a nested object.
+		if len(resultMapping.Result) == 0 && len(body) > 0 {
+			rawMap := map[string]json.RawMessage{}
+			if jsonErr := json.Unmarshal(body, &rawMap); jsonErr == nil {
+				if rawResult, ok := rawMap["result"]; ok && len(rawResult) > 0 {
+					// If the raw value is a JSON string, unquote it to get the inner content. If it is an object/array, use it directly as a string.
+					var strVal string
+					if jsonErr2 := json.Unmarshal(rawResult, &strVal); jsonErr2 == nil && len(strVal) > 0 {
+						resultMapping.Result = strVal
+					} else {
+						// The value is a raw JSON object/array — use it directly as the result string.
+						resultMapping.Result = string(rawResult)
+					}
+				}
+			}
+		}
+
 		resultMapping.ExecutionId = execution.ExecutionId
 		resultMapping.Authorization = execution.Authorization
 		// Waiting 3
