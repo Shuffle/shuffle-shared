@@ -25,6 +25,7 @@ import (
 	"sort"
 	"unicode"
 
+	openai "github.com/sashabaranov/go-openai"
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
 	"google.golang.org/api/cloudfunctions/v1"
@@ -18389,6 +18390,36 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							foundError += fmt.Sprintf(quickUnmarshal.Reason)
 						}
 
+						// Tries to map it in from the openai request 
+						if len(oldAgentOutput.OriginalInput) == 0 {
+							for _, param := range actionResult.Action.Parameters { 
+								if param.Name != "body" { 
+									continue
+								}
+
+								// Marshal into openai conversation request 
+								openaiReq := openai.ChatCompletionRequest{}
+								unmarshalledErr := json.Unmarshal([]byte(param.Value), &openaiReq)
+								if unmarshalledErr != nil {
+									log.Printf("[ERROR] Failed unmarshalling body into openai request: %s", unmarshalledErr)
+									break
+								} 
+
+								if len(openaiReq.Messages) > 0 {
+									for _, userMessage := range openaiReq.Messages {
+										if !strings.HasPrefix(userMessage.Content, "USER REQUEST:") { 
+											continue
+										}
+
+										oldAgentOutput.OriginalInput = userMessage.Content
+										break
+									}
+								}
+
+								break
+							}
+						}
+
 						go abortAgentExecution(ctx, *foundParentExec, startNode, oldAgentOutput, "llm_received_failure", foundError)
 					}
 				}
@@ -22394,10 +22425,12 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		if len(decision) > 0 {
 			decisionId = decision[0]
 		}
+
 	} else if strings.ToLower(appId) == "integration" || strings.ToLower(appId) == "singul" {
 		log.Printf("[INFO] Running single action for 'integration' app => Singul")
 
 		// Related to sensor groups for Orborus
+
 	} else if strings.ToLower(appId) == "sensors" && action.Name == "run_action" {
 		if len(user.ActiveOrg.Id) == 0 {
 			return workflowExecution, errors.New("No org ID supplied for sensor execution")
@@ -26275,6 +26308,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		var execution ExecutionRequest
 		err = json.Unmarshal(body, &execution)
 		if err != nil {
+			if debug { 
+				log.Printf("[DEBUG] JSON parsing problem in run workflow: %s", err)
+			}
+
 			if len(string(body)) < 100 {
 				log.Printf("[WARNING] Failed execution POST unmarshaling - continuing anyway: '%s'. Err: %s", string(body), err)
 			} else {
@@ -26285,14 +26322,22 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		// Ensuring it works even if startpoint isn't defined
 		if execution.Start == "" && len(body) > 0 && len(execution.ExecutionSource) == 0 && len(execution.ExecutionArgument) == 0 {
 			// Check if "execution_argument" in body
+			if debug { 
+				log.Printf("[DEBUG] Fallback to full body usage for exec arg")
+			}
+
 			execution.ExecutionArgument = string(body)
 		}
 
 		// FIXME - this should have "execution_argument" from executeWorkflow frontend
 		//log.Printf("EXEC: %s", execution)
-		if len(execution.ExecutionArgument) > 0 {
+		if len(execution.ExecutionArgument) > 0 && len(workflowExecution.ExecutionArgument) == 0 {
 			workflowExecution.ExecutionArgument = execution.ExecutionArgument
 		}
+
+		//if debug { 
+		//	log.Printf("\n\n\n\n\n[DEBUG] INPUT BODY: %s \n\n\n\n\n", string(body))
+		//}
 
 		if len(execution.ExecutionSource) > 0 {
 			workflowExecution.ExecutionSource = execution.ExecutionSource
