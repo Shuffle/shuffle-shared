@@ -10355,8 +10355,6 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 	if len(env.Auth) == 0 {
 		if len(os.Getenv("SHUFFLE_ENVIRONMENT_AUTH")) > 0 {
 			env.Auth = os.Getenv("SHUFFLE_ENVIRONMENT_AUTH")
-		} else {
-			env.Auth = uuid.NewV4().String()
 		}
 	}
 
