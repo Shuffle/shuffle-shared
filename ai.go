@@ -44,8 +44,8 @@ import (
 var standalone bool
 
 // var model = "gpt-5-mini"
-//var model = "gpt-5-mini"
-var model = "gpt-5.4-nano"
+var model = "gpt-5-mini"
+//var model = "gpt-5.4-nano"
 //var model = "gpt-5.2-codex"
 
 var fallbackModel = ""
@@ -1541,53 +1541,20 @@ func FixJSONNewlines(input string) string {
 }
 
 func FixContentOutput(contentOutput string) string {
-	if strings.Contains(contentOutput, "```json") {
-		// Handle ```json
-		start := strings.Index(contentOutput, "```json")
-		end := strings.Index(contentOutput, "```")
-		if start != -1 {
-			end = strings.Index(contentOutput[start+7:], "```")
-
-			// Shift it so the index is at the correct place
-			end = end + start + 7
+	// Safely extract content from ```json or ``` blocks
+	if start := strings.Index(contentOutput, "```json"); start != -1 {
+		start += 7 // skip ```json
+		if end := strings.Index(contentOutput[start:], "```"); end != -1 {
+			contentOutput = contentOutput[start : start+end]
+		} else {
+			contentOutput = contentOutput[start:] // Unmatched, take the rest
 		}
-
-		if start != -1 && end != -1 {
-			newend := end + 7
-			newstart := start + 7
-
-			log.Printf("[INFO] Found ``` in content. Start: %d, end: %d", start, end)
-
-			if newend > len(contentOutput) {
-				newend = end
-			}
-
-			if newend > len(contentOutput) {
-				newend = len(contentOutput)
-			}
-
-			if newstart > len(contentOutput) {
-				newstart = start
-			}
-
-			if newstart > len(contentOutput) {
-				newstart = len(contentOutput)
-			}
-
-			contentOutput = contentOutput[start+7 : newend]
-		}
-	}
-
-	if strings.Contains(contentOutput, "```") {
-		start := strings.Index(contentOutput, "```")
-		end := strings.Index(contentOutput[start+3:], "```")
-		if start != -1 {
-			end = strings.Index(contentOutput[start+3:], "```")
-			end = end + start + 3
-		}
-
-		if start != -1 && end != -1 {
-			contentOutput = contentOutput[start+3 : end+3]
+	} else if start := strings.Index(contentOutput, "```"); start != -1 {
+		start += 3 // skip ```
+		if end := strings.Index(contentOutput[start:], "```"); end != -1 {
+			contentOutput = contentOutput[start : start+end]
+		} else {
+			contentOutput = contentOutput[start:] // Unmatched, take the rest
 		}
 	}
 
@@ -8749,7 +8716,7 @@ data_filter:
 		}
 
 		// Maps OpenAI -> Result struct so we can handle it
-		resultMapping := ActionResult{}
+		resultMapping = ActionResult{}
 		err = json.Unmarshal(body, &resultMapping)
 		if err != nil {
 			log.Printf("[ERROR] AI Agent (2): Failed unmarshalling response into decisions. Response from sending AI Agent request to %s: %d - '%s'. Err: %s", fullUrl, llmStatusCode, string(body), err)
@@ -8872,7 +8839,7 @@ data_filter:
 			}
 
 			// Parse the outputMap.Result to OpenAI response
-			choicesString := ""
+			// choicesString = "" 
 			bodyMap, ok := outputMap.Body.(map[string]interface{})
 			if !ok {
 				log.Printf("[ERROR][%s] AI Agent: Failed to convert body to MAP in AI Agent response. Raw response: %s", execution.ExecutionId, string(resultMapping.Result))

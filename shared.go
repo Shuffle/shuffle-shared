@@ -37749,13 +37749,32 @@ func GetWorkflowMinimal(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Fetch workflow
-	workflow, err := GetWorkflow(ctx, workflowId)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting workflow %s: %s", workflowId, err)
-		resp.WriteHeader(404)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
-		return
+	// Fetch workflow (try cache first so agent sees its draft)
+	cacheKey := fmt.Sprintf("workflow_ops_cache_%s", workflowId)
+	cachedWorkflow, cacheErr := GetCache(ctx, cacheKey)
+
+	var workflow *Workflow
+	if cacheErr == nil && cachedWorkflow != nil {
+		if byteData, ok := cachedWorkflow.([]byte); ok {
+			workflow = &Workflow{}
+			err := json.Unmarshal(byteData, workflow)
+			if err != nil {
+				log.Printf("[WARNING] Failed unmarshaling cached workflow in GetWorkflowMinimal: %s", err)
+				workflow = nil
+			}
+		}
+	}
+
+	// Fallback to DB if no cache
+	if workflow == nil {
+		var err error
+		workflow, err = GetWorkflow(ctx, workflowId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting workflow %s: %s", workflowId, err)
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+			return
+		}
 	}
 
 	// Permission check: user owns it OR user is in same org
@@ -37985,14 +38004,9 @@ func enrichTriggerFromApp(minTrig *MinimalTrigger, environment string) (Trigger,
 	}
 }
 
-func broadcastToStream(workflowID string, operation WorkflowOperation, userID string, username string, authHeader string) {
-	// Convert SetOps operation to StreamOps format
-	item := "node" // default
-	switch operation.Op {
-	case "add_branch", "edit_branch", "delete_branch":
-		item = "branch"
-	case "add_condition", "edit_condition", "delete_condition":
-		item = "condition"
+func broadcastBatchToStream(wf *Workflow, operations []WorkflowOperation, tempIDMap map[string]string, userID string, username string, authHeader string) {
+	if len(operations) == 0 {
+		return
 	}
 
 	if len(userID) == 0 {
@@ -38002,20 +38016,94 @@ func broadcastToStream(workflowID string, operation WorkflowOperation, userID st
 		username = "agent"
 	}
 
-	streamOp := StreamWorkflowOperation{
-		Item:      item,
-		Type:      operation.Op,
-		ID:        operation.ID,
-		UserID:    userID,
-		Username:  username,
-		Data:      operation.Data,
-		Timestamp: time.Now().UnixMilli(),
+	var streamOps []StreamWorkflowOperation
+
+	for _, operation := range operations {
+		item := "node" // default
+		opType := ""
+		switch operation.Op {
+		case "add_node":
+			item = "node"
+			opType = "add"
+		case "move_node":
+			item = "node"
+			opType = "move"
+		case "edit_node":
+			item = "node"
+			opType = "configure"
+		case "delete_node":
+			item = "node"
+			opType = "remove"
+		case "add_branch":
+			item = "branch"
+			opType = "add"
+		case "edit_branch":
+			item = "branch"
+			opType = "configure"
+		case "delete_branch":
+			item = "branch"
+			opType = "remove"
+		case "save_workflow":
+			item = "workflow"
+			opType = "save"
+		case "set_start_node":
+			item = "workflow"
+			opType = "configure"
+		default:
+			item = "node"
+			opType = operation.Op
+		}
+
+		opID := operation.ID
+		if realID, exists := tempIDMap[operation.ID]; exists {
+			opID = realID
+		} else if realID, exists := tempIDMap[operation.TempID]; exists {
+			opID = realID
+		}
+
+		// Extract the ENRICHED node/branch from the workflow instead of using the Minimal payload
+		// We only need the fully enriched data for CREATING nodes/branches.
+		// For edits or moves, we just pass the partial payload the agent sent so the UI can patch it locally.
+		var enrichedData interface{}
+		if operation.Op == "add_node" {
+			if operation.NodeType == "action" {
+				if idx := findActionIndexByID(wf, opID); idx != -1 {
+					enrichedData = wf.Actions[idx]
+				}
+			} else if operation.NodeType == "trigger" {
+				if idx := findTriggerIndexByID(wf, opID); idx != -1 {
+					enrichedData = wf.Triggers[idx]
+				}
+			}
+		} else if operation.Op == "add_branch" {
+			if idx := findBranchIndexByID(wf, opID); idx != -1 {
+				enrichedData = wf.Branches[idx]
+			}
+		}
+
+		var finalData []byte
+		if enrichedData != nil {
+			finalData, _ = json.Marshal(enrichedData)
+		} else {
+			// Fallback for delete ops where the node is already removed from wf, or if not found
+			finalData = operation.Data
+		}
+
+		streamOps = append(streamOps, StreamWorkflowOperation{
+			Item:      item,
+			Type:      opType,
+			ID:        opID,
+			UserID:    userID,
+			Username:  username,
+			Data:      finalData,
+			Timestamp: time.Now().UnixMilli(),
+		})
 	}
 
-	// Marshal to JSON
-	payload, err := json.Marshal(streamOp)
+	// Marshal to JSON array
+	payload, err := json.Marshal(streamOps)
 	if err != nil {
-		log.Printf("[WARNING] Failed to marshal stream operation for workflow %s: %s", workflowID, err)
+		log.Printf("[WARNING] Failed to marshal stream operations for workflow %s: %s", wf.ID, err)
 		return
 	}
 
@@ -38032,12 +38120,12 @@ func broadcastToStream(workflowID string, operation WorkflowOperation, userID st
 		}
 	}
 
-	streamURL := fmt.Sprintf("%s/api/v1/workflows/%s/stream", baseURL, workflowID)
+	streamURL := fmt.Sprintf("%s/api/v1/workflows/%s/stream", baseURL, wf.ID)
 
 	// Create HTTP POST request
 	req, err := http.NewRequest("POST", streamURL, strings.NewReader(string(payload)))
 	if err != nil {
-		log.Printf("[WARNING] Failed to create stream request for workflow %s: %s", workflowID, err)
+		log.Printf("[WARNING] Failed to create stream request for workflow %s: %s", wf.ID, err)
 		return
 	}
 
@@ -38051,16 +38139,16 @@ func broadcastToStream(workflowID string, operation WorkflowOperation, userID st
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[WARNING] Failed to broadcast to stream for workflow %s: %s", workflowID, err)
+		log.Printf("[WARNING] Failed to broadcast to stream for workflow %s: %s", wf.ID, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	// Log result
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		log.Printf("[DEBUG] Streamed operation %s to workflow %s", operation.Op, workflowID)
+		log.Printf("[DEBUG] Streamed %d operations to workflow %s", len(streamOps), wf.ID)
 	} else {
-		log.Printf("[WARNING] Stream endpoint returned status %d for workflow %s", resp.StatusCode, workflowID)
+		log.Printf("[WARNING] Stream endpoint returned status %d for workflow %s", resp.StatusCode, wf.ID)
 	}
 }
 
@@ -38088,22 +38176,15 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 
 	// Extract workflow ID from URL
 	location := strings.Split(request.URL.String(), "/")
-	var workflowID string
+	var urlWorkflowID string
 	if len(location) > 4 && location[1] == "api" {
-		workflowID = location[4]
-		if strings.Contains(workflowID, "?") {
-			workflowID = strings.Split(workflowID, "?")[0]
+		urlWorkflowID = location[4]
+		if strings.Contains(urlWorkflowID, "?") {
+			urlWorkflowID = strings.Split(urlWorkflowID, "?")[0]
 		}
 	}
 
-	if len(workflowID) != 36 {
-		log.Printf("[WARNING] Invalid workflow ID: %s", workflowID)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Invalid workflow ID"}`))
-		return
-	}
-
-	// Parse request
+	// Parse request first so we can fallback to body's WorkflowID
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Failed reading request body: %s", err)
@@ -38122,8 +38203,21 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	workflowID := urlWorkflowID
+	if len(workflowID) != 36 {
+		// Fallback to body's WorkflowID if URL ID is invalid (e.g., %7Bkey%7D from MCP)
+		if len(setOpsReq.WorkflowID) == 36 {
+			workflowID = setOpsReq.WorkflowID
+		} else {
+			log.Printf("[WARNING] Invalid workflow ID: %s", urlWorkflowID)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Invalid workflow ID"}`))
+			return
+		}
+	}
+
 	// Validate request
-	if setOpsReq.WorkflowID != workflowID {
+	if setOpsReq.WorkflowID != "" && setOpsReq.WorkflowID != workflowID {
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow ID mismatch"}`))
 		return
@@ -38136,7 +38230,7 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Get workflow (from cache or DB)
-	cacheKey := fmt.Sprintf("workflow_ops_cache_%s_%s", workflowID, user.Id)
+	cacheKey := fmt.Sprintf("workflow_ops_cache_%s", workflowID)
 	cachedWorkflow, cacheErr := GetCache(ctx, cacheKey)
 
 	var workflow *Workflow
@@ -38173,7 +38267,14 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 
 	// Apply operations (all-or-nothing) with temp ID mapping
 	tempIDMap := make(map[string]string) // Maps temp_id → real_id
+	shouldSaveDB := false
+
 	for opIndex, operation := range setOpsReq.Operations {
+		if operation.Op == "save_workflow" {
+			shouldSaveDB = true
+			continue
+		}
+
 		err = applyWorkflowOperationWithMapping(ctx, user, workflow, &operation, tempIDMap)
 		if err != nil {
 			errMsg := fmt.Sprintf(`{"success": false, "reason": "Operation %d failed: %s", "failed_at_op": %d}`, opIndex, err.Error(), opIndex)
@@ -38199,6 +38300,16 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 		// Don't fail the request, cache is best-effort
 	}
 
+	if shouldSaveDB {
+		err = SetWorkflow(ctx, *workflow, workflow.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed saving workflow to DB: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to save workflow to database"}`))
+			return
+		}
+	}
+
 	// Build response
 	minWf := buildMinimalWorkflow(workflow)
 	response := WorkflowSetOpsResponse{
@@ -38219,9 +38330,7 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 	// Broadcast operations to stream endpoint (agent gets response immediately, streaming happens in background)
 	// Extract auth header from incoming request to pass to stream endpoint
 	authHeader := request.Header.Get("Authorization")
-	for _, operation := range setOpsReq.Operations {
-		go broadcastToStream(workflowID, operation, user.Id, user.Username, authHeader)
-	}
+	go broadcastBatchToStream(workflow, setOpsReq.Operations, tempIDMap, "agent", "Agent", authHeader)
 
 	if debug{
 		log.Printf("[INFO] Applied %d operations to workflow %s for user %s", len(setOpsReq.Operations), workflowID, user.Username)
@@ -38256,6 +38365,15 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 		return opEditCondition(wf, op)
 	case "delete_condition":
 		return opDeleteCondition(wf, op)
+
+	// ====== WORKFLOW OPERATIONS ======
+	case "set_start_node":
+		if realID, exists := tempIDMap[op.ID]; exists {
+			wf.Start = realID
+		} else {
+			wf.Start = op.ID
+		}
+		return nil
 
 	default:
 		return fmt.Errorf("unknown operation: %s", op.Op)
