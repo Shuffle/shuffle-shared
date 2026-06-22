@@ -18505,6 +18505,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			} else {
 				workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
 			}
+			//			@yashsinghcodes: Something to force the executionVars to update. Not needed rn
+//			for i, executionVariable := range workflowExecution.Workflow.ExecutionVariables {
+//				if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
+//					workflowExecution.Workflow.ExecutionVariables[i] = actionResult.Action.ExecutionVariable
+//					break
+//				}
+//			}
+
 		} else {
 			log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Check previous errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
 		}

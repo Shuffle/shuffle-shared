@@ -2410,7 +2410,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				// Check if key in lastexecVar
 				if _, ok := lastexecVar[result.Action.ExecutionVariable.Name]; ok {
 
-					if lastexecVar[result.Action.ExecutionVariable.Name].CompletedAt > result.CompletedAt {
+					if lastexecVar[result.Action.ExecutionVariable.Name].CompletedAt < result.CompletedAt {
 						lastexecVar[result.Action.ExecutionVariable.Name] = result
 					}
 				} else {
