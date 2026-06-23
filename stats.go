@@ -850,7 +850,9 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	newjson, err := json.Marshal(info)
+	stats := handleGetCorrectedStats(info)
+
+	newjson, err := json.Marshal(stats)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshal in get org stats: %s", err)
 		resp.WriteHeader(500)
@@ -860,6 +862,33 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
+}
+
+// Make sure that we are not calling SetOrgStatistics function after calling this function. This will increase the app runs count in db on every call to this function.
+func handleGetCorrectedStats(info *ExecutionInfo) *ExecutionInfo {
+
+	// 1 Million Input Tokens = 250 app runs
+	// 1 Million Output Tokens = 1500 app runs
+	// 1 SMS = 3 app runs
+	// 1 Email = 2 app runs
+
+	// Loop through the daily statistics and add the app runs from tokens, SMS and email on top of existing counts
+	for i := range info.DailyStatistics {
+		info.DailyStatistics[i].AppExecutions += info.DailyStatistics[i].AgentInputTokens*250/1_000_000 + info.DailyStatistics[i].AgentOutputTokens*1500/1_000_000 + info.DailyStatistics[i].DailySMSUsage*3 + info.DailyStatistics[i].DailyEmailUsage*2
+		info.DailyStatistics[i].ChildAppExecutions += info.DailyStatistics[i].ChildOrgAgentInputTokens*250/1_000_000 + info.DailyStatistics[i].ChildOrgAgentOutputTokens*1500/1_000_000 + info.DailyStatistics[i].DailyChildOrgSMSUsage*3 + info.DailyStatistics[i].DailyChildOrgEmailUsage*2
+	}
+
+	// Add the monthly app runs from SMS, Email, Input Tokens and Output Tokens on top of existing counts
+	info.MonthlyAppExecutions += info.MonthlySMSUsage*3 + info.MonthlyEmailUsage*2 + info.MonthlyAgentInputTokens*250/1_000_000 + info.MonthlyAgentOutputTokens*1500/1_000_000
+	info.MonthlyChildAppExecutions += info.MonthlyChildOrgSMSUsage*3 + info.MonthlyChildOrgEmailUsage*2 + info.MonthlyChildOrgAgentInputTokens*250/1_000_000 + info.MonthlyChildOrgAgentOutputTokens*1500/1_000_000
+
+	info.DailyAppExecutions += info.DailyAgentInputTokens*250/1_000_000 + info.DailyAgentOutputTokens*1500/1_000_000 + info.DailySMSUsage*3 + info.DailyEmailUsage*2
+	info.DailyChildAppExecutions += info.DailyChildOrgAgentInputTokens*250/1_000_000 + info.DailyChildOrgAgentOutputTokens*1500/1_000_000 + info.DailyChildOrgSMSUsage*3 + info.DailyChildOrgEmailUsage*2
+
+	info.TotalAppExecutions += info.TotalAgentInputTokens*250/1_000_000 + info.TotalAgentOutputTokens*1500/1_000_000 + info.TotalSMSUsage*3 + info.TotalEmailUsage*2
+	info.TotalChildAppExecutions += info.TotalChildOrgAgentInputTokens*250/1_000_000 + info.TotalChildOrgAgentOutputTokens*1500/1_000_000 + info.TotalChildOrgSMSUsage*3 + info.TotalChildOrgEmailUsage*2
+
+	return info
 }
 
 func HandleAppendStatistics(resp http.ResponseWriter, request *http.Request) {
@@ -1327,6 +1356,19 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		CloudExecutions:            executionInfo.DailyCloudExecutions,
 		OnpremExecutions:           executionInfo.DailyOnpremExecutions,
 		AIUsage:                    executionInfo.DailyAIUsage,
+		AgentExecutions:            executionInfo.DailyAgentExecutions,
+		AgentTokens:                executionInfo.DailyAgentTokens,
+		AgentInputTokens:           executionInfo.DailyAgentInputTokens,
+		AgentOutputTokens:          executionInfo.DailyAgentOutputTokens,
+		ChildOrgAiUsage:            executionInfo.DailyChildOrgAiUsage,
+		ChildOrgAgentExecutions:    executionInfo.DailyChildOrgAgentExecutions,
+		ChildOrgAgentTokens:        executionInfo.DailyChildOrgAgentTokens,
+		ChildOrgAgentInputTokens:   executionInfo.DailyChildOrgAgentInputTokens,
+		ChildOrgAgentOutputTokens:  executionInfo.DailyChildOrgAgentOutputTokens,
+		DailySMSUsage:              executionInfo.DailySMSUsage,
+		DailyChildOrgSMSUsage:      executionInfo.DailyChildOrgSMSUsage,
+		DailyEmailUsage:            executionInfo.DailyEmailUsage,
+		DailyChildOrgEmailUsage:    executionInfo.DailyChildOrgEmailUsage,
 
 		ApiUsage: executionInfo.DailyApiUsage,
 
@@ -1362,6 +1404,20 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.DailyOnpremExecutions = 0
 	executionInfo.DailyApiUsage = 0
 	executionInfo.DailyAIUsage = 0
+	executionInfo.DailyChildOrgAiUsage = 0
+	executionInfo.DailyAgentExecutions = 0
+	executionInfo.DailyAgentTokens = 0
+	executionInfo.DailyAgentInputTokens = 0
+	executionInfo.DailyAgentOutputTokens = 0
+	executionInfo.DailyChildOrgAiUsage = 0
+	executionInfo.DailyChildOrgAgentExecutions = 0
+	executionInfo.DailyChildOrgAgentTokens = 0
+	executionInfo.DailyChildOrgAgentInputTokens = 0
+	executionInfo.DailyChildOrgAgentOutputTokens = 0
+	executionInfo.DailySMSUsage = 0
+	executionInfo.DailyChildOrgSMSUsage = 0
+	executionInfo.DailyEmailUsage = 0
+	executionInfo.DailyChildOrgEmailUsage = 0
 
 	// Weekly
 	executionInfo.WeeklyAppExecutions = 0
@@ -1404,6 +1460,15 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyAgentTokens = 0
 		executionInfo.MonthlyAgentInputTokens = 0
 		executionInfo.MonthlyAgentOutputTokens = 0
+		executionInfo.MonthlyChildOrgAiUsage = 0
+		executionInfo.MonthlyChildOrgAgentExecutions = 0
+		executionInfo.MonthlyChildOrgAgentTokens = 0
+		executionInfo.MonthlyChildOrgAgentInputTokens = 0
+		executionInfo.MonthlyChildOrgAgentOutputTokens = 0
+		executionInfo.MonthlySMSUsage = 0
+		executionInfo.MonthlyChildOrgSMSUsage = 0
+		executionInfo.MonthlyEmailUsage = 0
+		executionInfo.MonthlyChildOrgEmailUsage = 0
 		executionInfo.LastMonthlyResetMonth = currentMonth
 		executionInfo.LastUsageAlertThreshold = 0
 
@@ -1555,14 +1620,42 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalAgentTokens += int64(increment)
 		orgStatistics.MonthlyAgentTokens += int64(increment)
 		orgStatistics.DailyAgentTokens += int64(increment)
+	} else if dataType == "childorg_agent_tokens" {
+		orgStatistics.TotalChildOrgAgentTokens += int64(increment)
+		orgStatistics.MonthlyChildOrgAgentTokens += int64(increment)
+		orgStatistics.DailyChildOrgAgentTokens += int64(increment)
 	} else if dataType == "agent_input_tokens" {
 		orgStatistics.TotalAgentInputTokens += int64(increment)
 		orgStatistics.MonthlyAgentInputTokens += int64(increment)
 		orgStatistics.DailyAgentInputTokens += int64(increment)
+	} else if dataType == "childorg_agent_input_tokens" {
+		orgStatistics.TotalChildOrgAgentInputTokens += int64(increment)
+		orgStatistics.MonthlyChildOrgAgentInputTokens += int64(increment)
+		orgStatistics.DailyChildOrgAgentInputTokens += int64(increment)
 	} else if dataType == "agent_output_tokens" {
 		orgStatistics.TotalAgentOutputTokens += int64(increment)
 		orgStatistics.MonthlyAgentOutputTokens += int64(increment)
 		orgStatistics.DailyAgentOutputTokens += int64(increment)
+	} else if dataType == "childorg_agent_output_tokens" {
+		orgStatistics.TotalChildOrgAgentOutputTokens += int64(increment)
+		orgStatistics.MonthlyChildOrgAgentOutputTokens += int64(increment)
+		orgStatistics.DailyChildOrgAgentOutputTokens += int64(increment)
+	} else if dataType == "send_sms" {
+		orgStatistics.TotalSMSUsage += int64(increment)
+		orgStatistics.MonthlySMSUsage += int64(increment)
+		orgStatistics.DailySMSUsage += int64(increment)
+	} else if dataType == "childorg_send_sms" {
+		orgStatistics.TotalChildOrgSMSUsage += int64(increment)
+		orgStatistics.MonthlyChildOrgSMSUsage += int64(increment)
+		orgStatistics.DailyChildOrgSMSUsage += int64(increment)
+	} else if dataType == "send_mail" {
+		orgStatistics.TotalEmailUsage += int64(increment)
+		orgStatistics.MonthlyEmailUsage += int64(increment)
+		orgStatistics.DailyEmailUsage += int64(increment)
+	} else if dataType == "childorg_send_mail" {
+		orgStatistics.TotalChildOrgEmailUsage += int64(increment)
+		orgStatistics.MonthlyChildOrgEmailUsage += int64(increment)
+		orgStatistics.DailyChildOrgEmailUsage += int64(increment)
 	} else {
 		//log.Printf("\n\n[ERROR] Unknown data type in stats increment for org %s: %s. Appending to custom list.\n\n", orgStatistics.OrgId, dataType)
 		appendCustom = true
@@ -1687,17 +1780,24 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			AppRunsPercentage := float64(totalAppExecutions) / float64(org.SyncFeatures.AppExecutions.Limit) * 100
 			appRunsUsagePercentageStr := fmt.Sprintf("%d%% of your app runs limit", int64(AppRunsPercentage))
 			Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your tenant %s", appRunsUsagePercentageStr, org.Name)
+			aiTokensUsage := orgStatistics.MonthlyAgentTokens + orgStatistics.MonthlyChildOrgAgentTokens
+			aiTokensUsagePercentage := float64(aiTokensUsage) / float64(org.SyncFeatures.AgentTokens.Limit) * 100
 
+			aiTokensLimit := org.SyncFeatures.AgentTokens.Limit
+			if aiTokensLimit == 0 {
+				aiTokensLimit = 10000000
+			}
 			substitutions := map[string]interface{}{
-				"app_runs_usage":            totalAppExecutions,
-				"app_runs_limit":            org.SyncFeatures.AppExecutions.Limit,
-				"subject_string":            appRunsUsagePercentageStr,
-				"ai_tokens_usage":           orgStatistics.MonthlyAgentTokens,
-				"ai_tokens_limit":           org.SyncFeatures.AgentTokens.Limit,
-				"org_name":                  org.Name,
-				"org_id":                    org.Id,
-				"admin_email":               org.Name,
-				"app_runs_usage_percentage": int64(AppRunsPercentage),
+				"app_runs_usage":             totalAppExecutions,
+				"app_runs_limit":             org.SyncFeatures.AppExecutions.Limit,
+				"subject_string":             appRunsUsagePercentageStr,
+				"ai_tokens_usage":            aiTokensUsage,
+				"ai_tokens_limit":            aiTokensLimit,
+				"org_name":                   org.Name,
+				"org_id":                     org.Id,
+				"admin_email":                org.Name,
+				"app_runs_usage_percentage":  int64(AppRunsPercentage),
+				"ai_tokens_usage_percentage": int64(aiTokensUsagePercentage),
 			}
 
 			err = sendMailSendgridV2(

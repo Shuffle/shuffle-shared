@@ -7196,26 +7196,34 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 	appRunsLimit := int64(0)
 	orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
 	if statsErr == nil && orgStats != nil {
-		totalAppExecutions = orgStats.MonthlyAppExecutions + orgStats.MonthlyChildAppExecutions
+		stats := handleGetCorrectedStats(orgStats)
+		totalAppExecutions = stats.MonthlyAppExecutions + stats.MonthlyChildAppExecutions
 	}
 	if fullOrg != nil {
 		appRunsLimit = fullOrg.SyncFeatures.AppExecutions.Limit
 	}
 
+	appRunsUsagePercentage := float64(totalAppExecutions) / float64(appRunsLimit) * 100
 	subjectLine := fmt.Sprintf("%d%% of your AI token limit", int64(aiPercentage))
 	Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your tenant %s", subjectLine, orgName)
 	AiRecommendation := "Tip: <a href=\"https://shuffler.io/admin?tab=app_auth\" style=\"color: #FF8444; text-decoration: none; font-weight: bold;\">Connect your own AI provider app</a> to use your own keys and bypass the AI token limit entirely."
+
+	if tokenLimit == 0 {
+		tokenLimit = 10000000
+	}
+
 	substitutions := map[string]interface{}{
-		"app_runs_usage":            totalAppExecutions,
-		"app_runs_limit":            appRunsLimit,
-		"subject_string":            subjectLine,
-		"ai_tokens_usage":           monthlyTokensUsed,
-		"ai_tokens_limit":           tokenLimit,
-		"org_name":                  orgName,
-		"org_id":                    billingOrgId,
-		"admin_email":               orgName,
-		"app_runs_usage_percentage": int64(aiPercentage),
-		"ai_recommendation":         AiRecommendation,
+		"app_runs_usage":             totalAppExecutions,
+		"app_runs_limit":             appRunsLimit,
+		"subject_string":             subjectLine,
+		"ai_tokens_usage":            monthlyTokensUsed,
+		"ai_tokens_limit":            tokenLimit,
+		"org_name":                   orgName,
+		"org_id":                     billingOrgId,
+		"admin_email":                orgName,
+		"app_runs_usage_percentage":  int64(appRunsUsagePercentage),
+		"ai_tokens_usage_percentage": int64(aiPercentage),
+		"ai_recommendation":          AiRecommendation,
 	}
 
 	err := sendMailSendgridV2(
@@ -8550,7 +8558,7 @@ data_filter:
 		orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
 		monthlyTokensUsed := int64(0)
 		if statsErr == nil && orgStats != nil {
-			monthlyTokensUsed = orgStats.MonthlyAgentTokens
+			monthlyTokensUsed = orgStats.MonthlyAgentTokens + orgStats.MonthlyChildOrgAgentTokens
 		}
 
 		tokenLimit := int64(0)
@@ -8933,7 +8941,6 @@ data_filter:
 					outputTokens := int(openaiOutput.Usage.CompletionTokens)
 					totalTokens := int(openaiOutput.Usage.TotalTokens)
 
-					subOrgId := execution.Workflow.OrgId
 					go func() {
 						time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
 						IncrementCacheDump(ctx, billingOrgId, "agent_tokens", totalTokens)
@@ -8942,16 +8949,6 @@ data_filter:
 						}
 						if outputTokens > 0 {
 							IncrementCache(ctx, billingOrgId, "agent_output_tokens", outputTokens)
-						}
-
-						if billingOrgId != subOrgId {
-							IncrementCache(ctx, subOrgId, "agent_tokens", totalTokens)
-							if inputTokens > 0 {
-								IncrementCache(ctx, subOrgId, "agent_input_tokens", inputTokens)
-							}
-							if outputTokens > 0 {
-								IncrementCache(ctx, subOrgId, "agent_output_tokens", outputTokens)
-							}
 						}
 					}()
 					log.Printf("[AUDIT][%s] Incremented AI Agent usage for billing_org=%s exec_org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
