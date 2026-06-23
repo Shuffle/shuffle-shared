@@ -37535,7 +37535,9 @@ func GetOrgAppsSummary(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[DEBUG] Returning %d apps for agent (user: %s, org: %s)", len(appSummaries), user.Username, user.ActiveOrg.Id)
+	if debug {
+		log.Printf("[DEBUG] Returning %d apps for agent (user: %s, org: %s)", len(appSummaries), user.Username, user.ActiveOrg.Id)
+	}
 
 	// Marshal to JSON
 	responseData, err := json.Marshal(appSummaries)
