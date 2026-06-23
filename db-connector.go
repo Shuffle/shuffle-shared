@@ -2410,7 +2410,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				// Check if key in lastexecVar
 				if _, ok := lastexecVar[result.Action.ExecutionVariable.Name]; ok {
 
-					if lastexecVar[result.Action.ExecutionVariable.Name].CompletedAt > result.CompletedAt {
+					if lastexecVar[result.Action.ExecutionVariable.Name].CompletedAt < result.CompletedAt {
 						lastexecVar[result.Action.ExecutionVariable.Name] = result
 					}
 				} else {
@@ -11581,6 +11581,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			"sort": map[string]interface{}{
 				"updated_at": map[string]interface{}{
 					"order": "desc",
+					"unmapped_type": "long",
 				},
 			},
 			"query": map[string]interface{}{
@@ -14926,7 +14927,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 		if len(cacheData.Category) == 0 || len(cacheData.OrgId) == 0 {
 			if debug {
-				log.Printf("[DEBUG] No category/orgid. Continue")
+				log.Printf("[DEBUG] ERROR: No category/orgid for key '%s'. Continue", cacheData.Key)
 			}
 			continue
 		}

@@ -4894,33 +4894,61 @@ type MinimalParameter struct {
 	Value string `json:"value"`
 }
 
+// MinimalAction - action with position and basic info
 type MinimalAction struct {
 	AppName    string             `json:"app_name"`
+	AppID      string             `json:"app_id"`
 	ID         string             `json:"id"`
 	Label      string             `json:"label"`
 	Name       string             `json:"action_name"`
 	Parameters []MinimalParameter `json:"parameters"`
 	Errors     []string           `json:"errors,omitempty"`
+	X          int64              `json:"x"`
+	Y          int64              `json:"y"`
+	IsStart    bool               `json:"is_start"`
 }
 
+// MinimalTrigger - trigger with position and basic info
 type MinimalTrigger struct {
+	ID         string             `json:"id"`
 	AppName    string             `json:"app_name"`
 	Label      string             `json:"label"`
 	Parameters []MinimalParameter `json:"parameters"`
+	X          int64              `json:"x"`
+	Y          int64              `json:"y"`
+	IsStart    bool               `json:"is_start"`
 }
 
+// MinimalBranch - branch connecting nodes
 type MinimalBranch struct {
-	ID            string `json:"id"`
-	SourceID      string `json:"source_id"`
-	DestinationID string `json:"destination_id"`
+	ID            string             `json:"id"`
+	SourceID      string             `json:"source_id"`
+	DestinationID string             `json:"destination_id"`
+	Label         string             `json:"label"`
+	Conditions    []MinimalCondition `json:"conditions,omitempty"`
 }
 
-// MinimalWorkflow gathers only the minimal slices.
+// MinimalCondition - condition with minimal parameters
+type MinimalCondition struct {
+	Source      MinimalConditionParam `json:"source"`
+	Condition   MinimalConditionParam `json:"condition"`
+	Destination MinimalConditionParam `json:"destination"`
+}
+
+// MinimalConditionParam - minimal parameter for conditions (id, name, value only)
+type MinimalConditionParam struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// MinimalWorkflow - minimal workflow structure with node positions and connections
 type MinimalWorkflow struct {
-	Actions  []MinimalAction  `json:"actions"`
-	Branches []MinimalBranch  `json:"branches"`
-	Triggers []MinimalTrigger `json:"triggers"`
-	Errors   []string         `json:"errors,omitempty"`
+	Actions         []MinimalAction  `json:"actions"`
+	Branches        []MinimalBranch  `json:"branches"`
+	Triggers        []MinimalTrigger `json:"triggers"`
+	Errors          []string         `json:"errors,omitempty"`
+	StartTriggerID  string           `json:"start_trigger_id,omitempty"`
 }
 
 type NGramItem struct {
@@ -5671,4 +5699,65 @@ type RemoteControl struct{
 
 type RemoteControlActionBatch struct {
 	Actions []RemoteControl `json:"actions"`
+}
+
+// AppSummary - Lightweight app info for AI agents (name + description + id)
+type AppSummary struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ID          string `json:"id"`
+}
+
+// ActionParameter - minimal action parameter info
+type ActionParameter struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+}
+
+// ActionSummary - minimal action info for AI agents
+type ActionSummary struct {
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Parameters  []ActionParameter  `json:"parameters"`
+}
+
+// AppActionResponse - actions grouped by app
+type AppActionResponse struct {
+	AppName string           `json:"app_name"`
+	AppID   string           `json:"app_id"`
+	Actions []ActionSummary  `json:"actions"`
+}
+
+
+// WorkflowOperation represents a single modification operation
+type WorkflowOperation struct {
+	Op             string          `json:"op"`                        // "add_node", "edit_node", "move_node", "delete_node", "add_branch", "edit_branch", "delete_branch", "add_condition", "edit_condition", "delete_condition"
+	NodeType       string          `json:"node_type,omitempty"`       // "action" or "trigger" (for node ops)
+	ID             string          `json:"id,omitempty"`              // Target ID for edit/delete/move ops OR real ID after creation
+	TempID         string          `json:"temp_id,omitempty"`         // Temporary ID provided by agent (for batch ops to reference new nodes)
+	BranchID       string          `json:"branch_id,omitempty"`       // For condition ops
+	ConditionIndex int             `json:"condition_index,omitempty"` // For edit/delete condition
+	InsertBefore   string          `json:"insert_before,omitempty"`   // Insert before this node ID
+	InsertAfter    string          `json:"insert_after,omitempty"`    // Insert after this node ID
+	Data           json.RawMessage `json:"data"`                      // MinimalAction, MinimalBranch, MinimalCondition, or position data
+}
+
+// WorkflowSetOpsRequest is the agent request to modify a workflow
+type WorkflowSetOpsRequest struct {
+	WorkflowID string              `json:"workflow_id"`
+	Operations []WorkflowOperation `json:"operations"`
+}
+
+// WorkflowSetOpsResponse returns the updated state
+type WorkflowSetOpsResponse struct {
+	Success           bool              `json:"success"`
+	WorkflowID        string            `json:"workflow_id"`
+	Message           string            `json:"message"`
+	OperationsApplied int               `json:"operations_applied"`
+	Workflow          *MinimalWorkflow  `json:"workflow"`
+	IDMapping         map[string]string `json:"id_mapping,omitempty"` // Maps temp_id → real_id for new nodes
+	CacheExpiresIn    int               `json:"cache_expires_in"`     // seconds
+	Error             string            `json:"error,omitempty"`
+	FailedAtOp        int               `json:"failed_at_op,omitempty"`
 }
