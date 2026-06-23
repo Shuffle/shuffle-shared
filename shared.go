@@ -37996,7 +37996,18 @@ CRITICAL RULES FOR THE AGENT
 
 	// Call /api/v1/agent directly
 	backendUrl := os.Getenv("BASE_URL")
-
+	if len(backendUrl) == 0 {
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		} else {
+			port := os.Getenv("PORT")
+			if len(port) == 0 {
+				port = "5001"
+			}
+			backendUrl = fmt.Sprintf("http://localhost:%s", port)
+		}
+	}
+	
 	agentReq, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/agent", backendUrl), strings.NewReader(string(mcpBody)))
 	if err != nil {
 		log.Printf("[ERROR] Failed creating agent request in AgentWorkflowEditor: %s", err)
