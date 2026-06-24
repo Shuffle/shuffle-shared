@@ -408,6 +408,20 @@ type DailyStatistics struct {
 	CloudExecutions            int64 `json:"cloud_executions" datastore:"cloud_executions"`
 	OnpremExecutions           int64 `json:"onprem_executions" datastore:"onprem_executions"`
 	AIUsage                    int64 `json:"ai_executions" datastore:"ai_executions"`
+	AgentExecutions            int64 `json:"agent_executions" datastore:"agent_executions"`
+	AgentTokens                int64 `json:"agent_tokens" datastore:"agent_tokens"`
+	AgentInputTokens           int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
+	AgentOutputTokens          int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
+	ChildOrgAiUsage            int64 `json:"child_org_ai_usage" datastore:"child_org_ai_usage"`
+	ChildOrgAgentExecutions    int64 `json:"child_org_agent_executions" datastore:"child_org_agent_executions"`
+	ChildOrgAgentTokens        int64 `json:"child_org_agent_tokens" datastore:"child_org_agent_tokens"`
+	ChildOrgAgentInputTokens   int64 `json:"child_org_agent_input_tokens" datastore:"child_org_agent_input_tokens"`
+	ChildOrgAgentOutputTokens  int64 `json:"child_org_agent_output_tokens" datastore:"child_org_agent_output_tokens"`
+
+	DailySMSUsage           int64 `json:"daily_sms_usage" datastore:"daily_sms_usage"`
+	DailyChildOrgSMSUsage   int64 `json:"daily_child_org_sms_usage" datastore:"daily_child_org_sms_usage"`
+	DailyEmailUsage         int64 `json:"daily_email_usage" datastore:"daily_email_usage"`
+	DailyChildOrgEmailUsage int64 `json:"daily_child_org_email_usage" datastore:"daily_child_org_email_usage"`
 
 	ApiUsage int64      `json:"api_usage" datastore:"api_usage"`
 	AppUsage []AppUsage `json:"app_usage" datastore:"app_usage"`
@@ -442,7 +456,16 @@ type ExecutionInfo struct {
 	TotalAgentTokens                int64 `json:"total_agent_tokens" datastore:"total_agent_tokens"`
 	TotalAgentInputTokens           int64 `json:"total_agent_input_tokens" datastore:"total_agent_input_tokens"`
 	TotalAgentOutputTokens          int64 `json:"total_agent_output_tokens" datastore:"total_agent_output_tokens"`
+	TotalChildOrgAiUsage            int64 `json:"total_child_org_ai_usage" datastore:"total_child_org_ai_usage"`
+	TotalChildOrgAgentExecutions    int64 `json:"total_child_org_agent_executions" datastore:"total_child_org_agent_executions"`
+	TotalChildOrgAgentTokens        int64 `json:"total_child_org_agent_tokens" datastore:"total_child_org_agent_tokens"`
+	TotalChildOrgAgentInputTokens   int64 `json:"total_child_org_agent_input_tokens" datastore:"total_child_org_agent_input_tokens"`
+	TotalChildOrgAgentOutputTokens  int64 `json:"total_child_org_agent_output_tokens" datastore:"total_child_org_agent_output_tokens"`
 	TotalChildWorkflowExecutions    int64 `json:"total_child_workflow_executions" datastore:"total_child_workflow_executions"`
+	TotalSMSUsage                   int64 `json:"total_sms_usage" datastore:"total_sms_usage"`
+	TotalChildOrgSMSUsage           int64 `json:"total_child_org_sms_usage" datastore:"total_child_org_sms_usage"`
+	TotalEmailUsage                 int64 `json:"total_email_usage" datastore:"total_email_usage"`
+	TotalChildOrgEmailUsage         int64 `json:"total_child_org_email_usage" datastore:"total_child_org_email_usage"`
 
 	MonthlyApiUsage                   int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
 	MonthlyChildAppExecutions         int64 `json:"monthly_child_app_executions,omitempty" datastore:"monthly_child_app_executions"`
@@ -461,6 +484,15 @@ type ExecutionInfo struct {
 	MonthlyAgentTokens                int64 `json:"monthly_agent_tokens,omitempty" datastore:"monthly_agent_tokens"`
 	MonthlyAgentInputTokens           int64 `json:"monthly_agent_input_tokens,omitempty" datastore:"monthly_agent_input_tokens"`
 	MonthlyAgentOutputTokens          int64 `json:"monthly_agent_output_tokens,omitempty" datastore:"monthly_agent_output_tokens"`
+	MonthlyChildOrgAiUsage            int64 `json:"monthly_child_org_ai_usage,omitempty" datastore:"monthly_child_org_ai_usage"`
+	MonthlyChildOrgAgentExecutions    int64 `json:"monthly_child_org_agent_executions,omitempty" datastore:"monthly_child_org_agent_executions"`
+	MonthlyChildOrgAgentTokens        int64 `json:"monthly_child_org_agent_tokens,omitempty" datastore:"monthly_child_org_agent_tokens"`
+	MonthlyChildOrgAgentInputTokens   int64 `json:"monthly_child_org_agent_input_tokens,omitempty" datastore:"monthly_child_org_agent_input_tokens"`
+	MonthlyChildOrgAgentOutputTokens  int64 `json:"monthly_child_org_agent_output_tokens,omitempty" datastore:"monthly_child_org_agent_output_tokens"`
+	MonthlySMSUsage                   int64 `json:"monthly_sms_usage,omitempty" datastore:"monthly_sms_usage"`
+	MonthlyChildOrgSMSUsage           int64 `json:"monthly_child_org_sms_usage,omitempty" datastore:"monthly_child_org_sms_usage"`
+	MonthlyEmailUsage                 int64 `json:"monthly_email_usage,omitempty" datastore:"monthly_email_usage"`
+	MonthlyChildOrgEmailUsage         int64 `json:"monthly_child_org_email_usage,omitempty" datastore:"monthly_child_org_email_usage"`
 
 	WeeklyAppExecutions              int64 `json:"weekly_app_executions,omitempty" datastore:"weekly_app_executions"`
 	WeeklyChildAppExecutions         int64 `json:"weekly_child_app_executions,omitempty" datastore:"weekly_child_app_executions"`
@@ -491,6 +523,15 @@ type ExecutionInfo struct {
 	DailyAgentTokens                int64 `json:"daily_agent_tokens" datastore:"daily_agent_tokens"`
 	DailyAgentInputTokens           int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
 	DailyAgentOutputTokens          int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`
+	DailyChildOrgAiUsage            int64 `json:"daily_child_org_ai_usage" datastore:"daily_child_org_ai_usage"`
+	DailyChildOrgAgentExecutions    int64 `json:"daily_child_org_agent_executions" datastore:"daily_child_org_agent_executions"`
+	DailyChildOrgAgentTokens        int64 `json:"daily_child_org_agent_tokens" datastore:"daily_child_org_agent_tokens"`
+	DailyChildOrgAgentInputTokens   int64 `json:"daily_child_org_agent_input_tokens" datastore:"daily_child_org_agent_input_tokens"`
+	DailyChildOrgAgentOutputTokens  int64 `json:"daily_child_org_agent_output_tokens" datastore:"daily_child_org_agent_output_tokens"`
+	DailySMSUsage                   int64 `json:"daily_sms_usage" datastore:"daily_sms_usage"`
+	DailyChildOrgSMSUsage           int64 `json:"daily_child_org_sms_usage" datastore:"daily_child_org_sms_usage"`
+	DailyEmailUsage                 int64 `json:"daily_email_usage" datastore:"daily_email_usage"`
+	DailyChildOrgEmailUsage         int64 `json:"daily_child_org_email_usage" datastore:"daily_child_org_email_usage"`
 
 	HourlyAppExecutions              int64 `json:"hourly_app_executions,omitempty" datastore:"hourly_app_executions"`
 	HourlyChildAppExecutions         int64 `json:"hourly_child_app_executions,omitempty" datastore:"hourly_child_app_executions"`

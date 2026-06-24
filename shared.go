@@ -14048,6 +14048,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			org.SyncFeatures.AppExecutions.Limit = 300000
 			org.SyncFeatures.MultiEnv.Limit = 250
 			org.SyncFeatures.MultiTenant.Limit = 1000
+			org.SyncFeatures.SendSms.Limit = 10000
+			org.SyncFeatures.SendMail.Limit = 10000
+			org.SyncFeatures.SendSms.Active = true
+			org.SyncFeatures.SendMail.Active = true
 			log.Printf("[INFO] Set limits to 300000 app runs / 250 envs / 1000 tenants for org %s (enterprise/business)", org.Id)
 		} else if newLeadinfo.POV {
 			org.SyncFeatures.AppExecutions.Limit = 10000

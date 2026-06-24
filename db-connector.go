@@ -1346,6 +1346,46 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		}
 	}
 
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_agent_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_input_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_agent_input_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_output_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_agent_output_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "send_sms") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_send_sms", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "send_mail") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_send_mail", int(dbDumpInterval))
+			}
+		}
+	}
+
 	concurrentTxn := false
 	errMsg := ""
 
