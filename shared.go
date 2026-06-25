@@ -26320,6 +26320,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 				// Handles agentic run continues
 				// This is if shuffler.io/agents  => questions are answered
+				// Only process decision injection for the specific action result we are targeting
+				if result.Action.ID != start[0] {
+					continue
+				}
+
 				if agentic {
 					log.Printf("[INFO][%s] Should fix the decision by injecting the values and continuing to the next step! :3", oldExecution.ExecutionId)
 
@@ -38301,6 +38306,51 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if shouldSaveDB {
+		env := workflow.ExecutionEnvironment
+		if len(env) == 0 {
+			env = "Shuffle"
+		}
+		for i := range workflow.Actions {
+			if len(workflow.Actions[i].Environment) == 0 {
+				workflow.Actions[i].Environment = env
+			}
+		}
+		for i := range workflow.Triggers {
+			if len(workflow.Triggers[i].Environment) == 0 {
+				workflow.Triggers[i].Environment = env
+			}
+		}
+
+		allAuths, authErr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+		if authErr != nil {
+			log.Printf("[WARNING] Could not load org auths for auto-hydration during save: %s", authErr)
+		} else {
+			for i := range workflow.Actions {
+				if workflow.Actions[i].AuthenticationId != "" {
+					continue // already has auth, skip
+				}
+				appID := workflow.Actions[i].AppID
+				appName := workflow.Actions[i].AppName
+
+				var bestAuth *AppAuthenticationStorage
+				var bestEdited int64 = -1
+				for j := range allAuths {
+					a := &allAuths[j]
+					if a.App.ID != appID && !strings.EqualFold(a.App.Name, appName) {
+						continue
+					}
+					if a.Edited > bestEdited {
+						bestEdited = a.Edited
+						bestAuth = a
+					}
+				}
+				if bestAuth != nil {
+					workflow.Actions[i].AuthenticationId = bestAuth.Id
+					//log.Printf("[INFO] Auto-assigned auth %s (%s) to action %s (%s)", bestAuth.Label, bestAuth.Id, workflow.Actions[i].Label, appName)
+				}
+			}
+		}
+
 		err = SetWorkflow(ctx, *workflow, workflow.ID)
 		if err != nil {
 			log.Printf("[ERROR] Failed saving workflow to DB: %s", err)
@@ -38445,7 +38495,15 @@ func opAddNode(ctx context.Context, user User, wf *Workflow, op *WorkflowOperati
 		// 	}
 		// }
 
-		// Should we let the agent specify the position? If not, can we auto-calculate based on existing nodes ??
+		// If the agent didn't specify a position (0,0), auto-layout to prevent stacking
+		if minAct.X == 0 && minAct.Y == 0 {
+			startX := -312.0
+			y := 190.0
+			xSpacing := 437.0
+			minAct.X = int64(startX + float64(len(wf.Triggers)+len(wf.Actions))*xSpacing)
+			minAct.Y = int64(y)
+		}
+
 		newAction.Position = Position{
 			X: float64(minAct.X),
 			Y: float64(minAct.Y),
@@ -38662,7 +38720,7 @@ func opMoveNode(wf *Workflow, op *WorkflowOperation) error {
 		return nil
 	}
 
-	return fmt.Errorf("node %s not found in workflow (not an action or trigger)", op.ID)
+	return fmt.Errorf("node %s not found in workflow (not an action or trigger) for move", op.ID)
 }
 
 func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
@@ -38670,7 +38728,12 @@ func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
 	case "action":
 		idx := findActionIndexByID(wf, op.ID)
 		if idx == -1 {
-			return fmt.Errorf("action %s not found", op.ID)
+			// Already gone, idempotent no-op (e.g. cascade from a prior delete)
+			if debug {
+				log.Printf("[DEBUG] delete_node(action): action %s not found, already removed - skipping", op.ID)
+			}
+			
+			return nil
 		}
 
 		// Remove action
@@ -38688,7 +38751,11 @@ func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
 	case "trigger":
 		idx := findTriggerIndexByID(wf, op.ID)
 		if idx == -1 {
-			return fmt.Errorf("trigger %s not found", op.ID)
+			// Already gone idempotent no-op
+			if debug {
+				log.Printf("[DEBUG] delete_node(trigger): trigger %s not found, already removed - skipping", op.ID)
+			}
+			return nil
 		}
 
 		wf.Triggers = append(wf.Triggers[:idx], wf.Triggers[idx+1:]...)
@@ -38733,7 +38800,23 @@ func opAddBranchWithMapping(wf *Workflow, op *WorkflowOperation, tempIDMap map[s
 	resolvedData, _ := json.Marshal(branchData)
 	op.Data = resolvedData
 
-	return opAddBranch(wf, op)
+	err := opAddBranch(wf, op)
+	if err != nil {
+		return err
+	}
+
+	// Map the newly generated branch ID back to the agent's temp IDs
+	if len(wf.Branches) > 0 {
+		realID := wf.Branches[len(wf.Branches)-1].ID
+		if len(op.TempID) > 0 {
+			tempIDMap[op.TempID] = realID
+		}
+		if len(op.ID) > 0 {
+			tempIDMap[op.ID] = realID
+		}
+	}
+
+	return nil
 }
 
 func opAddBranch(wf *Workflow, op *WorkflowOperation) error {
@@ -38803,7 +38886,13 @@ func opDeleteBranch(wf *Workflow, op *WorkflowOperation) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("branch %s not found", op.ID)
+	// Branch not found - this is OK if it was already removed as a consequence of
+	// a previous delete_node op. Treat as a no-op so the agent doesn't retry.
+	if debug {
+		log.Printf("[DEBUG] delete_branch: branch %s not found, already removed (likely cascade from delete_node) - skipping", op.ID)
+	}
+	
+	return nil
 }
 
 
