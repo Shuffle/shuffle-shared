@@ -18505,6 +18505,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			} else {
 				workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
 			}
+			//			@yashsinghcodes: Something to force the executionVars to update. Not needed rn
+//			for i, executionVariable := range workflowExecution.Workflow.ExecutionVariables {
+//				if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
+//					workflowExecution.Workflow.ExecutionVariables[i] = actionResult.Action.ExecutionVariable
+//					break
+//				}
+//			}
+
 		} else {
 			log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Check previous errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
 		}
@@ -37470,28 +37478,12 @@ func ListProcesses() ([]ProcessInfo, error) {
 	}
 }
 
-func GetWorkflowAppsSummary(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	ctx := GetContext(request)
-	user, userErr := HandleApiAuthentication(resp, request)
-	if userErr != nil {
-		log.Printf("[WARNING] Api authentication failed in GetWorkflowAppsSummary: %s", userErr)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
+func getOrgAppSummaries(ctx context.Context, user User) ([]AppSummary, error) {
 	// Get prioritized apps
 	apps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting apps for agent: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		return nil, err
 	}
 
 	// Build summary list - name + description only
@@ -37522,7 +37514,35 @@ func GetWorkflowAppsSummary(resp http.ResponseWriter, request *http.Request) {
 		count++
 	}
 
-	log.Printf("[DEBUG] Returning %d apps for agent (user: %s, org: %s)", count, user.Username, user.ActiveOrg.Id)
+	return appSummaries, nil
+}
+
+func GetOrgAppsSummary(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in GetOrgAppsSummary: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	appSummaries, err := getOrgAppSummaries(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting apps for agent: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if debug {
+		log.Printf("[DEBUG] Returning %d apps for agent (user: %s, org: %s)", len(appSummaries), user.Username, user.ActiveOrg.Id)
+	}
 
 	// Marshal to JSON
 	responseData, err := json.Marshal(appSummaries)
@@ -37815,6 +37835,240 @@ func GetWorkflowMinimal(resp http.ResponseWriter, request *http.Request) {
 	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(200)
 	resp.Write(responseData)
+}
+
+func AgentWorkflowEditor(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in AgentWorkflowEditor: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed reading body in AgentWorkflowEditor: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type agentContextRequest struct {
+		Input      string `json:"input"`
+		WorkflowId string `json:"workflow_id"`
+	}
+
+	var req agentContextRequest
+	err = json.Unmarshal(body, &req)
+	if err != nil || len(strings.TrimSpace(req.Input)) == 0 {
+		log.Printf("[WARNING] Bad body in AgentWorkflowEditor: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "input field is required"}`))
+		return
+	}
+
+	// Get org apps summary
+	appSummaries, err := getOrgAppSummaries(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting apps in AgentWorkflowEditor for user %s: %s", user.Username, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Build system prompt with apps context
+	appsJson, _ := json.Marshal(appSummaries)
+
+	systemPrompt := fmt.Sprintf(`You are an autonomous workflow-building agent. You build or edit workflows that will eventually automates the task. Only use the special actions build for you, like get_minimal_workflow, agent_update are the ones you have to use.
+
+The workflow you are currently working on has the ID: %s — always use this as the "workflow_id" in every payload you send.
+
+Only ask the user for information when it is genuinely unavailable through any allowed action.
+
+Payload Structure
+
+Send your incremental steps in the operations array. You can send one operation at a time, or multiple if you are building a connected sequence.
+{
+"workflow_id": "%s",
+"operations": [ ...array of step-by-step operations... ] // api just supports bulk operations but its optional, just mention 1 op at a time in the array
+}
+
+Supported Step-by-Step Operations
+
+A workflow has two types of nodes: Actions and Triggers. If you need a trigger, you use either Webhook or Schedule. Keep in mind that there is no rigid rule that triggers must exists everytime. Only use trigger if the workflow solution you are building really needs it.
+
+Format: Webhook Trigger
+
+{
+"op": "add_node",
+"node_type": "trigger",
+"temp_id": "<your_temp_id>",
+"data": {
+"app_name": "Webhook",
+"label": "<unique_node_name>",
+"x": 100,
+"y": 100
+}
+}
+
+Format: Schedule Trigger
+
+{
+"op": "add_node",
+"node_type": "trigger",
+"temp_id": "<your_temp_id>",
+"data": {
+"app_name": "Schedule",
+"label": "<unique_node_name>",
+"parameters": [
+{ "name": "cron", "value": "*/15 * * * *" }
+],
+"x": 100,
+"y": 100
+}
+}
+
+1. ADDING A NODE (Action)
+{
+"op": "add_node",
+"node_type": "action",
+"temp_id": "a_temp_id_string",
+"data": {
+"app_id": "<id of the app>",
+"action_name": "<name of action to use, or custom_action>",
+"label": "Authenticate User",
+"parameters": [
+{ "name": "param_1", "value": "some_value" }
+],
+"x": 100,
+"y": 100
+}
+}
+Note: You can vertically position the node between existing ones by adding "insert_before": "<node_id>" or "insert_after": "<node_id>" alongside the data field.
+2. CONNECTING NODES (Adding a Branch)
+Connect your nodes using their real IDs (if they already exist) or the temp_id you assigned when creating them in the same payload.
+{
+"op": "add_branch",
+"data": {
+"source_id": "<real_node_id or temp_id>",
+"destination_id": "<real_node_id or temp_id>"
+}
+}
+3. EDITING A NODE
+Only provide the fields you actually want to change.
+{
+"op": "edit_node",
+"id": "<real_node_id>",
+"data": {
+"label": "New Name",
+"parameters": [
+{ "name": "param_1", "value": "new_value" }
+]
+}
+}
+4. DELETING OR MOVING
+{ "op": "delete_node", "node_type": "action", "id": "<real_node_id>" }
+{ "op": "delete_branch", "id": "<real_branch_id>" }
+{ "op": "move_node", "id": "<real_node_id>", "data": { "x": 250, "y": 300 } }
+5. SETTING THE START NODE
+Defines the entry point of the workflow. You can use a real ID or a temp_id from the same payload.
+{
+"op": "set_start_node",
+"id": "<real_node_id or temp_id>"
+}
+6. SAVING THE WORKFLOW
+Your edits are stored as a real-time draft. When you are completely finished building or modifying the workflow, you MUST append this operation to your final payload to permanently save the workflow to the database. Make sure you do this after fully finishing all the changes you want to do to the workflow, but don't forget to call it.
+{
+"op": "save_workflow"
+}
+
+To use data from another node, reference its label.
+
+CRITICAL RULES FOR THE AGENT
+
+1. Handling Errors: If you make a mistake, the API will reject your request and tell you EXACTLY which operation failed and why (e.g., Operation 1 failed: app_id is required). Read this error carefully, fix the specific missing or incorrect parameter, and try again.
+2. Special actions are built exculsively for you. get_minimal_workflow is enough to the info about how the workflow is structured and generally there is no need of other meta data info of the worklfow as often times its not that useful. agent_update is another beautiful action that do a lot of heavy lifting for you.
+3. Try not to use parallel decision calling as much as possible; always do sequential tool calls.
+
+<Start of App/Actions Context>
+%s
+<End of App/Actions Context>
+
+<Start of User Request>
+%s
+<End of User Request>`, req.WorkflowId, req.WorkflowId, string(appsJson), req.Input)
+
+	// Build MCPRequest with the full system prompt as input
+	mcpReq := MCPRequest{}
+	mcpReq.Jsonrpc = "2.0"
+	mcpReq.Method = "tools/call"
+	mcpReq.Params.ToolName = "app:9f05339c05f9aaca4eeb35e6f13e41e6:shuffles_app_management,app:b598b078fd5c531699fca803c172ce72:shuffle_workflows"
+	mcpReq.Params.Input.Text = systemPrompt
+
+	mcpBody, err := json.Marshal(mcpReq)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling MCPRequest in AgentWorkflowEditor: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Call /api/v1/agent directly
+	backendUrl := os.Getenv("BASE_URL")
+	if len(backendUrl) == 0 {
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		} else {
+			port := os.Getenv("PORT")
+			if len(port) == 0 {
+				port = "5001"
+			}
+			backendUrl = fmt.Sprintf("http://localhost:%s", port)
+		}
+	}
+	
+	agentReq, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/agent", backendUrl), strings.NewReader(string(mcpBody)))
+	if err != nil {
+		log.Printf("[ERROR] Failed creating agent request in AgentWorkflowEditor: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	agentReq.Header = request.Header.Clone()
+	agentReq.Header.Set("Content-Type", "application/json")
+	agentReq.Header.Set("X-Internal-Caller", "AgentWorkflowEditor")
+
+	log.Printf("[INFO] AgentWorkflowEditor: calling /api/v1/agent for user %s (%s), workflow_id=%s, apps=%d", user.Username, user.Id, req.WorkflowId, len(appSummaries))
+
+	client := &http.Client{}
+	agentResp, err := client.Do(agentReq)
+	if err != nil {
+		log.Printf("[ERROR] Failed calling /api/v1/agent in AgentWorkflowEditor: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+	defer agentResp.Body.Close()
+
+	agentRespBody, err := ioutil.ReadAll(agentResp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading agent response in AgentWorkflowEditor: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(agentResp.StatusCode)
+	resp.Write(agentRespBody)
 }
 
 func generateNodeID() string {
