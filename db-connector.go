@@ -17403,6 +17403,73 @@ func GetCacheKeysByPrefix(ctx context.Context, orgId string, category string, pr
 	return matched, "", nil
 }
 
+// GetCacheKeysByToken does an exact-token search using the n-gram index that the
+// correlation engine already maintains (crossCorrelateNGrams). It's a single O(1)
+// lookup of "orgId_<token>" -> refs ("category|key"), then a Get per ref. No scan,
+// no new index, works on both Datastore and OpenSearch.
+//
+// The n-gram index is over VALUES (string fields 5-70 chars, lowercased,
+// timestamps/uuids/JSON mostly skipped), so it finds entries whose value contains
+// the token. Matching is exact: the token must equal an indexed term, not a prefix.
+// Scoped entirely to orgId (ngram key + entry fetch are both org-prefixed).
+func GetCacheKeysByToken(ctx context.Context, orgId string, category string, token string, max int) ([]CacheKeyData, string, error) {
+	if max > 1000 {
+		max = 1000
+	}
+	if max <= 0 {
+		max = 50
+	}
+
+	parsedCategory := strings.ReplaceAll(strings.ToLower(category), " ", "_")
+	parsedToken := strings.ToLower(strings.TrimSpace(token))
+	if parsedToken == "" {
+		return []CacheKeyData{}, "", nil
+	}
+
+	ngramKey := fmt.Sprintf("%s_%s", orgId, parsedToken)
+	item, err := GetDatastoreNGramItem(ctx, ngramKey)
+	if err != nil || item == nil || len(item.Ref) == 0 {
+		// No token match is a valid empty result, not an error to the caller.
+		return []CacheKeyData{}, "", nil
+	}
+
+	results := []CacheKeyData{}
+	seen := map[string]bool{}
+	for _, ref := range item.Ref {
+		parts := strings.SplitN(ref, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		refCategory, refKey := parts[0], parts[1]
+
+		// Scope to the selected category when one is set.
+		if parsedCategory != "" && parsedCategory != "default" && refCategory != parsedCategory {
+			continue
+		}
+		if seen[ref] {
+			continue
+		}
+		seen[ref] = true
+
+		cacheId := fmt.Sprintf("%s_%s", orgId, refKey)
+		if len(refCategory) > 0 && refCategory != "default" {
+			cacheId = fmt.Sprintf("%s_%s_%s", orgId, refKey, refCategory)
+		}
+
+		cacheItem, err := GetDatastoreKey(ctx, cacheId, refCategory)
+		if err != nil || cacheItem == nil || cacheItem.Key == "" {
+			continue
+		}
+
+		results = append(results, *cacheItem)
+		if len(results) >= max {
+			break
+		}
+	}
+
+	return results, "", nil
+}
+
 func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
 	nameKey := "reseller_deal"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)

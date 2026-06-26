@@ -21012,6 +21012,12 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		if err != nil {
 			isSuccess = false
 		}
+	} else if tokenList, tokenOk := request.URL.Query()["token"]; tokenOk && len(tokenList) > 0 && tokenList[0] != "" {
+		// Exact-token value search via the n-gram index the correlation engine maintains.
+		keys, newCursor, err = GetCacheKeysByToken(ctx, org.Id, category, tokenList[0], maxAmount)
+		if err != nil {
+			isSuccess = false
+		}
 	} else {
 		keys, newCursor, err = GetAllCacheKeys(ctx, org.Id, category, maxAmount, cursor)
 		if err != nil {
