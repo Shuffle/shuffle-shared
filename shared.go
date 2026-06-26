@@ -19836,18 +19836,174 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				}
 			}
 
+			for execVarIndex, execVar := range workflowExecution.Workflow.ExecutionVariables {
+				if len(execVar.Value) > 32500 && !strings.Contains(execVar.Value, "Result too large to handle") {
+					itemSize := len(execVar.Value)
+					safeName := execVar.ID
+					if len(safeName) == 0 {
+						safeName = execVar.Name
+					}
+
+					safeName = strings.ReplaceAll(safeName, "/", "_")
+					safeName = strings.ReplaceAll(safeName, " ", "_")
+					if len(safeName) == 0 {
+						safeName = fmt.Sprintf("execution_variable_%d", execVarIndex)
+					}
+
+					actionId := fmt.Sprintf("workflow_execution_variable_%s", safeName)
+					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+					localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+
+					log.Printf("[DEBUG][%s] Offloading workflow execution variable %s (%s) (%d bytes) to file %s", workflowExecution.ExecutionId, execVar.Name, execVar.ID, itemSize, localPath)
+
+					replacementJson := fmt.Sprintf(`{
+						"success": false,
+						"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+						"size": %d,
+						"extra": "replace",
+						"id": "%s_%s"
+					}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+					if err := ioutil.WriteFile(localPath, []byte(execVar.Value), 0644); err != nil {
+						dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+						if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+							log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
+							workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = "Size too large. Removed."
+						} else if retryErr := ioutil.WriteFile(localPath, []byte(execVar.Value), 0644); retryErr != nil {
+							log.Printf("[WARNING][%s] Failed writing workflow execution variable file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
+							workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = "Size too large. Removed."
+						} else {
+							workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = replacementJson
+						}
+					} else {
+						workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = replacementJson
+					}
+				}
+			}
+
+			for execVarIndex, execVar := range workflowExecution.ExecutionVariables {
+				if len(execVar.Value) > 32500 && !strings.Contains(execVar.Value, "Result too large to handle") {
+					itemSize := len(execVar.Value)
+					safeName := execVar.ID
+					if len(safeName) == 0 {
+						safeName = execVar.Name
+					}
+
+					safeName = strings.ReplaceAll(safeName, "/", "_")
+					safeName = strings.ReplaceAll(safeName, " ", "_")
+					if len(safeName) == 0 {
+						safeName = fmt.Sprintf("execution_variable_%d", execVarIndex)
+					}
+
+					actionId := fmt.Sprintf("execution_variable_%s", safeName)
+					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+					localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+
+					log.Printf("[DEBUG][%s] Offloading execution variable %s (%s) (%d bytes) to file %s", workflowExecution.ExecutionId, execVar.Name, execVar.ID, itemSize, localPath)
+
+					replacementJson := fmt.Sprintf(`{
+						"success": false,
+						"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+						"size": %d,
+						"extra": "replace",
+						"id": "%s_%s"
+					}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+					if err := ioutil.WriteFile(localPath, []byte(execVar.Value), 0644); err != nil {
+						dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+						if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+							log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
+							workflowExecution.ExecutionVariables[execVarIndex].Value = "Size too large. Removed."
+						} else if retryErr := ioutil.WriteFile(localPath, []byte(execVar.Value), 0644); retryErr != nil {
+							log.Printf("[WARNING][%s] Failed writing execution variable file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
+							workflowExecution.ExecutionVariables[execVarIndex].Value = "Size too large. Removed."
+						} else {
+							workflowExecution.ExecutionVariables[execVarIndex].Value = replacementJson
+						}
+					} else {
+						workflowExecution.ExecutionVariables[execVarIndex].Value = replacementJson
+					}
+				}
+			}
+
 			for resultIndex, result := range workflowExecution.Results {
 				for paramIndex, param := range result.Action.Parameters {
 					if len(param.Value) > 32500 {
-						log.Printf("[DEBUG][%s] Trimming parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
-						workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
+						itemSize := len(param.Value)
+						safeName := strings.ReplaceAll(param.Name, "/", "_")
+						safeName = strings.ReplaceAll(safeName, " ", "_")
+						if len(safeName) == 0 {
+							safeName = fmt.Sprintf("parameter_%d", paramIndex)
+						}
+
+						actionId := fmt.Sprintf("result_action_parameter_%s_%s", result.Action.ID, safeName)
+						fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+						localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+
+						log.Printf("[DEBUG][%s] Offloading parameter %s in action %s (%d bytes) to file %s", workflowExecution.ExecutionId, param.Name, result.Action.Label, itemSize, localPath)
+
+						replacementJson := fmt.Sprintf(`{
+							"success": false,
+							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+							"size": %d,
+							"extra": "replace",
+							"id": "%s_%s"
+						}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+						if err := ioutil.WriteFile(localPath, []byte(param.Value), 0644); err != nil {
+							dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+							if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+								log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
+								workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
+							} else if retryErr := ioutil.WriteFile(localPath, []byte(param.Value), 0644); retryErr != nil {
+								log.Printf("[WARNING][%s] Failed writing parameter file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
+								workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
+							} else {
+								workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = replacementJson
+							}
+						} else {
+							workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = replacementJson
+						}
 					}
 				}
 
 				for paramIndex, param := range result.Action.InvalidParameters {
 					if len(param.Value) > 32500 {
-						log.Printf("[DEBUG][%s] Trimming invalid parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, result.Action.Label, len(param.Value))
-						workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = "Size too large. Removed."
+						itemSize := len(param.Value)
+						safeName := strings.ReplaceAll(param.Name, "/", "_")
+						safeName = strings.ReplaceAll(safeName, " ", "_")
+						if len(safeName) == 0 {
+							safeName = fmt.Sprintf("invalid_parameter_%d", paramIndex)
+						}
+
+						actionId := fmt.Sprintf("result_action_invalid_parameter_%s_%s", result.Action.ID, safeName)
+						fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+						localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+
+						log.Printf("[DEBUG][%s] Offloading invalid parameter %s in action %s (%d bytes) to file %s", workflowExecution.ExecutionId, param.Name, result.Action.Label, itemSize, localPath)
+
+						replacementJson := fmt.Sprintf(`{
+							"success": false,
+							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+							"size": %d,
+							"extra": "replace",
+							"id": "%s_%s"
+						}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+						if err := ioutil.WriteFile(localPath, []byte(param.Value), 0644); err != nil {
+							dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+							if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+								log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
+								workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = "Size too large. Removed."
+							} else if retryErr := ioutil.WriteFile(localPath, []byte(param.Value), 0644); retryErr != nil {
+								log.Printf("[WARNING][%s] Failed writing invalid parameter file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
+								workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = "Size too large. Removed."
+							} else {
+								workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = replacementJson
+							}
+						} else {
+							workflowExecution.Results[resultIndex].Action.InvalidParameters[paramIndex].Value = replacementJson
+						}
 					}
 				}
 			}
@@ -19855,15 +20011,81 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 			for actionIndex, action := range workflowExecution.Workflow.Actions {
 				for paramIndex, param := range action.Parameters {
 					if len(param.Value) > 32500 {
-						log.Printf("[DEBUG][%s] Trimming workflow parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, action.Label, len(param.Value))
-						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+						itemSize := len(param.Value)
+						safeName := strings.ReplaceAll(param.Name, "/", "_")
+						safeName = strings.ReplaceAll(safeName, " ", "_")
+						if len(safeName) == 0 {
+							safeName = fmt.Sprintf("parameter_%d", paramIndex)
+						}
+
+						actionId := fmt.Sprintf("workflow_action_parameter_%s_%s", action.ID, safeName)
+						fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+						localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+
+						log.Printf("[DEBUG][%s] Offloading workflow parameter %s in action %s (%d bytes) to file %s", workflowExecution.ExecutionId, param.Name, action.Label, itemSize, localPath)
+
+						replacementJson := fmt.Sprintf(`{
+							"success": false,
+							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+							"size": %d,
+							"extra": "replace",
+							"id": "%s_%s"
+						}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+						if err := ioutil.WriteFile(localPath, []byte(param.Value), 0644); err != nil {
+							dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+							if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+								log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
+								workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							} else if retryErr := ioutil.WriteFile(localPath, []byte(param.Value), 0644); retryErr != nil {
+								log.Printf("[WARNING][%s] Failed writing workflow parameter file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
+								workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							} else {
+								workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = replacementJson
+							}
+						} else {
+							workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = replacementJson
+						}
 					}
 				}
 
 				for paramIndex, param := range action.InvalidParameters {
 					if len(param.Value) > 32500 {
-						log.Printf("[DEBUG][%s] Trimming workflow invalid parameter %s in action %s (size: %d bytes)", workflowExecution.ExecutionId, param.Name, action.Label, len(param.Value))
-						workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
+						itemSize := len(param.Value)
+						safeName := strings.ReplaceAll(param.Name, "/", "_")
+						safeName = strings.ReplaceAll(safeName, " ", "_")
+						if len(safeName) == 0 {
+							safeName = fmt.Sprintf("invalid_parameter_%d", paramIndex)
+						}
+
+						actionId := fmt.Sprintf("workflow_action_invalid_parameter_%s_%s", action.ID, safeName)
+						fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+						localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
+
+						log.Printf("[DEBUG][%s] Offloading workflow invalid parameter %s in action %s (%d bytes) to file %s", workflowExecution.ExecutionId, param.Name, action.Label, itemSize, localPath)
+
+						replacementJson := fmt.Sprintf(`{
+							"success": false,
+							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+							"size": %d,
+							"extra": "replace",
+							"id": "%s_%s"
+						}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+						if err := ioutil.WriteFile(localPath, []byte(param.Value), 0644); err != nil {
+							dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
+							if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
+								log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
+								workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
+							} else if retryErr := ioutil.WriteFile(localPath, []byte(param.Value), 0644); retryErr != nil {
+								log.Printf("[WARNING][%s] Failed writing workflow invalid parameter file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
+								workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
+							} else {
+								workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = replacementJson
+							}
+						} else {
+							workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = replacementJson
+						}
 					}
 				}
 			}
