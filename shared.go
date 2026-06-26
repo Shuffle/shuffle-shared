@@ -9969,6 +9969,13 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		if foundUser.Id != userInfo.Id {
+			log.Printf("[AUDIT] %s tried and failed to change apikey for %s (1)", userInfo.Username, t.UserId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change the apikey of another user"}`)))
+			return
+		}
+
 		// FIXME: May not be good due to different roles in different organizations.
 		if foundUser.Role == "admin" {
 			log.Printf("[AUDIT] %s tried and failed to change apikey for %s. Skipping because users' role is admin", userInfo.Username, t.UserId)
