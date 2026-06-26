@@ -17336,6 +17336,73 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	return cacheKeys, cursor, nil
 }
 
+// GetCacheKeysByPrefix returns datastore keys within a category whose Key starts
+// with the given prefix (case-insensitive).
+//
+// org_cache is a write-heavy kind, so we deliberately avoid adding a composite
+// index just to serve occasional admin searches - that would tax every write
+// for a rare read. Instead we page through the category (reusing GetAllCacheKeys,
+// which is cached) and filter by prefix in Go, bounded by scanCap. Matching the
+// Key field in Go also lets us be case-insensitive, which a Datastore range
+// filter could not do.
+func GetCacheKeysByPrefix(ctx context.Context, orgId string, category string, prefix string, max int, inputcursor string) ([]CacheKeyData, string, error) {
+	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" {
+		return []CacheKeyData{}, "", errors.New("Not available in worker mode")
+	}
+
+	if strings.ToLower(category) == "default" {
+		category = ""
+	}
+
+	if max > 1000 {
+		max = 1000
+	}
+	if max <= 0 {
+		max = 50
+	}
+
+	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
+	lowerPrefix := strings.ToLower(prefix)
+
+	matched := []CacheKeyData{}
+	scanCap := 5000
+	scanned := 0
+	cursor := ""
+
+	for scanned < scanCap {
+		batch, newCursor, err := GetAllCacheKeys(ctx, orgId, category, 1000, cursor)
+		if err != nil {
+			return matched, "", err
+		}
+
+		if len(batch) == 0 {
+			break
+		}
+
+		for _, k := range batch {
+			scanned += 1
+			if strings.HasPrefix(strings.ToLower(k.Key), lowerPrefix) {
+				matched = append(matched, k)
+				if len(matched) >= max {
+					return matched, "", nil
+				}
+			}
+		}
+
+		if newCursor == "" || newCursor == cursor {
+			break
+		}
+
+		cursor = newCursor
+	}
+
+	if scanned >= scanCap {
+		log.Printf("[WARNING] Prefix search hit scan cap (%d) for category '%s'. Results may be incomplete for very large categories.", scanCap, category)
+	}
+
+	return matched, "", nil
+}
+
 func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
 	nameKey := "reseller_deal"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)

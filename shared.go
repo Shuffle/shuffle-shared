@@ -20991,6 +20991,20 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		keys = []CacheKeyData{
 			*cacheItem,
 		}
+	} else if searchList, searchOk := request.URL.Query()["search"]; searchOk && len(searchList) > 0 && searchList[0] != "" {
+		// Prefix search within a category (e.g. DataGrid "starts with").
+		// Require a real category so the scan stays bounded - never an org-wide scan.
+		if len(category) == 0 || category == "default" {
+			log.Printf("[WARNING] Prefix search attempted without a category. Returning 400.")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "A category is required to search keys"}`))
+			return
+		}
+
+		keys, newCursor, err = GetCacheKeysByPrefix(ctx, org.Id, category, searchList[0], maxAmount, cursor)
+		if err != nil {
+			isSuccess = false
+		}
 	} else {
 		keys, newCursor, err = GetAllCacheKeys(ctx, org.Id, category, maxAmount, cursor)
 		if err != nil {
