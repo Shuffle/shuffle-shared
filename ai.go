@@ -7918,6 +7918,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	_ = oldActionResult
 	oldAgentOutput := AgentOutput{}
 	previousAnswers := ""
+	continuationMessage := "" // Tracks user continuation text (new message sent to a finished agent)
 
 	marshalledDecisions := []byte{}
 	if createNextActions == true {
@@ -8104,10 +8105,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				for _, field := range mappedDecision.Fields {
 					if field.Key == "continue" && len(field.Answer) > 0 {
 						if debug {
-							log.Printf("[DEBUG][%s] AI Agent continuation: overriding userMessage with 'continue' answer (length=%d)", execution.ExecutionId, len(field.Answer))
+							log.Printf("[DEBUG][%s] AI Agent continuation: found 'continue' answer (length=%d); keeping original userMessage, adding as continuationMessage", execution.ExecutionId, len(field.Answer))
 						}
 
-						userMessage = field.Answer
+						continuationMessage = field.Answer
 						foundContinuation = true
 						break
 					}
@@ -8382,9 +8383,10 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 
 ### INPUT PROTOCOL
 1. **USER CONTEXT:** Available actions/tools.
-2. **USER REQUEST:** Task to process.
-3. **USER ANSWERS:** Explicit answers already provided by the user to prior agent questions. Treat these as authoritative context.
-4. **HISTORY:** JSON list of previous executions (Newest First).
+2. **ORIGINAL REQUEST (optional):** The user's prior request from this session, already completed. Visible in HISTORY. Use for context only — do NOT re-execute it.
+3. **USER REQUEST:** The current task to complete. PHASE 1 checks THIS against HISTORY.
+4. **USER ANSWERS:** Explicit answers already provided by the user to prior agent questions. Treat these as authoritative context.
+5. **HISTORY:** JSON list of previous executions (Newest First).
 
 ### PHASE 1: COMPLETION CHECK (HIGHEST PRIORITY)
 **Compare the "USER REQUEST" against the "HISTORY".**
@@ -8560,12 +8562,28 @@ data_filter:
 		}
 	}
 
-	// Fix e.g. injected JSON and other quote/newline mechanics that aren't compatible
-	// Problem: The input data itself can be a reference.
-	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
-	})
+	// Build the USER REQUEST message.
+	// For a normal run: USER REQUEST = the original user input.
+	// For a continuation (user sent a follow-up to a finished agent): the continuation is the live task that PHASE 1 should check against. The original question goes in as read-only context so the LLM knows the prior topic without re-executing it.
+	if len(continuationMessage) > 0 {
+		// Continuation run: new message is the actual task
+		if len(userMessage) > 0 {
+			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleUser,
+				Content: fmt.Sprintf("ORIGINAL REQUEST (already completed, visible in HISTORY): %s", userMessage),
+			})
+		}
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: fmt.Sprintf("USER REQUEST: %s", continuationMessage),
+		})
+	} else {
+		// Normal run: original input is the task
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
+		})
+	}
 
 	if len(previousAnswers) > 0 {
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
@@ -8574,8 +8592,8 @@ data_filter:
 		})
 	}
 
-	if len(marshalledDecisions) > 4 { 
-		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage {
+	if len(marshalledDecisions) > 4 {
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,
 			Content: fmt.Sprintf("HISTORY:\n%s", string(marshalledDecisions)),
 		})
