@@ -2738,7 +2738,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			// Last cleanup
 			for i := len(removeIndex) - 1; i >= 0; i-- {
 				env.SensorHosts = append(env.SensorHosts[:removeIndex[i]], env.SensorHosts[removeIndex[i]+1:]...)
-				log.Printf("[INFO] Sensor '%s' removed from group environment '%s' (%s) due to inactivity. Checkin: %d seconds ago", env.SensorHosts[removeIndex[i]].Hostname, env.Name, env.Id, timeNow-env.SensorHosts[removeIndex[i]].Checkin)
+				//log.Printf("[INFO] Sensor '%s' removed from group environment '%s' (%s) due to inactivity. Checkin: %d seconds ago", env.SensorHosts[removeIndex[i]].Hostname, env.Name, env.Id, timeNow-env.SensorHosts[removeIndex[i]].Checkin)
 			}
 
 			go HandleSensorDatastoreUpdate(orborusData)
