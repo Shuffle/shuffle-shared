@@ -15116,6 +15116,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		resp, err := project.Es.Bulk(ctx, opensearchapi.BulkReq{
 			Body:  bytes.NewReader(buf.Bytes()),
 			Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+			// Refresh for immediate read-after-write; matches indexEs().
+			Params: opensearchapi.BulkParams{Refresh: "true"},
 		})
 
 		res := resp.Inspect().Response
