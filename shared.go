@@ -38275,153 +38275,153 @@ func enrichTriggerFromApp(minTrig *MinimalTrigger, environment string) (Trigger,
 	}
 }
 
-func broadcastBatchToStream(wf *Workflow, operations []WorkflowOperation, tempIDMap map[string]string, userID string, username string, authHeader string) {
-	if len(operations) == 0 {
-		return
-	}
+// func broadcastBatchToStream(wf *Workflow, operations []WorkflowOperation, tempIDMap map[string]string, userID string, username string, authHeader string) {
+// 	if len(operations) == 0 {
+// 		return
+// 	}
 
-	if len(userID) == 0 {
-		userID = "agent"
-	}
-	if len(username) == 0 {
-		username = "agent"
-	}
+// 	if len(userID) == 0 {
+// 		userID = "agent"
+// 	}
+// 	if len(username) == 0 {
+// 		username = "agent"
+// 	}
 
-	var streamOps []StreamWorkflowOperation
+// 	var streamOps []StreamWorkflowOperation
 
-	for _, operation := range operations {
-		item := "node" // default
-		opType := ""
-		switch operation.Op {
-		case "add_node":
-			item = "node"
-			opType = "add"
-		case "move_node":
-			item = "node"
-			opType = "move"
-		case "edit_node":
-			item = "node"
-			opType = "configure"
-		case "delete_node":
-			item = "node"
-			opType = "remove"
-		case "add_branch":
-			item = "branch"
-			opType = "add"
-		case "edit_branch":
-			item = "branch"
-			opType = "configure"
-		case "delete_branch":
-			item = "branch"
-			opType = "remove"
-		case "save_workflow":
-			item = "workflow"
-			opType = "save"
-		case "set_start_node":
-			item = "workflow"
-			opType = "configure"
-		default:
-			item = "node"
-			opType = operation.Op
-		}
+// 	for _, operation := range operations {
+// 		item := "node" // default
+// 		opType := ""
+// 		switch operation.Op {
+// 		case "add_node":
+// 			item = "node"
+// 			opType = "add"
+// 		case "move_node":
+// 			item = "node"
+// 			opType = "move"
+// 		case "edit_node":
+// 			item = "node"
+// 			opType = "configure"
+// 		case "delete_node":
+// 			item = "node"
+// 			opType = "remove"
+// 		case "add_branch":
+// 			item = "branch"
+// 			opType = "add"
+// 		case "edit_branch":
+// 			item = "branch"
+// 			opType = "configure"
+// 		case "delete_branch":
+// 			item = "branch"
+// 			opType = "remove"
+// 		case "save_workflow":
+// 			item = "workflow"
+// 			opType = "save"
+// 		case "set_start_node":
+// 			item = "workflow"
+// 			opType = "configure"
+// 		default:
+// 			item = "node"
+// 			opType = operation.Op
+// 		}
 
-		opID := operation.ID
-		if realID, exists := tempIDMap[operation.ID]; exists {
-			opID = realID
-		} else if realID, exists := tempIDMap[operation.TempID]; exists {
-			opID = realID
-		}
+// 		opID := operation.ID
+// 		if realID, exists := tempIDMap[operation.ID]; exists {
+// 			opID = realID
+// 		} else if realID, exists := tempIDMap[operation.TempID]; exists {
+// 			opID = realID
+// 		}
 
-		// Extract the ENRICHED node/branch from the workflow instead of using the Minimal payload
-		// We only need the fully enriched data for CREATING nodes/branches.
-		// For edits or moves, we just pass the partial payload the agent sent so the UI can patch it locally.
-		var enrichedData interface{}
-		if operation.Op == "add_node" {
-			if operation.NodeType == "action" {
-				if idx := findActionIndexByID(wf, opID); idx != -1 {
-					enrichedData = wf.Actions[idx]
-				}
-			} else if operation.NodeType == "trigger" {
-				if idx := findTriggerIndexByID(wf, opID); idx != -1 {
-					enrichedData = wf.Triggers[idx]
-				}
-			}
-		} else if operation.Op == "add_branch" {
-			if idx := findBranchIndexByID(wf, opID); idx != -1 {
-				enrichedData = wf.Branches[idx]
-			}
-		}
+// 		// Extract the ENRICHED node/branch from the workflow instead of using the Minimal payload
+// 		// We only need the fully enriched data for CREATING nodes/branches.
+// 		// For edits or moves, we just pass the partial payload the agent sent so the UI can patch it locally.
+// 		var enrichedData interface{}
+// 		if operation.Op == "add_node" {
+// 			if operation.NodeType == "action" {
+// 				if idx := findActionIndexByID(wf, opID); idx != -1 {
+// 					enrichedData = wf.Actions[idx]
+// 				}
+// 			} else if operation.NodeType == "trigger" {
+// 				if idx := findTriggerIndexByID(wf, opID); idx != -1 {
+// 					enrichedData = wf.Triggers[idx]
+// 				}
+// 			}
+// 		} else if operation.Op == "add_branch" {
+// 			if idx := findBranchIndexByID(wf, opID); idx != -1 {
+// 				enrichedData = wf.Branches[idx]
+// 			}
+// 		}
 
-		var finalData []byte
-		if enrichedData != nil {
-			finalData, _ = json.Marshal(enrichedData)
-		} else {
-			// Fallback for delete ops where the node is already removed from wf, or if not found
-			finalData = operation.Data
-		}
+// 		var finalData []byte
+// 		if enrichedData != nil {
+// 			finalData, _ = json.Marshal(enrichedData)
+// 		} else {
+// 			// Fallback for delete ops where the node is already removed from wf, or if not found
+// 			finalData = operation.Data
+// 		}
 
-		streamOps = append(streamOps, StreamWorkflowOperation{
-			Item:      item,
-			Type:      opType,
-			ID:        opID,
-			UserID:    userID,
-			Username:  username,
-			Data:      finalData,
-			Timestamp: time.Now().UnixMilli(),
-		})
-	}
+// 		streamOps = append(streamOps, StreamWorkflowOperation{
+// 			Item:      item,
+// 			Type:      opType,
+// 			ID:        opID,
+// 			UserID:    userID,
+// 			Username:  username,
+// 			Data:      finalData,
+// 			Timestamp: time.Now().UnixMilli(),
+// 		})
+// 	}
 
-	// Marshal to JSON array
-	payload, err := json.Marshal(streamOps)
-	if err != nil {
-		log.Printf("[WARNING] Failed to marshal stream operations for workflow %s: %s", wf.ID, err)
-		return
-	}
+// 	// Marshal to JSON array
+// 	payload, err := json.Marshal(streamOps)
+// 	if err != nil {
+// 		log.Printf("[WARNING] Failed to marshal stream operations for workflow %s: %s", wf.ID, err)
+// 		return
+// 	}
 
-	baseURL := os.Getenv("BASE_URL")
-	if len(baseURL) == 0 {
-		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-			baseURL = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-		} else {
-			port := os.Getenv("PORT")
-			if len(port) == 0 {
-				port = "5001"
-			}
-			baseURL = fmt.Sprintf("http://localhost:%s", port)
-		}
-	}
+// 	baseURL := os.Getenv("BASE_URL")
+// 	if len(baseURL) == 0 {
+// 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+// 			baseURL = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+// 		} else {
+// 			port := os.Getenv("PORT")
+// 			if len(port) == 0 {
+// 				port = "5001"
+// 			}
+// 			baseURL = fmt.Sprintf("http://localhost:%s", port)
+// 		}
+// 	}
 
-	streamURL := fmt.Sprintf("%s/api/v1/workflows/%s/stream", baseURL, wf.ID)
+// 	streamURL := fmt.Sprintf("%s/api/v1/workflows/%s/stream", baseURL, wf.ID)
 
-	// Create HTTP POST request
-	req, err := http.NewRequest("POST", streamURL, strings.NewReader(string(payload)))
-	if err != nil {
-		log.Printf("[WARNING] Failed to create stream request for workflow %s: %s", wf.ID, err)
-		return
-	}
+// 	// Create HTTP POST request
+// 	req, err := http.NewRequest("POST", streamURL, strings.NewReader(string(payload)))
+// 	if err != nil {
+// 		log.Printf("[WARNING] Failed to create stream request for workflow %s: %s", wf.ID, err)
+// 		return
+// 	}
 
-	// Set headers
-	req.Header.Set("Content-Type", "application/json")
-	if len(authHeader) > 0 {
-		req.Header.Set("Authorization", authHeader)
-	}
+// 	// Set headers
+// 	req.Header.Set("Content-Type", "application/json")
+// 	if len(authHeader) > 0 {
+// 		req.Header.Set("Authorization", authHeader)
+// 	}
 
-	// Make request with timeout
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[WARNING] Failed to broadcast to stream for workflow %s: %s", wf.ID, err)
-		return
-	}
-	defer resp.Body.Close()
+// 	// Make request with timeout
+// 	client := &http.Client{Timeout: 10 * time.Second}
+// 	resp, err := client.Do(req)
+// 	if err != nil {
+// 		log.Printf("[WARNING] Failed to broadcast to stream for workflow %s: %s", wf.ID, err)
+// 		return
+// 	}
+// 	defer resp.Body.Close()
 
-	// Log result
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		log.Printf("[DEBUG] Streamed %d operations to workflow %s", len(streamOps), wf.ID)
-	} else {
-		log.Printf("[WARNING] Stream endpoint returned status %d for workflow %s", resp.StatusCode, wf.ID)
-	}
-}
+// 	// Log result
+// 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+// 		log.Printf("[DEBUG] Streamed %d operations to workflow %s", len(streamOps), wf.ID)
+// 	} else {
+// 		log.Printf("[WARNING] Stream endpoint returned status %d for workflow %s", resp.StatusCode, wf.ID)
+// 	}
+// }
 
 func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -38645,8 +38645,8 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 
 	// Broadcast operations to stream endpoint (agent gets response immediately, streaming happens in background)
 	// Extract auth header from incoming request to pass to stream endpoint
-	authHeader := request.Header.Get("Authorization")
-	go broadcastBatchToStream(workflow, setOpsReq.Operations, tempIDMap, "agent", "Agent", authHeader)
+	// authHeader := request.Header.Get("Authorization")
+	// go broadcastBatchToStream(workflow, setOpsReq.Operations, tempIDMap, "agent", "Agent", authHeader)
 
 	if debug{
 		log.Printf("[INFO] Applied %d operations to workflow %s for user %s", len(setOpsReq.Operations), workflowID, user.Username)
