@@ -18157,13 +18157,25 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			log.Printf("[INFO][%s] Agent continuation: resetting execution status from '%s' to 'EXECUTING' for continuation", workflowExecution.ExecutionId, workflowExecution.Status)
 			workflowExecution.Status = "EXECUTING"
 			workflowExecution.CompletedAt = 0
+		}
 
-			executionCacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
-			DeleteCache(ctx, executionCacheKey)
-			marshalledExec, marshalErr := json.Marshal(workflowExecution)
-			if marshalErr == nil {
-				SetCache(ctx, executionCacheKey, marshalledExec, 30)
+		if foundActionResultIndex >= 0 && foundActionResultIndex < len(workflowExecution.Results) {
+			if marshalledResult, marshalErr := json.Marshal(mappedResult); marshalErr == nil {
+				workflowExecution.Results[foundActionResultIndex].Result = string(marshalledResult)
+
+				//  push to the action result cache so GetWorkflowExecution inside HandleAiAgentExecutionStart picks up the fresh copy.
+				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+				go SetCache(ctx, actionCacheId, marshalledResult, 35)
+			} else {
+				log.Printf("[WARNING][%s] Failed to marshal updated mappedResult before HandleAiAgentExecutionStart: %s", workflowExecution.ExecutionId, marshalErr)
 			}
+		}
+
+		// so the GetWorkflowExecution fetch inside HandleAiAgentExecutionStart gets the fresh copy.
+		executionCacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
+		DeleteCache(ctx, executionCacheKey)
+		if marshalledExec, marshalErr := json.Marshal(workflowExecution); marshalErr == nil {
+			SetCache(ctx, executionCacheKey, marshalledExec, 30)
 		}
 
 		callerName := "handleAgentDecisionStreamResult"
