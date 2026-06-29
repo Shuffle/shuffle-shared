@@ -5817,6 +5817,8 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 		resp, err := project.Es.Document.Delete(ctx, opensearchapi.DocumentDeleteReq{
 			Index:      strings.ToLower(GetESIndexPrefix(entity)),
 			DocumentID: value,
+			// Refresh so the delete is immediately reflected in reads; matches indexEs().
+			Params: opensearchapi.DocumentDeleteParams{Refresh: "true"},
 		})
 
 		if err != nil {
