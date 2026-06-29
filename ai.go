@@ -9584,14 +9584,14 @@ data_filter:
 			}
 
 			if !foundResult {
-				// duration := int64(0)
-				// if agentOutput.StartedAt > 0 && agentOutput.CompletedAt > 0 {
-				// 	duration = agentOutput.CompletedAt - agentOutput.StartedAt
-				// } else if agentOutput.StartedAt > 0 {
-				// 	duration = time.Now().Unix() - agentOutput.StartedAt
-				// }
+				duration := int64(0)
+				if agentOutput.StartedAt > 0 && agentOutput.CompletedAt > 0 {
+					duration = (agentOutput.CompletedAt - agentOutput.StartedAt) / 1000
+				} else if agentOutput.StartedAt > 0 {
+					duration = (time.Now().UnixMilli() - agentOutput.StartedAt) / 1000
+				}
 
-				// log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=SUCCESS duration=%ds decisions=%d llm_calls=%d tokens_used=%d", execution.ExecutionId, execution.Workflow.OrgId, duration, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens)
+				log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=FINISHED duration=%ds tool_calls=%d llm_calls=%d prompt_tokens=%d completion_tokens=%d total_tokens=%d", execution.ExecutionId, execution.Workflow.OrgId, duration, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.PromptTokens, agentOutput.CompletionTokens, agentOutput.TotalTokens)
 			}
 		}
 
