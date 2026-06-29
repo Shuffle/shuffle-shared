@@ -1673,6 +1673,136 @@ func balanceJSONLikeString(s string) string {
 	return string(result)
 }
 
+// extracts AgentDecision structs from messy LLM output. It tries multiple strategies to handle various output formats.
+func parseAgentDecisions(rawOutput string) ([]AgentDecision, error) {
+	cleaned := FixContentOutput(rawOutput)
+
+	// If its a JSON array
+	if decisions, err := extractDecisionArray(cleaned); err == nil {
+		return decisions, nil
+	}
+
+	// JSONL (one object per occurrence) ??
+	if decisions, err := extractDecisionJSONL(cleaned); err == nil {
+		return decisions, nil
+	}
+
+	// last resort: unescape, then retry array
+	unescaped := strings.ReplaceAll(cleaned, `\"`, `"`)
+	if decisions, err := extractDecisionArray(unescaped); err == nil {
+		return decisions, nil
+	}
+
+	return nil, fmt.Errorf("failed to parse agent decisions from LLM output")
+}
+
+// extractDecisionArray finds the first '[' that decodes into a valid decision array.
+func extractDecisionArray(s string) ([]AgentDecision, error) {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '[' {
+			continue
+		}
+
+		// So lets decode into raw maps so we can inspect and mutate it
+		var raw []map[string]interface{}
+		if err := json.NewDecoder(strings.NewReader(s[i:])).Decode(&raw); err != nil {
+			continue
+		}
+
+		if len(raw) == 0 || raw[0]["action"] == nil {
+			continue
+		}
+
+		// Fix the types (convert numbers/bools to strings)
+		normalizeDecisionFields(raw)
+
+		//Round-trip: Marshal the fixed map back to bytes, then unmarshal into the strict struct
+		b, err := json.Marshal(raw)
+		if err != nil {
+			continue
+		}
+
+		var decisions []AgentDecision
+		if err := json.Unmarshal(b, &decisions); err != nil {
+			continue
+		}
+
+		return decisions, nil
+	}
+
+	return nil, fmt.Errorf("no valid JSON array found")
+}
+
+// extractDecisionJSONL collects every top-level '{...}' that looks like a decision.
+func extractDecisionJSONL(s string) ([]AgentDecision, error) {
+	var out []AgentDecision
+
+	for i := 0; i < len(s); {
+		if s[i] != '{' {
+			i++
+			continue
+		}
+
+		r := strings.NewReader(s[i:])
+		dec := json.NewDecoder(r)
+
+		var raw map[string]interface{}
+		if err := dec.Decode(&raw); err != nil {
+			i++
+			continue
+		}
+
+		if raw["action"] != nil {
+			normalizeDecisionFields([]map[string]interface{}{raw})
+			b, err := json.Marshal(raw)
+			if err == nil {
+				var one AgentDecision
+				if err := json.Unmarshal(b, &one); err == nil {
+					out = append(out, one)
+				}
+			}
+		}
+
+		// Jump past the object we just consumed to avoid parsing nested braces
+		i += int(dec.InputOffset())
+	}
+
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no valid JSONL objects found")
+	}
+
+	return out, nil
+}
+
+// normalizeDecisionFields converts non-string field["value"] entries into JSON strings.
+// This MUST happen before unmarshalling into AgentDecision (whose Value field is a string).
+func normalizeDecisionFields(decisions []map[string]interface{}) {
+	for _, d := range decisions {
+		fields, ok := d["fields"].([]interface{})
+		if !ok {
+			continue
+		}
+
+		for _, f := range fields {
+			fm, ok := f.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			v, ok := fm["value"]
+			if !ok || v == nil {
+				continue
+			}
+
+			if _, isStr := v.(string); !isStr {
+				if b, err := json.Marshal(v); err == nil {
+					fm["value"] = string(b)
+				}
+			}
+		}
+	}
+}
+
 func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys []string) (WorkflowApp, WorkflowAppAction) {
 	standalone := os.Getenv("STANDALONE") == "true"
 
@@ -8967,49 +9097,26 @@ data_filter:
 		// Found random JSON issues with [{} and similar, due to LLM instability.
 		decisionString = FixContentOutput(choicesString)
 
-		// Find the first one and remove anything until that point
 		conditionText := "conditions must be correct"
-		if !strings.HasPrefix(decisionString, `[`) {
-			firstIndex := strings.Index(decisionString, "[")
-			if firstIndex != -1 {
-				decisionString = decisionString[firstIndex:]
-			} else {
-				if !strings.Contains(decisionString, conditionText) {
-					log.Printf("[WARNING][%s] No '[' found in AI Agent response. Using full response: %s", execution.ExecutionId, decisionString)
-				}
-			}
-		}
-
-		// LLM is occasionally appending freeform text like (e.g. "Summary: ...") after the closing bracket. Truncate everything past the last ']' so the JSON		
-		// parser doesn't dont break due to that.
-		if lastBracket := strings.LastIndex(decisionString, "]"); lastBracket != -1 {
-			decisionString = decisionString[:lastBracket+1]
-		}
-
 		errorMessage := ""
-		mappedDecisions := []AgentDecision{}
-		err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
-		if err != nil {
-			if !strings.Contains(decisionString, conditionText) {
-				log.Printf("[ERROR][%s] AI Agent (5): Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
+
+		// Parse decisions using the refactored helper function
+		mappedDecisions, parsingErr := parseAgentDecisions(choicesString)
+
+		if len(mappedDecisions) == 0 {
+			if parsingErr == nil {
+				parsingErr = errors.New("no valid AgentDecision array or objects found in output")
 			}
-
-			if len(mappedDecisions) == 0 {
-				decisionString = strings.Replace(decisionString, `\"`, `"`, -1)
-
-				err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
-				if err != nil && !strings.Contains(decisionString, conditionText) {
-					log.Printf("[ERROR][%s] AI Agent (6): Failed unmarshalling decisions in AI Agent response (2): %s. String: %s", execution.ExecutionId, err, decisionString)
-
-					// Updating the OUTPUT in some way to help the user a bit.
-					if strings.Contains(decisionString, "conditions must be correct") { 
-						errorMessage = fmt.Sprintf("Condition failed. See decision_string for details")
-						resultMapping.Status = "SKIPPED"
-					} else {
-						resultMapping.Status = "FAILURE"
-						errorMessage = fmt.Sprintf("The output from the LLM had no decisions. See the raw decisions tring for the response. Contact support@shuffler.io if you think this is wrong.")
-					}
-				}
+			if !strings.Contains(decisionString, conditionText) {
+				log.Printf("[ERROR][%s] AI Agent (6): Failed parsing decisions in AI Agent response: %s. String: %s", execution.ExecutionId, parsingErr, decisionString)
+			}
+			// Updating the OUTPUT in some way to help the user a bit.
+			if strings.Contains(decisionString, "conditions must be correct") {
+				errorMessage = fmt.Sprintf("Condition failed. See decision_string for details")
+				resultMapping.Status = "SKIPPED"
+			} else {
+				resultMapping.Status = "FAILURE"
+				errorMessage = fmt.Sprintf("The output from the LLM had no decisions. See the raw decisions tring for the response. Contact support@shuffler.io if you think this is wrong.")
 			}
 		}
 

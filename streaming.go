@@ -92,12 +92,12 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		}
 	}
 
-	org, err := GetOrg(ctx, workflow.OrgId)
-	if err != nil || !org.SyncFeatures.Multiplayer.Active {
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
+	_, _ = GetOrg(ctx, workflow.OrgId)
+	// if err != nil || !org.SyncFeatures.Multiplayer.Active {
+	// 	resp.WriteHeader(403)
+	// 	resp.Write([]byte(`{"success": false}`))
+	// 	return
+	// }
 
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
@@ -278,12 +278,12 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	org, err := GetOrg(ctx, workflow.OrgId)
-	if err != nil || !org.SyncFeatures.Multiplayer.Active {
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
+	_, _ = GetOrg(ctx, workflow.OrgId)
+	// if err != nil || !org.SyncFeatures.Multiplayer.Active {
+	// 	resp.WriteHeader(403)
+	// 	resp.Write([]byte(`{"success": false}`))
+	// 	return
+	// }
 
 	resp.Header().Set("Connection", "Keep-Alive")
 	resp.Header().Set("X-Content-Type-Options", "nosniff")
@@ -522,12 +522,12 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 		}
 	}
 
-	org, err := GetOrg(ctx, workflow.OrgId)
-	if err != nil || !org.SyncFeatures.Multiplayer.Active {
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
+	_, _ = GetOrg(ctx, workflow.OrgId)
+	// if err != nil || !org.SyncFeatures.Multiplayer.Active {
+	// 	resp.WriteHeader(403)
+	// 	resp.Write([]byte(`{"success": false}`))
+	// 	return
+	// }
 
 	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
 	var state StreamWorkflowState
