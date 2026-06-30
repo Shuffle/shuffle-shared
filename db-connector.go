@@ -1005,6 +1005,87 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 						workflowExecution.Results[valueIndex].Result = newValue
 					}
+
+					for paramIndex, param := range value.Action.Parameters {
+						if strings.Contains(param.Value, "Result too large to handle") {
+							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+								Result: param.Value,
+							})
+							if err == nil {
+								workflowExecution.Results[valueIndex].Action.Parameters[paramIndex].Value = newValue
+							}
+						}
+					}
+
+					for paramIndex, param := range value.Action.InvalidParameters {
+						if strings.Contains(param.Value, "Result too large to handle") {
+							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+								Result: param.Value,
+							})
+							if err == nil {
+								workflowExecution.Results[valueIndex].Action.InvalidParameters[paramIndex].Value = newValue
+							}
+						}
+					}
+				}
+
+				for actionIndex, action := range workflowExecution.Workflow.Actions {
+					for paramIndex, param := range action.Parameters {
+						if strings.Contains(param.Value, "Result too large to handle") {
+							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+								Result: param.Value,
+							})
+							if err == nil {
+								workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = newValue
+							}
+						}
+					}
+
+					for paramIndex, param := range action.InvalidParameters {
+						if strings.Contains(param.Value, "Result too large to handle") {
+							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+								Result: param.Value,
+							})
+							if err == nil {
+								workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = newValue
+							}
+						}
+					}
+				}
+
+				for triggerIndex, trigger := range workflowExecution.Workflow.Triggers {
+					for paramIndex, param := range trigger.Parameters {
+						if strings.Contains(param.Value, "Result too large to handle") {
+							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+								Result: param.Value,
+							})
+							if err == nil {
+								workflowExecution.Workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = newValue
+							}
+						}
+					}
+				}
+
+				for execVarIndex, execVar := range workflowExecution.Workflow.ExecutionVariables {
+					if strings.Contains(execVar.Value, "Result too large to handle") {
+						newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+							Result: execVar.Value,
+						})
+						if err == nil {
+							workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = newValue
+						}
+					}
+				}
+
+				for execVarIndex, execVar := range workflowExecution.ExecutionVariables {
+					if strings.Contains(execVar.Value, "Result too large to handle") {
+						newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+							Result: execVar.Value,
+						})
+						if err == nil {
+							workflowExecution.ExecutionVariables[execVarIndex].Value = newValue
+						}
+					}
 				}
 
 				// Fixes missing pieces
@@ -1108,6 +1189,87 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				}
 
 				workflowExecution.Results[valueIndex].Result = newValue
+			}
+
+			for paramIndex, param := range value.Action.Parameters {
+				if strings.Contains(param.Value, "Result too large to handle") {
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+						Result: param.Value,
+					})
+					if err == nil {
+						workflowExecution.Results[valueIndex].Action.Parameters[paramIndex].Value = newValue
+					}
+				}
+			}
+
+			for paramIndex, param := range value.Action.InvalidParameters {
+				if strings.Contains(param.Value, "Result too large to handle") {
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+						Result: param.Value,
+					})
+					if err == nil {
+						workflowExecution.Results[valueIndex].Action.InvalidParameters[paramIndex].Value = newValue
+					}
+				}
+			}
+		}
+
+		for actionIndex, action := range workflowExecution.Workflow.Actions {
+			for paramIndex, param := range action.Parameters {
+				if strings.Contains(param.Value, "Result too large to handle") {
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+						Result: param.Value,
+					})
+					if err == nil {
+						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = newValue
+					}
+				}
+			}
+
+			for paramIndex, param := range action.InvalidParameters {
+				if strings.Contains(param.Value, "Result too large to handle") {
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+						Result: param.Value,
+					})
+					if err == nil {
+						workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = newValue
+					}
+				}
+			}
+		}
+
+		for triggerIndex, trigger := range workflowExecution.Workflow.Triggers {
+			for paramIndex, param := range trigger.Parameters {
+				if strings.Contains(param.Value, "Result too large to handle") {
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+						Result: param.Value,
+					})
+					if err == nil {
+						workflowExecution.Workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = newValue
+					}
+				}
+			}
+		}
+
+		for execVarIndex, execVar := range workflowExecution.Workflow.ExecutionVariables {
+			if strings.Contains(execVar.Value, "Result too large to handle") {
+				newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+					Result: execVar.Value,
+				})
+				if err == nil {
+					workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = newValue
+				}
+			}
+		}
+
+		for execVarIndex, execVar := range workflowExecution.ExecutionVariables {
+			if strings.Contains(execVar.Value, "Result too large to handle") {
+				newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+					Result: execVar.Value,
+				})
+				if err == nil {
+					workflowExecution.ExecutionVariables[execVarIndex].Value = newValue
+				}
 			}
 		}
 	}
@@ -1900,9 +2062,28 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 }
 
 func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecution, action ActionResult) (string, error) {
-	fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, action.Action.ID)
+	fileID := action.Action.ID
+	if len(fileID) == 0 && len(action.Result) > 0 {
+		parsedPlaceholder := map[string]interface{}{}
+		if err := json.Unmarshal([]byte(action.Result), &parsedPlaceholder); err == nil {
+			if parsedID, ok := parsedPlaceholder["id"].(string); ok && len(parsedID) > 0 {
+				prefix := fmt.Sprintf("%s_", workflowExecution.ExecutionId)
+				if strings.HasPrefix(parsedID, prefix) {
+					fileID = strings.TrimPrefix(parsedID, prefix)
+				} else {
+					fileID = parsedID
+				}
+			}
+		}
+	}
 
-	cacheKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, action.Action.ID)
+	if len(fileID) == 0 {
+		return "", errors.New("missing file id for large execution value")
+	}
+
+	fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, fileID)
+
+	cacheKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, fileID)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -5636,6 +5817,8 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 		resp, err := project.Es.Document.Delete(ctx, opensearchapi.DocumentDeleteReq{
 			Index:      strings.ToLower(GetESIndexPrefix(entity)),
 			DocumentID: value,
+			// Refresh so the delete is immediately reflected in reads; matches indexEs().
+			Params: opensearchapi.DocumentDeleteParams{Refresh: "true"},
 		})
 
 		if err != nil {
@@ -9741,7 +9924,53 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, workflow.RevisionId, data)
 		if err != nil {
-			return err
+			if strings.Contains(err.Error(), "immense term") {
+				retried := false
+				indexWorkflow := workflow
+
+				for actionIndex, action := range indexWorkflow.Actions {
+					for paramIndex, param := range action.Parameters {
+						if len(param.Value) > 32500 {
+							log.Printf("[DEBUG][%s] Trimming workflow revision parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
+							indexWorkflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+
+					for paramIndex, param := range action.InvalidParameters {
+						if len(param.Value) > 32500 {
+							log.Printf("[DEBUG][%s] Trimming workflow revision invalid parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
+							indexWorkflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				for triggerIndex, trigger := range indexWorkflow.Triggers {
+					for paramIndex, param := range trigger.Parameters {
+						if len(param.Value) > 32500 {
+							log.Printf("[DEBUG][%s] Trimming workflow revision trigger parameter %s in trigger %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, trigger.Label, len(param.Value))
+							indexWorkflow.Triggers[triggerIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				if retried {
+					indexData, marshalErr := json.Marshal(indexWorkflow)
+					if marshalErr != nil {
+						log.Printf("[WARNING] Failed marshalling trimmed workflow revision for ES retry: %s", marshalErr)
+						return marshalErr
+					}
+
+					log.Printf("[DEBUG][%s] Retrying OpenSearch workflow revision save after trimming oversized parameter values", workflow.ID)
+					err = indexEs(ctx, nameKey, workflow.RevisionId, indexData)
+				}
+			}
+
+			if err != nil {
+				return err
+			}
 		}
 	} else {
 		key := datastore.NameKey(nameKey, workflow.RevisionId, nil)
@@ -9944,7 +10173,53 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
-			return err
+			if strings.Contains(err.Error(), "immense term") {
+				retried := false
+				indexWorkflow := workflow
+
+				for actionIndex, action := range indexWorkflow.Actions {
+					for paramIndex, param := range action.Parameters {
+						if len(param.Value) > 32500 {
+							log.Printf("[DEBUG][%s] Trimming workflow parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
+							indexWorkflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+
+					for paramIndex, param := range action.InvalidParameters {
+						if len(param.Value) > 32500 {
+							log.Printf("[DEBUG][%s] Trimming workflow invalid parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
+							indexWorkflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				for triggerIndex, trigger := range indexWorkflow.Triggers {
+					for paramIndex, param := range trigger.Parameters {
+						if len(param.Value) > 32500 {
+							log.Printf("[DEBUG][%s] Trimming workflow trigger parameter %s in trigger %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, trigger.Label, len(param.Value))
+							indexWorkflow.Triggers[triggerIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				if retried {
+					indexData, marshalErr := json.Marshal(indexWorkflow)
+					if marshalErr != nil {
+						log.Printf("[WARNING] Failed marshalling trimmed workflow for ES retry: %s", marshalErr)
+						return marshalErr
+					}
+
+					log.Printf("[DEBUG][%s] Retrying OpenSearch workflow save after trimming oversized parameter values", workflow.ID)
+					err = indexEs(ctx, nameKey, id, indexData)
+				}
+			}
+
+			if err != nil {
+				return err
+			}
 		}
 	} else {
 		//log.Printf("\n\n[INFO] Adding workflow with ID %s\n\n", id)
@@ -14843,6 +15118,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		resp, err := project.Es.Bulk(ctx, opensearchapi.BulkReq{
 			Body:  bytes.NewReader(buf.Bytes()),
 			Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+			// Refresh for immediate read-after-write; matches indexEs().
+			Params: opensearchapi.BulkParams{Refresh: "true"},
 		})
 
 		res := resp.Inspect().Response
@@ -17061,6 +17338,73 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	}
 
 	return cacheKeys, cursor, nil
+}
+
+// GetCacheKeysByPrefix returns datastore keys within a category whose Key starts
+// with the given prefix (case-insensitive).
+//
+// org_cache is a write-heavy kind, so we deliberately avoid adding a composite
+// index just to serve occasional admin searches - that would tax every write
+// for a rare read. Instead we page through the category (reusing GetAllCacheKeys,
+// which is cached) and filter by prefix in Go, bounded by scanCap. Matching the
+// Key field in Go also lets us be case-insensitive, which a Datastore range
+// filter could not do.
+func GetCacheKeysByPrefix(ctx context.Context, orgId string, category string, prefix string, max int, inputcursor string) ([]CacheKeyData, string, error) {
+	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" {
+		return []CacheKeyData{}, "", errors.New("Not available in worker mode")
+	}
+
+	if strings.ToLower(category) == "default" {
+		category = ""
+	}
+
+	if max > 1000 {
+		max = 1000
+	}
+	if max <= 0 {
+		max = 50
+	}
+
+	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
+	lowerPrefix := strings.ToLower(prefix)
+
+	matched := []CacheKeyData{}
+	scanCap := 5000
+	scanned := 0
+	cursor := ""
+
+	for scanned < scanCap {
+		batch, newCursor, err := GetAllCacheKeys(ctx, orgId, category, 1000, cursor)
+		if err != nil {
+			return matched, "", err
+		}
+
+		if len(batch) == 0 {
+			break
+		}
+
+		for _, k := range batch {
+			scanned += 1
+			if strings.HasPrefix(strings.ToLower(k.Key), lowerPrefix) {
+				matched = append(matched, k)
+				if len(matched) >= max {
+					return matched, "", nil
+				}
+			}
+		}
+
+		if newCursor == "" || newCursor == cursor {
+			break
+		}
+
+		cursor = newCursor
+	}
+
+	if scanned >= scanCap {
+		log.Printf("[WARNING] Prefix search hit scan cap (%d) for category '%s'. Results may be incomplete for very large categories.", scanCap, category)
+	}
+
+	return matched, "", nil
 }
 
 func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
