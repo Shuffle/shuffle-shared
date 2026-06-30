@@ -1678,52 +1678,65 @@ func parseAgentDecisions(rawOutput string) ([]AgentDecision, error) {
 	cleaned := FixContentOutput(rawOutput)
 
 	// If its a JSON array
-	if decisions, err := extractDecisionArray(cleaned); err == nil {
+	decisions, err := extractDecisionArray(cleaned)
+	if err == nil {
 		return decisions, nil
 	}
 
 	// JSONL (one object per occurrence) ??
-	if decisions, err := extractDecisionJSONL(cleaned); err == nil {
+	decisions, err = extractDecisionJSONL(cleaned)
+	if err == nil {
 		return decisions, nil
 	}
 
 	// last resort: unescape, then retry array
 	unescaped := strings.ReplaceAll(cleaned, `\"`, `"`)
-	if decisions, err := extractDecisionArray(unescaped); err == nil {
+	decisions, err = extractDecisionArray(unescaped)
+	if err == nil {
 		return decisions, nil
 	}
 
 	return nil, fmt.Errorf("failed to parse agent decisions from LLM output")
 }
 
-// extractDecisionArray finds the first '[' that decodes into a valid decision array.
+// extractDecisionArray scans s for the first '[' that decodes into a valid decision array. It uses a raw-map intermediate step so we can fix field types before unmarshalling into the strict AgentDecision struct (whose Value field must be a string).
 func extractDecisionArray(s string) ([]AgentDecision, error) {
 	for i := 0; i < len(s); i++ {
-		if s[i] != '[' {
+		char := s[i]
+		if char != '[' {
 			continue
 		}
 
-		// So lets decode into raw maps so we can inspect and mutate it
 		var raw []map[string]interface{}
-		if err := json.NewDecoder(strings.NewReader(s[i:])).Decode(&raw); err != nil {
+		reader := strings.NewReader(s[i:])
+		decoder := json.NewDecoder(reader)
+		decodeErr := decoder.Decode(&raw)
+		if decodeErr != nil {
 			continue
 		}
 
-		if len(raw) == 0 || raw[0]["action"] == nil {
+		if len(raw) == 0 {
 			continue
 		}
 
-		// Fix the types (convert numbers/bools to strings)
-		normalizeDecisionFields(raw)
+		firstItem := raw[0]
+		firstActionVal, firstActionExists := firstItem["action"]
+		if !firstActionExists || firstActionVal == nil {
+			continue
+		}
 
-		//Round-trip: Marshal the fixed map back to bytes, then unmarshal into the strict struct
-		b, err := json.Marshal(raw)
-		if err != nil {
+		for idx := range raw {
+			raw[idx] = normalizeDecisionFields(raw[idx])
+		}
+
+		b, marshalErr := json.Marshal(raw)
+		if marshalErr != nil {
 			continue
 		}
 
 		var decisions []AgentDecision
-		if err := json.Unmarshal(b, &decisions); err != nil {
+		unmarshalErr := json.Unmarshal(b, &decisions)
+		if unmarshalErr != nil {
 			continue
 		}
 
@@ -1733,38 +1746,54 @@ func extractDecisionArray(s string) ([]AgentDecision, error) {
 	return nil, fmt.Errorf("no valid JSON array found")
 }
 
-// extractDecisionJSONL collects every top-level '{...}' that looks like a decision.
+// extractDecisionJSONL collects every top-level '{...}' object in s that looks like a decision. This handles LLM output where decisions are emitted as separate JSON objects rather than an array.
 func extractDecisionJSONL(s string) ([]AgentDecision, error) {
 	var out []AgentDecision
 
-	for i := 0; i < len(s); {
-		if s[i] != '{' {
+	i := 0
+	for i < len(s) {
+		char := s[i]
+		if char != '{' {
 			i++
 			continue
 		}
 
-		r := strings.NewReader(s[i:])
-		dec := json.NewDecoder(r)
+		reader := strings.NewReader(s[i:])
+		dec := json.NewDecoder(reader)
 
 		var raw map[string]interface{}
-		if err := dec.Decode(&raw); err != nil {
+		decodeErr := dec.Decode(&raw)
+
+		consumed := int(dec.InputOffset())
+		if consumed <= 0 {
 			i++
+		} else {
+			i += consumed
+		}
+
+		if decodeErr != nil {
 			continue
 		}
 
-		if raw["action"] != nil {
-			normalizeDecisionFields([]map[string]interface{}{raw})
-			b, err := json.Marshal(raw)
-			if err == nil {
-				var one AgentDecision
-				if err := json.Unmarshal(b, &one); err == nil {
-					out = append(out, one)
-				}
-			}
+		actionVal, actionExists := raw["action"]
+		if !actionExists || actionVal == nil {
+			continue
 		}
 
-		// Jump past the object we just consumed to avoid parsing nested braces
-		i += int(dec.InputOffset())
+		raw = normalizeDecisionFields(raw)
+
+		b, marshalErr := json.Marshal(raw)
+		if marshalErr != nil {
+			continue
+		}
+
+		var one AgentDecision
+		unmarshalErr := json.Unmarshal(b, &one)
+		if unmarshalErr != nil {
+			continue
+		}
+
+		out = append(out, one)
 	}
 
 	if len(out) == 0 {
@@ -1774,33 +1803,47 @@ func extractDecisionJSONL(s string) ([]AgentDecision, error) {
 	return out, nil
 }
 
-// normalizeDecisionFields converts non-string field["value"] entries into JSON strings.
-// This MUST happen before unmarshalling into AgentDecision (whose Value field is a string).
-func normalizeDecisionFields(decisions []map[string]interface{}) {
-	for _, d := range decisions {
-		fields, ok := d["fields"].([]interface{})
-		if !ok {
+// normalizeDecisionFields converts non-string field["value"] entries into JSON strings. This MUST happen before unmarshalling into AgentDecision (whose Value field is a string).
+func normalizeDecisionFields(d map[string]interface{}) map[string]interface{} {
+	//check "fields" key exists at all.
+	rawFields, fieldsExist := d["fields"]
+	if !fieldsExist {
+		return d
+	}
+
+	fields, fieldsOk := rawFields.([]interface{})
+	if !fieldsOk {
+		return d
+	}
+
+	for _, item := range fields {
+		fm, itemOk := item.(map[string]interface{})
+		if !itemOk {
 			continue
 		}
 
-		for _, f := range fields {
-			fm, ok := f.(map[string]interface{})
-			if !ok {
-				continue
-			}
-
-			v, ok := fm["value"]
-			if !ok || v == nil {
-				continue
-			}
-
-			if _, isStr := v.(string); !isStr {
-				if b, err := json.Marshal(v); err == nil {
-					fm["value"] = string(b)
-				}
-			}
+		rawValue, valueExists := fm["value"]
+		if !valueExists {
+			continue
 		}
+
+		if rawValue == nil {
+			continue
+		}
+
+		_, isString := rawValue.(string)
+		if isString {
+			continue
+		}
+
+		b, marshalErr := json.Marshal(rawValue)
+		if marshalErr != nil {
+			continue
+		}
+		fm["value"] = string(b)
 	}
+
+	return d
 }
 
 func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys []string) (WorkflowApp, WorkflowAppAction) {
