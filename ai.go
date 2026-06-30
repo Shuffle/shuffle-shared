@@ -1673,177 +1673,148 @@ func balanceJSONLikeString(s string) string {
 	return string(result)
 }
 
-// extracts AgentDecision structs from messy LLM output. It tries multiple strategies to handle various output formats.
+func normalizeRawDecision(decision *rawDecision) {
+	for fieldIndex, field := range decision.Fields {
+		if field.Value == nil {
+			continue
+		}
+
+		_, isAlreadyString := field.Value.(string)
+		if !isAlreadyString {
+			marshaledValueBytes, marshalErr := json.Marshal(field.Value)
+			if marshalErr == nil {
+				decision.Fields[fieldIndex].Value = string(marshaledValueBytes)
+			}
+		}
+	}
+}
+
+// parseAgentDecisions extracts AgentDecision structs from messy LLM output. It tries multiple strategies in order: JSON array, JSONL, then array after unescaping.
 func parseAgentDecisions(rawOutput string) ([]AgentDecision, error) {
-	cleaned := FixContentOutput(rawOutput)
+	cleanedText := FixContentOutput(rawOutput)
 
-	// If its a JSON array
-	decisions, err := extractDecisionArray(cleaned)
-	if err == nil {
-		return decisions, nil
+	//Try to parse as a JSON array
+	parsedDecisions, extractionErr := extractDecisionArray(cleanedText)
+	if extractionErr == nil {
+		return parsedDecisions, nil
 	}
 
-	// JSONL (one object per occurrence) ??
-	decisions, err = extractDecisionJSONL(cleaned)
-	if err == nil {
-		return decisions, nil
+	// Try to parse as JSONL (one object per occurrence)
+	parsedDecisions, extractionErr = extractDecisionJSONL(cleanedText)
+	if extractionErr == nil {
+		return parsedDecisions, nil
 	}
 
-	// last resort: unescape, then retry array
-	unescaped := strings.ReplaceAll(cleaned, `\"`, `"`)
-	decisions, err = extractDecisionArray(unescaped)
-	if err == nil {
-		return decisions, nil
+	// Last resort: unescape quotes, then retry the array strategy
+	unescapedText := strings.ReplaceAll(cleanedText, `\"`, `"`)
+	parsedDecisions, extractionErr = extractDecisionArray(unescapedText)
+	if extractionErr == nil {
+		return parsedDecisions, nil
 	}
 
 	return nil, fmt.Errorf("failed to parse agent decisions from LLM output")
 }
 
-// extractDecisionArray scans s for the first '[' that decodes into a valid decision array. It uses a raw-map intermediate step so we can fix field types before unmarshalling into the strict AgentDecision struct (whose Value field must be a string).
-func extractDecisionArray(s string) ([]AgentDecision, error) {
-	for i := 0; i < len(s); i++ {
-		char := s[i]
-		if char != '[' {
+// extractDecisionArray scans the text for the first '[' that successfully decodes into a valid array of decisions.
+func extractDecisionArray(rawText string) ([]AgentDecision, error) {
+	for byteIndex := 0; byteIndex < len(rawText); byteIndex++ {
+		currentByte := rawText[byteIndex]
+		if currentByte != '[' {
 			continue
 		}
 
-		var raw []map[string]interface{}
-		reader := strings.NewReader(s[i:])
-		decoder := json.NewDecoder(reader)
-		decodeErr := decoder.Decode(&raw)
+		// Decode the JSON starting from this '[' into our raw structs
+		var decodedRawDecisions []rawDecision
+		stringReader := strings.NewReader(rawText[byteIndex:])
+		jsonDecoder := json.NewDecoder(stringReader)
+		decodeErr := jsonDecoder.Decode(&decodedRawDecisions)
+		
 		if decodeErr != nil {
-			continue
+			continue 
 		}
 
-		if len(raw) == 0 {
-			continue
+		if len(decodedRawDecisions) == 0 || decodedRawDecisions[0].Action == "" {
+			continue 
 		}
 
-		firstItem := raw[0]
-		firstActionVal, firstActionExists := firstItem["action"]
-		if !firstActionExists || firstActionVal == nil {
-			continue
+		// Fix the data types (convert numbers/bools to strings)
+		for decisionIndex := range decodedRawDecisions {
+			normalizeRawDecision(&decodedRawDecisions[decisionIndex])
 		}
 
-		for idx := range raw {
-			raw[idx] = normalizeDecisionFields(raw[idx])
-		}
-
-		b, marshalErr := json.Marshal(raw)
+		marshaledJSONBytes, marshalErr := json.Marshal(decodedRawDecisions)
 		if marshalErr != nil {
 			continue
 		}
-
-		var decisions []AgentDecision
-		unmarshalErr := json.Unmarshal(b, &decisions)
-		if unmarshalErr != nil {
+		
+		var finalDecisions []AgentDecision
+		structUnmarshalErr := json.Unmarshal(marshaledJSONBytes, &finalDecisions)
+		if structUnmarshalErr != nil {
 			continue
 		}
-
-		return decisions, nil
+		
+		return finalDecisions, nil
 	}
 
 	return nil, fmt.Errorf("no valid JSON array found")
 }
 
-// extractDecisionJSONL collects every top-level '{...}' object in s that looks like a decision. This handles LLM output where decisions are emitted as separate JSON objects rather than an array.
-func extractDecisionJSONL(s string) ([]AgentDecision, error) {
-	var out []AgentDecision
+// extractDecisionJSONL scans the text for top-level '{' characters and extracts every valid JSON object that looks like a decision.
+func extractDecisionJSONL(rawText string) ([]AgentDecision, error) {
+	var collectedDecisions []AgentDecision
+	byteIndex := 0
 
-	i := 0
-	for i < len(s) {
-		char := s[i]
-		if char != '{' {
-			i++
+	for byteIndex < len(rawText) {
+		currentByte := rawText[byteIndex]
+		if currentByte != '{' {
+			byteIndex++
 			continue
 		}
 
-		reader := strings.NewReader(s[i:])
-		dec := json.NewDecoder(reader)
+		stringReader := strings.NewReader(rawText[byteIndex:])
+		jsonDecoder := json.NewDecoder(stringReader)
 
-		var raw map[string]interface{}
-		decodeErr := dec.Decode(&raw)
+		var singleRawDecision rawDecision
+		decodeErr := jsonDecoder.Decode(&singleRawDecision)
 
-		consumed := int(dec.InputOffset())
-		if consumed <= 0 {
-			i++
+		// Calculate how many bytes the decoder consumed so we can skip past this object
+		bytesConsumedByDecoder := int(jsonDecoder.InputOffset())
+		if bytesConsumedByDecoder <= 0 {
+			byteIndex++ 
 		} else {
-			i += consumed
+			byteIndex += bytesConsumedByDecoder
 		}
 
 		if decodeErr != nil {
-			continue
+			continue 
 		}
 
-		actionVal, actionExists := raw["action"]
-		if !actionExists || actionVal == nil {
-			continue
+		if singleRawDecision.Action == "" {
+			continue // Missing the required "action" key
 		}
 
-		raw = normalizeDecisionFields(raw)
+		// Fix the data types
+		normalizeRawDecision(&singleRawDecision)
 
-		b, marshalErr := json.Marshal(raw)
+		marshaledJSONBytes, marshalErr := json.Marshal(singleRawDecision)
 		if marshalErr != nil {
 			continue
 		}
 
-		var one AgentDecision
-		unmarshalErr := json.Unmarshal(b, &one)
-		if unmarshalErr != nil {
+		var finalDecision AgentDecision
+		structUnmarshalErr := json.Unmarshal(marshaledJSONBytes, &finalDecision)
+		if structUnmarshalErr != nil {
 			continue
 		}
 
-		out = append(out, one)
+		collectedDecisions = append(collectedDecisions, finalDecision)
 	}
 
-	if len(out) == 0 {
+	if len(collectedDecisions) == 0 {
 		return nil, fmt.Errorf("no valid JSONL objects found")
 	}
 
-	return out, nil
-}
-
-// normalizeDecisionFields converts non-string field["value"] entries into JSON strings. This MUST happen before unmarshalling into AgentDecision (whose Value field is a string).
-func normalizeDecisionFields(d map[string]interface{}) map[string]interface{} {
-	//check "fields" key exists at all.
-	rawFields, fieldsExist := d["fields"]
-	if !fieldsExist {
-		return d
-	}
-
-	fields, fieldsOk := rawFields.([]interface{})
-	if !fieldsOk {
-		return d
-	}
-
-	for _, item := range fields {
-		fm, itemOk := item.(map[string]interface{})
-		if !itemOk {
-			continue
-		}
-
-		rawValue, valueExists := fm["value"]
-		if !valueExists {
-			continue
-		}
-
-		if rawValue == nil {
-			continue
-		}
-
-		_, isString := rawValue.(string)
-		if isString {
-			continue
-		}
-
-		b, marshalErr := json.Marshal(rawValue)
-		if marshalErr != nil {
-			continue
-		}
-		fm["value"] = string(b)
-	}
-
-	return d
+	return collectedDecisions, nil
 }
 
 func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys []string) (WorkflowApp, WorkflowAppAction) {
