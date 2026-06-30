@@ -3516,6 +3516,25 @@ func GetUsecaseData() string {
     "step": 1,
     "list": [
       {
+        "name": "Phishing",
+        "type": "Email",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "email_case_management_1",
+        "source_id": "email",
+        "target_id": "case_management",
+        "tags": [
+          "Alert",
+          "Logs"
+        ],
+        "description": "User-reported phishing emails create cases for triage. Automating intake with deduplication and auto-enrichment drastically cuts analyst workload.",
+        "agentic_description": "An agent parses reported emails, extracts and enriches all IOCs, determines phishing verdict using threat intel, and auto-closes low-risk reports while escalating confirmed campaigns.",
+        "automation_label": "Ingest Tickets",
+        "automation_category": "cases",
+        "automation_area": "automatic_ingestion"
+      },
+      {
         "name": "SIEM alerts",
         "type": "SIEM",
         "destination": "Cases",
@@ -3550,25 +3569,6 @@ func GetUsecaseData() string {
         ],
         "description": "EDR-generated alerts (malware detections, suspicious process executions, ransomware behavior) are forwarded directly to Case Management to open or update incidents, bypassing the SIEM for faster response on high-confidence endpoint detections.",
         "agentic_description": "An agent evaluates EDR alert confidence, correlates with related endpoint events, determines if it belongs to an existing case, and either updates the case or creates a new one with a pre-filled investigation timeline.",
-        "automation_label": "Ingest Tickets",
-        "automation_category": "cases",
-        "automation_area": "automatic_ingestion"
-      },
-      {
-        "name": "Email reports",
-        "type": "Email",
-        "destination": "Cases",
-        "running": false,
-        "disabled": false,
-        "id": "email_case_management_1",
-        "source_id": "email",
-        "target_id": "case_management",
-        "tags": [
-          "Alert",
-          "Logs"
-        ],
-        "description": "User-reported phishing emails create cases for triage. Automating intake with deduplication and auto-enrichment drastically cuts analyst workload.",
-        "agentic_description": "An agent parses reported emails, extracts and enriches all IOCs, determines phishing verdict using threat intel, and auto-closes low-risk reports while escalating confirmed campaigns.",
         "automation_label": "Ingest Tickets",
         "automation_category": "cases",
         "automation_area": "automatic_ingestion"
