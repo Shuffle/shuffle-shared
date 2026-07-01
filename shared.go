@@ -1449,6 +1449,11 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.LeadInfo = LeadInfo{}
 	}
 
+	// Sort subscriptions: active first, inactive last
+	sort.Slice(org.Subscriptions, func(i, j int) bool {
+		return org.Subscriptions[i].Active && !org.Subscriptions[j].Active
+	})
+
 	newjson, err := json.Marshal(org)
 	if err != nil {
 		log.Printf("[ERROR] Failed unmarshal of org %s (%s): %s", org.Name, org.Id, err)
