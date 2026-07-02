@@ -1019,6 +1019,32 @@ func GetLiveExecutionStats(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(dataJSON)
 }
 
+// redactCacheHealthResult strips sensitive fields from a raw CacheKeyData JSON blob
+// (DatastoreHealth.Result) before it's served on the public /api/v1/health/stats endpoint.
+// This covers historical records stored before UpdatedBy/PublicAuthorization were scrubbed
+// at the source in HandleGetCacheKey. Anything that doesn't parse as a JSON object is
+// dropped entirely rather than returned as-is, since we can't know what it contains.
+func redactCacheHealthResult(raw string) string {
+	if len(raw) == 0 {
+		return raw
+	}
+
+	parsed := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return ""
+	}
+
+	delete(parsed, "updated_by")
+	delete(parsed, "public_authorization")
+
+	redacted, err := json.Marshal(parsed)
+	if err != nil {
+		return ""
+	}
+
+	return string(redacted)
+}
+
 func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1128,6 +1154,10 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 		if len(newHealthChecks) > 0 {
 			healthChecks = newHealthChecks
 		}
+	}
+
+	for i := range healthChecks {
+		healthChecks[i].Datastore.Result = redactCacheHealthResult(healthChecks[i].Datastore.Result)
 	}
 
 	healthChecksData, err := json.MarshalIndent(healthChecks, "", "  ")

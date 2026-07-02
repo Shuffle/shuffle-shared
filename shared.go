@@ -21925,6 +21925,8 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cacheData.ExecutionId = ""
 	cacheData.Authorization = ""
 	cacheData.OrgId = ""
+	cacheData.UpdatedBy = ""
+	cacheData.PublicAuthorization = ""
 
 	// Look for query param "type"
 	typeQuery := query.Get("type")
