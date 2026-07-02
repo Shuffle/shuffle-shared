@@ -44,8 +44,8 @@ import (
 var standalone bool
 
 // var model = "gpt-5-mini"
-//var model = "gpt-5-mini"
-var model = "gpt-5.4-nano"
+var model = "gpt-5-mini"
+//var model = "gpt-5.4-nano"
 //var model = "gpt-5.2-codex"
 
 var fallbackModel = ""
@@ -1541,53 +1541,20 @@ func FixJSONNewlines(input string) string {
 }
 
 func FixContentOutput(contentOutput string) string {
-	if strings.Contains(contentOutput, "```json") {
-		// Handle ```json
-		start := strings.Index(contentOutput, "```json")
-		end := strings.Index(contentOutput, "```")
-		if start != -1 {
-			end = strings.Index(contentOutput[start+7:], "```")
-
-			// Shift it so the index is at the correct place
-			end = end + start + 7
+	// Safely extract content from ```json or ``` blocks
+	if start := strings.Index(contentOutput, "```json"); start != -1 {
+		start += 7 // skip ```json
+		if end := strings.Index(contentOutput[start:], "```"); end != -1 {
+			contentOutput = contentOutput[start : start+end]
+		} else {
+			contentOutput = contentOutput[start:] // Unmatched, take the rest
 		}
-
-		if start != -1 && end != -1 {
-			newend := end + 7
-			newstart := start + 7
-
-			log.Printf("[INFO] Found ``` in content. Start: %d, end: %d", start, end)
-
-			if newend > len(contentOutput) {
-				newend = end
-			}
-
-			if newend > len(contentOutput) {
-				newend = len(contentOutput)
-			}
-
-			if newstart > len(contentOutput) {
-				newstart = start
-			}
-
-			if newstart > len(contentOutput) {
-				newstart = len(contentOutput)
-			}
-
-			contentOutput = contentOutput[start+7 : newend]
-		}
-	}
-
-	if strings.Contains(contentOutput, "```") {
-		start := strings.Index(contentOutput, "```")
-		end := strings.Index(contentOutput[start+3:], "```")
-		if start != -1 {
-			end = strings.Index(contentOutput[start+3:], "```")
-			end = end + start + 3
-		}
-
-		if start != -1 && end != -1 {
-			contentOutput = contentOutput[start+3 : end+3]
+	} else if start := strings.Index(contentOutput, "```"); start != -1 {
+		start += 3 // skip ```
+		if end := strings.Index(contentOutput[start:], "```"); end != -1 {
+			contentOutput = contentOutput[start : start+end]
+		} else {
+			contentOutput = contentOutput[start:] // Unmatched, take the rest
 		}
 	}
 
@@ -1704,6 +1671,166 @@ func balanceJSONLikeString(s string) string {
 	}
 
 	return string(result)
+}
+
+// normalizeRawDecisionFields converts any non-string 'Value' into a JSON-encoded string.
+func normalizeRawDecisionFields(fields []rawField) {
+	for fieldIndex := range fields {
+		if fields[fieldIndex].Value == nil {
+			continue
+		}
+
+		_, isAlreadyString := fields[fieldIndex].Value.(string)
+		if !isAlreadyString {
+			marshaledValueBytes, marshalErr := json.Marshal(fields[fieldIndex].Value)
+			if marshalErr == nil {
+				fields[fieldIndex].Value = string(marshaledValueBytes)
+			}
+		}
+	}
+}
+
+// extractDecisionArray scans the text for the first '[' that successfully decodes into a valid array of decisions.
+func extractDecisionArray(rawText string) ([]AgentDecision, error) {
+	for byteIndex := 0; byteIndex < len(rawText); byteIndex++ {
+		if rawText[byteIndex] != '[' {
+			continue
+		}
+
+		var decodedRawDecisions []map[string]json.RawMessage
+		stringReader := strings.NewReader(rawText[byteIndex:])
+		jsonDecoder := json.NewDecoder(stringReader)
+		decodeErr := jsonDecoder.Decode(&decodedRawDecisions)
+		
+		if decodeErr != nil || len(decodedRawDecisions) == 0 {
+			continue 
+		}
+
+		// Check if the first item has an "action" key
+		if _, hasAction := decodedRawDecisions[0]["action"]; !hasAction {
+			continue
+		}
+
+		for mapIndex, rawMap := range decodedRawDecisions {
+			if rawFields, hasFields := rawMap["fields"]; hasFields {
+				var fields []rawField
+				if unmarshalErr := json.Unmarshal(rawFields, &fields); unmarshalErr == nil {
+					normalizeRawDecisionFields(fields)
+					
+					fixedFieldsBytes, marshalErr := json.Marshal(fields)
+					if marshalErr == nil {
+						decodedRawDecisions[mapIndex]["fields"] = fixedFieldsBytes
+					}
+				}
+			}
+		}
+
+		marshaledJSONBytes, marshalErr := json.Marshal(decodedRawDecisions)
+		if marshalErr != nil {
+			continue
+		}
+		
+		var finalDecisions []AgentDecision
+		structUnmarshalErr := json.Unmarshal(marshaledJSONBytes, &finalDecisions)
+		if structUnmarshalErr != nil {
+			continue
+		}
+		
+		return finalDecisions, nil
+	}
+
+	return nil, fmt.Errorf("no valid JSON array found")
+}
+
+// extractDecisionJSONL scans the text for top-level '{' characters and extracts every valid JSON object.
+func extractDecisionJSONL(rawText string) ([]AgentDecision, error) {
+	var collectedDecisions []AgentDecision
+	byteIndex := 0
+
+	for byteIndex < len(rawText) {
+		if rawText[byteIndex] != '{' {
+			byteIndex++
+			continue
+		}
+
+		stringReader := strings.NewReader(rawText[byteIndex:])
+		jsonDecoder := json.NewDecoder(stringReader)
+
+		var rawMap map[string]json.RawMessage
+		decodeErr := jsonDecoder.Decode(&rawMap)
+
+		bytesConsumedByDecoder := int(jsonDecoder.InputOffset())
+		if bytesConsumedByDecoder <= 0 {
+			byteIndex++ 
+		} else {
+			byteIndex += bytesConsumedByDecoder
+		}
+
+		if decodeErr != nil {
+			continue 
+		}
+
+		if _, hasAction := rawMap["action"]; !hasAction {
+			continue 
+		}
+
+		// Fix the "fields" array if it exists
+		if rawFields, hasFields := rawMap["fields"]; hasFields {
+			var fields []rawField
+			if unmarshalErr := json.Unmarshal(rawFields, &fields); unmarshalErr == nil {
+				normalizeRawDecisionFields(fields)
+				fixedFieldsBytes, marshalErr := json.Marshal(fields)
+				if marshalErr == nil {
+					rawMap["fields"] = fixedFieldsBytes
+				}
+			}
+		}
+
+		marshaledJSONBytes, marshalErr := json.Marshal(rawMap)
+		if marshalErr != nil {
+			continue
+		}
+
+		var finalDecision AgentDecision
+		structUnmarshalErr := json.Unmarshal(marshaledJSONBytes, &finalDecision)
+		if structUnmarshalErr != nil {
+			continue
+		}
+
+		collectedDecisions = append(collectedDecisions, finalDecision)
+	}
+
+	if len(collectedDecisions) == 0 {
+		return nil, fmt.Errorf("no valid JSONL objects found")
+	}
+
+	return collectedDecisions, nil
+}
+
+// parseAgentDecisions extracts AgentDecision structs from messy LLM output. It tries multiple strategies in order: JSON array, JSONL, then array after unescaping.
+func parseAgentDecisions(rawOutput string) ([]AgentDecision, error) {
+	cleanedText := FixContentOutput(rawOutput)
+
+	//Try to parse as a JSON array
+	parsedDecisions, extractionErr := extractDecisionArray(cleanedText)
+	if extractionErr == nil {
+		return parsedDecisions, nil
+	}
+
+	// Try to parse as JSONL (one object per occurrence)
+	parsedDecisions, extractionErr = extractDecisionJSONL(cleanedText)
+	if extractionErr == nil {
+		return parsedDecisions, nil
+	}
+
+	// unescape quotes, then retry the array strategy
+	unescapedText := strings.ReplaceAll(cleanedText, `\"`, `"`)
+	parsedDecisions, extractionErr = extractDecisionArray(unescapedText)
+	if extractionErr == nil {
+		return parsedDecisions, nil
+	}
+
+	return nil, fmt.Errorf("failed to parse agent decisions from LLM output")
 }
 
 func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys []string) (WorkflowApp, WorkflowAppAction) {
@@ -7821,6 +7948,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	_ = oldActionResult
 	oldAgentOutput := AgentOutput{}
 	previousAnswers := ""
+	continuationMessage := "" // Tracks user continuation text (new message sent to a finished agent)
 
 	marshalledDecisions := []byte{}
 	if createNextActions == true {
@@ -8007,10 +8135,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				for _, field := range mappedDecision.Fields {
 					if field.Key == "continue" && len(field.Answer) > 0 {
 						if debug {
-							log.Printf("[DEBUG][%s] AI Agent continuation: overriding userMessage with 'continue' answer (length=%d)", execution.ExecutionId, len(field.Answer))
+							log.Printf("[DEBUG][%s] AI Agent continuation: found 'continue' answer (length=%d); keeping original userMessage, adding as continuationMessage", execution.ExecutionId, len(field.Answer))
 						}
 
-						userMessage = field.Answer
+						continuationMessage = field.Answer
 						foundContinuation = true
 						break
 					}
@@ -8285,9 +8413,10 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 
 ### INPUT PROTOCOL
 1. **USER CONTEXT:** Available actions/tools.
-2. **USER REQUEST:** Task to process.
-3. **USER ANSWERS:** Explicit answers already provided by the user to prior agent questions. Treat these as authoritative context.
-4. **HISTORY:** JSON list of previous executions (Newest First).
+2. **ORIGINAL REQUEST (optional):** The user's prior request from this session, already completed. Visible in HISTORY. Use for context only — do NOT re-execute it.
+3. **USER REQUEST:** The current task to complete. PHASE 1 checks THIS against HISTORY.
+4. **USER ANSWERS:** Explicit answers already provided by the user to prior agent questions. Treat these as authoritative context.
+5. **HISTORY:** JSON list of previous executions (Newest First).
 
 ### PHASE 1: COMPLETION CHECK (HIGHEST PRIORITY)
 **Compare the "USER REQUEST" against the "HISTORY".**
@@ -8463,12 +8592,28 @@ data_filter:
 		}
 	}
 
-	// Fix e.g. injected JSON and other quote/newline mechanics that aren't compatible
-	// Problem: The input data itself can be a reference.
-	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-		Role:    openai.ChatMessageRoleUser,
-		Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
-	})
+	// Build the USER REQUEST message.
+	// For a normal run: USER REQUEST = the original user input.
+	// For a continuation (user sent a follow-up to a finished agent): the continuation is the live task that PHASE 1 should check against. The original question goes in as read-only context so the LLM knows the prior topic without re-executing it.
+	if len(continuationMessage) > 0 {
+		// Continuation run: new message is the actual task
+		if len(userMessage) > 0 {
+			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleUser,
+				Content: fmt.Sprintf("ORIGINAL REQUEST (already completed, visible in HISTORY): %s", userMessage),
+			})
+		}
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: fmt.Sprintf("USER REQUEST: %s", continuationMessage),
+		})
+	} else {
+		// Normal run: original input is the task
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
+		})
+	}
 
 	if len(previousAnswers) > 0 {
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
@@ -8477,8 +8622,8 @@ data_filter:
 		})
 	}
 
-	if len(marshalledDecisions) > 4 { 
-		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage {
+	if len(marshalledDecisions) > 4 {
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,
 			Content: fmt.Sprintf("HISTORY:\n%s", string(marshalledDecisions)),
 		})
@@ -8749,7 +8894,7 @@ data_filter:
 		}
 
 		// Maps OpenAI -> Result struct so we can handle it
-		resultMapping := ActionResult{}
+		resultMapping = ActionResult{}
 		err = json.Unmarshal(body, &resultMapping)
 		if err != nil {
 			log.Printf("[ERROR] AI Agent (2): Failed unmarshalling response into decisions. Response from sending AI Agent request to %s: %d - '%s'. Err: %s", fullUrl, llmStatusCode, string(body), err)
@@ -8872,7 +9017,7 @@ data_filter:
 			}
 
 			// Parse the outputMap.Result to OpenAI response
-			choicesString := ""
+			// choicesString = "" 
 			bodyMap, ok := outputMap.Body.(map[string]interface{})
 			if !ok {
 				log.Printf("[ERROR][%s] AI Agent: Failed to convert body to MAP in AI Agent response. Raw response: %s", execution.ExecutionId, string(resultMapping.Result))
@@ -9000,49 +9145,26 @@ data_filter:
 		// Found random JSON issues with [{} and similar, due to LLM instability.
 		decisionString = FixContentOutput(choicesString)
 
-		// Find the first one and remove anything until that point
 		conditionText := "conditions must be correct"
-		if !strings.HasPrefix(decisionString, `[`) {
-			firstIndex := strings.Index(decisionString, "[")
-			if firstIndex != -1 {
-				decisionString = decisionString[firstIndex:]
-			} else {
-				if !strings.Contains(decisionString, conditionText) {
-					log.Printf("[WARNING][%s] No '[' found in AI Agent response. Using full response: %s", execution.ExecutionId, decisionString)
-				}
-			}
-		}
-
-		// LLM is occasionally appending freeform text like (e.g. "Summary: ...") after the closing bracket. Truncate everything past the last ']' so the JSON		
-		// parser doesn't dont break due to that.
-		if lastBracket := strings.LastIndex(decisionString, "]"); lastBracket != -1 {
-			decisionString = decisionString[:lastBracket+1]
-		}
-
 		errorMessage := ""
-		mappedDecisions := []AgentDecision{}
-		err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
-		if err != nil {
-			if !strings.Contains(decisionString, conditionText) {
-				log.Printf("[ERROR][%s] AI Agent (5): Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
+
+		// Parse decisions using the refactored helper function
+		mappedDecisions, parsingErr := parseAgentDecisions(choicesString)
+
+		if len(mappedDecisions) == 0 {
+			if parsingErr == nil {
+				parsingErr = errors.New("no valid AgentDecision array or objects found in output")
 			}
-
-			if len(mappedDecisions) == 0 {
-				decisionString = strings.Replace(decisionString, `\"`, `"`, -1)
-
-				err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
-				if err != nil && !strings.Contains(decisionString, conditionText) {
-					log.Printf("[ERROR][%s] AI Agent (6): Failed unmarshalling decisions in AI Agent response (2): %s. String: %s", execution.ExecutionId, err, decisionString)
-
-					// Updating the OUTPUT in some way to help the user a bit.
-					if strings.Contains(decisionString, "conditions must be correct") { 
-						errorMessage = fmt.Sprintf("Condition failed. See decision_string for details")
-						resultMapping.Status = "SKIPPED"
-					} else {
-						resultMapping.Status = "FAILURE"
-						errorMessage = fmt.Sprintf("The output from the LLM had no decisions. See the raw decisions tring for the response. Contact support@shuffler.io if you think this is wrong.")
-					}
-				}
+			if !strings.Contains(decisionString, conditionText) {
+				log.Printf("[ERROR][%s] AI Agent (6): Failed parsing decisions in AI Agent response: %s. String: %s", execution.ExecutionId, parsingErr, decisionString)
+			}
+			// Updating the OUTPUT in some way to help the user a bit.
+			if strings.Contains(decisionString, "conditions must be correct") {
+				errorMessage = fmt.Sprintf("Condition failed. See decision_string for details")
+				resultMapping.Status = "SKIPPED"
+			} else {
+				resultMapping.Status = "FAILURE"
+				errorMessage = fmt.Sprintf("The output from the LLM had no decisions. See the raw decisions tring for the response. Contact support@shuffler.io if you think this is wrong.")
 			}
 		}
 
@@ -9492,14 +9614,14 @@ data_filter:
 			}
 
 			if !foundResult {
-				// duration := int64(0)
-				// if agentOutput.StartedAt > 0 && agentOutput.CompletedAt > 0 {
-				// 	duration = agentOutput.CompletedAt - agentOutput.StartedAt
-				// } else if agentOutput.StartedAt > 0 {
-				// 	duration = time.Now().Unix() - agentOutput.StartedAt
-				// }
+				duration := int64(0)
+				if agentOutput.StartedAt > 0 && agentOutput.CompletedAt > 0 {
+					duration = (agentOutput.CompletedAt - agentOutput.StartedAt) / 1000
+				} else if agentOutput.StartedAt > 0 {
+					duration = (time.Now().UnixMilli() - agentOutput.StartedAt) / 1000
+				}
 
-				// log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=SUCCESS duration=%ds decisions=%d llm_calls=%d tokens_used=%d", execution.ExecutionId, execution.Workflow.OrgId, duration, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.TotalTokens)
+				log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=FINISHED duration=%ds tool_calls=%d llm_calls=%d prompt_tokens=%d completion_tokens=%d total_tokens=%d", execution.ExecutionId, execution.Workflow.OrgId, duration, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.PromptTokens, agentOutput.CompletionTokens, agentOutput.TotalTokens)
 			}
 		}
 
