@@ -2379,7 +2379,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			decision.RunDetails.ActionName = actionName
 
 			if debug {
-				log.Printf("RawResp: %s", string(rawResponse))
+				log.Printf("[DEBUG] RawResp: %s", string(rawResponse))
 			}
 
 			if err != nil {
@@ -2738,7 +2738,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 			// Last cleanup
 			for i := len(removeIndex) - 1; i >= 0; i-- {
 				env.SensorHosts = append(env.SensorHosts[:removeIndex[i]], env.SensorHosts[removeIndex[i]+1:]...)
-				log.Printf("[INFO] Sensor '%s' removed from group environment '%s' (%s) due to inactivity. Checkin: %d seconds ago", env.SensorHosts[removeIndex[i]].Hostname, env.Name, env.Id, timeNow-env.SensorHosts[removeIndex[i]].Checkin)
+				//log.Printf("[INFO] Sensor '%s' removed from group environment '%s' (%s) due to inactivity. Checkin: %d seconds ago", env.SensorHosts[removeIndex[i]].Hostname, env.Name, env.Id, timeNow-env.SensorHosts[removeIndex[i]].Checkin)
 			}
 
 			go HandleSensorDatastoreUpdate(orborusData)
@@ -3656,6 +3656,8 @@ ExecStart=$INSTALL_PATH \
   --screenlock_check=$SCREENLOCK_CHECK \
   --log_forwarding=$LOG_FORWARDING \
   --response_actions=$RESPONSE_ACTIONS
+StandardOutput=append:/var/log/orborus.log
+StandardError=append:/var/log/orborus.log
 
 Restart=always
 RestartSec=5
@@ -3702,6 +3704,13 @@ install_macos() {
 
   <key>RunAtLoad</key>
   <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/orborus.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/orborus.log</string>
+
 </dict>
 </plist>
 EOF
