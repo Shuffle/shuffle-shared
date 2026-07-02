@@ -5752,3 +5752,8 @@ type WorkflowSetOpsResponse struct {
 	Error             string            `json:"error,omitempty"`
 	FailedAtOp        int               `json:"failed_at_op,omitempty"`
 }
+
+type rawField struct {
+	Name  string      `json:"name"`
+	Value interface{} `json:"value"` 
+}
