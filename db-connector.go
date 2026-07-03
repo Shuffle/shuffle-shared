@@ -33,6 +33,7 @@ import (
 	"cloud.google.com/go/datastore"
 	"github.com/Masterminds/semver"
 	"github.com/bradfitz/slice"
+	"github.com/microcosm-cc/bluemonday"
 	uuid "github.com/satori/go.uuid"
 
 	//"github.com/frikky/kin-openapi/openapi3"
@@ -2211,6 +2212,32 @@ func sanitizeString(input string) string {
 	}
 
 	return input
+}
+
+var formMarkdownPolicy *bluemonday.Policy
+
+// Blocks script/iframe/event-handler XSS in FormControl.InputMarkdown while keeping basic formatting.
+func getFormMarkdownPolicy() *bluemonday.Policy {
+	if formMarkdownPolicy != nil {
+		return formMarkdownPolicy
+	}
+
+	policy := bluemonday.UGCPolicy()
+	policy.AllowStandardURLs()
+	policy.RequireNoFollowOnLinks(true)
+	policy.RequireNoReferrerOnLinks(true)
+	policy.AddTargetBlankToFullyQualifiedLinks(true)
+
+	formMarkdownPolicy = policy
+	return formMarkdownPolicy
+}
+
+func sanitizeFormMarkdown(input string) string {
+	if len(input) == 0 {
+		return input
+	}
+
+	return getFormMarkdownPolicy().Sanitize(input)
 }
 
 func GetExecutionValidation(ctx context.Context, executionId string) (TypeValidation, error) {
