@@ -7192,6 +7192,17 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 		return
 	}
 
+	orgStats, err := GetOrgStatistics(ctx, billingOrgId)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get org stats for AI token limit alert for org %s: %s", billingOrgId, err)
+		return
+	}
+
+	if orgStats.MonthlyAIUsageAlertSent {
+		log.Printf("[DEBUG] Skipping duplicate AI token limit alert for org %s - already sent recently (2)", billingOrgId)
+		return
+	}
+
 	totalAppExecutions := int64(0)
 	appRunsLimit := int64(0)
 	orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
@@ -7218,7 +7229,7 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 		"ai_recommendation":         AiRecommendation,
 	}
 
-	err := sendMailSendgridV2(
+	err = sendMailSendgridV2(
 		[]string{"support@shuffler.io"},
 		Subject,
 		substitutions,
@@ -7230,6 +7241,11 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 		log.Printf("[ERROR] Failed sending AI token alert email to %v for org %s: %s", admins, billingOrgId, err)
 	} else {
 		log.Printf("[INFO] Sent AI token %d%% alert email to %v of org %s", int64(aiPercentage), admins, billingOrgId)
+		orgStats.MonthlyAIUsageAlertSent = true
+		errStats := SetOrgStatistics(ctx, *orgStats, billingOrgId)
+		if errStats != nil {
+			log.Printf("[ERROR] Failed to update org stats after sending AI token limit alert for org %s: %s", billingOrgId, errStats)
+		}
 	}
 }
 

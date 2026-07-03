@@ -160,10 +160,11 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 			log.Printf("[ERROR] Failed adding stats with ID %s: %s", id, putErr)
 
 			if strings.Contains(fmt.Sprintf("%s", putErr), "entity is too big") {
-				log.Printf("[WARNING] SetOrgStatistics: entity too big for org %s – archiving to GCS and trimming", id)
+				log.Printf("[WARNING] SetOrgStatistics: entity too big for org %s – attempting to archive to GCS", id)
 
 				if archiveErr := archiveOldStatsToGCSBucket(ctx, id, &stats); archiveErr != nil {
-					log.Printf("[WARNING] SetOrgStatistics: GCS archive failed for org %s: %s – trimming anyway", id, archiveErr)
+					log.Printf("[ERROR] SetOrgStatistics: GCS archive failed for org %s: %s – cannot trim stats without backup, returning original error", id, archiveErr)
+					return putErr
 				}
 
 				if len(stats.DailyStatistics) > 60 {

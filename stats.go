@@ -846,7 +846,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 
 		// Get a max of the last 365 days
 		if len(info.DailyStatistics) > 365 {
-			info.DailyStatistics = info.DailyStatistics[len(info.DailyStatistics)-60:]
+			info.DailyStatistics = info.DailyStatistics[len(info.DailyStatistics)-365:]
 		}
 	}
 
@@ -1406,6 +1406,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyAgentOutputTokens = 0
 		executionInfo.LastMonthlyResetMonth = currentMonth
 		executionInfo.LastUsageAlertThreshold = 0
+		executionInfo.MonthlyAIUsageAlertSent = false
 
 		// Reset all usage alerts to unsent
 		for index := range executionInfo.UsageAlerts {
