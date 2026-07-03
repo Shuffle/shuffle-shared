@@ -1019,11 +1019,6 @@ func GetLiveExecutionStats(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(dataJSON)
 }
 
-// redactCacheHealthResult strips sensitive fields from a raw CacheKeyData JSON blob
-// (DatastoreHealth.Result) before it's served on the public /api/v1/health/stats endpoint.
-// This covers historical records stored before UpdatedBy/PublicAuthorization were scrubbed
-// at the source in HandleGetCacheKey. Anything that doesn't parse as a JSON object is
-// dropped entirely rather than returned as-is, since we can't know what it contains.
 func redactCacheHealthResult(raw string) string {
 	if len(raw) == 0 {
 		return raw
