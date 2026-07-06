@@ -6140,7 +6140,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 }
 
 // Index = Username
-func SetSession(ctx context.Context, user User, value string) error {
+func SetSession(ctx context.Context, user *User, value string) error {
 	//parsedKey := strings.ToLower(user.Username)
 	// Non indexed User data
 	parsedKey := user.Id
