@@ -6146,6 +6146,12 @@ func SetSession(ctx context.Context, user User, value string) error {
 	parsedKey := user.Id
 	user.Session = value
 
+	now := time.Now().Unix()
+	if user.SessionCreatedAt == 0 {
+		user.SessionCreatedAt = now
+	}
+	user.SessionLastActivityAt = now
+
 	nameKey := "Users"
 	if project.DbType == "opensearch" {
 		data, err := json.Marshal(user)

@@ -287,6 +287,34 @@ func isLoop(arg string) bool {
 	return false
 }
 
+func getSessionIdleTimeout() time.Duration {
+	val := os.Getenv("SHUFFLE_SESSION_IDLE_TIMEOUT")
+	if val == "" {
+		return 3600 * time.Second
+	}
+	seconds, err := strconv.Atoi(val)
+	if err != nil || seconds <= 0 {
+		return 3600 * time.Second
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func getSessionMaxLifetime() time.Duration {
+	val := os.Getenv("SHUFFLE_SESSION_MAX_LIFETIME")
+	if val == "" {
+		return 0
+	}
+	seconds, err := strconv.Atoi(val)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func getSessionExpiration() time.Time {
+	return time.Now().Add(getSessionIdleTimeout())
+}
+
 func ConstructSessionCookie(value string, expires time.Time) *http.Cookie {
 	c := http.Cookie{
 		Name:     "session_token",
@@ -327,6 +355,23 @@ func constructSessionDeleteCookie() *http.Cookie {
 	c := ConstructSessionCookie("", time.Time{})
 	c.MaxAge = -1
 	return c
+}
+
+// expireSession clears the session on both the server (DB, cache) and client (cookie).
+func expireSession(ctx context.Context, resp http.ResponseWriter, user *User, reason string) error {
+	if resp != nil {
+		newCookie := constructSessionDeleteCookie()
+		http.SetCookie(resp, newCookie)
+		newCookie.Name = "__session"
+		http.SetCookie(resp, newCookie)
+	}
+	go DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+	user.Session = ""
+	user.SessionCreatedAt = 0
+	user.SessionLastActivityAt = 0
+	user.ValidatedSessionOrgs = []string{}
+	go SetUser(ctx, user, false)
+	return errors.New(reason)
 }
 
 func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
@@ -1756,6 +1801,8 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	userInfo.UsersLastSession = userInfo.Session
 
 	userInfo.Session = ""
+	userInfo.SessionCreatedAt = 0
+	userInfo.SessionLastActivityAt = 0
 	userInfo.ValidatedSessionOrgs = []string{}
 	err := SetUser(ctx, &userInfo, false)
 	if err != nil {
@@ -3878,6 +3925,41 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		//}
 
 		user.SessionLogin = true
+
+		// ── Session timeout enforcement ──────────────────────────────────
+		now := time.Now()
+		idleTimeout := getSessionIdleTimeout()
+		maxLifetime := getSessionMaxLifetime()
+
+		if user.Session != "" {
+			// Idle timeout: expire if the user hasn't made any request within the configured window
+			if user.SessionLastActivityAt > 0 && now.Unix()-user.SessionLastActivityAt > int64(idleTimeout.Seconds()) {
+				return User{}, expireSession(ctx, resp, &user, "Session expired due to inactivity")
+			}
+
+			// Max lifetime: expire if the session has existed longer than the absolute maximum,
+			// regardless of activity. Only enforced when SHUFFLE_SESSION_MAX_LIFETIME is set.
+			if maxLifetime > 0 && user.SessionCreatedAt > 0 && now.Unix()-user.SessionCreatedAt > int64(maxLifetime.Seconds()) {
+				return User{}, expireSession(ctx, resp, &user, "Session max lifetime exceeded")
+			}
+
+			// Throttled activity write: persist SessionLastActivityAt to the database
+			// at most once every 60 seconds per session, to avoid hammering Opensearch
+			// on every keystroke or rapid-fire API call.
+			if now.Unix()-user.SessionLastActivityAt >= 60 {
+				user.SessionLastActivityAt = now.Unix()
+				go SetUser(ctx, &user, false)
+			}
+
+			// Slide the cookie's Expires forward on every request so the browser
+			// also enforces the idle timeout at the HTTP level.
+			if resp != nil {
+				refreshedCookie := ConstructSessionCookie(user.Session, getSessionExpiration())
+				http.SetCookie(resp, refreshedCookie)
+				refreshedCookie.Name = "__session"
+				http.SetCookie(resp, refreshedCookie)
+			}
+		}
 
 		// Means session exists, but
 		return user, nil
