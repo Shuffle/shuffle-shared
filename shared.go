@@ -79,9 +79,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
 
+	"runtime"
+
 	"github.com/Masterminds/semver"
 	dockerclient "github.com/docker/docker/client"
-	"runtime"
 )
 
 var project ShuffleStorage
@@ -3943,21 +3944,19 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				return User{}, expireSession(ctx, resp, &user, "Session max lifetime exceeded")
 			}
 
-			// Throttled activity write: persist SessionLastActivityAt to the database
-			// at most once every 60 seconds per session, to avoid hammering Opensearch
-			// on every keystroke or rapid-fire API call.
+			// Refresh the session after every successful authenciation, but at most once every 60 seconds per session,
+			// to avoid hammering Opensearch on every keystroke or rapid-fire API call.
 			if now.Unix()-user.SessionLastActivityAt >= 60 {
 				user.SessionLastActivityAt = now.Unix()
 				go SetUser(ctx, &user, false)
-			}
 
-			// Slide the cookie's Expires forward on every request so the browser
-			// also enforces the idle timeout at the HTTP level.
-			if resp != nil {
-				refreshedCookie := ConstructSessionCookie(user.Session, getSessionExpiration())
-				http.SetCookie(resp, refreshedCookie)
-				refreshedCookie.Name = "__session"
-				http.SetCookie(resp, refreshedCookie)
+				// Slide the cookie's Expires forward so the browser also enforces the idle timeout at the HTTP level.
+				if resp != nil {
+					refreshedCookie := ConstructSessionCookie(user.Session, getSessionExpiration())
+					http.SetCookie(resp, refreshedCookie)
+					refreshedCookie.Name = "__session"
+					http.SetCookie(resp, refreshedCookie)
+				}
 			}
 		}
 
@@ -38300,7 +38299,7 @@ CRITICAL RULES FOR THE AGENT
 			backendUrl = fmt.Sprintf("http://localhost:%s", port)
 		}
 	}
-	
+
 	agentReq, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/agent", backendUrl), strings.NewReader(string(mcpBody)))
 	if err != nil {
 		log.Printf("[ERROR] Failed creating agent request in AgentWorkflowEditor: %s", err)
@@ -39249,7 +39248,7 @@ func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
 			if debug {
 				log.Printf("[DEBUG] delete_node(action): action %s not found, already removed - skipping", op.ID)
 			}
-			
+
 			return nil
 		}
 
@@ -39407,7 +39406,7 @@ func opDeleteBranch(wf *Workflow, op *WorkflowOperation) error {
 	if debug {
 		log.Printf("[DEBUG] delete_branch: branch %s not found, already removed (likely cascade from delete_node) - skipping", op.ID)
 	}
-	
+
 	return nil
 }
 
