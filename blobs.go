@@ -377,8 +377,8 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
 			}
 		}
-	} else if actionType == "vulnerability_comparison" {
-		categoryCheck := "shuffle-security_sensors"
+	} else if actionType == "vulnerability_correlation" {
+		categoryCheck := "shuffle-security_packages"
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
@@ -1183,6 +1183,206 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		}
 
 		// For now while testing
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+
+	} else if parsedActiontype == "vulnerability_correlation" {
+		createCaseId := uuid.NewV4().String()
+		defaultWorkflow := Workflow{
+			Name:        actionType,
+			Description: "For each software package + version coming from a host monitor, queries the Shuffle vulnerability API and stores any matching CVEs into the shuffle-security_vulnerabilities datastore category.",
+			OrgId:       orgId,
+			Start:       startActionId,
+			UsecaseIds:  []string{"vulnerabilities"},
+			Tags:        []string{"correlate", "vulnerability", "automatic"},
+			Actions: []Action{
+				{
+					Name:        "execute_python",
+					AppID:       "3e2bdf9d5069fe3f4746c29d68785a6a",
+					AppName:     "Shuffle Tools",
+					ID:          startActionId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "verify_package_vulnerability",
+					IsStartNode: true,
+					Sharing:     true,
+					Parameters: []WorkflowAppActionParameter{
+						{
+							Name:      "code",
+							Value: `import json
+import time
+import requests
+
+raw = r"""$exec"""
+
+exec = json.loads(raw)
+if isinstance(exec, str):
+    exec = json.loads(exec)
+
+name = exec["name"]
+versions = exec.get("versions", [])
+
+DATASTORE_CATEGORY = "shuffle-security_vulnerabilities"
+
+ECOSYSTEM_MAP = {
+    "python": "PyPI", "pip": "PyPI", "pypi": "PyPI",
+    "golang": "Go", "go": "Go",
+    "javascript": "npm", "node": "npm", "npm": "npm",
+    "rust": "crates.io", "cargo": "crates.io",
+    "ruby": "RubyGems", "gem": "RubyGems",
+    "java": "Maven", "maven": "Maven",
+    "php": "Packagist", "composer": "Packagist",
+    "dotnet": "NuGet", "nuget": "NuGet",
+}
+raw_os = (exec.get("os") or "").strip()
+ecosystem = ECOSYSTEM_MAP.get(raw_os.lower(), raw_os)
+
+def normalize_version(v):
+    if not v:
+        return None
+    v = v.strip()
+    if v.startswith("=="):
+        v = v.lstrip("=")
+    if any(c in v for c in "<>=*~^ "):
+        return None
+    return v
+
+API = "https://shuffler.io/api/v1/vulnerabilities"
+MAX_RETRIES = 4
+RETRY_WAIT = 20
+
+def is_rate_limited(resp, data):
+    if resp.status_code == 429:
+        return True
+    reason = (data.get("reason") or "") if isinstance(data, dict) else ""
+    return isinstance(data, dict) and data.get("success") is False and "too many requests" in reason.lower()
+
+found = []
+errors = []
+rate_limited = False
+
+for raw_version in versions:
+    version = normalize_version(raw_version)
+    if not version:
+        continue
+    if not ecosystem:
+        errors.append("No ecosystem mapping for os=%r" % raw_os)
+        break
+
+    body = {"package": {"name": name, "ecosystem": ecosystem}, "version": version}
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            r = requests.post(API, json=body, timeout=30)
+        except Exception as e:
+            errors.append("Request failed for %s %s: %s" % (name, version, e))
+            break
+        try:
+            data = r.json()
+        except Exception:
+            errors.append("Bad response (%s) for %s %s: %s" % (r.status_code, name, version, r.text[:200]))
+            break
+
+        if is_rate_limited(r, data):
+            rate_limited = True
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_WAIT)
+                continue
+            errors.append("RATE LIMITED on %s %s after %d retries" % (name, version, MAX_RETRIES))
+            break
+
+        if isinstance(data, dict) and data.get("success") is False:
+            errors.append("API error for %s %s: %s" % (name, version, data.get("reason")))
+            break
+
+        found.extend(data.get("vulns") or data.get("vulnerabilities") or [])
+        break
+
+seen, deduped = set(), []
+for v in found:
+    vid = v.get("id")
+    if vid and vid not in seen:
+        seen.add(vid)
+        deduped.append(v)
+
+stored = []
+store_errors = []
+for v in deduped:
+    vid = v.get("id")
+    if not vid:
+        continue
+    try:
+        self.set_key(vid, json.dumps(v), category=DATASTORE_CATEGORY)
+        stored.append(vid)
+    except Exception as e:
+        store_errors.append("Failed storing %s: %s" % (vid, e))
+
+if rate_limited or errors or store_errors:
+    status = "unknown"
+elif deduped:
+    status = "vulnerable"
+else:
+    status = "not_vulnerable"
+
+result = {
+    "name": name,
+    "ecosystem": ecosystem,
+    "status": status,
+    "vuln_count": len(deduped),
+    "stored_count": len(stored),
+    "stored_ids": stored,
+    "rate_limited": rate_limited,
+    "errors": errors,
+    "store_errors": store_errors,
+}
+print(json.dumps(result, indent=2))
+`,
+							Multiline: true,
+							Required:  true,
+						},
+					},
+				},
+				{
+					Name:        "Cases",
+					AppID:       "integration",
+					AppName:     "Singul",
+					LargeImage:  getSingulLogo(),
+					ID:          createCaseId,
+					AppVersion:  "1.0.0",
+					Environment: actionEnv,
+					Label:       "Create ticket",
+					Parameters: []WorkflowAppActionParameter{
+						{
+							Name:  "app_name",
+							Value: "",
+						},
+						{
+							Name:  "action",
+							Value: "Create ticket",
+							Options: []string{
+								"List tickets",
+								"Create ticket",
+								"Close ticket",
+								"Add comment",
+							},
+						},
+						{
+							Name:      "fields",
+							Value:     "data=$verify_package_vulnerability",
+							Multiline: true,
+						},
+					},
+				},
+			},
+			Branches: []Branch{
+				{
+					SourceID:      startActionId,
+					DestinationID: createCaseId,
+					ID:            uuid.NewV4().String(),
+				},
+			},
+		}
+
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
 
@@ -4017,12 +4217,9 @@ func GetUsecaseData() string {
         ],
         "description": "Correlate known vulnerabilities (CVEs, misconfigurations, missing patches) on affected assets with active incidents — surfacing exploitable weaknesses that elevate risk and guide containment priorities.",
         "agentic_description": "An agent matches observables and affected hosts in a case against the vulnerability inventory, identifies exploitable CVEs aligned with the attack technique, recalculates incident severity, and recommends remediation or compensating controls.",
-        "automation_area": "correlation",
-        "custom_action": {
-          "label": "Configure Vulnerabilities",
-          "href": "/vulnerabilities",
-          "description": "Open the vulnerability inventory to ingest CVEs from your scanners."
-        }
+        "automation_label": "Vulnerability Correlation",
+        "automation_category": "cases",
+        "automation_area": "correlation"
       },
       {
         "name": "Phishing IOCs",
