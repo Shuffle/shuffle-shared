@@ -6815,7 +6815,7 @@ func RunActionAI(resp http.ResponseWriter, request *http.Request) {
 					},
 					Orgs: []string{ephemeralUser},
 
-					Role:   "user",
+					Role:   "admin",
 					ApiKey: apikey,
 				}
 
@@ -6826,7 +6826,7 @@ func RunActionAI(resp http.ResponseWriter, request *http.Request) {
 						{
 							Id:       newUser.Id,
 							Username: newUser.Username,
-							Role:     "user",
+							Role:     "admin",
 						},
 					},
 				}
