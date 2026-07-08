@@ -37369,9 +37369,13 @@ func FuzzyHashBody(body []byte) uint64 {
 // - /workflow/{workflowId}/run
 // - /apps/{appId}/run
 // - /hooks/{webhookId}
-func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byte) bool {
+func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byte, org *Org) bool {
 	// May not have enough details to know without a body (?)
 	if len(body) == 0 {
+		return false
+	}
+
+	if org != nil && (org.LeadInfo.Customer || org.LeadInfo.POV || len(org.ManagerOrgs) > 0) && !org.LeadInfo.OpenSource {
 		return false
 	}
 
@@ -37381,7 +37385,6 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 	// The main point is avoiding replicas with deviations like timestamps
 	hash1 := FuzzyHashBody(body)
 
-	//cacheKey := fmt.Sprintf("%s_%s", urlMd5, hash1)
 	cacheKey := fmt.Sprintf("hash_%s_%d", urlMd5, hash1)
 	cache, err := GetCache(ctx, cacheKey)
 	if err != nil {
@@ -37401,14 +37404,12 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 		foundNumber = 1
 	}
 
-	// Controllable
-	defaultRecursionDepth := 5
+	defaultRecursionDepth := 15
 	maxRecursionDepthInt := defaultRecursionDepth
 	maxRecursionDepth := os.Getenv("SHUFFLE_MAX_RECURSION_DEPTH")
-	if maxRecursionDepth == "" {
-		maxRecursionDepthInt, err = strconv.Atoi(maxRecursionDepth)
-		if err != nil {
-			maxRecursionDepthInt = defaultRecursionDepth
+	if maxRecursionDepth != "" {
+		if n, parseErr := strconv.Atoi(maxRecursionDepth); parseErr == nil {
+			maxRecursionDepthInt = n
 		}
 	}
 
@@ -37416,7 +37417,6 @@ func IsExecutionRecursion(ctx context.Context, request *http.Request, body []byt
 		maxRecursionDepthInt = 3
 	}
 
-	// This has monitoring on it and should ideally NEVER happen
 	if foundNumber > maxRecursionDepthInt {
 		log.Printf("[ERROR] Detected potential recursion for URL %s. Hash: %d", request.URL.String(), hash1)
 		return true
