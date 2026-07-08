@@ -8957,15 +8957,19 @@ data_filter:
 					inputTokens := int(openaiOutput.Usage.PromptTokens)
 					outputTokens := int(openaiOutput.Usage.CompletionTokens)
 					totalTokens := int(openaiOutput.Usage.TotalTokens)
+					currentOrgId := execution.Workflow.OrgId
+					if len(currentOrgId) == 0 {
+						currentOrgId = billingOrgId
+					}
 
 					go func() {
 						time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
-						IncrementCacheDump(ctx, billingOrgId, "agent_tokens", totalTokens)
+						IncrementCache(ctx, currentOrgId, "agent_tokens", totalTokens)
 						if inputTokens > 0 {
-							IncrementCache(ctx, billingOrgId, "agent_input_tokens", inputTokens)
+							IncrementCache(ctx, currentOrgId, "agent_input_tokens", inputTokens)
 						}
 						if outputTokens > 0 {
-							IncrementCache(ctx, billingOrgId, "agent_output_tokens", outputTokens)
+							IncrementCache(ctx, currentOrgId, "agent_output_tokens", outputTokens)
 						}
 					}()
 					log.Printf("[AUDIT][%s] Incremented AI Agent usage for billing_org=%s exec_org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
