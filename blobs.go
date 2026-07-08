@@ -1354,7 +1354,7 @@ print(json.dumps(result, indent=2))
 					Parameters: []WorkflowAppActionParameter{
 						{
 							Name:  "app_name",
-							Value: "",
+							Value: categoryAction.AppName,
 						},
 						{
 							Name:  "action",
