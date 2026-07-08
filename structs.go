@@ -1040,6 +1040,7 @@ type LeadInfo struct {
 
 	ShuffleEnterpriseLicenseOldCustomer bool `json:"shuffle_enterprise_license_old_customer,omitempty" datastore:"shuffle_enterprise_license_old_customer"`
 	ScaleLicenseCloudTrial              bool `json:"scale_license_cloud_trial,omitempty" datastore:"scale_license_cloud_trial"`
+	OpenSourceLicense                   bool `json:"opensource_license,omitempty" datastore:"opensource_license"`
 	ScaleLicenseCloudCustomer           bool `json:"scale_license_cloud_customer,omitempty" datastore:"scale_license_cloud_customer"`
 	ScaleLicenseOnpremCustomer          bool `json:"scale_license_onprem_customer,omitempty" datastore:"scale_license_onprem_customer"`
 	BusinessLicenseCloud                bool `json:"business_license_cloud,omitempty" datastore:"business_license_cloud"`

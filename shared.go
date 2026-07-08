@@ -13867,6 +13867,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		newLeadinfo.OldCustomer = false
 		newLeadinfo.OldLead = false
 		newLeadinfo.OpenSource = false
+		newLeadinfo.OpenSourceLicense = false
 		newLeadinfo.Internal = false
 		newLeadinfo.Student = false
 		newLeadinfo.Creator = false
@@ -13970,6 +13971,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				newLeadinfo.OpenSource = true
 			}
 
+			if lead == "Open Source License" {
+				newLeadinfo.OpenSourceLicense = true
+			}
+
 			if lead == "Internal" {
 				newLeadinfo.Internal = true
 			}
@@ -13998,7 +14003,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				newLeadinfo.POV = true
 			}
 
-			if lead == "Shuffle Enterprise License" {
+			if lead == "Enterprise License (Legacy)" {
 				newLeadinfo.ShuffleEnterpriseLicenseOldCustomer = true
 			}
 
@@ -14047,12 +14052,55 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 		org.LeadInfo = newLeadinfo
 
-		if newLeadinfo.EnterpriseLicenseCloud ||
-			newLeadinfo.BusinessLicenseCloud ||
-			newLeadinfo.ShuffleEnterpriseLicenseOldCustomer {
-			org.SyncFeatures.AppExecutions.Limit = 300000
+		if newLeadinfo.EnterpriseLicenseOnprem ||
+			newLeadinfo.BusinessLicenseOnprem {
+			org.SyncFeatures.OnpremAppExecutions.Limit = 300000
+			org.SyncFeatures.OnpremAppExecutions.Active = true
+
+			org.SyncFeatures.Branding.Active = false
+
+			org.SyncFeatures.AppExecutions.Limit = 2000
+
 			org.SyncFeatures.MultiEnv.Limit = 250
+			org.SyncFeatures.MultiEnv.Active = true
+
+			org.SyncFeatures.MultiTenant.Active = true
 			org.SyncFeatures.MultiTenant.Limit = 1000
+
+			org.SyncFeatures.SendSms.Active = true
+			org.SyncFeatures.SendSms.Limit = 10000
+
+			org.SyncFeatures.SendMail.Active = true
+			org.SyncFeatures.SendMail.Limit = 10000
+			log.Printf("[INFO] Set limits to 300000 app runs / 250 envs / 1000 tenants for org %s (enterprise/business)", org.Id)
+		} else if newLeadinfo.ShuffleEnterpriseLicenseOldCustomer {
+			org.SyncFeatures.AppExecutions.Limit = 300000
+			org.SyncFeatures.Branding.Active = false
+
+			org.SyncFeatures.MultiEnv.Limit = 250
+			org.SyncFeatures.MultiEnv.Active = true
+
+			org.SyncFeatures.MultiTenant.Limit = 1000
+			org.SyncFeatures.MultiTenant.Active = true
+
+			org.SyncFeatures.SendSms.Active = true
+			org.SyncFeatures.SendSms.Limit = 10000
+
+			org.SyncFeatures.SendMail.Active = true
+			org.SyncFeatures.SendMail.Limit = 10000
+			log.Printf("[INFO] Set limits to 300000 app runs / 250 envs / 1000 tenants for org %s (enterprise/business)", org.Id)
+		} else if newLeadinfo.EnterpriseLicenseCloud ||
+			newLeadinfo.BusinessLicenseCloud {
+
+			org.SyncFeatures.OnpremAppExecutions.Limit = 25000
+
+			org.SyncFeatures.Branding.Active = false
+			org.SyncFeatures.MultiEnv.Active = true
+			org.SyncFeatures.MultiEnv.Limit = 250
+
+			org.SyncFeatures.MultiTenant.Active = true
+			org.SyncFeatures.MultiTenant.Limit = 1000
+
 			org.SyncFeatures.SendSms.Limit = 10000
 			org.SyncFeatures.SendMail.Limit = 10000
 			org.SyncFeatures.SendSms.Active = true
@@ -14060,17 +14108,32 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Set limits to 300000 app runs / 250 envs / 1000 tenants for org %s (enterprise/business)", org.Id)
 		} else if newLeadinfo.POV {
 			org.SyncFeatures.AppExecutions.Limit = 10000
+			org.SyncFeatures.Branding.Active = false
 			org.SyncFeatures.MultiEnv.Limit = 1
 			org.SyncFeatures.MultiTenant.Limit = 3
 			log.Printf("[INFO] Set limits to 10000 app runs / 1 env / 3 tenants for org %s (POC license)", org.Id)
 		} else if newLeadinfo.ScaleLicenseCloudTrial {
 			org.SyncFeatures.AppExecutions.Limit = 2000
+			org.SyncFeatures.Branding.Active = false
 			org.SyncFeatures.MultiEnv.Limit = 1
 			org.SyncFeatures.MultiTenant.Limit = 3
 			log.Printf("[INFO] Set limits to 2000 app runs / 1 env / 3 tenants for org %s (Scale free trial)", org.Id)
-		} else {
+		} else if newLeadinfo.OpenSourceLicense {
+			org.SyncFeatures.OnpremAppExecutions.Active = true
+			org.SyncFeatures.OnpremAppExecutions.Limit = 25000
+			org.SyncFeatures.Branding.Active = false
 			org.SyncFeatures.AppExecutions.Limit = 2000
 			org.SyncFeatures.MultiEnv.Limit = 1
+			org.SyncFeatures.MultiTenant.Limit = 3
+			log.Printf("[INFO] Set onprem limits to 25K onprem app runs / 1 env / 3 tenants for org %s (Open Source License)", org.Id)
+		} else if newLeadinfo.IntegrationPartner || newLeadinfo.ServicePartner {
+			org.SyncFeatures.Branding.Active = true
+		} else {
+			org.SyncFeatures.AppExecutions.Limit = 2000
+			org.SyncFeatures.OnpremAppExecutions.Limit = 25000
+			org.SyncFeatures.OnpremAppExecutions.Active = true
+			org.SyncFeatures.MultiEnv.Limit = 1
+			org.SyncFeatures.Branding.Active = false
 			org.SyncFeatures.MultiTenant.Limit = 3
 			log.Printf("[INFO] Reset limits to defaults (2000 app runs / 1 env / 3 tenants) for org %s (no license)", org.Id)
 		}
