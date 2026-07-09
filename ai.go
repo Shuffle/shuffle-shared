@@ -8656,6 +8656,18 @@ data_filter:
 		return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "marshal_request_body_failed", fmt.Sprintf("Failed to start AI Agent (4): %s", err.Error()))
 	}
 
+	if !json.Valid(initialAgentRequestBody) {
+		initialAgentRequestBody, err = json.Marshal(extendedReq)
+		if err != nil {
+			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "marshal_request_body_fallback_failed", fmt.Sprintf("Failed to start AI Agent (4b): %s", err.Error()))
+		}
+
+		if !json.Valid(initialAgentRequestBody) {
+
+			log.Printf("[ERROR][%s] AI Agent: Even fallback method produced invalid JSON. Body len=%d. Will still attempt the LLM call.", execution.ExecutionId, len(initialAgentRequestBody))
+		}
+	}
+
 	//go executeSpecificCloudApp(ctx, execution.ExecutionId, execution.Authorization, urls, startNode)
 	// if !runOpenaiRequest {
 	// 	log.Printf("[ERROR] AI Agent: Unhandled Singul BODY for OpenAI agent (first request): %s. AI APPNAME (can't be empty): %#v", string(initialAgentRequestBody), appname)
