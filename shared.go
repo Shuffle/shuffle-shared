@@ -38943,7 +38943,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 	}
 }
 
-var streamHTTPClient = &http.Client{Timeout: 5 * time.Second}
+var streamHTTPClient = &http.Client{Timeout: 2 * time.Second}
 
 func sendStreamOperation(ctx context.Context, request *http.Request, streamURL string, streamOp *StreamWorkflowOperation) error {
 	opBytes, err := json.Marshal(streamOp)
@@ -38965,11 +38965,7 @@ func sendStreamOperation(ctx context.Context, request *http.Request, streamURL s
 		req.Header.Set("Org-Id", orgHeader)
 	}
 
-	if cookie, err := request.Cookie("__session"); err == nil {
-		req.AddCookie(cookie)
-	} else if cookie, err := request.Cookie("session_token"); err == nil {
-		req.AddCookie(cookie)
-	}
+	// the streamURL is an internal endpoint not a user controlled value, so should I have to worry much about passing auth stuff ? 
 
 	resp, err := streamHTTPClient.Do(req)
 	if err != nil {
