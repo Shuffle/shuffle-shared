@@ -408,6 +408,12 @@ type DailyStatistics struct {
 	CloudExecutions            int64 `json:"cloud_executions" datastore:"cloud_executions"`
 	OnpremExecutions           int64 `json:"onprem_executions" datastore:"onprem_executions"`
 	AIUsage                    int64 `json:"ai_executions" datastore:"ai_executions"`
+	AgentExecutions            int64 `json:"agent_executions" datastore:"agent_executions"`
+	AgentExecutionsSuccessful  int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
+	AgentExecutionsFailed      int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
+	AgentTokens                int64 `json:"agent_tokens" datastore:"agent_tokens"`
+	AgentInputTokens           int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
+	AgentOutputTokens          int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
 
 	ApiUsage int64      `json:"api_usage" datastore:"api_usage"`
 	AppUsage []AppUsage `json:"app_usage" datastore:"app_usage"`
@@ -439,6 +445,8 @@ type ExecutionInfo struct {
 	TotalOnpremExecutions           int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
 	TotalAIUsage                    int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
 	TotalAgentExecutions            int64 `json:"total_agent_executions" datastore:"total_agent_executions"`
+	TotalAgentExecutionsSuccessful  int64 `json:"total_agent_executions_successful" datastore:"total_agent_executions_successful"`
+	TotalAgentExecutionsFailed      int64 `json:"total_agent_executions_failed" datastore:"total_agent_executions_failed"`
 	TotalAgentTokens                int64 `json:"total_agent_tokens" datastore:"total_agent_tokens"`
 	TotalAgentInputTokens           int64 `json:"total_agent_input_tokens" datastore:"total_agent_input_tokens"`
 	TotalAgentOutputTokens          int64 `json:"total_agent_output_tokens" datastore:"total_agent_output_tokens"`
@@ -458,6 +466,8 @@ type ExecutionInfo struct {
 	MonthlyOnpremExecutions           int64 `json:"monthly_onprem_executions,omitempty" datastore:"monthly_onprem_executions"`
 	MonthlyAIUsage                    int64 `json:"monthly_ai_executions,omitempty" datastore:"monthly_ai_executions"`
 	MonthlyAgentExecutions            int64 `json:"monthly_agent_executions,omitempty" datastore:"monthly_agent_executions"`
+	MonthlyAgentExecutionsSuccessful  int64 `json:"monthly_agent_executions_successful,omitempty" datastore:"monthly_agent_executions_successful"`
+	MonthlyAgentExecutionsFailed      int64 `json:"monthly_agent_executions_failed,omitempty" datastore:"monthly_agent_executions_failed"`
 	MonthlyAgentTokens                int64 `json:"monthly_agent_tokens,omitempty" datastore:"monthly_agent_tokens"`
 	MonthlyAgentInputTokens           int64 `json:"monthly_agent_input_tokens,omitempty" datastore:"monthly_agent_input_tokens"`
 	MonthlyAgentOutputTokens          int64 `json:"monthly_agent_output_tokens,omitempty" datastore:"monthly_agent_output_tokens"`
@@ -488,6 +498,8 @@ type ExecutionInfo struct {
 	DailyOnpremExecutions           int64 `json:"daily_onprem_executions" datastore:"daily_onprem_executions"`
 	DailyAIUsage                    int64 `json:"daily_ai_executions" datastore:"daily_ai_executions"`
 	DailyAgentExecutions            int64 `json:"daily_agent_executions" datastore:"daily_agent_executions"`
+	DailyAgentExecutionsSuccessful  int64 `json:"daily_agent_executions_successful" datastore:"daily_agent_executions_successful"`
+	DailyAgentExecutionsFailed      int64 `json:"daily_agent_executions_failed" datastore:"daily_agent_executions_failed"`
 	DailyAgentTokens                int64 `json:"daily_agent_tokens" datastore:"daily_agent_tokens"`
 	DailyAgentInputTokens           int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
 	DailyAgentOutputTokens          int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`

@@ -40,6 +40,9 @@ var PredictableDataTypes = []string{
 	"workflow_executions_onprem",
 	"api_usage",
 	"ai_executions",
+	"agent_executions",
+	"agent_executions_successful",
+	"agent_executions_failed",
 	"agent_tokens",
 	"agent_input_tokens",
 	"agent_output_tokens",
@@ -421,6 +424,18 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 			return d.ApiUsage
 		case "ai_executions":
 			return d.AIUsage
+		case "agent_executions":
+			return d.AgentExecutions
+		case "agent_executions_successful":
+			return d.AgentExecutionsSuccessful
+		case "agent_executions_failed":
+			return d.AgentExecutionsFailed
+		case "agent_tokens":
+			return d.AgentTokens
+		case "agent_input_tokens":
+			return d.AgentInputTokens
+		case "agent_output_tokens":
+			return d.AgentOutputTokens
 		default:
 			return -1
 		}
@@ -1327,6 +1342,12 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		CloudExecutions:            executionInfo.DailyCloudExecutions,
 		OnpremExecutions:           executionInfo.DailyOnpremExecutions,
 		AIUsage:                    executionInfo.DailyAIUsage,
+		AgentExecutions:            executionInfo.DailyAgentExecutions,
+		AgentExecutionsSuccessful:  executionInfo.DailyAgentExecutionsSuccessful,
+		AgentExecutionsFailed:      executionInfo.DailyAgentExecutionsFailed,
+		AgentTokens:                executionInfo.DailyAgentTokens,
+		AgentInputTokens:           executionInfo.DailyAgentInputTokens,
+		AgentOutputTokens:          executionInfo.DailyAgentOutputTokens,
 
 		ApiUsage: executionInfo.DailyApiUsage,
 
@@ -1362,6 +1383,8 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.DailyOnpremExecutions = 0
 	executionInfo.DailyApiUsage = 0
 	executionInfo.DailyAIUsage = 0
+	executionInfo.DailyAgentExecutionsSuccessful = 0
+	executionInfo.DailyAgentExecutionsFailed = 0
 
 	// Weekly
 	executionInfo.WeeklyAppExecutions = 0
@@ -1401,6 +1424,8 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyApiUsage = 0
 		executionInfo.MonthlyAIUsage = 0
 		executionInfo.MonthlyAgentExecutions = 0
+		executionInfo.MonthlyAgentExecutionsSuccessful = 0
+		executionInfo.MonthlyAgentExecutionsFailed = 0
 		executionInfo.MonthlyAgentTokens = 0
 		executionInfo.MonthlyAgentInputTokens = 0
 		executionInfo.MonthlyAgentOutputTokens = 0
@@ -1552,6 +1577,14 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalAgentExecutions += int64(increment)
 		orgStatistics.MonthlyAgentExecutions += int64(increment)
 		orgStatistics.DailyAgentExecutions += int64(increment)
+	} else if dataType == "agent_executions_successful" {
+		orgStatistics.TotalAgentExecutionsSuccessful += int64(increment)
+		orgStatistics.MonthlyAgentExecutionsSuccessful += int64(increment)
+		orgStatistics.DailyAgentExecutionsSuccessful += int64(increment)
+	} else if dataType == "agent_executions_failed" {
+		orgStatistics.TotalAgentExecutionsFailed += int64(increment)
+		orgStatistics.MonthlyAgentExecutionsFailed += int64(increment)
+		orgStatistics.DailyAgentExecutionsFailed += int64(increment)
 	} else if dataType == "agent_tokens" {
 		orgStatistics.TotalAgentTokens += int64(increment)
 		orgStatistics.MonthlyAgentTokens += int64(increment)

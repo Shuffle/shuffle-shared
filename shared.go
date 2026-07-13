@@ -17756,6 +17756,14 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		if agentOut.Status != "" && agentOut.Status != "RUNNING" {
 			logStatus = agentOut.Status
 		}
+
+		go IncrementCache(ctx, workflowExecution.Workflow.OrgId, "agent_executions", 1)
+		if logStatus == "SUCCESS" || logStatus == "FINISHED" {
+			go IncrementCache(ctx, workflowExecution.Workflow.OrgId, "agent_executions_successful", 1)
+		} else {
+			go IncrementCache(ctx, workflowExecution.Workflow.OrgId, "agent_executions_failed", 1)
+		}
+
 		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=%s duration=%ds tool_calls=%d llm_calls=%d prompt_tokens=%d completion_tokens=%d total_tokens=%d", workflowExecution.ExecutionId, workflowExecution.Workflow.OrgId, logStatus, duration, len(agentOut.Decisions), agentOut.LLMCallCount, agentOut.PromptTokens, agentOut.CompletionTokens, agentOut.TotalTokens)
 	}
 
