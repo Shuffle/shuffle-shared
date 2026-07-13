@@ -815,6 +815,54 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	key = fmt.Sprintf("cache_%s_send_mail", orgId)
+	cacheItem, err = GetCache(ctx, key)
+	if err == nil {
+		parsedItem := []byte(cacheItem.([]uint8))
+		increment, err := strconv.Atoi(string(parsedItem))
+		if err == nil {
+			info.TotalEmailUsage += int64(increment)
+			info.MonthlyEmailUsage += int64(increment)
+			info.DailyEmailUsage += int64(increment)
+		}
+	}
+
+	key = fmt.Sprintf("cache_%s_childorg_send_mail", orgId)
+	cacheItem, err = GetCache(ctx, key)
+	if err == nil {
+		parsedItem := []byte(cacheItem.([]uint8))
+		increment, err := strconv.Atoi(string(parsedItem))
+		if err == nil {
+			info.TotalChildOrgEmailUsage += int64(increment)
+			info.MonthlyChildOrgEmailUsage += int64(increment)
+			info.DailyChildOrgEmailUsage += int64(increment)
+		}
+	}
+
+	key = fmt.Sprintf("cache_%s_send_sms", orgId)
+	cacheItem, err = GetCache(ctx, key)
+	if err == nil {
+		parsedItem := []byte(cacheItem.([]uint8))
+		increment, err := strconv.Atoi(string(parsedItem))
+		if err == nil {
+			info.TotalSMSUsage += int64(increment)
+			info.MonthlySMSUsage += int64(increment)
+			info.DailySMSUsage += int64(increment)
+		}
+	}
+
+	key = fmt.Sprintf("cache_%s_childorg_send_sms", orgId)
+	cacheItem, err = GetCache(ctx, key)
+	if err == nil {
+		parsedItem := []byte(cacheItem.([]uint8))
+		increment, err := strconv.Atoi(string(parsedItem))
+		if err == nil {
+			info.TotalChildOrgSMSUsage += int64(increment)
+			info.MonthlyChildOrgSMSUsage += int64(increment)
+			info.DailyChildOrgSMSUsage += int64(increment)
+		}
+	}
+
 	for additionCnt, addition := range info.Additions {
 
 		key := fmt.Sprintf("cache_%s_%s", orgId, addition.Key)
