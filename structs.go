@@ -408,6 +408,13 @@ type DailyStatistics struct {
 	CloudExecutions            int64 `json:"cloud_executions" datastore:"cloud_executions"`
 	OnpremExecutions           int64 `json:"onprem_executions" datastore:"onprem_executions"`
 	AIUsage                    int64 `json:"ai_executions" datastore:"ai_executions"`
+	AgentExecutions            int64 `json:"agent_executions" datastore:"agent_executions"`
+	AgentExecutionsSuccessful  int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
+	AgentExecutionsFailed      int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
+	AgentTokens                int64 `json:"agent_tokens" datastore:"agent_tokens"`
+	AgentInputTokens           int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
+	AgentOutputTokens          int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
+	AgentCachedTokens          int64 `json:"agent_cached_tokens" datastore:"agent_cached_tokens"`
 
 	ApiUsage int64      `json:"api_usage" datastore:"api_usage"`
 	AppUsage []AppUsage `json:"app_usage" datastore:"app_usage"`
@@ -439,9 +446,12 @@ type ExecutionInfo struct {
 	TotalOnpremExecutions           int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
 	TotalAIUsage                    int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
 	TotalAgentExecutions            int64 `json:"total_agent_executions" datastore:"total_agent_executions"`
+	TotalAgentExecutionsSuccessful  int64 `json:"total_agent_executions_successful" datastore:"total_agent_executions_successful"`
+	TotalAgentExecutionsFailed      int64 `json:"total_agent_executions_failed" datastore:"total_agent_executions_failed"`
 	TotalAgentTokens                int64 `json:"total_agent_tokens" datastore:"total_agent_tokens"`
 	TotalAgentInputTokens           int64 `json:"total_agent_input_tokens" datastore:"total_agent_input_tokens"`
 	TotalAgentOutputTokens          int64 `json:"total_agent_output_tokens" datastore:"total_agent_output_tokens"`
+	TotalAgentCachedTokens          int64 `json:"total_agent_cached_tokens" datastore:"total_agent_cached_tokens"`
 	TotalChildWorkflowExecutions    int64 `json:"total_child_workflow_executions" datastore:"total_child_workflow_executions"`
 
 	MonthlyApiUsage                   int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
@@ -458,9 +468,12 @@ type ExecutionInfo struct {
 	MonthlyOnpremExecutions           int64 `json:"monthly_onprem_executions,omitempty" datastore:"monthly_onprem_executions"`
 	MonthlyAIUsage                    int64 `json:"monthly_ai_executions,omitempty" datastore:"monthly_ai_executions"`
 	MonthlyAgentExecutions            int64 `json:"monthly_agent_executions,omitempty" datastore:"monthly_agent_executions"`
+	MonthlyAgentExecutionsSuccessful  int64 `json:"monthly_agent_executions_successful,omitempty" datastore:"monthly_agent_executions_successful"`
+	MonthlyAgentExecutionsFailed      int64 `json:"monthly_agent_executions_failed,omitempty" datastore:"monthly_agent_executions_failed"`
 	MonthlyAgentTokens                int64 `json:"monthly_agent_tokens,omitempty" datastore:"monthly_agent_tokens"`
 	MonthlyAgentInputTokens           int64 `json:"monthly_agent_input_tokens,omitempty" datastore:"monthly_agent_input_tokens"`
 	MonthlyAgentOutputTokens          int64 `json:"monthly_agent_output_tokens,omitempty" datastore:"monthly_agent_output_tokens"`
+	MonthlyAgentCachedTokens          int64 `json:"monthly_agent_cached_tokens,omitempty" datastore:"monthly_agent_cached_tokens"`
 
 	WeeklyAppExecutions              int64 `json:"weekly_app_executions,omitempty" datastore:"weekly_app_executions"`
 	WeeklyChildAppExecutions         int64 `json:"weekly_child_app_executions,omitempty" datastore:"weekly_child_app_executions"`
@@ -488,9 +501,12 @@ type ExecutionInfo struct {
 	DailyOnpremExecutions           int64 `json:"daily_onprem_executions" datastore:"daily_onprem_executions"`
 	DailyAIUsage                    int64 `json:"daily_ai_executions" datastore:"daily_ai_executions"`
 	DailyAgentExecutions            int64 `json:"daily_agent_executions" datastore:"daily_agent_executions"`
+	DailyAgentExecutionsSuccessful  int64 `json:"daily_agent_executions_successful" datastore:"daily_agent_executions_successful"`
+	DailyAgentExecutionsFailed      int64 `json:"daily_agent_executions_failed" datastore:"daily_agent_executions_failed"`
 	DailyAgentTokens                int64 `json:"daily_agent_tokens" datastore:"daily_agent_tokens"`
 	DailyAgentInputTokens           int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
 	DailyAgentOutputTokens          int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`
+	DailyAgentCachedTokens          int64 `json:"daily_agent_cached_tokens" datastore:"daily_agent_cached_tokens"`
 
 	HourlyAppExecutions              int64 `json:"hourly_app_executions,omitempty" datastore:"hourly_app_executions"`
 	HourlyChildAppExecutions         int64 `json:"hourly_child_app_executions,omitempty" datastore:"hourly_child_app_executions"`
@@ -513,6 +529,7 @@ type ExecutionInfo struct {
 	LastMonthlyResetMonth   int                   `json:"last_monthly_reset_month" datastore:"last_monthly_reset_month"`
 	LastUsageAlertThreshold int64                 `json:"last_usage_alert_threshold" datastore:"last_usage_alert_threshold"`
 	UsageAlerts             []AlertThreshold      `json:"usage_alerts" datastore:"usage_alerts"`
+	MonthlyAIUsageAlertSent bool                  `json:"monthly_ai_usage_alert_sent" datastore:"monthly_ai_usage_alert_sent"`
 }
 
 type AdditionalUseConfig struct {
@@ -4885,33 +4902,61 @@ type MinimalParameter struct {
 	Value string `json:"value"`
 }
 
+// MinimalAction - action with position and basic info
 type MinimalAction struct {
 	AppName    string             `json:"app_name"`
+	AppID      string             `json:"app_id"`
 	ID         string             `json:"id"`
 	Label      string             `json:"label"`
 	Name       string             `json:"action_name"`
 	Parameters []MinimalParameter `json:"parameters"`
 	Errors     []string           `json:"errors,omitempty"`
+	X          int64              `json:"x"`
+	Y          int64              `json:"y"`
+	IsStart    bool               `json:"is_start"`
 }
 
+// MinimalTrigger - trigger with position and basic info
 type MinimalTrigger struct {
+	ID         string             `json:"id"`
 	AppName    string             `json:"app_name"`
 	Label      string             `json:"label"`
 	Parameters []MinimalParameter `json:"parameters"`
+	X          int64              `json:"x"`
+	Y          int64              `json:"y"`
+	IsStart    bool               `json:"is_start"`
 }
 
+// MinimalBranch - branch connecting nodes
 type MinimalBranch struct {
-	ID            string `json:"id"`
-	SourceID      string `json:"source_id"`
-	DestinationID string `json:"destination_id"`
+	ID            string             `json:"id"`
+	SourceID      string             `json:"source_id"`
+	DestinationID string             `json:"destination_id"`
+	Label         string             `json:"label"`
+	Conditions    []MinimalCondition `json:"conditions,omitempty"`
 }
 
-// MinimalWorkflow gathers only the minimal slices.
+// MinimalCondition - condition with minimal parameters
+type MinimalCondition struct {
+	Source      MinimalConditionParam `json:"source"`
+	Condition   MinimalConditionParam `json:"condition"`
+	Destination MinimalConditionParam `json:"destination"`
+}
+
+// MinimalConditionParam - minimal parameter for conditions (id, name, value only)
+type MinimalConditionParam struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// MinimalWorkflow - minimal workflow structure with node positions and connections
 type MinimalWorkflow struct {
-	Actions  []MinimalAction  `json:"actions"`
-	Branches []MinimalBranch  `json:"branches"`
-	Triggers []MinimalTrigger `json:"triggers"`
-	Errors   []string         `json:"errors,omitempty"`
+	Actions         []MinimalAction  `json:"actions"`
+	Branches        []MinimalBranch  `json:"branches"`
+	Triggers        []MinimalTrigger `json:"triggers"`
+	Errors          []string         `json:"errors,omitempty"`
+	StartTriggerID  string           `json:"start_trigger_id,omitempty"`
 }
 
 type NGramItem struct {
@@ -5668,4 +5713,68 @@ type AgentVerifierResult struct {
 	Pass   bool
 	Reason string 	// Skipped is true when the verifier was not run (missing input, LLM error, parse error). In that case the caller should accept the finish as-is.
 	Skipped bool
+// AppSummary - Lightweight app info for AI agents (name + description + id)
+type AppSummary struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	ID          string `json:"id"`
+}
+
+// ActionParameter - minimal action parameter info
+type ActionParameter struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Required    bool   `json:"required"`
+}
+
+// ActionSummary - minimal action info for AI agents
+type ActionSummary struct {
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Parameters  []ActionParameter  `json:"parameters"`
+}
+
+// AppActionResponse - actions grouped by app
+type AppActionResponse struct {
+	AppName string           `json:"app_name"`
+	AppID   string           `json:"app_id"`
+	Actions []ActionSummary  `json:"actions"`
+}
+
+
+// WorkflowOperation represents a single modification operation
+type WorkflowOperation struct {
+	Op             string          `json:"op"`                        // "add_node", "edit_node", "move_node", "delete_node", "add_branch", "edit_branch", "delete_branch", "add_condition", "edit_condition", "delete_condition"
+	NodeType       string          `json:"node_type,omitempty"`       // "action" or "trigger" (for node ops)
+	ID             string          `json:"id,omitempty"`              // Target ID for edit/delete/move ops OR real ID after creation
+	TempID         string          `json:"temp_id,omitempty"`         // Temporary ID provided by agent (for batch ops to reference new nodes)
+	BranchID       string          `json:"branch_id,omitempty"`       // For condition ops
+	ConditionIndex int             `json:"condition_index,omitempty"` // For edit/delete condition
+	InsertBefore   string          `json:"insert_before,omitempty"`   // Insert before this node ID
+	InsertAfter    string          `json:"insert_after,omitempty"`    // Insert after this node ID
+	Data           json.RawMessage `json:"data"`                      // MinimalAction, MinimalBranch, MinimalCondition, or position data
+}
+
+// WorkflowSetOpsRequest is the agent request to modify a workflow
+type WorkflowSetOpsRequest struct {
+	WorkflowID string              `json:"workflow_id"`
+	Operations []WorkflowOperation `json:"operations"`
+}
+
+// WorkflowSetOpsResponse returns the updated state
+type WorkflowSetOpsResponse struct {
+	Success           bool              `json:"success"`
+	WorkflowID        string            `json:"workflow_id"`
+	Message           string            `json:"message"`
+	OperationsApplied int               `json:"operations_applied"`
+	Workflow          *MinimalWorkflow  `json:"workflow"`
+	IDMapping         map[string]string `json:"id_mapping,omitempty"` // Maps temp_id → real_id for new nodes
+	CacheExpiresIn    int               `json:"cache_expires_in"`     // seconds
+	Error             string            `json:"error,omitempty"`
+	FailedAtOp        int               `json:"failed_at_op,omitempty"`
+}
+
+type rawField struct {
+	Name  string      `json:"name"`
+	Value interface{} `json:"value"` 
 }

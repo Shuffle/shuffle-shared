@@ -271,8 +271,8 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		newNotifications = append(newNotifications, notification)
 	}
 
-	sort.Slice(notifications[:], func(i, j int) bool {
-		return notifications[i].UpdatedAt > notifications[j].UpdatedAt
+	sort.Slice(newNotifications[:], func(i, j int) bool {
+		return newNotifications[i].UpdatedAt > newNotifications[j].UpdatedAt
 	})
 
 	notificationResponse := NotificationResponse{
@@ -311,6 +311,18 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	if notification.Ignored {
 		log.Printf("[DEBUG] Skipping notification workflow send for notification %s as it's ignored. WorkflowId: %#v", notification.Id, workflowId)
 		return nil
+	}
+
+	workflow, err := GetWorkflow(ctx, workflowId)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting workflow %s: %s", workflowId, err)
+	} else if workflow.ExecutingOrg.Id != "" && workflow.ExecutingOrg.Id != authOrg.Id {
+		executionOrg, err := GetOrg(ctx, workflow.ExecutingOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting execution org %s: %s", workflow.ExecutingOrg.Id, err)
+		} else {
+			authOrg = *executionOrg
+		}
 	}
 
 	//log.Printf("[DEBUG] Sending notification to workflow with id: %#v", workflowId)
@@ -1040,13 +1052,13 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			}
 
 			workflow, err := GetWorkflow(ctx, org.Defaults.NotificationWorkflow)
-			if err != nil {
-				log.Printf("[WARNING] Failed getting workflow with ID %s: %s", org.Defaults.NotificationWorkflow, err)
+			if err != nil || len(workflow.ID) == 0 {
+				log.Printf("[WARNING] Failed getting notification workflow with ID '%s': %s", org.Defaults.NotificationWorkflow, err)
 				return err
 			}
 
 			if workflow.OrgId != mainNotification.OrgId {
-				log.Printf("[WARNING] Can't access workflow %s with org %s (%s): %#v", workflow.ID, mainNotification.OrgName, mainNotification.OrgId, workflow.Org)
+				log.Printf("[WARNING] Can't access workflow '%s' (notification create) with org %s (%s): %#v", workflow.ID, mainNotification.OrgName, mainNotification.OrgId, workflow.Org)
 
 				// Get parent org if it exists and check too
 				if len(org.ManagerOrgs) > 0 {

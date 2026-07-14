@@ -40,9 +40,13 @@ var PredictableDataTypes = []string{
 	"workflow_executions_onprem",
 	"api_usage",
 	"ai_executions",
+	"agent_executions",
+	"agent_executions_successful",
+	"agent_executions_failed",
 	"agent_tokens",
 	"agent_input_tokens",
 	"agent_output_tokens",
+	"agent_cached_tokens",
 }
 
 func HandleGetWidget(resp http.ResponseWriter, request *http.Request) {
@@ -421,6 +425,20 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 			return d.ApiUsage
 		case "ai_executions":
 			return d.AIUsage
+		case "agent_executions":
+			return d.AgentExecutions
+		case "agent_executions_successful":
+			return d.AgentExecutionsSuccessful
+		case "agent_executions_failed":
+			return d.AgentExecutionsFailed
+		case "agent_tokens":
+			return d.AgentTokens
+		case "agent_input_tokens":
+			return d.AgentInputTokens
+		case "agent_output_tokens":
+			return d.AgentOutputTokens
+		case "agent_cached_tokens":
+			return d.AgentCachedTokens
 		default:
 			return -1
 		}
@@ -846,7 +864,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 
 		// Get a max of the last 365 days
 		if len(info.DailyStatistics) > 365 {
-			info.DailyStatistics = info.DailyStatistics[len(info.DailyStatistics)-60:]
+			info.DailyStatistics = info.DailyStatistics[len(info.DailyStatistics)-365:]
 		}
 	}
 
@@ -1327,6 +1345,13 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		CloudExecutions:            executionInfo.DailyCloudExecutions,
 		OnpremExecutions:           executionInfo.DailyOnpremExecutions,
 		AIUsage:                    executionInfo.DailyAIUsage,
+		AgentExecutions:            executionInfo.DailyAgentExecutions,
+		AgentExecutionsSuccessful:  executionInfo.DailyAgentExecutionsSuccessful,
+		AgentExecutionsFailed:      executionInfo.DailyAgentExecutionsFailed,
+		AgentTokens:                executionInfo.DailyAgentTokens,
+		AgentInputTokens:           executionInfo.DailyAgentInputTokens,
+		AgentOutputTokens:          executionInfo.DailyAgentOutputTokens,
+		AgentCachedTokens:          executionInfo.DailyAgentCachedTokens,
 
 		ApiUsage: executionInfo.DailyApiUsage,
 
@@ -1362,6 +1387,13 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.DailyOnpremExecutions = 0
 	executionInfo.DailyApiUsage = 0
 	executionInfo.DailyAIUsage = 0
+	executionInfo.DailyAgentExecutions = 0
+	executionInfo.DailyAgentExecutionsSuccessful = 0
+	executionInfo.DailyAgentExecutionsFailed = 0
+	executionInfo.DailyAgentTokens = 0
+	executionInfo.DailyAgentInputTokens = 0
+	executionInfo.DailyAgentOutputTokens = 0
+	executionInfo.DailyAgentCachedTokens = 0
 
 	// Weekly
 	executionInfo.WeeklyAppExecutions = 0
@@ -1401,11 +1433,15 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyApiUsage = 0
 		executionInfo.MonthlyAIUsage = 0
 		executionInfo.MonthlyAgentExecutions = 0
+		executionInfo.MonthlyAgentExecutionsSuccessful = 0
+		executionInfo.MonthlyAgentExecutionsFailed = 0
 		executionInfo.MonthlyAgentTokens = 0
 		executionInfo.MonthlyAgentInputTokens = 0
 		executionInfo.MonthlyAgentOutputTokens = 0
+		executionInfo.MonthlyAgentCachedTokens = 0
 		executionInfo.LastMonthlyResetMonth = currentMonth
 		executionInfo.LastUsageAlertThreshold = 0
+		executionInfo.MonthlyAIUsageAlertSent = false
 
 		// Reset all usage alerts to unsent
 		for index := range executionInfo.UsageAlerts {
@@ -1551,6 +1587,14 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalAgentExecutions += int64(increment)
 		orgStatistics.MonthlyAgentExecutions += int64(increment)
 		orgStatistics.DailyAgentExecutions += int64(increment)
+	} else if dataType == "agent_executions_successful" {
+		orgStatistics.TotalAgentExecutionsSuccessful += int64(increment)
+		orgStatistics.MonthlyAgentExecutionsSuccessful += int64(increment)
+		orgStatistics.DailyAgentExecutionsSuccessful += int64(increment)
+	} else if dataType == "agent_executions_failed" {
+		orgStatistics.TotalAgentExecutionsFailed += int64(increment)
+		orgStatistics.MonthlyAgentExecutionsFailed += int64(increment)
+		orgStatistics.DailyAgentExecutionsFailed += int64(increment)
 	} else if dataType == "agent_tokens" {
 		orgStatistics.TotalAgentTokens += int64(increment)
 		orgStatistics.MonthlyAgentTokens += int64(increment)
@@ -1563,6 +1607,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalAgentOutputTokens += int64(increment)
 		orgStatistics.MonthlyAgentOutputTokens += int64(increment)
 		orgStatistics.DailyAgentOutputTokens += int64(increment)
+	} else if dataType == "agent_cached_tokens" {
+		orgStatistics.TotalAgentCachedTokens += int64(increment)
+		orgStatistics.MonthlyAgentCachedTokens += int64(increment)
+		orgStatistics.DailyAgentCachedTokens += int64(increment)
 	} else {
 		//log.Printf("\n\n[ERROR] Unknown data type in stats increment for org %s: %s. Appending to custom list.\n\n", orgStatistics.OrgId, dataType)
 		appendCustom = true

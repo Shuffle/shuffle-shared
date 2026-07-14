@@ -3936,7 +3936,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.39"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.40"
 }
 
 // Removes JSON values from the input
@@ -4645,26 +4645,29 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 	return appname, baseAppname, appVersion, nil
 }
 
-func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType string) error {
+func handleDatastoreAutomationRequest(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType string) error {
 	var err error
 
-	// Dedup here with cache
-	cacheName := fmt.Sprintf("automation_%s_%s_%s", runType, cacheData.Category, cacheData.Key)
-	_, err = GetCache(ctx, cacheName)
-	if err == nil {
-		if debug { 
-			log.Printf("[DEBUG] Found existing cache for %s - skipping execution to prevent duplicates", cacheName)
-		}
+	// Makes sure we wait 2500ms. This is to avoid infinite loops primarily.
+	// Problem: There's a difference between user updates and automation updates.
+	// Trying without cache.
 
-		return nil
-	}
+	//cacheName := fmt.Sprintf("automation_%s_%s_%s", runType, cacheData.Category, cacheData.Key)
+	//_, err = GetCache(ctx, cacheName)
+	//if err == nil {
+	//	if debug { 
+	//		log.Printf("[DEBUG] Found existing '%s' cache for '%s' - skipping execution to prevent duplicates", runType, cacheName)
+	//	}
 
-	// Makes sure we wait 2500ms
-	SetCache(ctx, cacheName, []byte("1"), 2500, true)
+	//	return nil
+	//}
+	//SetCache(ctx, cacheName, []byte("1"), 2500, true)
 
 	if runType == "run_workflow" {
 
 	} else if runType == "webhook" {
+
+		// For now HTTP app hmm
 		webhookUrl := ""
 		for _, option := range automation.Options {
 			if option.Key == "webhook_url" {
@@ -4765,6 +4768,10 @@ func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte
 	client := &http.Client{
 		Timeout: time.Second * 5,
 	}
+
+	//if debug { 
+	//	log.Printf("[DEBUG] OUTPUT BODY: %s", string(marshalledBody))
+	//}
 
 	req, err := http.NewRequest(
 		"POST",
@@ -5190,6 +5197,19 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 			cacheData.WorkflowId = option.Value
 			workflowIds := strings.Split(option.Value, ",")
 
+
+			formattedBodyStruct := ExecutionRequest{
+				ExecutionSource:   fmt.Sprintf("datastore_%s_%s", cacheData.Category, cacheData.Key),
+				ExecutionArgument: string(marshalledBody),
+			}
+
+			marshalledFormattedBody, err := json.Marshal(formattedBodyStruct)
+			if err != nil {
+				log.Printf("[ERROR] Failed in marshalling data in 'run_workflow' datastore automation for workflow %s")
+			} else {
+				marshalledBody = marshalledFormattedBody
+			}
+
 			handled := []string{}
 			for _, workflowId := range workflowIds {
 				workflowId = strings.TrimSpace(workflowId)
@@ -5198,19 +5218,8 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 				}
 
 				handled = append(handled, workflowId)
-				formattedBodyStruct := ExecutionRequest{
-					ExecutionSource:   fmt.Sprintf("datastore_%s_%s", cacheData.Category, cacheData.Key),
-					ExecutionArgument: string(marshalledBody),
-				}
 
-				marshalledFormattedBody, err := json.Marshal(formattedBodyStruct)
-				if err != nil {
-					log.Printf("[ERROR] Failed in marshalling data in 'run_workflow' datastore automation for workflow %s", workflowId)
-				} else {
-					marshalledBody = marshalledFormattedBody
-				}
-
-				go handleDatastoreAutomationWebhook(ctx, marshalledBody, cacheData, automation, fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), "run_workflow")
+				go handleDatastoreAutomationRequest(ctx, marshalledBody, cacheData, automation, fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), "run_workflow")
 			}
 
 			break
@@ -5222,7 +5231,7 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 			return errors.New("No options provided for 'run_workflow' automation")
 		}
 
-		return handleDatastoreAutomationWebhook(ctx, marshalledBody, cacheData, automation, "/api/v1/apps/HTTP/run", "webhook")
+		return handleDatastoreAutomationRequest(ctx, marshalledBody, cacheData, automation, "/api/v1/apps/HTTP/run", "webhook")
 
 		// Send the webhook using the HTTP app with a POST request
 

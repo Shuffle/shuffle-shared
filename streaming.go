@@ -17,8 +17,15 @@ var streamPresenceColors = []string{
 	"#818CF8", "#FB923C",
 }
 
-func presenceColor(userID string, slotIndex int) string {
-	return streamPresenceColors[slotIndex%len(streamPresenceColors)]
+func presenceColor(userID string) string {
+	var hash int
+	for _, c := range userID {
+		hash = hash*31 + int(c)
+	}
+	if hash < 0 {
+		hash = -hash
+	}
+	return streamPresenceColors[hash%len(streamPresenceColors)]
 }
 
 // streamPresenceInterval: presence update every 100 poll iterations (~10s at 100ms/poll)
@@ -377,7 +384,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 					UserID:   user.Id,
 					Username: user.Username,
 					LastSeen: now,
-					Color:    presenceColor(user.Id, len(activeUsers)),
+					Color:    presenceColor(user.Id),
 				})
 			}
 			presence.Users = activeUsers
