@@ -27037,7 +27037,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									workflow.ID,
 									oldExecution.ExecutionId,
 									oldExecution.Authorization,
-									result.Action.ID,
+									result.Action.ID+"_decline",
 									failureSubflowStartnode,
 								)
 								reqBody := fmt.Sprintf(`{"execution_argument": %s}`, strconv.Quote(execArg))
