@@ -898,7 +898,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	stats := handleGetCorrectedStats(info)
+	stats := GetCorrectedStats(info)
 
 	newjson, err := json.Marshal(stats)
 	if err != nil {
@@ -913,7 +913,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 }
 
 // Make sure that we are not calling SetOrgStatistics function after calling this function. This will increase the app runs count in db on every call to this function.
-func handleGetCorrectedStats(info *ExecutionInfo) *ExecutionInfo {
+func GetCorrectedStats(info *ExecutionInfo) *ExecutionInfo {
 
 	// 1 Million Input Tokens = 250 app runs
 	// 1 Million Output Tokens = 1500 app runs
