@@ -600,6 +600,34 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
+
+	// Weird workaround that only applies during local development
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "debian" {
+		hostname = "shuffle-backend"
+	}
+
+	existingExecution, existingErr := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+	if existingErr == nil && len(existingExecution.ExecutionId) > 0 {
+		existingTerminal := existingExecution.Status == "FINISHED" || existingExecution.Status == "ABORTED" || existingExecution.Status == "FAILURE"
+		incomingTerminal := workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" || workflowExecution.Status == "FAILURE"
+
+		if existingTerminal && !incomingTerminal {
+			log.Printf("[INFO][%s] Existing execution is already %s. Not overriding with incoming %s update.", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
+			return nil
+		}
+
+		if existingTerminal && incomingTerminal && existingExecution.Status != workflowExecution.Status {
+			log.Printf("[INFO][%s] Existing execution is already %s. Not overriding with incoming terminal %s update.", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
+			return nil
+		}
+
+		if existingTerminal && incomingTerminal && len(existingExecution.Results) >= len(workflowExecution.Results) {
+			log.Printf("[INFO][%s] Existing execution is already %s with %d results. Not re-saving incoming %s update with %d results.", workflowExecution.ExecutionId, existingExecution.Status, len(existingExecution.Results), workflowExecution.Status, len(workflowExecution.Results))
+			return nil
+		}
+	}
+
 	executionData, err := json.Marshal(workflowExecution)
 	if err == nil {
 		err = SetCache(ctx, cacheKey, executionData, 31)
@@ -612,12 +640,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	} else {
 		//log.Printf("[ERROR] Failed marshalling execution for cache: %s", err)
 		//log.Printf("[INFO] Set execution cache for workflowexecution %s", cacheKey)
-	}
-
-	// Weird workaround that only applies during local development
-	hostname, err := os.Hostname()
-	if err != nil || hostname == "debian" {
-		hostname = "shuffle-backend"
 	}
 
 	// FIXME: This right here has caused more problems during dev than anything
@@ -1160,7 +1182,8 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				//return workflowExecution, err
 			}
 		}
-
+	}
+	if len(workflowExecution.ExecutionId) > 0 {
 		// A workaround for large bits of information for execution argument
 		if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
 			//log.Printf("[DEBUG] Found prefix %s to be replaced for exec argument (3)", workflowExecution.ExecutionArgument)
@@ -1175,6 +1198,20 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			} else {
 				//log.Printf("[DEBUG] Found a new value to parse with exec argument")
 				workflowExecution.ExecutionArgument = newValue
+			}
+		}
+
+		if strings.Contains(workflowExecution.Result, "Result too large to handle") {
+			baseResult := &ActionResult{
+				Result: workflowExecution.Result,
+				Action: Action{ID: "execution_result"},
+			}
+
+			newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseResult)
+			if err != nil {
+				log.Printf("[DEBUG][%s] Failed to parse in execution file value for Result: %s", workflowExecution.ExecutionId, err)
+			} else {
+				workflowExecution.Result = newValue
 			}
 		}
 
