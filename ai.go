@@ -7612,7 +7612,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		metadata += fmt.Sprintf("Current user: %s\n", execution.Workflow.UpdatedBy)
 	}
 
-	metadata += fmt.Sprintf("Current time: %s\n", time.Now().Format(time.RFC3339))
+	//metadata += fmt.Sprintf("Current time: %s\n", time.Now().Format(time.RFC3339))
 
 	/*
 	categoryActions := GetAppCategories()
@@ -7828,6 +7828,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 					trimmedActionStr := strings.TrimPrefix(actionStr, "app:")
 					sortedAppActions := getPrioritisedAppActions(ctx, trimmedActionStr, 15)
+
+					// Sort alphabetically so the action list is byte-for-byte identical across every LLM loop, keeping the prompt cache prefix stable.
+					sort.Slice(sortedAppActions, func(i, j int) bool {
+						return sortedAppActions[i].Name < sortedAppActions[j].Name
+					})
 
 					if len(sortedAppActions) > 0 {
 						// Cuts off the potential md5:appname prefix
@@ -8431,8 +8436,8 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 1. **USER CONTEXT:** Available actions/tools.
 2. **ORIGINAL REQUEST (optional):** The user's prior request from this session, already completed. Visible in HISTORY. Use for context only — do NOT re-execute it.
 3. **USER REQUEST:** The current task to complete. PHASE 1 checks THIS against HISTORY.
-4. **USER ANSWERS:** Explicit answers already provided by the user to prior agent questions. Treat these as authoritative context.
-5. **HISTORY:** JSON list of previous executions (Newest First).
+4. **HISTORY:** JSON list of previous executions (Newest First). Answered questions are embedded inside HISTORY decisions under field 'answer'.
+5. **USER ANSWERS:** Explicit answers already provided by the user to prior agent questions. Treat these as authoritative context.
 
 ### PHASE 1: COMPLETION CHECK (HIGHEST PRIORITY)
 **Compare the "USER REQUEST" against the "HISTORY".**
@@ -8631,17 +8636,18 @@ data_filter:
 		})
 	}
 
-	if len(previousAnswers) > 0 {
-		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
-			Content: fmt.Sprintf("USER ANSWERS:\n%s", previousAnswers),
-		})
-	}
-
 	if len(marshalledDecisions) > 4 {
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,
 			Content: fmt.Sprintf("HISTORY:\n%s", string(marshalledDecisions)),
+		})
+	}
+
+	// Let's put the USER ANSWERS after HISTORY so the frozen prefix [1][2][3] is never affected.
+	if len(previousAnswers) > 0 {
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: fmt.Sprintf("USER ANSWERS:\n%s", previousAnswers),
 		})
 	}
 
@@ -8651,6 +8657,12 @@ data_filter:
 			Content: failureInjection,
 		})
 	}
+
+	// Append a fresh timestamp as the very last message so we will hit the cache without ruining prefix.
+	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+		Role:    openai.ChatMessageRoleUser,
+		Content: fmt.Sprintf("Current time: %s", time.Now().Format(time.RFC3339)),
+	})
     
 	// Let's try to make the prompt cache key sticky
 	type ExtendedRequest struct {
@@ -9133,6 +9145,9 @@ data_filter:
 						if outputTokens > 0 {
 							IncrementCache(ctx, billingOrgId, "agent_output_tokens", outputTokens)
 						}
+						if cachedTokens > 0 {
+							IncrementCache(ctx, billingOrgId, "agent_cached_tokens", cachedTokens)
+						}
 
 						if billingOrgId != subOrgId {
 							IncrementCache(ctx, subOrgId, "agent_tokens", totalTokens)
@@ -9142,8 +9157,16 @@ data_filter:
 							if outputTokens > 0 {
 								IncrementCache(ctx, subOrgId, "agent_output_tokens", outputTokens)
 							}
+							if cachedTokens > 0 {
+								IncrementCache(ctx, subOrgId, "agent_cached_tokens", cachedTokens)
+							}
 						}
 					}()
+					
+					if cachedTokens > 0 && debug {
+						log.Printf("[DEBUG][%s] PROMPT CACHING HIT! Saved %d tokens on this request.", execution.ExecutionId, cachedTokens)
+					}
+					
 					log.Printf("[AUDIT][%s] Incremented AI Agent usage for billing_org=%s exec_org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
 				}
 
