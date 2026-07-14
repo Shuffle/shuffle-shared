@@ -14054,7 +14054,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 		if newLeadinfo.EnterpriseLicenseOnprem ||
 			newLeadinfo.BusinessLicenseOnprem {
-			org.SyncFeatures.OnpremAppExecutions.Limit = 300000
 			org.SyncFeatures.OnpremAppExecutions.Active = true
 
 			org.SyncFeatures.Branding.Active = false
@@ -14068,10 +14067,8 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			org.SyncFeatures.MultiTenant.Limit = 1000
 
 			org.SyncFeatures.SendSms.Active = true
-			org.SyncFeatures.SendSms.Limit = 10000
-
 			org.SyncFeatures.SendMail.Active = true
-			org.SyncFeatures.SendMail.Limit = 10000
+
 			log.Printf("[INFO] Set limits to 300000 app runs / 250 envs / 1000 tenants for org %s (enterprise/business)", org.Id)
 		} else if newLeadinfo.ShuffleEnterpriseLicenseOldCustomer {
 			org.SyncFeatures.AppExecutions.Limit = 300000
@@ -14083,16 +14080,18 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			org.SyncFeatures.MultiTenant.Limit = 1000
 			org.SyncFeatures.MultiTenant.Active = true
 
-			org.SyncFeatures.SendSms.Active = true
-			org.SyncFeatures.SendSms.Limit = 10000
+			org.LeadInfo.ScaleLicenseCloudTrial = false
 
+			org.SyncFeatures.SendSms.Active = true
 			org.SyncFeatures.SendMail.Active = true
-			org.SyncFeatures.SendMail.Limit = 10000
 			log.Printf("[INFO] Set limits to 300000 app runs / 250 envs / 1000 tenants for org %s (enterprise/business)", org.Id)
 		} else if newLeadinfo.EnterpriseLicenseCloud ||
 			newLeadinfo.BusinessLicenseCloud {
 
+			org.SyncFeatures.AppExecutions.Limit = 300000
 			org.SyncFeatures.OnpremAppExecutions.Limit = 25000
+
+			org.LeadInfo.ScaleLicenseCloudTrial = false
 
 			org.SyncFeatures.Branding.Active = false
 			org.SyncFeatures.MultiEnv.Active = true
@@ -14101,8 +14100,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			org.SyncFeatures.MultiTenant.Active = true
 			org.SyncFeatures.MultiTenant.Limit = 1000
 
-			org.SyncFeatures.SendSms.Limit = 10000
-			org.SyncFeatures.SendMail.Limit = 10000
 			org.SyncFeatures.SendSms.Active = true
 			org.SyncFeatures.SendMail.Active = true
 			log.Printf("[INFO] Set limits to 300000 app runs / 250 envs / 1000 tenants for org %s (enterprise/business)", org.Id)
