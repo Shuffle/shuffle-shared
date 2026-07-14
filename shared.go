@@ -24246,8 +24246,8 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 
 	// Check status is finished, and set timestamp for finished if it's 0
 	if execution.Status == "FINISHED" || execution.Status == "ABORTED" || execution.Status == "FAILURE" {
-		if baseExecution.CompletedAt == 0 {
-			baseExecution.CompletedAt = time.Now().Unix()
+		if execution.CompletedAt == 0 {
+			execution.CompletedAt = time.Now().Unix()
 		}
 	}
 
