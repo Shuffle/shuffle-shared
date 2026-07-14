@@ -26341,6 +26341,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					found = true
 
+					// user input triggers fire two subflows (options + decline) from the same source node
+					if trigger.TriggerType == "USERINPUT" {
+						allowContinuation = true
+						break
+					}
+
 					//$Get_Offenses.# -> Allow to run more
 					for _, param := range trigger.Parameters {
 						if param.Name == "argument" {
@@ -27037,7 +27043,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									workflow.ID,
 									oldExecution.ExecutionId,
 									oldExecution.Authorization,
-									result.Action.ID+"_decline",
+									result.Action.ID,
 									failureSubflowStartnode,
 								)
 								reqBody := fmt.Sprintf(`{"execution_argument": %s}`, strconv.Quote(execArg))
