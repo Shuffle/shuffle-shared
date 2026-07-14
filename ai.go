@@ -7196,7 +7196,7 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 	appRunsLimit := int64(0)
 	orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
 	if statsErr == nil && orgStats != nil {
-		stats := GetCorrectedStats(orgStats)
+		stats := handleGetCorrectedStats(orgStats)
 		totalAppExecutions = stats.MonthlyAppExecutions + stats.MonthlyChildAppExecutions
 	}
 	if fullOrg != nil {
@@ -8556,16 +8556,36 @@ data_filter:
 		}
 
 		orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
-		monthlyAppRuns := int64(0)
+		monthlyTokensUsed := int64(0)
 		if statsErr == nil && orgStats != nil {
-			convertedStats := GetCorrectedStats(orgStats)
-			monthlyAppRuns = convertedStats.MonthlyAppExecutions + convertedStats.MonthlyChildAppExecutions
+			monthlyTokensUsed = orgStats.MonthlyAgentTokens + orgStats.MonthlyChildOrgAgentTokens
 		}
 
-		appRunLimit := int64(billingOrg.SyncFeatures.AppExecutions.Limit)
+		tokenLimit := int64(0)
 		if project.Environment == "cloud" {
-			if monthlyAppRuns >= appRunLimit {
-				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "app_limit_exceeded", fmt.Sprintf("AI App limit reached: %d >= %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyAppRuns, appRunLimit))
+			tokenLimit = int64(10_000_000)
+		}
+		if billingOrg != nil && billingOrg.SyncFeatures.AgentTokens.Active && billingOrg.SyncFeatures.AgentTokens.Limit > 0 {
+			tokenLimit = billingOrg.SyncFeatures.AgentTokens.Limit
+		}
+
+		if tokenLimit > 0 {
+			estimatedCurrentTokens := EstimatePromptTokens(completionRequest.Messages)
+			totalTokensAfterRequest := monthlyTokensUsed + estimatedCurrentTokens
+			//usagePercentage := (monthlyTokensUsed * 100) / tokenLimit
+
+			//log.Printf("[DEBUG][%s] AI_AGENT_TOKEN_USAGE: billing_org=%s exec_org=%s monthly_used=%d limit=%d usage_percent=%d%%", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, tokenLimit, usagePercentage)
+
+			if totalTokensAfterRequest > tokenLimit {
+				throttleKey := fmt.Sprintf("token_limit_log_%s", billingOrgId)
+				_, cacheErr := GetCache(ctx, throttleKey)
+				alreadyThrottled := cacheErr == nil
+				if !alreadyThrottled {
+					log.Printf("[ERROR][%s] AI_AGENT_TOKEN_LIMIT_EXCEEDED: billing_org=%s exec_org=%s monthly_used=%d estimated_current=%d total_would_be=%d limit=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, monthlyTokensUsed, estimatedCurrentTokens, totalTokensAfterRequest, tokenLimit)
+					_ = SetCache(ctx, throttleKey, []byte("1"), 2*60)
+					go sendAITokenLimitAlert(ctx, execution, billingOrg, tokenLimit, monthlyTokensUsed)
+				}
+				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit), alreadyThrottled)
 			}
 		}
 	}
