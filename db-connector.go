@@ -127,7 +127,7 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 		}
 
 		stat.Date = stat.Date.UTC()
-		statdate := stat.Date.Format("2006-12-30")
+		statdate := stat.Date.Format("2006-01-02")
 		if !ArrayContains(allDates, statdate) {
 			newDaily = append(newDaily, stat)
 			allDates = append(allDates, statdate)

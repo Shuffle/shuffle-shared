@@ -7196,7 +7196,7 @@ func sendAITokenLimitAlert(ctx context.Context, execution WorkflowExecution, ful
 	appRunsLimit := int64(0)
 	orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
 	if statsErr == nil && orgStats != nil {
-		stats := handleGetCorrectedStats(orgStats)
+		stats := GetCorrectedStats(orgStats)
 		totalAppExecutions = stats.MonthlyAppExecutions + stats.MonthlyChildAppExecutions
 	}
 	if fullOrg != nil {
