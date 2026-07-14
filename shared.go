@@ -26341,6 +26341,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					found = true
 
+					// user input triggers fire two subflows (options + decline) from the same source node
+					if trigger.TriggerType == "USERINPUT" {
+						allowContinuation = true
+						break
+					}
+
 					//$Get_Offenses.# -> Allow to run more
 					for _, param := range trigger.Parameters {
 						if param.Name == "argument" {
