@@ -4100,7 +4100,7 @@ func GetUsecaseData() string {
         "manual_verification": true
       },
       {
-        "name": "Incident Routing",
+        "name": "Incident Routing Rules",
         "type": "Cases",
         "destination": "Cases",
         "running": false,
