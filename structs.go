@@ -4952,11 +4952,11 @@ type MinimalConditionParam struct {
 
 // MinimalWorkflow - minimal workflow structure with node positions and connections
 type MinimalWorkflow struct {
-	Actions         []MinimalAction  `json:"actions"`
-	Branches        []MinimalBranch  `json:"branches"`
-	Triggers        []MinimalTrigger `json:"triggers"`
-	Errors          []string         `json:"errors,omitempty"`
-	StartTriggerID  string           `json:"start_trigger_id,omitempty"`
+	Actions        []MinimalAction  `json:"actions"`
+	Branches       []MinimalBranch  `json:"branches"`
+	Triggers       []MinimalTrigger `json:"triggers"`
+	Errors         []string         `json:"errors,omitempty"`
+	StartTriggerID string           `json:"start_trigger_id,omitempty"`
 }
 
 type NGramItem struct {
@@ -5172,6 +5172,9 @@ type MCPRequest struct {
 				URL    string `json:"url"`
 				Detail string `json:"detail,omitempty"`
 			}
+
+			// Special cases for templates 
+			WorkflowId string `json:"workflow_id,omitempty"`
 		} `json:"input"`
 		Context struct {
 			SessionID string `json:"session_id"`
@@ -5182,6 +5185,7 @@ type MCPRequest struct {
 		EnableQuestions  bool   `json:"enable_questions"`
 		AuthenticationId string `json:"authentication_id"`
 		Reasoning        string `json:"reasoning"`
+		Template         string `json:"template"` // Controls presets like "workflow-edit" to add special backend-controlled system messages
 
 		// From testing in Lovable
 		ProtocolVersion string `json:"protocolVersion"`
@@ -5347,28 +5351,28 @@ type AppBuildRequest struct {
 }
 
 type AgentsOpsError struct {
-	Create             string `json:"create"`
-	Run                string `json:"run"`
-	Delete             string `json:"delete"`
-	RunFinished        string `json:"run_finished"`
+	Create          string `json:"create"`
+	Run             string `json:"run"`
+	Delete          string `json:"delete"`
+	RunFinished     string `json:"run_finished"`
 	AgentValidation string `json:"agent_validation"`
 }
 
 type AgentHealth struct {
-	Create             bool    			`json:"create"`
-	Run                bool    			`json:"run"`
-	BackendVersion     string  			`json:"backend_version"`
-	RunFinished        bool    			`json:"run_finished"`
-	ExecutionTook      float64 			`json:"execution_took"`
-	RunStatus          string  			`json:"run_status"`
-	Delete             bool    			`json:"delete"`
-	ExecutionId        string  			`json:"execution_id"`
-	WorkflowId         string  			`json:"workflow_id"`
-	AgentNodeId        string  			`json:"agent_node_id"`
-	AgentStatus        string  			`json:"agent_status"`         // Status of the agent itself (RUNNING, FINISHED, ABORTED)
-	AgentDecisionCount int     			`json:"agent_decision_count"` // Number of decisions made by the agent
-	LLMCallSuccess     bool    			`json:"llm_call_success"`     // Whether the LLM call succeeded
-	Error   		   AgentsOpsError 	`json:"error"`
+	Create             bool           `json:"create"`
+	Run                bool           `json:"run"`
+	BackendVersion     string         `json:"backend_version"`
+	RunFinished        bool           `json:"run_finished"`
+	ExecutionTook      float64        `json:"execution_took"`
+	RunStatus          string         `json:"run_status"`
+	Delete             bool           `json:"delete"`
+	ExecutionId        string         `json:"execution_id"`
+	WorkflowId         string         `json:"workflow_id"`
+	AgentNodeId        string         `json:"agent_node_id"`
+	AgentStatus        string         `json:"agent_status"`         // Status of the agent itself (RUNNING, FINISHED, ABORTED)
+	AgentDecisionCount int            `json:"agent_decision_count"` // Number of decisions made by the agent
+	LLMCallSuccess     bool           `json:"llm_call_success"`     // Whether the LLM call succeeded
+	Error              AgentsOpsError `json:"error"`
 }
 
 type WttrResponse struct {
@@ -5699,10 +5703,11 @@ type DisplaySize struct {
 	OffsetX int `json:"offset_x,omitempty"`
 	OffsetY int `json:"offset_y,omitempty"`
 }
+
 // Added remote control capabilities for windows
-type RemoteControl struct{
-	Op     string                 `json:"op"`
-	Params map[string]any        `json:"params"`
+type RemoteControl struct {
+	Op     string         `json:"op"`
+	Params map[string]any `json:"params"`
 }
 
 type RemoteControlActionBatch struct {
@@ -5710,8 +5715,8 @@ type RemoteControlActionBatch struct {
 }
 
 type AgentVerifierResult struct {
-	Pass   bool
-	Reason string 	// Skipped is true when the verifier was not run (missing input, LLM error, parse error). In that case the caller should accept the finish as-is.
+	Pass    bool
+	Reason  string // Skipped is true when the verifier was not run (missing input, LLM error, parse error). In that case the caller should accept the finish as-is.
 	Skipped bool
 }
 
@@ -5731,18 +5736,17 @@ type ActionParameter struct {
 
 // ActionSummary - minimal action info for AI agents
 type ActionSummary struct {
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	Parameters  []ActionParameter  `json:"parameters"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Parameters  []ActionParameter `json:"parameters"`
 }
 
 // AppActionResponse - actions grouped by app
 type AppActionResponse struct {
-	AppName string           `json:"app_name"`
-	AppID   string           `json:"app_id"`
-	Actions []ActionSummary  `json:"actions"`
+	AppName string          `json:"app_name"`
+	AppID   string          `json:"app_id"`
+	Actions []ActionSummary `json:"actions"`
 }
-
 
 // WorkflowOperation represents a single modification operation
 type WorkflowOperation struct {
@@ -5778,5 +5782,5 @@ type WorkflowSetOpsResponse struct {
 
 type rawField struct {
 	Name  string      `json:"name"`
-	Value interface{} `json:"value"` 
+	Value interface{} `json:"value"`
 }

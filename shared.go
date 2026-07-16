@@ -38129,14 +38129,14 @@ func AgentWorkflowEditor(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	type agentContextRequest struct {
-		Input      string `json:"input"`
-		WorkflowId string `json:"workflow_id"`
-	}
+	//type agentContextRequest struct {
+	//	Input      string `json:"input"`
+	//	WorkflowId string `json:"workflow_id"`
+	//}
 
-	var req agentContextRequest
+	var req MCPRequest 
 	err = json.Unmarshal(body, &req)
-	if err != nil || len(strings.TrimSpace(req.Input)) == 0 {
+	if err != nil || len(strings.TrimSpace(req.Params.Input.Text)) == 0 {
 		log.Printf("[WARNING] Bad body in AgentWorkflowEditor: %s", err)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "input field is required"}`))
@@ -38272,7 +38272,7 @@ CRITICAL RULES FOR THE AGENT
 
 <Start of User Request>
 %s
-<End of User Request>`, req.WorkflowId, req.WorkflowId, string(appsJson), req.Input)
+<End of User Request>`, req.Params.Input.WorkflowId, req.Params.Input.WorkflowId, string(appsJson), req.Params.Input.Text)
 
 	// Build MCPRequest with the full system prompt as input
 	mcpReq := MCPRequest{}
@@ -38303,6 +38303,7 @@ CRITICAL RULES FOR THE AGENT
 		}
 	}
 	
+	// FIXME: Change this to a function. This is stupid // Fred 
 	agentReq, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/agent", backendUrl), strings.NewReader(string(mcpBody)))
 	if err != nil {
 		log.Printf("[ERROR] Failed creating agent request in AgentWorkflowEditor: %s", err)
@@ -38315,7 +38316,7 @@ CRITICAL RULES FOR THE AGENT
 	agentReq.Header.Set("Content-Type", "application/json")
 	agentReq.Header.Set("X-Internal-Caller", "AgentWorkflowEditor")
 
-	log.Printf("[INFO] AgentWorkflowEditor: calling /api/v1/agent for user %s (%s), workflow_id=%s, apps=%d", user.Username, user.Id, req.WorkflowId, len(appSummaries))
+	log.Printf("[INFO] AgentWorkflowEditor: calling /api/v1/agent for user %s (%s), workflow_id=%s, apps=%d", user.Username, user.Id, req.Params.Input.WorkflowId, len(appSummaries))
 
 	client := &http.Client{}
 	agentResp, err := client.Do(agentReq)
