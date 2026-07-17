@@ -6181,6 +6181,12 @@ func SetSession(ctx context.Context, user User, value string) error {
 	//parsedKey := strings.ToLower(user.Username)
 	// Non indexed User data
 	parsedKey := user.Id
+	previousSession := user.Session
+	if len(previousSession) > 0 && previousSession != value {
+		DeleteCache(ctx, previousSession)
+		DeleteCache(ctx, fmt.Sprintf("session_%s", previousSession))
+	}
+
 	user.Session = value
 
 	nameKey := "Users"
@@ -6985,7 +6991,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 	err = DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
-	if err != nil {
+	if err != nil && err != gomemcache.ErrCacheMiss {
 		log.Printf("[ERROR] Failed to delete cache for user apikey %s", err)
 	}
 
@@ -7073,8 +7079,11 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 	}
 
 	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(user.Username)))
 
 	return nil
 }
@@ -11145,21 +11154,24 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 	var users []User
 
-	//	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
-	//	if project.CacheDb {
-	//		cache, err := GetCache(ctx, cacheKey)
-	//		if err == nil {
-	//			cacheData := []byte(cache.([]uint8))
-	//			err = json.Unmarshal(cacheData, &users)
-	//			if err == nil && len(users) > 0 {
-	//				log.Printf("[DEBUG] Found user apikey cache %s", cacheKey)
-	//				return users[0], nil
-	//			}
-	//		}
-	//	}
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &users)
+			if err == nil && len(users) > 0 {
+				if debug {
+					log.Printf("[DEBUG] Found user API key in cache")
+				}
+
+				return users[0], nil
+			}
+		}
+	}
 
 	if debug {
-		log.Printf("[DEBUG] Looking for the API Key pass the cache check %s", project.DbType)
+		log.Printf("[DEBUG] API key cache miss; looking up user in %s", project.DbType)
 	}
 
 	if project.DbType == "opensearch" {
@@ -11258,22 +11270,22 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		//}
 	}
 
-	//	if project.CacheDb {
-	//		userData, err := json.Marshal(users)
-	//		if err != nil {
-	//			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
-	//			if len(users) > 0 {
-	//				return users[0], nil
-	//			} else {
-	//				return User{}, err
-	//			}
-	//		}
-	//
-	//		err = SetCache(ctx, cacheKey, userData, 10)
-	//		if err != nil {
-	//			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
-	//		}
-	//	}
+	if project.CacheDb {
+		userData, err := json.Marshal(users)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
+			if len(users) > 0 {
+				return users[0], nil
+			} else {
+				return User{}, err
+			}
+		}
+
+		err = SetCache(ctx, cacheKey, userData, 10)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
+		}
+	}
 
 	if len(users) == 0 {
 		return User{}, errors.New("No users found for this apikey (2)")
