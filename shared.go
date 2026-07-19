@@ -38182,19 +38182,38 @@ func AgentWorkflowEditor(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Get org apps summary
-	appSummaries, err := getOrgAppSummaries(ctx, user)
+	workflow, err := GetWorkflow(ctx, req.WorkflowId)
 	if err != nil {
-		log.Printf("[WARNING] Failed getting apps in AgentWorkflowEditor for user %s: %s", user.Username, err)
+		log.Printf("[WARNING] Failed getting workflow %s in AgentWorkflowEditor: %s", req.WorkflowId, err)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+		return
+	}
+
+	if user.Id != workflow.Owner && workflow.OrgId != user.ActiveOrg.Id {
+		log.Printf("[WARNING] User %s (%s) unauthorized to edit workflow %s (owner: %s, org: %s)", 
+			user.Username, user.Id, req.WorkflowId, workflow.Owner, workflow.OrgId)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorized"}`))
+		return
+	}
+
+	minimalWorkflow := buildMinimalWorkflow(workflow)
+	minimalWorkflowJson, _ := json.Marshal(minimalWorkflow)
+
+	// Get org apps action summaries
+	appActionSummaries, err := getOrgAppActionSummaries(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting app actions in AgentWorkflowEditor for user %s: %s", user.Username, err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	// Build system prompt with apps context
-	appsJson, _ := json.Marshal(appSummaries)
+	appsJson, _ := json.Marshal(appActionSummaries)
 
-	systemPrompt := fmt.Sprintf(`You are an autonomous workflow-building agent. You build or edit workflows that will eventually automates the task. Only use the special actions build for you, like get_minimal_workflow, agent_update are the ones you have to use.
+	systemPrompt := fmt.Sprintf(`You are an autonomous workflow-building agent. You build or edit workflows that will eventually automates the task. Only use the special actions build for you, like agent_update are the ones you have to use. If the user requests an integration that is not in your current context, you can still fetch its actions by passing the requested app name to your get_workflow_app_actions tool. The system will automatically search for the app and return its actions.
 
 The workflow you are currently working on has the ID: %s — always use this as the "workflow_id" in every payload you send.
 
@@ -38302,8 +38321,12 @@ To use data from another node, reference its label.
 CRITICAL RULES FOR THE AGENT
 
 1. Handling Errors: If you make a mistake, the API will reject your request and tell you EXACTLY which operation failed and why (e.g., Operation 1 failed: app_id is required). Read this error carefully, fix the specific missing or incorrect parameter, and try again.
-2. Special actions are built exculsively for you. get_minimal_workflow is enough to the info about how the workflow is structured and generally there is no need of other meta data info of the worklfow as often times its not that useful. agent_update is another beautiful action that do a lot of heavy lifting for you.
+2. Special actions are built exclusively for you. The current minimal workflow state is provided below. agent_update is another beautiful action that does a lot of heavy lifting for you.
 3. Try not to use parallel decision calling as much as possible; always do sequential tool calls.
+
+<Start of Current Workflow State>
+%s
+<End of Current Workflow State>
 
 <Start of App/Actions Context>
 %s
@@ -38311,72 +38334,88 @@ CRITICAL RULES FOR THE AGENT
 
 <Start of User Request>
 %s
-<End of User Request>`, req.WorkflowId, req.WorkflowId, string(appsJson), req.Input)
+<End of User Request>`, req.WorkflowId, req.WorkflowId, string(minimalWorkflowJson), string(appsJson), req.Input)
 
-	// Build MCPRequest with the full system prompt as input
-	mcpReq := MCPRequest{}
-	mcpReq.Jsonrpc = "2.0"
-	mcpReq.Method = "tools/call"
-	mcpReq.Params.ToolName = "app:9f05339c05f9aaca4eeb35e6f13e41e6:shuffles_app_management,app:b598b078fd5c531699fca803c172ce72:shuffle_workflows"
-	mcpReq.Params.Input.Text = systemPrompt
+	// Build the Action with the right parameters for HandleAiAgentExecutionStart
+	toolApps := "app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps,app:b598b078fd5c531699fca803c172ce72:shuffle_workflows"
 
-	mcpBody, err := json.Marshal(mcpReq)
+	action := Action{
+		ID:             uuid.NewV4().String(),
+		Name:           "agent",
+		AppName:        "AI Agent",
+		AppID:          "shuffle_agent",
+		AppVersion:     "1.0.0",
+		Environment:    "cloud",
+		Parameters: []WorkflowAppActionParameter{
+			{
+				Name:  "input",
+				Value: systemPrompt,
+			},
+			{
+				Name:  "action",
+				Value: toolApps,
+			},
+		},
+	}
+
+	workflowId := uuid.NewV4().String()
+	action.SourceWorkflow = workflowId
+
+	exec := WorkflowExecution{
+		Workflow: Workflow{
+			ID: workflowId,
+			Actions: []Action{
+				action,
+			},
+			OrgId:     user.ActiveOrg.Id,
+			Owner:     user.Username,
+			UpdatedBy: user.Username,
+			Start:     action.ID,
+		},
+		Type:          "AGENT",
+		Start:         action.ID,
+		Status:        "EXECUTING",
+		WorkflowId:    workflowId,
+		ExecutionId:   workflowId,
+		ExecutionOrg:  user.ActiveOrg.Id,
+		StartedAt:     int64(time.Now().Unix()),
+		Authorization: uuid.NewV4().String(),
+	}
+
+	SetWorkflowExecution(ctx, exec, true)
+
+	log.Printf("[INFO] AgentWorkflowEditor: calling HandleAiAgentExecutionStart directly for user %s (%s), workflow_id=%s, execution_id=%s, apps=%d", user.Username, user.Id, req.WorkflowId, exec.ExecutionId, len(appActionSummaries))
+
+	returnAction, err := HandleAiAgentExecutionStart(exec, action, false, "AgentWorkflowEditor")
 	if err != nil {
-		log.Printf("[ERROR] Failed marshalling MCPRequest in AgentWorkflowEditor: %s", err)
+		log.Printf("[ERROR] HandleAiAgentExecutionStart failed in AgentWorkflowEditor: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err.Error())))
+		return
+	}
+
+	// Fetch the updated execution to return
+	newExec, err := GetWorkflowExecution(ctx, exec.ExecutionId)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get workflow execution after agent start in AgentWorkflowEditor: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
-	// Call /api/v1/agent directly
-	backendUrl := os.Getenv("BASE_URL")
-	if len(backendUrl) == 0 {
-		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-		} else {
-			port := os.Getenv("PORT")
-			if len(port) == 0 {
-				port = "5001"
-			}
-			backendUrl = fmt.Sprintf("http://localhost:%s", port)
-		}
-	}
-	
-	agentReq, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/agent", backendUrl), strings.NewReader(string(mcpBody)))
+	_ = returnAction
+
+	responseData, err := json.Marshal(newExec)
 	if err != nil {
-		log.Printf("[ERROR] Failed creating agent request in AgentWorkflowEditor: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	agentReq.Header = request.Header.Clone()
-	agentReq.Header.Set("Content-Type", "application/json")
-	agentReq.Header.Set("X-Internal-Caller", "AgentWorkflowEditor")
-
-	log.Printf("[INFO] AgentWorkflowEditor: calling /api/v1/agent for user %s (%s), workflow_id=%s, apps=%d", user.Username, user.Id, req.WorkflowId, len(appSummaries))
-
-	client := &http.Client{}
-	agentResp, err := client.Do(agentReq)
-	if err != nil {
-		log.Printf("[ERROR] Failed calling /api/v1/agent in AgentWorkflowEditor: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-	defer agentResp.Body.Close()
-
-	agentRespBody, err := ioutil.ReadAll(agentResp.Body)
-	if err != nil {
-		log.Printf("[ERROR] Failed reading agent response in AgentWorkflowEditor: %s", err)
+		log.Printf("[ERROR] Failed marshalling execution response in AgentWorkflowEditor: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	resp.Header().Set("Content-Type", "application/json")
-	resp.WriteHeader(agentResp.StatusCode)
-	resp.Write(agentRespBody)
+	resp.WriteHeader(200)
+	resp.Write(responseData)
 }
 
 func generateNodeID() string {
