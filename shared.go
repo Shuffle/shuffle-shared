@@ -9213,12 +9213,12 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	referer := request.Header.Get("Referer")
-	if !strings.Contains(referer, "/forms/") {
-		workflow.Sharing = tmpworkflow.Sharing
-		workflow.InputQuestions = tmpworkflow.InputQuestions
-		workflow.FormControl = tmpworkflow.FormControl
-	}
+	//referer := request.Header.Get("Referer")
+	//if !strings.Contains(referer, "/forms/") {
+	//	workflow.Sharing = tmpworkflow.Sharing
+	//	workflow.InputQuestions = tmpworkflow.InputQuestions
+	//	workflow.FormControl = tmpworkflow.FormControl
+	//}
 
 	if fileId != workflow.ID {
 		log.Printf("[ERROR] Path and request ID are NOT matching in workflow save: %s != %s. URL: %s", fileId, workflow.ID, request.URL.String())
@@ -24246,8 +24246,8 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 
 	// Check status is finished, and set timestamp for finished if it's 0
 	if execution.Status == "FINISHED" || execution.Status == "ABORTED" || execution.Status == "FAILURE" {
-		if baseExecution.CompletedAt == 0 {
-			baseExecution.CompletedAt = time.Now().Unix()
+		if execution.CompletedAt == 0 {
+			execution.CompletedAt = time.Now().Unix()
 		}
 	}
 
@@ -26340,6 +26340,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					found = true
+
+					// user input triggers fire two subflows (options + decline) from the same source node
+					if trigger.TriggerType == "USERINPUT" {
+						allowContinuation = true
+						break
+					}
 
 					//$Get_Offenses.# -> Allow to run more
 					for _, param := range trigger.Parameters {
@@ -38168,14 +38174,14 @@ func AgentWorkflowEditor(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	type agentContextRequest struct {
-		Input      string `json:"input"`
-		WorkflowId string `json:"workflow_id"`
-	}
+	//type agentContextRequest struct {
+	//	Input      string `json:"input"`
+	//	WorkflowId string `json:"workflow_id"`
+	//}
 
-	var req agentContextRequest
+	var req MCPRequest 
 	err = json.Unmarshal(body, &req)
-	if err != nil || len(strings.TrimSpace(req.Input)) == 0 {
+	if err != nil || len(strings.TrimSpace(req.Params.Input.Text)) == 0 {
 		log.Printf("[WARNING] Bad body in AgentWorkflowEditor: %s", err)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "input field is required"}`))

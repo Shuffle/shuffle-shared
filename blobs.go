@@ -1749,7 +1749,21 @@ func GetPublicDetections() []DetectionResponse {
 }
 
 func GetBaseDockerfile() []byte {
-	return []byte(`FROM frikky/shuffle:app_sdk as base
+	appSdkImage := "frikky/shuffle:app_sdk"
+
+	registry := os.Getenv("SHUFFLE_BASE_IMAGE_REGISTRY")
+	name := os.Getenv("SHUFFLE_BASE_IMAGE_NAME")
+	if name != "" {
+		if registry != "" {
+			appSdkImage = fmt.Sprintf("%s/%s:app_sdk", registry, name)
+		} else {
+			appSdkImage = fmt.Sprintf("%s:app_sdk", name)
+		}
+	} else if registry != "" {
+		appSdkImage = fmt.Sprintf("%s/frikky/shuffle:app_sdk", registry)
+	}
+
+	return []byte(fmt.Sprintf(`FROM %s as base`, appSdkImage) + `
 
 # We're going to stage away all of the bloat from the build tools so lets create a builder stage
 FROM base as builder
@@ -4100,7 +4114,7 @@ func GetUsecaseData() string {
         "manual_verification": true
       },
       {
-        "name": "Incident Routing",
+        "name": "Incident Routing Rules",
         "type": "Cases",
         "destination": "Cases",
         "running": false,

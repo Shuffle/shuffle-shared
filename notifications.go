@@ -313,6 +313,18 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		return nil
 	}
 
+	workflow, err := GetWorkflow(ctx, workflowId)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting workflow %s: %s", workflowId, err)
+	} else if workflow.ExecutingOrg.Id != "" && workflow.ExecutingOrg.Id != authOrg.Id {
+		executionOrg, err := GetOrg(ctx, workflow.ExecutingOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting execution org %s: %s", workflow.ExecutingOrg.Id, err)
+		} else {
+			authOrg = *executionOrg
+		}
+	}
+
 	//log.Printf("[DEBUG] Sending notification to workflow with id: %#v", workflowId)
 
 	cachedNotifications := NotificationCached{}
