@@ -37782,6 +37782,79 @@ func getOrgAppSummaries(ctx context.Context, user User) ([]AppSummary, error) {
 	return appSummaries, nil
 }
 
+func buildAppActionResponses(matchedApps []WorkflowApp) []AppActionResponse {
+	responses := []AppActionResponse{}
+
+	for _, app := range matchedApps {
+		if len(app.Actions) == 0 {
+			continue
+		}
+
+		appDesc := app.Description
+		if len(appDesc) > 150 {
+			appDesc = appDesc[:150] + "..."
+		}
+
+		appResp := AppActionResponse{
+			AppName:        app.Name,
+			AppDescription: appDesc,
+			AppID:          app.ID,
+			Actions:        []ActionSummary{},
+		}
+
+		for _, action := range app.Actions {
+			if len(action.Name) == 0 {
+				continue
+			}
+
+			params := []ActionParameter{}
+			for _, param := range action.Parameters {
+				if len(param.Name) == 0 {
+					continue
+				}
+
+				params = append(params, ActionParameter{
+					Name:        param.Name,
+					Required:    param.Required,
+					Description: param.Description,
+				})
+			}
+
+			desc := action.Description
+			if len(desc) > 100 {
+				desc = desc[:100] + "..."
+			}
+
+			appResp.Actions = append(appResp.Actions, ActionSummary{
+				Name:        action.Name,
+				Description: desc,
+				Parameters:  params,
+			})
+		}
+
+		if len(appResp.Actions) > 0 {
+			responses = append(responses, appResp)
+		}
+	}
+	
+	return responses
+}
+
+func getOrgAppActionSummaries(ctx context.Context, user User) ([]AppActionResponse, error) {
+	apps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting apps for agent: %s", err)
+		return nil, err
+	}
+
+	maxApps := 150
+	if len(apps) > maxApps {
+		apps = apps[:maxApps]
+	}
+
+	return buildAppActionResponses(apps), nil
+}
+
 func GetOrgAppsSummary(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -37898,6 +37971,7 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 	if len(actionReq.AppNames) > 0 {
 		for _, appName := range actionReq.AppNames {
 			lowerName := strings.ToLower(strings.TrimSpace(appName))
+			foundInOrg := false
 			for _, app := range allApps {
 				if strings.ToLower(app.Name) == lowerName && len(app.ID) > 0 {
 					// Check if already added via ID search
@@ -37911,7 +37985,28 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 					if !alreadyAdded {
 						matchedApps = append(matchedApps, app)
 					}
+					foundInOrg = true
 					break
+				}
+			}
+
+			// If not found in org, search Algolia
+			if !foundInOrg {
+				algoliaApp, err := HandleAlgoliaAppSearch(ctx, appName)
+				if err == nil && algoliaApp.ObjectID != "" {
+					discoveredApp, err := GetApp(ctx, algoliaApp.ObjectID, user, false)
+					if err == nil && discoveredApp != nil {
+						alreadyAdded := false
+						for _, matched := range matchedApps {
+							if matched.ID == discoveredApp.ID {
+								alreadyAdded = true
+								break
+							}
+						}
+						if !alreadyAdded {
+							matchedApps = append(matchedApps, *discoveredApp)
+						}
+					}
 				}
 			}
 		}
@@ -37928,57 +38023,7 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Build response with actions for each matched app
-	responses := []AppActionResponse{}
-
-	for _, app := range matchedApps {
-		if len(app.Actions) == 0 {
-			if debug {
-				log.Printf("[DEBUG] Skipping app %s because len(Actions) is 0", app.Name)
-			}
-			continue
-		}
-
-		appResp := AppActionResponse{
-			AppName: app.Name,
-			AppID:   app.ID,
-			Actions: []ActionSummary{},
-		}
-
-		// Extract minimal action info
-		for _, action := range app.Actions {
-			if len(action.Name) == 0 {
-				continue
-			}
-
-			// Build parameter list
-			params := []ActionParameter{}
-			for _, param := range action.Parameters {
-				if len(param.Name) == 0 {
-					continue
-				}
-
-				params = append(params, ActionParameter{
-					Name:        param.Name,
-					Required:    param.Required,
-				})
-			}
-
-			desc := action.Description
-			if len(desc) > 100 {
-				desc = desc[:100] + "..."
-			}
-
-			appResp.Actions = append(appResp.Actions, ActionSummary{
-				Name:        action.Name,
-				Description: desc,
-				Parameters:  params,
-			})
-		}
-
-		if len(appResp.Actions) > 0 {
-			responses = append(responses, appResp)
-		}
-	}
+	responses := buildAppActionResponses(matchedApps)
 
 	if len(responses) == 0 {
 		if debug {
