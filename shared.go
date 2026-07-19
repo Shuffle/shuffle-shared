@@ -38188,17 +38188,16 @@ func AgentWorkflowEditor(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	workflow, err := GetWorkflow(ctx, req.WorkflowId)
+	workflow, err := GetWorkflow(ctx, req.Params.Input.WorkflowId)
 	if err != nil {
-		log.Printf("[WARNING] Failed getting workflow %s in AgentWorkflowEditor: %s", req.WorkflowId, err)
+		log.Printf("[WARNING] Failed getting workflow %s in AgentWorkflowEditor: %s", req.Params.Input.WorkflowId, err)
 		resp.WriteHeader(404)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
 		return
 	}
 
 	if user.Id != workflow.Owner && workflow.OrgId != user.ActiveOrg.Id {
-		log.Printf("[WARNING] User %s (%s) unauthorized to edit workflow %s (owner: %s, org: %s)", 
-			user.Username, user.Id, req.WorkflowId, workflow.Owner, workflow.OrgId)
+		log.Printf("[WARNING] User %s (%s) unauthorized to edit workflow %s (owner: %s, org: %s)", user.Username, user.Id, req.Params.Input.WorkflowId, workflow.Owner, workflow.OrgId)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Unauthorized"}`))
 		return
