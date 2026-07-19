@@ -38334,7 +38334,7 @@ CRITICAL RULES FOR THE AGENT
 
 <Start of User Request>
 %s
-<End of User Request>`, req.WorkflowId, req.WorkflowId, string(minimalWorkflowJson), string(appsJson), req.Input)
+<End of User Request>`,  req.Params.Input.WorkflowId, req.Params.Input.WorkflowId, string(minimalWorkflowJson), string(appsJson), req.Params.Input.Text)
 
 	// Build the Action with the right parameters for HandleAiAgentExecutionStart
 	toolApps := "app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps,app:b598b078fd5c531699fca803c172ce72:shuffle_workflows"
