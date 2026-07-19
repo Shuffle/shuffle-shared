@@ -38384,7 +38384,7 @@ CRITICAL RULES FOR THE AGENT
 
 	SetWorkflowExecution(ctx, exec, true)
 
-	log.Printf("[INFO] AgentWorkflowEditor: calling HandleAiAgentExecutionStart directly for user %s (%s), workflow_id=%s, execution_id=%s, apps=%d", user.Username, user.Id, req.WorkflowId, exec.ExecutionId, len(appActionSummaries))
+	log.Printf("[INFO] AgentWorkflowEditor: calling HandleAiAgentExecutionStart directly for user %s (%s), workflow_id=%s, execution_id=%s, apps=%d", user.Username, user.Id, req.Params.Input.WorkflowId, exec.ExecutionId, len(appActionSummaries))
 
 	returnAction, err := HandleAiAgentExecutionStart(exec, action, false, "AgentWorkflowEditor")
 	if err != nil {
