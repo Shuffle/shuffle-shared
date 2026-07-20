@@ -18194,7 +18194,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 
 		callerName := "handleAgentDecisionStreamResult"
-		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, originalAction, true, callerName)
+		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, originalAction, true, callerName, "")
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed handling agent execution start: %s", workflowExecution.ExecutionId, err)
 		}
@@ -18307,7 +18307,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					if err != nil { 
 						log.Printf("[ERROR] AI Agent (10): Failed marshalling actionResult: %s", err)
 					} else {
-						go HandleAiAgentExecutionStart(*foundParentExec, startNode, false, callerName, marshalledResult) 
+						go HandleAiAgentExecutionStart(*foundParentExec, startNode, false, callerName, "", marshalledResult) 
 					}
 				}
 			} else {
@@ -22503,7 +22503,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 			log.Printf("[INFO][%s] AI Agent: %s Started standalone for org %s, execution id %s, workflow %s", exec.ExecutionId, callerName, user.ActiveOrg.Id, exec.ExecutionId, exec.WorkflowId)
 
-			action, err := HandleAiAgentExecutionStart(exec, action, false, callerName)
+			action, err := HandleAiAgentExecutionStart(exec, action, false, callerName, "")
 			if err != nil {
 				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
 			}
@@ -38174,20 +38174,17 @@ func AgentWorkflowEditor(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//type agentContextRequest struct {
-	//	Input      string `json:"input"`
-	//	WorkflowId string `json:"workflow_id"`
-	//}
-
 	var req MCPRequest 
 	err = json.Unmarshal(body, &req)
+
 	if err != nil || len(strings.TrimSpace(req.Params.Input.Text)) == 0 {
-		log.Printf("[WARNING] Bad body in AgentWorkflowEditor: %s", err)
+		log.Printf("[WARNING] Bad body in AgentWorkflowEditor. Error: %v, Body: %s", err, string(body))
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "input field is required"}`))
 		return
 	}
 
+	// Auth check: verify user has access to the target workflow before kicking off the agent
 	workflow, err := GetWorkflow(ctx, req.Params.Input.WorkflowId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflow %s in AgentWorkflowEditor: %s", req.Params.Input.WorkflowId, err)
@@ -38203,145 +38200,8 @@ func AgentWorkflowEditor(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	minimalWorkflow := buildMinimalWorkflow(workflow)
-	minimalWorkflowJson, _ := json.Marshal(minimalWorkflow)
-
-	// Get org apps action summaries
-	appActionSummaries, err := getOrgAppActionSummaries(ctx, user)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting app actions in AgentWorkflowEditor for user %s: %s", user.Username, err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	// Build system prompt with apps context
-	appsJson, _ := json.Marshal(appActionSummaries)
-
-	systemPrompt := fmt.Sprintf(`You are an autonomous workflow-building agent. You build or edit workflows that will eventually automates the task. Only use the special actions build for you, like agent_update are the ones you have to use. If the user requests an integration that is not in your current context, you can still fetch its actions by passing the requested app name to your get_workflow_app_actions tool. The system will automatically search for the app and return its actions.
-
-The workflow you are currently working on has the ID: %s — always use this as the "workflow_id" in every payload you send.
-
-Only ask the user for information when it is genuinely unavailable through any allowed action.
-
-Payload Structure
-
-Send your incremental steps in the operations array. You can send one operation at a time, or multiple if you are building a connected sequence.
-{
-"workflow_id": "%s",
-"operations": [ ...array of step-by-step operations... ] // api just supports bulk operations but its optional, just mention 1 op at a time in the array
-}
-
-Supported Step-by-Step Operations
-
-A workflow has two types of nodes: Actions and Triggers. If you need a trigger, you use either Webhook or Schedule. Keep in mind that there is no rigid rule that triggers must exists everytime. Only use trigger if the workflow solution you are building really needs it.
-
-Format: Webhook Trigger
-
-{
-"op": "add_node",
-"node_type": "trigger",
-"temp_id": "<your_temp_id>",
-"data": {
-"app_name": "Webhook",
-"label": "<unique_node_name>",
-"x": 100,
-"y": 100
-}
-}
-
-Format: Schedule Trigger
-
-{
-"op": "add_node",
-"node_type": "trigger",
-"temp_id": "<your_temp_id>",
-"data": {
-"app_name": "Schedule",
-"label": "<unique_node_name>",
-"parameters": [
-{ "name": "cron", "value": "*/15 * * * *" }
-],
-"x": 100,
-"y": 100
-}
-}
-
-1. ADDING A NODE (Action)
-{
-"op": "add_node",
-"node_type": "action",
-"temp_id": "a_temp_id_string",
-"data": {
-"app_id": "<id of the app>",
-"action_name": "<name of action to use, or custom_action>",
-"label": "Authenticate User",
-"parameters": [
-{ "name": "param_1", "value": "some_value" }
-],
-"x": 100,
-"y": 100
-}
-}
-Note: You can vertically position the node between existing ones by adding "insert_before": "<node_id>" or "insert_after": "<node_id>" alongside the data field.
-2. CONNECTING NODES (Adding a Branch)
-Connect your nodes using their real IDs (if they already exist) or the temp_id you assigned when creating them in the same payload.
-{
-"op": "add_branch",
-"data": {
-"source_id": "<real_node_id or temp_id>",
-"destination_id": "<real_node_id or temp_id>"
-}
-}
-3. EDITING A NODE
-Only provide the fields you actually want to change.
-{
-"op": "edit_node",
-"id": "<real_node_id>",
-"data": {
-"label": "New Name",
-"parameters": [
-{ "name": "param_1", "value": "new_value" }
-]
-}
-}
-4. DELETING OR MOVING
-{ "op": "delete_node", "node_type": "action", "id": "<real_node_id>" }
-{ "op": "delete_branch", "id": "<real_branch_id>" }
-{ "op": "move_node", "id": "<real_node_id>", "data": { "x": 250, "y": 300 } }
-5. SETTING THE START NODE
-Defines the entry point of the workflow. You can use a real ID or a temp_id from the same payload.
-{
-"op": "set_start_node",
-"id": "<real_node_id or temp_id>"
-}
-6. SAVING THE WORKFLOW
-Your edits are stored as a real-time draft. When you are completely finished building or modifying the workflow, you MUST append this operation to your final payload to permanently save the workflow to the database. Make sure you do this after fully finishing all the changes you want to do to the workflow, but don't forget to call it.
-{
-"op": "save_workflow"
-}
-
-To use data from another node, reference its label.
-
-CRITICAL RULES FOR THE AGENT
-
-1. Handling Errors: If you make a mistake, the API will reject your request and tell you EXACTLY which operation failed and why (e.g., Operation 1 failed: app_id is required). Read this error carefully, fix the specific missing or incorrect parameter, and try again.
-2. Special actions are built exclusively for you. The current minimal workflow state is provided below. agent_update is another beautiful action that does a lot of heavy lifting for you.
-3. Try not to use parallel decision calling as much as possible; always do sequential tool calls.
-
-<Start of Current Workflow State>
-%s
-<End of Current Workflow State>
-
-<Start of App/Actions Context>
-%s
-<End of App/Actions Context>
-
-<Start of User Request>
-%s
-<End of User Request>`,  req.Params.Input.WorkflowId, req.Params.Input.WorkflowId, string(minimalWorkflowJson), string(appsJson), req.Params.Input.Text)
-
-	// Build the Action with the right parameters for HandleAiAgentExecutionStart
+	// All context building (workflow state, app actions, rules) is handled inside
+	// buildWorkflowEditContext which is called by getTemplateContext inside HandleAiAgentExecutionStart
 	toolApps := "app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps,app:b598b078fd5c531699fca803c172ce72:shuffle_workflows"
 
 	action := Action{
@@ -38354,7 +38214,7 @@ CRITICAL RULES FOR THE AGENT
 		Parameters: []WorkflowAppActionParameter{
 			{
 				Name:  "input",
-				Value: systemPrompt,
+				Value: req.Params.Input.Text,
 			},
 			{
 				Name:  "action",
@@ -38377,21 +38237,23 @@ CRITICAL RULES FOR THE AGENT
 			UpdatedBy: user.Username,
 			Start:     action.ID,
 		},
-		Type:          "AGENT",
-		Start:         action.ID,
-		Status:        "EXECUTING",
-		WorkflowId:    workflowId,
-		ExecutionId:   workflowId,
-		ExecutionOrg:  user.ActiveOrg.Id,
-		StartedAt:     int64(time.Now().Unix()),
-		Authorization: uuid.NewV4().String(),
+		Type:             "AGENT",
+		Start:            action.ID,
+		Status:           "EXECUTING",
+		WorkflowId:       workflowId,
+		ExecutionId:      workflowId,
+		ExecutionOrg:     user.ActiveOrg.Id,
+		StartedAt:        int64(time.Now().Unix()),
+		Authorization:    uuid.NewV4().String(),
+		// Store the target workflow_id here so buildWorkflowEditContext can fetch it
+		ExecutionArgument: req.Params.Input.WorkflowId,
 	}
 
 	SetWorkflowExecution(ctx, exec, true)
 
-	log.Printf("[INFO] AgentWorkflowEditor: calling HandleAiAgentExecutionStart directly for user %s (%s), workflow_id=%s, execution_id=%s, apps=%d", user.Username, user.Id, req.Params.Input.WorkflowId, exec.ExecutionId, len(appActionSummaries))
+	log.Printf("[INFO] AgentWorkflowEditor: calling HandleAiAgentExecutionStart for user %s (%s), target_workflow_id=%s, execution_id=%s", user.Username, user.Id, req.Params.Input.WorkflowId, exec.ExecutionId)
 
-	returnAction, err := HandleAiAgentExecutionStart(exec, action, false, "AgentWorkflowEditor")
+	returnAction, err := HandleAiAgentExecutionStart(exec, action, false, "AgentWorkflowEditor", "workflow-edit")
 	if err != nil {
 		log.Printf("[ERROR] HandleAiAgentExecutionStart failed in AgentWorkflowEditor: %s", err)
 		resp.WriteHeader(500)
@@ -38410,7 +38272,13 @@ CRITICAL RULES FOR THE AGENT
 
 	_ = returnAction
 
-	responseData, err := json.Marshal(newExec)
+	respObj := agentResponse{
+		Success:       true,
+		ExecutionId:   newExec.ExecutionId,
+		Authorization: newExec.Authorization,
+	}
+
+	responseData, err := json.Marshal(respObj)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshalling execution response in AgentWorkflowEditor: %s", err)
 		resp.WriteHeader(500)
@@ -38613,7 +38481,7 @@ func enrichTriggerFromApp(minTrig *MinimalTrigger, environment string) (Trigger,
 	}
 }
 
-func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
+func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -38622,7 +38490,7 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("[WARNING] Api authentication failed in HandleAgentWorkflowSave: %s", userErr)
+		log.Printf("[WARNING] Api authentication failed in HandleAgentWorkflowOperations: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
 		return
@@ -38635,17 +38503,6 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Extract workflow ID from URL
-	location := strings.Split(request.URL.String(), "/")
-	var urlWorkflowID string
-	if len(location) > 4 && location[1] == "api" {
-		urlWorkflowID = location[4]
-		if strings.Contains(urlWorkflowID, "?") {
-			urlWorkflowID = strings.Split(urlWorkflowID, "?")[0]
-		}
-	}
-
-	// Parse request first so we can fallback to body's WorkflowID
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Failed reading request body: %s", err)
@@ -38664,17 +38521,12 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	workflowID := urlWorkflowID
+	workflowID := setOpsReq.WorkflowID
 	if len(workflowID) != 36 {
-		// Fallback to body's WorkflowID if URL ID is invalid (e.g., %7Bkey%7D from MCP)
-		if len(setOpsReq.WorkflowID) == 36 {
-			workflowID = setOpsReq.WorkflowID
-		} else {
-			log.Printf("[WARNING] Invalid workflow ID: %s", urlWorkflowID)
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "Invalid workflow ID"}`))
-			return
-		}
+		log.Printf("[WARNING] Invalid or missing workflow ID in body: %s", workflowID)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid workflow ID"}`))
+		return
 	}
 
 	// Validate request

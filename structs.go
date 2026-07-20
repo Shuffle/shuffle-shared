@@ -5785,3 +5785,9 @@ type rawField struct {
 	Name  string      `json:"name"`
 	Value interface{} `json:"value"`
 }
+
+type agentResponse struct {
+	Success       bool   `json:"success"`
+	ExecutionId   string `json:"execution_id"`
+	Authorization string `json:"authorization"`
+}
