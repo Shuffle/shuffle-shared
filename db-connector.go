@@ -54,7 +54,7 @@ import (
 var requestCache = cache.New(60*time.Minute, 60*time.Minute)
 
 var memcached = os.Getenv("SHUFFLE_MEMCACHED")
-var mc = gomemcache.New(memcached)
+var mc = newShuffleMemcacheClient(strings.Split(memcached, ",")...)
 
 var gceProject = os.Getenv("SHUFFLE_GCEPROJECT")
 var propagateUrl = os.Getenv("SHUFFLE_PROPAGATE_URL")
@@ -5268,8 +5268,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 }
 
 func init() {
-	mc.Timeout = 2000 * time.Millisecond
-
 	isValid := checkImportPath()
 	if !isValid {
 		time.Sleep(time.Duration(600+rand.Intn(600)) * time.Second)
@@ -16313,6 +16311,8 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		kmsDebug = true
 	}
 
+	memcached = os.Getenv("SHUFFLE_MEMCACHED")
+
 	// docker run -p 11211:11211 --name memcache -d memcached -m 100
 	log.Printf("[DEBUG] Starting with memcached address '%s' (SHUFFLE_MEMCACHED). If this is empty, fallback to default (appengine / local). Name: '%s'", memcached, environment)
 
@@ -16329,13 +16329,11 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 			}
 
 			log.Printf("[DEBUG] Multiple memcached servers detected. Split into %#v", newMemcached)
-			mc = gomemcache.New(newMemcached...)
+			mc = newShuffleMemcacheClient(newMemcached...)
 		} else {
 			log.Printf("[DEBUG] Initializing single memcached client with memcached url: %s", memcached)
-			mc = gomemcache.New(memcached)
+			mc = newShuffleMemcacheClient(memcached)
 		}
-
-		mc.Timeout = 10 * time.Second
 	}
 
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
