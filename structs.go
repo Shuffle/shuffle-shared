@@ -4902,6 +4902,31 @@ type MinimalParameter struct {
 	Value string `json:"value"`
 }
 
+func (m *MinimalParameter) UnmarshalJSON(data []byte) error {
+	type Alias MinimalParameter
+	var aux struct {
+		Value json.RawMessage `json:"value"`
+		*Alias
+	}
+	aux.Alias = (*Alias)(m)
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	if len(aux.Value) > 0 {
+		if aux.Value[0] == '"' {
+			var str string
+			if err := json.Unmarshal(aux.Value, &str); err != nil {
+				return err
+			}
+			m.Value = str
+		} else {
+			m.Value = string(aux.Value)
+		}
+	}
+	return nil
+}
+
 // MinimalAction - action with position and basic info
 type MinimalAction struct {
 	AppName    string             `json:"app_name"`
@@ -5782,7 +5807,8 @@ type WorkflowSetOpsResponse struct {
 }
 
 type rawField struct {
-	Name  string      `json:"name"`
+	Name  string      `json:"name,omitempty"`
+	Key   string      `json:"key,omitempty"`
 	Value interface{} `json:"value"`
 }
 
