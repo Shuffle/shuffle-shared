@@ -7682,22 +7682,21 @@ func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) 
 	// What we tell the agent about its workflow_id
 	workflowIdLine := "You do NOT have an existing workflow yet. Your FIRST action MUST be to call create_workflow to create one, then use the returned workflow_id for all subsequent operations."
 	if len(targetWorkflowId) > 0 {
-		workflowIdLine = fmt.Sprintf(`The workflow you are currently working on has the ID: %s — always use this as the "workflow_id" in every payload you send.`, targetWorkflowId)
+		workflowIdLine = fmt.Sprintf(`Working Workflow ID: %s — use this as the "workflow_id" field in agent_update.`, targetWorkflowId)
 	}
 
-	systemRule := fmt.Sprintf(`[SECONDARY]: You are an autonomous workflow-building agent. You build or edit workflows that will eventually automate the task. Only use the special actions built for you — agent_update is the primary one you will use. If the user requests an integration that is not in your current context, you can still fetch its actions by passing the requested app name to your get_workflow_app_actions tool. The system will automatically search for the app and return its actions.
-
-%s
+	systemRule := `[SECONDARY]: You are an autonomous workflow-building agent. You build or edit workflows that will eventually automate the task. Only use the special actions built for you — agent_update is the primary one you will use. If the user requests an integration that is not in your current context, you can still fetch its actions by passing the requested app name to your get_workflow_app_actions tool. The system will automatically search for the app and return its actions.
 
 Only ask the user for information when it is genuinely unavailable through any allowed action. Use get_minimal_action to fetch the latest workflow state whenever you need to inspect or verify what is currently in the workflow — prefer this over relying on stale context.
 
 Payload Structure
 
 Send your incremental steps in the operations array. You can send one operation at a time, or multiple if you are building a connected sequence.
-{
+Key is "body" and Value is {
 "workflow_id": "<workflow_id>",
 "operations": [ ...array of step-by-step operations... ]
 }
+CRITICAL: The "operations" field MUST be a JSON array of objects. NEVER write a natural language plan, summary, or string inside the "operations" field.
 
 Supported Step-by-Step Operations
 
@@ -7748,6 +7747,7 @@ Format: Schedule Trigger
   "y": 100
 }
 }
+CRITICAL NOTE: The "value" field inside "parameters" MUST ALWAYS be a string. If the parameter expects a JSON object or array, you must escape it into a JSON string (e.g., "value": "{\"key\": \"val\"}"). Do NOT pass raw JSON objects or arrays as values.
 Note: You can vertically position the node between existing ones by adding "insert_before": "<node_id>" or "insert_after": "<node_id>" alongside the data field.
 
 2. CONNECTING NODES (Adding a Branch)
@@ -7797,18 +7797,43 @@ CRITICAL RULES FOR THE AGENT
 
 1. Handling Errors: If you make a mistake, the API will reject your request and tell you EXACTLY which operation failed and why (e.g., "Operation 1 failed: app_id is required"). Read the error carefully, fix the specific missing or incorrect field, and try again.
 2. Special actions are built exclusively for you. agent_update is the core action that does most of the heavy lifting.
-3. Use get_minimal_action to fetch the current workflow state whenever you need to verify what is there — do not assume the context is fresh.
-4. Try not to use parallel decision calling; always do sequential tool calls.`, workflowIdLine)
+3. Use get_minimal_action to fetch the current workflow state only whenever you need it.
+4. Try not to use parallel decision calling; always do sequential tool calls.`
 
 	templateContext := fmt.Sprintf(`%s
+%s
 
 <Start of Available Apps>
 %s
-<End of Available Apps>`, workflowStateSection, string(appsJson))
+<End of Available Apps>`, workflowIdLine, workflowStateSection, string(appsJson))
 
 	return systemRule, templateContext, nil
 }
 
+
+func getWorkflowEditPromptRemovals() []string {
+	return []string{
+		`   - **Destructive Guard:**
+     - If action is DESTRUCTIVE (stop/delete/remove) -> Set "approval_required": true on the action/tool.`,
+	}
+}
+
+func filterSystemPromptByTemplate(template string, systemMessage string) string {
+	var removals []string
+
+	switch template {
+	case "workflow-edit":
+		removals = getWorkflowEditPromptRemovals()
+	}
+	
+	for _, removal := range removals {
+		if removal != "" {
+			systemMessage = strings.ReplaceAll(systemMessage, removal, "")
+		}
+	}
+
+	return systemMessage
+}
 
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string, template string, aiResponseWrapper ...[]byte) (Action, error) {
 	ctx := context.Background()
@@ -8742,11 +8767,17 @@ data_filter:
   }
 ]`, enableQuestionsString)
 
-	// If a template is set, get secondary system rules + extra context
+	systemMessage = filterSystemPromptByTemplate(template, systemMessage)
+
+	// If a template is set, get secondary system rules + extra context.
+	// Only fetch on first run, subsequent steps already have it in HISTORY so no need to re-hit DB.
 	templateSystemRule := ""
 	templateContext := ""
-	if len(template) > 0 {
+	if len(template) > 0 && len(marshalledDecisions) <= 4 {
 		templateSystemRule, templateContext, _ = getTemplateContext(ctx, template, execution)
+	} else if len(template) > 0 {
+		// Still inject the static system rule on every step, just skip the DB fetch for context
+		templateSystemRule, _, _ = getTemplateContext(ctx, template, execution)
 	}
 
 	agentReasoningEffort := "low"
@@ -8787,7 +8818,7 @@ data_filter:
 	}
 
 	// Set model based on environment
-	aiModel := "gpt-5-mini"
+	aiModel := "gpt-5.4-2026-03-05"
 	newAiModel := os.Getenv("AI_MODEL")
 	if newAiModel == "" {
 		newAiModel = os.Getenv("OPENAI_MODEL")
@@ -8819,8 +8850,16 @@ data_filter:
 		ReasoningEffort: agentReasoningEffort,
 	}
 
-	// Inject template-specific context (e.g. workflow state, app actions) into user context
+	// Inject template-specific context as a completely separate user message
+	if len(templateContext) > 0 {
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: "TEMPLATE CONTEXT:\n" + templateContext,
+		})
+	}
+
 	preparedContent := fmt.Sprintf("USER CONTEXT:\n%s\n", metadata)
+
 	if len(imagesIncluded) == 0 {
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,
