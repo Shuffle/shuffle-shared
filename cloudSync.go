@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"sync"
 	"encoding/base64"
+	"regexp"
 
 	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
@@ -3311,6 +3312,24 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 	}
 }
 
+var shellUnsafeRe = regexp.MustCompile(`[;<>&|` + "\\$`" + `\\'"(){}\x00-\x1f\x7f<>]`)
+
+func sanitizeShellParam(s string) string {
+	return strings.TrimSpace(shellUnsafeRe.ReplaceAllString(s, ""))
+}
+
+func validateShellURL(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", false
+	}
+	cleaned := u.Scheme + "://" + u.Host + u.Path
+	if shellUnsafeRe.MatchString(cleaned) {
+		return "", false
+	}
+	return cleaned, true
+}
+
 // Download handler for Orborus agent installation script. This is used in the "Assets" page for Orborus, and can be used by customers to easily install Orborus on their hosts. It returns a bash script that can be run on the target host to install Orborus with the correct configuration.
 func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -3353,22 +3372,33 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if v := q.Get("base_url"); v != "" {
-		c.BaseURL = v
+		if cleaned, ok := validateShellURL(v); ok {
+			c.BaseURL = cleaned
+		} else {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, "invalid base_url: must be a valid http or https URL")
+			return
+		}
 	}
 	if v := q.Get("queue"); v != "" {
-		c.Queue = v
+		c.Queue = sanitizeShellParam(v)
 	}
 	if v := q.Get("auth"); v != "" {
-		c.Auth = v
+		c.Auth = sanitizeShellParam(v)
 	}
 	if v := q.Get("org_id"); v != "" {
+		if !isValidUUID(v) {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, "invalid org_id: must be a valid UUID")
+			return
+		}
 		c.OrgID = v
 	}
 	if v := q.Get("response_actions"); v != "" {
-		c.ResponseActions = v
+		c.ResponseActions = sanitizeShellParam(v)
 	}
 	if v := q.Get("log_forwarding"); v != "" {
-		c.LogForwarding = v
+		c.LogForwarding = sanitizeShellParam(v)
 	}
 	if v := q.Get("software_list_enabled"); v != "" {
 		c.SoftwareListEnabled = v == "true"
@@ -3383,9 +3413,8 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 		c.AsRoot = v != "false"
 	}
 
-	// Check the "AUTH" header for a secret value to allow overriding the config (for security)
 	if authHeader := r.Header.Get("AUTH"); authHeader != "" {
-		c.Auth = authHeader
+		c.Auth = sanitizeShellParam(authHeader)
 	}
 
 	// Quite untested.
