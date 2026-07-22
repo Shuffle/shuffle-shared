@@ -38296,20 +38296,21 @@ func generateNodeID() string {
 }
 
 func createCondition(sourceVal, conditionVal, destVal string) Condition {
+	sharedID := generateNodeID()
 	return Condition{
 		Source: WorkflowAppActionParameter{
-			ID:      generateNodeID(),
+			ID:      sharedID,
 			Name:    "source",
 			Variant: "STATIC_VALUE",
 			Value:   sourceVal,
 		},
 		Condition: WorkflowAppActionParameter{
-			ID:    generateNodeID(),
+			ID:    sharedID,
 			Name:  "condition",
 			Value: conditionVal,
 		},
 		Destination: WorkflowAppActionParameter{
-			ID:      generateNodeID(),
+			ID:      sharedID,
 			Name:    "destination",
 			Variant: "STATIC_VALUE",
 			Value:   destVal,
@@ -38887,6 +38888,23 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 			ID:   realID,
 		}}
 
+	case "add_condition", "edit_condition", "delete_condition":
+		// The branch already has its updated conditions applied.
+		// Stream edge:configure with the full branch so the frontend re-renders it.
+		branchID := op.BranchID
+		for _, branch := range wf.Branches {
+			if branch.ID == branchID {
+				dataBytes, _ := json.Marshal(branch)
+				return []StreamWorkflowOperation{{
+					Item: "edge",
+					Type: "configure",
+					ID:   branch.ID,
+					Data: dataBytes,
+				}}
+			}
+		}
+		return nil
+
 	default:
 		return nil
 	}
@@ -38951,12 +38969,20 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 		return opDeleteBranch(wf, op)
 
 	// ====== CONDITION OPERATIONS ======
-	case "add_condition":
-		return opAddCondition(wf, op)
-	case "edit_condition":
-		return opEditCondition(wf, op)
-	case "delete_condition":
-		return opDeleteCondition(wf, op)
+	case "add_condition", "edit_condition", "delete_condition":
+		if realBranchID, exists := tempIDMap[op.BranchID]; exists {
+			op.BranchID = realBranchID
+		}
+
+		switch op.Op {
+		case "add_condition":
+			return opAddCondition(wf, op)
+		case "edit_condition":
+			return opEditCondition(wf, op)
+		case "delete_condition":
+			return opDeleteCondition(wf, op)
+		}
+		return nil
 
 	// ====== WORKFLOW OPERATIONS ======
 	case "set_start_node":
@@ -39366,6 +39392,11 @@ func opAddBranch(wf *Workflow, op *WorkflowOperation) error {
 		SourceID      string `json:"source_id"`
 		DestinationID string `json:"destination_id"`
 		Label         string `json:"label"`
+		Conditions    []struct {
+			Source      string `json:"source"`
+			Condition   string `json:"condition"`
+			Destination string `json:"destination"`
+		} `json:"conditions"`
 	}
 
 	if err := json.Unmarshal(op.Data, &branchData); err != nil {
@@ -39389,6 +39420,10 @@ func opAddBranch(wf *Workflow, op *WorkflowOperation) error {
 		DestinationID: branchData.DestinationID,
 		Label:         branchData.Label,
 		Conditions:    []Condition{},
+	}
+
+	for _, c := range branchData.Conditions {
+		newBranch.Conditions = append(newBranch.Conditions, createCondition(c.Source, c.Condition, c.Destination))
 	}
 
 	// Detect circular references before adding branch
@@ -39440,9 +39475,11 @@ func opDeleteBranch(wf *Workflow, op *WorkflowOperation) error {
 
 func opAddCondition(wf *Workflow, op *WorkflowOperation) error {
 	var condData struct {
-		Source      string `json:"source"`
-		Condition   string `json:"condition"`
-		Destination string `json:"destination"`
+		Conditions []struct {
+			Source      string `json:"source"`
+			Condition   string `json:"condition"`
+			Destination string `json:"destination"`
+		} `json:"conditions"`
 	}
 
 	if err := json.Unmarshal(op.Data, &condData); err != nil {
@@ -39454,8 +39491,10 @@ func opAddCondition(wf *Workflow, op *WorkflowOperation) error {
 		return fmt.Errorf("branch %s not found", op.BranchID)
 	}
 
-	newCond := createCondition(condData.Source, condData.Condition, condData.Destination)
-	wf.Branches[branchIdx].Conditions = append(wf.Branches[branchIdx].Conditions, newCond)
+	for _, c := range condData.Conditions {
+		newCond := createCondition(c.Source, c.Condition, c.Destination)
+		wf.Branches[branchIdx].Conditions = append(wf.Branches[branchIdx].Conditions, newCond)
+	}
 
 	return nil
 }
@@ -39466,25 +39505,35 @@ func opEditCondition(wf *Workflow, op *WorkflowOperation) error {
 		return fmt.Errorf("branch %s not found", op.BranchID)
 	}
 
-	if op.ConditionIndex < 0 || op.ConditionIndex >= len(wf.Branches[branchIdx].Conditions) {
-		return fmt.Errorf("condition index %d out of range", op.ConditionIndex)
-	}
-
 	var condData struct {
-		Source      string `json:"source"`
-		Condition   string `json:"condition"`
-		Destination string `json:"destination"`
+		Conditions []struct {
+			ID          string  `json:"id"`
+			Source      *string `json:"source"`
+			Condition   *string `json:"condition"`
+			Destination *string `json:"destination"`
+		} `json:"conditions"`
 	}
 
 	if err := json.Unmarshal(op.Data, &condData); err != nil {
 		return fmt.Errorf("invalid condition update data: %w", err)
 	}
 
-	wf.Branches[branchIdx].Conditions[op.ConditionIndex] = createCondition(
-		condData.Source,
-		condData.Condition,
-		condData.Destination,
-	)
+	for _, update := range condData.Conditions {
+		for cIdx := range wf.Branches[branchIdx].Conditions {
+			if wf.Branches[branchIdx].Conditions[cIdx].Condition.ID == update.ID {
+				if update.Source != nil {
+					wf.Branches[branchIdx].Conditions[cIdx].Source.Value = *update.Source
+				}
+				if update.Condition != nil {
+					wf.Branches[branchIdx].Conditions[cIdx].Condition.Value = *update.Condition
+				}
+				if update.Destination != nil {
+					wf.Branches[branchIdx].Conditions[cIdx].Destination.Value = *update.Destination
+				}
+				break
+			}
+		}
+	}
 
 	return nil
 }
@@ -39495,14 +39544,28 @@ func opDeleteCondition(wf *Workflow, op *WorkflowOperation) error {
 		return fmt.Errorf("branch %s not found", op.BranchID)
 	}
 
-	if op.ConditionIndex < 0 || op.ConditionIndex >= len(wf.Branches[branchIdx].Conditions) {
-		return fmt.Errorf("condition index %d out of range", op.ConditionIndex)
+	var deleteData struct {
+		ConditionIDs []string `json:"condition_ids"`
 	}
 
-	wf.Branches[branchIdx].Conditions = append(
-		wf.Branches[branchIdx].Conditions[:op.ConditionIndex],
-		wf.Branches[branchIdx].Conditions[op.ConditionIndex+1:]...,
-	)
+	if err := json.Unmarshal(op.Data, &deleteData); err != nil {
+		return fmt.Errorf("invalid delete condition data: %w", err)
+	}
+
+	var newConds []Condition
+	for _, c := range wf.Branches[branchIdx].Conditions {
+		deleted := false
+		for _, delID := range deleteData.ConditionIDs {
+			if c.Condition.ID == delID {
+				deleted = true
+				break
+			}
+		}
+		if !deleted {
+			newConds = append(newConds, c)
+		}
+	}
+	wf.Branches[branchIdx].Conditions = newConds
 
 	return nil
 }
