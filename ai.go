@@ -7747,16 +7747,26 @@ Format: Schedule Trigger
   "y": 100
 }
 }
-CRITICAL NOTE: The "value" field inside "parameters" MUST ALWAYS be a string. If the parameter expects a JSON object or array, you must escape it into a JSON string (e.g., "value": "{\"key\": \"val\"}"). Do NOT pass raw JSON objects or arrays as values.
+
+Every action’s response is stored under its label. You can reference it using:
+$label_name this itself gives you the parsed JSON output of the action
+* $jira_action_1.id
+* $python_2.message.email
+* For triggers use "$exec" for example $exec.field
+
 Note: You can vertically position the node between existing ones by adding "insert_before": "<node_id>" or "insert_after": "<node_id>" alongside the data field.
 
 2. CONNECTING NODES (Adding a Branch)
-Connect your nodes using their real IDs (if they already exist) or the temp_id you assigned when creating them in the same payload.
+Connect your nodes using their real IDs (if they already exist) or the temp_id you assigned when creating them in the same payload. You can include an array of conditions if you are adding multiple to the same branch.
 {
 "op": "add_branch",
+"temp_id": "branch_1",
 "data": {
   "source_id": "<real_node_id or temp_id>",
-  "destination_id": "<real_node_id or temp_id>"
+  "destination_id": "<real_node_id or temp_id>",
+  "conditions": [
+    { "source": "$some_var", "condition": "equals", "destination": "true" }
+  ]
 }
 }
 
@@ -7778,14 +7788,51 @@ Only provide the fields you actually want to change.
 { "op": "delete_branch", "id": "<real_branch_id>" }
 { "op": "move_node", "id": "<real_node_id>", "data": { "x": 250, "y": 300 } }
 
-5. SETTING THE START NODE
+5. MANAGING CONDITIONS
+You can add, edit, or delete conditions on an EXISTING branch.
+NOTE: To edit or delete, you must use a Get/Read action first to find the exact condition ID.
+
+Available operators: equals, larger than, less than, does not equal, startswith, endswith, is empty, contains, contains_any_of.
+
+Add conditions to an existing branch:
+{
+"op": "add_condition",
+"branch_id": "<real_branch_id or temp_id>",
+"data": {
+  "conditions": [
+    { "source": "$var", "condition": "equals", "destination": "val" }
+  ]
+}
+}
+
+Edit existing conditions (only include fields you want to change):
+{
+"op": "edit_condition",
+"branch_id": "<real_branch_id>",
+"data": {
+  "conditions": [
+    { "id": "<real_condition_id>", "source": "$new_var", "condition": "contains", "destination": "new_val" }
+  ]
+}
+}
+
+Delete conditions:
+{
+"op": "delete_condition",
+"branch_id": "<real_branch_id>",
+"data": {
+  "condition_ids": ["<real_condition_id>"]
+}
+}
+
+6. SETTING THE START NODE
 Defines the entry point of the workflow. You can use a real ID or a temp_id from the same payload.
 {
 "op": "set_start_node",
 "id": "<real_node_id or temp_id>"
 }
 
-6. SAVING THE WORKFLOW
+7. SAVING THE WORKFLOW
 Your edits are stored as a real-time draft. When you are completely finished building or modifying the workflow, you MUST append this operation to your final payload to permanently save the workflow to the database. Call this only after all changes are complete — do not forget it.
 {
 "op": "save_workflow"
@@ -7815,6 +7862,11 @@ func getWorkflowEditPromptRemovals() []string {
 	return []string{
 		`   - **Destructive Guard:**
      - If action is DESTRUCTIVE (stop/delete/remove) -> Set "approval_required": true on the action/tool.`,
+	 `// true IF the action seems risky or destructive and requires user approval. Otherwise false`,
+	 `### DATA REDUCTION:
+data_filter:
+- "full": The default value of the data_filter is full. Use for all non-data-returning calls or when you need the entire response.
+- "list": Use for ALL data calls. Request ONLY essential fields. If the schema is completely unknown, fallback to "full"`,
 	}
 }
 
