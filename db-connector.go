@@ -11715,12 +11715,14 @@ func SetNotification(ctx context.Context, notification Notification) error {
 		}
 	}
 
-	/*
+	if len(notification.OrgId) > 0 {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.OrgId)
 		DeleteCache(ctx, cacheKey)
-		cacheKey = fmt.Sprintf("%s_%s", nameKey, notification.UserId)
+	}
+	if len(notification.UserId) > 0 {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.UserId)
 		DeleteCache(ctx, cacheKey)
-	*/
+	}
 
 	return nil
 }
