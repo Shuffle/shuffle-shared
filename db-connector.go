@@ -5835,12 +5835,37 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 	}
 
 	if entity == "org_cache" {
-		// FIXME: Add check in ngram to clean up correlations after deletions
+		cacheData := &CacheKeyData{}
+		cache, err := GetCache(ctx, fmt.Sprintf("%s_%s", entity, value))
+		if err == nil {
+			err = json.Unmarshal([]byte(cache.([]uint8)), cacheData)
+		}
+		if err == nil && len(cacheData.Category) > 0 && len(orgId) > 0 {
+			cacheKey := fmt.Sprintf("%s_%s_%s_%s", entity, "", orgId, cacheData.Category)
+			DeleteCache(ctx, cacheKey)
+			DeleteCache(ctx, fmt.Sprintf("%s_50", cacheKey))
+			DeleteCache(ctx, fmt.Sprintf("%s_100", cacheKey))
+			DeleteCache(ctx, fmt.Sprintf("%s_1000", cacheKey))
+		}
 	}
 
 	if entity == "workflow" && len(orgId) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("%s_workflows", orgId))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", orgId))
+	}
+
+	if entity == "notifications" {
+		notification, err := GetNotification(ctx, value)
+		if err == nil {
+			if len(notification.OrgId) > 0 {
+				DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.OrgId))
+			}
+			if len(notification.UserId) > 0 {
+				DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.UserId))
+			}
+		} else if len(orgId) > 0 {
+			DeleteCache(ctx, fmt.Sprintf("notifications_%s", orgId))
+		}
 	}
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
@@ -6924,6 +6949,11 @@ func (u *User) InitSSOInfos() {
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	log.Printf("[INFO] Updating user %s (%s) that has the role %s with %d apps and %d orgs. Org updater: %t", user.Username, user.Id, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
 	parsedKey := user.Id
+	previousApiKey := ""
+	previousUser, previousUserErr := GetUser(ctx, parsedKey)
+	if previousUserErr == nil && len(previousUser.ApiKey) > 0 && previousUser.ApiKey != user.ApiKey {
+		previousApiKey = previousUser.ApiKey
+	}
 
 	DeleteCache(ctx, user.ApiKey)
 	DeleteCache(ctx, user.ApiKey+user.ActiveOrg.Id)
@@ -6984,6 +7014,14 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 					log.Printf("[ERROR] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
 				}
 			}()
+		}
+	}
+
+	if len(previousApiKey) > 0 {
+		DeleteCache(ctx, previousApiKey)
+		DeleteCache(ctx, fmt.Sprintf("Users_%s", previousApiKey))
+		if err := DeleteKey(ctx, "apikey", previousApiKey); err != nil {
+			return err
 		}
 	}
 
