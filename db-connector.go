@@ -2126,7 +2126,11 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := string(cache.([]uint8))
-			return cacheData, nil
+			if len(cacheData) > 0 {
+				return cacheData, nil
+			} else { 
+				return "", errors.New(fmt.Sprintf("File '%s' doesn't exist (cache).", fullParsedPath))
+			}
 		}
 	}
 
@@ -2160,7 +2164,12 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		obj := bucket.Object(fullParsedPath)
 		fileReader, err := obj.NewReader(ctx)
 		if err != nil {
-			log.Printf("[ERROR] Failed reading file '%s' from bucket %s: %s. Will try with alternative solution.", fullParsedPath, bucketName, err)
+			if debug { 
+				log.Printf("[DEBUG] Failed reading file '%s' from bucket %s: %s. Will try with alternative solution.", fullParsedPath, bucketName, err)
+			}
+
+			// Cache sip for the minute 
+			SetCache(ctx, cacheKey, []byte{}, 1)
 
 			if projectName != "shuffler" {
 				bucketName = fmt.Sprintf("%s.appspot.com", projectName)
@@ -2168,7 +2177,8 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 				obj = bucket.Object(fullParsedPath)
 				fileReader, err = obj.NewReader(ctx)
 				if err != nil {
-					log.Printf("[ERROR] Failed reading file '%s' again from bucket %s: %s", fullParsedPath, bucketName, err)
+					//log.Printf("[ERROR] Failed reading file '%s' again from bucket %s: %s", fullParsedPath, bucketName, err)
+		
 					return "", err
 				}
 			} else {

@@ -2220,7 +2220,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		log.Printf("[ERROR][%s] AI Agent: FAILED MAPPING RAW RESP INTERfACE. TYPE: %T\n\n\n", execution.ExecutionId, outputMapped.RawResponse)
 	}
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode >= 300 {
 		if debug { 
 			log.Printf("[ERROR][%s] AI Agent: Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
 		} else {
@@ -2230,9 +2230,9 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		return body, debugUrl, appname, []string{}, "", errors.New(fmt.Sprintf("Failed running agent decision (2). Status code %d", resp.StatusCode))
 	}
 
-	if outputMapped.Success == false {
-		return originalBody, debugUrl, appname, []string{}, "", errors.New("Failed running agent decision (3). Success false for Singul action")
-	}
+	//if outputMapped.Success == false {
+	//	return originalBody, debugUrl, appname, []string{}, "", errors.New("Failed running agent decision (3). Success false for Singul action")
+	//}
 
 	/*
 		agentOutput.Decisions[decisionIndex].RunDetails.RawResponse = string(rawResponse)
@@ -2379,7 +2379,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			decision.RunDetails.ActionName = actionName
 
 			if debug {
-				log.Printf("[DEBUG] RawResp: %s", string(rawResponse))
+				log.Printf("[DEBUG] RawResp agent: %s", string(rawResponse))
 			}
 
 			if err != nil {

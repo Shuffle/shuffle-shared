@@ -23562,8 +23562,9 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	}
 
 	// VERY short sleeptime here on purpose
+	// Increased to 30 seconds because a lot of APIs can take ~longish
+	maxSeconds := 30 
 	startTime := time.Now().Unix()
-	maxSeconds := 15 
 	if project.Environment != "cloud" {
 		maxSeconds = 180
 	}
