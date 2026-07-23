@@ -5845,12 +5845,37 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 	}
 
 	if entity == "org_cache" {
-		// FIXME: Add check in ngram to clean up correlations after deletions
+		cacheData := &CacheKeyData{}
+		cache, err := GetCache(ctx, fmt.Sprintf("%s_%s", entity, value))
+		if err == nil {
+			err = json.Unmarshal([]byte(cache.([]uint8)), cacheData)
+		}
+		if err == nil && len(cacheData.Category) > 0 && len(orgId) > 0 {
+			cacheKey := fmt.Sprintf("%s_%s_%s_%s", entity, "", orgId, cacheData.Category)
+			DeleteCache(ctx, cacheKey)
+			DeleteCache(ctx, fmt.Sprintf("%s_50", cacheKey))
+			DeleteCache(ctx, fmt.Sprintf("%s_100", cacheKey))
+			DeleteCache(ctx, fmt.Sprintf("%s_1000", cacheKey))
+		}
 	}
 
 	if entity == "workflow" && len(orgId) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("%s_workflows", orgId))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", orgId))
+	}
+
+	if entity == "notifications" {
+		notification, err := GetNotification(ctx, value)
+		if err == nil {
+			if len(notification.OrgId) > 0 {
+				DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.OrgId))
+			}
+			if len(notification.UserId) > 0 {
+				DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.UserId))
+			}
+		} else if len(orgId) > 0 {
+			DeleteCache(ctx, fmt.Sprintf("notifications_%s", orgId))
+		}
 	}
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
@@ -6191,6 +6216,12 @@ func SetSession(ctx context.Context, user User, value string) error {
 	//parsedKey := strings.ToLower(user.Username)
 	// Non indexed User data
 	parsedKey := user.Id
+	previousSession := user.Session
+	if len(previousSession) > 0 && previousSession != value {
+		DeleteCache(ctx, previousSession)
+		DeleteCache(ctx, fmt.Sprintf("session_%s", previousSession))
+	}
+
 	user.Session = value
 
 	nameKey := "Users"
@@ -6928,6 +6959,11 @@ func (u *User) InitSSOInfos() {
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	log.Printf("[INFO] Updating user %s (%s) that has the role %s with %d apps and %d orgs. Org updater: %t", user.Username, user.Id, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
 	parsedKey := user.Id
+	previousApiKey := ""
+	previousUser, previousUserErr := GetUser(ctx, parsedKey)
+	if previousUserErr == nil && len(previousUser.ApiKey) > 0 && previousUser.ApiKey != user.ApiKey {
+		previousApiKey = previousUser.ApiKey
+	}
 
 	DeleteCache(ctx, user.ApiKey)
 	DeleteCache(ctx, user.ApiKey+user.ActiveOrg.Id)
@@ -6991,11 +7027,19 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		}
 	}
 
+	if len(previousApiKey) > 0 {
+		DeleteCache(ctx, previousApiKey)
+		DeleteCache(ctx, fmt.Sprintf("Users_%s", previousApiKey))
+		if err := DeleteKey(ctx, "apikey", previousApiKey); err != nil {
+			return err
+		}
+	}
+
 	DeleteCache(ctx, user.ApiKey)
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 	err = DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
-	if err != nil {
+	if err != nil && err != gomemcache.ErrCacheMiss {
 		log.Printf("[ERROR] Failed to delete cache for user apikey %s", err)
 	}
 
@@ -7083,8 +7127,11 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 	}
 
 	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(user.Username)))
 
 	return nil
 }
@@ -10675,6 +10722,12 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 		env.Id = uuid.NewV4().String()
 	}
 
+	if len(env.Auth) == 0 {
+		if len(os.Getenv("SHUFFLE_ENVIRONMENT_AUTH")) > 0 {
+			env.Auth = os.Getenv("SHUFFLE_ENVIRONMENT_AUTH")
+		}
+	}
+
 	timeNow := time.Now().Unix()
 	if env.Created == 0 {
 		env.Created = timeNow
@@ -11155,21 +11208,24 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 	var users []User
 
-	//	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
-	//	if project.CacheDb {
-	//		cache, err := GetCache(ctx, cacheKey)
-	//		if err == nil {
-	//			cacheData := []byte(cache.([]uint8))
-	//			err = json.Unmarshal(cacheData, &users)
-	//			if err == nil && len(users) > 0 {
-	//				log.Printf("[DEBUG] Found user apikey cache %s", cacheKey)
-	//				return users[0], nil
-	//			}
-	//		}
-	//	}
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &users)
+			if err == nil && len(users) > 0 {
+				if debug {
+					log.Printf("[DEBUG] Found user API key in cache")
+				}
+
+				return users[0], nil
+			}
+		}
+	}
 
 	if debug {
-		log.Printf("[DEBUG] Looking for the API Key pass the cache check %s", project.DbType)
+		log.Printf("[DEBUG] API key cache miss; looking up user in %s", project.DbType)
 	}
 
 	if project.DbType == "opensearch" {
@@ -11268,22 +11324,22 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		//}
 	}
 
-	//	if project.CacheDb {
-	//		userData, err := json.Marshal(users)
-	//		if err != nil {
-	//			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
-	//			if len(users) > 0 {
-	//				return users[0], nil
-	//			} else {
-	//				return User{}, err
-	//			}
-	//		}
-	//
-	//		err = SetCache(ctx, cacheKey, userData, 10)
-	//		if err != nil {
-	//			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
-	//		}
-	//	}
+	if project.CacheDb {
+		userData, err := json.Marshal(users)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
+			if len(users) > 0 {
+				return users[0], nil
+			} else {
+				return User{}, err
+			}
+		}
+
+		err = SetCache(ctx, cacheKey, userData, 10)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
+		}
+	}
 
 	if len(users) == 0 {
 		return User{}, errors.New("No users found for this apikey (2)")
@@ -11669,12 +11725,14 @@ func SetNotification(ctx context.Context, notification Notification) error {
 		}
 	}
 
-	/*
+	if len(notification.OrgId) > 0 {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.OrgId)
 		DeleteCache(ctx, cacheKey)
-		cacheKey = fmt.Sprintf("%s_%s", nameKey, notification.UserId)
+	}
+	if len(notification.UserId) > 0 {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.UserId)
 		DeleteCache(ctx, cacheKey)
-	*/
+	}
 
 	return nil
 }
