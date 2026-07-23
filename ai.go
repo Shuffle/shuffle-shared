@@ -7696,7 +7696,28 @@ Key is "body" and Value is {
 "workflow_id": "<workflow_id>",
 "operations": [ ...array of step-by-step operations... ]
 }
-CRITICAL: The "operations" field MUST be a JSON array of objects. NEVER write a natural language plan, summary, or string inside the "operations" field.
+
+CRITICAL: The "operations" field MUST be a JSON array of objects. NEVER write a natural language plan, summary, or string inside the "operations" field. This overrides the generic "value": "literal_value" example shown elsewhere in your instructions — for agent_update, "value" is ALWAYS an object, and "operations" inside it is ALWAYS an array, never a string.
+
+Concrete example of a correct full decision using agent_update:
+{
+  "action": "agent_update",
+  "category": "singul",
+  "tool": "agent_update",
+  "fields": [
+    {
+      "key": "body",
+      "value": {
+        "workflow_id": "<workflow_id>",
+        "operations": [
+          { "op": "edit_node", "id": "<real_node_id>", "data": { "parameters": [ { "name": "method", "value": "GET" }, { "name": "url", "value": "https://example.com" } ] } }
+        ]
+      }
+    }
+  ]
+}
+  
+INCORRECT (do NOT do this): { "key": "body", "value": { "operations": "Update the workflow actions as follows: ...", "workflow_id": "<workflow_id>" } }
 
 Supported Step-by-Step Operations
 
@@ -7887,7 +7908,8 @@ func filterSystemPromptByTemplate(template string, systemMessage string) string 
 	return systemMessage
 }
 
-func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string, template string, aiResponseWrapper ...[]byte) (Action, error) {
+func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string, aiResponseWrapper ...[]byte) (Action, error) {
+	template := ""
 	ctx := context.Background()
 	aiStarttime := time.Now().UnixMilli()
 
@@ -8080,6 +8102,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	imagesIncluded := []string{}
 	imageDetail := openai.ImageURLDetailAuto // low, high, original, auto (let the model decide)
 	for _, param := range startNode.Parameters {
+		if param.Name == "template" && len(template) == 0 {
+			template = param.Value
+		}
+
 		if param.Name == "input" {
 			userMessage = param.Value
 	
@@ -8822,14 +8848,10 @@ data_filter:
 	systemMessage = filterSystemPromptByTemplate(template, systemMessage)
 
 	// If a template is set, get secondary system rules + extra context.
-	// Only fetch on first run, subsequent steps already have it in HISTORY so no need to re-hit DB.
 	templateSystemRule := ""
 	templateContext := ""
-	if len(template) > 0 && len(marshalledDecisions) <= 4 {
+	if len(template) > 0 {
 		templateSystemRule, templateContext, _ = getTemplateContext(ctx, template, execution)
-	} else if len(template) > 0 {
-		// Still inject the static system rule on every step, just skip the DB fetch for context
-		templateSystemRule, _, _ = getTemplateContext(ctx, template, execution)
 	}
 
 	agentReasoningEffort := "low"
