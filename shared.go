@@ -37964,10 +37964,33 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 	// Search by IDs first (more direct)
 	if len(actionReq.AppIDs) > 0 {
 		for _, appID := range actionReq.AppIDs {
+			foundInOrg := false
 			for _, app := range allApps {
 				if app.ID == appID && len(app.Name) > 0 {
+					if debug {
+						log.Printf("[DEBUG] Found app by ID %s in org apps list", appID)
+					}
 					matchedApps = append(matchedApps, app)
+					foundInOrg = true
 					break
+				}
+			}
+
+			// If not found in org's active apps, fetch it globally by ID!
+			if !foundInOrg {
+				if debug {
+					log.Printf("[DEBUG] App ID %s not in org, trying global GetApp", appID)
+				}
+				globalApp, err := GetApp(ctx, appID, user, false)
+				if err == nil && globalApp != nil {
+					if debug {
+						log.Printf("[DEBUG] Successfully found app %s globally", appID)
+					}
+					matchedApps = append(matchedApps, *globalApp)
+				} else {
+					if debug {
+						log.Printf("[DEBUG] Failed to fetch app globally by ID %s: %v", appID, err)
+					}
 				}
 			}
 		}
@@ -37980,6 +38003,9 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 			foundInOrg := false
 			for _, app := range allApps {
 				if strings.ToLower(app.Name) == lowerName && len(app.ID) > 0 {
+					if debug {
+						log.Printf("[DEBUG] Found app by name '%s' (ID %s) in org apps list", appName, app.ID)
+					}
 					// Check if already added via ID search
 					alreadyAdded := false
 					for _, matched := range matchedApps {
@@ -37998,8 +38024,14 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 
 			// If not found in org, search Algolia
 			if !foundInOrg {
+				if debug {
+					log.Printf("[DEBUG] App Name '%s' not in org, searching Algolia", appName)
+				}
 				algoliaApp, err := HandleAlgoliaAppSearch(ctx, appName)
 				if err == nil && algoliaApp.ObjectID != "" {
+					if debug {
+						log.Printf("[DEBUG] Found Algolia match for '%s': ObjectID %s", appName, algoliaApp.ObjectID)
+					}
 					discoveredApp, err := GetApp(ctx, algoliaApp.ObjectID, user, false)
 					if err == nil && discoveredApp != nil {
 						alreadyAdded := false
@@ -38010,6 +38042,9 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 							}
 						}
 						if !alreadyAdded {
+							if debug {
+								log.Printf("[DEBUG] Appended Algolia app %s to matched apps", discoveredApp.ID)
+							}
 							matchedApps = append(matchedApps, *discoveredApp)
 						}
 					}
@@ -38202,7 +38237,7 @@ func AgentWorkflowEditor(resp http.ResponseWriter, request *http.Request) {
 
 	// All context building (workflow state, app actions, rules) is handled inside
 	// buildWorkflowEditContext which is called by getTemplateContext inside HandleAiAgentExecutionStart
-	toolApps := "app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps,app:b598b078fd5c531699fca803c172ce72:shuffle_workflows"
+	toolApps := "app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps,app:de4ef2287bd41b9d5563e39989643ee6:shuffle_workflows_builder"
 
 	action := Action{
 		ID:             uuid.NewV4().String(),
@@ -38329,8 +38364,55 @@ func findAppByID(ctx context.Context, appID string, user User) (*WorkflowApp, er
 		return app, err
 	}
 
+	// 1. Search Org's Prioritized Apps first
+	prioritizedApps, err := GetPrioritizedApps(ctx, user)
+	if err == nil {
+		for _, pApp := range prioritizedApps {
+			if pApp.ID == appID {
+				return &pApp, nil
+			}
+		}
+	}
+
+	// 2. If not found in org apps, try getting it globally
 	app, err := GetApp(ctx, appID, user, false)
-	return app, err
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. If we got it globally but it wasn't in prioritized apps, auto-activate it in parallel
+	go func(activateAppID string, apiKey string) {
+		baseURL := os.Getenv("BASE_URL")
+		if len(baseURL) == 0 {
+			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+				baseURL = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+			} else {
+				port := os.Getenv("PORT")
+				if len(port) == 0 {
+					port = "5001"
+				}
+				baseURL = fmt.Sprintf("http://localhost:%s", port)
+			}
+		}
+
+		activateURL := fmt.Sprintf("%s/api/v1/apps/%s/activate", baseURL, activateAppID)
+		req, err := http.NewRequest("GET", activateURL, nil)
+		if err != nil {
+			log.Printf("[WARNING] Failed building auto-activate request for app %s: %s", activateAppID, err)
+			return
+		}
+
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+		httpResp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Printf("[WARNING] Failed auto-activating app %s: %s", activateAppID, err)
+			return
+		}
+		httpResp.Body.Close()
+		//log.Printf("[INFO] Auto-activated app %s in the background", activateAppID)
+	}(appID, user.ApiKey)
+
+	return app, nil
 }
 
 func enrichActionFromApp(ctx context.Context, minAct *MinimalAction, realApp *WorkflowApp, environment string) (Action, error) {
