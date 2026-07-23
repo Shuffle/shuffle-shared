@@ -2231,7 +2231,25 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	}
 
 	if outputMapped.Success == false {
-		return originalBody, debugUrl, appname, []string{}, "", errors.New("Failed running agent decision (3). Success false for Singul action")
+		// The outer Singul wrapper said success=false, but the actual underlying
+		// HTTP call may have still worked (this happens with new/custom apps that
+		// Singul doesn't fully recognise at the schema level).
+		// By this point `body` already holds the extracted inner raw_response content
+		// (decoded above). Check if that inner result was actually successful before
+		// giving up — we only fail hard if the inner call also failed.
+		var innerResult struct {
+			Status  int  `json:"status"`
+			Success bool `json:"success"`
+		}
+		innerUnmarshalErr := json.Unmarshal(body, &innerResult)
+
+		innerCallSucceeded := innerUnmarshalErr == nil && (innerResult.Success || innerResult.Status == 200)
+		if !innerCallSucceeded {
+			log.Printf("[ERROR][%s] AI Agent: Singul action failed (success=false) and inner raw_response also shows failure. Returning error.", execution.ExecutionId)
+			return originalBody, debugUrl, appname, []string{}, "", errors.New("Failed running agent decision (3). Success false for Singul action")
+		}
+
+		log.Printf("[INFO][%s] AI Agent: Singul outer wrapper returned success=false but inner raw_response shows success (status=%d). Treating as success for custom/new app.", execution.ExecutionId, innerResult.Status)
 	}
 
 	/*
