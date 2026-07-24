@@ -6842,12 +6842,36 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	workflowjson, err := json.Marshal(workflow)
-	if err != nil {
-		log.Printf("Failed workflow json setting marshalling: %s", err)
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	type minimalWorkflowWithId struct {
+		*MinimalWorkflow
+		WorkflowId string `json:"workflow_id"`
+	}
+
+	var workflowjson []byte
+	if request.URL.Query().Get("minimal") == "true" {
+		minimalWorkflow := buildMinimalWorkflow(&workflow)
+		if minimalWorkflow == nil {
+			log.Printf("[ERROR] Failed building minimal workflow %s", workflow.ID)
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		workflowjson, err = json.Marshal(minimalWorkflowWithId{minimalWorkflow, workflow.ID})
+		if err != nil {
+			log.Printf("Failed minimal workflow json setting marshalling: %s", err)
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	} else {
+		workflowjson, err = json.Marshal(workflow)
+		if err != nil {
+			log.Printf("Failed workflow json setting marshalling: %s", err)
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	err = SetWorkflow(ctx, workflow, workflow.ID)
