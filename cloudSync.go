@@ -2230,9 +2230,9 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		return body, debugUrl, appname, []string{}, "", errors.New(fmt.Sprintf("Failed running agent decision (2). Status code %d", resp.StatusCode))
 	}
 
-	//if outputMapped.Success == false {
-	//	return originalBody, debugUrl, appname, []string{}, "", errors.New("Failed running agent decision (3). Success false for Singul action")
-	//}
+	if resp.StatusCode != 200 && outputMapped.Success == false {
+		return originalBody, debugUrl, appname, []string{}, "", errors.New("Failed running agent decision (3). Success false for Singul action")
+	}
 
 	/*
 		agentOutput.Decisions[decisionIndex].RunDetails.RawResponse = string(rawResponse)
