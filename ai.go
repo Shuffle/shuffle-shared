@@ -7666,23 +7666,11 @@ func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) 
 	}
 	appsJson, _ := json.Marshal(appSummaries)
 
-	// Workflow state section, skip fetch if creating from scratch
-	workflowStateSection := "<Start of Current Workflow State>\n(No existing workflow — you are creating one from scratch. Use create_workflow first, then work on it.)\n<End of Current Workflow State>"
-	if len(targetWorkflowId) > 0 {
-		workflow, wErr := GetWorkflow(ctx, targetWorkflowId)
-		if wErr != nil {
-			log.Printf("[WARNING] buildWorkflowEditContext: failed to get workflow %s: %s", targetWorkflowId, wErr)
-		} else {
-			minimalWorkflow := buildMinimalWorkflow(workflow)
-			minimalWorkflowJson, _ := json.Marshal(minimalWorkflow)
-			workflowStateSection = fmt.Sprintf("<Start of Current Workflow State>\n%s\n<End of Current Workflow State>", string(minimalWorkflowJson))
-		}
-	}
-
 	// What we tell the agent about its workflow_id
-	workflowIdLine := "You do NOT have an existing workflow yet. Your FIRST action MUST be to call create_workflow to create one, then use the returned workflow_id for all subsequent operations."
+	workflowIdLine := "CRITICAL: You do NOT have an existing workflow yet. Your FIRST action MUST be to call create_workflow to create one, then ALWAYS use the returned workflow_id for ALL subsequent operations."
 	if len(targetWorkflowId) > 0 {
-		workflowIdLine = fmt.Sprintf(`Working Workflow ID: %s — use this as the "workflow_id" field in agent_update.`, targetWorkflowId)
+		workflowIdLine = fmt.Sprintf(`CRITICAL: Working Workflow ID: %s 
+You MUST use this exact workflow_id in every single agent_update operation. DO NOT try to guess or create a new one.`, targetWorkflowId)
 	}
 
 	systemRule := `[SECONDARY]: You are an autonomous workflow-building agent. You build or edit workflows that will eventually automate the task. Only use the special actions built for you — agent_update is the primary one you will use. If the user requests an integration that is not in your current context, you can still fetch its actions by passing the requested app name to your get_workflow_app_actions tool. The system will automatically search for the app and return its actions.
@@ -7869,11 +7857,10 @@ CRITICAL RULES FOR THE AGENT
 4. Try not to use parallel decision calling; always do sequential tool calls.`
 
 	templateContext := fmt.Sprintf(`%s
-%s
 
 <Start of Available Apps>
 %s
-<End of Available Apps>`, workflowIdLine, workflowStateSection, string(appsJson))
+<End of Available Apps>`, workflowIdLine, string(appsJson))
 
 	return systemRule, templateContext, nil
 }
