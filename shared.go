@@ -39245,6 +39245,50 @@ func findNodePosition(wf *Workflow, nodeID string) (string, int, error) {
 
 
 func opAddNodeWithMapping(ctx context.Context, user User, wf *Workflow, op *WorkflowOperation, tempIDMap map[string]string) error {
+	// IDEMPOTENCY: if this temp_id was already resolved in a prior agent loop,
+	// the node already exists in the workflow (loaded from DB). Skip the add and
+	// re-populate the tempIDMap entry so downstream add_branch ops still work.
+	if len(op.TempID) > 0 {
+		if _, alreadyMapped := tempIDMap[op.TempID]; alreadyMapped {
+			return nil
+		}
+	}
+
+	// Always check by label for idempotency, because labels must be unique in a workflow.
+	// This prevents duplicates if the workflow was loaded from DB after a prior save,
+	// regardless of whether a temp_id was provided or not.
+	var minLabel string
+	if op.NodeType == "action" {
+		var minAct MinimalAction
+		if jsonErr := json.Unmarshal(op.Data, &minAct); jsonErr == nil {
+			minLabel = minAct.Label
+		}
+	} else if op.NodeType == "trigger" {
+		var minTrig MinimalTrigger
+		if jsonErr := json.Unmarshal(op.Data, &minTrig); jsonErr == nil {
+			minLabel = minTrig.Label
+		}
+	}
+
+	if len(minLabel) > 0 {
+		for _, existing := range wf.Actions {
+			if strings.EqualFold(existing.Label, minLabel) {
+				if len(op.TempID) > 0 {
+					tempIDMap[op.TempID] = existing.ID
+				}
+				return nil
+			}
+		}
+		for _, existing := range wf.Triggers {
+			if strings.EqualFold(existing.Label, minLabel) {
+				if len(op.TempID) > 0 {
+					tempIDMap[op.TempID] = existing.ID
+				}
+				return nil
+			}
+		}
+	}
+
 	err := opAddNode(ctx, user, wf, op)
 	if err != nil {
 		return err
@@ -39596,6 +39640,21 @@ func opAddBranchWithMapping(wf *Workflow, op *WorkflowOperation, tempIDMap map[s
 	// Re-marshal the resolved data back into op.Data for opAddBranch
 	resolvedData, _ := json.Marshal(branchData)
 	op.Data = resolvedData
+
+	// IDEMPOTENCY: if a branch between this source to destination already exists
+	// (e.g. a second agent loop re-issued the same add_branch), skip the add
+	// and re-map the temp_id so downstream ops still resolve correctly.
+	for _, existing := range wf.Branches {
+		if existing.SourceID == branchData.SourceID && existing.DestinationID == branchData.DestinationID {
+			if len(op.TempID) > 0 {
+				tempIDMap[op.TempID] = existing.ID
+			}
+			if len(op.ID) > 0 {
+				tempIDMap[op.ID] = existing.ID
+			}
+			return nil
+		}
+	}
 
 	err := opAddBranch(wf, op)
 	if err != nil {
