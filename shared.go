@@ -23579,6 +23579,10 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 	addedParams := []string{}
 	sleeptime := 100
+
+	// Gives it 10 iterations to get validation right before returning
+	successBreak := 5
+	successCount := 0
 	for {
 		// Use startTime instead:
 		if time.Now().Unix()-startTime > int64(maxSeconds) {
@@ -23590,7 +23594,6 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		}
 
 		time.Sleep(time.Duration(sleeptime) * time.Millisecond)
-
 		newExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err != nil {
 
@@ -23619,15 +23622,23 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 			}
 		}
 
-		//log.Printf("\n\n\n[INFO] Checking single action execution %s. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
+		//if debug { 
+		//	log.Printf("[DEBUG][%s] Checking single action. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
+		//}
+
 		if len(newExecution.Results) > resultAmount-1 {
 			if relevantIndex == -1 {
 				relevantIndex = len(newExecution.Results) - 1
 			}
 
-			if len(newExecution.Results[relevantIndex].Result) > 0 || newExecution.Results[relevantIndex].Status == "SUCCESS" {
-				returnBody.Result = newExecution.Results[relevantIndex].Result
+			if debug && relevantIndex >= 0 { 
+				log.Printf("[DEBUG][%s] Single result found. Validating -> break. Execution status: %s, Action status: %s. Result len: %d", newExecution.ExecutionId, newExecution.Status, newExecution.Results[relevantIndex].Status, len(newExecution.Results[relevantIndex].Result))
+			}
 
+			if len(newExecution.Results[relevantIndex].Result) > 0 || newExecution.Results[relevantIndex].Status == "SUCCESS" {
+				successCount += 1
+
+				returnBody.Result = newExecution.Results[relevantIndex].Result
 				if len(newExecution.Results[relevantIndex].Action.Parameters) > 0 {
 					for _, param := range newExecution.Results[relevantIndex].Action.Parameters {
 						// Remove auth just in case
@@ -23645,6 +23656,11 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 							}
 						}
 					}
+				}
+
+				if successCount >= successBreak { 
+					log.Printf("[INFO][%s] Single action validation success count reached. Breaking single action loop without validation.", workflowExecution.ExecutionId)
+					break
 				}
 
 				// FIXME: This is a custom fix for single action custom runs.

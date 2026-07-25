@@ -1855,6 +1855,12 @@ func GetAppCategories() []AppCategory {
 			ActionLabels: []string{"Answer Question", "Run Action", "Run LLM"},
 		},
 		AppCategory{
+			Name:         "Internal",
+			Color:        "#FFC107",
+			Icon:         "other",
+			ActionLabels: []string{"Get Workflow", "List Workflows", "Create Workflow", "Update Workflow", "Delete Workflow", "Run Workflow", "Get Run", "List Runs", "Create Run", "Update Run", "Delete Run"},
+		},
+		AppCategory{
 			Name:         "Other",
 			Color:        "#FFC107",
 			Icon:         "other",

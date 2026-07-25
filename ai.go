@@ -409,7 +409,10 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 	// Make result into a body as well
 	err = json.Unmarshal([]byte(kmsResponse.Result), httpOutput)
 	if err != nil {
-		log.Printf("[ERROR] Failed to unmarshal Schemaless HTTP Output response (2): %s. Data: %s", err, kmsResponse.Result)
+		if len(kmsResponse.Result) > 0 { 
+			log.Printf("[ERROR] Failed to unmarshal Schemaless HTTP Output response (2): %s. Data: %s", err, kmsResponse.Result)
+		}
+
 		return *httpOutput, []byte{}, err
 	}
 
@@ -1834,8 +1837,8 @@ func parseAgentDecisions(rawOutput string) ([]AgentDecision, error) {
 }
 
 func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys []string) (WorkflowApp, WorkflowAppAction) {
-	standalone := os.Getenv("STANDALONE") == "true"
 
+	standalone := os.Getenv("STANDALONE") == "true"
 	if len(app.ID) == 0 || len(app.Name) == 0 {
 		log.Printf("[ERROR] No app ID or name found in AutofixAppLabels")
 		return app, WorkflowAppAction{}
@@ -1918,7 +1921,7 @@ func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys [
 
 		if len(foundCategory.Name) == 0 {
 			log.Printf("[DEBUG] No category found for app %s (%s). Checking based on input label, then using that category in app setup", app.Name, app.ID)
-			systemMessage := `Your goal is to find the correct CATEGORY for the app to be in. Synonyms are accepted, and you should be very critical to not make mistakes. If none match, don't add any. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate. If it exists, return {"success": true, "category": "<category>"} where <category> is replaced with the category found. If it does not exist, return {"success": false, "category": "Other"}. Output as JSON."`
+			systemMessage := `Your goal is to find the correct CATEGORY for the app to be in. Synonyms are accepted, and you should be very critical to not make mistakes. If none match, don't add any. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate. If it exists, return {"success": true, "category": "<category>"} where <category> is replaced with the category found. If it does not exist, return {"success": false, "category": "Other"}. If are not sure about the category, choose 'Other'. If they are related to Shuffle Automation, choose 'Internal'. Output as JSON."`
 
 			categories := ""
 			for _, category := range availableCategories {
@@ -1958,7 +1961,6 @@ func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys [
 			}
 
 			app.Categories = append(app.Categories, actionStruct.Category)
-
 			// Forces app to update
 			if len(app.Actions) > 0 {
 				updatedIndex = 0
@@ -1971,6 +1973,11 @@ func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys [
 
 				foundCategory = category
 				break
+			}
+
+			// Update the actual app?
+			if debug { 
+				log.Printf("[DEBUG] UPDATEINDEX CATEGORY (%s): %#v", app.Name, updatedIndex)
 			}
 		}
 	}
@@ -2245,7 +2252,12 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 
 	// FIXME: Add the label to the OpenAPI action as well?
 	// 0x0elliot: Would we want to do this through an API on standalone?
-	if updatedIndex >= 0 && !standalone {
+	if debug { 
+		log.Printf("[DEBUG] App: %#v, standalone: %v, updatedIndex: %d, len(app.Actions): %d", app.Name, standalone, updatedIndex, len(app.Actions))
+	}
+
+	if !standalone && updatedIndex >= 0 && len(app.Actions) > 0 {
+
 		err := SetWorkflowAppDatastore(context.Background(), app, app.ID)
 		if err != nil {
 			log.Printf("[WARNING] Failed to set app datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
@@ -2352,7 +2364,7 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 		guessedAction.Parameters[paramIndex] = param
 	}
 
-	SetAutofixAppLabelsCache(ctx, app, guessedAction, label, keys)
+	go SetAutofixAppLabelsCache(context.Background(), app, guessedAction, label, keys)
 	return app, guessedAction
 }
 

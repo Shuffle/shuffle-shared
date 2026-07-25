@@ -2128,8 +2128,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 			cacheData := string(cache.([]uint8))
 			if len(cacheData) > 0 {
 				return cacheData, nil
-			} else { 
-				return "", errors.New(fmt.Sprintf("File '%s' doesn't exist (cache).", fullParsedPath))
+				//return "", errors.New(fmt.Sprintf("File '%s' doesn't exist (cache).", fullParsedPath))
 			}
 		}
 	}
@@ -2153,6 +2152,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 			} else {
 				log.Printf("[ERROR] Failed reading file '%s' from local storage: %s", localPath, err)
 			}
+
 			return "", err
 		}
 	} else {
@@ -11225,7 +11225,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	}
 
 	if debug {
-		log.Printf("[DEBUG] API key cache miss; looking up user in %s", project.DbType)
+		log.Printf("[DEBUG] API key cache miss; looking up user in db '%#v'", project.DbType)
 	}
 
 	if project.DbType == "opensearch" {
@@ -11318,11 +11318,11 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		}
 	}
 
-	if len(users) != 0 {
-		//if debug {
-		//	log.Printf("[DEBUG] Moving away from getapikey '%s' (%s)", users[0].Username, users[0].Id)
-		//}
-	}
+	//if len(users) > 0 {
+	//	if debug {
+	//		log.Printf("[DEBUG] Found user '%s' for apikey lookup", users[0].Username)
+	//	}
+	//}
 
 	if project.CacheDb {
 		userData, err := json.Marshal(users)
