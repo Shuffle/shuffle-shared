@@ -2430,6 +2430,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					// Auto fixing decision data based on cache for better decisionmaking
 					// Map the result into AgentOutput to check decisions
 
+					// Any Unix timestamp under 10 billion is in seconds (valid through year 2286). Milliseconds are > 1 trillion.
+					const maxSecondsTimestamp int64 = 10_000_000_000
+
 					finishedDecisions := []string{}
 					failedFound := false
 					finishDecisionFound := false
@@ -2454,14 +2457,18 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
 
 							// Max runtime of a decision at 5 minutes
-							if decision.RunDetails.StartedAt > 0 && time.Now().UnixMilli()-decision.RunDetails.StartedAt > 300000 {
+							startedTs := decision.RunDetails.StartedAt
+							if startedTs > 0 && startedTs < maxSecondsTimestamp {
+								startedTs *= 1000
+							}
+							if startedTs > 0 && time.Now().UnixMilli()-startedTs > 300000 {
 								timeoutFlagKey := fmt.Sprintf("agent-%s-%s-timeout-handled", workflowExecution.ExecutionId, decision.RunDetails.Id)
 								if _, err := GetCache(ctx, timeoutFlagKey); err == nil {
 									// Already handled this timeout in a previous check so just count it as finished.
 									finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 									failedFound = true
 								} else {
-									log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-decision.RunDetails.StartedAt)/1000)
+									log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-startedTs)/1000)
 									SetCache(ctx, timeoutFlagKey, []byte("1"), 60) // 60 min TTL — long enough to outlive any recovery cycle
 
 									decisionsUpdated = true
@@ -2584,6 +2591,24 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 								go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 							}()
 						} else {
+							mostRecentCompletion := int64(0)
+							for _, dec := range mappedOutput.Decisions {
+								ts := dec.RunDetails.CompletedAt
+								if ts > 0 && ts < maxSecondsTimestamp {
+									ts *= 1000
+								}
+								if ts > mostRecentCompletion {
+									mostRecentCompletion = ts
+								}
+							}
+							timeSinceCompletionMs := time.Now().UnixMilli() - mostRecentCompletion
+							if timeSinceCompletionMs < 60000 {
+								if debug {
+									log.Printf("[DEBUG][%s] Skipping fixexecution_timeout_recovery: last decision completed %d ms ago (waiting for LLM response from primary stream handler).", workflowExecution.ExecutionId, timeSinceCompletionMs)
+								}
+								continue
+							}
+
 							log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found, marking as WAITING.", workflowExecution.ExecutionId, action.ID)
 							//log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found. Re-invoking agent to finalize (failedFound: %t).", workflowExecution.ExecutionId, action.ID, failedFound)
 
