@@ -613,8 +613,21 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		incomingTerminal := workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" || workflowExecution.Status == "FAILURE"
 
 		if existingTerminal && !incomingTerminal {
-			log.Printf("[INFO][%s] Existing execution is already %s. Not overriding with incoming %s update.", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
-			return nil
+			isAgentContinuation := false
+			if (existingExecution.Status == "FINISHED" || existingExecution.Status == "SUCCESS") && workflowExecution.Status == "EXECUTING" && workflowExecution.CompletedAt == 0 {
+				for _, result := range workflowExecution.Results {
+					if result.Action.AppName == "AI Agent" || result.Action.AppName == "Shuffle Agent" {
+						isAgentContinuation = true
+						break
+					}
+				}
+			}
+
+			if !isAgentContinuation {
+				log.Printf("[INFO][%s] Existing execution is already %s. Not overriding with incoming %s update.", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
+				return nil
+			}
+			log.Printf("[INFO][%s] Permitting Agent Continuation: overriding existing %s execution to %s!", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
 		}
 
 		if existingTerminal && incomingTerminal && existingExecution.Status != workflowExecution.Status {
@@ -630,7 +643,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	executionData, err := json.Marshal(workflowExecution)
 	if err == nil {
-		err = SetCache(ctx, cacheKey, executionData, 31)
+		err = SetCache(ctx, cacheKey, executionData, 600)
 		if err != nil {
 			//log.Printf("[WARNING] Failed updating execution cache. Setting DB! %s", err)
 			dbSave = true
@@ -1327,7 +1340,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			return workflowExecution, getErr
 		}
 
-		err = SetCache(ctx, id, newexecution, 30)
+		err = SetCache(ctx, id, newexecution, 600)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating execution: %s", err)
 		}
@@ -2337,6 +2350,22 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 			// Special cleanup for agents
 			if innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent" {
+				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, innerresult.Action.ID)
+				if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil {
+					cachedBytes := []byte(cachedData.([]uint8))
+					var cachedOutput AgentOutput
+					if err := json.Unmarshal(cachedBytes, &cachedOutput); err == nil && len(cachedOutput.Decisions) > 0 {
+						var currentOutput AgentOutput
+						_ = json.Unmarshal([]byte(innerresult.Result), &currentOutput)
+						if len(cachedOutput.Decisions) >= len(currentOutput.Decisions) {
+							if debug {
+								log.Printf("[DEBUG][%s] Fixexecution: upgrading agent result index %d from cache (%d decisions vs %d)", workflowExecution.ExecutionId, resultIndex, len(cachedOutput.Decisions), len(currentOutput.Decisions))
+							}
+							innerresult.Result = string(cachedBytes)
+							workflowExecution.Results[resultIndex].Result = string(cachedBytes)
+						}
+					}
+				}
 
 				// Starting autocorrections
 				mappedOutput := AgentOutput{}
@@ -2536,7 +2565,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						}
 
 						// Set cache to prevent multiple sends — if cache is down, skip to prevent retry storm
-						if cacheErr := SetCache(ctx, cacheId, []byte("handled"), 1); cacheErr != nil {
+						if cacheErr := SetCache(ctx, cacheId, []byte("handled"), 60); cacheErr != nil {
 							log.Printf("[WARNING][%s] Memcache down — skipping fixexec agent self-request for action %s to prevent retry storm", workflowExecution.ExecutionId, action.ID)
 							continue
 						}
