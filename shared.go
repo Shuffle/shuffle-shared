@@ -17919,6 +17919,24 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	ctx := context.Background()
 
+	// re-fetch the freshest execution state from DB/cache before doing ANY decision counting.
+	if freshExec, fetchErr := GetWorkflowExecution(ctx, workflowExecution.ExecutionId); fetchErr == nil && freshExec != nil {
+		if len(freshExec.Results) >= len(workflowExecution.Results) {
+			origStatus := workflowExecution.Status
+			origCompleted := workflowExecution.CompletedAt
+			origResults := workflowExecution.Results
+			workflowExecution = *freshExec
+			if origStatus == "EXECUTING" && (workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS") {
+				log.Printf("[INFO][%s] Preserving EXECUTING status and continuation results over stale DB FINISHED status in handleAgentDecisionStreamResult", workflowExecution.ExecutionId)
+				workflowExecution.Status = origStatus
+				workflowExecution.CompletedAt = origCompleted
+				workflowExecution.Results = origResults
+			} else {
+				log.Printf("[DEBUG][%s] handleAgentDecisionStreamResult: refreshed execution from DB (results: %d)", workflowExecution.ExecutionId, len(workflowExecution.Results))
+			}
+		}
+	}
+
 	foundActionResultIndex := -1
 	for actionIndex, result := range workflowExecution.Results {
 		if result.Action.ID == actionResult.Action.ID {
@@ -17926,6 +17944,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			break
 		}
 	}
+
 
 	if foundActionResultIndex < 0 {
 		// In test mode, Singul doesn't create sub-executions, so we need to handle this gracefully
@@ -18011,6 +18030,26 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			decisionIdResultIndex = resultDecisionIndex
 			decisionIndex = resultDecision.I
 			break
+		}
+	}
+
+	if decisionIdResultIndex < 0 {
+		actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+		if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil {
+			cachedBytes := []byte(cachedData.([]uint8))
+			var cachedOutput AgentOutput
+			if err := json.Unmarshal(cachedBytes, &cachedOutput); err == nil {
+				for resultDecisionIndex, resultDecision := range cachedOutput.Decisions {
+					if resultDecision.RunDetails.Id == decisionId {
+						log.Printf("[INFO][%s] Found decision ID '%s' in action result cache during fallback!", workflowExecution.ExecutionId, decisionId)
+						mappedResult = cachedOutput
+						workflowExecution.Results[foundActionResultIndex].Result = string(cachedBytes)
+						decisionIdResultIndex = resultDecisionIndex
+						decisionIndex = resultDecision.I
+						break
+					}
+				}
+			}
 		}
 	}
 
@@ -18178,9 +18217,9 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			if marshalledResult, marshalErr := json.Marshal(mappedResult); marshalErr == nil {
 				workflowExecution.Results[foundActionResultIndex].Result = string(marshalledResult)
 
-				//  push to the action result cache so GetWorkflowExecution inside HandleAiAgentExecutionStart picks up the fresh copy.
+				// push to the action result cache so GetWorkflowExecution inside HandleAiAgentExecutionStart picks up the fresh copy.
 				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
-				go SetCache(ctx, actionCacheId, marshalledResult, 35)
+				go SetCache(ctx, actionCacheId, marshalledResult, 600)
 			} else {
 				log.Printf("[WARNING][%s] Failed to marshal updated mappedResult before HandleAiAgentExecutionStart: %s", workflowExecution.ExecutionId, marshalErr)
 			}
@@ -18190,8 +18229,14 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		executionCacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
 		DeleteCache(ctx, executionCacheKey)
 		if marshalledExec, marshalErr := json.Marshal(workflowExecution); marshalErr == nil {
-			SetCache(ctx, executionCacheKey, marshalledExec, 30)
+			SetCache(ctx, executionCacheKey, marshalledExec, 600)
 		}
+		SetWorkflowExecution(ctx, workflowExecution, true)
+
+		// Set the fixexec cache lock so fixExecution doesn't race and start a duplicate LLM call
+
+		cacheId := fmt.Sprintf("agent-%s-%s-fixexec-finished-check", workflowExecution.ExecutionId, originalAction.ID)
+		_ = SetCache(ctx, cacheId, []byte("handled"), 60)
 
 		callerName := "handleAgentDecisionStreamResult"
 		returnAction, err := HandleAiAgentExecutionStart(workflowExecution, originalAction, true, callerName)
@@ -18302,7 +18347,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 
 				if !skipAgentContinue { 
-					callerName := "LLMResponse"
+					callerName := "ParsedExecutionResult"
 					marshalledResult, err := json.Marshal(actionResult)
 					if err != nil { 
 						log.Printf("[ERROR] AI Agent (10): Failed marshalling actionResult: %s", err)
@@ -18395,7 +18440,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				actionResultBody, err := json.Marshal(actionResult)
 				if err == nil {
 					cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
-					err = SetCache(ctx, cacheId, actionResultBody, 35)
+					err = SetCache(ctx, cacheId, actionResultBody, 600)
 					if err != nil {
 						log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
 						continue
@@ -18412,7 +18457,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				actionResultBody, err := json.Marshal(actionResult)
 				if err == nil {
 					cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
-					err = SetCache(ctx, cacheId, actionResultBody, 35)
+					err = SetCache(ctx, cacheId, actionResultBody, 600)
 					if err != nil {
 						log.Printf("[ERROR][%s] Failed to update cache for %s", workflowExecution.ExecutionId, cacheId)
 					}
@@ -26687,8 +26732,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								// The only key we care about in this case
 								if key == "continue" {
 									// Overwrite everything
-									if workflowExecution.Status == "FINISHED" {
+									if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
 										workflowExecution.Status = "EXECUTING"
+										workflowExecution.CompletedAt = 0
 									}
 
 									unmarshalledDecision.Status = "RUNNING"
@@ -26734,6 +26780,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 							// Both start counting from 0
 							if len(decision.Fields) <= fieldNumber {
+								log.Printf("[ERROR][%s] Decision '%s' field number '%d' exceeds maximum length %d", workflowExecution.ExecutionId, decisionId, fieldNumber, len(decision.Fields))
 								continue
 							}
 
@@ -26756,7 +26803,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							if err != nil {
 								log.Printf("[ERROR][%s] Failed marshalling decision during agentic decision handling: %s", oldExecution.ExecutionId, err)
 							} else {
-								SetCache(ctx, decisionId, marshalledDecision, 60)
+								SetCache(ctx, decisionId, marshalledDecision, 600)
 							}
 
 						}
@@ -26782,7 +26829,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							if err != nil {
 								log.Printf("[ERROR][%s] Failed marshalling decision during agentic decision handling: %s", oldExecution.ExecutionId, err)
 							} else {
-								SetCache(ctx, decisionId, marshalledDecision, 60)
+								SetCache(ctx, decisionId, marshalledDecision, 600)
 							}
 
 							fieldsChanged = true
@@ -26807,7 +26854,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					actionCacheId := fmt.Sprintf("%s_%s_result", oldExecution.ExecutionId, result.Action.ID)
-					err = SetCache(ctx, actionCacheId, []byte(result.Result), 35)
+					err = SetCache(ctx, actionCacheId, []byte(result.Result), 600)
 					if err != nil {
 						log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
 					}
