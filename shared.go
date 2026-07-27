@@ -26794,7 +26794,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 						if fieldsChanged {
 							decision.RunDetails.Status = "FINISHED"
-							decision.RunDetails.CompletedAt = time.Now().Unix()
+							decision.RunDetails.CompletedAt = time.Now().UnixMilli()
 							unmarshalledDecision.Decisions[decisionIndex] = decision
 
 							// Updates cache live
