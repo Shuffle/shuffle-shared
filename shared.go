@@ -6562,6 +6562,8 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	workflow.FormControl.InputMarkdown = sanitizeFormMarkdown(workflow.FormControl.InputMarkdown)
+
 	// Overwriting all settings as a just in case
 	workflow.ID = uuid.NewV4().String()
 	workflow.Owner = user.Id
@@ -8898,6 +8900,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
+
+	workflow.FormControl.InputMarkdown = sanitizeFormMarkdown(workflow.FormControl.InputMarkdown)
 
 	// This fix the region issues with public workflow but can it create problem?
 	if len(tmpworkflow.ID) == 0 || workflow.Public == true {
