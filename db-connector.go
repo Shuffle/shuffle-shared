@@ -11225,7 +11225,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	}
 
 	if debug {
-		log.Printf("[DEBUG] API key cache miss; looking up user in db '%#v'", project.DbType)
+		log.Printf("[DEBUG] API key cache miss; looking up user") 
 	}
 
 	if project.DbType == "opensearch" {
@@ -15717,7 +15717,7 @@ func SetDatastoreKeyRevision(ctx context.Context, cacheData CacheKeyData) error 
 	} else {
 		key := datastore.NameKey(nameKey, cacheId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
-			log.Printf("[ERROR] Error setting datastore key revision: %s", err)
+			log.Printf("[ERROR] Error setting datastore key revision for '%s' in category '%s: %s", cacheId, cacheData.Category, err)
 			return err
 		}
 	}
