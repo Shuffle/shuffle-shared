@@ -2436,12 +2436,16 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				}
 
 				if finishFound { 
+					//if debug { 
+					//	log.Printf("[DEBUG][%s] SELF AGENT FINISH FOUND", workflowExecution.ExecutionId)
+					//}
+
 					mappedOutput.Status = "FINISHED"
 
 					result.Status = "SUCCESS"
 					innerresult.Status = "SUCCESS"
 					workflowExecution.Results[resultIndex].Status = "SUCCESS"
-					// go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 				}
 
 				if !finishFound && innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" {
