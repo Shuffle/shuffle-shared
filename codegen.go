@@ -4648,20 +4648,19 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 func handleDatastoreAutomationRequest(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType string) error {
 	var err error
 
-	// Makes sure we wait 2500ms. This is to avoid infinite loops primarily.
+	// Makes sure we wait 7500ms between runs. This is to avoid infinite loops primarily.
 	// Problem: There's a difference between user updates and automation updates.
 	// Trying without cache.
+	cacheName := fmt.Sprintf("automation_%s_%s_%s", runType, cacheData.Category, cacheData.Key)
+	_, err = GetCache(ctx, cacheName)
+	if err == nil {
+		if debug { 
+			log.Printf("[DEBUG] Found existing '%s' cache for '%s' - skipping execution to prevent duplicates", runType, cacheName)
+		}
 
-	//cacheName := fmt.Sprintf("automation_%s_%s_%s", runType, cacheData.Category, cacheData.Key)
-	//_, err = GetCache(ctx, cacheName)
-	//if err == nil {
-	//	if debug { 
-	//		log.Printf("[DEBUG] Found existing '%s' cache for '%s' - skipping execution to prevent duplicates", runType, cacheName)
-	//	}
-
-	//	return nil
-	//}
-	//SetCache(ctx, cacheName, []byte("1"), 2500, true)
+		return nil
+	}
+	SetCache(ctx, cacheName, []byte("1"), 15000, true)
 
 	if runType == "run_workflow" {
 
@@ -5068,10 +5067,11 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		}
 
 		//SetCache(ctx, cacheKey, []byte("1"), 1)
-		var timeout int32 = 5000 
+		var timeout int32 = 15000 
 		if project.Environment != "cloud" {
 			timeout = 60000 
 		}
+
 		SetCache(ctx, cacheKey, []byte("1"), timeout, true)
 		if cacheData.Enrichments != nil && len(cacheData.Enrichments) > 0 {
 		}

@@ -567,30 +567,8 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 // That means each algorithm needs to be written as if-statements to
 // replace a specific part of a workflow :thinking:
 
-func getVulnerabilityCorrelationWorkflow(actionType, orgId, startActionId, actionEnv string, categoryAction CategoryAction) Workflow {
-	createCaseId := uuid.NewV4().String()
-	return Workflow{
-		Name:        actionType,
-		Description: "For each software package + version coming from a host monitor, queries the Shuffle vulnerability API and stores any matching CVEs into the shuffle-security_vulnerabilities datastore category.",
-		OrgId:       orgId,
-		Start:       startActionId,
-		UsecaseIds:  []string{"vulnerabilities"},
-		Tags:        []string{"correlate", "vulnerability", "automatic"},
-		Actions: []Action{
-			{
-				Name:        "execute_python",
-				AppID:       "3e2bdf9d5069fe3f4746c29d68785a6a",
-				AppName:     "Shuffle Tools",
-				ID:          startActionId,
-				AppVersion:  "1.2.0",
-				Environment: actionEnv,
-				Label:       "verify_package_vulnerability",
-				IsStartNode: true,
-				Sharing:     true,
-				Parameters: []WorkflowAppActionParameter{
-					{
-						Name: "code",
-						Value: `import json
+func getVulnerabilityCorrelationScript(orgId string) string {
+	return fmt.Sprintf(`import json
 import time
 import requests
 
@@ -669,7 +647,7 @@ for raw_version in versions:
             if attempt < MAX_RETRIES - 1:
                 time.sleep(RETRY_WAIT)
                 continue
-            errors.append("RATE LIMITED on %s %s after %d retries" % (name, version, MAX_RETRIES))
+            errors.append("RATE LIMITED on %s %s after %s retries" % (name, version, MAX_RETRIES))
             break
 
         if isinstance(data, dict) and data.get("success") is False:
@@ -717,52 +695,7 @@ result = {
     "store_errors": store_errors,
 }
 print(json.dumps(result, indent=2))
-`,
-						Multiline: true,
-						Required:  true,
-					},
-				},
-			},
-			{
-				Name:        "Cases",
-				AppID:       "integration",
-				AppName:     "Singul",
-				LargeImage:  getSingulLogo(),
-				ID:          createCaseId,
-				AppVersion:  "1.0.0",
-				Environment: actionEnv,
-				Label:       "Create ticket",
-				Parameters: []WorkflowAppActionParameter{
-					{
-						Name:  "app_name",
-						Value: categoryAction.AppName,
-					},
-					{
-						Name:  "action",
-						Value: "Create ticket",
-						Options: []string{
-							"List tickets",
-							"Create ticket",
-							"Close ticket",
-							"Add comment",
-						},
-					},
-					{
-						Name:      "fields",
-						Value:     "data=$verify_package_vulnerability",
-						Multiline: true,
-					},
-				},
-			},
-		},
-		Branches: []Branch{
-			{
-				SourceID:      startActionId,
-				DestinationID: createCaseId,
-				ID:            uuid.NewV4().String(),
-			},
-		},
-	}
+`, "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%d", "%s", "%s", "%s", "%s", "%s")					
 }
 
 // Should workflows be written as YAML and be text-editable?
@@ -1385,7 +1318,76 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow.OrgId = orgId
 
 	} else if parsedActiontype == "vulnerability_correlation" {
-		defaultWorkflow := getVulnerabilityCorrelationWorkflow(actionType, orgId, startActionId, actionEnv, categoryAction)
+	createCaseId := uuid.NewV4().String()
+		//defaultWorkflow := getVulnerabilityCorrelationWorkflow(actionType, orgId, startActionId, actionEnv, categoryAction)
+		defaultWorkflow := Workflow{
+			Name:        actionType,
+			Description: "For each software package + version coming from a host monitor, queries the Shuffle vulnerability API and stores any matching CVEs into the shuffle-security_vulnerabilities datastore category.",
+			OrgId:       orgId,
+			Start:       startActionId,
+			UsecaseIds:  []string{"vulnerabilities"},
+			Tags:        []string{"correlate", "vulnerability", "automatic"},
+			Actions: []Action{
+				{
+					Name:        "execute_python",
+					AppID:       "3e2bdf9d5069fe3f4746c29d68785a6a",
+					AppName:     "Shuffle Tools",
+					ID:          startActionId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "verify_package_vulnerability",
+					IsStartNode: true,
+					Sharing:     true,
+					Parameters: []WorkflowAppActionParameter{
+						{
+							Name: "code",
+							Value: getVulnerabilityCorrelationScript(orgId),
+							Multiline: true,
+							Required:  true,
+						},
+					},
+				},
+				{
+					Name:        "Cases",
+					AppID:       "integration",
+					AppName:     "Singul",
+					LargeImage:  getSingulLogo(),
+					ID:          createCaseId,
+					AppVersion:  "1.0.0",
+					Environment: actionEnv,
+					Label:       "Create ticket",
+					Parameters: []WorkflowAppActionParameter{
+						{
+							Name:  "app_name",
+							Value: categoryAction.AppName,
+						},
+						{
+							Name:  "action",
+							Value: "Create vulnerability",
+							Options: []string{
+								"List tickets",
+								"Create ticket",
+								"Close ticket",
+								"Add comment",
+							},
+						},
+						{
+							Name:      "fields",
+							Value:     "data=$verify_package_vulnerability",
+							Multiline: true,
+						},
+					},
+				},
+			},
+			Branches: []Branch{
+				{
+					SourceID:      startActionId,
+					DestinationID: createCaseId,
+					ID:            uuid.NewV4().String(),
+				},
+			},
+		}
+
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
 
