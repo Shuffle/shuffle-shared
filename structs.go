@@ -1178,6 +1178,7 @@ type Billing struct {
 	AlertThreshold           []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
 	Consultation             Consultation     `json:"Consultation" datastore:"Consultation"`
 	InternalAppRunsHardLimit int64            `json:"internal_app_runs_hard_limit" datastore:"internal_app_runs_hard_limit"`
+	DefaultAlertsApplied     bool             `json:"default_alerts_applied" datastore:"default_alerts_applied"`
 }
 
 type AlertThreshold struct {

@@ -4807,6 +4807,36 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 	return curOrg, nil
 }
 
+var defaultAlertThresholdPercentages = []int{50, 75, 90, 100}
+
+func addDefaultAlertThresholds(org *Org) bool {
+	if org.Billing.DefaultAlertsApplied {
+		return false
+	}
+
+	limit := org.SyncFeatures.AppExecutions.Limit
+	if limit <= 0 {
+		return false
+	}
+
+	existingPercentages := map[int]bool{}
+	for _, threshold := range org.Billing.AlertThreshold {
+		existingPercentages[threshold.Percentage] = true
+	}
+
+	for _, percentage := range defaultAlertThresholdPercentages {
+		if !existingPercentages[percentage] {
+			org.Billing.AlertThreshold = append(org.Billing.AlertThreshold, AlertThreshold{
+				Percentage: percentage,
+				Count:      int(float64(percentage) / 100 * float64(limit)),
+			})
+		}
+	}
+
+	org.Billing.DefaultAlertsApplied = true
+	return true
+}
+
 // ListBooks returns a list of books, ordered by title.
 // Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {
@@ -4843,6 +4873,14 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				if curOrg.Id == "" {
 					return curOrg, errors.New("Org doesn't exist")
 				} else {
+					billingBackup := curOrg.Billing
+					if addDefaultAlertThresholds(curOrg) {
+						err := SetOrg(ctx, *curOrg, curOrg.Id)
+						if err != nil {
+							log.Printf("[ERROR] Failed persisting default alert thresholds for org %s: %s", curOrg.Id, err)
+							curOrg.Billing = billingBackup
+						}
+					}
 					return curOrg, nil
 				}
 			}
@@ -4995,6 +5033,14 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	curOrg.Priorities = newPriorities
+	billingBackup := curOrg.Billing
+	if addDefaultAlertThresholds(curOrg) {
+		err := SetOrg(ctx, *curOrg, curOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed persisting default alert thresholds for org %s: %s", curOrg.Id, err)
+			curOrg.Billing = billingBackup
+		}
+	}
 	if project.CacheDb {
 		neworg, err := json.Marshal(curOrg)
 		if err != nil {
