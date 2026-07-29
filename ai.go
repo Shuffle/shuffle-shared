@@ -7648,13 +7648,11 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 // createNextActions = true => mid-agent to decide next steps
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string, aiResponseWrapper ...[]byte) (Action, error) {
 
-	if debug {
-		if callerName == "" {
-			callerName = "UNKNOWN_CALLER"
-		}
-
-		log.Printf("[INFO][%s] AI Agent: HandleAiAgentExecutionStart invoked by caller: '%s' (createNextActions=%t, node=%s, status=%s)", execution.ExecutionId, callerName, createNextActions, startNode.ID, execution.Status)
+	if callerName == "" {
+		callerName = "UNKNOWN_CALLER"
 	}
+
+	log.Printf("[INFO][%s] AI Agent: HandleAiAgentExecutionStart invoked by caller: '%s' (createNextActions=%t, node=%s, status=%s)", execution.ExecutionId, callerName, createNextActions, startNode.ID, execution.Status)
 
 	ctx := context.Background()
 	aiStarttime := time.Now().UnixMilli()
