@@ -7659,12 +7659,28 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string, aiResponseWrapper ...[]byte) (Action, error) {
+
+	if callerName == "" {
+		callerName = "UNKNOWN_CALLER"
+	}
+
+	log.Printf("[INFO][%s] AI Agent: HandleAiAgentExecutionStart invoked by caller: '%s' (createNextActions=%t, node=%s, status=%s)", execution.ExecutionId, callerName, createNextActions, startNode.ID, execution.Status)
+
 	ctx := context.Background()
 	aiStarttime := time.Now().UnixMilli()
 
 	replacedExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)
 	if err == nil && len(replacedExecution.Results) > 0 && (execution.Status == "EXECUTING" || execution.Status == "WAITING") { 
+		origStatus := execution.Status
+		origCompleted := execution.CompletedAt
+		origResults := execution.Results
 		execution = *replacedExecution
+		if origStatus == "EXECUTING" && (execution.Status == "FINISHED" || execution.Status == "SUCCESS") {
+			log.Printf("[INFO][%s] Preserving EXECUTING status for Agent Continuation over DB %s status", execution.ExecutionId, execution.Status)
+			execution.Status = origStatus
+			execution.CompletedAt = origCompleted
+			execution.Results = origResults
+		}
 	}
 
 	llmResponse := []byte{} 
@@ -9408,7 +9424,7 @@ data_filter:
 
 					// Update the result in cache as actions are self-corrective
 					actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, result.Action.ID)
-					err = SetCache(ctx, actionCacheId, []byte(execution.Results[resultIndex].Result), 35)
+					err = SetCache(ctx, actionCacheId, []byte(execution.Results[resultIndex].Result), 600)
 					if err != nil {
 						log.Printf("[ERROR] AI Agent: Failed setting cache for action result %s: %s", actionCacheId, err)
 					}
@@ -9446,7 +9462,6 @@ data_filter:
 		}
 
 		decisionActionRan := false
-		nextActionType := ""
 
 		for decisionIndex, decision := range agentOutput.Decisions {
 			// Random generate an ID that's 10 chars long
@@ -9482,8 +9497,6 @@ data_filter:
 			if decision.I != lastFinishedIndex {
 				continue
 			}
-
-			nextActionType = decision.Action
 
 			normalizedAction := strings.ToLower(strings.TrimSpace(decision.Action))
 			normalizedCategory := strings.ToLower(strings.TrimSpace(decision.Category))
@@ -9703,32 +9716,23 @@ data_filter:
 
 		// Set the result in cache here as well (just in case)
 		actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, resultMapping.Action.ID)
-		err = SetCache(ctx, actionCacheId, []byte(resultMapping.Result), 35)
+		err = SetCache(ctx, actionCacheId, []byte(resultMapping.Result), 600)
 		if err != nil {
 			log.Printf("[ERROR] AI Agent: Failed setting cache for action result %s: %s", actionCacheId, err)
 		}
 
-		// Makes sure ot update the execution itself as well
-		if createNextActions == true {
-			if decisionActionRan {
-			}
-
-			// Initialised from an 'ask' request (question) to user
-			// These aren't properly being updated in the db, so
-			// we need additional logic here to ensure it is being
-			// set/started
-			if nextActionType == "ask" || nextActionType == "question" || nextActionType == "finish" || nextActionType == "answer" {
-				// Ensure we update all of it
-				for resultIndex, result := range execution.Results {
-					if result.Action.ID != startNode.ID {
-						continue
-					}
-
-					execution.Results[resultIndex] = resultMapping
+		// Always update all execution results in DB regardless of action type,
+		// so tools never lose their decisions.
+		if len(execution.Results) > 0 {
+			for resultIndex, result := range execution.Results {
+				if result.Action.ID != startNode.ID {
+					continue
 				}
 
-				SetWorkflowExecution(ctx, execution, true)
+				execution.Results[resultIndex] = resultMapping
 			}
+
+			SetWorkflowExecution(ctx, execution, true)
 		}
 
 		//log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s status=%s duration=%ds decisions=%d", execution.ExecutionId, agentOutput.Status, time.Now().Unix()-agentOutput.StartedAt, len(agentOutput.Decisions))

@@ -614,8 +614,21 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		incomingTerminal := workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" || workflowExecution.Status == "FAILURE"
 
 		if existingTerminal && !incomingTerminal {
-			log.Printf("[INFO][%s] Existing execution is already %s. Not overriding with incoming %s update.", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
-			return nil
+			isAgentContinuation := false
+			if (existingExecution.Status == "FINISHED" || existingExecution.Status == "SUCCESS") && workflowExecution.Status == "EXECUTING" && workflowExecution.CompletedAt == 0 {
+				for _, result := range workflowExecution.Results {
+					if result.Action.AppName == "AI Agent" || result.Action.AppName == "Shuffle Agent" {
+						isAgentContinuation = true
+						break
+					}
+				}
+			}
+
+			if !isAgentContinuation {
+				log.Printf("[INFO][%s] Existing execution is already %s. Not overriding with incoming %s update.", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
+				return nil
+			}
+			log.Printf("[INFO][%s] Permitting Agent Continuation: overriding existing %s execution to %s!", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
 		}
 
 		if existingTerminal && incomingTerminal && existingExecution.Status != workflowExecution.Status {
@@ -631,7 +644,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	executionData, err := json.Marshal(workflowExecution)
 	if err == nil {
-		err = SetCache(ctx, cacheKey, executionData, 31)
+		err = SetCache(ctx, cacheKey, executionData, 600)
 		if err != nil {
 			//log.Printf("[WARNING] Failed updating execution cache. Setting DB! %s", err)
 			dbSave = true
@@ -1328,7 +1341,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			return workflowExecution, getErr
 		}
 
-		err = SetCache(ctx, id, newexecution, 30)
+		err = SetCache(ctx, id, newexecution, 600)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating execution: %s", err)
 		}
@@ -2364,6 +2377,22 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 			// Special cleanup for agents
 			if innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent" {
+				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, innerresult.Action.ID)
+				if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil {
+					cachedBytes := []byte(cachedData.([]uint8))
+					var cachedOutput AgentOutput
+					if err := json.Unmarshal(cachedBytes, &cachedOutput); err == nil && len(cachedOutput.Decisions) > 0 {
+						var currentOutput AgentOutput
+						_ = json.Unmarshal([]byte(innerresult.Result), &currentOutput)
+						if len(cachedOutput.Decisions) >= len(currentOutput.Decisions) {
+							if debug {
+								log.Printf("[DEBUG][%s] Fixexecution: upgrading agent result index %d from cache (%d decisions vs %d)", workflowExecution.ExecutionId, resultIndex, len(cachedOutput.Decisions), len(currentOutput.Decisions))
+							}
+							innerresult.Result = string(cachedBytes)
+							workflowExecution.Results[resultIndex].Result = string(cachedBytes)
+						}
+					}
+				}
 
 				// Starting autocorrections
 				mappedOutput := AgentOutput{}
@@ -2428,6 +2457,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					// Auto fixing decision data based on cache for better decisionmaking
 					// Map the result into AgentOutput to check decisions
 
+					// Any Unix timestamp under 10 billion is in seconds (valid through year 2286). Milliseconds are > 1 trillion.
+					const maxSecondsTimestamp int64 = 10_000_000_000
+
 					finishedDecisions := []string{}
 					failedFound := false
 					finishDecisionFound := false
@@ -2452,14 +2484,18 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
 
 							// Max runtime of a decision at 5 minutes
-							if decision.RunDetails.StartedAt > 0 && time.Now().UnixMilli()-decision.RunDetails.StartedAt > 300000 {
+							startedTs := decision.RunDetails.StartedAt
+							if startedTs > 0 && startedTs < maxSecondsTimestamp {
+								startedTs *= 1000
+							}
+							if startedTs > 0 && time.Now().UnixMilli()-startedTs > 300000 {
 								timeoutFlagKey := fmt.Sprintf("agent-%s-%s-timeout-handled", workflowExecution.ExecutionId, decision.RunDetails.Id)
 								if _, err := GetCache(ctx, timeoutFlagKey); err == nil {
 									// Already handled this timeout in a previous check so just count it as finished.
 									finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 									failedFound = true
 								} else {
-									log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-decision.RunDetails.StartedAt)/1000)
+									log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-startedTs)/1000)
 									SetCache(ctx, timeoutFlagKey, []byte("1"), 60) // 60 min TTL — long enough to outlive any recovery cycle
 
 									decisionsUpdated = true
@@ -2563,7 +2599,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						}
 
 						// Set cache to prevent multiple sends — if cache is down, skip to prevent retry storm
-						if cacheErr := SetCache(ctx, cacheId, []byte("handled"), 1); cacheErr != nil {
+						if cacheErr := SetCache(ctx, cacheId, []byte("handled"), 60); cacheErr != nil {
 							log.Printf("[WARNING][%s] Memcache down — skipping fixexec agent self-request for action %s to prevent retry storm", workflowExecution.ExecutionId, action.ID)
 							continue
 						}
@@ -2582,6 +2618,24 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 								go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 							}()
 						} else {
+							mostRecentCompletion := int64(0)
+							for _, dec := range mappedOutput.Decisions {
+								ts := dec.RunDetails.CompletedAt
+								if ts > 0 && ts < maxSecondsTimestamp {
+									ts *= 1000
+								}
+								if ts > mostRecentCompletion {
+									mostRecentCompletion = ts
+								}
+							}
+							timeSinceCompletionMs := time.Now().UnixMilli() - mostRecentCompletion
+							if timeSinceCompletionMs < 60000 {
+								if debug {
+									log.Printf("[DEBUG][%s] Skipping fixexecution_timeout_recovery: last decision completed %d ms ago (waiting for LLM response from primary stream handler).", workflowExecution.ExecutionId, timeSinceCompletionMs)
+								}
+								continue
+							}
+
 							log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found, marking as WAITING.", workflowExecution.ExecutionId, action.ID)
 							//log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found. Re-invoking agent to finalize (failedFound: %t).", workflowExecution.ExecutionId, action.ID, failedFound)
 

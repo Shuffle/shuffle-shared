@@ -5782,5 +5782,6 @@ type WorkflowSetOpsResponse struct {
 
 type rawField struct {
 	Name  string      `json:"name"`
+	Key   string      `json:"key,omitempty"`
 	Value interface{} `json:"value"`
 }
