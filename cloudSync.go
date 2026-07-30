@@ -917,21 +917,83 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		}
 	}
 
-	// Fix Me: Add daily stats update script to append daily stats immdediately after day change and reset monthly stats on month change
-	lastMonthlyReset := validationOrgStats.LastMonthlyResetMonth
-	currentMonth := time.Now().UTC().Month()
-	if int(lastMonthlyReset) != int(currentMonth) {
+	statsLenBefore := len(validationOrgStats.DailyStatistics)
 		validationOrgStats = handleDailyCacheUpdate(validationOrgStats)
-
+	if len(validationOrgStats.DailyStatistics) != statsLenBefore {
 		err = SetOrgStatistics(ctx, *validationOrgStats, validationOrg.Id)
 		if err != nil {
-			log.Printf("[ERROR] Failed setting org statistics for monthly reset for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
+			log.Printf("[ERROR] Failed setting org statistics after daily rollover for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
 		}
 	}
 
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
-	if validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
-		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d) - Only Shuffle Support can control this metric.", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
+	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == false && validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
+		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
+	}
+
+	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == true && validationOrg.LeadInfo.Customer {
+		now := time.Now().Unix()
+		isExpiredAnnualPlan := false
+		var planStartDate int64
+
+		for _, sub := range validationOrg.Subscriptions {
+			if sub.Active {
+				subName := strings.ToLower(sub.Name)
+				if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") {
+					planStartDate = sub.Startdate
+
+					if sub.Enddate > 0 && sub.Enddate < now {
+						isExpiredAnnualPlan = true
+					}
+					break
+				}
+			}
+		}
+
+		if isExpiredAnnualPlan {
+			orgAdmin := User{}
+			for _, user := range validationOrg.Users {
+				if strings.ToLower(user.Role) == "admin" {
+					if len(user.ApiKey) > 0 && !strings.Contains(user.Username, "shuffler") {
+						orgAdmin = user
+						break
+					} else {
+						fullUser, err := GetUser(ctx, user.Id)
+						if err == nil && len(fullUser.ApiKey) > 0 && !strings.Contains(fullUser.Username, "shuffler") {
+							orgAdmin = *fullUser
+							break
+						}
+					}
+				}
+			}
+
+			if len(orgAdmin.ApiKey) > 0 {
+				log.Printf("[AUDIT] Sending license expired request with user %s for org %s", orgAdmin.Username, validationOrg.Id)
+				go SendLicenseExpiredRequest(validationOrg.Id, orgAdmin.ApiKey)
+			}
+
+		} else if planStartDate > 0 {
+			var annualAppRuns int64
+			for _, stat := range validationOrgStats.DailyStatistics {
+				if stat.Date.Unix() >= planStartDate {
+					annualAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+				}
+			}
+
+			// Set annual app runs limit as 200% of the monthly app runs limit to allow overage
+			annualAppRunsLimit := validationOrg.SyncFeatures.AppExecutions.Limit * 12
+			if validationOrg.Billing.InternalAppRunsHardLimit > 0 {
+				annualAppRunsLimit = validationOrg.Billing.InternalAppRunsHardLimit
+			} else {
+				annualAppRunsLimit *= 2
+			}
+
+			if annualAppRuns > annualAppRunsLimit {
+				return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the annual app runs limit (%d/%d)", validationOrg.Name, validationOrg.Id, annualAppRuns, annualAppRunsLimit))
+			}
+
+			return validationOrg, nil
+		}
 	}
 
 	// Allows partners and POV users to run workflows without limits
