@@ -23714,7 +23714,18 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 				// FIXME: This is a custom fix for single action custom runs.
 				// Wait for validation to have ran
-				if newExecution.Workflow.Validation.ValidationRan {
+				
+				agentBypass := false
+				if len(newExecution.Results[relevantIndex].Action.Parameters) > 0 {
+					for _, param := range newExecution.Results[relevantIndex].Action.Parameters {
+						if param.Name == "agent_bypass_validation" && param.Value == "true" {
+							agentBypass = true
+							break
+						}
+					}
+				}
+
+				if newExecution.Workflow.Validation.ValidationRan || agentBypass {
 
 					// FIXME: Check the return here. If there is an issue with custom_action doesn't exist, we rebuild it in realtime
 					if strings.Contains(returnBody.Result, "custom_action doesn't exist") {
