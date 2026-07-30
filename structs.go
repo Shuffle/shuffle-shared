@@ -5122,12 +5122,6 @@ type AgentStartResponse struct {
 	Authorization string `json:"authorization"`
 }
 
-type StreamsResultResponse struct {
-	Result  string         `json:"result"`
-	Results []ActionResult `json:"results"`
-	Status  string         `json:"status"`
-}
-
 type AgentStartRequest struct {
 	ID          string              `json:"id"`
 	Name        string              `json:"name"`
@@ -5136,6 +5130,12 @@ type AgentStartRequest struct {
 	AppVersion  string              `json:"app_version"`
 	Environment string              `json:"environment"`
 	Parameters  []map[string]string `json:"parameters"`
+}
+
+type StreamsResultResponse struct {
+	Result  string         `json:"result"`
+	Results []ActionResult `json:"results"`
+	Status  string         `json:"status"`
 }
 
 type StreamsResultRequest struct {
@@ -5157,65 +5157,69 @@ type TestResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
+type MCPRequestInput struct {
+	Text  string `json:"text"`
+	Voice string `json:"voice"`
+
+	Images []struct {
+		URL    string `json:"url"`
+		Detail string `json:"detail,omitempty"`
+	}
+
+	// Special cases for templates 
+	WorkflowId string `json:"workflow_id,omitempty"`
+}
+
+type MCPRequestParams struct {
+	ToolName string `json:"tool_name"`
+	Input    MCPRequestInput `json:"input"`
+	Context struct {
+		SessionID string `json:"session_id"`
+	} `json:"context"`
+	ToolID string `json:"tool_id"`
+
+	Environment      string `json:"environment"`
+	EnableQuestions  bool   `json:"enable_questions"`
+	AuthenticationId string `json:"authentication_id"`
+	Reasoning        string `json:"reasoning"`
+	Template         string `json:"template"` // Controls presets like "workflow-edit" to add special backend-controlled system messages
+
+	// From testing in Lovable
+	ProtocolVersion string `json:"protocolVersion"`
+	Capabilities    struct {
+		Roots struct {
+			ListChanged bool `json:"listChanged"`
+		} `json:"roots"`
+		Sampling struct {
+		} `json:"sampling"`
+		Tools struct {
+			ListChanged bool `json:"listChanged"`
+		} `json:"tools"`
+
+		// OpenAI testing
+		Experimental struct {
+			OpenaiVisibility struct {
+				Enabled bool `json:"enabled"`
+			} `json:"openai/visibility"`
+		} `json:"openAiVisibility"`
+		Extensions struct {
+			IoModelContextProtocolUi struct {
+				MimeTypes []string `json:"mimeTypes"`
+			} `json:"io.modelcontextprotocol/ui"`
+		} `json:"extensions"`
+	} `json:"capabilities"`
+	ClientInfo struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	} `json:"clientInfo"`
+}
+
 // Standard used for MCP
 type MCPRequest struct {
 	Jsonrpc string `json:"jsonrpc"`
 	ID      int    `json:"id"`
 	Method  string `json:"method"`
-	Params  struct {
-		ToolName string `json:"tool_name"`
-		Input    struct {
-			Text  string `json:"text"`
-			Voice string `json:"voice"`
-
-			Images []struct {
-				URL    string `json:"url"`
-				Detail string `json:"detail,omitempty"`
-			}
-
-			// Special cases for templates 
-			WorkflowId string `json:"workflow_id,omitempty"`
-		} `json:"input"`
-		Context struct {
-			SessionID string `json:"session_id"`
-		} `json:"context"`
-		ToolID string `json:"tool_id"`
-
-		Environment      string `json:"environment"`
-		EnableQuestions  bool   `json:"enable_questions"`
-		AuthenticationId string `json:"authentication_id"`
-		Reasoning        string `json:"reasoning"`
-		Template         string `json:"template"` // Controls presets like "workflow-edit" to add special backend-controlled system messages
-
-		// From testing in Lovable
-		ProtocolVersion string `json:"protocolVersion"`
-		Capabilities    struct {
-			Roots struct {
-				ListChanged bool `json:"listChanged"`
-			} `json:"roots"`
-			Sampling struct {
-			} `json:"sampling"`
-			Tools struct {
-				ListChanged bool `json:"listChanged"`
-			} `json:"tools"`
-
-			// OpenAI testing
-			Experimental struct {
-				OpenaiVisibility struct {
-					Enabled bool `json:"enabled"`
-				} `json:"openai/visibility"`
-			} `json:"openAiVisibility"`
-			Extensions struct {
-				IoModelContextProtocolUi struct {
-					MimeTypes []string `json:"mimeTypes"`
-				} `json:"io.modelcontextprotocol/ui"`
-			} `json:"extensions"`
-		} `json:"capabilities"`
-		ClientInfo struct {
-			Name    string `json:"name"`
-			Version string `json:"version"`
-		} `json:"clientInfo"`
-	} `json:"params"`
+	Params  MCPRequestParams `json:"params"`	
 }
 
 type MCPResponse struct {

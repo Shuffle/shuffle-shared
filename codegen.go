@@ -4892,17 +4892,13 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		}
 	}
 
-	if parsedName == "correlate_categories" {
-		// Correlations don't matter anymore as ngrams are automatic. Cleaned up
-		// november 2025 after adding graphic system to datastore
-
-	} else if parsedName == "run_ai_agent" {
+	if parsedName == "run_ai_agent" {
 		if len(automation.Options) == 0 {
 			log.Printf("[ERROR] AI agent: No options provided for run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
 			return errors.New("No options provided for run_ai_agent automation")
 		}
 
-		log.Printf("[DEBUG] AI agent: Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
+		log.Printf("[INFO] AI agent: Handling 'run_ai_agent' automation for key '%s' in category '%s'", cacheData.Key, cacheData.Category)
 		if len(foundApikey) == 0 {
 			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
 			return errors.New("No admin user with API key found")
@@ -4956,7 +4952,14 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 				continue
 			}
 
-			requiredApps := []string{"internal_datastore", "shuffle-datastore"}
+			// Makes sure we don't re-run the same twice
+			cacheData.Tags = append(cacheData.Tags, agentTagName)
+			err = SetDatastoreKeyMeta(ctx, cacheData)
+			if err != nil {
+				log.Printf("[ERROR] Failed to set cache key after running AI agent: %s", err)
+			}
+
+			requiredApps := []string{"shuffle-datastore"}
 			for _, req := range requiredApps {
 
 				if !ArrayContains(option.Apps, req) {
@@ -4965,7 +4968,7 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 			}
 
 			allowedApps := strings.Join(option.Apps, ",")
-
+			/*
 			parsedParams := []map[string]string{
 				map[string]string{
 					"name":  "app_name",
@@ -4983,15 +4986,27 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 				"value": fmt.Sprintf("TASK: %s\n\nKey: %s\nCategory: %s\n\nRAW DATA:\n%s", option.Value, cacheData.Key, cacheData.Category, cacheData.Value),
 			})
 
-			agentUrl := fmt.Sprintf("%s/api/v1/apps/agent_starter/run", backendUrl)
+			//agentUrl := fmt.Sprintf("%s/api/v1/apps/agent_starter/run", backendUrl)
 			agentStartRequest := AgentStartRequest{
 				//ID          string              `json:"id"`
 				Name:        "agent",
 				AppName:     "AI Agent",
 				AppID:       "shuffle_agent",
 				AppVersion:  "1.0.0",
-				Environment: "cloud",
+				//Environment: "cloud",
 				Parameters:  parsedParams,
+			}
+			*/
+
+			agentUrl := fmt.Sprintf("%s/api/v1/agent", backendUrl)
+			agentStartRequest := MCPRequest{
+				Method: "tools/call",
+				Params: MCPRequestParams{
+					ToolName: allowedApps,
+					Input: MCPRequestInput{
+						Text: fmt.Sprintf("TASK: %s\n\nKey: %s\nCategory: %s\n\nRAW DATA:\n%s", option.Value, cacheData.Key, cacheData.Category, cacheData.Value),
+					},
+				},
 			}
 
 			newParsedBody, err := json.Marshal(agentStartRequest)
@@ -5016,17 +5031,13 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 			req.Header.Set("Org-Id", cacheData.OrgId)
 			req.Header.Set("X-Internal-Caller", "handleRunDatastoreAutomation")
 
-			resp, err := client.Do(req)
-			if err != nil {
-				log.Printf("[ERROR] Failed to send enrichment workflow execution request: %s", err)
-				return err
-			}
+			go client.Do(req)
 
-			// Makes sure we don't re-run the same twice
-			cacheData.Tags = append(cacheData.Tags, agentTagName)
-			err = SetDatastoreKeyMeta(ctx, cacheData)
+			/*
+			resp, err := 
 			if err != nil {
-				log.Printf("[ERROR] Failed to set cache key after running AI agent: %s", err)
+				log.Printf("[ERROR] Failed to run ai agent execution request: %s", err)
+				return err
 			}
 
 			defer resp.Body.Close()
@@ -5039,6 +5050,7 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 			if debug {
 				log.Printf("[DEBUG] RESP FOR RUNNING AI AGENT (%d): %s", resp.StatusCode, string(body))
 			}
+			*/
 
 			break
 		}
