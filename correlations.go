@@ -2,6 +2,7 @@ package shuffle
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"fmt"
 	"strconv"
@@ -1543,4 +1544,86 @@ func GetVulnerabilities(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(responseData)
+}
+
+// Fallback with redirect
+// r.HandleFunc("/api/v2/{datastore_category}", shuffle.HandleDatastoreRedirect).Methods("GET")
+func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request) {
+	location := strings.Split(request.URL.Path, "/")
+	var category string
+	if location[1] == "api" {
+		if len(location) <= 3 {
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		category = location[3]
+	}
+
+	if len(category) == 0 { 
+		log.Printf("[WARNING] No category found in datastore redirect wrapper")
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No category found in datastore redirect wrapper"}`))
+		return
+	}
+
+	newRequest := request.Clone(context.Background())
+	newRequest.URL.Path = "/api/v2/datastore"
+
+	q := newRequest.URL.Query()
+	q.Set("category", category)
+	newRequest.URL.RawQuery = q.Encode()
+
+	// Check direct first, then fall back to shuffle-security_* if no values
+	recorder := httptest.NewRecorder()
+	HandleListCacheKeys(recorder, newRequest)
+
+
+	cacheReturn := CacheReturn{}
+	result := recorder.Result()
+	defer result.Body.Close()
+	body, err := io.ReadAll(result.Body)
+	if err == nil && len(body) > 0 {
+		respError := json.Unmarshal(body, &cacheReturn)
+		if respError == nil && cacheReturn.Amount > 0 {
+			resp.WriteHeader(result.StatusCode)
+			resp.Write(body)
+			return
+		}
+	}
+
+	// Same again with a prefix
+	if !strings.HasPrefix(category, "shuffle-security_") {
+		category = "shuffle-security_" + category
+		newRequest = request.Clone(context.Background())
+		newRequest.URL.Path = "/api/v2/datastore"
+
+		q := newRequest.URL.Query()
+		q.Set("category", category)
+		newRequest.URL.RawQuery = q.Encode()
+
+		// Check direct first, then fall back to shuffle-security_* if no values
+		recorder := httptest.NewRecorder()
+		HandleListCacheKeys(recorder, newRequest)
+
+
+		cacheReturn := CacheReturn{}
+		result := recorder.Result()
+		defer result.Body.Close()
+		body, err = io.ReadAll(result.Body)
+		if err == nil && len(body) > 0 {
+			respError := json.Unmarshal(body, &cacheReturn)
+			if respError == nil && cacheReturn.Amount > 0 {
+				resp.WriteHeader(result.StatusCode)
+				resp.Write(body)
+				return
+			}
+		}
+	}
+
+	resp.WriteHeader(404)
+	resp.Write([]byte(`{"success": false, "reason": "No keys found for this key"}`))
+
+
 }

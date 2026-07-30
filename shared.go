@@ -20971,7 +20971,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
-			log.Printf("Path too short: %d", len(location))
+			//log.Printf("Path too short: %d", len(location))
 		} else {
 			if location[4] == "category" && len(location) > 5 {
 				category = location[5]

@@ -625,19 +625,29 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 			}
 
 			if !isAgentContinuation {
-				log.Printf("[INFO][%s] Existing execution is already %s. Not overriding with incoming %s update.", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
+				if debug { 
+					log.Printf("[DEBUG][%s] Existing execution is already %s. Not overriding with incoming %s update.", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
+				}
+
 				return nil
 			}
+
 			log.Printf("[INFO][%s] Permitting Agent Continuation: overriding existing %s execution to %s!", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
 		}
 
 		if existingTerminal && incomingTerminal && existingExecution.Status != workflowExecution.Status {
-			log.Printf("[INFO][%s] Existing execution is already %s. Not overriding with incoming terminal %s update.", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
+			if debug { 
+				log.Printf("[DEBUG][%s] Existing execution is already %s. Not overriding with incoming terminal %s update.", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
+			}
+
 			return nil
 		}
 
 		if existingTerminal && incomingTerminal && len(existingExecution.Results) >= len(workflowExecution.Results) {
-			log.Printf("[INFO][%s] Existing execution is already %s with %d results. Not re-saving incoming %s update with %d results.", workflowExecution.ExecutionId, existingExecution.Status, len(existingExecution.Results), workflowExecution.Status, len(workflowExecution.Results))
+			if debug { 
+				log.Printf("[DEBUG][%s] Existing execution is already %s with %d results. Not re-saving incoming %s update with %d results.", workflowExecution.ExecutionId, existingExecution.Status, len(existingExecution.Results), workflowExecution.Status, len(workflowExecution.Results))
+			}
+
 			return nil
 		}
 	}
