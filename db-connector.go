@@ -7052,6 +7052,11 @@ func (u *User) InitSSOInfos() {
 }
 
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
+	if len(user.Id) == 0 {
+		log.Printf("[ERROR] Setting user without ID: %s. Is this expected?", user.Username)
+		return errors.New("user ID is required")
+	}
+
 	log.Printf("[INFO] Updating user %s (%s) that has the role %s with %d apps and %d orgs. Org updater: %t", user.Username, user.Id, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
 	parsedKey := user.Id
 	previousApiKey := ""
