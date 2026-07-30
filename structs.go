@@ -163,13 +163,14 @@ type ExecutionRequest struct {
 }
 
 type RetStruct struct {
-	Success         bool                  `json:"success"`
-	SyncFeatures    SyncFeatures          `json:"sync_features"`
-	SessionKey      string                `json:"session_key"`
-	IntervalSeconds int64                 `json:"interval_seconds"`
-	Subscriptions   []PaymentSubscription `json:"subscriptions,omitempty"`
-	Licensed        bool                  `json:"licensed"`
-	CloudSyncUrl    string                `json:"cloud_sync_url,omitempty"`
+	Success          bool                  `json:"success"`
+	SyncFeatures     SyncFeatures          `json:"sync_features"`
+	SessionKey       string                `json:"session_key"`
+	IntervalSeconds  int64                 `json:"interval_seconds"`
+	Subscriptions    []PaymentSubscription `json:"subscriptions,omitempty"`
+	Licensed         bool                  `json:"licensed"`
+	CloudSyncUrl     string                `json:"cloud_sync_url,omitempty"`
+	AppRunsHardLimit int64                 `json:"app_runs_hard_limit"`
 }
 
 type AppMini struct {
@@ -397,36 +398,61 @@ type IncrementInCache struct {
 type DailyStatistics struct {
 	Date time.Time `json:"date" datastore:"date"`
 
-	AppExecutions              int64 `json:"app_executions" datastore:"app_executions"`
-	ChildAppExecutions         int64 `json:"child_app_executions" datastore:"child_app_executions"`
-	AppExecutionsFailed        int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
-	SubflowExecutions          int64 `json:"subflow_executions" datastore:"subflow_executions"`
-	WorkflowExecutions         int64 `json:"workflow_executions" datastore:"workflow_executions"`
-	WorkflowExecutionsFinished int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
-	WorkflowExecutionsFailed   int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
-	OrgSyncActions             int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
-	CloudExecutions            int64 `json:"cloud_executions" datastore:"cloud_executions"`
-	OnpremExecutions           int64 `json:"onprem_executions" datastore:"onprem_executions"`
-	AIUsage                    int64 `json:"ai_executions" datastore:"ai_executions"`
-	AgentExecutions            int64 `json:"agent_executions" datastore:"agent_executions"`
-	AgentTokens                int64 `json:"agent_tokens" datastore:"agent_tokens"`
-	AgentInputTokens           int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
-	AgentOutputTokens          int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
-	ChildOrgAiUsage            int64 `json:"child_org_ai_usage" datastore:"child_org_ai_usage"`
-	ChildOrgAgentExecutions    int64 `json:"child_org_agent_executions" datastore:"child_org_agent_executions"`
-	ChildOrgAgentTokens        int64 `json:"child_org_agent_tokens" datastore:"child_org_agent_tokens"`
-	ChildOrgAgentInputTokens   int64 `json:"child_org_agent_input_tokens" datastore:"child_org_agent_input_tokens"`
-	ChildOrgAgentOutputTokens  int64 `json:"child_org_agent_output_tokens" datastore:"child_org_agent_output_tokens"`
-
-	DailySMSUsage           int64 `json:"daily_sms_usage" datastore:"daily_sms_usage"`
-	DailyChildOrgSMSUsage   int64 `json:"daily_child_org_sms_usage" datastore:"daily_child_org_sms_usage"`
-	DailyEmailUsage         int64 `json:"daily_email_usage" datastore:"daily_email_usage"`
-	DailyChildOrgEmailUsage int64 `json:"daily_child_org_email_usage" datastore:"daily_child_org_email_usage"`
+	AppExecutions                  int64 `json:"app_executions" datastore:"app_executions"`
+	ChildAppExecutions             int64 `json:"child_app_executions" datastore:"child_app_executions"`
+	AppExecutionsFailed            int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
+	SubflowExecutions              int64 `json:"subflow_executions" datastore:"subflow_executions"`
+	WorkflowExecutions             int64 `json:"workflow_executions" datastore:"workflow_executions"`
+	WorkflowExecutionsFinished     int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
+	WorkflowExecutionsFailed       int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
+	OrgSyncActions                 int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
+	CloudExecutions                int64 `json:"cloud_executions" datastore:"cloud_executions"`
+	OnpremExecutions               int64 `json:"onprem_executions" datastore:"onprem_executions"`
+	AIUsage                        int64 `json:"ai_executions" datastore:"ai_executions"`
+	AgentExecutions                int64 `json:"agent_executions" datastore:"agent_executions"`
+	AgentExecutionsSuccessful      int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
+	AgentExecutionsFailed          int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
+	AgentTokens                    int64 `json:"agent_tokens" datastore:"agent_tokens"`
+	AgentInputTokens               int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
+	AgentOutputTokens              int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
+	AgentCachedTokens              int64 `json:"agent_cached_tokens" datastore:"agent_cached_tokens"`
+	DailyChildOrgAiUsage           int64 `json:"daily_child_org_ai_usage" datastore:"daily_child_org_ai_usage"`
+	DailyChildOrgAgentExecutions   int64 `json:"daily_child_org_agent_executions" datastore:"daily_child_org_agent_executions"`
+	DailyChildOrgAgentTokens       int64 `json:"daily_child_org_agent_tokens" datastore:"daily_child_org_agent_tokens"`
+	DailyChildOrgAgentInputTokens  int64 `json:"daily_child_org_agent_input_tokens" datastore:"daily_child_org_agent_input_tokens"`
+	DailyChildOrgAgentOutputTokens int64 `json:"daily_child_org_agent_output_tokens" datastore:"daily_child_org_agent_output_tokens"`
+	DailySMSUsage                  int64 `json:"daily_sms_usage" datastore:"daily_sms_usage"`
+	DailyChildOrgSMSUsage          int64 `json:"daily_child_org_sms_usage" datastore:"daily_child_org_sms_usage"`
+	DailyEmailUsage                int64 `json:"daily_email_usage" datastore:"daily_email_usage"`
+	DailyChildOrgEmailUsage        int64 `json:"daily_child_org_email_usage" datastore:"daily_child_org_email_usage"`
+	ChildOrgAgentExecutions        int64 `json:"child_org_agent_executions" datastore:"child_org_agent_executions"`
+	ChildOrgAgentTokens            int64 `json:"child_org_agent_tokens" datastore:"child_org_agent_tokens"`
+	ChildOrgAgentInputTokens       int64 `json:"child_org_agent_input_tokens" datastore:"child_org_agent_input_tokens"`
+	ChildOrgAgentOutputTokens      int64 `json:"child_org_agent_output_tokens" datastore:"child_org_agent_output_tokens"`
+	ChildOrgAiUsage                int64 `json:"child_org_ai_usage" datastore:"child_org_ai_usage"`
 
 	ApiUsage int64      `json:"api_usage" datastore:"api_usage"`
 	AppUsage []AppUsage `json:"app_usage" datastore:"app_usage"`
 
 	Additions []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
+}
+
+type Tenants struct {
+	Name      string    `json:"name" datastore:"name"`
+	Id        string    `json:"id" datastore:"id"`
+	CreatedAt time.Time `json:"created_at" datastore:"created_at"`
+	DeletedAt time.Time `json:"deleted_at" datastore:"deleted_at"`
+	Status    string    `json:"status" datastore:"status"`
+}
+
+type Locations struct {
+	OrgId     string `json:"org_id"`
+	OrgName   string `json:"org_name"`
+	Name      string `json:"name"`
+	Id        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+	DeletedAt string `json:"deleted_at"`
+	Status    string `json:"status"`
 }
 
 // Used to be related to users, now related to orgs.
@@ -453,9 +479,12 @@ type ExecutionInfo struct {
 	TotalOnpremExecutions           int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
 	TotalAIUsage                    int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
 	TotalAgentExecutions            int64 `json:"total_agent_executions" datastore:"total_agent_executions"`
+	TotalAgentExecutionsSuccessful  int64 `json:"total_agent_executions_successful" datastore:"total_agent_executions_successful"`
+	TotalAgentExecutionsFailed      int64 `json:"total_agent_executions_failed" datastore:"total_agent_executions_failed"`
 	TotalAgentTokens                int64 `json:"total_agent_tokens" datastore:"total_agent_tokens"`
 	TotalAgentInputTokens           int64 `json:"total_agent_input_tokens" datastore:"total_agent_input_tokens"`
 	TotalAgentOutputTokens          int64 `json:"total_agent_output_tokens" datastore:"total_agent_output_tokens"`
+	TotalAgentCachedTokens          int64 `json:"total_agent_cached_tokens" datastore:"total_agent_cached_tokens"`
 	TotalChildOrgAiUsage            int64 `json:"total_child_org_ai_usage" datastore:"total_child_org_ai_usage"`
 	TotalChildOrgAgentExecutions    int64 `json:"total_child_org_agent_executions" datastore:"total_child_org_agent_executions"`
 	TotalChildOrgAgentTokens        int64 `json:"total_child_org_agent_tokens" datastore:"total_child_org_agent_tokens"`
@@ -481,9 +510,12 @@ type ExecutionInfo struct {
 	MonthlyOnpremExecutions           int64 `json:"monthly_onprem_executions,omitempty" datastore:"monthly_onprem_executions"`
 	MonthlyAIUsage                    int64 `json:"monthly_ai_executions,omitempty" datastore:"monthly_ai_executions"`
 	MonthlyAgentExecutions            int64 `json:"monthly_agent_executions,omitempty" datastore:"monthly_agent_executions"`
+	MonthlyAgentExecutionsSuccessful  int64 `json:"monthly_agent_executions_successful,omitempty" datastore:"monthly_agent_executions_successful"`
+	MonthlyAgentExecutionsFailed      int64 `json:"monthly_agent_executions_failed,omitempty" datastore:"monthly_agent_executions_failed"`
 	MonthlyAgentTokens                int64 `json:"monthly_agent_tokens,omitempty" datastore:"monthly_agent_tokens"`
 	MonthlyAgentInputTokens           int64 `json:"monthly_agent_input_tokens,omitempty" datastore:"monthly_agent_input_tokens"`
 	MonthlyAgentOutputTokens          int64 `json:"monthly_agent_output_tokens,omitempty" datastore:"monthly_agent_output_tokens"`
+	MonthlyAgentCachedTokens          int64 `json:"monthly_agent_cached_tokens,omitempty" datastore:"monthly_agent_cached_tokens"`
 	MonthlyChildOrgAiUsage            int64 `json:"monthly_child_org_ai_usage,omitempty" datastore:"monthly_child_org_ai_usage"`
 	MonthlyChildOrgAgentExecutions    int64 `json:"monthly_child_org_agent_executions,omitempty" datastore:"monthly_child_org_agent_executions"`
 	MonthlyChildOrgAgentTokens        int64 `json:"monthly_child_org_agent_tokens,omitempty" datastore:"monthly_child_org_agent_tokens"`
@@ -520,7 +552,10 @@ type ExecutionInfo struct {
 	DailyOnpremExecutions           int64 `json:"daily_onprem_executions" datastore:"daily_onprem_executions"`
 	DailyAIUsage                    int64 `json:"daily_ai_executions" datastore:"daily_ai_executions"`
 	DailyAgentExecutions            int64 `json:"daily_agent_executions" datastore:"daily_agent_executions"`
+	DailyAgentExecutionsSuccessful  int64 `json:"daily_agent_executions_successful" datastore:"daily_agent_executions_successful"`
+	DailyAgentExecutionsFailed      int64 `json:"daily_agent_executions_failed" datastore:"daily_agent_executions_failed"`
 	DailyAgentTokens                int64 `json:"daily_agent_tokens" datastore:"daily_agent_tokens"`
+	DailyAgentCachedTokens          int64 `json:"daily_agent_cached_tokens" datastore:"daily_agent_cached_tokens"`
 	DailyAgentInputTokens           int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
 	DailyAgentOutputTokens          int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`
 	DailyChildOrgAiUsage            int64 `json:"daily_child_org_ai_usage" datastore:"daily_child_org_ai_usage"`
@@ -549,6 +584,10 @@ type ExecutionInfo struct {
 	// These are just here in case we get use of them
 	TotalApiUsage int64 `json:"total_api_usage" datastore:"total_api_usage"`
 	DailyApiUsage int64 `json:"daily_api_usage" datastore:"daily_api_usage"`
+
+	// Store only deleted tenants here. So it doesn't grow out of 1MB datastore limit
+	Tenants   []Tenants   `json:"tenants" datastore:"tenants"`
+	Locations []Locations `json:"locations" datastore:"locations"`
 
 	Additions               []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
 	LastMonthlyResetMonth   int                   `json:"last_monthly_reset_month" datastore:"last_monthly_reset_month"`
@@ -1117,6 +1156,7 @@ type OnpremLicense struct {
 	AppRuns            OnpremLimits `json:"app_runs" datastore:"app_runs"`
 	Timeout            string       `json:"timeout" datastore:"timeout"`
 	Branding           bool         `json:"branding" datastore:"branding"`
+	AppRunsGrouping    bool         `json:"app_runs_grouping" datastore:"app_runs_grouping"`
 }
 
 type Org struct {
@@ -1422,32 +1462,33 @@ type MailLevel struct {
 }
 
 type SyncFeatures struct {
-	Editing             bool        `json:"editing" datastore:"editing"`
-	MailSent            []MailLevel `json:"mail_sent" datastore:"mail_sent"`
-	AppExecutions       SyncData    `json:"app_executions" datastore:"app_executions"`
-	OnpremAppExecutions SyncData    `json:"onprem_app_executions" datastore:"onprem_app_executions"`
-	MultiEnv            SyncData    `json:"multi_env" datastore:"multi_env"`
-	MultiTenant         SyncData    `json:"multi_tenant" datastore:"multi_tenant"`
-	MultiRegion         SyncData    `json:"multi_region" datastore:"multi_region"`
-	Webhook             SyncData    `json:"webhook" datastore:"webhook"`
-	Schedules           SyncData    `json:"schedules" datastore:"schedules"`
-	UserInput           SyncData    `json:"user_input" datastore:"user_input"`
-	SendMail            SyncData    `json:"send_mail" datastore:"send_mail"`
-	SendSms             SyncData    `json:"send_sms" datastore:"send_sms"`
-	Updates             SyncData    `json:"updates" datastore:"updates"`
-	EmailTrigger        SyncData    `json:"email_trigger" datastore:"email_trigger"`
-	Notifications       SyncData    `json:"notifications" datastore:"notifications"`
-	Workflows           SyncData    `json:"workflows" datastore:"workflows"`
-	Autocomplete        SyncData    `json:"autocomplete" datastore:"autocomplete"`
-	WorkflowExecutions  SyncData    `json:"workflow_executions" datastore:"workflow_executions"`
-	Authentication      SyncData    `json:"authentication" datastore:"authentication"`
-	Schedule            SyncData    `json:"schedule" datastore:"schedule"`
-	Apps                SyncData    `json:"apps" datastore:"apps"`
-	ShuffleGPT          SyncData    `json:"shuffle_gpt" datastore:"shuffle_gpt"`
-	Branding            SyncData    `json:"branding" datastore:"branding"`
-	AgentExecutions     SyncData    `json:"agent_executions" datastore:"agent_executions"`
-	AgentTokens         SyncData    `json:"agent_tokens" datastore:"agent_tokens"`
-	Multiplayer         SyncData    `json:"multiplayer" datastore:"multiplayer"`
+	Editing               bool        `json:"editing" datastore:"editing"`
+	MailSent              []MailLevel `json:"mail_sent" datastore:"mail_sent"`
+	AppExecutions         SyncData    `json:"app_executions" datastore:"app_executions"`
+	OnpremAppExecutions   SyncData    `json:"onprem_app_executions" datastore:"onprem_app_executions"`
+	AnnualAppRunsGrouping SyncData    `json:"annual_app_runs_grouping" datastore:"annual_app_runs_grouping"`
+	MultiEnv              SyncData    `json:"multi_env" datastore:"multi_env"`
+	MultiTenant           SyncData    `json:"multi_tenant" datastore:"multi_tenant"`
+	MultiRegion           SyncData    `json:"multi_region" datastore:"multi_region"`
+	Webhook               SyncData    `json:"webhook" datastore:"webhook"`
+	Schedules             SyncData    `json:"schedules" datastore:"schedules"`
+	UserInput             SyncData    `json:"user_input" datastore:"user_input"`
+	SendMail              SyncData    `json:"send_mail" datastore:"send_mail"`
+	SendSms               SyncData    `json:"send_sms" datastore:"send_sms"`
+	Updates               SyncData    `json:"updates" datastore:"updates"`
+	EmailTrigger          SyncData    `json:"email_trigger" datastore:"email_trigger"`
+	Notifications         SyncData    `json:"notifications" datastore:"notifications"`
+	Workflows             SyncData    `json:"workflows" datastore:"workflows"`
+	Autocomplete          SyncData    `json:"autocomplete" datastore:"autocomplete"`
+	WorkflowExecutions    SyncData    `json:"workflow_executions" datastore:"workflow_executions"`
+	Authentication        SyncData    `json:"authentication" datastore:"authentication"`
+	Schedule              SyncData    `json:"schedule" datastore:"schedule"`
+	Apps                  SyncData    `json:"apps" datastore:"apps"`
+	ShuffleGPT            SyncData    `json:"shuffle_gpt" datastore:"shuffle_gpt"`
+	Branding              SyncData    `json:"branding" datastore:"branding"`
+	AgentExecutions       SyncData    `json:"agent_executions" datastore:"agent_executions"`
+	AgentTokens           SyncData    `json:"agent_tokens" datastore:"agent_tokens"`
+	Multiplayer           SyncData    `json:"multiplayer" datastore:"multiplayer"`
 }
 
 type SyncData struct {
