@@ -40,9 +40,13 @@ var PredictableDataTypes = []string{
 	"workflow_executions_onprem",
 	"api_usage",
 	"ai_executions",
+	"agent_executions",
+	"agent_executions_successful",
+	"agent_executions_failed",
 	"agent_tokens",
 	"agent_input_tokens",
 	"agent_output_tokens",
+	"agent_cached_tokens",
 }
 
 func HandleGetWidget(resp http.ResponseWriter, request *http.Request) {
@@ -421,6 +425,20 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 			return d.ApiUsage
 		case "ai_executions":
 			return d.AIUsage
+		case "agent_executions":
+			return d.AgentExecutions
+		case "agent_executions_successful":
+			return d.AgentExecutionsSuccessful
+		case "agent_executions_failed":
+			return d.AgentExecutionsFailed
+		case "agent_tokens":
+			return d.AgentTokens
+		case "agent_input_tokens":
+			return d.AgentInputTokens
+		case "agent_output_tokens":
+			return d.AgentOutputTokens
+		case "agent_cached_tokens":
+			return d.AgentCachedTokens
 		default:
 			return -1
 		}
@@ -896,6 +914,165 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		if len(info.DailyStatistics) > 365 {
 			info.DailyStatistics = info.DailyStatistics[len(info.DailyStatistics)-60:]
 		}
+	}
+
+	if len(org.ChildOrgs) > 0 {
+		// Build a date-keyed map of parent daily stats for fast lookups when merging cross-region child data
+		parentDailyMap := make(map[string]int, len(info.DailyStatistics))
+		for i, d := range info.DailyStatistics {
+			parentDailyMap[d.Date.UTC().Format("2006-01-02")] = i
+		}
+
+		// mu protects all shared writes: info.Tenants, info.Locations, info.DailyStatistics, parentDailyMap
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+
+		// Semaphore: buffered channel of size 5 limits concurrent goroutines to 5 at a time
+		sem := make(chan struct{}, 5)
+
+		parentRegionUrl := strings.TrimRight(org.RegionUrl, "/")
+
+		for _, childOrgMini := range org.ChildOrgs {
+			wg.Add(1)
+			sem <- struct{}{} // acquire a slot; blocks if 5 goroutines are already running
+
+			go func(childOrgMini OrgMini) {
+				defer wg.Done()
+				defer func() { <-sem }() // release the slot when this goroutine finishes
+
+				childOrgFull, err := GetOrg(ctx, childOrgMini.Id)
+				if err != nil {
+					log.Printf("[WARNING] HandleGetStatistics: failed fetching child org %s: %s", childOrgMini.Id, err)
+					return
+				}
+
+				// --- Collect Tenant and Location data (write behind mutex) ---
+				newTenant := Tenants{
+					Name:      childOrgFull.Name,
+					Id:        childOrgFull.Id,
+					CreatedAt: time.Unix(childOrgFull.Created, 0),
+					Status:    "active",
+				}
+
+				var newLocs []Locations
+				childEnvs, err := GetEnvironments(ctx, childOrgFull.Id)
+				if err == nil {
+					for _, env := range childEnvs {
+						if len(env.SuborgDistribution) > 0 {
+							continue
+						}
+						if strings.ToLower(env.Name) == "cloud" {
+							continue
+						}
+						status := "active"
+						if env.Archived {
+							status = "disabled"
+						}
+						newLocs = append(newLocs, Locations{
+							OrgId:     childOrgFull.Id,
+							OrgName:   childOrgFull.Name,
+							Name:      env.Name,
+							Id:        env.Id,
+							CreatedAt: time.Unix(env.Created, 0).Format(time.RFC3339),
+							Status:    status,
+						})
+					}
+				}
+
+				// --- Fetch cross-region stats (pure HTTP, no shared state touched yet) ---
+				childRegionUrl := strings.TrimRight(childOrgFull.RegionUrl, "/")
+
+				var childDailyStats []DailyStatistics
+				if project.Environment == "cloud" &&
+					len(childRegionUrl) > 0 &&
+					strings.Contains(childRegionUrl, "http") &&
+					childRegionUrl != parentRegionUrl {
+
+					log.Printf("[INFO] HandleGetStatistics: fetching cross-region stats for child org %s (%s) from region %s", childOrgFull.Name, childOrgFull.Id, childRegionUrl)
+
+					crossRegionUrl := fmt.Sprintf("%s/api/v1/orgs/%s/statistics", childRegionUrl, childOrgFull.Id)
+					crossReq, crossErr := http.NewRequest("GET", crossRegionUrl, nil)
+					if crossErr != nil {
+						log.Printf("[WARNING] HandleGetStatistics: failed building cross-region request for child org %s: %s", childOrgFull.Id, crossErr)
+					} else {
+						crossReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", user.ApiKey))
+						crossReq.Header.Set("Org-Id", childOrgFull.Id)
+
+						crossClient := &http.Client{Timeout: 10 * time.Second}
+						crossResp, crossDoErr := crossClient.Do(crossReq)
+						if crossDoErr != nil {
+							log.Printf("[WARNING] HandleGetStatistics: cross-region request failed for child org %s (%s): %s", childOrgFull.Name, childOrgFull.Id, crossDoErr)
+						} else {
+							if crossResp.StatusCode == 200 {
+								crossBody, crossReadErr := ioutil.ReadAll(crossResp.Body)
+								crossResp.Body.Close()
+								if crossReadErr != nil {
+									log.Printf("[WARNING] HandleGetStatistics: failed reading cross-region stats body for child org %s: %s", childOrgFull.Id, crossReadErr)
+								} else {
+									var childInfo ExecutionInfo
+									if jsonErr := json.Unmarshal(crossBody, &childInfo); jsonErr != nil {
+										log.Printf("[WARNING] HandleGetStatistics: failed unmarshalling cross-region stats for child org %s: %s", childOrgFull.Id, jsonErr)
+									} else {
+										log.Printf("[INFO] HandleGetStatistics: received %d cross-region daily stats from child org %s (%s)", len(childInfo.DailyStatistics), childOrgFull.Name, childOrgFull.Id)
+										childDailyStats = childInfo.DailyStatistics
+									}
+								}
+							} else {
+								crossResp.Body.Close()
+								log.Printf("[WARNING] HandleGetStatistics: cross-region stats request for child org %s returned status %d", childOrgFull.Id, crossResp.StatusCode)
+							}
+						}
+					}
+				}
+
+				// --- Merge all collected data into shared state under the mutex ---
+				mu.Lock()
+				info.Tenants = append(info.Tenants, newTenant)
+				info.Locations = append(info.Locations, newLocs...)
+
+				for _, childDay := range childDailyStats {
+					dateKey := childDay.Date.UTC().Format("2006-01-02")
+					alreadyAppliedCorrection := childDay.AgentInputTokens*250/1_000_000 +
+						childDay.AgentOutputTokens*1500/1_000_000 +
+						childDay.DailySMSUsage*3 +
+						childDay.DailyEmailUsage*2
+					rawChildAppExecutions := childDay.AppExecutions - alreadyAppliedCorrection
+					if rawChildAppExecutions < 0 {
+						rawChildAppExecutions = 0
+					}
+
+					if idx, exists := parentDailyMap[dateKey]; exists {
+						info.DailyStatistics[idx].ChildAppExecutions += rawChildAppExecutions
+						info.DailyStatistics[idx].DailyChildOrgAiUsage += childDay.AIUsage
+						info.DailyStatistics[idx].DailyChildOrgAgentExecutions += childDay.AgentExecutions
+						info.DailyStatistics[idx].DailyChildOrgAgentTokens += childDay.AgentTokens
+						info.DailyStatistics[idx].DailyChildOrgAgentInputTokens += childDay.AgentInputTokens
+						info.DailyStatistics[idx].DailyChildOrgAgentOutputTokens += childDay.AgentOutputTokens
+						info.DailyStatistics[idx].DailyChildOrgSMSUsage += childDay.DailySMSUsage
+						info.DailyStatistics[idx].DailyChildOrgEmailUsage += childDay.DailyEmailUsage
+					} else {
+						// No matching parent day — create a new entry carrying only the child org counters
+						newDay := DailyStatistics{
+							Date:                           childDay.Date,
+							ChildAppExecutions:             rawChildAppExecutions,
+							DailyChildOrgAiUsage:           childDay.AIUsage,
+							DailyChildOrgAgentExecutions:   childDay.AgentExecutions,
+							DailyChildOrgAgentTokens:       childDay.AgentTokens,
+							DailyChildOrgAgentInputTokens:  childDay.AgentInputTokens,
+							DailyChildOrgAgentOutputTokens: childDay.AgentOutputTokens,
+							DailyChildOrgSMSUsage:          childDay.DailySMSUsage,
+							DailyChildOrgEmailUsage:        childDay.DailyEmailUsage,
+						}
+						parentDailyMap[dateKey] = len(info.DailyStatistics)
+						info.DailyStatistics = append(info.DailyStatistics, newDay)
+					}
+				}
+				mu.Unlock()
+			}(childOrgMini)
+		}
+
+		// Wait for all goroutines to finish before continuing
+		wg.Wait()
 	}
 
 	stats := GetCorrectedStats(info)
@@ -1374,58 +1551,15 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 // 2. If there isn't, set it and clear out the daily records
 // Also: can we dump a list of apps that run? Maybe a list of them?
 func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
-	timeYesterday := time.Now().AddDate(0, 0, -1)
-	timeYesterdayFormatted := timeYesterday.Format("2006-12-02")
+	currentDate := time.Now().Format("2006-01-02")
 
-	for _, day := range executionInfo.DailyStatistics {
+	// check if today's date exists in daily stats, if not (new day), append it and reset daily values
+	if len(executionInfo.DailyStatistics) == 0 || executionInfo.DailyStatistics[len(executionInfo.DailyStatistics)-1].Date.Format("2006-01-02") != currentDate {
+		executionInfo.DailyStatistics = append(executionInfo.DailyStatistics, DailyStatistics{
+			Date: time.Now(),
+		})
 
-		// Check if the day.Date is the same as yesterday and return if it is
-		if day.Date.Format("2006-12-02") == timeYesterdayFormatted {
-			for additionIndex, _ := range executionInfo.Additions {
-				executionInfo.Additions[additionIndex].DailyValue = 0
-			}
-
-			return executionInfo
-		}
-	}
-
-	log.Printf("[DEBUG] Daily stats not updated for %s in org %s today. Only have %d stats so far - running update.", timeYesterday, executionInfo.OrgId, len(executionInfo.DailyStatistics))
-	// If we get here, we need to update the daily stats
-	newDay := DailyStatistics{
-		Date:                       timeYesterday,
-		AppExecutions:              executionInfo.DailyAppExecutions,
-		ChildAppExecutions:         executionInfo.DailyChildAppExecutions,
-		AppExecutionsFailed:        executionInfo.DailyAppExecutionsFailed,
-		SubflowExecutions:          executionInfo.DailySubflowExecutions,
-		WorkflowExecutions:         executionInfo.DailyWorkflowExecutions,
-		WorkflowExecutionsFinished: executionInfo.DailyWorkflowExecutionsFinished,
-		WorkflowExecutionsFailed:   executionInfo.DailyWorkflowExecutionsFailed,
-		OrgSyncActions:             executionInfo.DailyOrgSyncActions,
-		CloudExecutions:            executionInfo.DailyCloudExecutions,
-		OnpremExecutions:           executionInfo.DailyOnpremExecutions,
-		AIUsage:                    executionInfo.DailyAIUsage,
-		AgentExecutions:            executionInfo.DailyAgentExecutions,
-		AgentTokens:                executionInfo.DailyAgentTokens,
-		AgentInputTokens:           executionInfo.DailyAgentInputTokens,
-		AgentOutputTokens:          executionInfo.DailyAgentOutputTokens,
-		ChildOrgAiUsage:            executionInfo.DailyChildOrgAiUsage,
-		ChildOrgAgentExecutions:    executionInfo.DailyChildOrgAgentExecutions,
-		ChildOrgAgentTokens:        executionInfo.DailyChildOrgAgentTokens,
-		ChildOrgAgentInputTokens:   executionInfo.DailyChildOrgAgentInputTokens,
-		ChildOrgAgentOutputTokens:  executionInfo.DailyChildOrgAgentOutputTokens,
-		DailySMSUsage:              executionInfo.DailySMSUsage,
-		DailyChildOrgSMSUsage:      executionInfo.DailyChildOrgSMSUsage,
-		DailyEmailUsage:            executionInfo.DailyEmailUsage,
-		DailyChildOrgEmailUsage:    executionInfo.DailyChildOrgEmailUsage,
-
-		ApiUsage: executionInfo.DailyApiUsage,
-
-		Additions: executionInfo.Additions,
-	}
-
-	executionInfo.DailyStatistics = append(executionInfo.DailyStatistics, newDay)
-
-	// Cleaning up old stuff we don't use for now
+		// Reset daily and hourly/weekly fields so they start fresh
 	executionInfo.HourlyAppExecutions = 0
 	executionInfo.HourlyChildAppExecutions = 0
 	executionInfo.HourlyAppExecutionsFailed = 0
@@ -1438,7 +1572,6 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.HourlyCloudExecutions = 0
 	executionInfo.HourlyOnpremExecutions = 0
 
-	// Reset daily
 	executionInfo.DailyAppExecutions = 0
 	executionInfo.DailyChildAppExecutions = 0
 	executionInfo.DailyAppExecutionsFailed = 0
@@ -1452,7 +1585,6 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.DailyOnpremExecutions = 0
 	executionInfo.DailyApiUsage = 0
 	executionInfo.DailyAIUsage = 0
-	executionInfo.DailyChildOrgAiUsage = 0
 	executionInfo.DailyAgentExecutions = 0
 	executionInfo.DailyAgentTokens = 0
 	executionInfo.DailyAgentInputTokens = 0
@@ -1467,7 +1599,6 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.DailyEmailUsage = 0
 	executionInfo.DailyChildOrgEmailUsage = 0
 
-	// Weekly
 	executionInfo.WeeklyAppExecutions = 0
 	executionInfo.WeeklyChildAppExecutions = 0
 	executionInfo.WeeklyAppExecutionsFailed = 0
@@ -1480,10 +1611,39 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.WeeklyOnpremExecutions = 0
 	executionInfo.WeeklyChildWorkflowExecutions = 0
 
-	// Cleans up "random" stats as well
-	for additionIndex, _ := range executionInfo.Additions {
+		for additionIndex := range executionInfo.Additions {
 		executionInfo.Additions[additionIndex].Value = 0
 		executionInfo.Additions[additionIndex].DailyValue = 0
+		}
+	} else {
+		// Update today's stats on each increment
+		lastIdx := len(executionInfo.DailyStatistics) - 1
+		executionInfo.DailyStatistics[lastIdx].AppExecutions = executionInfo.DailyAppExecutions
+		executionInfo.DailyStatistics[lastIdx].ChildAppExecutions = executionInfo.DailyChildAppExecutions
+		executionInfo.DailyStatistics[lastIdx].AppExecutionsFailed = executionInfo.DailyAppExecutionsFailed
+		executionInfo.DailyStatistics[lastIdx].SubflowExecutions = executionInfo.DailySubflowExecutions
+		executionInfo.DailyStatistics[lastIdx].WorkflowExecutions = executionInfo.DailyWorkflowExecutions
+		executionInfo.DailyStatistics[lastIdx].WorkflowExecutionsFinished = executionInfo.DailyWorkflowExecutionsFinished
+		executionInfo.DailyStatistics[lastIdx].WorkflowExecutionsFailed = executionInfo.DailyWorkflowExecutionsFailed
+		executionInfo.DailyStatistics[lastIdx].OrgSyncActions = executionInfo.DailyOrgSyncActions
+		executionInfo.DailyStatistics[lastIdx].CloudExecutions = executionInfo.DailyCloudExecutions
+		executionInfo.DailyStatistics[lastIdx].OnpremExecutions = executionInfo.DailyOnpremExecutions
+		executionInfo.DailyStatistics[lastIdx].AIUsage = executionInfo.DailyAIUsage
+		executionInfo.DailyStatistics[lastIdx].ApiUsage = executionInfo.DailyApiUsage
+		executionInfo.DailyStatistics[lastIdx].Additions = executionInfo.Additions
+		executionInfo.DailyStatistics[lastIdx].AgentExecutions = executionInfo.DailyAgentExecutions
+		executionInfo.DailyStatistics[lastIdx].AgentTokens = executionInfo.DailyAgentTokens
+		executionInfo.DailyStatistics[lastIdx].AgentInputTokens = executionInfo.DailyAgentInputTokens
+		executionInfo.DailyStatistics[lastIdx].ChildOrgAgentInputTokens = executionInfo.DailyChildOrgAgentInputTokens
+		executionInfo.DailyStatistics[lastIdx].AgentOutputTokens = executionInfo.DailyAgentOutputTokens
+		executionInfo.DailyStatistics[lastIdx].ChildOrgAgentOutputTokens = executionInfo.DailyChildOrgAgentOutputTokens
+		executionInfo.DailyStatistics[lastIdx].ChildOrgAiUsage = executionInfo.DailyChildOrgAiUsage
+		executionInfo.DailyStatistics[lastIdx].ChildOrgAgentExecutions = executionInfo.DailyChildOrgAgentExecutions
+		executionInfo.DailyStatistics[lastIdx].ChildOrgAgentTokens = executionInfo.DailyChildOrgAgentTokens
+		executionInfo.DailyStatistics[lastIdx].DailySMSUsage = executionInfo.DailySMSUsage
+		executionInfo.DailyStatistics[lastIdx].DailyChildOrgSMSUsage = executionInfo.DailyChildOrgSMSUsage
+		executionInfo.DailyStatistics[lastIdx].DailyEmailUsage = executionInfo.DailyEmailUsage
+		executionInfo.DailyStatistics[lastIdx].DailyChildOrgEmailUsage = executionInfo.DailyChildOrgEmailUsage
 	}
 
 	now := time.Now()
@@ -1505,9 +1665,12 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyApiUsage = 0
 		executionInfo.MonthlyAIUsage = 0
 		executionInfo.MonthlyAgentExecutions = 0
+		executionInfo.MonthlyAgentExecutionsSuccessful = 0
+		executionInfo.MonthlyAgentExecutionsFailed = 0
 		executionInfo.MonthlyAgentTokens = 0
 		executionInfo.MonthlyAgentInputTokens = 0
 		executionInfo.MonthlyAgentOutputTokens = 0
+		executionInfo.MonthlyAgentCachedTokens = 0
 		executionInfo.MonthlyChildOrgAiUsage = 0
 		executionInfo.MonthlyChildOrgAgentExecutions = 0
 		executionInfo.MonthlyChildOrgAgentTokens = 0
@@ -1664,6 +1827,14 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalAgentExecutions += int64(increment)
 		orgStatistics.MonthlyAgentExecutions += int64(increment)
 		orgStatistics.DailyAgentExecutions += int64(increment)
+	} else if dataType == "agent_executions_successful" {
+		orgStatistics.TotalAgentExecutionsSuccessful += int64(increment)
+		orgStatistics.MonthlyAgentExecutionsSuccessful += int64(increment)
+		orgStatistics.DailyAgentExecutionsSuccessful += int64(increment)
+	} else if dataType == "agent_executions_failed" {
+		orgStatistics.TotalAgentExecutionsFailed += int64(increment)
+		orgStatistics.MonthlyAgentExecutionsFailed += int64(increment)
+		orgStatistics.DailyAgentExecutionsFailed += int64(increment)
 	} else if dataType == "agent_tokens" {
 		orgStatistics.TotalAgentTokens += int64(increment)
 		orgStatistics.MonthlyAgentTokens += int64(increment)
@@ -1684,6 +1855,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalAgentOutputTokens += int64(increment)
 		orgStatistics.MonthlyAgentOutputTokens += int64(increment)
 		orgStatistics.DailyAgentOutputTokens += int64(increment)
+	} else if dataType == "agent_cached_tokens" {
+		orgStatistics.TotalAgentCachedTokens += int64(increment)
+		orgStatistics.MonthlyAgentCachedTokens += int64(increment)
+		orgStatistics.DailyAgentCachedTokens += int64(increment)
 	} else if dataType == "childorg_agent_output_tokens" {
 		orgStatistics.TotalChildOrgAgentOutputTokens += int64(increment)
 		orgStatistics.MonthlyChildOrgAgentOutputTokens += int64(increment)

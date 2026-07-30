@@ -8974,11 +8974,16 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 
 	if project.Environment != "cloud" && len(inputEnv) > 0 && len(executions) > 0 {
 		env := inputEnv[0]
-
 		orgId := env.OrgId
-		org, err := GetOrg(ctx, orgId)
+
+		org, err := GetFirstOrg(ctx)
 		if err != nil {
-			log.Printf("[ERROR] Failed getting org %s for queue: %s", orgId, err)
+			log.Printf("[ERROR] Failed getting parent org directly for queue: %s", err)
+			return ExecutionRequestWrapper{
+				Data: executions,
+			}, nil
+		}
+		if len(org.Id) == 0 {
 			return ExecutionRequestWrapper{
 				Data: executions,
 			}, nil
@@ -9009,15 +9014,54 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 
 		license := checkNoInternet()
 		if license.Valid {
+			if license.AppRunsGrouping {
+				limit = limit * 12
+			} else {
 			limit = limit * 2
 		}
 
-		shouldSkipRateLimit := false
-		if licenseOrg.CloudSync && !license.Valid && licenseOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
-			shouldSkipRateLimit = true
+		} else if licenseOrg.CloudSync && licenseOrg.SyncFeatures.AnnualAppRunsGrouping.Active {
+			limit = limit * 12 * 2
+
+			if licenseOrg.Billing.InternalAppRunsHardLimit > 0 {
+				limit = licenseOrg.Billing.InternalAppRunsHardLimit
+			}
+
+			var planStartDate int64
+			for _, sub := range licenseOrg.Subscriptions {
+				if sub.Active {
+					subName := strings.ToLower(sub.Name)
+					if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") {
+						planStartDate = sub.Startdate
+						break
+					}
+				}
+			}
+
+			var annualAppRuns int64
+			if planStartDate > 0 {
+				for _, stat := range stats.DailyStatistics {
+					if stat.Date.Unix() >= planStartDate {
+						annualAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+					}
+				}
+			}
+			totalAppExecutions = annualAppRuns
+		} else if licenseOrg.CloudSync && licenseOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+			limit = limit * 10
+
+			if licenseOrg.Billing.InternalAppRunsHardLimit > 0 {
+				limit = licenseOrg.Billing.InternalAppRunsHardLimit
+			}
+
 		}
 
-		if !shouldSkipRateLimit && totalAppExecutions > limit {
+		if debug {
+			log.Printf("[INFO] total app executions in the queue is: %v", totalAppExecutions)
+			log.Printf("[INFO] app runs limit in the queue is: %v", limit)
+		}
+
+		if totalAppExecutions > limit {
 			cacheKey := fmt.Sprintf("org-%s-last-queue-send", orgId)
 			currentTime := time.Now().Unix()
 			lastSendCache, err := GetCache(ctx, cacheKey)

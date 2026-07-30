@@ -13621,6 +13621,71 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if tmpData.Editing == "license_expired" {
+		// 1. Check if editing org is on mark as customer and opensource if yes than only countinue this checks
+		if org.LeadInfo.Customer {
+			// 2. Check if editing org have subscription active and it is ended if yes than only continue
+			now := time.Now().Unix()
+			hasEndedSubscription := false
+			for _, sub := range org.Subscriptions {
+				subName := strings.ToLower(sub.Name)
+				if (strings.Contains(subName, "enterprise") || strings.Contains(subName, "business")) && sub.Active && sub.Enddate > 0 && sub.Enddate < now {
+					hasEndedSubscription = true
+					break
+				}
+			}
+
+			if hasEndedSubscription {
+				// 3. If both of the above conditions are met than it's orgs onpremappruns limit as 25K, set subscription active as false, tenants limit 3, environmennt limit as 1 and branding as false
+				org.SyncFeatures.OnpremAppExecutions.Limit = 25000
+				org.SyncFeatures.AppExecutions.Limit = 2000
+				org.SyncFeatures.AnnualAppRunsGrouping.Active = false
+				var newSubs []PaymentSubscription
+				hasBaseSubscription := false
+				for i := range org.Subscriptions {
+					subName := strings.ToLower(org.Subscriptions[i].Name)
+					if strings.Contains(subName, "enterprise") || strings.Contains(subName, "business") {
+						org.Subscriptions[i].Active = false
+					}
+					if strings.Contains(subName, "free") || strings.Contains(subName, "open source") {
+						hasBaseSubscription = true
+					}
+					newSubs = append(newSubs, org.Subscriptions[i])
+				}
+
+				if !hasBaseSubscription {
+					newSubs = append(newSubs, BuildBaseSubscription(*org, 2000))
+				}
+				org.Subscriptions = newSubs
+				org.SyncFeatures.MultiTenant.Limit = 3
+				org.SyncFeatures.MultiEnv.Limit = 1
+				org.SyncFeatures.Branding.Active = false
+
+				org.LeadInfo.Customer = false
+				org.LeadInfo.OpenSource = false
+				org.LeadInfo.BusinessLicenseOnprem = false
+				org.LeadInfo.BusinessLicenseCloud = false
+				org.LeadInfo.EnterpriseLicenseCloud = false
+				org.LeadInfo.EnterpriseLicenseOnprem = false
+				org.LeadInfo.ShuffleEnterpriseLicenseOldCustomer = false
+				// 4. Update above information in org and return sucess true and don't continue this furthus
+				err = SetOrg(ctx, *org, org.Id)
+				if err != nil {
+					log.Printf("[ERROR] Failed to update org %s on license expiry: %v", org.Id, err)
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false}`))
+					return
+				}
+				resp.WriteHeader(200)
+				resp.Write([]byte(`{"success": true}`))
+				return
+			}
+		}
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true}`))
+		return
+	}
+
 	// Allow editing a specific subscription card from UI except Eula and Reference
 	if tmpData.Editing == "subscription_update" {
 		// Find subscription by ID (SubscriptionIndex now holds the ID string)
@@ -13806,8 +13871,43 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.Billing.AppRunsHardLimit = tmpData.Billing.AppRunsHardLimit
 	}
 
-	if user.SupportAccess && tmpData.Editing == "internal_appruns_hard_limit" && tmpData.Billing.InternalAppRunsHardLimit != org.Billing.InternalAppRunsHardLimit {
+	if tmpData.Editing == "app_runs_grouping" {
+		org.SyncFeatures.AnnualAppRunsGrouping.Active = tmpData.SyncFeatures.AnnualAppRunsGrouping.Active
+	}
+
+	if tmpData.Editing == "internal_appruns_hard_limit" && tmpData.Billing.InternalAppRunsHardLimit != org.Billing.InternalAppRunsHardLimit {
+		if !user.SupportAccess {
+			if org.SyncFeatures.AnnualAppRunsGrouping.Active {
+				// Allow 200% app runs hard limit for annual plan
+				maxAllowed := org.SyncFeatures.AppExecutions.Limit * 12 * 2
+				if tmpData.Billing.InternalAppRunsHardLimit > maxAllowed {
+					resp.WriteHeader(400)
+					resp.Write([]byte(`{"success": false, "reason": "Hard limit cannot exceed 200% of the annual limit."}`))
+					return
+				}
+			} else if org.LeadInfo.BusinessLicenseCloud || org.LeadInfo.BusinessLicenseOnprem || org.LeadInfo.EnterpriseLicenseCloud || org.LeadInfo.EnterpriseLicenseOnprem || org.LeadInfo.ShuffleEnterpriseLicenseOldCustomer {
+				// Allow 1000% of monthly plan for enterprise and business plans
+				maxAllowed := org.SyncFeatures.AppExecutions.Limit * 10
+				if tmpData.Billing.InternalAppRunsHardLimit > maxAllowed {
+					resp.WriteHeader(400)
+					resp.Write([]byte(`{"success": false, "reason": "Hard limit cannot exceed 1000% of the monthly limit."}`))
+					return
+				}
+			} else {
+				// Don't allow the hard limit more than the monthly limit for scale plans
+				maxAllowed := org.SyncFeatures.AppExecutions.Limit
+				if tmpData.Billing.InternalAppRunsHardLimit > maxAllowed {
+					resp.WriteHeader(400)
+					resp.Write([]byte(`{"success": false, "reason": "Hard limit cannot exceed 1000% of the monthly limit."}`))
+					return
+				}
+			}
+
+			org.Billing.InternalAppRunsHardLimit = tmpData.Billing.InternalAppRunsHardLimit
+		} else {
+			// Allow any limit for the support users
 		org.Billing.InternalAppRunsHardLimit = tmpData.Billing.InternalAppRunsHardLimit
+		}
 	}
 
 	//Update mfa required value
@@ -14333,7 +14433,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// check if user is editing sync features of suborg from parent org
-	if project.Environment == "cloud" && !user.SupportAccess && tmpData.SyncFeatures.Editing && tmpData.Editing != "app_runs_hard_limit" {
+	if project.Environment == "cloud" && !user.SupportAccess && tmpData.SyncFeatures.Editing && tmpData.Editing != "app_runs_hard_limit" && tmpData.Editing != "app_runs_grouping" {
 		log.Printf("[WARNING] User %s (%s) is trying to edit sync features of suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
 
 		// check whether user org id is suborg of parent org
@@ -14467,6 +14567,46 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
 
+}
+
+func SendLicenseExpiredRequest(orgId string, apikey string) {
+	log.Printf("[INFO] Subscription expired for org %s, sending license_expired update", orgId)
+	url := fmt.Sprintf("https://shuffler.io/api/v1/orgs/%s", orgId)
+	payloadData := map[string]string{
+		"editing": "license_expired",
+		"org_id":  orgId,
+	}
+	payload, _ := json.Marshal(payloadData)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(payload))
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request for license_expired: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Org-Id", orgId)
+	if apikey != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apikey))
+	}
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to send license_expired request to edit org %s: %v", orgId, err)
+		return
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		log.Printf("[WARNING] license_expired request returned status code %d for org %s", res.StatusCode, orgId)
+	} else {
+		log.Printf("[INFO] Successfully marked license as expired for org %s", orgId)
+	}
 }
 
 func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool, BccAddresses []string) error {
@@ -18033,6 +18173,14 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		if agentOut.Status != "" && agentOut.Status != "RUNNING" {
 			logStatus = agentOut.Status
 		}
+
+		go IncrementCache(ctx, workflowExecution.Workflow.OrgId, "agent_executions", 1)
+		if logStatus == "SUCCESS" || logStatus == "FINISHED" {
+			go IncrementCache(ctx, workflowExecution.Workflow.OrgId, "agent_executions_successful", 1)
+		} else {
+			go IncrementCache(ctx, workflowExecution.Workflow.OrgId, "agent_executions_failed", 1)
+		}
+
 		log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=%s duration=%ds tool_calls=%d llm_calls=%d prompt_tokens=%d completion_tokens=%d total_tokens=%d", workflowExecution.ExecutionId, workflowExecution.Workflow.OrgId, logStatus, duration, len(agentOut.Decisions), agentOut.LLMCallCount, agentOut.PromptTokens, agentOut.CompletionTokens, agentOut.TotalTokens)
 	}
 
@@ -34307,6 +34455,26 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	orgStats, err := GetOrgStatistics(ctx, parentOrg.Id)
+	if err == nil && orgStats != nil {
+		newTenant := Tenants{
+			Name:      subOrg.Name,
+			Id:        subOrg.Id,
+			CreatedAt: time.Unix(subOrg.Created, 0),
+			DeletedAt: time.Now(),
+			Status:    "deleted",
+		}
+
+		if orgStats.Tenants == nil {
+			orgStats.Tenants = []Tenants{}
+		}
+		orgStats.Tenants = append(orgStats.Tenants, newTenant)
+		err = SetOrgStatistics(ctx, *orgStats, parentOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting org statistics for org '%s': %s", parentOrg.Id, err)
+		}
+	}
+
 	user.Orgs = newOrgString
 	if user.ActiveOrg.Id == subOrg.Id {
 		// If the user is in the org that was deleted, set active org as parent org
@@ -35010,6 +35178,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.AppExecutions.Active = false
 			org.SyncFeatures.AppExecutions.Limit = 25000
 
+			org.SyncFeatures.AnnualAppRunsGrouping.Active = false
+
 			return org
 		}
 		features := SyncFeatures{}
@@ -35031,6 +35201,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 						org.SyncFeatures.Branding.Active = features.Branding.Active
 
+						org.SyncFeatures.AnnualAppRunsGrouping.Active = features.AnnualAppRunsGrouping.Active
+
 						org.SyncFeatures.AppExecutions.Active = features.OnpremAppExecutions.Active
 						if features.OnpremAppExecutions.Limit < 25000 {
 							org.SyncFeatures.AppExecutions.Limit = 25000
@@ -35047,6 +35219,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 						org.SyncFeatures.Branding.Active = false
 						org.SyncFeatures.AppExecutions.Active = false
 						org.SyncFeatures.AppExecutions.Limit = 25000
+						org.SyncFeatures.AnnualAppRunsGrouping.Active = false
 					}
 				} else {
 					org.Licensed = false
@@ -35059,6 +35232,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 					org.SyncFeatures.Branding.Active = false
 					org.SyncFeatures.AppExecutions.Active = false
 					org.SyncFeatures.AppExecutions.Limit = 25000
+					org.SyncFeatures.AnnualAppRunsGrouping.Active = false
 
 				}
 
@@ -35068,6 +35242,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 				} else {
 					org.SyncFeatures.AppExecutions.Limit = features.OnpremAppExecutions.Limit
 				}
+
+				org.SyncFeatures.AnnualAppRunsGrouping.Active = features.AnnualAppRunsGrouping.Active
 
 				org.SyncFeatures.Webhook.Active = features.Webhook.Active
 				org.SyncFeatures.Webhook.Limit = features.Webhook.Limit
@@ -35128,6 +35304,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 			org.SyncFeatures.Branding.Active = false
 			org.SyncFeatures.AppExecutions.Active = false
+			org.SyncFeatures.AnnualAppRunsGrouping.Active = false
 			org.SyncFeatures.AppExecutions.Limit = 25000
 		}
 
@@ -35151,6 +35328,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 				}
 
 				org.SyncFeatures.Branding.Active = license.Branding
+				org.SyncFeatures.AnnualAppRunsGrouping.Active = license.AppRunsGrouping
 			}
 		}
 
@@ -35165,6 +35343,25 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 				org.Subscriptions = subscriptionsList
 			} else {
 				log.Printf("[ERROR] Failed to parse cached subscriptions for org (%s) in HandleCheckLicense: %v", org.Id, err)
+			}
+		}
+
+		appRunsHardLimitCacheKey := fmt.Sprintf("org_app_runs_hard_limit_%s", org.Id)
+		appRunsHardLimit, err := GetCache(ctx, appRunsHardLimitCacheKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get cache for org (%s) subscriptions in HandleCheckLicense: %v", org.Id, err)
+		} else {
+			if appRunsHardLimit != nil {
+				if data, ok := appRunsHardLimit.([]byte); ok {
+					var limit int64
+					if err := json.Unmarshal(data, &limit); err == nil {
+						org.Billing.InternalAppRunsHardLimit = limit
+					} else if parsedLimit, err := strconv.ParseInt(string(data), 10, 64); err == nil {
+						org.Billing.InternalAppRunsHardLimit = parsedLimit
+					}
+				} else if limit, ok := appRunsHardLimit.(int64); ok {
+					org.Billing.InternalAppRunsHardLimit = limit
+				}
 			}
 		}
 
@@ -35183,6 +35380,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.Branding.Active = license.Branding
 			org.SyncFeatures.AppExecutions.Active = license.AppRuns.Active
 			org.SyncFeatures.AppExecutions.Limit = license.AppRuns.Limit
+			org.SyncFeatures.AnnualAppRunsGrouping.Active = license.AppRunsGrouping
 
 			org.SyncFeatures.WorkflowExecutions.Active = true
 			org.SyncFeatures.Webhook.Active = true
@@ -35211,6 +35409,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 			org.SyncFeatures.AppExecutions.Active = false
 			org.SyncFeatures.AppExecutions.Limit = 25000
+			org.SyncFeatures.AnnualAppRunsGrouping.Active = false
 		}
 
 		parsedEula := GetOnpremPaidEula()
@@ -35289,6 +35488,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 		org.SyncFeatures.AppExecutions.Active = false
 		org.SyncFeatures.AppExecutions.Limit = 25000
+
+		org.SyncFeatures.AnnualAppRunsGrouping.Active = false
 	}
 
 	return org
