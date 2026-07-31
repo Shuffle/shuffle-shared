@@ -1227,7 +1227,9 @@ type DatastoreCategoryUpdate struct {
 
 type DatastoreKeyMini struct {
 	Key     string `json:"key" datastore:"key"`
+
 	Existed bool   `json:"existed" datastore:"existed"` // If the key existed before the update
+	Changed bool   `json:"changed" datastore:"changed"` // If the key was updated or not 
 }
 
 // Based on OCSF reputation: https://schema.ocsf.io/1.8.0/objects/reputation

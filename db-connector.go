@@ -14904,6 +14904,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		go func(cacheData CacheKeyData, index int) {
 			defer wg.Done()
 
+			keyUpdated := true
+
 			cacheData.Existed = false
 			cacheData.Changed = false
 			cacheData.Created = timeNow
@@ -14921,7 +14923,6 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			sameValue := false
 			config, getCacheError := GetDatastoreKey(ctx, datastoreId, cacheData.Category)
 
-			cacheData.Changed = true
 			if getCacheError == nil && config.Value == cacheData.Value {
 				sameValue = true
 			}
@@ -15036,9 +15037,15 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 					if !ruleValid {
 						// Break out
 						if debug {
-							log.Printf("[WARNING] Rule is NOT valid! Skipping modification.")
+							log.Printf("[DEBUG] ERROR: Rule is NOT valid! Skipping modification.")
 						}
 
+						keyUpdated = false
+
+						cacheData.Existed = true 
+						cacheData.Changed = keyUpdated 
+						datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
+						cacheKeys <- cacheData
 						return
 					}
 				}
@@ -15128,6 +15135,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 			}
 
+			cacheData.Changed = keyUpdated
 			datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
 			cacheKeys <- cacheData
 		}(cacheData, index)
@@ -15167,6 +15175,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		minKey := DatastoreKeyMini{
 			Key:     key.Key,
 			Existed: key.Existed,
+			Changed: key.Changed,
 		}
 
 		existingInfo = append(existingInfo, minKey)
