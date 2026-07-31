@@ -91,9 +91,18 @@ func HandleDatastorePostRedirect(resp http.ResponseWriter, request *http.Request
 		}
 	}
 
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed to read request body in datastore redirect wrapper: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
+		return
+	}
+
 	newRequest := request.Clone(context.Background())
 	newRequest.Method = "POST"
 	newRequest.URL.Path = fmt.Sprintf("/api/v2/datastore/%s/%s", category, key)
+	newRequest.Body = ioutil.NopCloser(bytes.NewBuffer(body))
 	// r.HandleFunc("/api/v2/datastore/{category_key}/{key}", shuffle.HandleSetDatastoreKey).Methods("POST", "PUT", "OPTIONS")
 
 	q := newRequest.URL.Query()
@@ -107,19 +116,18 @@ func HandleDatastorePostRedirect(resp http.ResponseWriter, request *http.Request
 	cacheReturn := CacheReturn{}
 	result := recorder.Result()
 	defer result.Body.Close()
-	body, err := io.ReadAll(result.Body)
-	log.Printf("BODY1: %s", body)
-	if err == nil && len(body) > 0 {
-		respError := json.Unmarshal(body, &cacheReturn)
+	respbody, err := io.ReadAll(result.Body)
+	if err == nil && len(respbody) > 0 {
+		respError := json.Unmarshal(respbody, &cacheReturn)
 		if respError == nil && (cacheReturn.Amount > 0 || (cacheReturn.Key == key && len(cacheReturn.Value) > 0)) {
 			resp.WriteHeader(result.StatusCode)
-			resp.Write(body)
+			resp.Write(respbody)
 			return
 		}
 	}
 
 	resp.WriteHeader(result.StatusCode)
-	resp.Write(body)
+	resp.Write(respbody)
 }
 
 // Fallback with redirect
@@ -688,7 +696,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 			tmpDataOverride.OrgId = user.ActiveOrg.Id 
 			tmpDataOverride.Key = key
 			tmpDataOverride.Category = category
-			tmpDataOverride.Value = body
+			tmpDataOverride.Value = string(body)
 		}
 
 		// Check if value is a map[] or []map first
