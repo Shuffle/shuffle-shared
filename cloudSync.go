@@ -1984,7 +1984,7 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 	}
 }
 
-// runAgentDecisionDirectAppCall bypasses Singul's AI translation layer and
+// runAgentDecisionDirectAppCall bypasses Singul and runs the app directly.
 func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDecision) (rawResult []byte, debugUrl string, appName string, categoryLabels []string, actionName string, err error) {
 	ctx := context.Background()
 	minUser := User{
