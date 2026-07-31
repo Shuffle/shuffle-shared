@@ -1997,7 +1997,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	var (
 		resolvedAppId   string
 		resolvedAppName = decision.Tool
-		resolvedAuthId  string
+		//resolvedAuthId  string
 		resolvedApp     WorkflowApp
 	)
 
@@ -2047,6 +2047,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	}
 
 
+	/*
 	authStart := time.Now()
 	allAuths, authErr := GetAllWorkflowAppAuth(ctx, execution.ExecutionOrg)
 	if authErr != nil {
@@ -2063,12 +2064,13 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		}
 	}
 	log.Printf("[DEBUG][%s] DirectAppCall: Auth resolution took %s", execution.ExecutionId, time.Since(authStart))
+	*/
 
 	action := Action{
 		AppID:            resolvedAppId,
 		AppName:          resolvedAppName,
 		Name:             decision.Action, // overwritten below if schema match found
-		AuthenticationId: resolvedAuthId,
+		//AuthenticationId: resolvedAuthId,
 		Parameters:       []WorkflowAppActionParameter{},
 	}
 
@@ -2137,7 +2139,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		}
 	}
 
-	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg)
+	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=115", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg)
 
 	//log.Printf("[DEBUG][%s] DirectAppCall: Calling /run for tool '%s' action '%s' -> %s", execution.ExecutionId, resolvedAppName, action.Name, requestUrl)
 
@@ -2166,9 +2168,11 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 
 	log.Printf("[INFO][%s] DirectAppCall: executeSingleAction returned status %d, body length %d", execution.ExecutionId, resp.StatusCode, len(respBody))
 
+	debugUrl = resp.Header.Get("X-Debug-Url")
+
 	if resp.StatusCode >= 400 {
 		log.Printf("[ERROR][%s] DirectAppCall: executeSingleAction returned HTTP %d: %s", execution.ExecutionId, resp.StatusCode, string(respBody))
-		return nil, requestUrl, resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: executeSingleAction returned HTTP %d", resp.StatusCode)
+		return nil, debugUrl, resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: executeSingleAction returned HTTP %d", resp.StatusCode)
 	}
 
 	var singleResult SingleResult
@@ -2188,11 +2192,11 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		}
 
 		log.Printf("[INFO][%s] DirectAppCall: result length %d, status %s", execution.ExecutionId, len(singleResult.Result), status)
-		return []byte(singleResult.Result), requestUrl, resolvedAppName, []string{}, action.Name, nil
+		return []byte(singleResult.Result), debugUrl, resolvedAppName, []string{}, action.Name, nil
 	}
 
 	// Fallback: return raw body when the response isn't a well-formed SingleResult
-	return respBody, requestUrl, resolvedAppName, []string{}, action.Name, nil
+	return respBody, debugUrl, resolvedAppName, []string{}, action.Name, nil
 }
 
 // This is JUST for Singul actions with AI agents.
