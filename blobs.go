@@ -900,7 +900,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 		defaultWorkflow := Workflow{
 			Name:        actionType,
-			Description: fmt.Sprintf("List %s from different systems and ingest them", actionName),
+			Description: fmt.Sprintf("List %s from different systems and ingest them", strings.Split(parsedActiontype, "_")[1]),
 			OrgId:       orgId,
 			Start:       startActionId,
 			UsecaseIds:  []string{"SIEM to ticket"},
@@ -1130,6 +1130,75 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				},
 			},
 			Branches: []Branch{},
+		}
+
+		// For now while testing
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+	} else if parsedActiontype == "vulnerabilities_webhook" {
+		defaultWorkflow := Workflow{
+			Name:        "Vulnerabilities Webhook",
+			Description: "Ingest vulnerabilities through a webhook",
+			OrgId:       orgId,
+			Start:       startActionId,
+			UsecaseIds:  []string{"SIEM to ticket", "SIEM alerts", "EDR alerts"},
+			Tags:        []string{"ingest", "webhook", "automatic"},
+			Actions: []Action{
+				Action{
+					Name:        "Translate standard",
+					AppID:       "integration",
+					AppName:     "Singul",
+					LargeImage:  getSingulLogo(),
+					ID:          startActionId,
+					AppVersion:  "1.0.0",
+					Environment: actionEnv,
+					Label:       "Ingest Ticket from Webhook",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "source_data",
+							Value:     "$exec",
+							Multiline: true,
+						},
+						WorkflowAppActionParameter{
+							Name:        "standard",
+							Description: "The standard to use from https://github.com/Shuffle/standards/tree/main",
+							Value:       "vulnerability",
+							Multiline:   false,
+						},
+					},
+				},
+			},
+			Triggers: []Trigger{
+				Trigger{
+					ID:          startTriggerId,
+					Name:        "Webhook",
+					TriggerType: "WEBHOOK",
+					Label:       "Ingest",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "url",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "tmp",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "auth_header",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "custom_response_body",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "await_response",
+							Value: "",
+						},
+					},
+				},
+			},
 		}
 
 		// For now while testing
@@ -1392,39 +1461,6 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					SourceID:      startActionId,
 					DestinationID: createCaseId,
 					ID:            uuid.NewV4().String(),
-				},
-			},
-		}
-
-		workflow = defaultWorkflow
-		workflow.OrgId = orgId
-
-	} else if parsedActiontype == "vulnerability_comparison" {
-		// FIXME: Work in progress during test: /workflows/c584fa73-e399-b395-c62d-a64d8bba67c4
-		defaultWorkflow := Workflow{
-			Name:        actionType,
-			Description: "Based on available vulnerabilities in the shuffle-security_sensors (and otherwise), checks these realtime against available ones.",
-			OrgId:       orgId,
-			Start:       startActionId,
-			UsecaseIds:  []string{"vulnerabilities"},
-			Tags:        []string{"ingest", "correlate", "automatic"},
-			Actions: []Action{
-				Action{
-					Name:        "execute_python",
-					AppID:       "Shuffle Tools",
-					AppName:     "Shuffle Tools",
-					ID:          startActionId,
-					AppVersion:  "1.2.0",
-					Environment: actionEnv,
-					Label:       "Add enrichments to entry",
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:      "code",
-							Value:     getVulnerabilityComparison(),
-							Multiline: true,
-							Required:  true,
-						},
-					},
 				},
 			},
 		}
