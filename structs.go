@@ -4379,6 +4379,10 @@ type CacheReturn struct {
 	Categories []string                `json:"categories,omitempty"`
 
 	Keys []CacheKeyData `json:"keys"`
+
+	Reason string `json:"reason,omitempty"`
+	Key    string `json:"key,omitempty"`
+	Value  string `json:"value,omitempty"`
 }
 
 type GCPIncident struct {
@@ -5166,14 +5170,14 @@ type MCPRequestInput struct {
 		Detail string `json:"detail,omitempty"`
 	}
 
-	// Special cases for templates 
+	// Special cases for templates
 	WorkflowId string `json:"workflow_id,omitempty"`
 }
 
 type MCPRequestParams struct {
-	ToolName string `json:"tool_name"`
+	ToolName string          `json:"tool_name"`
 	Input    MCPRequestInput `json:"input"`
-	Context struct {
+	Context  struct {
 		SessionID string `json:"session_id"`
 	} `json:"context"`
 	ToolID string `json:"tool_id"`
@@ -5216,10 +5220,10 @@ type MCPRequestParams struct {
 
 // Standard used for MCP
 type MCPRequest struct {
-	Jsonrpc string `json:"jsonrpc"`
-	ID      int    `json:"id"`
-	Method  string `json:"method"`
-	Params  MCPRequestParams `json:"params"`	
+	Jsonrpc string           `json:"jsonrpc"`
+	ID      int              `json:"id"`
+	Method  string           `json:"method"`
+	Params  MCPRequestParams `json:"params"`
 }
 
 type MCPResponse struct {
