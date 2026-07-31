@@ -2221,6 +2221,9 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	_ = debugUrl
 	
 	baseUrl := "https://shuffler.io"
+	if os.Getenv("BASE_URL") != "" {
+		baseUrl = os.Getenv("BASE_URL")
+	}
 
 	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
 		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
