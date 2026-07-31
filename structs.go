@@ -4800,6 +4800,9 @@ type AgentOutput struct {
 	AllowedActions []string `json:"allowed_actions,omitempty" datastore:"allowed_actions"`
 	Output         string   `json:"output,omitempty" datastore:"output"`
 
+	// ExecutionMode controls how tool actions are dispatched for this agent run. i.e singul or direct
+	ExecutionMode string `json:"execution_mode,omitempty" datastore:"execution_mode"`
+
 	// Usage tracking for guardrails
 	LLMCallCount     int   `json:"llm_call_count,omitempty" datastore:"llm_call_count"`
 	TotalTokens      int64 `json:"total_tokens,omitempty" datastore:"total_tokens"`
