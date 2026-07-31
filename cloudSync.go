@@ -2197,7 +2197,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 
 // This is JUST for Singul actions with AI agents.
 // As AI Agents can have multiple types of runs, this could change every time.
-func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, []string, string, error) {
+func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision, executionMode string) ([]byte, string, string, []string, string, error) {
 	debugUrl := ""
 	log.Printf("[INFO][%s] Running agent decision action '%s' with app '%s'.", execution.ExecutionId, decision.Action, decision.Tool)
 
@@ -2208,9 +2208,9 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		return body, debugUrl, appName, []string{}, "", err
 	}
 
-	// AGENT_SKIP_SINGUL routes the decision directly to the app's /run endpoint,
-	if os.Getenv("AGENT_SKIP_SINGUL") == "true" {
-		//log.Printf("[INFO][%s] AGENT_SKIP_SINGUL enabled - calling app /run directly (no Singul translation)", execution.ExecutionId)
+	skipSingul := executionMode == "direct" || os.Getenv("AGENT_SKIP_SINGUL") == "true"
+	if skipSingul {
+		log.Printf("[INFO][%s] Calling app directly. ExecutionMode=%q EnvOverride=%v", execution.ExecutionId, executionMode, os.Getenv("AGENT_SKIP_SINGUL") == "true")
 		return runAgentDecisionDirectAppCall(execution, decision)
 	}
 
@@ -2582,7 +2582,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			}
 		} else {
 		// Singul handler
-			rawResponse, debugUrl, appname, categoryLabels, actionName, err := RunAgentDecisionSingulActionHandler(execution, decision)
+			rawResponse, debugUrl, appname, categoryLabels, actionName, err := RunAgentDecisionSingulActionHandler(execution, decision, agentOutput.ExecutionMode)
 
 			if len(appname) > 0 {
 				decision.Tool = appname
