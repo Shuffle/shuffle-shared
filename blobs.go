@@ -857,7 +857,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
-	} else if parsedActiontype == "ingest_tickets" || parsedActiontype == "ingest_assets" || parsedActiontype == "ingest_users" {
+	} else if parsedActiontype == "ingest_tickets" || parsedActiontype == "ingest_assets" || parsedActiontype == "ingest_users" || parsedActiontype == "ingest_vulnerabilities" {
 		actionName := "Cases"
 		currentAction := WorkflowAppActionParameter{
 			Name:  "action",
@@ -888,11 +888,19 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				"Search users",
 				"Create user",
 			}
+		} else if parsedActiontype == "ingest_vulnerabilities" {
+			actionName = "Assets"
+			currentAction.Value = "List vulnerabilities"
+			currentAction.Options = []string{
+				"List vulnerabilities",
+				"Get vulnerability",
+				"Create vulnerability",
+			}
 		}
 
 		defaultWorkflow := Workflow{
 			Name:        actionType,
-			Description: "List tickets from different systems and ingest them",
+			Description: fmt.Sprintf("List %s from different systems and ingest them", actionName),
 			OrgId:       orgId,
 			Start:       startActionId,
 			UsecaseIds:  []string{"SIEM to ticket"},
@@ -1348,7 +1356,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					},
 				},
 				{
-					Name:        "Cases",
+					Name:        "Vulnerability upload",
 					AppID:       "integration",
 					AppName:     "Singul",
 					LargeImage:  getSingulLogo(),
