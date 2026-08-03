@@ -608,50 +608,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		hostname = "shuffle-backend"
 	}
 
-	existingExecution, existingErr := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
-	if existingErr == nil && len(existingExecution.ExecutionId) > 0 {
-		existingTerminal := existingExecution.Status == "FINISHED" || existingExecution.Status == "ABORTED" || existingExecution.Status == "FAILURE"
-		incomingTerminal := workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" || workflowExecution.Status == "FAILURE"
-
-		if existingTerminal && !incomingTerminal {
-			isAgentContinuation := false
-			if (existingExecution.Status == "FINISHED" || existingExecution.Status == "SUCCESS") && workflowExecution.Status == "EXECUTING" && workflowExecution.CompletedAt == 0 {
-				for _, result := range workflowExecution.Results {
-					if result.Action.AppName == "AI Agent" || result.Action.AppName == "Shuffle Agent" {
-						isAgentContinuation = true
-						break
-					}
-				}
-			}
-
-			if !isAgentContinuation {
-				if debug { 
-					log.Printf("[DEBUG][%s] Existing execution is already %s. Not overriding with incoming %s update.", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
-				}
-
-				return nil
-			}
-
-			log.Printf("[INFO][%s] Permitting Agent Continuation: overriding existing %s execution to %s!", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
-		}
-
-		if existingTerminal && incomingTerminal && existingExecution.Status != workflowExecution.Status {
-			if debug { 
-				log.Printf("[DEBUG][%s] Existing execution is already %s. Not overriding with incoming terminal %s update.", workflowExecution.ExecutionId, existingExecution.Status, workflowExecution.Status)
-			}
-
-			return nil
-		}
-
-		if existingTerminal && incomingTerminal && len(existingExecution.Results) >= len(workflowExecution.Results) {
-			if debug { 
-				log.Printf("[DEBUG][%s] Existing execution is already %s with %d results. Not re-saving incoming %s update with %d results.", workflowExecution.ExecutionId, existingExecution.Status, len(existingExecution.Results), workflowExecution.Status, len(workflowExecution.Results))
-			}
-
-			return nil
-		}
-	}
-
 	executionData, err := json.Marshal(workflowExecution)
 	if err == nil {
 		err = SetCache(ctx, cacheKey, executionData, 600)
