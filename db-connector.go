@@ -14974,12 +14974,17 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						if len(foundRule) > 5 {
 							oldDoc := config.Value
 							newDoc := cacheData.Value
-							mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
-							if debug {
-								log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s). Org: '%s', Key: '%s', Category: '%s': %#v. .\n\nError: %#v", foundRule, cacheData.OrgId, cacheData.Key, cacheData.Category, allowed, errString)
+
+							if debug { 
+								log.Printf("\n\nOLD: %s\n\nNEW: %s\n\n", oldDoc, newDoc)
 							}
 
-							// Since merge happens, can we trust it 100% of the time?
+							mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
+							if debug {
+								log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s). Org: '%s', Key: '%s', Category: '%s': %#v. .\n\nError: %#v\n\n", foundRule, cacheData.OrgId, cacheData.Key, cacheData.Category, allowed, errString)
+							}
+
+							// Since merge happens anyway, we are trusting it either way
 							cacheData.Value = mergedJSON
 							ruleValid = true
 
@@ -14995,6 +15000,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						break
 					}
 
+					// This NEVER triggers. RLS just returns the merged JSON 
+					// and we trust it. If we don't trust it, we can set 
+					// ruleValid to false above. 
 					if !ruleValid {
 						// Break out
 						if debug {

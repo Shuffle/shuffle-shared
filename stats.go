@@ -1003,6 +1003,8 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 						// log.Printf("[DEBUG] Set cache index key for (1) %s", orgId)
 					}
 				}
+			} else if err != nil {
+				log.Printf("[ERROR] Failed getting increment cache for key %s: %s", orgId, err)
 			} else {
 				dumpedItems := []string{}
 				err = json.Unmarshal(keyItems.Value, &dumpedItems)
