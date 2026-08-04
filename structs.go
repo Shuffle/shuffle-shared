@@ -4911,6 +4911,31 @@ type MinimalParameter struct {
 	Value string `json:"value"`
 }
 
+func (m *MinimalParameter) UnmarshalJSON(data []byte) error {
+	type Alias MinimalParameter
+	var aux struct {
+		Value json.RawMessage `json:"value"`
+		*Alias
+	}
+	aux.Alias = (*Alias)(m)
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	if len(aux.Value) > 0 {
+		if aux.Value[0] == '"' {
+			var str string
+			if err := json.Unmarshal(aux.Value, &str); err != nil {
+				return err
+			}
+			m.Value = str
+		} else {
+			m.Value = string(aux.Value)
+		}
+	}
+	return nil
+}
+
 // MinimalAction - action with position and basic info
 type MinimalAction struct {
 	AppName    string             `json:"app_name"`
@@ -5756,9 +5781,10 @@ type ActionSummary struct {
 
 // AppActionResponse - actions grouped by app
 type AppActionResponse struct {
-	AppName string          `json:"app_name"`
-	AppID   string          `json:"app_id"`
-	Actions []ActionSummary `json:"actions"`
+	AppName        string          `json:"app_name"`
+	AppDescription string           `json:"app_description"`
+	AppID          string          `json:"app_id"`
+	Actions        []ActionSummary `json:"actions"`
 }
 
 // WorkflowOperation represents a single modification operation
@@ -5797,4 +5823,10 @@ type rawField struct {
 	Name  string      `json:"name"`
 	Key   string      `json:"key,omitempty"`
 	Value interface{} `json:"value"`
+}
+
+type agentResponse struct {
+	Success       bool   `json:"success"`
+	ExecutionId   string `json:"execution_id"`
+	Authorization string `json:"authorization"`
 }

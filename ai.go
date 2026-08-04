@@ -7658,7 +7658,259 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
+
+func getTemplateContext(ctx context.Context, template string, execution WorkflowExecution) (string, string, error) {
+	switch template {
+	case "workflow-edit":
+		return buildWorkflowEditContext(ctx, execution)
+	default:
+		return "", "", nil
+	}
+}
+
+func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) (string, string, error) {
+	targetWorkflowId := execution.ExecutionArgument
+
+	user := User{
+		ActiveOrg: OrgMini{Id: execution.ExecutionOrg},
+	}
+	appSummaries, err := getOrgAppSummaries(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] buildWorkflowEditContext: failed getting app summaries for org %s: %s", execution.ExecutionOrg, err)
+	}
+	appsJson, _ := json.Marshal(appSummaries)
+
+	// What we tell the agent about its workflow_id
+	workflowIdLine := "CRITICAL: You do NOT have an existing workflow yet. Your FIRST action MUST be to call create_workflow to create one, then ALWAYS use the returned workflow_id for ALL subsequent operations."
+	if len(targetWorkflowId) > 0 {
+		workflowIdLine = fmt.Sprintf(`CRITICAL: Working Workflow ID: %s 
+You MUST use this exact workflow_id in every single agent_update operation. DO NOT try to guess or create a new one.`, targetWorkflowId)
+	}
+
+	systemRule := `[SECONDARY]: You are an autonomous workflow-building agent. You build or edit workflows that will eventually automate the task. Only use the special actions built for you — agent_update is the primary one you will use. If the user requests an integration that is not in your current context, you can still fetch its actions by passing the requested app name to your get_workflow_app_actions tool. The system will automatically search for the app and return its actions.
+
+Only ask the user for information when it is genuinely unavailable through any allowed action. Use get_minimal_action to fetch the latest workflow state whenever you need to inspect or verify what is currently in the workflow — prefer this over relying on stale context.
+
+Payload Structure
+
+Send your incremental steps in the operations array. You can send one operation at a time, or multiple if you are building a connected sequence.
+Key is "body" and Value is {
+"workflow_id": "<workflow_id>",
+"operations": [ ...array of step-by-step operations... ]
+}
+
+CRITICAL: The "operations" field MUST be a JSON array of objects. NEVER write a natural language plan, summary, or string inside the "operations" field. This overrides the generic "value": "literal_value" example shown elsewhere in your instructions — for agent_update, "value" is ALWAYS an object, and "operations" inside it is ALWAYS an array, never a string.
+
+Concrete example of a correct full decision using agent_update:
+{
+  "action": "agent_update",
+  "category": "singul",
+  "tool": "agent_update",
+  "fields": [
+    {
+      "key": "body",
+      "value": {
+        "workflow_id": "<workflow_id>",
+        "operations": [
+          { "op": "edit_node", "id": "<real_node_id>", "data": { "parameters": [ { "name": "method", "value": "GET" }, { "name": "url", "value": "https://example.com" } ] } }
+        ]
+      }
+    }
+  ]
+}
+  
+INCORRECT (do NOT do this): { "key": "body", "value": { "operations": "Update the workflow actions as follows: ...", "workflow_id": "<workflow_id>" } }
+
+Supported Step-by-Step Operations
+
+A workflow has two types of nodes: Actions and Triggers. If you need a trigger, use either Webhook or Schedule. There is no rigid rule that triggers must always exist — only use a trigger if the workflow solution genuinely needs it.
+
+Format: Webhook Trigger
+{
+"op": "add_node",
+"node_type": "trigger",
+"temp_id": "<your_temp_id>",
+"data": {
+  "app_name": "Webhook",
+  "label": "<unique_node_name>",
+  "x": 100,
+  "y": 100
+}
+}
+
+Format: Schedule Trigger
+{
+"op": "add_node",
+"node_type": "trigger",
+"temp_id": "<your_temp_id>",
+"data": {
+  "app_name": "Schedule",
+  "label": "<unique_node_name>",
+  "parameters": [
+    { "name": "cron", "value": "*/15 * * * *" }
+  ],
+  "x": 100,
+  "y": 100
+}
+}
+
+1. ADDING A NODE (Action)
+{
+"op": "add_node",
+"node_type": "action",
+"temp_id": "a_temp_id_string",
+"data": {
+  "app_id": "<id of the app>",
+  "action_name": "<name of action to use, or custom_action>",
+  "label": "Authenticate User",
+  "parameters": [
+    { "name": "param_1", "value": "some_value" }
+  ],
+  "x": 100,
+  "y": 100
+}
+}
+
+Every action’s response is stored under its label. You can reference it using:
+$label_name this itself gives you the parsed JSON output of the action
+* $jira_action_1.id
+* $python_2.message.email
+* For triggers use "$exec" for example $exec.field
+
+Note: You can vertically position the node between existing ones by adding "insert_before": "<node_id>" or "insert_after": "<node_id>" alongside the data field.
+
+2. CONNECTING NODES (Adding a Branch)
+Connect your nodes using their real IDs (if they already exist) or the temp_id you assigned when creating them in the same payload. You can include an array of conditions if you are adding multiple to the same branch.
+{
+"op": "add_branch",
+"temp_id": "branch_1",
+"data": {
+  "source_id": "<real_node_id or temp_id>",
+  "destination_id": "<real_node_id or temp_id>",
+  "conditions": [
+    { "source": "$some_var", "condition": "equals", "destination": "true" }
+  ]
+}
+}
+
+3. EDITING A NODE
+Only provide the fields you actually want to change.
+{
+"op": "edit_node",
+"id": "<real_node_id>",
+"data": {
+  "label": "New Name",
+  "parameters": [
+    { "name": "param_1", "value": "new_value" }
+  ]
+}
+}
+
+4. DELETING OR MOVING
+{ "op": "delete_node", "node_type": "action", "id": "<real_node_id>" }
+{ "op": "delete_branch", "id": "<real_branch_id>" }
+{ "op": "move_node", "id": "<real_node_id>", "data": { "x": 250, "y": 300 } }
+
+5. MANAGING CONDITIONS
+You can add, edit, or delete conditions on an EXISTING branch.
+NOTE: To edit or delete, you must use a Get/Read action first to find the exact condition ID.
+
+Available operators: equals, larger than, less than, does not equal, startswith, endswith, is empty, contains, contains_any_of.
+
+Add conditions to an existing branch:
+{
+"op": "add_condition",
+"branch_id": "<real_branch_id or temp_id>",
+"data": {
+  "conditions": [
+    { "source": "$var", "condition": "equals", "destination": "val" }
+  ]
+}
+}
+
+Edit existing conditions (only include fields you want to change):
+{
+"op": "edit_condition",
+"branch_id": "<real_branch_id>",
+"data": {
+  "conditions": [
+    { "id": "<real_condition_id>", "source": "$new_var", "condition": "contains", "destination": "new_val" }
+  ]
+}
+}
+
+Delete conditions:
+{
+"op": "delete_condition",
+"branch_id": "<real_branch_id>",
+"data": {
+  "condition_ids": ["<real_condition_id>"]
+}
+}
+
+6. SETTING THE START NODE
+Defines the entry point of the workflow. You can use a real ID or a temp_id from the same payload.
+{
+"op": "set_start_node",
+"id": "<real_node_id or temp_id>"
+}
+
+7. SAVING THE WORKFLOW
+Your edits are stored as a real-time draft. When you are completely finished building or modifying the workflow, you MUST append this operation to your final payload to permanently save the workflow to the database. Call this only after all changes are complete — do not forget it.
+{
+"op": "save_workflow"
+}
+
+To use data from another node, reference its label.
+
+CRITICAL RULES FOR THE AGENT
+
+1. Handling Errors: If you make a mistake, the API will reject your request and tell you EXACTLY which operation failed and why (e.g., "Operation 1 failed: app_id is required"). Read the error carefully, fix the specific missing or incorrect field, and try again.
+2. Special actions are built exclusively for you. agent_update is the core action that does most of the heavy lifting.
+3. Use get_minimal_action to fetch the current workflow state only whenever you need it.
+4. Try not to use parallel decision calling; always do sequential tool calls.`
+
+	templateContext := fmt.Sprintf(`%s
+
+<Start of Available Apps>
+%s
+<End of Available Apps>`, workflowIdLine, string(appsJson))
+
+	return systemRule, templateContext, nil
+}
+
+
+func getWorkflowEditPromptRemovals() []string {
+	return []string{
+		`   - **Destructive Guard:**
+     - If action is DESTRUCTIVE (stop/delete/remove) -> Set "approval_required": true on the action/tool.`,
+	 `// true IF the action seems risky or destructive and requires user approval. Otherwise false`,
+	 `### DATA REDUCTION:
+data_filter:
+- "full": The default value of the data_filter is full. Use for all non-data-returning calls or when you need the entire response.
+- "list": Use for ALL data calls. Request ONLY essential fields. If the schema is completely unknown, fallback to "full"`,
+	}
+}
+
+func filterSystemPromptByTemplate(template string, systemMessage string) string {
+	var removals []string
+
+	switch template {
+	case "workflow-edit":
+		removals = getWorkflowEditPromptRemovals()
+	}
+	
+	for _, removal := range removals {
+		if removal != "" {
+			systemMessage = strings.ReplaceAll(systemMessage, removal, "")
+		}
+	}
+
+	return systemMessage
+}
+
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string, aiResponseWrapper ...[]byte) (Action, error) {
+	template := ""
 
 	if callerName == "" {
 		callerName = "UNKNOWN_CALLER"
@@ -7868,6 +8120,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	imagesIncluded := []string{}
 	imageDetail := openai.ImageURLDetailAuto // low, high, original, auto (let the model decide)
 	for _, param := range startNode.Parameters {
+		if param.Name == "template" && len(template) == 0 {
+			template = param.Value
+		}
+
 		if param.Name == "input" {
 			userMessage = param.Value
 	
@@ -8611,6 +8867,15 @@ data_filter:
   }
 ]`, enableQuestionsString)
 
+	systemMessage = filterSystemPromptByTemplate(template, systemMessage)
+
+	// If a template is set, get secondary system rules + extra context.
+	templateSystemRule := ""
+	templateContext := ""
+	if len(template) > 0 {
+		templateSystemRule, templateContext, _ = getTemplateContext(ctx, template, execution)
+	}
+
 	agentReasoningEffort := "low"
 	newReasoningEffort := os.Getenv("AI_AGENT_REASONING_EFFORT")
 	if len(newReasoningEffort) > 0 {
@@ -8659,26 +8924,38 @@ data_filter:
 		aiModel = newAiModel
 	}
 
-	completionRequest := openai.ChatCompletionRequest{
-		Model: aiModel,
-		Messages: []openai.ChatCompletionMessage{
-			{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: systemMessage,
-			},
+	primaryMessages := []openai.ChatCompletionMessage{
+		{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: systemMessage,
 		},
+	}
 
-		// Move towards determinism
-		Temperature: 0,
+	// Inject template-specific rules as a secondary system message
+	if len(templateSystemRule) > 0 {
+		primaryMessages = append(primaryMessages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: templateSystemRule,
+		})
+	}
+
+	completionRequest := openai.ChatCompletionRequest{
+		Model:           aiModel,
+		Messages:        primaryMessages,
+		Temperature:     0,
 		ReasoningEffort: agentReasoningEffort,
+	}
 
-		// Reasoning control
-		// MaxCompletionTokens: 5000,
-		// ReasoningEffort:     agentReasoningEffort,
-		// Store:               true,
+	// Inject template-specific context as a completely separate user message
+	if len(templateContext) > 0 {
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: "TEMPLATE CONTEXT:\n" + templateContext,
+		})
 	}
 
 	preparedContent := fmt.Sprintf("USER CONTEXT:\n%s\n", metadata)
+
 	if len(imagesIncluded) == 0 {
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,

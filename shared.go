@@ -6844,12 +6844,36 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	workflowjson, err := json.Marshal(workflow)
-	if err != nil {
-		log.Printf("Failed workflow json setting marshalling: %s", err)
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	type minimalWorkflowWithId struct {
+		*MinimalWorkflow
+		WorkflowId string `json:"workflow_id"`
+	}
+
+	var workflowjson []byte
+	if request.URL.Query().Get("minimal") == "true" {
+		minimalWorkflow := buildMinimalWorkflow(&workflow)
+		if minimalWorkflow == nil {
+			log.Printf("[ERROR] Failed building minimal workflow %s", workflow.ID)
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		workflowjson, err = json.Marshal(minimalWorkflowWithId{minimalWorkflow, workflow.ID})
+		if err != nil {
+			log.Printf("Failed minimal workflow json setting marshalling: %s", err)
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	} else {
+		workflowjson, err = json.Marshal(workflow)
+		if err != nil {
+			log.Printf("Failed workflow json setting marshalling: %s", err)
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	err = SetWorkflow(ctx, workflow, workflow.ID)
@@ -36380,6 +36404,79 @@ func getOrgAppSummaries(ctx context.Context, user User) ([]AppSummary, error) {
 	return appSummaries, nil
 }
 
+func buildAppActionResponses(matchedApps []WorkflowApp) []AppActionResponse {
+	responses := []AppActionResponse{}
+
+	for _, app := range matchedApps {
+		if len(app.Actions) == 0 {
+			continue
+		}
+
+		appDesc := app.Description
+		if len(appDesc) > 150 {
+			appDesc = appDesc[:150] + "..."
+		}
+
+		appResp := AppActionResponse{
+			AppName:        app.Name,
+			AppDescription: appDesc,
+			AppID:          app.ID,
+			Actions:        []ActionSummary{},
+		}
+
+		for _, action := range app.Actions {
+			if len(action.Name) == 0 {
+				continue
+			}
+
+			params := []ActionParameter{}
+			for _, param := range action.Parameters {
+				if len(param.Name) == 0 {
+					continue
+				}
+
+				params = append(params, ActionParameter{
+					Name:        param.Name,
+					Required:    param.Required,
+					Description: param.Description,
+				})
+			}
+
+			desc := action.Description
+			if len(desc) > 100 {
+				desc = desc[:100] + "..."
+			}
+
+			appResp.Actions = append(appResp.Actions, ActionSummary{
+				Name:        action.Name,
+				Description: desc,
+				Parameters:  params,
+			})
+		}
+
+		if len(appResp.Actions) > 0 {
+			responses = append(responses, appResp)
+		}
+	}
+	
+	return responses
+}
+
+func getOrgAppActionSummaries(ctx context.Context, user User) ([]AppActionResponse, error) {
+	apps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting apps for agent: %s", err)
+		return nil, err
+	}
+
+	maxApps := 150
+	if len(apps) > maxApps {
+		apps = apps[:maxApps]
+	}
+
+	return buildAppActionResponses(apps), nil
+}
+
 func GetOrgAppsSummary(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -36483,10 +36580,33 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 	// Search by IDs first (more direct)
 	if len(actionReq.AppIDs) > 0 {
 		for _, appID := range actionReq.AppIDs {
+			foundInOrg := false
 			for _, app := range allApps {
 				if app.ID == appID && len(app.Name) > 0 {
+					if debug {
+						log.Printf("[DEBUG] Found app by ID %s in org apps list", appID)
+					}
 					matchedApps = append(matchedApps, app)
+					foundInOrg = true
 					break
+				}
+			}
+
+			// If not found in org's active apps, fetch it globally by ID!
+			if !foundInOrg {
+				if debug {
+					log.Printf("[DEBUG] App ID %s not in org, trying global GetApp", appID)
+				}
+				globalApp, err := GetApp(ctx, appID, user, false)
+				if err == nil && globalApp != nil {
+					if debug {
+						log.Printf("[DEBUG] Successfully found app %s globally", appID)
+					}
+					matchedApps = append(matchedApps, *globalApp)
+				} else {
+					if debug {
+						log.Printf("[DEBUG] Failed to fetch app globally by ID %s: %v", appID, err)
+					}
 				}
 			}
 		}
@@ -36496,8 +36616,12 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 	if len(actionReq.AppNames) > 0 {
 		for _, appName := range actionReq.AppNames {
 			lowerName := strings.ToLower(strings.TrimSpace(appName))
+			foundInOrg := false
 			for _, app := range allApps {
 				if strings.ToLower(app.Name) == lowerName && len(app.ID) > 0 {
+					if debug {
+						log.Printf("[DEBUG] Found app by name '%s' (ID %s) in org apps list", appName, app.ID)
+					}
 					// Check if already added via ID search
 					alreadyAdded := false
 					for _, matched := range matchedApps {
@@ -36509,7 +36633,37 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 					if !alreadyAdded {
 						matchedApps = append(matchedApps, app)
 					}
+					foundInOrg = true
 					break
+				}
+			}
+
+			// If not found in org, search Algolia
+			if !foundInOrg {
+				if debug {
+					log.Printf("[DEBUG] App Name '%s' not in org, searching Algolia", appName)
+				}
+				algoliaApp, err := HandleAlgoliaAppSearch(ctx, appName)
+				if err == nil && algoliaApp.ObjectID != "" {
+					if debug {
+						log.Printf("[DEBUG] Found Algolia match for '%s': ObjectID %s", appName, algoliaApp.ObjectID)
+					}
+					discoveredApp, err := GetApp(ctx, algoliaApp.ObjectID, user, false)
+					if err == nil && discoveredApp != nil {
+						alreadyAdded := false
+						for _, matched := range matchedApps {
+							if matched.ID == discoveredApp.ID {
+								alreadyAdded = true
+								break
+							}
+						}
+						if !alreadyAdded {
+							if debug {
+								log.Printf("[DEBUG] Appended Algolia app %s to matched apps", discoveredApp.ID)
+							}
+							matchedApps = append(matchedApps, *discoveredApp)
+						}
+					}
 				}
 			}
 		}
@@ -36526,57 +36680,7 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Build response with actions for each matched app
-	responses := []AppActionResponse{}
-
-	for _, app := range matchedApps {
-		if len(app.Actions) == 0 {
-			if debug {
-				log.Printf("[DEBUG] Skipping app %s because len(Actions) is 0", app.Name)
-			}
-			continue
-		}
-
-		appResp := AppActionResponse{
-			AppName: app.Name,
-			AppID:   app.ID,
-			Actions: []ActionSummary{},
-		}
-
-		// Extract minimal action info
-		for _, action := range app.Actions {
-			if len(action.Name) == 0 {
-				continue
-			}
-
-			// Build parameter list
-			params := []ActionParameter{}
-			for _, param := range action.Parameters {
-				if len(param.Name) == 0 {
-					continue
-				}
-
-				params = append(params, ActionParameter{
-					Name:        param.Name,
-					Required:    param.Required,
-				})
-			}
-
-			desc := action.Description
-			if len(desc) > 100 {
-				desc = desc[:100] + "..."
-			}
-
-			appResp.Actions = append(appResp.Actions, ActionSummary{
-				Name:        action.Name,
-				Description: desc,
-				Parameters:  params,
-			})
-		}
-
-		if len(appResp.Actions) > 0 {
-			responses = append(responses, appResp)
-		}
-	}
+	responses := buildAppActionResponses(matchedApps)
 
 	if len(responses) == 0 {
 		if debug {
@@ -36721,216 +36825,125 @@ func AgentWorkflowEditor(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//type agentContextRequest struct {
-	//	Input      string `json:"input"`
-	//	WorkflowId string `json:"workflow_id"`
-	//}
-
 	var req MCPRequest 
 	err = json.Unmarshal(body, &req)
+
 	if err != nil || len(strings.TrimSpace(req.Params.Input.Text)) == 0 {
-		log.Printf("[WARNING] Bad body in AgentWorkflowEditor: %s", err)
+		log.Printf("[WARNING] Bad body in AgentWorkflowEditor. Error: %v, Body: %s", err, string(body))
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "input field is required"}`))
 		return
 	}
 
-	// Get org apps summary
-	appSummaries, err := getOrgAppSummaries(ctx, user)
+	// Auth check: verify user has access to the target workflow before kicking off the agent
+	workflow, err := GetWorkflow(ctx, req.Params.Input.WorkflowId)
 	if err != nil {
-		log.Printf("[WARNING] Failed getting apps in AgentWorkflowEditor for user %s: %s", user.Username, err)
+		log.Printf("[WARNING] Failed getting workflow %s in AgentWorkflowEditor: %s", req.Params.Input.WorkflowId, err)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+		return
+	}
+
+	if user.Id != workflow.Owner && workflow.OrgId != user.ActiveOrg.Id {
+		log.Printf("[WARNING] User %s (%s) unauthorized to edit workflow %s (owner: %s, org: %s)", user.Username, user.Id, req.Params.Input.WorkflowId, workflow.Owner, workflow.OrgId)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorized"}`))
+		return
+	}
+
+	// All context building (workflow state, app actions, rules) is handled inside
+	// buildWorkflowEditContext which is called by getTemplateContext inside HandleAiAgentExecutionStart
+	toolApps := "app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps,app:de4ef2287bd41b9d5563e39989643ee6:shuffle_workflows_builder"
+
+	action := Action{
+		ID:             uuid.NewV4().String(),
+		Name:           "agent",
+		AppName:        "AI Agent",
+		AppID:          "shuffle_agent",
+		AppVersion:     "1.0.0",
+		Environment:    "cloud",
+		Parameters: []WorkflowAppActionParameter{
+			{
+				Name:  "input",
+				Value: req.Params.Input.Text,
+			},
+			{
+				Name:  "action",
+				Value: toolApps,
+			},
+			{
+				Name:  "template",
+				Value: "workflow-edit",
+			},
+		},
+	}
+
+	workflowId := uuid.NewV4().String()
+	action.SourceWorkflow = workflowId
+
+	exec := WorkflowExecution{
+		Workflow: Workflow{
+			ID: workflowId,
+			Actions: []Action{
+				action,
+			},
+			OrgId:     user.ActiveOrg.Id,
+			Owner:     user.Username,
+			UpdatedBy: user.Username,
+			Start:     action.ID,
+		},
+		Type:             "AGENT",
+		Start:            action.ID,
+		Status:           "EXECUTING",
+		WorkflowId:       workflowId,
+		ExecutionId:      workflowId,
+		ExecutionOrg:     user.ActiveOrg.Id,
+		StartedAt:        int64(time.Now().Unix()),
+		Authorization:    uuid.NewV4().String(),
+		// Store the target workflow_id here so buildWorkflowEditContext can fetch it
+		ExecutionArgument: req.Params.Input.WorkflowId,
+	}
+
+	SetWorkflowExecution(ctx, exec, true)
+
+	log.Printf("[INFO] AgentWorkflowEditor: calling HandleAiAgentExecutionStart for user %s (%s), target_workflow_id=%s, execution_id=%s", user.Username, user.Id, req.Params.Input.WorkflowId, exec.ExecutionId)
+
+	returnAction, err := HandleAiAgentExecutionStart(exec, action, false, "AgentWorkflowEditor")
+	if err != nil {
+		log.Printf("[ERROR] HandleAiAgentExecutionStart failed in AgentWorkflowEditor: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err.Error())))
+		return
+	}
+
+	// Fetch the updated execution to return
+	newExec, err := GetWorkflowExecution(ctx, exec.ExecutionId)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get workflow execution after agent start in AgentWorkflowEditor: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
-	// Build system prompt with apps context
-	appsJson, _ := json.Marshal(appSummaries)
+	_ = returnAction
 
-	systemPrompt := fmt.Sprintf(`You are an autonomous workflow-building agent. You build or edit workflows that will eventually automates the task. Only use the special actions build for you, like get_minimal_workflow, agent_update are the ones you have to use.
-
-The workflow you are currently working on has the ID: %s — always use this as the "workflow_id" in every payload you send.
-
-Only ask the user for information when it is genuinely unavailable through any allowed action.
-
-Payload Structure
-
-Send your incremental steps in the operations array. You can send one operation at a time, or multiple if you are building a connected sequence.
-{
-"workflow_id": "%s",
-"operations": [ ...array of step-by-step operations... ] // api just supports bulk operations but its optional, just mention 1 op at a time in the array
-}
-
-Supported Step-by-Step Operations
-
-A workflow has two types of nodes: Actions and Triggers. If you need a trigger, you use either Webhook or Schedule. Keep in mind that there is no rigid rule that triggers must exists everytime. Only use trigger if the workflow solution you are building really needs it.
-
-Format: Webhook Trigger
-
-{
-"op": "add_node",
-"node_type": "trigger",
-"temp_id": "<your_temp_id>",
-"data": {
-"app_name": "Webhook",
-"label": "<unique_node_name>",
-"x": 100,
-"y": 100
-}
-}
-
-Format: Schedule Trigger
-
-{
-"op": "add_node",
-"node_type": "trigger",
-"temp_id": "<your_temp_id>",
-"data": {
-"app_name": "Schedule",
-"label": "<unique_node_name>",
-"parameters": [
-{ "name": "cron", "value": "*/15 * * * *" }
-],
-"x": 100,
-"y": 100
-}
-}
-
-1. ADDING A NODE (Action)
-{
-"op": "add_node",
-"node_type": "action",
-"temp_id": "a_temp_id_string",
-"data": {
-"app_id": "<id of the app>",
-"action_name": "<name of action to use, or custom_action>",
-"label": "Authenticate User",
-"parameters": [
-{ "name": "param_1", "value": "some_value" }
-],
-"x": 100,
-"y": 100
-}
-}
-Note: You can vertically position the node between existing ones by adding "insert_before": "<node_id>" or "insert_after": "<node_id>" alongside the data field.
-2. CONNECTING NODES (Adding a Branch)
-Connect your nodes using their real IDs (if they already exist) or the temp_id you assigned when creating them in the same payload.
-{
-"op": "add_branch",
-"data": {
-"source_id": "<real_node_id or temp_id>",
-"destination_id": "<real_node_id or temp_id>"
-}
-}
-3. EDITING A NODE
-Only provide the fields you actually want to change.
-{
-"op": "edit_node",
-"id": "<real_node_id>",
-"data": {
-"label": "New Name",
-"parameters": [
-{ "name": "param_1", "value": "new_value" }
-]
-}
-}
-4. DELETING OR MOVING
-{ "op": "delete_node", "node_type": "action", "id": "<real_node_id>" }
-{ "op": "delete_branch", "id": "<real_branch_id>" }
-{ "op": "move_node", "id": "<real_node_id>", "data": { "x": 250, "y": 300 } }
-5. SETTING THE START NODE
-Defines the entry point of the workflow. You can use a real ID or a temp_id from the same payload.
-{
-"op": "set_start_node",
-"id": "<real_node_id or temp_id>"
-}
-6. SAVING THE WORKFLOW
-Your edits are stored as a real-time draft. When you are completely finished building or modifying the workflow, you MUST append this operation to your final payload to permanently save the workflow to the database. Make sure you do this after fully finishing all the changes you want to do to the workflow, but don't forget to call it.
-{
-"op": "save_workflow"
-}
-
-To use data from another node, reference its label.
-
-CRITICAL RULES FOR THE AGENT
-
-1. Handling Errors: If you make a mistake, the API will reject your request and tell you EXACTLY which operation failed and why (e.g., Operation 1 failed: app_id is required). Read this error carefully, fix the specific missing or incorrect parameter, and try again.
-2. Special actions are built exculsively for you. get_minimal_workflow is enough to the info about how the workflow is structured and generally there is no need of other meta data info of the worklfow as often times its not that useful. agent_update is another beautiful action that do a lot of heavy lifting for you.
-3. Try not to use parallel decision calling as much as possible; always do sequential tool calls.
-
-<Start of App/Actions Context>
-%s
-<End of App/Actions Context>
-
-<Start of User Request>
-%s
-<End of User Request>`, req.Params.Input.WorkflowId, req.Params.Input.WorkflowId, string(appsJson), req.Params.Input.Text)
-
-	// Build MCPRequest with the full system prompt as input
-	mcpReq := MCPRequest{}
-	mcpReq.Jsonrpc = "2.0"
-	mcpReq.Method = "tools/call"
-	mcpReq.Params.ToolName = "app:9f05339c05f9aaca4eeb35e6f13e41e6:shuffles_app_management,app:b598b078fd5c531699fca803c172ce72:shuffle_workflows"
-	mcpReq.Params.Input.Text = systemPrompt
-
-	mcpBody, err := json.Marshal(mcpReq)
-	if err != nil {
-		log.Printf("[ERROR] Failed marshalling MCPRequest in AgentWorkflowEditor: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	respObj := agentResponse{
+		Success:       true,
+		ExecutionId:   newExec.ExecutionId,
+		Authorization: newExec.Authorization,
 	}
 
-	// Call /api/v1/agent directly
-	backendUrl := os.Getenv("BASE_URL")
-	if len(backendUrl) == 0 {
-		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-		} else {
-			port := os.Getenv("PORT")
-			if len(port) == 0 {
-				port = "5001"
-			}
-			backendUrl = fmt.Sprintf("http://localhost:%s", port)
-		}
-	}
-	
-	// FIXME: Change this to a function. This is stupid // Fred 
-	agentReq, err := http.NewRequest("POST", fmt.Sprintf("%s/api/v1/agent", backendUrl), strings.NewReader(string(mcpBody)))
+	responseData, err := json.Marshal(respObj)
 	if err != nil {
-		log.Printf("[ERROR] Failed creating agent request in AgentWorkflowEditor: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	agentReq.Header = request.Header.Clone()
-	agentReq.Header.Set("Content-Type", "application/json")
-	agentReq.Header.Set("X-Internal-Caller", "AgentWorkflowEditor")
-
-	log.Printf("[INFO] AgentWorkflowEditor: calling /api/v1/agent for user %s (%s), workflow_id=%s, apps=%d", user.Username, user.Id, req.Params.Input.WorkflowId, len(appSummaries))
-
-	client := &http.Client{}
-	agentResp, err := client.Do(agentReq)
-	if err != nil {
-		log.Printf("[ERROR] Failed calling /api/v1/agent in AgentWorkflowEditor: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-	defer agentResp.Body.Close()
-
-	agentRespBody, err := ioutil.ReadAll(agentResp.Body)
-	if err != nil {
-		log.Printf("[ERROR] Failed reading agent response in AgentWorkflowEditor: %s", err)
+		log.Printf("[ERROR] Failed marshalling execution response in AgentWorkflowEditor: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	resp.Header().Set("Content-Type", "application/json")
-	resp.WriteHeader(agentResp.StatusCode)
-	resp.Write(agentRespBody)
+	resp.WriteHeader(200)
+	resp.Write(responseData)
 }
 
 func generateNodeID() string {
@@ -36938,20 +36951,21 @@ func generateNodeID() string {
 }
 
 func createCondition(sourceVal, conditionVal, destVal string) Condition {
+	sharedID := generateNodeID()
 	return Condition{
 		Source: WorkflowAppActionParameter{
-			ID:      generateNodeID(),
+			ID:      sharedID,
 			Name:    "source",
 			Variant: "STATIC_VALUE",
 			Value:   sourceVal,
 		},
 		Condition: WorkflowAppActionParameter{
-			ID:    generateNodeID(),
+			ID:    sharedID,
 			Name:  "condition",
 			Value: conditionVal,
 		},
 		Destination: WorkflowAppActionParameter{
-			ID:      generateNodeID(),
+			ID:      sharedID,
 			Name:    "destination",
 			Variant: "STATIC_VALUE",
 			Value:   destVal,
@@ -36970,8 +36984,55 @@ func findAppByID(ctx context.Context, appID string, user User) (*WorkflowApp, er
 		return app, err
 	}
 
+	// 1. Search Org's Prioritized Apps first
+	prioritizedApps, err := GetPrioritizedApps(ctx, user)
+	if err == nil {
+		for _, pApp := range prioritizedApps {
+			if pApp.ID == appID {
+				return &pApp, nil
+			}
+		}
+	}
+
+	// 2. If not found in org apps, try getting it globally
 	app, err := GetApp(ctx, appID, user, false)
-	return app, err
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. If we got it globally but it wasn't in prioritized apps, auto-activate it in parallel
+	go func(activateAppID string, apiKey string) {
+		baseURL := os.Getenv("BASE_URL")
+		if len(baseURL) == 0 {
+			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+				baseURL = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+			} else {
+				port := os.Getenv("PORT")
+				if len(port) == 0 {
+					port = "5001"
+				}
+				baseURL = fmt.Sprintf("http://localhost:%s", port)
+			}
+		}
+
+		activateURL := fmt.Sprintf("%s/api/v1/apps/%s/activate", baseURL, activateAppID)
+		req, err := http.NewRequest("GET", activateURL, nil)
+		if err != nil {
+			log.Printf("[WARNING] Failed building auto-activate request for app %s: %s", activateAppID, err)
+			return
+		}
+
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiKey))
+		httpResp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Printf("[WARNING] Failed auto-activating app %s: %s", activateAppID, err)
+			return
+		}
+		httpResp.Body.Close()
+		//log.Printf("[INFO] Auto-activated app %s in the background", activateAppID)
+	}(appID, user.ApiKey)
+
+	return app, nil
 }
 
 func enrichActionFromApp(ctx context.Context, minAct *MinimalAction, realApp *WorkflowApp, environment string) (Action, error) {
@@ -37123,7 +37184,7 @@ func enrichTriggerFromApp(minTrig *MinimalTrigger, environment string) (Trigger,
 	}
 }
 
-func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
+func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -37132,7 +37193,7 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("[WARNING] Api authentication failed in HandleAgentWorkflowSave: %s", userErr)
+		log.Printf("[WARNING] Api authentication failed in HandleAgentWorkflowOperations: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
 		return
@@ -37145,17 +37206,6 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Extract workflow ID from URL
-	location := strings.Split(request.URL.String(), "/")
-	var urlWorkflowID string
-	if len(location) > 4 && location[1] == "api" {
-		urlWorkflowID = location[4]
-		if strings.Contains(urlWorkflowID, "?") {
-			urlWorkflowID = strings.Split(urlWorkflowID, "?")[0]
-		}
-	}
-
-	// Parse request first so we can fallback to body's WorkflowID
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Failed reading request body: %s", err)
@@ -37174,17 +37224,12 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	workflowID := urlWorkflowID
+	workflowID := setOpsReq.WorkflowID
 	if len(workflowID) != 36 {
-		// Fallback to body's WorkflowID if URL ID is invalid (e.g., %7Bkey%7D from MCP)
-		if len(setOpsReq.WorkflowID) == 36 {
-			workflowID = setOpsReq.WorkflowID
-		} else {
-			log.Printf("[WARNING] Invalid workflow ID: %s", urlWorkflowID)
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "Invalid workflow ID"}`))
-			return
-		}
+		log.Printf("[WARNING] Invalid or missing workflow ID in body: %s", workflowID)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid workflow ID"}`))
+		return
 	}
 
 	// Validate request
@@ -37240,6 +37285,10 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 	tempIDMap := make(map[string]string) // Maps temp_id → real_id
 	shouldSaveDB := false
 
+	// Track triggers to start/stop AFTER all operations are applied.
+	var addedTriggers []Trigger
+	var deletedTriggers []Trigger
+
 	// Collect stream ops as we apply each operation.
 	var streamOps []StreamWorkflowOperation
 
@@ -37254,10 +37303,23 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 
 		// For delete_node: capture which branch IDs are connected to this node BEFORE apply, because opDeleteNode silently prunes them from wf.Branches. We'll stream an edge:remove for each one auto-cleaned.
 		var prunedBranchIDs []string
-		if operation.Op == "delete_node" {
-			for _, br := range workflow.Branches {
-				if br.SourceID == operation.ID || br.DestinationID == operation.ID {
-					prunedBranchIDs = append(prunedBranchIDs, br.ID)
+		if operation.Op == "delete_node" || operation.Op == "remove_node" {
+			for _, branch := range workflow.Branches {
+				if branch.SourceID == operation.ID || branch.DestinationID == operation.ID {
+					prunedBranchIDs = append(prunedBranchIDs, branch.ID)
+				}
+			}
+		}
+
+		// Track triggers being added/deleted so we can start/stop them AFTER
+		// the full workflow is constructed (start node + branches all resolved).
+		var triggerToStop *Trigger
+		if (operation.Op == "delete_node" || operation.Op == "remove_node") && operation.NodeType == "trigger" {
+			for _, existingTrigger := range workflow.Triggers {
+				if existingTrigger.ID == operation.ID {
+					copy := existingTrigger
+					triggerToStop = &copy
+					break
 				}
 			}
 		}
@@ -37271,6 +37333,17 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 		streamOps = append(streamOps, collectStreamOps(workflow, &operation, tempIDMap, branchCountBefore, prunedBranchIDs)...)
+
+		// After apply: track triggers that were just added
+		if operation.Op == "add_node" && operation.NodeType == "trigger" {
+			// The newly added trigger is always the last in the Triggers slice
+			if len(workflow.Triggers) > 0 {
+				addedTriggers = append(addedTriggers, workflow.Triggers[len(workflow.Triggers)-1])
+			}
+		}
+		if triggerToStop != nil {
+			deletedTriggers = append(deletedTriggers, *triggerToStop)
+		}
 	}
 
 	// Save to cache (volatile, 30 min TTL)
@@ -37286,6 +37359,83 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 	if cacheErr != nil {
 		log.Printf("[WARNING] Failed caching workflow: %s", cacheErr)
 		// Don't fail the request, cache is best-effort
+	}
+
+	// Fire trigger start/stop goroutines NOW — workflow is fully constructed
+	// with all nodes, branches and start node resolved.
+	if len(addedTriggers) > 0 || len(deletedTriggers) > 0 {
+		go func(triggersToStart []Trigger, triggersToStop []Trigger, finalWorkflow Workflow, currentUser User) {
+			for _, trigger := range triggersToStart {
+				// Resolve start node: prefer a branch from this trigger, else use workflow start.
+				startNode := finalWorkflow.Start
+				for _, branch := range finalWorkflow.Branches {
+					if branch.SourceID == trigger.ID {
+						startNode = branch.DestinationID
+						break
+					}
+				}
+				if len(startNode) == 0 {
+					log.Printf("[INFO] Auto-start skipped for trigger %s: no start node in fully-constructed workflow", trigger.ID)
+					continue
+				}
+
+				switch strings.ToUpper(trigger.TriggerType) {
+				case "WEBHOOK":
+					auth := ""
+					customResponse := ""
+					version := "v1"
+					versionTimeout := 15
+					for _, param := range trigger.Parameters {
+						switch param.Name {
+						case "auth_headers":
+							auth = param.Value
+						case "custom_response_body":
+							customResponse = param.Value
+						case "await_response":
+							version = param.Value
+						case "version_timeout":
+							if parsedTimeout, convErr := strconv.Atoi(param.Value); convErr == nil {
+								versionTimeout = parsedTimeout
+							}
+						}
+					}
+					if startErr := startWebhookTrigger(context.Background(), finalWorkflow.ID, trigger.ID, trigger.Label, startNode, trigger.Environment, auth, customResponse, version, versionTimeout, currentUser, currentUser.ActiveOrg.Id); startErr != nil {
+						log.Printf("[WARNING] Auto-start webhook trigger %s failed: %s", trigger.ID, startErr)
+					} else {
+						log.Printf("[INFO] Auto-started webhook trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
+					}
+				case "SCHEDULE":
+					if startErr := startSchedule(trigger, currentUser.ApiKey, finalWorkflow); startErr != nil {
+						log.Printf("[WARNING] Auto-start schedule trigger %s failed: %s", trigger.ID, startErr)
+					} else {
+						log.Printf("[INFO] Auto-started schedule trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
+					}
+				}
+			}
+
+			for _, trigger := range triggersToStop {
+				switch strings.ToUpper(trigger.TriggerType) {
+				case "WEBHOOK":
+					hook, err := GetHook(context.Background(), trigger.ID)
+					if err != nil {
+						log.Printf("[WARNING] Auto-stop webhook: could not find hook %s: %s", trigger.ID, err)
+						continue
+					}
+					hook.Status = "stopped"
+					hook.Running = false
+					if setErr := SetHook(context.Background(), *hook); setErr != nil {
+						log.Printf("[WARNING] Auto-stop webhook: failed updating hook %s status: %s", trigger.ID, setErr)
+					}
+					log.Printf("[INFO] Auto-stopped webhook trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
+				case "SCHEDULE":
+					if stopErr := deleteScheduleGeneral(context.Background(), trigger.ID); stopErr != nil {
+						log.Printf("[WARNING] Auto-stop schedule trigger %s failed: %s", trigger.ID, stopErr)
+					} else {
+						log.Printf("[INFO] Auto-stopped schedule trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
+					}
+				}
+			}
+		}(addedTriggers, deletedTriggers, *workflow, user)
 	}
 
 	if shouldSaveDB {
@@ -37330,6 +37480,20 @@ func HandleAgentWorkflowSave(resp http.ResponseWriter, request *http.Request) {
 				if bestAuth != nil {
 					workflow.Actions[i].AuthenticationId = bestAuth.Id
 					//log.Printf("[INFO] Auto-assigned auth %s (%s) to action %s (%s)", bestAuth.Label, bestAuth.Id, workflow.Actions[i].Label, appName)
+				}
+			}
+		}
+
+		// After hydration, update any stream operations with the final state of the actions,
+		// so the frontend receives the auto-assigned AuthenticationId in real-time.
+		for s := range streamOps {
+			if streamOps[s].Item == "node" && (streamOps[s].Type == "add" || streamOps[s].Type == "configure") {
+				for _, action := range workflow.Actions {
+					if action.ID == streamOps[s].ID {
+						dataBytes, _ := json.Marshal(action)
+						streamOps[s].Data = dataBytes
+						break
+					}
 				}
 			}
 		}
@@ -37545,6 +37709,23 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 			ID:   realID,
 		}}
 
+	case "add_condition", "edit_condition", "delete_condition":
+		// The branch already has its updated conditions applied.
+		// Stream edge:configure with the full branch so the frontend re-renders it.
+		branchID := op.BranchID
+		for _, branch := range wf.Branches {
+			if branch.ID == branchID {
+				dataBytes, _ := json.Marshal(branch)
+				return []StreamWorkflowOperation{{
+					Item: "edge",
+					Type: "configure",
+					ID:   branch.ID,
+					Data: dataBytes,
+				}}
+			}
+		}
+		return nil
+
 	default:
 		return nil
 	}
@@ -37597,7 +37778,7 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 		return opEditNode(wf, op)
 	case "move_node":
 		return opMoveNode(wf, op)
-	case "delete_node":
+	case "delete_node", "remove_node":
 		return opDeleteNode(wf, op)
 
 	// ====== BRANCH OPERATIONS ======
@@ -37605,16 +37786,24 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 		return opAddBranchWithMapping(wf, op, tempIDMap)
 	case "edit_branch":
 		return opEditBranch(wf, op)
-	case "delete_branch":
+	case "delete_branch", "remove_branch":
 		return opDeleteBranch(wf, op)
 
 	// ====== CONDITION OPERATIONS ======
-	case "add_condition":
-		return opAddCondition(wf, op)
-	case "edit_condition":
-		return opEditCondition(wf, op)
-	case "delete_condition":
-		return opDeleteCondition(wf, op)
+	case "add_condition", "edit_condition", "delete_condition":
+		if realBranchID, exists := tempIDMap[op.BranchID]; exists {
+			op.BranchID = realBranchID
+		}
+
+		switch op.Op {
+		case "add_condition":
+			return opAddCondition(wf, op)
+		case "edit_condition":
+			return opEditCondition(wf, op)
+		case "delete_condition":
+			return opDeleteCondition(wf, op)
+		}
+		return nil
 
 	// ====== WORKFLOW OPERATIONS ======
 	case "set_start_node":
@@ -37648,6 +37837,50 @@ func findNodePosition(wf *Workflow, nodeID string) (string, int, error) {
 
 
 func opAddNodeWithMapping(ctx context.Context, user User, wf *Workflow, op *WorkflowOperation, tempIDMap map[string]string) error {
+	// IDEMPOTENCY: if this temp_id was already resolved in a prior agent loop,
+	// the node already exists in the workflow (loaded from DB). Skip the add and
+	// re-populate the tempIDMap entry so downstream add_branch ops still work.
+	if len(op.TempID) > 0 {
+		if _, alreadyMapped := tempIDMap[op.TempID]; alreadyMapped {
+			return nil
+		}
+	}
+
+	// Always check by label for idempotency, because labels must be unique in a workflow.
+	// This prevents duplicates if the workflow was loaded from DB after a prior save,
+	// regardless of whether a temp_id was provided or not.
+	var minLabel string
+	if op.NodeType == "action" {
+		var minAct MinimalAction
+		if jsonErr := json.Unmarshal(op.Data, &minAct); jsonErr == nil {
+			minLabel = minAct.Label
+		}
+	} else if op.NodeType == "trigger" {
+		var minTrig MinimalTrigger
+		if jsonErr := json.Unmarshal(op.Data, &minTrig); jsonErr == nil {
+			minLabel = minTrig.Label
+		}
+	}
+
+	if len(minLabel) > 0 {
+		for _, existing := range wf.Actions {
+			if strings.EqualFold(existing.Label, minLabel) {
+				if len(op.TempID) > 0 {
+					tempIDMap[op.TempID] = existing.ID
+				}
+				return nil
+			}
+		}
+		for _, existing := range wf.Triggers {
+			if strings.EqualFold(existing.Label, minLabel) {
+				if len(op.TempID) > 0 {
+					tempIDMap[op.TempID] = existing.ID
+				}
+				return nil
+			}
+		}
+	}
+
 	err := opAddNode(ctx, user, wf, op)
 	if err != nil {
 		return err
@@ -37819,6 +38052,7 @@ func opAddNode(ctx context.Context, user User, wf *Workflow, op *WorkflowOperati
 		} else {
 			wf.Triggers = append(wf.Triggers, newTrigger)
 		}
+
 		return nil
 
 	default:
@@ -37932,7 +38166,6 @@ func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
 			if debug {
 				log.Printf("[DEBUG] delete_node(action): action %s not found, already removed - skipping", op.ID)
 			}
-			
 			return nil
 		}
 
@@ -37941,9 +38174,9 @@ func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
 
 		// Remove branches connected to this node
 		var newBranches []Branch
-		for _, br := range wf.Branches {
-			if br.SourceID != op.ID && br.DestinationID != op.ID {
-				newBranches = append(newBranches, br)
+		for _, branch := range wf.Branches {
+			if branch.SourceID != op.ID && branch.DestinationID != op.ID {
+				newBranches = append(newBranches, branch)
 			}
 		}
 		wf.Branches = newBranches
@@ -37951,7 +38184,7 @@ func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
 	case "trigger":
 		idx := findTriggerIndexByID(wf, op.ID)
 		if idx == -1 {
-			// Already gone idempotent no-op
+			// Already gone, idempotent no-op
 			if debug {
 				log.Printf("[DEBUG] delete_node(trigger): trigger %s not found, already removed - skipping", op.ID)
 			}
@@ -37962,9 +38195,9 @@ func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
 
 		// Remove branches connected to this trigger (both source and destination)
 		var newBranches []Branch
-		for _, br := range wf.Branches {
-			if br.SourceID != op.ID && br.DestinationID != op.ID {
-				newBranches = append(newBranches, br)
+		for _, branch := range wf.Branches {
+			if branch.SourceID != op.ID && branch.DestinationID != op.ID {
+				newBranches = append(newBranches, branch)
 			}
 		}
 		wf.Branches = newBranches
@@ -38000,6 +38233,21 @@ func opAddBranchWithMapping(wf *Workflow, op *WorkflowOperation, tempIDMap map[s
 	resolvedData, _ := json.Marshal(branchData)
 	op.Data = resolvedData
 
+	// IDEMPOTENCY: if a branch between this source to destination already exists
+	// (e.g. a second agent loop re-issued the same add_branch), skip the add
+	// and re-map the temp_id so downstream ops still resolve correctly.
+	for _, existing := range wf.Branches {
+		if existing.SourceID == branchData.SourceID && existing.DestinationID == branchData.DestinationID {
+			if len(op.TempID) > 0 {
+				tempIDMap[op.TempID] = existing.ID
+			}
+			if len(op.ID) > 0 {
+				tempIDMap[op.ID] = existing.ID
+			}
+			return nil
+		}
+	}
+
 	err := opAddBranch(wf, op)
 	if err != nil {
 		return err
@@ -38024,6 +38272,11 @@ func opAddBranch(wf *Workflow, op *WorkflowOperation) error {
 		SourceID      string `json:"source_id"`
 		DestinationID string `json:"destination_id"`
 		Label         string `json:"label"`
+		Conditions    []struct {
+			Source      string `json:"source"`
+			Condition   string `json:"condition"`
+			Destination string `json:"destination"`
+		} `json:"conditions"`
 	}
 
 	if err := json.Unmarshal(op.Data, &branchData); err != nil {
@@ -38047,6 +38300,10 @@ func opAddBranch(wf *Workflow, op *WorkflowOperation) error {
 		DestinationID: branchData.DestinationID,
 		Label:         branchData.Label,
 		Conditions:    []Condition{},
+	}
+
+	for _, c := range branchData.Conditions {
+		newBranch.Conditions = append(newBranch.Conditions, createCondition(c.Source, c.Condition, c.Destination))
 	}
 
 	// Detect circular references before adding branch
@@ -38098,9 +38355,11 @@ func opDeleteBranch(wf *Workflow, op *WorkflowOperation) error {
 
 func opAddCondition(wf *Workflow, op *WorkflowOperation) error {
 	var condData struct {
-		Source      string `json:"source"`
-		Condition   string `json:"condition"`
-		Destination string `json:"destination"`
+		Conditions []struct {
+			Source      string `json:"source"`
+			Condition   string `json:"condition"`
+			Destination string `json:"destination"`
+		} `json:"conditions"`
 	}
 
 	if err := json.Unmarshal(op.Data, &condData); err != nil {
@@ -38112,8 +38371,10 @@ func opAddCondition(wf *Workflow, op *WorkflowOperation) error {
 		return fmt.Errorf("branch %s not found", op.BranchID)
 	}
 
-	newCond := createCondition(condData.Source, condData.Condition, condData.Destination)
-	wf.Branches[branchIdx].Conditions = append(wf.Branches[branchIdx].Conditions, newCond)
+	for _, c := range condData.Conditions {
+		newCond := createCondition(c.Source, c.Condition, c.Destination)
+		wf.Branches[branchIdx].Conditions = append(wf.Branches[branchIdx].Conditions, newCond)
+	}
 
 	return nil
 }
@@ -38124,25 +38385,35 @@ func opEditCondition(wf *Workflow, op *WorkflowOperation) error {
 		return fmt.Errorf("branch %s not found", op.BranchID)
 	}
 
-	if op.ConditionIndex < 0 || op.ConditionIndex >= len(wf.Branches[branchIdx].Conditions) {
-		return fmt.Errorf("condition index %d out of range", op.ConditionIndex)
-	}
-
 	var condData struct {
-		Source      string `json:"source"`
-		Condition   string `json:"condition"`
-		Destination string `json:"destination"`
+		Conditions []struct {
+			ID          string  `json:"id"`
+			Source      *string `json:"source"`
+			Condition   *string `json:"condition"`
+			Destination *string `json:"destination"`
+		} `json:"conditions"`
 	}
 
 	if err := json.Unmarshal(op.Data, &condData); err != nil {
 		return fmt.Errorf("invalid condition update data: %w", err)
 	}
 
-	wf.Branches[branchIdx].Conditions[op.ConditionIndex] = createCondition(
-		condData.Source,
-		condData.Condition,
-		condData.Destination,
-	)
+	for _, update := range condData.Conditions {
+		for cIdx := range wf.Branches[branchIdx].Conditions {
+			if wf.Branches[branchIdx].Conditions[cIdx].Condition.ID == update.ID {
+				if update.Source != nil {
+					wf.Branches[branchIdx].Conditions[cIdx].Source.Value = *update.Source
+				}
+				if update.Condition != nil {
+					wf.Branches[branchIdx].Conditions[cIdx].Condition.Value = *update.Condition
+				}
+				if update.Destination != nil {
+					wf.Branches[branchIdx].Conditions[cIdx].Destination.Value = *update.Destination
+				}
+				break
+			}
+		}
+	}
 
 	return nil
 }
@@ -38153,14 +38424,28 @@ func opDeleteCondition(wf *Workflow, op *WorkflowOperation) error {
 		return fmt.Errorf("branch %s not found", op.BranchID)
 	}
 
-	if op.ConditionIndex < 0 || op.ConditionIndex >= len(wf.Branches[branchIdx].Conditions) {
-		return fmt.Errorf("condition index %d out of range", op.ConditionIndex)
+	var deleteData struct {
+		ConditionIDs []string `json:"condition_ids"`
 	}
 
-	wf.Branches[branchIdx].Conditions = append(
-		wf.Branches[branchIdx].Conditions[:op.ConditionIndex],
-		wf.Branches[branchIdx].Conditions[op.ConditionIndex+1:]...,
-	)
+	if err := json.Unmarshal(op.Data, &deleteData); err != nil {
+		return fmt.Errorf("invalid delete condition data: %w", err)
+	}
+
+	var newConds []Condition
+	for _, c := range wf.Branches[branchIdx].Conditions {
+		deleted := false
+		for _, delID := range deleteData.ConditionIDs {
+			if c.Condition.ID == delID {
+				deleted = true
+				break
+			}
+		}
+		if !deleted {
+			newConds = append(newConds, c)
+		}
+	}
+	wf.Branches[branchIdx].Conditions = newConds
 
 	return nil
 }
