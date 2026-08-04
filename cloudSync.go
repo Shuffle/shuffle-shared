@@ -1987,12 +1987,14 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 // runAgentDecisionDirectAppCall bypasses Singul and runs the app directly.
 func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDecision) (rawResult []byte, debugUrl string, appName string, categoryLabels []string, actionName string, err error) {
 	ctx := context.Background()
-	minUser := User{
-		Username: execution.Workflow.Owner,
-		ActiveOrg: OrgMini{
-			Id: execution.ExecutionOrg,
-		},
+	var minUser User
+	org, err := GetOrg(ctx, execution.ExecutionOrg)
+	if err == nil && len(org.Users) > 0 {
+		minUser = org.Users[0] // Grabbing the first user, Is this the right way to do it ?
+	} else {
+		minUser = User{Username: execution.Workflow.Owner}
 	}
+	minUser.ActiveOrg = OrgMini{Id: execution.ExecutionOrg}
 
 	var (
 		resolvedAppId   string
