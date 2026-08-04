@@ -2242,7 +2242,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		return body, debugUrl, appName, []string{}, "", err
 	}
 
-	skipSingul := executionMode == "direct" || os.Getenv("AGENT_SKIP_SINGUL") == "true"
+	skipSingul := executionMode == "direct" || os.Getenv("AGENT_SKIP_SINGUL") != "false"
 	if skipSingul {
 		if debug { 
 			log.Printf("[DEBUG][%s] Calling decision run directly. ExecutionMode=%q EnvOverride=%v", execution.ExecutionId, executionMode, os.Getenv("AGENT_SKIP_SINGUL") == "true")
