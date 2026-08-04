@@ -305,7 +305,7 @@ func crossCorrelateNGrams(ctx context.Context, orgId, category, datastoreKey, va
 	}
 
 	if debug && len(enrichments) > 0 { 
-		log.Printf("\n\n[DEBUG] Enrichments (%s): %d\n\n", datastoreKey, len(enrichments))
+		log.Printf("[DEBUG] Enrichments (%s): %d", datastoreKey, len(enrichments))
 	}
 
 	for enrichmentCnt, enrichment := range enrichments {

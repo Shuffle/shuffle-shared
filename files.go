@@ -1024,7 +1024,7 @@ func GetFileContent(ctx context.Context, file *File, resp http.ResponseWriter) (
 		obj := bucket.Object(file.DownloadPath)
 		fileReader, err := obj.NewReader(ctx)
 		if err != nil {
-			log.Printf("[ERROR] Reader error for %s in bucket %s: %s", downloadPath, orgFileBucket, err)
+			//log.Printf("[ERROR] Reader error for %s in bucket %s: %s", downloadPath, orgFileBucket, err)
 
 			file.Status = "deleted"
 			err = SetFile(ctx, *file)

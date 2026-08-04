@@ -409,7 +409,10 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 	// Make result into a body as well
 	err = json.Unmarshal([]byte(kmsResponse.Result), httpOutput)
 	if err != nil {
-		log.Printf("[ERROR] Failed to unmarshal Schemaless HTTP Output response (2): %s. Data: %s", err, kmsResponse.Result)
+		if len(kmsResponse.Result) > 0 { 
+			log.Printf("[ERROR] Failed to unmarshal Schemaless HTTP Output response (2): %s. Data: %s", err, kmsResponse.Result)
+		}
+
 		return *httpOutput, []byte{}, err
 	}
 
@@ -1834,8 +1837,8 @@ func parseAgentDecisions(rawOutput string) ([]AgentDecision, error) {
 }
 
 func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys []string) (WorkflowApp, WorkflowAppAction) {
-	standalone := os.Getenv("STANDALONE") == "true"
 
+	standalone := os.Getenv("STANDALONE") == "true"
 	if len(app.ID) == 0 || len(app.Name) == 0 {
 		log.Printf("[ERROR] No app ID or name found in AutofixAppLabels")
 		return app, WorkflowAppAction{}
@@ -1918,7 +1921,7 @@ func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys [
 
 		if len(foundCategory.Name) == 0 {
 			log.Printf("[DEBUG] No category found for app %s (%s). Checking based on input label, then using that category in app setup", app.Name, app.ID)
-			systemMessage := `Your goal is to find the correct CATEGORY for the app to be in. Synonyms are accepted, and you should be very critical to not make mistakes. If none match, don't add any. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate. If it exists, return {"success": true, "category": "<category>"} where <category> is replaced with the category found. If it does not exist, return {"success": false, "category": "Other"}. Output as JSON."`
+			systemMessage := `Your goal is to find the correct CATEGORY for the app to be in. Synonyms are accepted, and you should be very critical to not make mistakes. If none match, don't add any. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate. If it exists, return {"success": true, "category": "<category>"} where <category> is replaced with the category found. If it does not exist, return {"success": false, "category": "Other"}. If are not sure about the category, choose 'Other'. If they are related to Shuffle Automation, choose 'Internal'. Output as JSON."`
 
 			categories := ""
 			for _, category := range availableCategories {
@@ -1958,7 +1961,6 @@ func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys [
 			}
 
 			app.Categories = append(app.Categories, actionStruct.Category)
-
 			// Forces app to update
 			if len(app.Actions) > 0 {
 				updatedIndex = 0
@@ -1971,6 +1973,11 @@ func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys [
 
 				foundCategory = category
 				break
+			}
+
+			// Update the actual app?
+			if debug { 
+				log.Printf("[DEBUG] UPDATEINDEX CATEGORY (%s): %#v", app.Name, updatedIndex)
 			}
 		}
 	}
@@ -2011,7 +2018,9 @@ func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys [
 			actionStruct.Action = string(guessedActionString)
 		}
 	} else {
-		log.Printf("[ERROR] Failed to get app from cache in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, cacheGeterr)
+		if debug { 
+			//log.Printf("[DEBUG] Failed to get app from cache in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, cacheGeterr)
+		}
 	}
 
 	// FIXME: Run AI here to check based on the label which action may be matching
@@ -2243,7 +2252,12 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 
 	// FIXME: Add the label to the OpenAPI action as well?
 	// 0x0elliot: Would we want to do this through an API on standalone?
-	if updatedIndex >= 0 && !standalone {
+	if debug { 
+		log.Printf("[DEBUG] App: %#v, standalone: %v, updatedIndex: %d, len(app.Actions): %d", app.Name, standalone, updatedIndex, len(app.Actions))
+	}
+
+	if !standalone && updatedIndex >= 0 && len(app.Actions) > 0 {
+
 		err := SetWorkflowAppDatastore(context.Background(), app, app.ID)
 		if err != nil {
 			log.Printf("[WARNING] Failed to set app datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
@@ -2350,7 +2364,7 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 		guessedAction.Parameters[paramIndex] = param
 	}
 
-	SetAutofixAppLabelsCache(ctx, app, guessedAction, label, keys)
+	go SetAutofixAppLabelsCache(context.Background(), app, guessedAction, label, keys)
 	return app, guessedAction
 }
 
@@ -7897,12 +7911,28 @@ func filterSystemPromptByTemplate(template string, systemMessage string) string 
 
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool, callerName string, aiResponseWrapper ...[]byte) (Action, error) {
 	template := ""
+
+	if callerName == "" {
+		callerName = "UNKNOWN_CALLER"
+	}
+
+	log.Printf("[INFO][%s] AI Agent: HandleAiAgentExecutionStart invoked by caller: '%s' (createNextActions=%t, node=%s, status=%s)", execution.ExecutionId, callerName, createNextActions, startNode.ID, execution.Status)
+
 	ctx := context.Background()
 	aiStarttime := time.Now().UnixMilli()
 
 	replacedExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)
 	if err == nil && len(replacedExecution.Results) > 0 && (execution.Status == "EXECUTING" || execution.Status == "WAITING") { 
+		origStatus := execution.Status
+		origCompleted := execution.CompletedAt
+		origResults := execution.Results
 		execution = *replacedExecution
+		if origStatus == "EXECUTING" && (execution.Status == "FINISHED" || execution.Status == "SUCCESS") {
+			log.Printf("[INFO][%s] Preserving EXECUTING status for Agent Continuation over DB %s status", execution.ExecutionId, execution.Status)
+			execution.Status = origStatus
+			execution.CompletedAt = origCompleted
+			execution.Results = origResults
+		}
 	}
 
 	llmResponse := []byte{} 
@@ -9671,7 +9701,7 @@ data_filter:
 
 					// Update the result in cache as actions are self-corrective
 					actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, result.Action.ID)
-					err = SetCache(ctx, actionCacheId, []byte(execution.Results[resultIndex].Result), 35)
+					err = SetCache(ctx, actionCacheId, []byte(execution.Results[resultIndex].Result), 600)
 					if err != nil {
 						log.Printf("[ERROR] AI Agent: Failed setting cache for action result %s: %s", actionCacheId, err)
 					}
@@ -9682,7 +9712,7 @@ data_filter:
 		}
 
 		if resultMapping.Status == "FAILURE" {
-			log.Printf("\n\n\n\n\nMAPPING TO FAILURE!!!\n\n\nn\n\n\n\n")
+			log.Printf("[ERROR] MAPPING TO FAILURE!!!")
 			//agentOutput.Status = "FAILURE"
 			//agentOutput.CompletedAt = time.Now().Unix()
 		}
@@ -9709,7 +9739,6 @@ data_filter:
 		}
 
 		decisionActionRan := false
-		nextActionType := ""
 
 		for decisionIndex, decision := range agentOutput.Decisions {
 			// Random generate an ID that's 10 chars long
@@ -9745,8 +9774,6 @@ data_filter:
 			if decision.I != lastFinishedIndex {
 				continue
 			}
-
-			nextActionType = decision.Action
 
 			normalizedAction := strings.ToLower(strings.TrimSpace(decision.Action))
 			normalizedCategory := strings.ToLower(strings.TrimSpace(decision.Category))
@@ -9966,32 +9993,23 @@ data_filter:
 
 		// Set the result in cache here as well (just in case)
 		actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, resultMapping.Action.ID)
-		err = SetCache(ctx, actionCacheId, []byte(resultMapping.Result), 35)
+		err = SetCache(ctx, actionCacheId, []byte(resultMapping.Result), 600)
 		if err != nil {
 			log.Printf("[ERROR] AI Agent: Failed setting cache for action result %s: %s", actionCacheId, err)
 		}
 
-		// Makes sure ot update the execution itself as well
-		if createNextActions == true {
-			if decisionActionRan {
-			}
-
-			// Initialised from an 'ask' request (question) to user
-			// These aren't properly being updated in the db, so
-			// we need additional logic here to ensure it is being
-			// set/started
-			if nextActionType == "ask" || nextActionType == "question" || nextActionType == "finish" || nextActionType == "answer" {
-				// Ensure we update all of it
-				for resultIndex, result := range execution.Results {
-					if result.Action.ID != startNode.ID {
-						continue
-					}
-
-					execution.Results[resultIndex] = resultMapping
+		// Always update all execution results in DB regardless of action type,
+		// so tools never lose their decisions.
+		if len(execution.Results) > 0 {
+			for resultIndex, result := range execution.Results {
+				if result.Action.ID != startNode.ID {
+					continue
 				}
 
-				SetWorkflowExecution(ctx, execution, true)
+				execution.Results[resultIndex] = resultMapping
 			}
+
+			SetWorkflowExecution(ctx, execution, true)
 		}
 
 		//log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s status=%s duration=%ds decisions=%d", execution.ExecutionId, agentOutput.Status, time.Now().Unix()-agentOutput.StartedAt, len(agentOutput.Decisions))
