@@ -43,14 +43,14 @@ func HandleDatastorePostRedirect(resp http.ResponseWriter, request *http.Request
 	var category string
 	var key string
 	if location[1] == "api" {
-		if len(location) <= 3 {
+		if len(location) <= 4 {
 			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
 
 		category = location[3]
-		if len(location) > 3 { 
+		if len(location) >= 4 { 
 			key = location[4]
 		}
 	}
@@ -655,11 +655,11 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 	var tmpData []CacheKeyData
 	err = json.Unmarshal(body, &tmpData)
-	if err != nil {
+	if err != nil || len(tmpData) == 0 {
 
 		var tmpDataOverride CacheKeyDataFallback
 		err = json.Unmarshal(body, &tmpDataOverride)
-		if err != nil {
+		if err != nil || len(tmpDataOverride.Key) == 0 {
 			if usererr != nil || len(user.Id) == 0 || len(user.ActiveOrg.Id) == 0 { 
 				log.Printf("[WARNING] Failed unmarshalling in setvalue (1): %s", err)
 				resp.Write([]byte(`{"success": false}`))
@@ -680,7 +680,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				category = location[4]
-				if len(location) > 3 { 
+				if len(location) >= 5 { 
 					key = location[5]
 				}
 			}
@@ -778,7 +778,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[AUDIT] Running bulk upload for org %s to category '%s. Keys: %d'. Tags: %#v", user.ActiveOrg.Id, mainCategory, len(tmpData), tmpData[0].Tags)
+	log.Printf("[AUDIT] Running bulk upload for org '%s' to category '%s'. Keys: %d. Tags: %#v", user.ActiveOrg.Id, mainCategory, len(tmpData), tmpData[0].Tags)
 
 	existingInfo, err := SetDatastoreKeyBulk(ctx, tmpData)
 	if err != nil {

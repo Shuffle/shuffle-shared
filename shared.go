@@ -17761,8 +17761,9 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	} else {
 		var cacheTTL int32 = 1 // 1 minute for non-terminal statuses
 		if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
-			cacheTTL = 1440 // 24 hours — execution outcome is permanent
+			cacheTTL = 60 // 1 hour — execution outcome is permanent and should not be called again with the same status
 		}
+
 		cacheErr := SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
 		if cacheErr != nil && (status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED") {
 			log.Printf("[WARNING][%s] Memcache down — skipping agent self-request for '%s' to prevent retry storm", workflowExecution.ExecutionId, status)
@@ -22208,9 +22209,9 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 			}
 		}
 
-		//if debug { 
-		//	log.Printf("[DEBUG][%s] Checking single action. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
-		//}
+		if debug { 
+			log.Printf("[DEBUG][%s] Checking single action. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
+		}
 
 		if len(newExecution.Results) > resultAmount-1 {
 			if relevantIndex == -1 {
@@ -25144,7 +25145,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if oldExecution.Workflow.ID != workflow.ID {
-				log.Printf("[INFO] Wrong workflowid!")
+				log.Printf("[ERROR][%s] Wrong workflowid! '%s' vs '%s'", referenceId[0], oldExecution.Workflow.ID, workflow.ID)
 				return workflowExecution, ExecInfo{}, fmt.Sprintf("Bad workflow ID in get %s", referenceId), errors.New("Bad workflow ID")
 			}
 
@@ -25168,7 +25169,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			if len(start) == 0 && request != nil {
 				decisionIds, decisionIdOk := request.URL.Query()["decision_id"]
 				if decisionIdOk {
-					log.Printf("[INFO][%s] Got decisionId '%s' to find inside Agentic action", oldExecution.ExecutionId, decisionIds[0])
+					if debug { 
+						log.Printf("[INFO][%s] Got decisionId '%s' to find inside Agentic action", oldExecution.ExecutionId, decisionIds[0])
+					}
+
 					decisionId = decisionIds[0]
 
 					agentic = true
@@ -25176,6 +25180,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						start = append(start, workflow.Actions[0].ID)
 						oldExecution.Results[0].Status = "WAITING"
 					} else {
+
+						log.Printf("QUERIES: %#v", request.URL.Query())
 
 						// Can loop for it
 						nodeIds, nodeIdsOk := request.URL.Query()["node_id"]

@@ -1994,8 +1994,8 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	} else {
 		minUser = User{Username: execution.Workflow.Owner}
 	}
-	minUser.ActiveOrg = OrgMini{Id: execution.ExecutionOrg}
 
+	minUser.ActiveOrg = OrgMini{Id: execution.ExecutionOrg}
 	var (
 		resolvedAppId   string
 		resolvedAppName = decision.Tool
@@ -2042,7 +2042,9 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		}
 	}
 
-	//log.Printf("[DEBUG][%s] DirectAppCall: App resolution took %s", execution.ExecutionId, time.Since(startTime))
+	//if debug { 
+	//	log.Printf("[DEBUG][%s] DirectAppCall: App resolution took %s", execution.ExecutionId, time.Since(startTime))
+	//}
 
 	if resolvedAppId == "" {
 		return nil, "", decision.Tool, nil, "", fmt.Errorf("DirectAppCall: could not resolve tool '%s' to any installed app for org '%s'", decision.Tool, execution.ExecutionOrg)
@@ -2083,7 +2085,10 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		labelAsSnake := strings.ReplaceAll(labelLower, " ", "_")
 
 		if nameLower == decisionActionLower || labelLower == decisionActionLower || labelAsSnake == decisionActionLower {
-			//log.Printf("[DEBUG][%s] DirectAppCall: Matched action '%s' -> schema name '%s'", execution.ExecutionId, decision.Action, appAction.Name)
+			//if debug { 
+			//	log.Printf("[DEBUG][%s] DirectAppCall: Matched action '%s' -> schema name '%s'", execution.ExecutionId, decision.Action, appAction.Name)
+			//}
+
 			for _, param := range appAction.Parameters {
 				action.Parameters = append(action.Parameters, param)
 			}
@@ -2108,6 +2113,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 				break
 			}
 		}
+
 		if !matched {
 			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
 				Name:  field.Key,
@@ -2116,11 +2122,18 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		}
 	}
 
+
 	// Signal HandleRetValidation to skip the 30-second polling timeout.
 	action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
 		Name:  "agent_bypass_validation",
 		Value: "true",
 	})
+
+	//if debug { 
+	//	for _, p := range action.Parameters {
+	//		log.Printf("[DEBUG][%s] DirectAppCall: PARAMS: %s = %s", execution.ExecutionId, p.Name, p.Value)
+	//	}
+	//}
 
 	actionBytes, marshalErr := json.Marshal(action)
 	if marshalErr != nil {
@@ -2143,35 +2156,47 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 
 	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=60", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg)
 
-	//log.Printf("[DEBUG][%s] DirectAppCall: Calling /run for tool '%s' action '%s' -> %s", execution.ExecutionId, resolvedAppName, action.Name, requestUrl)
+	//if debug { 
+	//	log.Printf("[DEBUG][%s] DirectAppCall: Calling /run for tool '%s' action '%s' -> %s", execution.ExecutionId, resolvedAppName, action.Name, requestUrl)
+	//}
 
 	//httpStart := time.Now()
 	client := GetExternalClientWithTimeout(requestUrl, 0)
-	client.Timeout = 120 * time.Second
+	client.Timeout = 30 * time.Second
+
 
 	req, reqErr := http.NewRequest("POST", requestUrl, bytes.NewBuffer(actionBytes))
 	if reqErr != nil {
 		return nil, "", resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: failed to create request: %s", reqErr)
 	}
+
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Org-Id", execution.ExecutionOrg)
 
 	resp, doErr := client.Do(req)
-	//log.Printf("[DEBUG][%s] DirectAppCall: HTTP call took %s", execution.ExecutionId, time.Since(httpStart))
+	//if debug { 
+	//	log.Printf("[DEBUG][%s] DirectAppCall: HTTP call took %s", execution.ExecutionId, time.Since(httpStart))
+	//}
+
 	if doErr != nil {
-		//log.Printf("[ERROR][%s] DirectAppCall: HTTP call failed: %s", execution.ExecutionId, doErr)
+		//if debug { 
+		//	log.Printf("[ERROR][%s] DirectAppCall: HTTP call failed: %s", execution.ExecutionId, doErr)
+		//}
+
 		return nil, "", resolvedAppName, nil, action.Name, doErr
 	}
-	defer resp.Body.Close()
 
+	defer resp.Body.Close()
 	respBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
 		return nil, "", resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: failed to read response: %s", readErr)
 	}
 
-	log.Printf("[INFO][%s] DirectAppCall: executeSingleAction returned status %d, body length %d", execution.ExecutionId, resp.StatusCode, len(respBody))
+	//if debug { 
+	//	log.Printf("[DEBUG][%s] DirectAppCall: executeSingleAction returned status %d, body length %d", execution.ExecutionId, resp.StatusCode, len(respBody))
+	//}
 
 	debugUrl = resp.Header.Get("X-Debug-Url")
-
 	if resp.StatusCode >= 400 {
 		log.Printf("[ERROR][%s] DirectAppCall: executeSingleAction returned HTTP %d: %s", execution.ExecutionId, resp.StatusCode, string(respBody))
 		return nil, debugUrl, resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: executeSingleAction returned HTTP %d", resp.StatusCode)
@@ -2193,7 +2218,10 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 			}
 		}
 
-		log.Printf("[INFO][%s] DirectAppCall: result length %d, status %s", execution.ExecutionId, len(singleResult.Result), status)
+		//if debug { 
+		//	log.Printf("[DEBUG][%s] DirectAppCall: result length %d, status %s", execution.ExecutionId, len(singleResult.Result), status)
+		//}
+
 		return []byte(singleResult.Result), debugUrl, resolvedAppName, []string{}, action.Name, nil
 	}
 
@@ -2216,7 +2244,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	skipSingul := executionMode == "direct" || os.Getenv("AGENT_SKIP_SINGUL") == "true"
 	if skipSingul {
-		log.Printf("[INFO][%s] Calling app directly. ExecutionMode=%q EnvOverride=%v", execution.ExecutionId, executionMode, os.Getenv("AGENT_SKIP_SINGUL") == "true")
+		if debug { 
+			log.Printf("[DEBUG][%s] Calling decision run directly. ExecutionMode=%q EnvOverride=%v", execution.ExecutionId, executionMode, os.Getenv("AGENT_SKIP_SINGUL") == "true")
+		}
+
 		return runAgentDecisionDirectAppCall(execution, decision)
 	}
 
@@ -2602,9 +2633,9 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			decision.RunDetails.CategoryLabels = categoryLabels
 			decision.RunDetails.ActionName = actionName
 
-			if debug {
-				log.Printf("[DEBUG] RawResp agent: %s", string(rawResponse))
-			}
+			//if debug {
+			//	log.Printf("[DEBUG] RawResp agent: %s", string(rawResponse))
+			//}
 
 			if err != nil {
 				if debug { 
@@ -2720,6 +2751,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		if streamErr == nil {
 			return
 		}
+
 		log.Printf("[ERROR][%s] AI Agent: All attempts to POST decision %s to streams failed: %v. Falling back to in-process handler.", execution.ExecutionId, decision.RunDetails.Id, streamErr)
 	}
  	// Try the in-process handler to keep the agent moving when the streams API is unavailable.

@@ -2351,9 +2351,10 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						var currentOutput AgentOutput
 						_ = json.Unmarshal([]byte(innerresult.Result), &currentOutput)
 						if len(cachedOutput.Decisions) >= len(currentOutput.Decisions) {
-							if debug {
-								log.Printf("[DEBUG][%s] Fixexecution: upgrading agent result index %d from cache (%d decisions vs %d)", workflowExecution.ExecutionId, resultIndex, len(cachedOutput.Decisions), len(currentOutput.Decisions))
-							}
+							//if debug {
+							//	log.Printf("[DEBUG][%s] Fixexecution: upgrading agent result index %d from cache (%d decisions vs %d)", workflowExecution.ExecutionId, resultIndex, len(cachedOutput.Decisions), len(currentOutput.Decisions))
+							//}
+
 							innerresult.Result = string(cachedBytes)
 							workflowExecution.Results[resultIndex].Result = string(cachedBytes)
 						}
@@ -2412,6 +2413,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					innerresult.Status = "SUCCESS"
 					workflowExecution.Results[resultIndex].Status = "SUCCESS"
 					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+					break
 				}
 
 				if !finishFound && innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" {
@@ -2576,7 +2578,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 						decisionsUpdated = true
 						if finishDecisionFound {
-							log.Printf("[INFO][%s] All decisions finished for agent action %s - marking as FINISHED.", workflowExecution.ExecutionId, action.ID)
+							//log.Printf("[INFO][%s] All decisions finished for agent action %s - marking as FINISHED.", workflowExecution.ExecutionId, action.ID)
 
 							mappedOutput.Status = "FINISHED"
 							mappedOutput.CompletedAt = time.Now().UnixMilli()
@@ -2636,6 +2638,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}()
 						}
 					} else if (result.Status == "" || result.Status == "WAITING") && mappedOutput.Status == "FINISHED" {
+						if debug { 
+							log.Printf("[INFO][%s] Agent action %s marked as FINISHED, updating result status to SUCCESS.", workflowExecution.ExecutionId, action.ID)
+						}
 						workflowExecution.Results[resultIndex].Status = "SUCCESS"
 						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 					}

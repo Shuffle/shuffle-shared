@@ -22,8 +22,8 @@ import (
 func IsShuffleApp(app WorkflowApp) bool {
 	parsedAppname := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
 
-	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors", "shuffle_apps", "shuffle_workflows_builder"}
-	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75", "7db43ccd25261967b095cfbd467a75cc", "de4ef2287bd41b9d5563e39989643ee6"} 
+	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors", "shuffle_apps", "shuffle_workflows_builder", "shuffle_incidents", "shuffle_vulnerabilities"}
+	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75", "7db43ccd25261967b095cfbd467a75cc", "de4ef2287bd41b9d5563e39989643ee6", "48793430d21468f9e371ace402efcd8e"} 
 
 	isShuffleApp := false
 	if project.Environment == "cloud" && len(app.ID) > 0 {
@@ -170,7 +170,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				DatastoreAutomationOption{
 					Key:      "action",
 					Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.   If the incident has RELEVANT tasks that are not finished, modify them if necessary. Change the incident \"severity\" to info/low/medium/high/critical if relevant. When done, ALWAYS make sure the \"status\" is inProgress. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.\n\nWhen done sending the previous update, start tackling the tasks one by one if there are any, and update them in realtime. When starting them, self-assign @AIAgent to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.",
-					Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
+					Apps: []string{"48793430d21468f9e371ace402efcd8e"},
 					Disabled: false,
 				},
 			},
@@ -1142,7 +1142,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			OrgId:       orgId,
 			Start:       startActionId,
 			UsecaseIds:  []string{"SIEM to ticket", "SIEM alerts", "EDR alerts"},
-			Tags:        []string{"ingest", "webhook", "automatic"},
+			Tags:        []string{"vulnerabilities", "ingest",},
 			Actions: []Action{
 				Action{
 					Name:        "Translate standard",

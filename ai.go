@@ -1610,72 +1610,6 @@ func FixContentOutput(contentOutput string) string {
 	return contentOutput
 }
 
-// Attempts to safely balance JSON strings
-// This is because LLM's have a high chance of outputting them
-// .... slightly shittily, and they need some help sometimes.
-func balanceJSONLikeString(s string) string {
-	stack := []rune{}
-	result := []rune{}
-	inString := false
-	escape := false
-
-	for _, ch := range s {
-		if inString {
-			result = append(result, ch)
-			if escape {
-				escape = false
-				continue
-			}
-			if ch == '\\' {
-				escape = true
-			} else if ch == '"' {
-				inString = false
-			}
-			continue
-		}
-
-		// Not inside a string
-		if ch == '"' {
-			inString = true
-			result = append(result, ch)
-			continue
-		}
-
-		if ch == '{' || ch == '[' {
-			stack = append(stack, ch)
-			result = append(result, ch)
-		} else if ch == '}' || ch == ']' {
-			if len(stack) == 0 {
-				// extra closing bracket, skip it
-				continue
-			}
-			last := stack[len(stack)-1]
-			if (last == '{' && ch == '}') || (last == '[' && ch == ']') {
-				stack = stack[:len(stack)-1]
-				result = append(result, ch)
-			} else {
-				// mismatched, skip it
-				continue
-			}
-		} else {
-			result = append(result, ch)
-		}
-	}
-
-	// close any still-open brackets/braces
-	for len(stack) > 0 {
-		open := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if open == '{' {
-			result = append(result, '}')
-		} else {
-			result = append(result, ']')
-		}
-	}
-
-	return string(result)
-}
-
 // normalizeRawDecisionFields converts any non-string 'Value' into a JSON-encoded string.
 func normalizeRawDecisionFields(fields []rawField) {
 	for fieldIndex := range fields {
@@ -8066,7 +8000,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s&parent_node=%s", backendUrl, repeaterNode.AppID, execution.ExecutionId, execution.Authorization, startNode.ID)
 				client := GetExternalClient(fullUrl)
 
-				client.Timeout = time.Minute * 5
+				client.Timeout = time.Minute * 1
 				req, err := http.NewRequest(
 					"POST",
 					fullUrl,
@@ -9663,7 +9597,7 @@ data_filter:
 			for _, mappedDecision := range mappedDecisions {
 				if mappedDecision.I == lastFinishedIndex && mappedDecision.RunDetails.Status == "FAILURE" {
 					if debug {
-						log.Printf("\n\n\n\n\nMAPPING TO FAILURE DUE TO DECISION INDEX AND STATUS!!! Decisions that aren't 'finalise' should be ignored\n\n\n\n\n\n\n")
+						log.Printf("\n\n\n\n\nMAPPING TO FAILURE (2) DUE TO DECISION INDEX AND STATUS!!! Decisions that aren't 'finalise' should be ignored\n\n\n\n\n\n\n")
 					}
 				}
 			}
@@ -9722,7 +9656,7 @@ data_filter:
 		}
 
 		if resultMapping.Status == "FAILURE" {
-			log.Printf("[ERROR] MAPPING TO FAILURE!!!")
+			log.Printf("\n\n[ERROR] MAPPING TO FAILURE!!!\n\n")
 			//agentOutput.Status = "FAILURE"
 			//agentOutput.CompletedAt = time.Now().Unix()
 		}
@@ -14778,3 +14712,178 @@ func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (
 
 	return tools, nil
 }
+
+func isJSONSpace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+}
+
+// Attempts to safely balance JSON strings
+// This is because LLM's have a high chance of outputting them
+// .... slightly shittily, and they need some help sometimes.
+func balanceJSONLikeString(s string) string {
+	runes := []rune(s)
+	n := len(runes)
+	stack := []rune{}
+	result := []rune{}
+	inString := false
+	escape := false
+
+	i := 0
+	for i < n {
+		ch := runes[i]
+
+		if inString {
+			if escape {
+				result = append(result, ch)
+				escape = false
+				i++
+				continue
+			}
+			if ch == '\\' {
+				result = append(result, ch)
+				escape = true
+				i++
+				continue
+			}
+			if ch == '"' {
+				// Could be a real end-of-string, OR LLM-emitted string
+				// concatenation glue: "..." + "...". If it's glue,
+				// swallow the quote/plus/quote and keep the string going.
+				j := i + 1
+				for j < n && isJSONSpace(runes[j]) {
+					j++
+				}
+				if j < n && runes[j] == '+' {
+					k := j + 1
+					for k < n && isJSONSpace(runes[k]) {
+						k++
+					}
+					if k < n && runes[k] == '"' {
+						i = k + 1
+						continue
+					}
+				}
+				result = append(result, ch)
+				inString = false
+				i++
+				continue
+			}
+			result = append(result, ch)
+			i++
+			continue
+		}
+
+		// Not inside a string
+		if ch == '"' {
+			inString = true
+			result = append(result, ch)
+			i++
+			continue
+		}
+		if ch == '{' || ch == '[' {
+			stack = append(stack, ch)
+			result = append(result, ch)
+		} else if ch == '}' || ch == ']' {
+			if len(stack) == 0 {
+				i++
+				continue
+			}
+			last := stack[len(stack)-1]
+			if (last == '{' && ch == '}') || (last == '[' && ch == ']') {
+				stack = stack[:len(stack)-1]
+				result = append(result, ch)
+			} else {
+				i++
+				continue
+			}
+		} else {
+			result = append(result, ch)
+		}
+		i++
+	}
+
+	// close a dangling unterminated string
+	if inString {
+		result = append(result, '"')
+	}
+
+	// close any still-open brackets/braces
+	for len(stack) > 0 {
+		open := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if open == '{' {
+			result = append(result, '}')
+		} else {
+			result = append(result, ']')
+		}
+	}
+	return string(result)
+}
+
+/*
+// Attempts to safely balance JSON strings
+// This is because LLM's have a high chance of outputting them
+// .... slightly shittily, and they need some help sometimes.
+func balanceJSONLikeString(s string) string {
+	stack := []rune{}
+	result := []rune{}
+	inString := false
+	escape := false
+
+	for _, ch := range s {
+		if inString {
+			result = append(result, ch)
+			if escape {
+				escape = false
+				continue
+			}
+			if ch == '\\' {
+				escape = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		// Not inside a string
+		if ch == '"' {
+			inString = true
+			result = append(result, ch)
+			continue
+		}
+
+		if ch == '{' || ch == '[' {
+			stack = append(stack, ch)
+			result = append(result, ch)
+		} else if ch == '}' || ch == ']' {
+			if len(stack) == 0 {
+				// extra closing bracket, skip it
+				continue
+			}
+			last := stack[len(stack)-1]
+			if (last == '{' && ch == '}') || (last == '[' && ch == ']') {
+				stack = stack[:len(stack)-1]
+				result = append(result, ch)
+			} else {
+				// mismatched, skip it
+				continue
+			}
+		} else {
+			result = append(result, ch)
+		}
+	}
+
+	// close any still-open brackets/braces
+	for len(stack) > 0 {
+		open := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if open == '{' {
+			result = append(result, '}')
+		} else {
+			result = append(result, ']')
+		}
+	}
+
+	return string(result)
+}
+*/

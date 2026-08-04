@@ -1285,7 +1285,7 @@ type CacheKeyData struct {
 	Value               string       `json:"value" datastore:"Value,noindex"`
 	Category            string       `json:"category" datastore:"category"`
 	Tags                []string     `json:"tags,omitempty" datastore:"tags"`
-	IgnoreSecurityRules bool         `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"`
+	IgnoreSecurityRules bool         `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"` // Whether to follow 'Automation for X" security rules or not. These are category-wide rules.
 	Enrichments         []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 
 	Created int64 `json:"created" datastore:"Created"`
