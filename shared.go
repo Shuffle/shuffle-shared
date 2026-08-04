@@ -37500,7 +37500,7 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 			if streamOps[s].Item == "node" && (streamOps[s].Type == "add" || streamOps[s].Type == "configure") {
 				for _, action := range workflow.Actions {
 					if action.ID == streamOps[s].ID {
-						dataBytes, _ := json.Marshal(action)
+						dataBytes, _ := json.Marshal(actionStreamNode{action, "ACTION"})
 						streamOps[s].Data = dataBytes
 						break
 					}
@@ -37588,6 +37588,16 @@ type edgeBrief struct {
 	ID     string `json:"id"`
 }
 
+type actionStreamNode struct {
+	Action
+	Type string `json:"type"`
+}
+
+type triggerStreamNode struct {
+	Trigger
+	Type string `json:"type"`
+}
+
 // collectStreamOps builds the enriched StreamWorkflowOperations for a single agent op,
 // reading from the already-applied workflow state (real IDs, full data everywhere).
 func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]string, branchCountBefore int, prunedBranchIDs []string) []StreamWorkflowOperation {
@@ -37604,7 +37614,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		// The node is now in wf.Actions or wf.Triggers with its real ID.
 		for _, action := range wf.Actions {
 			if action.ID == realID {
-				dataBytes, _ := json.Marshal(action)
+				dataBytes, _ := json.Marshal(actionStreamNode{action, "ACTION"})
 				return []StreamWorkflowOperation{{
 					Item:     "node",
 					Type:     "add",
@@ -37616,7 +37626,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		for _, trigger := range wf.Triggers {
 			if trigger.ID == realID {
-				dataBytes, _ := json.Marshal(trigger)
+				dataBytes, _ := json.Marshal(triggerStreamNode{trigger, "TRIGGER"})
 				return []StreamWorkflowOperation{{
 					Item:     "node",
 					Type:     "add",
