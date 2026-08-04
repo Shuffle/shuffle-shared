@@ -36881,6 +36881,10 @@ func AgentWorkflowEditor(resp http.ResponseWriter, request *http.Request) {
 				Name:  "template",
 				Value: "workflow-edit",
 			},
+			{
+				Name: "execution_mode",
+				Value: "direct",
+			},
 		},
 	}
 
