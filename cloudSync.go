@@ -1984,21 +1984,244 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 	}
 }
 
+// runAgentDecisionDirectAppCall bypasses Singul and runs the app directly.
+func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDecision) (rawResult []byte, debugUrl string, appName string, categoryLabels []string, actionName string, err error) {
+	ctx := context.Background()
+	var minUser User
+	org, err := GetOrg(ctx, execution.ExecutionOrg)
+	if err == nil && len(org.Users) > 0 {
+		minUser = org.Users[0] // Grabbing the first user, Is this the right way to do it ?
+	} else {
+		minUser = User{Username: execution.Workflow.Owner}
+	}
+	minUser.ActiveOrg = OrgMini{Id: execution.ExecutionOrg}
+
+	var (
+		resolvedAppId   string
+		resolvedAppName = decision.Tool
+		//resolvedAuthId  string
+		resolvedApp     WorkflowApp
+	)
+
+	//startTime := time.Now()
+	cacheKey := fmt.Sprintf("agent_app_slug_%s_%s", execution.ExecutionOrg, strings.ToLower(decision.Tool))
+
+	if project.CacheDb {
+		if cachedId, cacheErr := GetCache(ctx, cacheKey); cacheErr == nil {
+			resolvedAppId = string(cachedId.([]uint8))
+			if app, appErr := GetApp(ctx, resolvedAppId, minUser, false); appErr == nil {
+				resolvedApp = *app
+				resolvedAppName = app.Name
+				//log.Printf("[DEBUG][%s] DirectAppCall: Fast-resolved tool '%s' via cache -> ID: %s", execution.ExecutionId, decision.Tool, resolvedAppId)
+			} else {
+				resolvedAppId = "" // Cache hit but GetApp failed; fall through to full lookup
+			}
+		}
+	}
+
+	if resolvedAppId == "" {
+		allApps, appsErr := GetPrioritizedApps(ctx, minUser)
+		if appsErr != nil {
+			//log.Printf("[WARNING][%s] DirectAppCall: Failed to list apps for name resolution: %s", execution.ExecutionId, appsErr)
+		} else {
+			toolLower := strings.ToLower(decision.Tool)
+			for _, app := range allApps {
+				if strings.ToLower(app.Name) == toolLower ||
+					strings.ToLower(app.ID) == toolLower ||
+					strings.ReplaceAll(strings.ToLower(app.Name), " ", "") == toolLower {
+					resolvedAppId = app.ID
+					resolvedAppName = app.Name
+					resolvedApp = app
+					//log.Printf("[DEBUG][%s] DirectAppCall: Resolved tool '%s' -> App '%s' (ID: %s)", execution.ExecutionId, decision.Tool, app.Name, app.ID)
+					if project.CacheDb {
+						SetCache(ctx, cacheKey, []byte(app.ID), 3600)
+					}
+					break
+				}
+			}
+		}
+	}
+
+	//log.Printf("[DEBUG][%s] DirectAppCall: App resolution took %s", execution.ExecutionId, time.Since(startTime))
+
+	if resolvedAppId == "" {
+		return nil, "", decision.Tool, nil, "", fmt.Errorf("DirectAppCall: could not resolve tool '%s' to any installed app for org '%s'", decision.Tool, execution.ExecutionOrg)
+	}
+
+
+	/*
+	authStart := time.Now()
+	allAuths, authErr := GetAllWorkflowAppAuth(ctx, execution.ExecutionOrg)
+	if authErr != nil {
+		log.Printf("[WARNING][%s] DirectAppCall: Failed to get app auths: %s", execution.ExecutionId, authErr)
+	} else {
+		for _, auth := range allAuths {
+			if auth.App.ID == resolvedAppId || strings.ToLower(auth.App.Name) == strings.ToLower(resolvedAppName) {
+				resolvedAuthId = auth.Id
+				//log.Printf("[DEBUG][%s] DirectAppCall: Found auth '%s' (defined: %v) for app '%s'", execution.ExecutionId, resolvedAuthId, auth.Defined, resolvedAppName)
+				if auth.Defined {
+					break
+				}
+			}
+		}
+	}
+	log.Printf("[DEBUG][%s] DirectAppCall: Auth resolution took %s", execution.ExecutionId, time.Since(authStart))
+	*/
+
+	action := Action{
+		AppID:            resolvedAppId,
+		AppName:          resolvedAppName,
+		Name:             decision.Action, // overwritten below if schema match found
+		//AuthenticationId: resolvedAuthId,
+		Parameters:       []WorkflowAppActionParameter{},
+	}
+
+	decisionActionLower := strings.ToLower(decision.Action)
+	for _, appAction := range resolvedApp.Actions {
+		nameLower := strings.ToLower(appAction.Name)
+		labelLower := strings.ToLower(appAction.Label)
+		labelAsSnake := strings.ReplaceAll(labelLower, " ", "_")
+
+		if nameLower == decisionActionLower || labelLower == decisionActionLower || labelAsSnake == decisionActionLower {
+			//log.Printf("[DEBUG][%s] DirectAppCall: Matched action '%s' -> schema name '%s'", execution.ExecutionId, decision.Action, appAction.Name)
+			for _, param := range appAction.Parameters {
+				action.Parameters = append(action.Parameters, param)
+			}
+			// Always use the canonical name from the schema so the backend recognises it
+			action.Name = appAction.Name
+			break
+		}
+	}
+
+	// Overlay values the agent has explicitly provided, matching by parameter name.
+	for _, field := range decision.Fields {
+		val := field.Value
+		if len(field.Answer) > 0 {
+			val = field.Answer
+		}
+
+		matched := false
+		for i, p := range action.Parameters {
+			if strings.ToLower(p.Name) == strings.ToLower(field.Key) {
+				action.Parameters[i].Value = val
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  field.Key,
+				Value: val,
+			})
+		}
+	}
+
+	// Signal HandleRetValidation to skip the 30-second polling timeout.
+	action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+		Name:  "agent_bypass_validation",
+		Value: "true",
+	})
+
+	actionBytes, marshalErr := json.Marshal(action)
+	if marshalErr != nil {
+		return nil, "", resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: failed to marshal action: %s", marshalErr)
+	}
+
+
+	baseURL := os.Getenv("BASE_URL")
+	if len(baseURL) == 0 {
+		if v := os.Getenv("SHUFFLE_CLOUDRUN_URL"); len(v) > 0 {
+			baseURL = v
+		} else {
+			port := os.Getenv("PORT")
+			if len(port) == 0 {
+				port = "5001"
+			}
+			baseURL = fmt.Sprintf("http://localhost:%s", port)
+		}
+	}
+
+	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=60", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg)
+
+	//log.Printf("[DEBUG][%s] DirectAppCall: Calling /run for tool '%s' action '%s' -> %s", execution.ExecutionId, resolvedAppName, action.Name, requestUrl)
+
+	//httpStart := time.Now()
+	client := GetExternalClientWithTimeout(requestUrl, 0)
+	client.Timeout = 120 * time.Second
+
+	req, reqErr := http.NewRequest("POST", requestUrl, bytes.NewBuffer(actionBytes))
+	if reqErr != nil {
+		return nil, "", resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: failed to create request: %s", reqErr)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, doErr := client.Do(req)
+	//log.Printf("[DEBUG][%s] DirectAppCall: HTTP call took %s", execution.ExecutionId, time.Since(httpStart))
+	if doErr != nil {
+		//log.Printf("[ERROR][%s] DirectAppCall: HTTP call failed: %s", execution.ExecutionId, doErr)
+		return nil, "", resolvedAppName, nil, action.Name, doErr
+	}
+	defer resp.Body.Close()
+
+	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, "", resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: failed to read response: %s", readErr)
+	}
+
+	log.Printf("[INFO][%s] DirectAppCall: executeSingleAction returned status %d, body length %d", execution.ExecutionId, resp.StatusCode, len(respBody))
+
+	debugUrl = resp.Header.Get("X-Debug-Url")
+
+	if resp.StatusCode >= 400 {
+		log.Printf("[ERROR][%s] DirectAppCall: executeSingleAction returned HTTP %d: %s", execution.ExecutionId, resp.StatusCode, string(respBody))
+		return nil, debugUrl, resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: executeSingleAction returned HTTP %d", resp.StatusCode)
+	}
+
+	var singleResult SingleResult
+	if jsonErr := json.Unmarshal(respBody, &singleResult); jsonErr == nil && len(singleResult.Result) > 0 {
+		status := "SUCCESS"
+		if !singleResult.Success {
+			status = "FAILURE"
+		}
+
+		if status == "SUCCESS" {
+			var innerResult map[string]interface{}
+			if innerErr := json.Unmarshal([]byte(singleResult.Result), &innerResult); innerErr == nil {
+				if innerSuccess, ok := innerResult["success"].(bool); ok && !innerSuccess {
+					status = "FAILURE"
+				}
+			}
+		}
+
+		log.Printf("[INFO][%s] DirectAppCall: result length %d, status %s", execution.ExecutionId, len(singleResult.Result), status)
+		return []byte(singleResult.Result), debugUrl, resolvedAppName, []string{}, action.Name, nil
+	}
+
+	// Fallback: return raw body when the response isn't a well-formed SingleResult
+	return respBody, debugUrl, resolvedAppName, []string{}, action.Name, nil
+}
+
 // This is JUST for Singul actions with AI agents.
 // As AI Agents can have multiple types of runs, this could change every time.
-func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, []string, string, error) {
+func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision, executionMode string) ([]byte, string, string, []string, string, error) {
 	debugUrl := ""
-	log.Printf("[INFO][%s] Running agent decision action '%s' with app '%s'. This is ran with Singul.", execution.ExecutionId, decision.Action, decision.Tool)
+	log.Printf("[INFO][%s] Running agent decision action '%s' with app '%s'.", execution.ExecutionId, decision.Action, decision.Tool)
 
 	// Check if running in test mode
 	if os.Getenv("AGENT_TEST_MODE") == "true" {
 		log.Printf("[DEBUG][%s] AGENT_TEST_MODE enabled - using mock tool execution", execution.ExecutionId)
-
-		// Call mock handler
 		body, debugUrl, appName, err := RunAgentDecisionMockHandler(execution, decision)
 		return body, debugUrl, appName, []string{}, "", err
 	}
 
+	skipSingul := executionMode == "direct" || os.Getenv("AGENT_SKIP_SINGUL") == "true"
+	if skipSingul {
+		log.Printf("[INFO][%s] Calling app directly. ExecutionMode=%q EnvOverride=%v", execution.ExecutionId, executionMode, os.Getenv("AGENT_SKIP_SINGUL") == "true")
+		return runAgentDecisionDirectAppCall(execution, decision)
+	}
+
+	_ = debugUrl
+	
 	baseUrl := "https://shuffler.io"
 	if os.Getenv("BASE_URL") != "" {
 		baseUrl = os.Getenv("BASE_URL")
@@ -2368,7 +2591,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			}
 		} else {
 		// Singul handler
-			rawResponse, debugUrl, appname, categoryLabels, actionName, err := RunAgentDecisionSingulActionHandler(execution, decision)
+			rawResponse, debugUrl, appname, categoryLabels, actionName, err := RunAgentDecisionSingulActionHandler(execution, decision, agentOutput.ExecutionMode)
 
 			if len(appname) > 0 {
 				decision.Tool = appname

@@ -8014,6 +8014,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	foundReasoning := ""
 	enableQuestions := false
+	executionMode := ""
 
 	// This is a part of making sure variables work properly, no matter where
 	// in Shuffle we are
@@ -8168,6 +8169,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			//}
 
 			param.Name = "action"
+		}
+
+		if param.Name == "execution_mode" {
+			executionMode = strings.ToLower(strings.TrimSpace(param.Value))
 		}
 
 		if param.Name == "action" {
@@ -8909,7 +8914,7 @@ data_filter:
 	}
 
 	// Set model based on environment
-	aiModel := "gpt-5.4-2026-03-05"
+	aiModel := "gpt-5.4-mini-2026-03-17"
 	newAiModel := os.Getenv("AI_MODEL")
 	if newAiModel == "" {
 		newAiModel = os.Getenv("OPENAI_MODEL")
@@ -9211,6 +9216,10 @@ data_filter:
 				Name:  "headers",
 				Value: "Content-Type: application/json\nAccept: application/json",
 			},
+			// WorkflowAppActionParameter{
+			// 	Name:  "agent_bypass_validation",
+			// 	Value: "true",
+			// },
 		}
 
 		// Adding additional non-required params to make sure we get them parsed 
@@ -9616,12 +9625,13 @@ data_filter:
 			Error:     errorMessage,
 			Decisions: mappedDecisions,
 
-			ExecutionId: execution.ExecutionId,
-			NodeId:      startNode.ID,
-			StartedAt:   time.Now().UnixMilli(),
-			CompletedAt: 0,
+			ExecutionId:   execution.ExecutionId,
+			NodeId:        startNode.ID,
+			StartedAt:     time.Now().UnixMilli(),
+			CompletedAt:   0,
 
-			Memory: memorizationEngine,
+			Memory:        memorizationEngine,
+			ExecutionMode: executionMode,
 
 			AllowedActions: strings.Split(allowedActionString, ","),
 		}
