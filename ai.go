@@ -8914,7 +8914,7 @@ data_filter:
 	}
 
 	// Set model based on environment
-	aiModel := "gpt-5.4-mini-2026-03-17"
+	aiModel := "gpt-5.6-luna"
 	newAiModel := os.Getenv("AI_MODEL")
 	if newAiModel == "" {
 		newAiModel = os.Getenv("OPENAI_MODEL")
