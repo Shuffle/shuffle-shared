@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"fmt"
 	"hash/crc32"
 	"log"
 	"strings"
@@ -142,28 +143,43 @@ func (client *shuffleMemcacheClient) Set(item *gomemcache.Item) error {
 
 func (client *shuffleMemcacheClient) Add(item *gomemcache.Item) (bool, error) {
 	client.mutex.RLock()
-	if len(client.servers) == 0 {
+	serverCount := len(client.servers)
+	if serverCount == 0 {
 		client.mutex.RUnlock()
 		return false, gomemcache.ErrNoServers
 	}
-
-	// Atomic claims must always use the same server. Failing over here could
-	// allow two callers to acquire the same key on different servers.
-	server := client.servers[int(crc32.ChecksumIEEE([]byte(item.Key))%uint32(len(client.servers)))]
+	servers := append([]*shuffleMemcacheServer(nil), client.servers...)
 	client.mutex.RUnlock()
 
-	err := server.client.Add(item)
-	if err == nil {
-		return true, nil
-	}
-	if err == gomemcache.ErrNotStored {
-		return false, nil
-	}
-	if err != gomemcache.ErrMalformedKey {
+	quorum := serverCount/2 + 1
+	successes := 0
+	start := int(crc32.ChecksumIEEE([]byte(item.Key)) % uint32(serverCount))
+	var lastErr error
+	for offset := 0; offset < serverCount; offset++ {
+		server := servers[(start+offset)%serverCount]
+		err := server.client.Add(item)
+		if err == nil {
+			successes++
+			if successes >= quorum {
+				return true, nil
+			}
+			continue
+		}
+		if err == gomemcache.ErrNotStored {
+			return false, nil
+		}
+		if err == gomemcache.ErrMalformedKey {
+			return false, err
+		}
+
+		lastErr = err
 		client.disableServer(server, err)
 	}
 
-	return false, err
+	if lastErr != nil {
+		return false, fmt.Errorf("memcached claim quorum unavailable: got %d of %d: %w", successes, quorum, lastErr)
+	}
+	return false, nil
 }
 
 func (client *shuffleMemcacheClient) Delete(key string) error {
