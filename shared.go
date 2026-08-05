@@ -6929,8 +6929,34 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(workflowjson)
 }
 
+func mapParentBranchToChildTriggers(branch Branch, childTriggers []Trigger) Branch {
+	for _, trigger := range childTriggers {
+		if len(trigger.ReplacementForTrigger) == 0 {
+			continue
+		}
+
+		if trigger.ReplacementForTrigger == branch.SourceID {
+			branch.SourceID = trigger.ID
+		}
+
+		if trigger.ReplacementForTrigger == branch.DestinationID {
+			branch.DestinationID = trigger.ID
+		}
+	}
+
+	return branch
+}
+
 func hasBranchChanged(newBranch Branch, oldBranch Branch) (string, bool) {
 	// Check if there is a difference in parameters, and what they are
+	if newBranch.SourceID != oldBranch.SourceID {
+		return "source_id", true
+	}
+
+	if newBranch.DestinationID != oldBranch.DestinationID {
+		return "destination_id", true
+	}
+
 	if newBranch.Label != oldBranch.Label {
 		return "label", true
 	}
@@ -7779,6 +7805,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			continue
 		}
 
+		newBranch = mapParentBranchToChildTriggers(newBranch, oldWorkflow.Triggers)
+
 		// Verifies a ton of stuff about branches to ensure they are
 		// kept synced, even with e.g. ACTION/TRIGGER ID changes
 		for oldBranchIndex, oldBranch := range oldWorkflow.Branches {
@@ -7852,7 +7880,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					// Check triggers if it exists, as actions should not be changing ID
 					for _, trigger := range oldWorkflow.Triggers {
 						if trigger.ID == newSource {
-							foundSource = true
+							foundDestination = true
 							oldWorkflow.Branches[oldBranchIndex].DestinationID = newSource
 							break
 						}
@@ -8646,15 +8674,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					continue
 				}
 
-				// if a new branch is added to add a trigger,
-				// make sure it has the new trigger ID
-				for _, trigger := range childWorkflow.Triggers {
-					if trigger.ReplacementForTrigger == branch.SourceID {
-						branch.SourceID = trigger.ID
-					} else if trigger.ReplacementForTrigger == branch.DestinationID {
-						branch.DestinationID = trigger.ID
-					}
-				}
+				branch = mapParentBranchToChildTriggers(branch, childWorkflow.Triggers)
 
 				branches = append(branches, branch)
 			}
@@ -8679,6 +8699,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 		if len(updatedBranches) > 0 {
 			for _, action := range updatedBranches {
+				action = mapParentBranchToChildTriggers(action, childWorkflow.Triggers)
 				for index, childAction := range childWorkflow.Branches {
 					if childAction.ID != action.ID {
 						continue

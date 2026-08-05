@@ -346,6 +346,26 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 	return "", errors.New(fmt.Sprintf("No cache found for %s", name))
 }
 
+// ClaimCacheKey atomically creates a short-lived key in shared Memcached.
+func ClaimCacheKey(name string, expirationSeconds int32) (bool, error) {
+	name = strings.ReplaceAll(strings.TrimSpace(name), " ", "_")
+	if name == "" {
+		return false, errors.New("cache claim key cannot be empty")
+	}
+	if expirationSeconds < 1 {
+		return false, errors.New("cache claim expiration must be greater than zero")
+	}
+	if len(memcached) == 0 {
+		return false, errors.New("SHUFFLE_MEMCACHED is required for atomic cache claims")
+	}
+
+	return mc.Add(&gomemcache.Item{
+		Key:        name,
+		Value:      []byte("1"),
+		Expiration: expirationSeconds,
+	})
+}
+
 // Sets a key in cache. Expiration is in minutes, unless you pass in useMilliseconds=true
 // Added Millisecond timeout because some things like execution results may need more precise timing. Use by adding a true boolean as the last parameter.
 func SetCache(ctx context.Context, name string, data []byte, expiration int32, useMillisecondsInput ...bool) error {

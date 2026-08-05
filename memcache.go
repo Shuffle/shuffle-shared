@@ -140,6 +140,32 @@ func (client *shuffleMemcacheClient) Set(item *gomemcache.Item) error {
 	return gomemcache.ErrNoServers
 }
 
+func (client *shuffleMemcacheClient) Add(item *gomemcache.Item) (bool, error) {
+	client.mutex.RLock()
+	if len(client.servers) == 0 {
+		client.mutex.RUnlock()
+		return false, gomemcache.ErrNoServers
+	}
+
+	// Atomic claims must always use the same server. Failing over here could
+	// allow two callers to acquire the same key on different servers.
+	server := client.servers[int(crc32.ChecksumIEEE([]byte(item.Key))%uint32(len(client.servers)))]
+	client.mutex.RUnlock()
+
+	err := server.client.Add(item)
+	if err == nil {
+		return true, nil
+	}
+	if err == gomemcache.ErrNotStored {
+		return false, nil
+	}
+	if err != gomemcache.ErrMalformedKey {
+		client.disableServer(server, err)
+	}
+
+	return false, err
+}
+
 func (client *shuffleMemcacheClient) Delete(key string) error {
 	servers := client.availableServers(key)
 	if len(servers) == 0 {
