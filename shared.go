@@ -13871,7 +13871,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.Billing.AppRunsHardLimit = tmpData.Billing.AppRunsHardLimit
 	}
 
-	if tmpData.Editing == "app_runs_grouping" {
+	if tmpData.Editing == "app_runs_grouping" && !org.SyncFeatures.AnnualAppRunsGrouping.Active && !user.SupportAccess {
 		org.SyncFeatures.AnnualAppRunsGrouping.Active = tmpData.SyncFeatures.AnnualAppRunsGrouping.Active
 	}
 
@@ -14154,6 +14154,8 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 		if newLeadinfo.EnterpriseLicenseOnprem ||
 			newLeadinfo.BusinessLicenseOnprem {
+
+			org.SyncFeatures.OnpremAppExecutions.Limit = 300000
 			org.SyncFeatures.OnpremAppExecutions.Active = true
 
 			org.SyncFeatures.Branding.Active = false

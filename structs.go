@@ -581,6 +581,9 @@ type ExecutionInfo struct {
 	HourlyOnpremExecutions           int64 `json:"hourly_onprem_executions,omitempty" datastore:"hourly_onprem_executions"`
 	HourlyAIUsage                    int64 `json:"hourly_ai_executions,omitempty" datastore:"hourly_ai_executions"`
 
+	AnnualAppExecutions      int64 `json:"annual_app_executions,omitempty" datastore:"annual_app_executions"`
+	AnnualChildAppExecutions int64 `json:"annual_child_app_executions,omitempty" datastore:"annual_child_app_executions"`
+
 	// These are just here in case we get use of them
 	TotalApiUsage int64 `json:"total_api_usage" datastore:"total_api_usage"`
 	DailyApiUsage int64 `json:"daily_api_usage" datastore:"daily_api_usage"`
