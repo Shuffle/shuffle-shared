@@ -9077,7 +9077,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 			for _, sub := range licenseOrg.Subscriptions {
 				if sub.Active {
 					subName := strings.ToLower(sub.Name)
-					if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") {
+					if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") || strings.Contains(subName, "scale") {
 						planStartDate = sub.Startdate
 						break
 					}

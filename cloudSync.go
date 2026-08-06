@@ -939,7 +939,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		for _, sub := range validationOrg.Subscriptions {
 			if sub.Active {
 				subName := strings.ToLower(sub.Name)
-				if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") {
+				if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") || strings.Contains(subName, "scale") {
 					planStartDate = sub.Startdate
 
 					if sub.Enddate > 0 && sub.Enddate < now {
