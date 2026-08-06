@@ -165,7 +165,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 		// 3 year retention
 		if categoryConfig.Settings.Timeout == 0 {
-			categoryConfig.Settings.Timeout = 946080000
+			categoryConfig.Settings.Timeout = 94608000
 			datastoreCategoryConfigEdited = true
 		}
 

@@ -1928,7 +1928,9 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
 				newValue, err := HandleKeyDecryption([]byte(auth.Fields[index].Value), parsedKey)
 				if err != nil {
-					log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+					if debug { 
+						log.Printf("[DEBUG] ERROR - Failed decrypting field %s in org %s: %s", field.Key, auth.OrgId, err)
+					}
 				} else {
 					//log.Printf("Decrypted value: %s", newValue)
 					newAuthField.Fields[index].Value = string(newValue)
@@ -2095,7 +2097,9 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 						parsedKey := fmt.Sprintf("%s_%d_%s_%s", originalAuth.OrgId, originalAuth.Created, originalAuth.Label, field.Key)
 						newValue, err := HandleKeyDecryption([]byte(existingField.Value), parsedKey)
 						if err != nil {
-							log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+							if debug { 
+								log.Printf("[DEBUG] Failed decrypting field (2) %s: %s", field.Key, err)
+							}
 						} else {
 							//log.Printf("Decrypted value: %s", newValue)
 							appAuth.Fields[fieldIndex].Value = string(newValue)
@@ -2125,7 +2129,9 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 						parsedKey := fmt.Sprintf("%s_%d_%s_%s", originalAuth.OrgId, originalAuth.Created, originalAuth.Label, field.Key)
 						newValue, err := HandleKeyDecryption([]byte(existingField.Value), parsedKey)
 						if err != nil {
-							log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+							if debug { 
+								log.Printf("[DEBUG] Failed decrypting field (3) %s: %s", field.Key, err)
+							}
 						} else {
 							//log.Printf("Decrypted value: %s", newValue)
 							appAuth.Fields[fieldIndex].Value = string(newValue)
@@ -2139,7 +2145,9 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", originalAuth.OrgId, originalAuth.Created, originalAuth.Label, field.Key)
 				newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 				if err != nil {
-					log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+					if debug { 
+						log.Printf("[DEBUG] Failed decrypting field (4) %s: %s", field.Key, err)
+					}
 				} else {
 					//log.Printf("Decrypted value: %s", newValue)
 					appAuth.Fields[fieldIndex].Value = string(newValue)
@@ -4726,6 +4734,10 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		skipTruncate = true
 	}
 
+	if debug { 
+		log.Printf("[DEBUG] Getting workflows for user %s (%s) in org %s (%s). Max amount: %d, cursor: %s, skipTruncate: %t", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id, maxAmount, cursor, skipTruncate)
+	}
+
 	workflows, err = GetAllWorkflowsByQuery(ctx, user, maxAmount, cursor)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
@@ -4791,9 +4803,9 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	//log.Printf("[DEBUG] Env: %s, workflows: %d", project.Environment, len(parentWorkflows))
 	if project.Environment == "cloud" && len(parentWorkflows) > 40 {
-		//if debug  {
-		//	log.Printf("[DEBUG] Removed workflow actions & images for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
-		//}
+		if debug  {
+			log.Printf("[DEBUG] Removed workflow actions & images for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		}
 
 		// Check for "subflow" query
 		isSubflow := false

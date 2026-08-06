@@ -5008,21 +5008,6 @@ type AIConfig struct {
 	Status    string `json:"status" datastore:"status"`
 }
 
-// EDR and Audit Log Monitoring Structs
-type AuditLogEntry struct {
-	Timestamp   time.Time              `json:"timestamp"`
-	EventID     string                 `json:"event_id"`
-	EventType   string                 `json:"event_type"`
-	Source      string                 `json:"source"`
-	Level       string                 `json:"level"`
-	ProcessInfo *ProcessInfo           `json:"process_info,omitempty"`
-	UserInfo    *UserInfo              `json:"user_info,omitempty"`
-	Message     string                 `json:"message"`
-	RawData     string                 `json:"raw_data,omitempty"`
-	Platform    string                 `json:"platform"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
-}
-
 type ProcessInfo struct {
 	PID         int32  `json:"pid"`
 	PPID        int32  `json:"ppid,omitempty"`
@@ -5058,13 +5043,21 @@ type TelemetryFilter struct {
 	Exclude []string `json:"exclude,omitempty"`
 }
 
-type AuditLogCollector struct {
-	Config     TelemetryConfig
-	Platform   string
-	LogChannel chan AuditLogEntry
-	StopChan   chan bool
-	mu         sync.Mutex
+// EDR and Audit Log Monitoring Structs
+type AuditLogEntry struct {
+	Timestamp   time.Time              `json:"timestamp"`
+	EventID     string                 `json:"event_id"`
+	EventType   string                 `json:"event_type"`
+	Source      string                 `json:"source"`
+	Level       string                 `json:"level"`
+	ProcessInfo *ProcessInfo           `json:"process_info,omitempty"`
+	UserInfo    *UserInfo              `json:"user_info,omitempty"`
+	Message     string                 `json:"message"`
+	RawData     string                 `json:"raw_data,omitempty"`
+	Platform    string                 `json:"platform"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
+
 
 // Thread conversation access control structs
 type ThreadAccessRequest struct {
