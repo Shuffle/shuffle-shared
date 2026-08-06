@@ -196,6 +196,41 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 	if err == nil && len(body) > 0 {
 		respError := json.Unmarshal(body, &cacheReturn)
 		if respError == nil && (cacheReturn.Amount > 0 || (cacheReturn.Key == key && len(cacheReturn.Value) > 0)) {
+			// Makes the return better
+			if len(key) == 0 && len(cacheReturn.Keys) > 0 { 
+				newKeys := make([]map[string]interface{}, 0)
+				for _, cacheKey := range cacheReturn.Keys {
+					if len(cacheKey.Value) == 0 { 
+						continue
+					}
+
+					if !strings.HasPrefix(cacheKey.Value, "{") || !strings.HasSuffix(cacheKey.Value, "}") {
+						continue
+					}
+
+					mappedValue := map[string]interface{}{}
+					err := json.Unmarshal([]byte(cacheKey.Value), &mappedValue)
+					if err != nil {
+						log.Printf("[ERROR] Failed to unmarshal cacheKey.Value in datastore redirect wrapper: %s", err)
+					}
+
+					newKeys = append(newKeys, mappedValue)
+				}
+
+				if len(newKeys) > 0 { 
+					cacheReturn.Keys = []CacheKeyData{}
+					cacheReturn.Items = newKeys
+					cacheReturn.Config = DatastoreCategoryUpdate{}
+
+					marshalled, err := json.Marshal(cacheReturn)
+					if err == nil {
+						body = marshalled
+					} else {
+						log.Printf("[ERROR] Failed to marshal cacheReturn in datastore redirect wrapper: %s", err)
+					}
+				}
+			}
+
 			resp.WriteHeader(result.StatusCode)
 			resp.Write(body)
 			return
@@ -230,6 +265,42 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 		if err == nil && len(body) > 0 {
 			respError := json.Unmarshal(body, &cacheReturn)
 			if respError == nil && (cacheReturn.Amount > 0 || (cacheReturn.Key == key && len(cacheReturn.Value) > 0)) {
+
+				// Makes the return better
+				if len(key) == 0 && len(cacheReturn.Keys) > 0 { 
+					newKeys := make([]map[string]interface{}, 0)
+					for _, cacheKey := range cacheReturn.Keys {
+						if len(cacheKey.Value) == 0 { 
+							continue
+						}
+
+						if !strings.HasPrefix(cacheKey.Value, "{") || !strings.HasSuffix(cacheKey.Value, "}") {
+							continue
+						}
+
+						mappedValue := map[string]interface{}{}
+						err := json.Unmarshal([]byte(cacheKey.Value), &mappedValue)
+						if err != nil {
+							log.Printf("[ERROR] Failed to unmarshal cacheKey.Value in datastore redirect wrapper: %s", err)
+						}
+
+						newKeys = append(newKeys, mappedValue)
+					}
+
+					if len(newKeys) > 0 { 
+						cacheReturn.Keys = []CacheKeyData{}
+						cacheReturn.Items = newKeys
+						cacheReturn.Config = DatastoreCategoryUpdate{}
+
+						marshalled, err := json.Marshal(cacheReturn)
+						if err == nil {
+							body = marshalled
+						} else {
+							log.Printf("[ERROR] Failed to marshal cacheReturn in datastore redirect wrapper: %s", err)
+						}
+					}
+				}
+
 				resp.WriteHeader(result.StatusCode)
 				resp.Write(body)
 				return
@@ -238,7 +309,7 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 	}
 
 	resp.WriteHeader(404)
-	resp.Write([]byte(`{"success": false, "reason": "No datastore value found for this key and category"}`))
+	resp.Write([]byte(`{"success": false, "reason": "No values found for this key and category"}`))
 }
 
 func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {

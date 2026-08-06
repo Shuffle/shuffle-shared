@@ -4380,7 +4380,8 @@ type CacheReturn struct {
 	Config     DatastoreCategoryUpdate `json:"category_config,omitempty"`
 	Categories []string                `json:"categories,omitempty"`
 
-	Keys []CacheKeyData `json:"keys"`
+	Keys []CacheKeyData `json:"keys,omitempty"`
+	Items []map[string]interface{} `json:"items,omitempty"`
 
 	Reason string `json:"reason,omitempty"`
 	Key    string `json:"key,omitempty"`
