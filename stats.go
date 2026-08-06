@@ -1075,6 +1075,33 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		wg.Wait()
 	}
 
+	if org.SyncFeatures.AnnualAppRunsGrouping.Active {
+		var startDate, endDate time.Time
+		annualSubscriptionExists := false
+		for _, subscription := range org.Subscriptions {
+			if (strings.Contains(strings.ToLower(subscription.Name), "business") || strings.Contains(strings.ToLower(subscription.Name), "enterprise")) && (strings.Contains(strings.ToLower(subscription.Recurrence), "annual")) && subscription.Active {
+				annualSubscriptionExists = true
+				startDate = time.Unix(subscription.Startdate, 0)
+				endDate = time.Unix(subscription.Enddate, 0)
+				break
+			}
+		}
+
+		if annualSubscriptionExists && len(info.DailyStatistics) > 0 {
+
+			annualSubscriptionAppRuns := int64(0)
+			annualSubscriptionChildAppRuns := int64(0)
+			for i := range info.DailyStatistics {
+				if info.DailyStatistics[i].Date.Unix() >= startDate.Unix() && info.DailyStatistics[i].Date.Unix() <= endDate.Unix() {
+					annualSubscriptionAppRuns += info.DailyStatistics[i].AppExecutions
+					annualSubscriptionChildAppRuns += info.DailyStatistics[i].ChildAppExecutions
+				}
+			}
+			info.AnnualAppExecutions = annualSubscriptionAppRuns
+			info.AnnualChildAppExecutions = annualSubscriptionChildAppRuns
+		}
+	}
+
 	stats := GetCorrectedStats(info)
 
 	newjson, err := json.Marshal(stats)
@@ -1112,6 +1139,29 @@ func GetCorrectedStats(info *ExecutionInfo) *ExecutionInfo {
 
 	info.TotalAppExecutions += info.TotalAgentInputTokens*250/1_000_000 + info.TotalAgentOutputTokens*1500/1_000_000 + info.TotalSMSUsage*3 + info.TotalEmailUsage*2
 	info.TotalChildAppExecutions += info.TotalChildOrgAgentInputTokens*250/1_000_000 + info.TotalChildOrgAgentOutputTokens*1500/1_000_000 + info.TotalChildOrgSMSUsage*3 + info.TotalChildOrgEmailUsage*2
+
+	if len(info.DailyStatistics) > 0 {
+		annualInputTokens := int64(0)
+		annualChildInputTokens := int64(0)
+		annualOutputTokens := int64(0)
+		annualChildOutputTokens := int64(0)
+		annualSMSUsage := int64(0)
+		annualChildSMSUsage := int64(0)
+		annualEmailUsage := int64(0)
+		annualChildEmailUsage := int64(0)
+		for i := range info.DailyStatistics {
+			annualInputTokens += info.DailyStatistics[i].AgentInputTokens
+			annualChildInputTokens += info.DailyStatistics[i].ChildOrgAgentInputTokens
+			annualOutputTokens += info.DailyStatistics[i].AgentOutputTokens
+			annualChildOutputTokens += info.DailyStatistics[i].ChildOrgAgentOutputTokens
+			annualSMSUsage += info.DailyStatistics[i].DailySMSUsage
+			annualChildSMSUsage += info.DailyStatistics[i].DailyChildOrgSMSUsage
+			annualEmailUsage += info.DailyStatistics[i].DailyEmailUsage
+			annualChildEmailUsage += info.DailyStatistics[i].DailyChildOrgEmailUsage
+		}
+		info.AnnualAppExecutions += annualInputTokens*250/1_000_000 + annualOutputTokens*1500/1_000_000 + annualSMSUsage*3 + annualEmailUsage*2
+		info.AnnualChildAppExecutions += annualChildInputTokens*250/1_000_000 + annualChildOutputTokens*1500/1_000_000 + annualChildSMSUsage*3 + annualChildEmailUsage*2
+	}
 
 	return info
 }
