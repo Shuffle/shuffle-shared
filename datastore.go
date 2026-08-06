@@ -152,7 +152,7 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 		}
 
 		category = location[3]
-		if len(location) > 3 { 
+		if len(location) > 4 { 
 			key = location[4]
 		}
 	}
@@ -1462,7 +1462,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if workflowExecution.Status != "EXECUTING" {
-			log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+			log.Printf("[INFO] Workflow %s isn't executing (delete cache key)", workflowExecution.ExecutionId)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing (2)"}`))
 			return
@@ -1681,7 +1681,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		}
 	} else {
 		if workflowExecution.Status != "EXECUTING" {
-			log.Printf("[INFO] Workflow '%s' isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+			log.Printf("[INFO] Workflow '%s' isn't executing (update cache key)", workflowExecution.ExecutionId)
 			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing (4)"}`))
 			return
