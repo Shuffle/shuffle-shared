@@ -69,6 +69,9 @@ func init() {
 	if reasoningEffort == "minimal" || reasoningEffort == "low" || reasoningEffort == "medium" || reasoningEffort == "high" { 
 		aiReasoningEffort = reasoningEffort
 	}
+
+	// Forcing it to be local for ALL requests going forward
+	agentRunLocation = "local"
 }
 
 func EstimatePromptTokens(messages []openai.ChatCompletionMessage) int64 {
@@ -7950,17 +7953,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	enableQuestions := false
 	executionMode := ""
 
-	// This is a part of making sure variables work properly, no matter where
-	// in Shuffle we are
-	parsingBody := map[string]string{}
-	for _, param := range startNode.Parameters {
-		// Could this alleviate the need for the openai App itself??
-		// Would that help?
-		if strings.Contains(param.Value, "$") { 
-			parsingBody[param.Name] = param.Value
-		}
-	}
-
 	// Self-request starts here!
 	backendUrl := "https://shuffler.io"
 	if len(os.Getenv("BASE_URL")) > 0 {
@@ -7971,9 +7963,33 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
+	// This is a part of making sure variables work properly, no matter where
+	// in Shuffle we are
+	originalInput := ""
+	parsingBody := map[string]string{}
+	for _, param := range startNode.Parameters {
+		if param.Name == "input" {
+			originalInput = param.Value
+		}
+
+		// Could this alleviate the need for the openai App itself?
+		if strings.Contains(param.Value, "$") { 
+			parsingBody[param.Name] = param.Value
+		}
+	}
+
+	// Look for conditions leading into the startNode
+	hasConditions := false
+	for _, branch := range execution.Workflow.Branches {
+		if branch.DestinationID == startNode.ID && len(branch.Conditions) > 0 { 
+			hasConditions = true
+			break
+		}
+	}
+
 	llmStatusCode := 0
 	parsedAgentInput := ""
-	if len(parsingBody) > 0 { 
+	if hasConditions || len(parsingBody) > 0 { 
 		marshalledBody, err := json.Marshal(parsingBody)
 		if err == nil && len(marshalledBody) > 0 {
 			repeaterNode := Action{}
@@ -8031,13 +8047,59 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 								if len(toolsResultMapping.Result) > 0 {
 									mappedResult := map[string]string{}
 									unmarshalErr := json.Unmarshal([]byte(toolsResultMapping.Result), &mappedResult)
+
+									if reasonVal, ok := mappedResult["reason"]; ok {
+										if strings.Contains(strings.ToLower(reasonVal), "minimum of one branch") {
+											//log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: LLM setup failed due to missing branch selection: %s", execution.ExecutionId, reasonVal)
+
+											// Return IMMEDIATELY here pre-app run?
+											branchSkipOutput := AgentOutput{
+												Status:      "FINISHED",
+												StartedAt: time.Now().UnixMilli(),
+												CompletedAt: time.Now().UnixMilli(),
+
+												ExecutionId: execution.ExecutionId,
+												NodeId:	startNode.ID,
+												LLMCallCount: 0, 
+
+												OriginalInput: originalInput,
+												Output:      fmt.Sprintf("Branch Conditions failed: %s", reasonVal),
+											}
+
+											marshalledOutput, err := json.Marshal(branchSkipOutput)
+											if err != nil {
+												marshalledOutput = []byte(fmt.Sprintf("{\"status\":\"FINISHED\",\"output\":\"Branch Conditions failed. Failed to map reason.\",\"completed_at\":%d}",  time.Now().UnixMilli()))
+											}
+
+											successResult := ActionResult{
+												Status:        "SKIPPED",
+												Result:        string(marshalledOutput),
+												Action:        startNode,
+												ExecutionId:   execution.ExecutionId,
+												Authorization: execution.Authorization,
+												StartedAt:     time.Now().UnixMilli(),
+												CompletedAt:   time.Now().UnixMilli(),
+											}
+
+											for i, r := range execution.Results {
+												if r.Action.ID == startNode.ID {
+													execution.Results[i] = successResult
+													break
+												}
+											}
+
+											go sendAgentActionSelfRequest("SKIPPED", execution, successResult)
+											return startNode, nil
+										}
+									} 
+
 									if unmarshalErr != nil {
 										log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed parsing final result during LLM setup: %s", execution.ExecutionId, unmarshalErr)
-									} else {
-										for paramIndex, param := range startNode.Parameters {
-											if val, ok := mappedResult[param.Name]; ok {
-												startNode.Parameters[paramIndex].Value = val
-											}
+									} 
+
+									for paramIndex, param := range startNode.Parameters {
+										if val, ok := mappedResult[param.Name]; ok {
+											startNode.Parameters[paramIndex].Value = val
 										}
 									}
 								}
@@ -9123,6 +9185,10 @@ data_filter:
 		skipHttpParsing = true
 
 	} else {
+		// FIXME: This part is almost never used anymore. Used to be necessary 
+		// before we had the ability to run AI queries with mapping locally.
+		// Should be removed.
+
 		// Hardcoded for now
 		aiNode := Action{}
 		aiNode.AppID = "5d19dd82517870c68d40cacad9b5ca91"
@@ -9336,8 +9402,8 @@ data_filter:
 					Output:      resultMapping.Result,
 					CompletedAt: time.Now().UnixMilli(),
 				}
-				marshalledOutput, _ := json.Marshal(branchSkipOutput)
 
+				marshalledOutput, _ := json.Marshal(branchSkipOutput)
 				successResult := ActionResult{
 					Status:        "SUCCESS",
 					Result:        string(marshalledOutput),

@@ -218,11 +218,7 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 				}
 
 				if len(newKeys) > 0 { 
-					cacheReturn.Keys = []CacheKeyData{}
-					cacheReturn.Items = newKeys
-					cacheReturn.Config = DatastoreCategoryUpdate{}
-
-					marshalled, err := json.Marshal(cacheReturn)
+					marshalled, err := json.Marshal(newKeys)
 					if err == nil {
 						body = marshalled
 					} else {
@@ -288,11 +284,7 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 					}
 
 					if len(newKeys) > 0 { 
-						cacheReturn.Keys = []CacheKeyData{}
-						cacheReturn.Items = newKeys
-						cacheReturn.Config = DatastoreCategoryUpdate{}
-
-						marshalled, err := json.Marshal(cacheReturn)
+						marshalled, err := json.Marshal(newKeys)
 						if err == nil {
 							body = marshalled
 						} else {
