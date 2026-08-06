@@ -4429,6 +4429,118 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+// GetWorkflowExecutionSingle returns a single workflow execution by ID.
+// Pass ?forAgent=true to get a version with auth tokens and sensitive
+// parameter values redacted, safe for handing to an LLM/agent.
+func GetWorkflowExecutionSingle(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in getting workflow execution: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] != "api" || len(location) <= 6 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	fileId := location[4]
+	executionId := strings.Split(location[6], "?")[0]
+	if len(fileId) != 36 || len(executionId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow or execution ID is not valid"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	workflow, err := GetWorkflow(ctx, fileId, true)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting the workflow %s locally (get execution): %s", fileId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
+		if workflow.OrgId == user.ActiveOrg.Id {
+			log.Printf("[AUDIT] User %s is accessing workflow '%s' (%s) execution %s", user.Username, workflow.Name, workflow.ID, executionId)
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+			log.Printf("[AUDIT] Letting verified support admin %s access execution %s for workflow %s", user.Username, executionId, fileId)
+		} else {
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get execution)", user.Username, workflow.ID)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	execution, err := GetWorkflowExecution(ctx, executionId)
+	if err != nil || execution.WorkflowId != fileId {
+		log.Printf("[WARNING] Failed getting execution %s for workflow %s: %s", executionId, fileId, err)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Execution not found"}`))
+		return
+	}
+
+	var newjson []byte
+	if request.URL.Query().Get("forAgent") == "true" {
+		sanitizeExecutionForAgent(execution)
+
+		minimalWorkflow := buildMinimalWorkflow(&execution.Workflow)
+
+		type agentWorkflowExecution struct {
+			*WorkflowExecution
+			Workflow *MinimalWorkflow `json:"workflow"`
+		}
+
+		response := agentWorkflowExecution{
+			WorkflowExecution: execution,
+			Workflow:          minimalWorkflow,
+		}
+
+		newjson, err = json.Marshal(response)
+	} else {
+		newjson, err = json.Marshal(execution)
+	}
+
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed unpacking workflow execution"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(newjson)
+}
+
+
+func sanitizeExecutionForAgent(execution *WorkflowExecution) {
+	execution.Authorization = ""
+
+	for i := range execution.Results {
+		execution.Results[i].Authorization = ""
+		redactSensitiveParameters(execution.Results[i].Action.Parameters)
+	}
+}
+
+func redactSensitiveParameters(parameters []WorkflowAppActionParameter) {
+	for i := range parameters {
+		if isSensitiveParameter(parameters[i].Name) {
+			parameters[i].Value = "[REDACTED]"
+		}
+	}
+}
+
 func GetExecTimeline(fileId string) []WidgetPointData {
 
 	backgroundCtx := context.Background()
@@ -37281,7 +37393,7 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 			if streamOps[s].Item == "node" && (streamOps[s].Type == "add" || streamOps[s].Type == "configure") {
 				for _, action := range workflow.Actions {
 					if action.ID == streamOps[s].ID {
-						dataBytes, _ := json.Marshal(action)
+						dataBytes, _ := json.Marshal(actionStreamNode{action, "ACTION"})
 						streamOps[s].Data = dataBytes
 						break
 					}
@@ -37369,6 +37481,16 @@ type edgeBrief struct {
 	ID     string `json:"id"`
 }
 
+type actionStreamNode struct {
+	Action
+	Type string `json:"type"`
+}
+
+type triggerStreamNode struct {
+	Trigger
+	Type string `json:"type"`
+}
+
 // collectStreamOps builds the enriched StreamWorkflowOperations for a single agent op,
 // reading from the already-applied workflow state (real IDs, full data everywhere).
 func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]string, branchCountBefore int, prunedBranchIDs []string) []StreamWorkflowOperation {
@@ -37385,7 +37507,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		// The node is now in wf.Actions or wf.Triggers with its real ID.
 		for _, action := range wf.Actions {
 			if action.ID == realID {
-				dataBytes, _ := json.Marshal(action)
+				dataBytes, _ := json.Marshal(actionStreamNode{action, "ACTION"})
 				return []StreamWorkflowOperation{{
 					Item:     "node",
 					Type:     "add",
@@ -37397,7 +37519,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		for _, trigger := range wf.Triggers {
 			if trigger.ID == realID {
-				dataBytes, _ := json.Marshal(trigger)
+				dataBytes, _ := json.Marshal(triggerStreamNode{trigger, "TRIGGER"})
 				return []StreamWorkflowOperation{{
 					Item:     "node",
 					Type:     "add",
