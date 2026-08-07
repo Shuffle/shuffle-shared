@@ -78,6 +78,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/Masterminds/semver"
+	"github.com/klauspost/compress/gzhttp"
 	dockerclient "github.com/docker/docker/client"
 )
 
@@ -93,8 +94,39 @@ func GetProject() ShuffleStorage {
 	return project
 }
 
+var compressWrapper func(http.Handler) http.HandlerFunc
+func init() { 
+	var err error
+	compressWrapper, err = gzhttp.NewWrapper(
+		gzhttp.MinSize(1400),
+		gzhttp.CompressionLevel(3),
+		gzhttp.ExceptContentTypes([]string{
+			"image/jpeg", "image/png", "image/gif", "image/webp",
+			"application/zip", "application/x-gzip", "application/pdf",
+		}),
+	)
+
+	// This should NEVER fail
+	if err != nil {
+		panic(fmt.Sprintf("[ERROR] Failed to initialize gzip middleware: %v", err))
+	}
+}
+
+func Compress(next http.HandlerFunc) http.HandlerFunc {
+	return compressWrapper(next).ServeHTTP
+}
+
 // Injects the header in all requests
 func RequestMiddleware(next http.Handler) http.Handler {
+
+	// Default compression on ALL. Can be done AFTER extensive testing
+	//compressedNext := compressWrapper(next)
+	//return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	//	w.Header().Set("Content-Type", "application/json")
+
+	//	compressedNext.ServeHTTP(w, r)
+	//})
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -17607,7 +17639,6 @@ func ResendActionResult(actionData []byte, retries int64) {
 					ResendActionResult(actionData, retries)
 				}
 			} else if project.Environment != "cloud" && retries >= 5 {
-				//panic("No more sockets available. Restarting worker to self-repair.")
 				log.Printf("[WARNING] Should we quit out on worker and start a new? How can we remove socket boundry?")
 			}
 		}
