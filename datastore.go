@@ -43,14 +43,14 @@ func HandleDatastorePostRedirect(resp http.ResponseWriter, request *http.Request
 	var category string
 	var key string
 	if location[1] == "api" {
-		if len(location) <= 3 {
+		if len(location) <= 4 {
 			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
 
 		category = location[3]
-		if len(location) > 3 { 
+		if len(location) >= 4 { 
 			key = location[4]
 		}
 	}
@@ -152,7 +152,7 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 		}
 
 		category = location[3]
-		if len(location) > 3 { 
+		if len(location) > 4 { 
 			key = location[4]
 		}
 	}
@@ -196,6 +196,37 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 	if err == nil && len(body) > 0 {
 		respError := json.Unmarshal(body, &cacheReturn)
 		if respError == nil && (cacheReturn.Amount > 0 || (cacheReturn.Key == key && len(cacheReturn.Value) > 0)) {
+			// Makes the return better
+			if len(key) == 0 && len(cacheReturn.Keys) > 0 { 
+				newKeys := make([]map[string]interface{}, 0)
+				for _, cacheKey := range cacheReturn.Keys {
+					if len(cacheKey.Value) == 0 { 
+						continue
+					}
+
+					if !strings.HasPrefix(cacheKey.Value, "{") || !strings.HasSuffix(cacheKey.Value, "}") {
+						continue
+					}
+
+					mappedValue := map[string]interface{}{}
+					err := json.Unmarshal([]byte(cacheKey.Value), &mappedValue)
+					if err != nil {
+						log.Printf("[ERROR] Failed to unmarshal cacheKey.Value in datastore redirect wrapper: %s", err)
+					}
+
+					newKeys = append(newKeys, mappedValue)
+				}
+
+				if len(newKeys) > 0 { 
+					marshalled, err := json.Marshal(newKeys)
+					if err == nil {
+						body = marshalled
+					} else {
+						log.Printf("[ERROR] Failed to marshal cacheReturn in datastore redirect wrapper: %s", err)
+					}
+				}
+			}
+
 			resp.WriteHeader(result.StatusCode)
 			resp.Write(body)
 			return
@@ -230,6 +261,38 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 		if err == nil && len(body) > 0 {
 			respError := json.Unmarshal(body, &cacheReturn)
 			if respError == nil && (cacheReturn.Amount > 0 || (cacheReturn.Key == key && len(cacheReturn.Value) > 0)) {
+
+				// Makes the return better
+				if len(key) == 0 && len(cacheReturn.Keys) > 0 { 
+					newKeys := make([]map[string]interface{}, 0)
+					for _, cacheKey := range cacheReturn.Keys {
+						if len(cacheKey.Value) == 0 { 
+							continue
+						}
+
+						if !strings.HasPrefix(cacheKey.Value, "{") || !strings.HasSuffix(cacheKey.Value, "}") {
+							continue
+						}
+
+						mappedValue := map[string]interface{}{}
+						err := json.Unmarshal([]byte(cacheKey.Value), &mappedValue)
+						if err != nil {
+							log.Printf("[ERROR] Failed to unmarshal cacheKey.Value in datastore redirect wrapper: %s", err)
+						}
+
+						newKeys = append(newKeys, mappedValue)
+					}
+
+					if len(newKeys) > 0 { 
+						marshalled, err := json.Marshal(newKeys)
+						if err == nil {
+							body = marshalled
+						} else {
+							log.Printf("[ERROR] Failed to marshal cacheReturn in datastore redirect wrapper: %s", err)
+						}
+					}
+				}
+
 				resp.WriteHeader(result.StatusCode)
 				resp.Write(body)
 				return
@@ -238,7 +301,7 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 	}
 
 	resp.WriteHeader(404)
-	resp.Write([]byte(`{"success": false, "reason": "No datastore value found for this key and category"}`))
+	resp.Write([]byte(`{"success": false, "reason": "No values found for this key and category"}`))
 }
 
 func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
@@ -655,11 +718,11 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 
 	var tmpData []CacheKeyData
 	err = json.Unmarshal(body, &tmpData)
-	if err != nil {
+	if err != nil || len(tmpData) == 0 {
 
 		var tmpDataOverride CacheKeyDataFallback
 		err = json.Unmarshal(body, &tmpDataOverride)
-		if err != nil {
+		if err != nil || len(tmpDataOverride.Key) == 0 {
 			if usererr != nil || len(user.Id) == 0 || len(user.ActiveOrg.Id) == 0 { 
 				log.Printf("[WARNING] Failed unmarshalling in setvalue (1): %s", err)
 				resp.Write([]byte(`{"success": false}`))
@@ -680,7 +743,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				category = location[4]
-				if len(location) > 3 { 
+				if len(location) >= 5 { 
 					key = location[5]
 				}
 			}
@@ -778,7 +841,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[AUDIT] Running bulk upload for org %s to category '%s. Keys: %d'. Tags: %#v", user.ActiveOrg.Id, mainCategory, len(tmpData), tmpData[0].Tags)
+	log.Printf("[AUDIT] Running bulk upload for org '%s' to category '%s'. Keys: %d. Tags: %#v", user.ActiveOrg.Id, mainCategory, len(tmpData), tmpData[0].Tags)
 
 	existingInfo, err := SetDatastoreKeyBulk(ctx, tmpData)
 	if err != nil {
@@ -1462,7 +1525,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if workflowExecution.Status != "EXECUTING" {
-			log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+			log.Printf("[INFO] Workflow %s isn't executing (delete cache key)", workflowExecution.ExecutionId)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing (2)"}`))
 			return
@@ -1681,7 +1744,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		}
 	} else {
 		if workflowExecution.Status != "EXECUTING" {
-			log.Printf("[INFO] Workflow '%s' isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+			log.Printf("[INFO] Workflow '%s' isn't executing (update cache key)", workflowExecution.ExecutionId)
 			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing (4)"}`))
 			return

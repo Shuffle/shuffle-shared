@@ -69,6 +69,9 @@ func init() {
 	if reasoningEffort == "minimal" || reasoningEffort == "low" || reasoningEffort == "medium" || reasoningEffort == "high" { 
 		aiReasoningEffort = reasoningEffort
 	}
+
+	// Forcing it to be local for ALL requests going forward
+	agentRunLocation = "local"
 }
 
 func EstimatePromptTokens(messages []openai.ChatCompletionMessage) int64 {
@@ -1608,72 +1611,6 @@ func FixContentOutput(contentOutput string) string {
 	}
 
 	return contentOutput
-}
-
-// Attempts to safely balance JSON strings
-// This is because LLM's have a high chance of outputting them
-// .... slightly shittily, and they need some help sometimes.
-func balanceJSONLikeString(s string) string {
-	stack := []rune{}
-	result := []rune{}
-	inString := false
-	escape := false
-
-	for _, ch := range s {
-		if inString {
-			result = append(result, ch)
-			if escape {
-				escape = false
-				continue
-			}
-			if ch == '\\' {
-				escape = true
-			} else if ch == '"' {
-				inString = false
-			}
-			continue
-		}
-
-		// Not inside a string
-		if ch == '"' {
-			inString = true
-			result = append(result, ch)
-			continue
-		}
-
-		if ch == '{' || ch == '[' {
-			stack = append(stack, ch)
-			result = append(result, ch)
-		} else if ch == '}' || ch == ']' {
-			if len(stack) == 0 {
-				// extra closing bracket, skip it
-				continue
-			}
-			last := stack[len(stack)-1]
-			if (last == '{' && ch == '}') || (last == '[' && ch == ']') {
-				stack = stack[:len(stack)-1]
-				result = append(result, ch)
-			} else {
-				// mismatched, skip it
-				continue
-			}
-		} else {
-			result = append(result, ch)
-		}
-	}
-
-	// close any still-open brackets/braces
-	for len(stack) > 0 {
-		open := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if open == '{' {
-			result = append(result, '}')
-		} else {
-			result = append(result, ']')
-		}
-	}
-
-	return string(result)
 }
 
 // normalizeRawDecisionFields converts any non-string 'Value' into a JSON-encoded string.
@@ -8016,17 +7953,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	enableQuestions := false
 	executionMode := ""
 
-	// This is a part of making sure variables work properly, no matter where
-	// in Shuffle we are
-	parsingBody := map[string]string{}
-	for _, param := range startNode.Parameters {
-		// Could this alleviate the need for the openai App itself??
-		// Would that help?
-		if strings.Contains(param.Value, "$") { 
-			parsingBody[param.Name] = param.Value
-		}
-	}
-
 	// Self-request starts here!
 	backendUrl := "https://shuffler.io"
 	if len(os.Getenv("BASE_URL")) > 0 {
@@ -8037,9 +7963,33 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
+	// This is a part of making sure variables work properly, no matter where
+	// in Shuffle we are
+	originalInput := ""
+	parsingBody := map[string]string{}
+	for _, param := range startNode.Parameters {
+		if param.Name == "input" {
+			originalInput = param.Value
+		}
+
+		// Could this alleviate the need for the openai App itself?
+		if strings.Contains(param.Value, "$") { 
+			parsingBody[param.Name] = param.Value
+		}
+	}
+
+	// Look for conditions leading into the startNode
+	hasConditions := false
+	for _, branch := range execution.Workflow.Branches {
+		if branch.DestinationID == startNode.ID && len(branch.Conditions) > 0 { 
+			hasConditions = true
+			break
+		}
+	}
+
 	llmStatusCode := 0
 	parsedAgentInput := ""
-	if len(parsingBody) > 0 { 
+	if hasConditions || len(parsingBody) > 0 { 
 		marshalledBody, err := json.Marshal(parsingBody)
 		if err == nil && len(marshalledBody) > 0 {
 			repeaterNode := Action{}
@@ -8066,7 +8016,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s&parent_node=%s", backendUrl, repeaterNode.AppID, execution.ExecutionId, execution.Authorization, startNode.ID)
 				client := GetExternalClient(fullUrl)
 
-				client.Timeout = time.Minute * 5
+				client.Timeout = time.Minute * 1
 				req, err := http.NewRequest(
 					"POST",
 					fullUrl,
@@ -8097,13 +8047,59 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 								if len(toolsResultMapping.Result) > 0 {
 									mappedResult := map[string]string{}
 									unmarshalErr := json.Unmarshal([]byte(toolsResultMapping.Result), &mappedResult)
+
+									if reasonVal, ok := mappedResult["reason"]; ok {
+										if strings.Contains(strings.ToLower(reasonVal), "minimum of one branch") {
+											//log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: LLM setup failed due to missing branch selection: %s", execution.ExecutionId, reasonVal)
+
+											// Return IMMEDIATELY here pre-app run?
+											branchSkipOutput := AgentOutput{
+												Status:      "FINISHED",
+												StartedAt: time.Now().UnixMilli(),
+												CompletedAt: time.Now().UnixMilli(),
+
+												ExecutionId: execution.ExecutionId,
+												NodeId:	startNode.ID,
+												LLMCallCount: 0, 
+
+												OriginalInput: originalInput,
+												Output:      fmt.Sprintf("Branch Conditions failed: %s", reasonVal),
+											}
+
+											marshalledOutput, err := json.Marshal(branchSkipOutput)
+											if err != nil {
+												marshalledOutput = []byte(fmt.Sprintf("{\"status\":\"FINISHED\",\"output\":\"Branch Conditions failed. Failed to map reason.\",\"completed_at\":%d}",  time.Now().UnixMilli()))
+											}
+
+											successResult := ActionResult{
+												Status:        "SKIPPED",
+												Result:        string(marshalledOutput),
+												Action:        startNode,
+												ExecutionId:   execution.ExecutionId,
+												Authorization: execution.Authorization,
+												StartedAt:     time.Now().UnixMilli(),
+												CompletedAt:   time.Now().UnixMilli(),
+											}
+
+											for i, r := range execution.Results {
+												if r.Action.ID == startNode.ID {
+													execution.Results[i] = successResult
+													break
+												}
+											}
+
+											go sendAgentActionSelfRequest("SKIPPED", execution, successResult)
+											return startNode, nil
+										}
+									} 
+
 									if unmarshalErr != nil {
 										log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed parsing final result during LLM setup: %s", execution.ExecutionId, unmarshalErr)
-									} else {
-										for paramIndex, param := range startNode.Parameters {
-											if val, ok := mappedResult[param.Name]; ok {
-												startNode.Parameters[paramIndex].Value = val
-											}
+									} 
+
+									for paramIndex, param := range startNode.Parameters {
+										if val, ok := mappedResult[param.Name]; ok {
+											startNode.Parameters[paramIndex].Value = val
 										}
 									}
 								}
@@ -8835,7 +8831,7 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 
 ### PHASE 1: COMPLETION CHECK (HIGHEST PRIORITY)
 **Compare the "USER REQUEST" against the "HISTORY".**
-1. **Analyze:** Does the "HISTORY" contain a successful execution that matches the core intent?
+1. **Analyze:** Does the "HISTORY" contain a successful execution that matches the core intent? An action's own "success: true" only confirms that the CALL succeeded (e.g. a process was started) - it does NOT by itself confirm the underlying task actually completed successfully. If a separate action exists to check the result/status of what you started (its description will say to call it after), you must call it and see a completed/successful result before treating the task as done.
 2. **Decision:**
    - **IF DONE:** Select "finish".
    - **Fields:** category="finish", action="finish", fields=[{ "key": "output", "value": "Summary..." }]
@@ -9221,6 +9217,10 @@ data_filter:
 		skipHttpParsing = true
 
 	} else {
+		// FIXME: This part is almost never used anymore. Used to be necessary 
+		// before we had the ability to run AI queries with mapping locally.
+		// Should be removed.
+
 		// Hardcoded for now
 		aiNode := Action{}
 		aiNode.AppID = "5d19dd82517870c68d40cacad9b5ca91"
@@ -9434,8 +9434,8 @@ data_filter:
 					Output:      resultMapping.Result,
 					CompletedAt: time.Now().UnixMilli(),
 				}
-				marshalledOutput, _ := json.Marshal(branchSkipOutput)
 
+				marshalledOutput, _ := json.Marshal(branchSkipOutput)
 				successResult := ActionResult{
 					Status:        "SUCCESS",
 					Result:        string(marshalledOutput),
@@ -9701,7 +9701,7 @@ data_filter:
 			for _, mappedDecision := range mappedDecisions {
 				if mappedDecision.I == lastFinishedIndex && mappedDecision.RunDetails.Status == "FAILURE" {
 					if debug {
-						log.Printf("\n\n\n\n\nMAPPING TO FAILURE DUE TO DECISION INDEX AND STATUS!!! Decisions that aren't 'finalise' should be ignored\n\n\n\n\n\n\n")
+						log.Printf("\n\n\n\n\nMAPPING TO FAILURE (2) DUE TO DECISION INDEX AND STATUS!!! Decisions that aren't 'finalise' should be ignored\n\n\n\n\n\n\n")
 					}
 				}
 			}
@@ -9760,7 +9760,7 @@ data_filter:
 		}
 
 		if resultMapping.Status == "FAILURE" {
-			log.Printf("[ERROR] MAPPING TO FAILURE!!!")
+			log.Printf("\n\n[ERROR] MAPPING TO FAILURE!!!\n\n")
 			//agentOutput.Status = "FAILURE"
 			//agentOutput.CompletedAt = time.Now().Unix()
 		}
@@ -14816,3 +14816,178 @@ func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (
 
 	return tools, nil
 }
+
+func isJSONSpace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+}
+
+// Attempts to safely balance JSON strings
+// This is because LLM's have a high chance of outputting them
+// .... slightly shittily, and they need some help sometimes.
+func balanceJSONLikeString(s string) string {
+	runes := []rune(s)
+	n := len(runes)
+	stack := []rune{}
+	result := []rune{}
+	inString := false
+	escape := false
+
+	i := 0
+	for i < n {
+		ch := runes[i]
+
+		if inString {
+			if escape {
+				result = append(result, ch)
+				escape = false
+				i++
+				continue
+			}
+			if ch == '\\' {
+				result = append(result, ch)
+				escape = true
+				i++
+				continue
+			}
+			if ch == '"' {
+				// Could be a real end-of-string, OR LLM-emitted string
+				// concatenation glue: "..." + "...". If it's glue,
+				// swallow the quote/plus/quote and keep the string going.
+				j := i + 1
+				for j < n && isJSONSpace(runes[j]) {
+					j++
+				}
+				if j < n && runes[j] == '+' {
+					k := j + 1
+					for k < n && isJSONSpace(runes[k]) {
+						k++
+					}
+					if k < n && runes[k] == '"' {
+						i = k + 1
+						continue
+					}
+				}
+				result = append(result, ch)
+				inString = false
+				i++
+				continue
+			}
+			result = append(result, ch)
+			i++
+			continue
+		}
+
+		// Not inside a string
+		if ch == '"' {
+			inString = true
+			result = append(result, ch)
+			i++
+			continue
+		}
+		if ch == '{' || ch == '[' {
+			stack = append(stack, ch)
+			result = append(result, ch)
+		} else if ch == '}' || ch == ']' {
+			if len(stack) == 0 {
+				i++
+				continue
+			}
+			last := stack[len(stack)-1]
+			if (last == '{' && ch == '}') || (last == '[' && ch == ']') {
+				stack = stack[:len(stack)-1]
+				result = append(result, ch)
+			} else {
+				i++
+				continue
+			}
+		} else {
+			result = append(result, ch)
+		}
+		i++
+	}
+
+	// close a dangling unterminated string
+	if inString {
+		result = append(result, '"')
+	}
+
+	// close any still-open brackets/braces
+	for len(stack) > 0 {
+		open := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if open == '{' {
+			result = append(result, '}')
+		} else {
+			result = append(result, ']')
+		}
+	}
+	return string(result)
+}
+
+/*
+// Attempts to safely balance JSON strings
+// This is because LLM's have a high chance of outputting them
+// .... slightly shittily, and they need some help sometimes.
+func balanceJSONLikeString(s string) string {
+	stack := []rune{}
+	result := []rune{}
+	inString := false
+	escape := false
+
+	for _, ch := range s {
+		if inString {
+			result = append(result, ch)
+			if escape {
+				escape = false
+				continue
+			}
+			if ch == '\\' {
+				escape = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+
+		// Not inside a string
+		if ch == '"' {
+			inString = true
+			result = append(result, ch)
+			continue
+		}
+
+		if ch == '{' || ch == '[' {
+			stack = append(stack, ch)
+			result = append(result, ch)
+		} else if ch == '}' || ch == ']' {
+			if len(stack) == 0 {
+				// extra closing bracket, skip it
+				continue
+			}
+			last := stack[len(stack)-1]
+			if (last == '{' && ch == '}') || (last == '[' && ch == ']') {
+				stack = stack[:len(stack)-1]
+				result = append(result, ch)
+			} else {
+				// mismatched, skip it
+				continue
+			}
+		} else {
+			result = append(result, ch)
+		}
+	}
+
+	// close any still-open brackets/braces
+	for len(stack) > 0 {
+		open := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if open == '{' {
+			result = append(result, '}')
+		} else {
+			result = append(result, ']')
+		}
+	}
+
+	return string(result)
+}
+*/
