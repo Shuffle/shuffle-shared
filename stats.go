@@ -1392,6 +1392,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.DailyAgentExecutions = 0
 	executionInfo.DailyAgentExecutionsSuccessful = 0
 	executionInfo.DailyAgentExecutionsFailed = 0
+	executionInfo.DailyAgentMaxLoopsHit = 0
 	executionInfo.DailyAgentTokens = 0
 	executionInfo.DailyAgentInputTokens = 0
 	executionInfo.DailyAgentOutputTokens = 0
@@ -1437,6 +1438,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyAgentExecutions = 0
 		executionInfo.MonthlyAgentExecutionsSuccessful = 0
 		executionInfo.MonthlyAgentExecutionsFailed = 0
+		executionInfo.MonthlyAgentMaxLoopsHit = 0
 		executionInfo.MonthlyAgentTokens = 0
 		executionInfo.MonthlyAgentInputTokens = 0
 		executionInfo.MonthlyAgentOutputTokens = 0
@@ -1597,6 +1599,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalAgentExecutionsFailed += int64(increment)
 		orgStatistics.MonthlyAgentExecutionsFailed += int64(increment)
 		orgStatistics.DailyAgentExecutionsFailed += int64(increment)
+	} else if dataType == "agent_max_loops_hit" {
+		orgStatistics.TotalAgentMaxLoopsHit += int64(increment)
+		orgStatistics.MonthlyAgentMaxLoopsHit += int64(increment)
+		orgStatistics.DailyAgentMaxLoopsHit += int64(increment)
 	} else if dataType == "agent_tokens" {
 		orgStatistics.TotalAgentTokens += int64(increment)
 		orgStatistics.MonthlyAgentTokens += int64(increment)
