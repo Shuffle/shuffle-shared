@@ -8387,7 +8387,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				maxLoops = 60
 			}
 
-			if newLoopCount >= 60 {
+			if newLoopCount >= maxLoops {
 				log.Printf("[ERROR][%s] AI_AGENT_MAX_STEPS_EXCEEDED: org=%s loop_count=%d (cache=%d, decisions=%d)", execution.ExecutionId, execution.Workflow.OrgId, newLoopCount, cacheCount, decisionCount)
 
 				go func() {
