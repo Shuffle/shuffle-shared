@@ -118,20 +118,21 @@ func Compress(next http.HandlerFunc) http.HandlerFunc {
 
 // Injects the header in all requests
 func RequestMiddleware(next http.Handler) http.Handler {
-
-	// Default compression on ALL. Can be done AFTER extensive testing
-	//compressedNext := compressWrapper(next)
+	// NON-compressed responses
 	//return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 	//	w.Header().Set("Content-Type", "application/json")
 
-	//	compressedNext.ServeHTTP(w, r)
+	//	next.ServeHTTP(w, r)
 	//})
 
+	// Default compression on ALL. Can be done AFTER extensive testing
+	compressedNext := compressWrapper(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
-		next.ServeHTTP(w, r)
+		compressedNext.ServeHTTP(w, r)
 	})
+
 }
 
 // In case we need custom context control in the future
