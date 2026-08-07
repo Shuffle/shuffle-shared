@@ -2351,9 +2351,10 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						var currentOutput AgentOutput
 						_ = json.Unmarshal([]byte(innerresult.Result), &currentOutput)
 						if len(cachedOutput.Decisions) >= len(currentOutput.Decisions) {
-							if debug {
-								log.Printf("[DEBUG][%s] Fixexecution: upgrading agent result index %d from cache (%d decisions vs %d)", workflowExecution.ExecutionId, resultIndex, len(cachedOutput.Decisions), len(currentOutput.Decisions))
-							}
+							//if debug {
+							//	log.Printf("[DEBUG][%s] Fixexecution: upgrading agent result index %d from cache (%d decisions vs %d)", workflowExecution.ExecutionId, resultIndex, len(cachedOutput.Decisions), len(currentOutput.Decisions))
+							//}
+
 							innerresult.Result = string(cachedBytes)
 							workflowExecution.Results[resultIndex].Result = string(cachedBytes)
 						}
@@ -2412,6 +2413,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					innerresult.Status = "SUCCESS"
 					workflowExecution.Results[resultIndex].Status = "SUCCESS"
 					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+					break
 				}
 
 				if !finishFound && innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" {
@@ -2576,7 +2578,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 						decisionsUpdated = true
 						if finishDecisionFound {
-							log.Printf("[INFO][%s] All decisions finished for agent action %s - marking as FINISHED.", workflowExecution.ExecutionId, action.ID)
+							//log.Printf("[INFO][%s] All decisions finished for agent action %s - marking as FINISHED.", workflowExecution.ExecutionId, action.ID)
 
 							mappedOutput.Status = "FINISHED"
 							mappedOutput.CompletedAt = time.Now().UnixMilli()
@@ -2636,6 +2638,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}()
 						}
 					} else if (result.Status == "" || result.Status == "WAITING") && mappedOutput.Status == "FINISHED" {
+						if debug { 
+							log.Printf("[INFO][%s] Agent action %s marked as FINISHED, updating result status to SUCCESS.", workflowExecution.ExecutionId, action.ID)
+						}
 						workflowExecution.Results[resultIndex].Status = "SUCCESS"
 						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 					}
@@ -4845,7 +4850,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		//log.Printf("\n\n\nLooking for workflows for org %s with user %s (%s)\n\n\n", user.ActiveOrg.Id, user.Username, user.Id)
 
 		cursorStr := ""
+		// Sort by edited
 		query := datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
+		query = query.Order("-edited")
 		for {
 			it := project.Dbclient.Run(ctx, query)
 			if len(workflows) >= maxAmount {
@@ -4857,6 +4864,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				_, err = it.Next(&innerWorkflow)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+						if debug { 
+							//log.Printf("[DEBUG] Workflow load iterator issue: %s", err)
+						}
 
 					} else {
 						if !strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
@@ -4868,10 +4878,18 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Public {
+					//if debug { 
+					//	log.Printf("[DEBUG] Skipping public workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
+					//}
+
 					continue
 				}
 
 				if innerWorkflow.Hidden {
+					//if debug { 
+					//	log.Printf("[DEBUG] Skipping HIDDEN workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
+					//}
+
 					continue
 				}
 
@@ -4892,9 +4910,20 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 			}
 
+			// Fallback for when the iterator fails due to a datastore issue 
+			// (e.g. "cannot load field" error) and similar
 			if err != iterator.Done {
-				log.Printf("[INFO] Failed fetching workflow results: %v", err)
-				break
+				log.Printf("[WARNING] Failed fetching workflow results for org %s: %v", user.ActiveOrg.Id, err)
+
+				// Check if query contains edited or not 
+				if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition desc") && strings.Contains(fmt.Sprintf("%s", query), "edited") {
+					log.Printf("[ERROR] Retrying workflow query without Edited sort due to error: %s", err)
+
+					query = datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
+					continue
+				} else {
+					break
+				}
 			}
 
 			// Get the cursor for the next page of results.
@@ -4916,17 +4945,34 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 
 	//log.Printf("Found %d workflows for user %s (%s) in org %s", len(workflows), user.Username, user.Id, user.ActiveOrg.Id)
 
+	// Sort them by edited timestap
+	sort.Slice(workflows, func(i, j int) bool {
+		return workflows[i].Edited > workflows[j].Edited
+	})
+
 	if len(workflows) > maxAmount {
+		if debug { 
+			log.Printf("[WARNING] Found %d workflows for user %s (%s) in org %s, but limiting to %d", len(workflows), user.Username, user.Id, user.ActiveOrg.Id, maxAmount)
+		}
+
 		workflows = workflows[:maxAmount]
 	}
 
 	fixedWorkflows := []Workflow{}
 	for _, workflow := range workflows {
 		if workflow.Hidden {
+			if debug {
+				log.Printf("[DEBUG] Skipping HIDDEN workflow %s (%s) for org %s", workflow.Name, workflow.ID, user.ActiveOrg.Id)
+			}
+
 			continue
 		}
 
 		if len(workflow.Name) == 0 && len(workflow.Actions) <= 1 {
+			if debug {
+				log.Printf("[DEBUG] Skipping workflow %s (%s) for org %s because it has no name and only 1 action", workflow.Name, workflow.ID, user.ActiveOrg.Id)
+			}
+
 			continue
 		}
 
@@ -4937,10 +4983,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 
 		fixedWorkflows = append(fixedWorkflows, workflow)
 	}
-
-	slice.Sort(fixedWorkflows[:], func(i, j int) bool {
-		return fixedWorkflows[i].Edited > fixedWorkflows[j].Edited
-	})
 
 	if project.CacheDb {
 		newjson, err := json.Marshal(fixedWorkflows)
@@ -6690,6 +6732,10 @@ func FindUserBySSOIdentity(ctx context.Context, sub, clientID, orgID, email stri
 func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 	var users []User
 
+	if len(username) == 0 {
+		return users, errors.New("username is required (2)")
+	}
+
 	nameKey := "Users"
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -6789,6 +6835,10 @@ func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 
 func FindUser(ctx context.Context, username string) ([]User, error) {
 	var users []User
+
+	if len(username) == 0 {
+		return users, errors.New("username is required (3)")
+	}
 
 	nameKey := "Users"
 	if project.DbType == "opensearch" {
@@ -6894,6 +6944,10 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 func GetUser(ctx context.Context, username string) (*User, error) {
 	curUser := &User{}
 
+	if len(username) == 0 {
+		return curUser, errors.New("username is empty")
+	}
+
 	parsedKey := strings.ToLower(username)
 	cacheKey := fmt.Sprintf("user_%s", parsedKey)
 	if project.CacheDb {
@@ -6944,7 +6998,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 		if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
 			// Handles migration of the user
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[DEBUG] Failed loading user %s (this is ok): %s", username, err)
+				log.Printf("[DEBUG] Failed loading user '%s' (this is ok): %s", username, err)
 			} else {
 				log.Printf("[WARNING] Failed loading user %s - does it have to change? %s", username, err)
 				return &User{}, err
@@ -14969,12 +15023,17 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						if len(foundRule) > 5 {
 							oldDoc := config.Value
 							newDoc := cacheData.Value
-							mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
-							if debug {
-								log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s). Org: '%s', Key: '%s', Category: '%s': %#v. .\n\nError: %#v", foundRule, cacheData.OrgId, cacheData.Key, cacheData.Category, allowed, errString)
+
+							if debug { 
+								log.Printf("\n\nOLD: %s\n\nNEW: %s\n\n", oldDoc, newDoc)
 							}
 
-							// Since merge happens, can we trust it 100% of the time?
+							mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
+							if debug {
+								log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s). Org: '%s', Key: '%s', Category: '%s': %#v. .\n\nError: %#v\n\n", foundRule, cacheData.OrgId, cacheData.Key, cacheData.Category, allowed, errString)
+							}
+
+							// Since merge happens anyway, we are trusting it either way
 							cacheData.Value = mergedJSON
 							ruleValid = true
 
@@ -14990,6 +15049,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						break
 					}
 
+					// This NEVER triggers. RLS just returns the merged JSON 
+					// and we trust it. If we don't trust it, we can set 
+					// ruleValid to false above. 
 					if !ruleValid {
 						// Break out
 						if debug {

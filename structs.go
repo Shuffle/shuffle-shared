@@ -1319,7 +1319,7 @@ type CacheKeyData struct {
 	Value               string       `json:"value" datastore:"Value,noindex"`
 	Category            string       `json:"category" datastore:"category"`
 	Tags                []string     `json:"tags,omitempty" datastore:"tags"`
-	IgnoreSecurityRules bool         `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"`
+	IgnoreSecurityRules bool         `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"` // Whether to follow 'Automation for X" security rules or not. These are category-wide rules.
 	Enrichments         []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 
 	Created int64 `json:"created" datastore:"Created"`
@@ -4414,7 +4414,8 @@ type CacheReturn struct {
 	Config     DatastoreCategoryUpdate `json:"category_config,omitempty"`
 	Categories []string                `json:"categories,omitempty"`
 
-	Keys []CacheKeyData `json:"keys"`
+	Keys []CacheKeyData `json:"keys,omitempty"`
+	Items []map[string]interface{} `json:"items,omitempty"`
 
 	Reason string `json:"reason,omitempty"`
 	Key    string `json:"key,omitempty"`
@@ -5042,21 +5043,6 @@ type AIConfig struct {
 	Status    string `json:"status" datastore:"status"`
 }
 
-// EDR and Audit Log Monitoring Structs
-type AuditLogEntry struct {
-	Timestamp   time.Time              `json:"timestamp"`
-	EventID     string                 `json:"event_id"`
-	EventType   string                 `json:"event_type"`
-	Source      string                 `json:"source"`
-	Level       string                 `json:"level"`
-	ProcessInfo *ProcessInfo           `json:"process_info,omitempty"`
-	UserInfo    *UserInfo              `json:"user_info,omitempty"`
-	Message     string                 `json:"message"`
-	RawData     string                 `json:"raw_data,omitempty"`
-	Platform    string                 `json:"platform"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
-}
-
 type ProcessInfo struct {
 	PID         int32  `json:"pid"`
 	PPID        int32  `json:"ppid,omitempty"`
@@ -5092,13 +5078,21 @@ type TelemetryFilter struct {
 	Exclude []string `json:"exclude,omitempty"`
 }
 
-type AuditLogCollector struct {
-	Config     TelemetryConfig
-	Platform   string
-	LogChannel chan AuditLogEntry
-	StopChan   chan bool
-	mu         sync.Mutex
+// EDR and Audit Log Monitoring Structs
+type AuditLogEntry struct {
+	Timestamp   time.Time              `json:"timestamp"`
+	EventID     string                 `json:"event_id"`
+	EventType   string                 `json:"event_type"`
+	Source      string                 `json:"source"`
+	Level       string                 `json:"level"`
+	ProcessInfo *ProcessInfo           `json:"process_info,omitempty"`
+	UserInfo    *UserInfo              `json:"user_info,omitempty"`
+	Message     string                 `json:"message"`
+	RawData     string                 `json:"raw_data,omitempty"`
+	Platform    string                 `json:"platform"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
+
 
 // Thread conversation access control structs
 type ThreadAccessRequest struct {
