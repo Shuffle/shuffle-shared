@@ -8355,6 +8355,38 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 
 			oldAgentOutput = mappedResult
+
+			// Hard cap: This handles two failure modes: When the cache write or read fails or somehow the DB state is out of sync with the cache.
+			loopCacheKey := fmt.Sprintf("agent_loop_cap_%s_%s", execution.ExecutionId, startNode.ID)
+			cacheCount := 0
+			if val, cacheErr := GetCache(ctx, loopCacheKey); cacheErr == nil && val != nil {
+				if b, ok := val.([]byte); ok {
+					cacheCount, _ = strconv.Atoi(string(b))
+				}
+			}
+
+			decisionCount := len(oldAgentOutput.Decisions)
+
+			// Take the larger of the two values, whichever source has the higher number is closer to reality.
+			trustedCount := cacheCount
+			if decisionCount > cacheCount {
+				trustedCount = decisionCount
+			}
+
+			// Increment for this iteration
+			newLoopCount := trustedCount + 1
+			_ = SetCache(ctx, loopCacheKey, []byte(strconv.Itoa(newLoopCount)), 60)
+
+			if newLoopCount >= 5 {
+				log.Printf("[ERROR][%s] AI_AGENT_MAX_STEPS_EXCEEDED: org=%s loop_count=%d (cache=%d, decisions=%d)", execution.ExecutionId, execution.Workflow.OrgId, newLoopCount, cacheCount, decisionCount)
+
+				go func() {
+					IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_max_loops_hit", 1)
+				}()
+
+				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "max_agent_loops_reached", fmt.Sprintf("Agent reached maximum execution loops limit (%d) without finishing.", newLoopCount))
+			}
+
 			relevantDecisions := []AgentDecision{}
 
 			// Check for existing RUNNING/WAITING ask decisions - if found, return existing state without creating new decisions
