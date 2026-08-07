@@ -982,7 +982,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 			// Set annual app runs limit as 200% of the monthly app runs limit to allow overage
 			annualAppRunsLimit := validationOrg.SyncFeatures.AppExecutions.Limit * 12
-			if validationOrg.Billing.InternalAppRunsHardLimit > 0 {
+			if validationOrg.Billing.InternalAppRunsHardLimit > 0 && validationOrg.Billing.InternalAppRunsHardLimit <= validationOrg.SyncFeatures.AppExecutions.Limit {
 				annualAppRunsLimit = validationOrg.Billing.InternalAppRunsHardLimit
 			} else {
 				annualAppRunsLimit *= 2

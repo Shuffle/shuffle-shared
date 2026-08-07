@@ -654,6 +654,50 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": %v, "key": "%s", "total": %d, "available_keys": %s, "entries": %s}`, successful, strings.ReplaceAll(statsKey, "\"", ""), totalValue, string(availableStats), string(marshalledEntries))))
 }
 
+func mergeMultiRegionResults(crossRegionResults []MultiRegionStatsEntry, info *ExecutionInfo, parentDailyMap map[string]int) {
+	log.Printf("[INFO] HandleGetStatistics: received cross-region stats for %d child orgs from multi-region-stats endpoint", len(crossRegionResults))
+
+	for _, entry := range crossRegionResults {
+		for _, childDay := range entry.DailyStatistics {
+			dateKey := childDay.Date.UTC().Format("2006-01-02")
+			alreadyAppliedCorrection := childDay.AgentInputTokens*250/1_000_000 +
+				childDay.AgentOutputTokens*1500/1_000_000 +
+				childDay.DailySMSUsage*3 +
+				childDay.DailyEmailUsage*2
+			rawChildAppExecutions := childDay.AppExecutions - alreadyAppliedCorrection
+			if rawChildAppExecutions < 0 {
+				rawChildAppExecutions = 0
+			}
+
+			if idx, exists := parentDailyMap[dateKey]; exists {
+				info.DailyStatistics[idx].ChildAppExecutions += rawChildAppExecutions
+				info.DailyStatistics[idx].DailyChildOrgAiUsage += childDay.AIUsage
+				info.DailyStatistics[idx].DailyChildOrgAgentExecutions += childDay.AgentExecutions
+				info.DailyStatistics[idx].DailyChildOrgAgentTokens += childDay.AgentTokens
+				info.DailyStatistics[idx].DailyChildOrgAgentInputTokens += childDay.AgentInputTokens
+				info.DailyStatistics[idx].DailyChildOrgAgentOutputTokens += childDay.AgentOutputTokens
+				info.DailyStatistics[idx].DailyChildOrgSMSUsage += childDay.DailySMSUsage
+				info.DailyStatistics[idx].DailyChildOrgEmailUsage += childDay.DailyEmailUsage
+			} else {
+				// No matching parent day — create a new entry carrying only the child org counters
+				newDay := DailyStatistics{
+					Date:                           childDay.Date,
+					ChildAppExecutions:             rawChildAppExecutions,
+					DailyChildOrgAiUsage:           childDay.AIUsage,
+					DailyChildOrgAgentExecutions:   childDay.AgentExecutions,
+					DailyChildOrgAgentTokens:       childDay.AgentTokens,
+					DailyChildOrgAgentInputTokens:  childDay.AgentInputTokens,
+					DailyChildOrgAgentOutputTokens: childDay.AgentOutputTokens,
+					DailyChildOrgSMSUsage:          childDay.DailySMSUsage,
+					DailyChildOrgEmailUsage:        childDay.DailyEmailUsage,
+				}
+				parentDailyMap[dateKey] = len(info.DailyStatistics)
+				info.DailyStatistics = append(info.DailyStatistics, newDay)
+			}
+		}
+	}
+}
+
 func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -917,7 +961,16 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(org.ChildOrgs) > 0 {
+	skipMultiRegion := false
+	if skipList, ok := request.URL.Query()["skip_multi_region"]; ok && len(skipList) > 0 && skipList[0] == "true" {
+		skipMultiRegion = true
+	}
+
+	if len(org.CreatorOrg) > 0 {
+		skipMultiRegion = true
+	}
+
+	if len(org.ChildOrgs) > 0 && !skipMultiRegion {
 		// Build a date-keyed map of parent daily stats for fast lookups when merging cross-region child data
 		parentDailyMap := make(map[string]int, len(info.DailyStatistics))
 		for i, d := range info.DailyStatistics {
@@ -932,6 +985,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		sem := make(chan struct{}, 5)
 
 		parentRegionUrl := strings.TrimRight(org.RegionUrl, "/")
+		hasCrossRegionChildren := false
 
 		for _, childOrgMini := range org.ChildOrgs {
 			wg.Add(1)
@@ -980,100 +1034,76 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
-				// --- Fetch cross-region stats (pure HTTP, no shared state touched yet) ---
 				childRegionUrl := strings.TrimRight(childOrgFull.RegionUrl, "/")
-
-				var childDailyStats []DailyStatistics
 				if project.Environment == "cloud" &&
 					len(childRegionUrl) > 0 &&
 					strings.Contains(childRegionUrl, "http") &&
 					childRegionUrl != parentRegionUrl {
-
-					log.Printf("[INFO] HandleGetStatistics: fetching cross-region stats for child org %s (%s) from region %s", childOrgFull.Name, childOrgFull.Id, childRegionUrl)
-
-					crossRegionUrl := fmt.Sprintf("%s/api/v1/orgs/%s/statistics", childRegionUrl, childOrgFull.Id)
-					crossReq, crossErr := http.NewRequest("GET", crossRegionUrl, nil)
-					if crossErr != nil {
-						log.Printf("[WARNING] HandleGetStatistics: failed building cross-region request for child org %s: %s", childOrgFull.Id, crossErr)
-					} else {
-						crossReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", user.ApiKey))
-						crossReq.Header.Set("Org-Id", childOrgFull.Id)
-
-						crossClient := &http.Client{Timeout: 10 * time.Second}
-						crossResp, crossDoErr := crossClient.Do(crossReq)
-						if crossDoErr != nil {
-							log.Printf("[WARNING] HandleGetStatistics: cross-region request failed for child org %s (%s): %s", childOrgFull.Name, childOrgFull.Id, crossDoErr)
-						} else {
-							if crossResp.StatusCode == 200 {
-								crossBody, crossReadErr := ioutil.ReadAll(crossResp.Body)
-								crossResp.Body.Close()
-								if crossReadErr != nil {
-									log.Printf("[WARNING] HandleGetStatistics: failed reading cross-region stats body for child org %s: %s", childOrgFull.Id, crossReadErr)
-								} else {
-									var childInfo ExecutionInfo
-									if jsonErr := json.Unmarshal(crossBody, &childInfo); jsonErr != nil {
-										log.Printf("[WARNING] HandleGetStatistics: failed unmarshalling cross-region stats for child org %s: %s", childOrgFull.Id, jsonErr)
-									} else {
-										log.Printf("[INFO] HandleGetStatistics: received %d cross-region daily stats from child org %s (%s)", len(childInfo.DailyStatistics), childOrgFull.Name, childOrgFull.Id)
-										childDailyStats = childInfo.DailyStatistics
-									}
-								}
-							} else {
-								crossResp.Body.Close()
-								log.Printf("[WARNING] HandleGetStatistics: cross-region stats request for child org %s returned status %d", childOrgFull.Id, crossResp.StatusCode)
-							}
-						}
-					}
+					mu.Lock()
+					hasCrossRegionChildren = true
+					info.Tenants = append(info.Tenants, newTenant)
+					info.Locations = append(info.Locations, newLocs...)
+					mu.Unlock()
+					return
 				}
 
-				// --- Merge all collected data into shared state under the mutex ---
 				mu.Lock()
 				info.Tenants = append(info.Tenants, newTenant)
 				info.Locations = append(info.Locations, newLocs...)
-
-				for _, childDay := range childDailyStats {
-					dateKey := childDay.Date.UTC().Format("2006-01-02")
-					alreadyAppliedCorrection := childDay.AgentInputTokens*250/1_000_000 +
-						childDay.AgentOutputTokens*1500/1_000_000 +
-						childDay.DailySMSUsage*3 +
-						childDay.DailyEmailUsage*2
-					rawChildAppExecutions := childDay.AppExecutions - alreadyAppliedCorrection
-					if rawChildAppExecutions < 0 {
-						rawChildAppExecutions = 0
-					}
-
-					if idx, exists := parentDailyMap[dateKey]; exists {
-						info.DailyStatistics[idx].ChildAppExecutions += rawChildAppExecutions
-						info.DailyStatistics[idx].DailyChildOrgAiUsage += childDay.AIUsage
-						info.DailyStatistics[idx].DailyChildOrgAgentExecutions += childDay.AgentExecutions
-						info.DailyStatistics[idx].DailyChildOrgAgentTokens += childDay.AgentTokens
-						info.DailyStatistics[idx].DailyChildOrgAgentInputTokens += childDay.AgentInputTokens
-						info.DailyStatistics[idx].DailyChildOrgAgentOutputTokens += childDay.AgentOutputTokens
-						info.DailyStatistics[idx].DailyChildOrgSMSUsage += childDay.DailySMSUsage
-						info.DailyStatistics[idx].DailyChildOrgEmailUsage += childDay.DailyEmailUsage
-					} else {
-						// No matching parent day — create a new entry carrying only the child org counters
-						newDay := DailyStatistics{
-							Date:                           childDay.Date,
-							ChildAppExecutions:             rawChildAppExecutions,
-							DailyChildOrgAiUsage:           childDay.AIUsage,
-							DailyChildOrgAgentExecutions:   childDay.AgentExecutions,
-							DailyChildOrgAgentTokens:       childDay.AgentTokens,
-							DailyChildOrgAgentInputTokens:  childDay.AgentInputTokens,
-							DailyChildOrgAgentOutputTokens: childDay.AgentOutputTokens,
-							DailyChildOrgSMSUsage:          childDay.DailySMSUsage,
-							DailyChildOrgEmailUsage:        childDay.DailyEmailUsage,
-						}
-						parentDailyMap[dateKey] = len(info.DailyStatistics)
-						info.DailyStatistics = append(info.DailyStatistics, newDay)
-					}
-				}
 				mu.Unlock()
 			}(childOrgMini)
 		}
 
-		// Wait for all goroutines to finish before continuing
 		wg.Wait()
+
+		if project.Environment == "cloud" && hasCrossRegionChildren && !skipMultiRegion {
+			multiRegionCacheKey := fmt.Sprintf("multi_region_stats_%s", org.Id)
+
+			if cachedBody, cacheErr := GetCache(ctx, multiRegionCacheKey); cacheErr == nil {
+				cachedBytes := []byte(cachedBody.([]uint8))
+				var cachedResults []MultiRegionStatsEntry
+				if jsonErr := json.Unmarshal(cachedBytes, &cachedResults); jsonErr == nil {
+					log.Printf("[INFO] HandleGetStatistics: serving multi-region stats from cache for org %s", orgId)
+					mergeMultiRegionResults(cachedResults, info, parentDailyMap)
+					} else {
+					log.Printf("[WARNING] HandleGetStatistics: failed unmarshalling cached multi-region-stats, will refetch: %s", jsonErr)
+				}
+			} else {
+				multiRegionUrl := fmt.Sprintf("https://shuffler.io/api/v1/orgs/%s/multi-region-stats", orgId)
+				multiReq, multiErr := http.NewRequest("GET", multiRegionUrl, nil)
+				if multiErr != nil {
+					log.Printf("[WARNING] HandleGetStatistics: failed building multi-region-stats request: %s", multiErr)
+				} else {
+					multiReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", user.ApiKey))
+					multiReq.Header.Set("Org-Id", orgId)
+
+					multiClient := &http.Client{Timeout: 60 * time.Second}
+					multiResp, multiDoErr := multiClient.Do(multiReq)
+					if multiDoErr != nil {
+						log.Printf("[WARNING] HandleGetStatistics: multi-region-stats request failed: %s", multiDoErr)
+						} else {
+						defer multiResp.Body.Close()
+						if multiResp.StatusCode == 200 {
+							multiBody, multiReadErr := ioutil.ReadAll(multiResp.Body)
+							if multiReadErr != nil {
+								log.Printf("[WARNING] HandleGetStatistics: failed reading multi-region-stats body: %s", multiReadErr)
+								} else {
+								var crossRegionResults []MultiRegionStatsEntry
+								if jsonErr := json.Unmarshal(multiBody, &crossRegionResults); jsonErr != nil {
+									log.Printf("[WARNING] HandleGetStatistics: failed unmarshalling multi-region-stats: %s", jsonErr)
+									} else {
+									// Store raw response bytes in cache for 1 hour (3600 seconds)
+									_ = SetCache(ctx, multiRegionCacheKey, multiBody, 3600)
+									mergeMultiRegionResults(crossRegionResults, info, parentDailyMap)
+									}
+								}
+							} else {
+							log.Printf("[WARNING] HandleGetStatistics: multi-region-stats returned status %d", multiResp.StatusCode)
+						}
+					}
+				}
+			}
+		}
 	}
 
 	if org.SyncFeatures.AnnualAppRunsGrouping.Active {

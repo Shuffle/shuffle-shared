@@ -2310,6 +2310,14 @@ func GetBrandingAvailable(key string) bool {
 	return false
 }
 
+func GetAppRunsGrouping(key string) bool {
+	if key == "1e1bf9b426033f9f15e8070e007f9414d11d7fdd6a07402a9290e1a0d7965f8f" {
+		return true
+	}
+
+	return false
+}
+
 func GetOnpremKeys() map[string]string {
 	// key: expiry
 	// Format: DD-MM-YYYY

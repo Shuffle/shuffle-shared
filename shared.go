@@ -35422,6 +35422,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 		var endDate int64
 		var cancellationDate int64
+		var startDate int64
 		active := false
 
 		features := []string{
@@ -35446,12 +35447,25 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 				parsedTimeout = time.Now()
 			}
 			endDate = parsedTimeout.Unix()
+
+			parsedStartDate, err := time.Parse("02-01-2006", license.StartDate)
+			if err != nil {
+				parsedStartDate = time.Now()
+			}
+			startDate = parsedStartDate.Unix()
+
 			cancellationDate = 0
 			active = true
 		} else {
 			endDate = time.Now().Unix()
+			startDate = time.Now().Unix()
 			cancellationDate = time.Now().Unix()
 			active = false
+		}
+		recurrance := string("monthly")
+
+		if license.AppRunsGrouping {
+			recurrance = string("annual")
 		}
 
 		subscription := PaymentSubscription{
@@ -35459,9 +35473,9 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			Active:           active,
 			CancellationDate: cancellationDate,
 			SupportLevel:     "Enterprise Support",
-			Startdate:        time.Now().Unix(),
+			Startdate:        startDate,
 			Enddate:          endDate,
-			Recurrence:       string("monthly"),
+			Recurrence:       recurrance,
 			Amount:           "0",
 			Currency:         string("USD"),
 			Level:            "1",
