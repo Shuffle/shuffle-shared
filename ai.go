@@ -8376,8 +8376,18 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			// Increment for this iteration
 			newLoopCount := trustedCount + 1
 			_ = SetCache(ctx, loopCacheKey, []byte(strconv.Itoa(newLoopCount)), 60)
+			maxLoops := 60
+			if envVal := os.Getenv("AI_AGENT_MAX_STEPS"); envVal != "" {
+				if parsed, err := strconv.Atoi(envVal); err == nil {
+					maxLoops = parsed
+				}
+			}
 
-			if newLoopCount >= 5 {
+			if maxLoops <= 0 {
+				maxLoops = 60
+			}
+
+			if newLoopCount >= 60 {
 				log.Printf("[ERROR][%s] AI_AGENT_MAX_STEPS_EXCEEDED: org=%s loop_count=%d (cache=%d, decisions=%d)", execution.ExecutionId, execution.Workflow.OrgId, newLoopCount, cacheCount, decisionCount)
 
 				go func() {
