@@ -598,6 +598,11 @@ type ExecutionInfo struct {
 	UsageAlerts             []AlertThreshold      `json:"usage_alerts" datastore:"usage_alerts"`
 }
 
+type MultiRegionStatsEntry struct {
+	OrgId           string            `json:"org_id"`
+	DailyStatistics []DailyStatistics `json:"daily_statistics"`
+}
+
 type AdditionalUseConfig struct {
 	Key   string `json:"key" datastore:"key"`
 	Value int64  `json:"value" datastore:"value"`
@@ -1160,6 +1165,7 @@ type OnpremLicense struct {
 	Timeout            string       `json:"timeout" datastore:"timeout"`
 	Branding           bool         `json:"branding" datastore:"branding"`
 	AppRunsGrouping    bool         `json:"app_runs_grouping" datastore:"app_runs_grouping"`
+	StartDate          string       `json:"start_date" datastore:"start_date"`
 }
 
 type Org struct {

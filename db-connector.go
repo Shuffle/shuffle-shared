@@ -9062,6 +9062,30 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 		if license.Valid {
 			if license.AppRunsGrouping {
 				limit = limit * 12
+				if licenseOrg.Billing.InternalAppRunsHardLimit > 0 && licenseOrg.Billing.InternalAppRunsHardLimit <= licenseOrg.SyncFeatures.AppExecutions.Limit {
+					limit = licenseOrg.Billing.InternalAppRunsHardLimit
+				}
+
+				var planStartDate int64
+				for _, sub := range licenseOrg.Subscriptions {
+					if sub.Active {
+						subName := strings.ToLower(sub.Name)
+						if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") {
+							planStartDate = sub.Startdate
+							break
+						}
+					}
+				}
+
+				var annualAppRuns int64
+				if planStartDate > 0 {
+					for _, stat := range stats.DailyStatistics {
+						if stat.Date.Unix() >= planStartDate {
+							annualAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+						}
+					}
+				}
+				totalAppExecutions = annualAppRuns
 			} else {
 			limit = limit * 2
 		}
@@ -9069,7 +9093,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 		} else if licenseOrg.CloudSync && licenseOrg.SyncFeatures.AnnualAppRunsGrouping.Active {
 			limit = limit * 12 * 2
 
-			if licenseOrg.Billing.InternalAppRunsHardLimit > 0 {
+			if licenseOrg.Billing.InternalAppRunsHardLimit > 0 && licenseOrg.Billing.InternalAppRunsHardLimit <= licenseOrg.SyncFeatures.AppExecutions.Limit {
 				limit = licenseOrg.Billing.InternalAppRunsHardLimit
 			}
 
@@ -16122,9 +16146,12 @@ func checkNoInternet() OnpremLicense {
 			Active: false,
 			Limit:  25000,
 		},
-		Timeout:  "",
-		Branding: false,
+		Timeout:         "",
+		Branding:        false,
+		StartDate:       "",
+		AppRunsGrouping: false,
 	}
+
 	licenseKey := os.Getenv("SHUFFLE_LICENSE")
 	if len(licenseKey) == 0 {
 		return license
@@ -16180,6 +16207,24 @@ func checkNoInternet() OnpremLicense {
 
 	brandingHash := sha256.Sum256([]byte(branding))
 	encodedBranding := hex.EncodeToString(brandingHash[:])
+
+	startDate := ""
+	if len(licenseParts) > 5 {
+		startDate = licenseParts[5]
+	}
+
+	startDateHash := sha256.Sum256([]byte(startDate))
+	encodedStartDate := hex.EncodeToString(startDateHash[:])
+
+	// check if annual appruns grouping available
+	appRunsGrouping := ""
+	if len(licenseParts) > 6 {
+		appRunsGrouping = licenseParts[6]
+	}
+
+	appRunsGroupingHash := sha256.Sum256([]byte(appRunsGrouping))
+	encodedAppRunsGrouping := hex.EncodeToString(appRunsGroupingHash[:])
+
 	// Returns a map[sha256]timeout string
 	onpremKeys := GetOnpremKeys()
 	if timeout, ok := onpremKeys[encodedString]; ok {
@@ -16238,6 +16283,19 @@ func checkNoInternet() OnpremLicense {
 					} else {
 						license.AppRuns.Active = false
 					}
+				}
+
+				if len(startDate) > 0 && len(encodedStartDate) > 0 {
+					if startDate, ok := onpremKeys[encodedStartDate]; ok {
+						license.StartDate = startDate
+					}
+				}
+
+				if len(appRunsGrouping) > 0 && len(encodedAppRunsGrouping) > 0 {
+					appRuns := GetAppRunsGrouping(encodedAppRunsGrouping)
+					license.AppRunsGrouping = appRuns
+				} else {
+					license.AppRunsGrouping = false
 				}
 
 				return license
