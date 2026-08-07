@@ -1216,9 +1216,11 @@ type Billing struct {
 	Email                    string           `json:"Email" datastore:"Email"`
 	AppRunsHardLimit         int64            `json:"app_runs_hard_limit" datastore:"app_runs_hard_limit"`
 	AlertThreshold           []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
+	OnpremAlertThreshold     []AlertThreshold `json:"OnpremAlertThreshold" datastore:"OnpremAlertThreshold"`
 	Consultation             Consultation     `json:"Consultation" datastore:"Consultation"`
 	InternalAppRunsHardLimit int64            `json:"internal_app_runs_hard_limit" datastore:"internal_app_runs_hard_limit"`
 	DefaultAlertsApplied     bool             `json:"default_alerts_applied" datastore:"default_alerts_applied"`
+	DefaultOnpremAlertsApplied bool             `json:"default_onprem_alerts_applied" datastore:"default_onprem_alerts_applied"`
 }
 
 type AlertThreshold struct {

@@ -1737,6 +1737,81 @@ func checkAndSetAlertCache(ctx context.Context, cacheKey string) bool {
 	return true
 }
 
+
+func CheckOnpremUsageAlerts(ctx context.Context, org *Org, onpremMonthlyTotal int64) error {
+	if !isOnpremAlertEligible(org) {
+		return nil
+	}
+
+	onpremLimit := org.SyncFeatures.OnpremAppExecutions.Limit
+	if onpremLimit <= 0 {
+		return nil
+	}
+
+	onpremPercentage := float64(onpremMonthlyTotal) / float64(onpremLimit) * 100
+
+	allAdmins := []string{}
+	for _, user := range org.Users {
+		if user.Role == "admin" {
+			allAdmins = append(allAdmins, user.Username)
+		}
+	}
+
+	if !ArrayContains(allAdmins, "chris@shuffler.io") {
+		allAdmins = append(allAdmins, "chris@shuffler.io")
+	}
+
+	if !ArrayContains(allAdmins, "jay@shuffler.io") {
+		allAdmins = append(allAdmins, "jay@shuffler.io")
+	}
+
+	changed := false
+	for index, alert := range org.Billing.OnpremAlertThreshold {
+		if alert.Email_send || onpremPercentage < float64(alert.Percentage) {
+			continue
+		}
+
+		cacheKey := generateAlertCacheKey(org.Id, fmt.Sprintf("onprem_%d", alert.Percentage), allAdmins)
+		if !checkAndSetAlertCache(ctx, cacheKey) {
+			continue
+		}
+
+		usagePercentageStr := fmt.Sprintf("%d%% of your on-premise app runs limit", alert.Percentage)
+		Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your tenant %s", usagePercentageStr, org.Name)
+		substitutions := map[string]interface{}{
+			"app_runs_usage":            onpremMonthlyTotal,
+			"app_runs_limit":            onpremLimit,
+			"subject_string":            usagePercentageStr,
+			"org_name":                  org.Name,
+			"org_id":                    org.Id,
+			"admin_email":               org.Name,
+			"app_runs_usage_percentage": int64(onpremPercentage),
+		}
+
+		err := sendMailSendgridV2(
+			[]string{"support@shuffler.io"},
+			Subject,
+			substitutions,
+			false,
+			"d-3678d48b2b7144feb4b0b4cff7045016",
+			allAdmins,
+		)
+		if err != nil {
+			log.Printf("[ERROR] Failed sending onprem usage alert mail for org %s: %s", org.Id, err)
+			continue
+		}
+
+		org.Billing.OnpremAlertThreshold[index].Email_send = true
+		changed = true
+	}
+
+	if changed {
+		return SetOrg(ctx, *org, org.Id)
+	}
+
+	return nil
+}
+
 func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment uint) *ExecutionInfo {
 
 	appendCustom := false
