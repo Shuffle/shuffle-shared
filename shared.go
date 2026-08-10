@@ -18690,6 +18690,154 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			return handleAgentDecisionStreamResult(workflowExecution, actionResult)
 		}
+	} else {
+		// Handler for delay management in agent parent node updates 
+		hasDelay := false
+		if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.Workflow.Actions) == 1 {
+			for _, action := range workflowExecution.Workflow.Actions { 
+				if action.ID == actionResult.Action.ID && action.ExecutionDelay > 0 { 
+					hasDelay = true
+					break
+				}
+			}
+
+			// Look for the Agent decision parent to update
+			if hasDelay { 
+				decisionValue := "" 
+				for _, param := range actionResult.Action.Parameters { 
+					if param.Name == decisionParameterName { 
+						decisionValue = param.Value
+						break
+					}
+				}
+
+				if len(decisionValue) > 0 { 
+					parentExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionParent)
+					if err != nil {
+						log.Printf("[ERROR][%s] Failed to get parent execution for delayed agent decision update: %s", workflowExecution.ExecutionId, err)
+					} else {
+						// Basic auth check
+						if parentExecution.ExecutionOrg != workflowExecution.ExecutionOrg {
+							log.Printf("[ERROR][%s] Parent execution org %s does not match child execution org %s for delayed agent decision update", workflowExecution.ExecutionId, parentExecution.ExecutionOrg, workflowExecution.ExecutionOrg) 
+						} else {
+							decisionFound := false
+							for _, result := range parentExecution.Results {
+								if result.Action.AppName != "AI Agent" { 
+									continue
+								}
+
+								// Parse result to agent
+								agentOutput := AgentOutput{} 
+								err = json.Unmarshal([]byte(result.Result), &agentOutput)
+								if err != nil || len(agentOutput.Decisions) == 0 { 
+									log.Printf("[ERROR][%s] Failed to unmarshal agent output for delayed decision update: %s. Decisions: %d", workflowExecution.ExecutionId, err, agentOutput.Decisions) 
+								}
+
+								for decisionIndex, decision := range agentOutput.Decisions {
+									if decision.RunDetails.Id != decisionValue { 
+										continue
+									}
+
+									decisionFound = true 
+									log.Printf("[DEBUG][%s] Decision %s found. Status: %s", workflowExecution.ExecutionId, decisionValue, decision.RunDetails.Status)
+
+									if decision.RunDetails.Status != "WAITING" {
+										break
+									}
+
+
+									log.Printf("[DEBUG][%s] Updating parent decision %s to FINISHED", workflowExecution.ExecutionId, decisionValue)
+
+									agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
+									agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
+									agentOutput.Decisions[decisionIndex].RunDetails.RawResponse = actionResult.Result
+
+									marshalledDecision, err := json.Marshal(agentOutput.Decisions[decisionIndex])
+									if err != nil {
+										log.Printf("[ERROR][%s] Failed to marshal updated decision for delayed decision update: %s", workflowExecution.ExecutionId, err)
+									}
+
+									//decisionCacheId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
+									//SetCache(ctx, decisionValue, marshalledDecision, 30)
+
+									//marshalledAgentOutput, err := json.Marshal(agentOutput)
+									//if err != nil {
+									//	log.Printf("[ERROR][%s] Failed to marshal updated agent output for delayed decision update: %s", workflowExecution.ExecutionId, err)
+									//}
+									//actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, result.Action.ID)
+									//SetCache(ctx, actionCacheId, marshalledAgentOutput, 30)
+
+									//parentExecution.Results[resultIndex].Result = string(marshalledAgentOutput)
+									//err = SetWorkflowExecution(ctx, *parentExecution, true)
+									//if err != nil { 
+									//	log.Printf("[ERROR][%s] Failed to update parent execution for delayed decision update: %s", workflowExecution.ExecutionId, err)
+									//}
+
+									//sendAgentActionSelfRequest("SUCCESS", *parentExecution, actionResult) 
+									log.Printf("[DEBUG][%s] Updated parent decision %s to FINISHED", workflowExecution.ExecutionId, decisionValue)
+
+									baseUrl := "https://shuffler.io"
+									if os.Getenv("BASE_URL") != "" {
+										baseUrl = os.Getenv("BASE_URL")
+									}
+
+									if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+										baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+									}
+
+									//url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
+									url := fmt.Sprintf("%s/api/v1/streams", baseUrl)
+
+									if debug { 
+										log.Printf("[DEBUG][%s] Sending agent decision response %s with status %s. Node: %s. URL: %s", workflowExecution.ExecutionId, decisionValue, agentOutput.Decisions[decisionIndex].RunDetails.Status, agentOutput.NodeId, url)
+									}
+									client := GetExternalClient(url)
+									parsedAction := ActionResult{
+										ExecutionId:   parentExecution.ExecutionId,
+										Authorization: parentExecution.Authorization,
+
+										// Map in the node ID (action ID) and decision ID to set/continue the right result
+										Action: Action{
+											AppName: "AI Agent",
+											Label:   fmt.Sprintf("Agent Decision %s", decision.RunDetails.Id),
+											ID:      agentOutput.NodeId,
+										},
+										Status: fmt.Sprintf("agent_%s", decision.RunDetails.Id),
+										Result: string(marshalledDecision),
+									}
+
+									// Handle 
+									//if len(foundAction.ID) > 0 { 
+									//}
+
+									marshalledAction, err := json.Marshal(parsedAction)
+									if err != nil {
+										log.Printf("[ERROR][%s] AI Agent: Failed marshalling action in agent decision (2): %s", workflowExecution.ExecutionId, err)
+									} else {
+										streamReq, err := http.NewRequest("POST", url, bytes.NewBuffer(marshalledAction))
+										if err != nil {
+											log.Printf("[ERROR][%s] Failed to create request for agent decision response: %s", workflowExecution.ExecutionId, err)
+										} else {
+											streamReq.Header.Set("Content-Type", "application/json")
+											_, _, streamErr := DoRequestWithRetry(client, streamReq, 3)
+											if streamErr != nil {
+												log.Printf("[ERROR][%s] AI Agent: All attempts to POST decision %s to streams failed (2): %v. Falling back to in-process handler.", workflowExecution.ExecutionId, decision.RunDetails.Id, streamErr)
+											}
+										}
+									}
+
+									break
+								}
+
+								if decisionFound {
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 
 	if setCache {
@@ -21171,7 +21319,6 @@ func CheckHookAuth(request *http.Request, auth string) error {
 
 // Body = The action body received from the user to test.
 func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
-
 	workflowExecution := WorkflowExecution{}
 	if ctx == nil {
         ctx = context.Background() 
@@ -21961,7 +22108,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			marshalledActions, _ := json.MarshalIndent(action.Parameters, "", "  ")
 			log.Printf("ACTION PARAMS:\n%s", string(marshalledActions))
 			if action.AppName != "AI Agent" && action.AppName != "openai" {
-				//os.Exit(3)
 			}
 		}
 	*/
@@ -22023,9 +22169,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		workflowExecution.Workflow.ID = action.SourceWorkflow
 		workflowExecution.ExecutionSource = action.SourceWorkflow
 		workflowExecution.ExecutionParent = action.SourceExecution
-		if debug { 
-			log.Printf("\n\n\nHERE PRE OVERRIDE %s: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionId, workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
-		}
 
 		// Updated action stuff, ensuring everything is on par
 		if len(workflowExecution.Workflow.Actions) == 1 {
@@ -22110,11 +22253,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 				workflowExecution.Workflow.Branches = append(workflowExecution.Workflow.Branches, modifiedBranch)
 			}
-		}
-
-
-		if debug { 
-			log.Printf("\n\n\nHERE PRE OVERRIDE %s 2: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionId, workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
 		}
 
 		workflowExecution.ExecutionArgument = oldExec.ExecutionArgument
@@ -22249,10 +22387,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 			go RunAgentDecisionAction(*oldExec, mappedOutput, mappedOutput.Decisions[foundDecisionIndex])
 
-			if debug { 
-				log.Printf("\n\n\nHERE PRE OVERRIDE %s 3: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionId, workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
-			}
-
 			// FIXME: This is to ensure hadnling of the EXACT SAME decision happens.
 			return workflowExecution, errors.New(fmt.Sprintf("Successfully started rerun of decision %s. This will replace the current result.", decisionId))
 		}
@@ -22268,10 +22402,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		}
 	}
 
-	if debug { 
-		log.Printf("\n\n\nHERE PRE OVERRIDE %s 4: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionId, workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
-	}
-
 	if user.ActiveOrg.Id != "" {
 		workflow.ExecutingOrg = user.ActiveOrg
 		workflowExecution.ExecutionOrg = user.ActiveOrg.Id
@@ -22280,11 +22410,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 	if len(workflowExecution.ExecutionSource) == 0 || workflowExecution.ExecutionSource == "default" {
 		workflowExecution.ExecutionSource = "single_action"
-
-		// Fredrik fixing onprem
-		//if debug { 
-		//	os.Exit(3)
-		//}
 
 		// parentRequest 
 	}
@@ -22430,7 +22555,6 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 				// FIXME: This is a custom fix for single action custom runs.
 				// Wait for validation to have ran
-				
 				agentBypass := false
 				if len(newExecution.Results[relevantIndex].Action.Parameters) > 0 {
 					for _, param := range newExecution.Results[relevantIndex].Action.Parameters {

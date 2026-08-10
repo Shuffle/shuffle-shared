@@ -2427,7 +2427,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					break
 				}
 
-				if !finishFound && innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" {
+				if !finishFound && (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") {
 					if workflowExecution.Results[resultIndex].StartedAt == 0 {
 						workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMilli()
 					}
@@ -2456,6 +2456,11 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}
 						}
 
+						parsedDelay, err := strconv.Atoi(decision.Delay)
+						if err != nil { 
+							parsedDelay = 0
+						}
+
 						decisionId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
 						if decision.RunDetails.Status == "FINISHED" || decision.RunDetails.Status == "IGNORED" {
 							finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
@@ -2464,13 +2469,14 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 							failedFound = true
 							continue
-						} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
+						} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" && parsedDelay <= 0 {
 
 							// Max runtime of a decision at 5 minutes
 							startedTs := decision.RunDetails.StartedAt
 							if startedTs > 0 && startedTs < maxSecondsTimestamp {
 								startedTs *= 1000
 							}
+
 							if startedTs > 0 && time.Now().UnixMilli()-startedTs > 300000 {
 								timeoutFlagKey := fmt.Sprintf("agent-%s-%s-timeout-handled", workflowExecution.ExecutionId, decision.RunDetails.Id)
 								if _, err := GetCache(ctx, timeoutFlagKey); err == nil {
@@ -2538,7 +2544,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}
 						}
 
-						//log.Printf("[DEBUG] Check cache for %s with status %s", decision.RunDetails.Id, decision.RunDetails.Status)
 						cache, err := GetCache(ctx, decisionId)
 						if err == nil {
 							foundDecision := AgentDecision{}
@@ -4983,7 +4988,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 
 		if len(workflow.Name) == 0 && len(workflow.Actions) <= 1 {
 			if debug {
-				log.Printf("[DEBUG] Skipping workflow %s (%s) for org %s because it has no name and only 1 action", workflow.Name, workflow.ID, user.ActiveOrg.Id)
+				log.Printf("[DEBUG] Skipping workflow '%s' (%s) for org %s because it has no name and only 1 action", workflow.Name, workflow.ID, user.ActiveOrg.Id)
 			}
 
 			continue
