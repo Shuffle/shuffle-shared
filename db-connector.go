@@ -33,6 +33,7 @@ import (
 	"cloud.google.com/go/datastore"
 	"github.com/Masterminds/semver"
 	"github.com/bradfitz/slice"
+	"github.com/microcosm-cc/bluemonday"
 	uuid "github.com/satori/go.uuid"
 
 	//"github.com/frikky/kin-openapi/openapi3"
@@ -160,10 +161,11 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 			log.Printf("[ERROR] Failed adding stats with ID %s: %s", id, putErr)
 
 			if strings.Contains(fmt.Sprintf("%s", putErr), "entity is too big") {
-				log.Printf("[WARNING] SetOrgStatistics: entity too big for org %s – archiving to GCS and trimming", id)
+				log.Printf("[WARNING] SetOrgStatistics: entity too big for org %s – attempting to archive to GCS", id)
 
 				if archiveErr := archiveOldStatsToGCSBucket(ctx, id, &stats); archiveErr != nil {
-					log.Printf("[WARNING] SetOrgStatistics: GCS archive failed for org %s: %s – trimming anyway", id, archiveErr)
+					log.Printf("[ERROR] SetOrgStatistics: GCS archive failed for org %s: %s – cannot trim stats without backup, returning original error", id, archiveErr)
+					return putErr
 				}
 
 				if len(stats.DailyStatistics) > 60 {
@@ -599,9 +601,16 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
+
+	// Weird workaround that only applies during local development
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "debian" {
+		hostname = "shuffle-backend"
+	}
+
 	executionData, err := json.Marshal(workflowExecution)
 	if err == nil {
-		err = SetCache(ctx, cacheKey, executionData, 31)
+		err = SetCache(ctx, cacheKey, executionData, 600)
 		if err != nil {
 			//log.Printf("[WARNING] Failed updating execution cache. Setting DB! %s", err)
 			dbSave = true
@@ -611,12 +620,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	} else {
 		//log.Printf("[ERROR] Failed marshalling execution for cache: %s", err)
 		//log.Printf("[INFO] Set execution cache for workflowexecution %s", cacheKey)
-	}
-
-	// Weird workaround that only applies during local development
-	hostname, err := os.Hostname()
-	if err != nil || hostname == "debian" {
-		hostname = "shuffle-backend"
 	}
 
 	// FIXME: This right here has caused more problems during dev than anything
@@ -1005,6 +1008,87 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 						workflowExecution.Results[valueIndex].Result = newValue
 					}
+
+					for paramIndex, param := range value.Action.Parameters {
+						if strings.Contains(param.Value, "Result too large to handle") {
+							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+								Result: param.Value,
+							})
+							if err == nil {
+								workflowExecution.Results[valueIndex].Action.Parameters[paramIndex].Value = newValue
+							}
+						}
+					}
+
+					for paramIndex, param := range value.Action.InvalidParameters {
+						if strings.Contains(param.Value, "Result too large to handle") {
+							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+								Result: param.Value,
+							})
+							if err == nil {
+								workflowExecution.Results[valueIndex].Action.InvalidParameters[paramIndex].Value = newValue
+							}
+						}
+					}
+				}
+
+				for actionIndex, action := range workflowExecution.Workflow.Actions {
+					for paramIndex, param := range action.Parameters {
+						if strings.Contains(param.Value, "Result too large to handle") {
+							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+								Result: param.Value,
+							})
+							if err == nil {
+								workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = newValue
+							}
+						}
+					}
+
+					for paramIndex, param := range action.InvalidParameters {
+						if strings.Contains(param.Value, "Result too large to handle") {
+							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+								Result: param.Value,
+							})
+							if err == nil {
+								workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = newValue
+							}
+						}
+					}
+				}
+
+				for triggerIndex, trigger := range workflowExecution.Workflow.Triggers {
+					for paramIndex, param := range trigger.Parameters {
+						if strings.Contains(param.Value, "Result too large to handle") {
+							newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+								Result: param.Value,
+							})
+							if err == nil {
+								workflowExecution.Workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = newValue
+							}
+						}
+					}
+				}
+
+				for execVarIndex, execVar := range workflowExecution.Workflow.ExecutionVariables {
+					if strings.Contains(execVar.Value, "Result too large to handle") {
+						newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+							Result: execVar.Value,
+						})
+						if err == nil {
+							workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = newValue
+						}
+					}
+				}
+
+				for execVarIndex, execVar := range workflowExecution.ExecutionVariables {
+					if strings.Contains(execVar.Value, "Result too large to handle") {
+						newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+							Result: execVar.Value,
+						})
+						if err == nil {
+							workflowExecution.ExecutionVariables[execVarIndex].Value = newValue
+						}
+					}
 				}
 
 				// Fixes missing pieces
@@ -1078,7 +1162,8 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				//return workflowExecution, err
 			}
 		}
-
+	}
+	if len(workflowExecution.ExecutionId) > 0 {
 		// A workaround for large bits of information for execution argument
 		if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
 			//log.Printf("[DEBUG] Found prefix %s to be replaced for exec argument (3)", workflowExecution.ExecutionArgument)
@@ -1096,6 +1181,20 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			}
 		}
 
+		if strings.Contains(workflowExecution.Result, "Result too large to handle") {
+			baseResult := &ActionResult{
+				Result: workflowExecution.Result,
+				Action: Action{ID: "execution_result"},
+			}
+
+			newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseResult)
+			if err != nil {
+				log.Printf("[DEBUG][%s] Failed to parse in execution file value for Result: %s", workflowExecution.ExecutionId, err)
+			} else {
+				workflowExecution.Result = newValue
+			}
+		}
+
 		// Parsing as file.
 		//log.Printf("[DEBUG] Got execution %s. Results: ~%d/%d", id, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
 		for valueIndex, value := range workflowExecution.Results {
@@ -1108,6 +1207,87 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				}
 
 				workflowExecution.Results[valueIndex].Result = newValue
+			}
+
+			for paramIndex, param := range value.Action.Parameters {
+				if strings.Contains(param.Value, "Result too large to handle") {
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+						Result: param.Value,
+					})
+					if err == nil {
+						workflowExecution.Results[valueIndex].Action.Parameters[paramIndex].Value = newValue
+					}
+				}
+			}
+
+			for paramIndex, param := range value.Action.InvalidParameters {
+				if strings.Contains(param.Value, "Result too large to handle") {
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+						Result: param.Value,
+					})
+					if err == nil {
+						workflowExecution.Results[valueIndex].Action.InvalidParameters[paramIndex].Value = newValue
+					}
+				}
+			}
+		}
+
+		for actionIndex, action := range workflowExecution.Workflow.Actions {
+			for paramIndex, param := range action.Parameters {
+				if strings.Contains(param.Value, "Result too large to handle") {
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+						Result: param.Value,
+					})
+					if err == nil {
+						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = newValue
+					}
+				}
+			}
+
+			for paramIndex, param := range action.InvalidParameters {
+				if strings.Contains(param.Value, "Result too large to handle") {
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+						Result: param.Value,
+					})
+					if err == nil {
+						workflowExecution.Workflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = newValue
+					}
+				}
+			}
+		}
+
+		for triggerIndex, trigger := range workflowExecution.Workflow.Triggers {
+			for paramIndex, param := range trigger.Parameters {
+				if strings.Contains(param.Value, "Result too large to handle") {
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+						Result: param.Value,
+					})
+					if err == nil {
+						workflowExecution.Workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = newValue
+					}
+				}
+			}
+		}
+
+		for execVarIndex, execVar := range workflowExecution.Workflow.ExecutionVariables {
+			if strings.Contains(execVar.Value, "Result too large to handle") {
+				newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+					Result: execVar.Value,
+				})
+				if err == nil {
+					workflowExecution.Workflow.ExecutionVariables[execVarIndex].Value = newValue
+				}
+			}
+		}
+
+		for execVarIndex, execVar := range workflowExecution.ExecutionVariables {
+			if strings.Contains(execVar.Value, "Result too large to handle") {
+				newValue, err := getExecutionFileValue(ctx, *workflowExecution, ActionResult{
+					Result: execVar.Value,
+				})
+				if err == nil {
+					workflowExecution.ExecutionVariables[execVarIndex].Value = newValue
+				}
 			}
 		}
 	}
@@ -1127,7 +1307,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			return workflowExecution, getErr
 		}
 
-		err = SetCache(ctx, id, newexecution, 30)
+		err = SetCache(ctx, id, newexecution, 600)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating execution: %s", err)
 		}
@@ -1382,6 +1562,46 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
 			if len(managerOrg.Id) == 36 {
 				IncrementCache(ctx, managerOrg.Id, "childorg_send_mail", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_cached_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_agent_cached_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_executions") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_executions", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_executions_successful") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_executions_successful", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_executions_failed") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_executions_failed", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_max_loops_hit") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_max_loops_hit", int(dbDumpInterval))
 			}
 		}
 	}
@@ -1940,14 +2160,36 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 }
 
 func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecution, action ActionResult) (string, error) {
-	fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, action.Action.ID)
+	fileID := action.Action.ID
+	if len(fileID) == 0 && len(action.Result) > 0 {
+		parsedPlaceholder := map[string]interface{}{}
+		if err := json.Unmarshal([]byte(action.Result), &parsedPlaceholder); err == nil {
+			if parsedID, ok := parsedPlaceholder["id"].(string); ok && len(parsedID) > 0 {
+				prefix := fmt.Sprintf("%s_", workflowExecution.ExecutionId)
+				if strings.HasPrefix(parsedID, prefix) {
+					fileID = strings.TrimPrefix(parsedID, prefix)
+				} else {
+					fileID = parsedID
+				}
+			}
+		}
+	}
 
-	cacheKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, action.Action.ID)
+	if len(fileID) == 0 {
+		return "", errors.New("missing file id for large execution value")
+	}
+
+	fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, fileID)
+
+	cacheKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, fileID)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := string(cache.([]uint8))
-			return cacheData, nil
+			if len(cacheData) > 0 {
+				return cacheData, nil
+				//return "", errors.New(fmt.Sprintf("File '%s' doesn't exist (cache).", fullParsedPath))
+			}
 		}
 	}
 
@@ -1970,6 +2212,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 			} else {
 				log.Printf("[ERROR] Failed reading file '%s' from local storage: %s", localPath, err)
 			}
+
 			return "", err
 		}
 	} else {
@@ -1981,7 +2224,12 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		obj := bucket.Object(fullParsedPath)
 		fileReader, err := obj.NewReader(ctx)
 		if err != nil {
-			log.Printf("[ERROR] Failed reading file '%s' from bucket %s: %s. Will try with alternative solution.", fullParsedPath, bucketName, err)
+			if debug {
+				log.Printf("[DEBUG] Failed reading file '%s' from bucket %s: %s. Will try with alternative solution.", fullParsedPath, bucketName, err)
+			}
+
+			// Cache sip for the minute
+			SetCache(ctx, cacheKey, []byte{}, 1)
 
 			if projectName != "shuffler" {
 				bucketName = fmt.Sprintf("%s.appspot.com", projectName)
@@ -1989,7 +2237,8 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 				obj = bucket.Object(fullParsedPath)
 				fileReader, err = obj.NewReader(ctx)
 				if err != nil {
-					log.Printf("[ERROR] Failed reading file '%s' again from bucket %s: %s", fullParsedPath, bucketName, err)
+					//log.Printf("[ERROR] Failed reading file '%s' again from bucket %s: %s", fullParsedPath, bucketName, err)
+
 					return "", err
 				}
 			} else {
@@ -2071,6 +2320,32 @@ func sanitizeString(input string) string {
 	return input
 }
 
+var formMarkdownPolicy *bluemonday.Policy
+
+// Blocks script/iframe/event-handler XSS in FormControl.InputMarkdown while keeping basic formatting.
+func getFormMarkdownPolicy() *bluemonday.Policy {
+	if formMarkdownPolicy != nil {
+		return formMarkdownPolicy
+	}
+
+	policy := bluemonday.UGCPolicy()
+	policy.AllowStandardURLs()
+	policy.RequireNoFollowOnLinks(true)
+	policy.RequireNoReferrerOnLinks(true)
+	policy.AddTargetBlankToFullyQualifiedLinks(true)
+
+	formMarkdownPolicy = policy
+	return formMarkdownPolicy
+}
+
+func sanitizeFormMarkdown(input string) string {
+	if len(input) == 0 {
+		return input
+	}
+
+	return getFormMarkdownPolicy().Sanitize(input)
+}
+
 func GetExecutionValidation(ctx context.Context, executionId string) (TypeValidation, error) {
 	validation := TypeValidation{}
 
@@ -2106,7 +2381,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		workflowExecution.Workflow.Validation = validation
 	}
 
-	//if debug { 
+	//if debug {
 	//	log.Printf("\n\n[DEBUG][%s] EXEC CHECK? Actions: %d, Results: %d\n\n", workflowExecution.ExecutionId, len(workflowExecution.Workflow.Actions), len(workflowExecution.Results))
 	//}
 
@@ -2122,7 +2397,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 			// Very weird edgecase handling for agent cleanup
 			// This is for auto-correctiveness of executions
-			if len(workflowExecution.Workflow.Actions) == 1 && action.Name == "agent" && innerresult.Action.Name == "agent" && innerresult.Action.ID == "" { 
+			if len(workflowExecution.Workflow.Actions) == 1 && action.Name == "agent" && innerresult.Action.Name == "agent" && innerresult.Action.ID == "" {
 				innerresult.Action.ID = action.ID
 				innerresult.Action.AppName = "AI Agent"
 			}
@@ -2148,6 +2423,23 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 			// Special cleanup for agents
 			if innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent" {
+				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, innerresult.Action.ID)
+				if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil {
+					cachedBytes := []byte(cachedData.([]uint8))
+					var cachedOutput AgentOutput
+					if err := json.Unmarshal(cachedBytes, &cachedOutput); err == nil && len(cachedOutput.Decisions) > 0 {
+						var currentOutput AgentOutput
+						_ = json.Unmarshal([]byte(innerresult.Result), &currentOutput)
+						if len(cachedOutput.Decisions) >= len(currentOutput.Decisions) {
+							//if debug {
+							//	log.Printf("[DEBUG][%s] Fixexecution: upgrading agent result index %d from cache (%d decisions vs %d)", workflowExecution.ExecutionId, resultIndex, len(cachedOutput.Decisions), len(currentOutput.Decisions))
+							//}
+
+							innerresult.Result = string(cachedBytes)
+							workflowExecution.Results[resultIndex].Result = string(cachedBytes)
+						}
+					}
+				}
 
 				// Starting autocorrections
 				mappedOutput := AgentOutput{}
@@ -2173,30 +2465,35 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				}
 
 				finishFound := false
-				for decisionIndex, decision := range mappedOutput.Decisions { 
-					if decision.Action == "finish" || decision.Category == "finish" { 
+				for decisionIndex, decision := range mappedOutput.Decisions {
+					if decision.Action == "finish" || decision.Category == "finish" {
 
-						if decision.RunDetails.Status != "FINISHED" {  
-							if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 { 
-								mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli() 
+						if decision.RunDetails.Status != "FINISHED" {
+							if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
+								mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 							}
 
-							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli() 
+							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
 							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 							decisionsUpdated = true
 						}
-				
+
 						finishFound = true
 					}
 				}
 
-				if finishFound { 
+				if finishFound {
+					//if debug {
+					//	log.Printf("[DEBUG][%s] SELF AGENT FINISH FOUND", workflowExecution.ExecutionId)
+					//}
+
 					mappedOutput.Status = "FINISHED"
 
 					result.Status = "SUCCESS"
 					innerresult.Status = "SUCCESS"
 					workflowExecution.Results[resultIndex].Status = "SUCCESS"
-					// go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+					break
 				}
 
 				if !finishFound && innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" {
@@ -2212,6 +2509,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					// Auto fixing decision data based on cache for better decisionmaking
 					// Map the result into AgentOutput to check decisions
 
+					// Any Unix timestamp under 10 billion is in seconds (valid through year 2286). Milliseconds are > 1 trillion.
+					const maxSecondsTimestamp int64 = 10_000_000_000
+
 					finishedDecisions := []string{}
 					failedFound := false
 					finishDecisionFound := false
@@ -2219,7 +2519,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						if decision.Action == "finish" {
 							finishDecisionFound = true
 
-							if decision.RunDetails.Status == "" { 
+							if decision.RunDetails.Status == "" {
 								decision.RunDetails.Status = "FINISHED"
 								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 							}
@@ -2236,14 +2536,18 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
 
 							// Max runtime of a decision at 5 minutes
-							if decision.RunDetails.StartedAt > 0 && time.Now().UnixMilli()-decision.RunDetails.StartedAt > 300000 {
+							startedTs := decision.RunDetails.StartedAt
+							if startedTs > 0 && startedTs < maxSecondsTimestamp {
+								startedTs *= 1000
+							}
+							if startedTs > 0 && time.Now().UnixMilli()-startedTs > 300000 {
 								timeoutFlagKey := fmt.Sprintf("agent-%s-%s-timeout-handled", workflowExecution.ExecutionId, decision.RunDetails.Id)
 								if _, err := GetCache(ctx, timeoutFlagKey); err == nil {
 									// Already handled this timeout in a previous check so just count it as finished.
 									finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 									failedFound = true
 								} else {
-									log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-decision.RunDetails.StartedAt)/1000)
+									log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-startedTs)/1000)
 									SetCache(ctx, timeoutFlagKey, []byte("1"), 60) // 60 min TTL — long enough to outlive any recovery cycle
 
 									decisionsUpdated = true
@@ -2347,14 +2651,14 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						}
 
 						// Set cache to prevent multiple sends — if cache is down, skip to prevent retry storm
-						if cacheErr := SetCache(ctx, cacheId, []byte("handled"), 1); cacheErr != nil {
+						if cacheErr := SetCache(ctx, cacheId, []byte("handled"), 60); cacheErr != nil {
 							log.Printf("[WARNING][%s] Memcache down — skipping fixexec agent self-request for action %s to prevent retry storm", workflowExecution.ExecutionId, action.ID)
 							continue
 						}
 
 						decisionsUpdated = true
 						if finishDecisionFound {
-							log.Printf("[INFO][%s] All decisions finished for agent action %s - marking as FINISHED.", workflowExecution.ExecutionId, action.ID)
+							//log.Printf("[INFO][%s] All decisions finished for agent action %s - marking as FINISHED.", workflowExecution.ExecutionId, action.ID)
 
 							mappedOutput.Status = "FINISHED"
 							mappedOutput.CompletedAt = time.Now().UnixMilli()
@@ -2366,6 +2670,24 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 								go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 							}()
 						} else {
+							mostRecentCompletion := int64(0)
+							for _, dec := range mappedOutput.Decisions {
+								ts := dec.RunDetails.CompletedAt
+								if ts > 0 && ts < maxSecondsTimestamp {
+									ts *= 1000
+								}
+								if ts > mostRecentCompletion {
+									mostRecentCompletion = ts
+								}
+							}
+							timeSinceCompletionMs := time.Now().UnixMilli() - mostRecentCompletion
+							if timeSinceCompletionMs < 60000 {
+								if debug {
+									log.Printf("[DEBUG][%s] Skipping fixexecution_timeout_recovery: last decision completed %d ms ago (waiting for LLM response from primary stream handler).", workflowExecution.ExecutionId, timeSinceCompletionMs)
+								}
+								continue
+							}
+
 							log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found, marking as WAITING.", workflowExecution.ExecutionId, action.ID)
 							//log.Printf("[INFO][%s] All decisions finished for agent action %s - but no finish action found. Re-invoking agent to finalize (failedFound: %t).", workflowExecution.ExecutionId, action.ID, failedFound)
 
@@ -2396,6 +2718,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}()
 						}
 					} else if (result.Status == "" || result.Status == "WAITING") && mappedOutput.Status == "FINISHED" {
+						if debug {
+							log.Printf("[INFO][%s] Agent action %s marked as FINISHED, updating result status to SUCCESS.", workflowExecution.ExecutionId, action.ID)
+						}
 						workflowExecution.Results[resultIndex].Status = "SUCCESS"
 						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 					}
@@ -4605,7 +4930,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		//log.Printf("\n\n\nLooking for workflows for org %s with user %s (%s)\n\n\n", user.ActiveOrg.Id, user.Username, user.Id)
 
 		cursorStr := ""
+		// Sort by edited
 		query := datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
+		query = query.Order("-edited")
 		for {
 			it := project.Dbclient.Run(ctx, query)
 			if len(workflows) >= maxAmount {
@@ -4617,6 +4944,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				_, err = it.Next(&innerWorkflow)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+						if debug {
+							//log.Printf("[DEBUG] Workflow load iterator issue: %s", err)
+						}
 
 					} else {
 						if !strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
@@ -4628,10 +4958,18 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Public {
+					//if debug {
+					//	log.Printf("[DEBUG] Skipping public workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
+					//}
+
 					continue
 				}
 
 				if innerWorkflow.Hidden {
+					//if debug {
+					//	log.Printf("[DEBUG] Skipping HIDDEN workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
+					//}
+
 					continue
 				}
 
@@ -4652,9 +4990,20 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 			}
 
+			// Fallback for when the iterator fails due to a datastore issue
+			// (e.g. "cannot load field" error) and similar
 			if err != iterator.Done {
-				log.Printf("[INFO] Failed fetching workflow results: %v", err)
-				break
+				log.Printf("[WARNING] Failed fetching workflow results for org %s: %v", user.ActiveOrg.Id, err)
+
+				// Check if query contains edited or not
+				if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition desc") && strings.Contains(fmt.Sprintf("%s", query), "edited") {
+					log.Printf("[ERROR] Retrying workflow query without Edited sort due to error: %s", err)
+
+					query = datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
+					continue
+				} else {
+					break
+				}
 			}
 
 			// Get the cursor for the next page of results.
@@ -4676,17 +5025,34 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 
 	//log.Printf("Found %d workflows for user %s (%s) in org %s", len(workflows), user.Username, user.Id, user.ActiveOrg.Id)
 
+	// Sort them by edited timestap
+	sort.Slice(workflows, func(i, j int) bool {
+		return workflows[i].Edited > workflows[j].Edited
+	})
+
 	if len(workflows) > maxAmount {
+		if debug {
+			log.Printf("[WARNING] Found %d workflows for user %s (%s) in org %s, but limiting to %d", len(workflows), user.Username, user.Id, user.ActiveOrg.Id, maxAmount)
+		}
+
 		workflows = workflows[:maxAmount]
 	}
 
 	fixedWorkflows := []Workflow{}
 	for _, workflow := range workflows {
 		if workflow.Hidden {
+			if debug {
+				log.Printf("[DEBUG] Skipping HIDDEN workflow %s (%s) for org %s", workflow.Name, workflow.ID, user.ActiveOrg.Id)
+			}
+
 			continue
 		}
 
 		if len(workflow.Name) == 0 && len(workflow.Actions) <= 1 {
+			if debug {
+				log.Printf("[DEBUG] Skipping workflow %s (%s) for org %s because it has no name and only 1 action", workflow.Name, workflow.ID, user.ActiveOrg.Id)
+			}
+
 			continue
 		}
 
@@ -4697,10 +5063,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 
 		fixedWorkflows = append(fixedWorkflows, workflow)
 	}
-
-	slice.Sort(fixedWorkflows[:], func(i, j int) bool {
-		return fixedWorkflows[i].Edited > fixedWorkflows[j].Edited
-	})
 
 	if project.CacheDb {
 		newjson, err := json.Marshal(fixedWorkflows)
@@ -4808,7 +5170,6 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 }
 
 var defaultAlertThresholdPercentages = []int{50, 75, 90, 100}
-
 
 func isOnpremAlertEligible(org *Org) bool {
 	if !org.CloudSyncActive {
@@ -5727,12 +6088,37 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 	}
 
 	if entity == "org_cache" {
-		// FIXME: Add check in ngram to clean up correlations after deletions
+		cacheData := &CacheKeyData{}
+		cache, err := GetCache(ctx, fmt.Sprintf("%s_%s", entity, value))
+		if err == nil {
+			err = json.Unmarshal([]byte(cache.([]uint8)), cacheData)
+		}
+		if err == nil && len(cacheData.Category) > 0 && len(orgId) > 0 {
+			cacheKey := fmt.Sprintf("%s_%s_%s_%s", entity, "", orgId, cacheData.Category)
+			DeleteCache(ctx, cacheKey)
+			DeleteCache(ctx, fmt.Sprintf("%s_50", cacheKey))
+			DeleteCache(ctx, fmt.Sprintf("%s_100", cacheKey))
+			DeleteCache(ctx, fmt.Sprintf("%s_1000", cacheKey))
+		}
 	}
 
 	if entity == "workflow" && len(orgId) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("%s_workflows", orgId))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_workflows", "", orgId))
+	}
+
+	if entity == "notifications" {
+		notification, err := GetNotification(ctx, value)
+		if err == nil {
+			if len(notification.OrgId) > 0 {
+				DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.OrgId))
+			}
+			if len(notification.UserId) > 0 {
+				DeleteCache(ctx, fmt.Sprintf("notifications_%s", notification.UserId))
+			}
+		} else if len(orgId) > 0 {
+			DeleteCache(ctx, fmt.Sprintf("notifications_%s", orgId))
+		}
 	}
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
@@ -5747,6 +6133,8 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 		resp, err := project.Es.Document.Delete(ctx, opensearchapi.DocumentDeleteReq{
 			Index:      strings.ToLower(GetESIndexPrefix(entity)),
 			DocumentID: value,
+			// Refresh so the delete is immediately reflected in reads; matches indexEs().
+			Params: opensearchapi.DocumentDeleteParams{Refresh: "true"},
 		})
 
 		if err != nil {
@@ -6071,6 +6459,12 @@ func SetSession(ctx context.Context, user User, value string) error {
 	//parsedKey := strings.ToLower(user.Username)
 	// Non indexed User data
 	parsedKey := user.Id
+	previousSession := user.Session
+	if len(previousSession) > 0 && previousSession != value {
+		DeleteCache(ctx, previousSession)
+		DeleteCache(ctx, fmt.Sprintf("session_%s", previousSession))
+	}
+
 	user.Session = value
 
 	nameKey := "Users"
@@ -6488,6 +6882,10 @@ func FindUserBySSOIdentity(ctx context.Context, sub, clientID, orgID, email stri
 func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 	var users []User
 
+	if len(username) == 0 {
+		return users, errors.New("username is required (2)")
+	}
+
 	nameKey := "Users"
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -6587,6 +6985,10 @@ func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 
 func FindUser(ctx context.Context, username string) ([]User, error) {
 	var users []User
+
+	if len(username) == 0 {
+		return users, errors.New("username is required (3)")
+	}
 
 	nameKey := "Users"
 	if project.DbType == "opensearch" {
@@ -6692,6 +7094,10 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 func GetUser(ctx context.Context, username string) (*User, error) {
 	curUser := &User{}
 
+	if len(username) == 0 {
+		return curUser, errors.New("username is empty")
+	}
+
 	parsedKey := strings.ToLower(username)
 	cacheKey := fmt.Sprintf("user_%s", parsedKey)
 	if project.CacheDb {
@@ -6742,7 +7148,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 		if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
 			// Handles migration of the user
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[DEBUG] Failed loading user %s (this is ok): %s", username, err)
+				log.Printf("[DEBUG] Failed loading user '%s' (this is ok): %s", username, err)
 			} else {
 				log.Printf("[WARNING] Failed loading user %s - does it have to change? %s", username, err)
 				return &User{}, err
@@ -6806,8 +7212,18 @@ func (u *User) InitSSOInfos() {
 }
 
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
+	if len(user.Id) == 0 {
+		log.Printf("[ERROR] Setting user without ID: %s. Is this expected?", user.Username)
+		return errors.New("user ID is required")
+	}
+
 	log.Printf("[INFO] Updating user %s (%s) that has the role %s with %d apps and %d orgs. Org updater: %t", user.Username, user.Id, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
 	parsedKey := user.Id
+	previousApiKey := ""
+	previousUser, previousUserErr := GetUser(ctx, parsedKey)
+	if previousUserErr == nil && len(previousUser.ApiKey) > 0 && previousUser.ApiKey != user.ApiKey {
+		previousApiKey = previousUser.ApiKey
+	}
 
 	DeleteCache(ctx, user.ApiKey)
 	DeleteCache(ctx, user.ApiKey+user.ActiveOrg.Id)
@@ -6871,11 +7287,19 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		}
 	}
 
+	if len(previousApiKey) > 0 {
+		DeleteCache(ctx, previousApiKey)
+		DeleteCache(ctx, fmt.Sprintf("Users_%s", previousApiKey))
+		if err := DeleteKey(ctx, "apikey", previousApiKey); err != nil {
+			return err
+		}
+	}
+
 	DeleteCache(ctx, user.ApiKey)
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 	err = DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
-	if err != nil {
+	if err != nil && err != gomemcache.ErrCacheMiss {
 		log.Printf("[ERROR] Failed to delete cache for user apikey %s", err)
 	}
 
@@ -6963,8 +7387,11 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 	}
 
 	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
 	DeleteCache(ctx, user.Session)
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(user.Username)))
 
 	return nil
 }
@@ -9112,8 +9539,8 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 				}
 				totalAppExecutions = annualAppRuns
 			} else {
-			limit = limit * 2
-		}
+				limit = limit * 2
+			}
 
 		} else if licenseOrg.CloudSync && licenseOrg.SyncFeatures.AnnualAppRunsGrouping.Active {
 			limit = limit * 12 * 2
@@ -9920,7 +10347,53 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, workflow.RevisionId, data)
 		if err != nil {
-			return err
+			if strings.Contains(err.Error(), "immense term") {
+				retried := false
+				indexWorkflow := workflow
+
+				for actionIndex, action := range indexWorkflow.Actions {
+					for paramIndex, param := range action.Parameters {
+						if len(param.Value) > 32500 {
+							log.Printf("[DEBUG][%s] Trimming workflow revision parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
+							indexWorkflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+
+					for paramIndex, param := range action.InvalidParameters {
+						if len(param.Value) > 32500 {
+							log.Printf("[DEBUG][%s] Trimming workflow revision invalid parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
+							indexWorkflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				for triggerIndex, trigger := range indexWorkflow.Triggers {
+					for paramIndex, param := range trigger.Parameters {
+						if len(param.Value) > 32500 {
+							log.Printf("[DEBUG][%s] Trimming workflow revision trigger parameter %s in trigger %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, trigger.Label, len(param.Value))
+							indexWorkflow.Triggers[triggerIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				if retried {
+					indexData, marshalErr := json.Marshal(indexWorkflow)
+					if marshalErr != nil {
+						log.Printf("[WARNING] Failed marshalling trimmed workflow revision for ES retry: %s", marshalErr)
+						return marshalErr
+					}
+
+					log.Printf("[DEBUG][%s] Retrying OpenSearch workflow revision save after trimming oversized parameter values", workflow.ID)
+					err = indexEs(ctx, nameKey, workflow.RevisionId, indexData)
+				}
+			}
+
+			if err != nil {
+				return err
+			}
 		}
 	} else {
 		key := datastore.NameKey(nameKey, workflow.RevisionId, nil)
@@ -10123,7 +10596,53 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
-			return err
+			if strings.Contains(err.Error(), "immense term") {
+				retried := false
+				indexWorkflow := workflow
+
+				for actionIndex, action := range indexWorkflow.Actions {
+					for paramIndex, param := range action.Parameters {
+						if len(param.Value) > 32500 {
+							log.Printf("[DEBUG][%s] Trimming workflow parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
+							indexWorkflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+
+					for paramIndex, param := range action.InvalidParameters {
+						if len(param.Value) > 32500 {
+							log.Printf("[DEBUG][%s] Trimming workflow invalid parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
+							indexWorkflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				for triggerIndex, trigger := range indexWorkflow.Triggers {
+					for paramIndex, param := range trigger.Parameters {
+						if len(param.Value) > 32500 {
+							log.Printf("[DEBUG][%s] Trimming workflow trigger parameter %s in trigger %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, trigger.Label, len(param.Value))
+							indexWorkflow.Triggers[triggerIndex].Parameters[paramIndex].Value = "Size too large. Removed."
+							retried = true
+						}
+					}
+				}
+
+				if retried {
+					indexData, marshalErr := json.Marshal(indexWorkflow)
+					if marshalErr != nil {
+						log.Printf("[WARNING] Failed marshalling trimmed workflow for ES retry: %s", marshalErr)
+						return marshalErr
+					}
+
+					log.Printf("[DEBUG][%s] Retrying OpenSearch workflow save after trimming oversized parameter values", workflow.ID)
+					err = indexEs(ctx, nameKey, id, indexData)
+				}
+			}
+
+			if err != nil {
+				return err
+			}
 		}
 	} else {
 		//log.Printf("\n\n[INFO] Adding workflow with ID %s\n\n", id)
@@ -10529,6 +11048,12 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 	nameKey := "Environments"
 	if env.Id == "" {
 		env.Id = uuid.NewV4().String()
+	}
+
+	if len(env.Auth) == 0 {
+		if len(os.Getenv("SHUFFLE_ENVIRONMENT_AUTH")) > 0 {
+			env.Auth = os.Getenv("SHUFFLE_ENVIRONMENT_AUTH")
+		}
 	}
 
 	timeNow := time.Now().Unix()
@@ -11011,21 +11536,24 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 	var users []User
 
-	//	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
-	//	if project.CacheDb {
-	//		cache, err := GetCache(ctx, cacheKey)
-	//		if err == nil {
-	//			cacheData := []byte(cache.([]uint8))
-	//			err = json.Unmarshal(cacheData, &users)
-	//			if err == nil && len(users) > 0 {
-	//				log.Printf("[DEBUG] Found user apikey cache %s", cacheKey)
-	//				return users[0], nil
-	//			}
-	//		}
-	//	}
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &users)
+			if err == nil && len(users) > 0 {
+				if debug {
+					log.Printf("[DEBUG] Found user API key in cache")
+				}
+
+				return users[0], nil
+			}
+		}
+	}
 
 	if debug {
-		log.Printf("[DEBUG] Looking for the API Key pass the cache check %s", project.DbType)
+		log.Printf("[DEBUG] API key cache miss; looking up user")
 	}
 
 	if project.DbType == "opensearch" {
@@ -11118,28 +11646,28 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		}
 	}
 
-	if len(users) != 0 {
-		//if debug {
-		//	log.Printf("[DEBUG] Moving away from getapikey '%s' (%s)", users[0].Username, users[0].Id)
-		//}
-	}
-
-	//	if project.CacheDb {
-	//		userData, err := json.Marshal(users)
-	//		if err != nil {
-	//			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
-	//			if len(users) > 0 {
-	//				return users[0], nil
-	//			} else {
-	//				return User{}, err
-	//			}
-	//		}
-	//
-	//		err = SetCache(ctx, cacheKey, userData, 10)
-	//		if err != nil {
-	//			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
-	//		}
+	//if len(users) > 0 {
+	//	if debug {
+	//		log.Printf("[DEBUG] Found user '%s' for apikey lookup", users[0].Username)
 	//	}
+	//}
+
+	if project.CacheDb {
+		userData, err := json.Marshal(users)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getusers apikey: %s", err)
+			if len(users) > 0 {
+				return users[0], nil
+			} else {
+				return User{}, err
+			}
+		}
+
+		err = SetCache(ctx, cacheKey, userData, 10)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getusers apikey '%s': %s", cacheKey, err)
+		}
+	}
 
 	if len(users) == 0 {
 		return User{}, errors.New("No users found for this apikey (2)")
@@ -11525,12 +12053,14 @@ func SetNotification(ctx context.Context, notification Notification) error {
 		}
 	}
 
-	/*
+	if len(notification.OrgId) > 0 {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.OrgId)
 		DeleteCache(ctx, cacheKey)
-		cacheKey = fmt.Sprintf("%s_%s", nameKey, notification.UserId)
+	}
+	if len(notification.UserId) > 0 {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.UserId)
 		DeleteCache(ctx, cacheKey)
-	*/
+	}
 
 	return nil
 }
@@ -11759,7 +12289,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			"size": 1000,
 			"sort": map[string]interface{}{
 				"updated_at": map[string]interface{}{
-					"order": "desc",
+					"order":         "desc",
 					"unmapped_type": "long",
 				},
 			},
@@ -14602,6 +15132,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		go func(cacheData CacheKeyData, index int) {
 			defer wg.Done()
 
+			keyUpdated := true
+
 			cacheData.Existed = false
 			cacheData.Changed = false
 			cacheData.Created = timeNow
@@ -14619,7 +15151,6 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 			sameValue := false
 			config, getCacheError := GetDatastoreKey(ctx, datastoreId, cacheData.Category)
 
-			cacheData.Changed = true
 			if getCacheError == nil && config.Value == cacheData.Value {
 				sameValue = true
 			}
@@ -14710,12 +15241,17 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						if len(foundRule) > 5 {
 							oldDoc := config.Value
 							newDoc := cacheData.Value
-							mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
+
 							if debug {
-								log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s). Org: '%s', Key: '%s', Category: '%s': %#v. .\n\nError: %#v", foundRule, cacheData.OrgId, cacheData.Key, cacheData.Category, allowed, errString)
+								log.Printf("\n\nOLD: %s\n\nNEW: %s\n\n", oldDoc, newDoc)
 							}
 
-							// Since merge happens, can we trust it 100% of the time?
+							mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
+							if debug {
+								log.Printf("[DEBUG] RLS Security Rule OUTCOME (%s). Org: '%s', Key: '%s', Category: '%s': %#v. .\n\nError: %#v\n\n", foundRule, cacheData.OrgId, cacheData.Key, cacheData.Category, allowed, errString)
+							}
+
+							// Since merge happens anyway, we are trusting it either way
 							cacheData.Value = mergedJSON
 							ruleValid = true
 
@@ -14731,12 +15267,21 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						break
 					}
 
+					// This NEVER triggers. RLS just returns the merged JSON
+					// and we trust it. If we don't trust it, we can set
+					// ruleValid to false above.
 					if !ruleValid {
 						// Break out
 						if debug {
-							log.Printf("[WARNING] Rule is NOT valid! Skipping modification.")
+							log.Printf("[DEBUG] ERROR: Rule is NOT valid! Skipping modification.")
 						}
 
+						keyUpdated = false
+
+						cacheData.Existed = true
+						cacheData.Changed = keyUpdated
+						datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
+						cacheKeys <- cacheData
 						return
 					}
 				}
@@ -14826,6 +15371,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 			}
 
+			cacheData.Changed = keyUpdated
 			datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
 			cacheKeys <- cacheData
 		}(cacheData, index)
@@ -14865,6 +15411,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		minKey := DatastoreKeyMini{
 			Key:     key.Key,
 			Existed: key.Existed,
+			Changed: key.Changed,
 		}
 
 		existingInfo = append(existingInfo, minKey)
@@ -15022,6 +15569,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 		resp, err := project.Es.Bulk(ctx, opensearchapi.BulkReq{
 			Body:  bytes.NewReader(buf.Bytes()),
 			Index: strings.ToLower(GetESIndexPrefix(nameKey)),
+			// Refresh for immediate read-after-write; matches indexEs().
+			Params: opensearchapi.BulkParams{Refresh: "true"},
 		})
 
 		res := resp.Inspect().Response
@@ -15513,7 +16062,7 @@ func SetDatastoreKeyRevision(ctx context.Context, cacheData CacheKeyData) error 
 	} else {
 		key := datastore.NameKey(nameKey, cacheId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
-			log.Printf("[ERROR] Error setting datastore key revision: %s", err)
+			log.Printf("[ERROR] Error setting datastore key revision for '%s' in category '%s: %s", cacheId, cacheData.Category, err)
 			return err
 		}
 	}
@@ -17216,37 +17765,37 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		if parentOrgDepth >= 3 {
 			log.Printf("[ERROR] Reached maximum parent org lookup depth (%d) for org %s. Skipping parent org cache lookup to prevent infinite recursion.", parentOrgDepth, orgId)
 		} else {
-		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
-		if err != nil {
+			parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+			if err != nil {
 				if debug {
 					log.Printf("[DEBUG] Could not find parent org %s for org %s (possibly in different region): %s", foundOrg.CreatorOrg, orgId, err)
 				}
-		} else {
+			} else {
 				parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, "", max, inputcursor, cleanupDepth, parentOrgDepth+1)
-			if err != nil {
+				if err != nil {
 					if debug {
 						log.Printf("[DEBUG] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
 					}
-			} else {
-				if debug {
-					//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
-				}
-
-				for _, parentCache := range parentOrgCache {
-					/*
-						if debug && len(parentCache.SuborgDistribution) > 0 {
-							log.Printf("[DEBUG] Parent org %s keys: %#v", parentOrg.Id, parentCache.SuborgDistribution)
-						}
-					*/
-
-					if !ArrayContains(parentCache.SuborgDistribution, orgId) {
-						continue
+				} else {
+					if debug {
+						//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
 					}
 
-					// Clean up just in case
-					parentCache.PublicAuthorization = ""
-					parentCache.SuborgDistribution = []string{orgId}
-					cacheKeys = append(cacheKeys, parentCache)
+					for _, parentCache := range parentOrgCache {
+						/*
+							if debug && len(parentCache.SuborgDistribution) > 0 {
+								log.Printf("[DEBUG] Parent org %s keys: %#v", parentOrg.Id, parentCache.SuborgDistribution)
+							}
+						*/
+
+						if !ArrayContains(parentCache.SuborgDistribution, orgId) {
+							continue
+						}
+
+						// Clean up just in case
+						parentCache.PublicAuthorization = ""
+						parentCache.SuborgDistribution = []string{orgId}
+						cacheKeys = append(cacheKeys, parentCache)
 					}
 				}
 			}
@@ -17274,6 +17823,73 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	}
 
 	return cacheKeys, cursor, nil
+}
+
+// GetCacheKeysByPrefix returns datastore keys within a category whose Key starts
+// with the given prefix (case-insensitive).
+//
+// org_cache is a write-heavy kind, so we deliberately avoid adding a composite
+// index just to serve occasional admin searches - that would tax every write
+// for a rare read. Instead we page through the category (reusing GetAllCacheKeys,
+// which is cached) and filter by prefix in Go, bounded by scanCap. Matching the
+// Key field in Go also lets us be case-insensitive, which a Datastore range
+// filter could not do.
+func GetCacheKeysByPrefix(ctx context.Context, orgId string, category string, prefix string, max int, inputcursor string) ([]CacheKeyData, string, error) {
+	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" {
+		return []CacheKeyData{}, "", errors.New("Not available in worker mode")
+	}
+
+	if strings.ToLower(category) == "default" {
+		category = ""
+	}
+
+	if max > 1000 {
+		max = 1000
+	}
+	if max <= 0 {
+		max = 50
+	}
+
+	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
+	lowerPrefix := strings.ToLower(prefix)
+
+	matched := []CacheKeyData{}
+	scanCap := 5000
+	scanned := 0
+	cursor := ""
+
+	for scanned < scanCap {
+		batch, newCursor, err := GetAllCacheKeys(ctx, orgId, category, 1000, cursor)
+		if err != nil {
+			return matched, "", err
+		}
+
+		if len(batch) == 0 {
+			break
+		}
+
+		for _, k := range batch {
+			scanned += 1
+			if strings.HasPrefix(strings.ToLower(k.Key), lowerPrefix) {
+				matched = append(matched, k)
+				if len(matched) >= max {
+					return matched, "", nil
+				}
+			}
+		}
+
+		if newCursor == "" || newCursor == cursor {
+			break
+		}
+
+		cursor = newCursor
+	}
+
+	if scanned >= scanCap {
+		log.Printf("[WARNING] Prefix search hit scan cap (%d) for category '%s'. Results may be incomplete for very large categories.", scanCap, category)
+	}
+
+	return matched, "", nil
 }
 
 func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {

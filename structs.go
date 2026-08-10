@@ -398,38 +398,45 @@ type IncrementInCache struct {
 type DailyStatistics struct {
 	Date time.Time `json:"date" datastore:"date"`
 
-	AppExecutions                  int64 `json:"app_executions" datastore:"app_executions"`
-	ChildAppExecutions             int64 `json:"child_app_executions" datastore:"child_app_executions"`
-	AppExecutionsFailed            int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
-	SubflowExecutions              int64 `json:"subflow_executions" datastore:"subflow_executions"`
-	WorkflowExecutions             int64 `json:"workflow_executions" datastore:"workflow_executions"`
-	WorkflowExecutionsFinished     int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
-	WorkflowExecutionsFailed       int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
-	OrgSyncActions                 int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
-	CloudExecutions                int64 `json:"cloud_executions" datastore:"cloud_executions"`
-	OnpremExecutions               int64 `json:"onprem_executions" datastore:"onprem_executions"`
-	AIUsage                        int64 `json:"ai_executions" datastore:"ai_executions"`
-	AgentExecutions                int64 `json:"agent_executions" datastore:"agent_executions"`
-	AgentExecutionsSuccessful      int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
-	AgentExecutionsFailed          int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
-	AgentTokens                    int64 `json:"agent_tokens" datastore:"agent_tokens"`
-	AgentInputTokens               int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
-	AgentOutputTokens              int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
-	AgentCachedTokens              int64 `json:"agent_cached_tokens" datastore:"agent_cached_tokens"`
-	DailyChildOrgAiUsage           int64 `json:"daily_child_org_ai_usage" datastore:"daily_child_org_ai_usage"`
-	DailyChildOrgAgentExecutions   int64 `json:"daily_child_org_agent_executions" datastore:"daily_child_org_agent_executions"`
-	DailyChildOrgAgentTokens       int64 `json:"daily_child_org_agent_tokens" datastore:"daily_child_org_agent_tokens"`
-	DailyChildOrgAgentInputTokens  int64 `json:"daily_child_org_agent_input_tokens" datastore:"daily_child_org_agent_input_tokens"`
-	DailyChildOrgAgentOutputTokens int64 `json:"daily_child_org_agent_output_tokens" datastore:"daily_child_org_agent_output_tokens"`
-	DailySMSUsage                  int64 `json:"daily_sms_usage" datastore:"daily_sms_usage"`
-	DailyChildOrgSMSUsage          int64 `json:"daily_child_org_sms_usage" datastore:"daily_child_org_sms_usage"`
-	DailyEmailUsage                int64 `json:"daily_email_usage" datastore:"daily_email_usage"`
-	DailyChildOrgEmailUsage        int64 `json:"daily_child_org_email_usage" datastore:"daily_child_org_email_usage"`
-	ChildOrgAgentExecutions        int64 `json:"child_org_agent_executions" datastore:"child_org_agent_executions"`
-	ChildOrgAgentTokens            int64 `json:"child_org_agent_tokens" datastore:"child_org_agent_tokens"`
-	ChildOrgAgentInputTokens       int64 `json:"child_org_agent_input_tokens" datastore:"child_org_agent_input_tokens"`
-	ChildOrgAgentOutputTokens      int64 `json:"child_org_agent_output_tokens" datastore:"child_org_agent_output_tokens"`
-	ChildOrgAiUsage                int64 `json:"child_org_ai_usage" datastore:"child_org_ai_usage"`
+	AppExecutions                          int64 `json:"app_executions" datastore:"app_executions"`
+	ChildAppExecutions                     int64 `json:"child_app_executions" datastore:"child_app_executions"`
+	AppExecutionsFailed                    int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
+	SubflowExecutions                      int64 `json:"subflow_executions" datastore:"subflow_executions"`
+	WorkflowExecutions                     int64 `json:"workflow_executions" datastore:"workflow_executions"`
+	WorkflowExecutionsFinished             int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
+	WorkflowExecutionsFailed               int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
+	OrgSyncActions                         int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
+	CloudExecutions                        int64 `json:"cloud_executions" datastore:"cloud_executions"`
+	OnpremExecutions                       int64 `json:"onprem_executions" datastore:"onprem_executions"`
+	AIUsage                                int64 `json:"ai_executions" datastore:"ai_executions"`
+	AgentExecutions                        int64 `json:"agent_executions" datastore:"agent_executions"`
+	AgentExecutionsSuccessful              int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
+	AgentExecutionsFailed                  int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
+	AgentTokens                            int64 `json:"agent_tokens" datastore:"agent_tokens"`
+	AgentInputTokens                       int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
+	AgentOutputTokens                      int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
+	AgentCachedTokens                      int64 `json:"agent_cached_tokens" datastore:"agent_cached_tokens"`
+	DailyChildOrgAiUsage                   int64 `json:"daily_child_org_ai_usage" datastore:"daily_child_org_ai_usage"`
+	DailyChildOrgAgentExecutions           int64 `json:"daily_child_org_agent_executions" datastore:"daily_child_org_agent_executions"`
+	DailyChildOrgAgentExecutionsSuccessful int64 `json:"daily_child_org_agent_executions_successful" datastore:"daily_child_org_agent_executions_successful"`
+	DailyChildOrgAgentExecutionsFailed     int64 `json:"daily_child_org_agent_executions_failed" datastore:"daily_child_org_agent_executions_failed"`
+	DailyChildOrgAgentTokens               int64 `json:"daily_child_org_agent_tokens" datastore:"daily_child_org_agent_tokens"`
+	DailyChildOrgAgentInputTokens          int64 `json:"daily_child_org_agent_input_tokens" datastore:"daily_child_org_agent_input_tokens"`
+	DailyChildOrgAgentOutputTokens         int64 `json:"daily_child_org_agent_output_tokens" datastore:"daily_child_org_agent_output_tokens"`
+	DailySMSUsage                          int64 `json:"daily_sms_usage" datastore:"daily_sms_usage"`
+	DailyChildOrgSMSUsage                  int64 `json:"daily_child_org_sms_usage" datastore:"daily_child_org_sms_usage"`
+	DailyEmailUsage                        int64 `json:"daily_email_usage" datastore:"daily_email_usage"`
+	DailyChildOrgEmailUsage                int64 `json:"daily_child_org_email_usage" datastore:"daily_child_org_email_usage"`
+	ChildOrgAgentExecutions                int64 `json:"child_org_agent_executions" datastore:"child_org_agent_executions"`
+	ChildOrgAgentTokens                    int64 `json:"child_org_agent_tokens" datastore:"child_org_agent_tokens"`
+	ChildOrgAgentInputTokens               int64 `json:"child_org_agent_input_tokens" datastore:"child_org_agent_input_tokens"`
+	ChildOrgAgentOutputTokens              int64 `json:"child_org_agent_output_tokens" datastore:"child_org_agent_output_tokens"`
+	ChildOrgAiUsage                        int64 `json:"child_org_ai_usage" datastore:"child_org_ai_usage"`
+	AgentMaxLoopsHit                       int64 `json:"agent_max_loops_hit" datastore:"agent_max_loops_hit"`
+	ChildOrgAgentMaxLoopsHit               int64 `json:"child_org_agent_max_loops_hit" datastore:"child_org_agent_max_loops_hit"`
+	ChildOrgAgentExecutionsSuccessful      int64 `json:"child_org_agent_executions_successful" datastore:"child_org_agent_executions_successful"`
+	ChildOrgAgentExecutionsFailed          int64 `json:"child_org_agent_executions_failed" datastore:"child_org_agent_executions_failed"`
+	ChildOrgAgentCachedTokens              int64 `json:"child_org_agent_cached_tokens" datastore:"child_org_agent_cached_tokens"`
 
 	ApiUsage int64      `json:"api_usage" datastore:"api_usage"`
 	AppUsage []AppUsage `json:"app_usage" datastore:"app_usage"`
@@ -467,64 +474,74 @@ type ExecutionInfo struct {
 	DailyStatistics []DailyStatistics `json:"daily_statistics" datastore:"daily_statistics"`
 	OnpremStats     []DailyStatistics `json:"onprem_stats,omitempty" datastore:"onprem_stats"`
 
-	TotalAppExecutions              int64 `json:"total_app_executions" datastore:"total_app_executions"`
-	TotalChildAppExecutions         int64 `json:"total_child_app_executions" datastore:"total_child_app_executions"`
-	TotalAppExecutionsFailed        int64 `json:"total_app_executions_failed" datastore:"total_app_executions_failed"`
-	TotalSubflowExecutions          int64 `json:"total_subflow_executions" datastore:"total_subflow_executions"`
-	TotalWorkflowExecutions         int64 `json:"total_workflow_executions" datastore:"total_workflow_executions"`
-	TotalWorkflowExecutionsFinished int64 `json:"total_workflow_executions_finished" datastore:"total_workflow_executions_finished"`
-	TotalWorkflowExecutionsFailed   int64 `json:"total_workflow_executions_failed" datastore:"total_workflow_executions_failed"`
-	TotalOrgSyncActions             int64 `json:"total_org_sync_actions" datastore:"total_org_sync_actions"`
-	TotalCloudExecutions            int64 `json:"total_cloud_executions" datastore:"total_cloud_executions"`
-	TotalOnpremExecutions           int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
-	TotalAIUsage                    int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
-	TotalAgentExecutions            int64 `json:"total_agent_executions" datastore:"total_agent_executions"`
-	TotalAgentExecutionsSuccessful  int64 `json:"total_agent_executions_successful" datastore:"total_agent_executions_successful"`
-	TotalAgentExecutionsFailed      int64 `json:"total_agent_executions_failed" datastore:"total_agent_executions_failed"`
-	TotalAgentTokens                int64 `json:"total_agent_tokens" datastore:"total_agent_tokens"`
-	TotalAgentInputTokens           int64 `json:"total_agent_input_tokens" datastore:"total_agent_input_tokens"`
-	TotalAgentOutputTokens          int64 `json:"total_agent_output_tokens" datastore:"total_agent_output_tokens"`
-	TotalAgentCachedTokens          int64 `json:"total_agent_cached_tokens" datastore:"total_agent_cached_tokens"`
-	TotalChildOrgAiUsage            int64 `json:"total_child_org_ai_usage" datastore:"total_child_org_ai_usage"`
-	TotalChildOrgAgentExecutions    int64 `json:"total_child_org_agent_executions" datastore:"total_child_org_agent_executions"`
-	TotalChildOrgAgentTokens        int64 `json:"total_child_org_agent_tokens" datastore:"total_child_org_agent_tokens"`
-	TotalChildOrgAgentInputTokens   int64 `json:"total_child_org_agent_input_tokens" datastore:"total_child_org_agent_input_tokens"`
-	TotalChildOrgAgentOutputTokens  int64 `json:"total_child_org_agent_output_tokens" datastore:"total_child_org_agent_output_tokens"`
-	TotalChildWorkflowExecutions    int64 `json:"total_child_workflow_executions" datastore:"total_child_workflow_executions"`
-	TotalSMSUsage                   int64 `json:"total_sms_usage" datastore:"total_sms_usage"`
-	TotalChildOrgSMSUsage           int64 `json:"total_child_org_sms_usage" datastore:"total_child_org_sms_usage"`
-	TotalEmailUsage                 int64 `json:"total_email_usage" datastore:"total_email_usage"`
-	TotalChildOrgEmailUsage         int64 `json:"total_child_org_email_usage" datastore:"total_child_org_email_usage"`
+	TotalAppExecutions                     int64 `json:"total_app_executions" datastore:"total_app_executions"`
+	TotalChildAppExecutions                int64 `json:"total_child_app_executions" datastore:"total_child_app_executions"`
+	TotalAppExecutionsFailed               int64 `json:"total_app_executions_failed" datastore:"total_app_executions_failed"`
+	TotalSubflowExecutions                 int64 `json:"total_subflow_executions" datastore:"total_subflow_executions"`
+	TotalWorkflowExecutions                int64 `json:"total_workflow_executions" datastore:"total_workflow_executions"`
+	TotalWorkflowExecutionsFinished        int64 `json:"total_workflow_executions_finished" datastore:"total_workflow_executions_finished"`
+	TotalWorkflowExecutionsFailed          int64 `json:"total_workflow_executions_failed" datastore:"total_workflow_executions_failed"`
+	TotalOrgSyncActions                    int64 `json:"total_org_sync_actions" datastore:"total_org_sync_actions"`
+	TotalCloudExecutions                   int64 `json:"total_cloud_executions" datastore:"total_cloud_executions"`
+	TotalOnpremExecutions                  int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
+	TotalAIUsage                           int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
+	TotalAgentExecutions                   int64 `json:"total_agent_executions" datastore:"total_agent_executions"`
+	TotalAgentExecutionsSuccessful         int64 `json:"total_agent_executions_successful" datastore:"total_agent_executions_successful"`
+	TotalAgentExecutionsFailed             int64 `json:"total_agent_executions_failed" datastore:"total_agent_executions_failed"`
+	TotalAgentTokens                       int64 `json:"total_agent_tokens" datastore:"total_agent_tokens"`
+	TotalAgentInputTokens                  int64 `json:"total_agent_input_tokens" datastore:"total_agent_input_tokens"`
+	TotalAgentOutputTokens                 int64 `json:"total_agent_output_tokens" datastore:"total_agent_output_tokens"`
+	TotalAgentMaxLoopsHit                  int64 `json:"total_agent_max_loops_hit" datastore:"total_agent_max_loops_hit"`
+	TotalChildOrgAgentExecutionsSuccessful int64 `json:"total_child_org_agent_executions_successful" datastore:"total_child_org_agent_executions_successful"`
+	TotalChildOrgAgentExecutionsFailed     int64 `json:"total_child_org_agent_executions_failed" datastore:"total_child_org_agent_executions_failed"`
+	TotalChildOrgAgentCachedTokens         int64 `json:"total_child_org_agent_cached_tokens" datastore:"total_child_org_agent_cached_tokens"`
+	TotalChildOrgAgentMaxLoopsHit          int64 `json:"total_child_org_agent_max_loops_hit" datastore:"total_child_org_agent_max_loops_hit"`
+	TotalAgentCachedTokens                 int64 `json:"total_agent_cached_tokens" datastore:"total_agent_cached_tokens"`
+	TotalChildOrgAiUsage                   int64 `json:"total_child_org_ai_usage" datastore:"total_child_org_ai_usage"`
+	TotalChildOrgAgentExecutions           int64 `json:"total_child_org_agent_executions" datastore:"total_child_org_agent_executions"`
+	TotalChildOrgAgentTokens               int64 `json:"total_child_org_agent_tokens" datastore:"total_child_org_agent_tokens"`
+	TotalChildOrgAgentInputTokens          int64 `json:"total_child_org_agent_input_tokens" datastore:"total_child_org_agent_input_tokens"`
+	TotalChildOrgAgentOutputTokens         int64 `json:"total_child_org_agent_output_tokens" datastore:"total_child_org_agent_output_tokens"`
+	TotalChildWorkflowExecutions           int64 `json:"total_child_workflow_executions" datastore:"total_child_workflow_executions"`
+	TotalSMSUsage                          int64 `json:"total_sms_usage" datastore:"total_sms_usage"`
+	TotalChildOrgSMSUsage                  int64 `json:"total_child_org_sms_usage" datastore:"total_child_org_sms_usage"`
+	TotalEmailUsage                        int64 `json:"total_email_usage" datastore:"total_email_usage"`
+	TotalChildOrgEmailUsage                int64 `json:"total_child_org_email_usage" datastore:"total_child_org_email_usage"`
 
-	MonthlyApiUsage                   int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
-	MonthlyChildAppExecutions         int64 `json:"monthly_child_app_executions,omitempty" datastore:"monthly_child_app_executions"`
-	MonthlyAppExecutions              int64 `json:"monthly_app_executions,omitempty" datastore:"monthly_app_executions"`
-	MonthlyAppExecutionsFailed        int64 `json:"monthly_app_executions_failed,omitempty" datastore:"monthly_app_executions_failed"`
-	MonthlySubflowExecutions          int64 `json:"monthly_subflow_executions,omitempty" datastore:"monthly_subflow_executions"`
-	MonthlyWorkflowExecutions         int64 `json:"monthly_workflow_executions,omitempty" datastore:"monthly_workflow_executions"`
-	MonthlyChildWorkflowExecutions    int64 `json:"monthly_child_workflow_executions,omitempty" datastore:"monthly_child_workflow_executions"`
-	MonthlyWorkflowExecutionsFinished int64 `json:"monthly_workflow_executions_finished,omitempty" datastore:"monthly_workflow_executions_finished"`
-	MonthlyWorkflowExecutionsFailed   int64 `json:"monthly_workflow_executions_failed,omitempty" datastore:"monthly_workflow_executions_failed"`
-	MonthlyOrgSyncActions             int64 `json:"monthly_org_sync_actions,omitempty" datastore:"monthly_org_sync_actions"`
-	MonthlyCloudExecutions            int64 `json:"monthly_cloud_executions,omitempty" datastore:"monthly_cloud_executions"`
-	MonthlyOnpremExecutions           int64 `json:"monthly_onprem_executions,omitempty" datastore:"monthly_onprem_executions"`
-	MonthlyAIUsage                    int64 `json:"monthly_ai_executions,omitempty" datastore:"monthly_ai_executions"`
-	MonthlyAgentExecutions            int64 `json:"monthly_agent_executions,omitempty" datastore:"monthly_agent_executions"`
-	MonthlyAgentExecutionsSuccessful  int64 `json:"monthly_agent_executions_successful,omitempty" datastore:"monthly_agent_executions_successful"`
-	MonthlyAgentExecutionsFailed      int64 `json:"monthly_agent_executions_failed,omitempty" datastore:"monthly_agent_executions_failed"`
-	MonthlyAgentTokens                int64 `json:"monthly_agent_tokens,omitempty" datastore:"monthly_agent_tokens"`
-	MonthlyAgentInputTokens           int64 `json:"monthly_agent_input_tokens,omitempty" datastore:"monthly_agent_input_tokens"`
-	MonthlyAgentOutputTokens          int64 `json:"monthly_agent_output_tokens,omitempty" datastore:"monthly_agent_output_tokens"`
-	MonthlyAgentCachedTokens          int64 `json:"monthly_agent_cached_tokens,omitempty" datastore:"monthly_agent_cached_tokens"`
-	MonthlyChildOrgAiUsage            int64 `json:"monthly_child_org_ai_usage,omitempty" datastore:"monthly_child_org_ai_usage"`
-	MonthlyChildOrgAgentExecutions    int64 `json:"monthly_child_org_agent_executions,omitempty" datastore:"monthly_child_org_agent_executions"`
-	MonthlyChildOrgAgentTokens        int64 `json:"monthly_child_org_agent_tokens,omitempty" datastore:"monthly_child_org_agent_tokens"`
-	MonthlyChildOrgAgentInputTokens   int64 `json:"monthly_child_org_agent_input_tokens,omitempty" datastore:"monthly_child_org_agent_input_tokens"`
-	MonthlyChildOrgAgentOutputTokens  int64 `json:"monthly_child_org_agent_output_tokens,omitempty" datastore:"monthly_child_org_agent_output_tokens"`
-	MonthlySMSUsage                   int64 `json:"monthly_sms_usage,omitempty" datastore:"monthly_sms_usage"`
-	MonthlyChildOrgSMSUsage           int64 `json:"monthly_child_org_sms_usage,omitempty" datastore:"monthly_child_org_sms_usage"`
-	MonthlyEmailUsage                 int64 `json:"monthly_email_usage,omitempty" datastore:"monthly_email_usage"`
-	MonthlyChildOrgEmailUsage         int64 `json:"monthly_child_org_email_usage,omitempty" datastore:"monthly_child_org_email_usage"`
+	MonthlyApiUsage                          int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
+	MonthlyChildAppExecutions                int64 `json:"monthly_child_app_executions,omitempty" datastore:"monthly_child_app_executions"`
+	MonthlyAppExecutions                     int64 `json:"monthly_app_executions,omitempty" datastore:"monthly_app_executions"`
+	MonthlyAppExecutionsFailed               int64 `json:"monthly_app_executions_failed,omitempty" datastore:"monthly_app_executions_failed"`
+	MonthlySubflowExecutions                 int64 `json:"monthly_subflow_executions,omitempty" datastore:"monthly_subflow_executions"`
+	MonthlyWorkflowExecutions                int64 `json:"monthly_workflow_executions,omitempty" datastore:"monthly_workflow_executions"`
+	MonthlyChildWorkflowExecutions           int64 `json:"monthly_child_workflow_executions,omitempty" datastore:"monthly_child_workflow_executions"`
+	MonthlyWorkflowExecutionsFinished        int64 `json:"monthly_workflow_executions_finished,omitempty" datastore:"monthly_workflow_executions_finished"`
+	MonthlyWorkflowExecutionsFailed          int64 `json:"monthly_workflow_executions_failed,omitempty" datastore:"monthly_workflow_executions_failed"`
+	MonthlyOrgSyncActions                    int64 `json:"monthly_org_sync_actions,omitempty" datastore:"monthly_org_sync_actions"`
+	MonthlyCloudExecutions                   int64 `json:"monthly_cloud_executions,omitempty" datastore:"monthly_cloud_executions"`
+	MonthlyOnpremExecutions                  int64 `json:"monthly_onprem_executions,omitempty" datastore:"monthly_onprem_executions"`
+	MonthlyAIUsage                           int64 `json:"monthly_ai_executions,omitempty" datastore:"monthly_ai_executions"`
+	MonthlyAgentExecutions                   int64 `json:"monthly_agent_executions,omitempty" datastore:"monthly_agent_executions"`
+	MonthlyAgentExecutionsSuccessful         int64 `json:"monthly_agent_executions_successful,omitempty" datastore:"monthly_agent_executions_successful"`
+	MonthlyAgentExecutionsFailed             int64 `json:"monthly_agent_executions_failed,omitempty" datastore:"monthly_agent_executions_failed"`
+	MonthlyAgentTokens                       int64 `json:"monthly_agent_tokens,omitempty" datastore:"monthly_agent_tokens"`
+	MonthlyAgentInputTokens                  int64 `json:"monthly_agent_input_tokens,omitempty" datastore:"monthly_agent_input_tokens"`
+	MonthlyAgentOutputTokens                 int64 `json:"monthly_agent_output_tokens,omitempty" datastore:"monthly_agent_output_tokens"`
+	MonthlyAgentCachedTokens                 int64 `json:"monthly_agent_cached_tokens,omitempty" datastore:"monthly_agent_cached_tokens"`
+	MonthlyAgentMaxLoopsHit                  int64 `json:"monthly_agent_max_loops_hit,omitempty" datastore:"monthly_agent_max_loops_hit"`
+	MonthlyChildOrgAiUsage                   int64 `json:"monthly_child_org_ai_usage,omitempty" datastore:"monthly_child_org_ai_usage"`
+	MonthlyChildOrgAgentExecutions           int64 `json:"monthly_child_org_agent_executions,omitempty" datastore:"monthly_child_org_agent_executions"`
+	MonthlyChildOrgAgentExecutionsSuccessful int64 `json:"monthly_child_org_agent_executions_successful,omitempty" datastore:"monthly_child_org_agent_executions_successful"`
+	MonthlyChildOrgAgentExecutionsFailed     int64 `json:"monthly_child_org_agent_executions_failed,omitempty" datastore:"monthly_child_org_agent_executions_failed"`
+	MonthlyChildOrgAgentTokens               int64 `json:"monthly_child_org_agent_tokens,omitempty" datastore:"monthly_child_org_agent_tokens"`
+	MonthlyChildOrgAgentInputTokens          int64 `json:"monthly_child_org_agent_input_tokens,omitempty" datastore:"monthly_child_org_agent_input_tokens"`
+	MonthlyChildOrgAgentOutputTokens         int64 `json:"monthly_child_org_agent_output_tokens,omitempty" datastore:"monthly_child_org_agent_output_tokens"`
+	MonthlyChildOrgAgentCachedTokens         int64 `json:"monthly_child_org_agent_cached_tokens,omitempty" datastore:"monthly_child_org_agent_cached_tokens"`
+	MonthlyChildOrgAgentMaxLoopsHit          int64 `json:"monthly_child_org_agent_max_loops_hit,omitempty" datastore:"monthly_child_org_agent_max_loops_hit"`
+	MonthlySMSUsage                          int64 `json:"monthly_sms_usage,omitempty" datastore:"monthly_sms_usage"`
+	MonthlyChildOrgSMSUsage                  int64 `json:"monthly_child_org_sms_usage,omitempty" datastore:"monthly_child_org_sms_usage"`
+	MonthlyEmailUsage                        int64 `json:"monthly_email_usage,omitempty" datastore:"monthly_email_usage"`
+	MonthlyChildOrgEmailUsage                int64 `json:"monthly_child_org_email_usage,omitempty" datastore:"monthly_child_org_email_usage"`
 
 	WeeklyAppExecutions              int64 `json:"weekly_app_executions,omitempty" datastore:"weekly_app_executions"`
 	WeeklyChildAppExecutions         int64 `json:"weekly_child_app_executions,omitempty" datastore:"weekly_child_app_executions"`
@@ -539,34 +556,39 @@ type ExecutionInfo struct {
 	WeeklyOnpremExecutions           int64 `json:"weekly_onprem_executions,omitempty" datastore:"weekly_onprem_executions"`
 	WeeklyAIUsage                    int64 `json:"weekly_ai_executions,omitempty" datastore:"weekly_ai_executions"`
 
-	DailyAppExecutions              int64 `json:"daily_app_executions" datastore:"daily_app_executions"`
-	DailyChildAppExecutions         int64 `json:"daily_child_app_executions" datastore:"daily_child_app_executions"`
-	DailyAppExecutionsFailed        int64 `json:"daily_app_executions_failed" datastore:"daily_app_executions_failed"`
-	DailySubflowExecutions          int64 `json:"daily_subflow_executions" datastore:"daily_subflow_executions"`
-	DailyWorkflowExecutions         int64 `json:"daily_workflow_executions" datastore:"daily_workflow_executions"`
-	DailyChildWorkflowExecutions    int64 `json:"daily_child_workflow_executions" datastore:"daily_child_workflow_executions"`
-	DailyWorkflowExecutionsFinished int64 `json:"daily_workflow_executions_finished" datastore:"daily_workflow_executions_finished"`
-	DailyWorkflowExecutionsFailed   int64 `json:"daily_workflow_executions_failed" datastore:"daily_workflow_executions_failed"`
-	DailyOrgSyncActions             int64 `json:"daily_org_sync_actions" datastore:"daily_org_sync_actions"`
-	DailyCloudExecutions            int64 `json:"daily_cloud_executions" datastore:"daily_cloud_executions"`
-	DailyOnpremExecutions           int64 `json:"daily_onprem_executions" datastore:"daily_onprem_executions"`
-	DailyAIUsage                    int64 `json:"daily_ai_executions" datastore:"daily_ai_executions"`
-	DailyAgentExecutions            int64 `json:"daily_agent_executions" datastore:"daily_agent_executions"`
-	DailyAgentExecutionsSuccessful  int64 `json:"daily_agent_executions_successful" datastore:"daily_agent_executions_successful"`
-	DailyAgentExecutionsFailed      int64 `json:"daily_agent_executions_failed" datastore:"daily_agent_executions_failed"`
-	DailyAgentTokens                int64 `json:"daily_agent_tokens" datastore:"daily_agent_tokens"`
-	DailyAgentCachedTokens          int64 `json:"daily_agent_cached_tokens" datastore:"daily_agent_cached_tokens"`
-	DailyAgentInputTokens           int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
-	DailyAgentOutputTokens          int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`
-	DailyChildOrgAiUsage            int64 `json:"daily_child_org_ai_usage" datastore:"daily_child_org_ai_usage"`
-	DailyChildOrgAgentExecutions    int64 `json:"daily_child_org_agent_executions" datastore:"daily_child_org_agent_executions"`
-	DailyChildOrgAgentTokens        int64 `json:"daily_child_org_agent_tokens" datastore:"daily_child_org_agent_tokens"`
-	DailyChildOrgAgentInputTokens   int64 `json:"daily_child_org_agent_input_tokens" datastore:"daily_child_org_agent_input_tokens"`
-	DailyChildOrgAgentOutputTokens  int64 `json:"daily_child_org_agent_output_tokens" datastore:"daily_child_org_agent_output_tokens"`
-	DailySMSUsage                   int64 `json:"daily_sms_usage" datastore:"daily_sms_usage"`
-	DailyChildOrgSMSUsage           int64 `json:"daily_child_org_sms_usage" datastore:"daily_child_org_sms_usage"`
-	DailyEmailUsage                 int64 `json:"daily_email_usage" datastore:"daily_email_usage"`
-	DailyChildOrgEmailUsage         int64 `json:"daily_child_org_email_usage" datastore:"daily_child_org_email_usage"`
+	DailyAppExecutions                     int64 `json:"daily_app_executions" datastore:"daily_app_executions"`
+	DailyChildAppExecutions                int64 `json:"daily_child_app_executions" datastore:"daily_child_app_executions"`
+	DailyAppExecutionsFailed               int64 `json:"daily_app_executions_failed" datastore:"daily_app_executions_failed"`
+	DailySubflowExecutions                 int64 `json:"daily_subflow_executions" datastore:"daily_subflow_executions"`
+	DailyWorkflowExecutions                int64 `json:"daily_workflow_executions" datastore:"daily_workflow_executions"`
+	DailyChildWorkflowExecutions           int64 `json:"daily_child_workflow_executions" datastore:"daily_child_workflow_executions"`
+	DailyWorkflowExecutionsFinished        int64 `json:"daily_workflow_executions_finished" datastore:"daily_workflow_executions_finished"`
+	DailyWorkflowExecutionsFailed          int64 `json:"daily_workflow_executions_failed" datastore:"daily_workflow_executions_failed"`
+	DailyOrgSyncActions                    int64 `json:"daily_org_sync_actions" datastore:"daily_org_sync_actions"`
+	DailyCloudExecutions                   int64 `json:"daily_cloud_executions" datastore:"daily_cloud_executions"`
+	DailyOnpremExecutions                  int64 `json:"daily_onprem_executions" datastore:"daily_onprem_executions"`
+	DailyAIUsage                           int64 `json:"daily_ai_executions" datastore:"daily_ai_executions"`
+	DailyAgentExecutions                   int64 `json:"daily_agent_executions" datastore:"daily_agent_executions"`
+	DailyAgentExecutionsSuccessful         int64 `json:"daily_agent_executions_successful" datastore:"daily_agent_executions_successful"`
+	DailyAgentExecutionsFailed             int64 `json:"daily_agent_executions_failed" datastore:"daily_agent_executions_failed"`
+	DailyAgentTokens                       int64 `json:"daily_agent_tokens" datastore:"daily_agent_tokens"`
+	DailyAgentCachedTokens                 int64 `json:"daily_agent_cached_tokens" datastore:"daily_agent_cached_tokens"`
+	DailyAgentMaxLoopsHit                  int64 `json:"daily_agent_max_loops_hit,omitempty" datastore:"daily_agent_max_loops_hit"`
+	DailyAgentInputTokens                  int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
+	DailyAgentOutputTokens                 int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`
+	DailyChildOrgAiUsage                   int64 `json:"daily_child_org_ai_usage" datastore:"daily_child_org_ai_usage"`
+	DailyChildOrgAgentExecutions           int64 `json:"daily_child_org_agent_executions" datastore:"daily_child_org_agent_executions"`
+	DailyChildOrgAgentExecutionsSuccessful int64 `json:"daily_child_org_agent_executions_successful" datastore:"daily_child_org_agent_executions_successful"`
+	DailyChildOrgAgentExecutionsFailed     int64 `json:"daily_child_org_agent_executions_failed" datastore:"daily_child_org_agent_executions_failed"`
+	DailyChildOrgAgentTokens               int64 `json:"daily_child_org_agent_tokens" datastore:"daily_child_org_agent_tokens"`
+	DailyChildOrgAgentInputTokens          int64 `json:"daily_child_org_agent_input_tokens" datastore:"daily_child_org_agent_input_tokens"`
+	DailyChildOrgAgentOutputTokens         int64 `json:"daily_child_org_agent_output_tokens" datastore:"daily_child_org_agent_output_tokens"`
+	DailyChildOrgAgentCachedTokens         int64 `json:"daily_child_org_agent_cached_tokens" datastore:"daily_child_org_agent_cached_tokens"`
+	DailyChildOrgAgentMaxLoopsHit          int64 `json:"daily_child_org_agent_max_loops_hit,omitempty" datastore:"daily_child_org_agent_max_loops_hit"`
+	DailySMSUsage                          int64 `json:"daily_sms_usage" datastore:"daily_sms_usage"`
+	DailyChildOrgSMSUsage                  int64 `json:"daily_child_org_sms_usage" datastore:"daily_child_org_sms_usage"`
+	DailyEmailUsage                        int64 `json:"daily_email_usage" datastore:"daily_email_usage"`
+	DailyChildOrgEmailUsage                int64 `json:"daily_child_org_email_usage" datastore:"daily_child_org_email_usage"`
 
 	HourlyAppExecutions              int64 `json:"hourly_app_executions,omitempty" datastore:"hourly_app_executions"`
 	HourlyChildAppExecutions         int64 `json:"hourly_child_app_executions,omitempty" datastore:"hourly_child_app_executions"`
@@ -596,6 +618,7 @@ type ExecutionInfo struct {
 	LastMonthlyResetMonth   int                   `json:"last_monthly_reset_month" datastore:"last_monthly_reset_month"`
 	LastUsageAlertThreshold int64                 `json:"last_usage_alert_threshold" datastore:"last_usage_alert_threshold"`
 	UsageAlerts             []AlertThreshold      `json:"usage_alerts" datastore:"usage_alerts"`
+	MonthlyAIUsageAlertSent bool                  `json:"monthly_ai_usage_alert_sent" datastore:"monthly_ai_usage_alert_sent"`
 }
 
 type MultiRegionStatsEntry struct {
@@ -1222,13 +1245,13 @@ type Org struct {
 }
 
 type Billing struct {
-	Email                    string           `json:"Email" datastore:"Email"`
-	AppRunsHardLimit         int64            `json:"app_runs_hard_limit" datastore:"app_runs_hard_limit"`
-	AlertThreshold           []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
-	OnpremAlertThreshold     []AlertThreshold `json:"OnpremAlertThreshold" datastore:"OnpremAlertThreshold"`
-	Consultation             Consultation     `json:"Consultation" datastore:"Consultation"`
-	InternalAppRunsHardLimit int64            `json:"internal_app_runs_hard_limit" datastore:"internal_app_runs_hard_limit"`
-	DefaultAlertsApplied     bool             `json:"default_alerts_applied" datastore:"default_alerts_applied"`
+	Email                      string           `json:"Email" datastore:"Email"`
+	AppRunsHardLimit           int64            `json:"app_runs_hard_limit" datastore:"app_runs_hard_limit"`
+	AlertThreshold             []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
+	OnpremAlertThreshold       []AlertThreshold `json:"OnpremAlertThreshold" datastore:"OnpremAlertThreshold"`
+	Consultation               Consultation     `json:"Consultation" datastore:"Consultation"`
+	InternalAppRunsHardLimit   int64            `json:"internal_app_runs_hard_limit" datastore:"internal_app_runs_hard_limit"`
+	DefaultAlertsApplied       bool             `json:"default_alerts_applied" datastore:"default_alerts_applied"`
 	DefaultOnpremAlertsApplied bool             `json:"default_onprem_alerts_applied" datastore:"default_onprem_alerts_applied"`
 }
 
@@ -1312,8 +1335,10 @@ type DatastoreCategoryUpdate struct {
 }
 
 type DatastoreKeyMini struct {
-	Key     string `json:"key" datastore:"key"`
-	Existed bool   `json:"existed" datastore:"existed"` // If the key existed before the update
+	Key string `json:"key" datastore:"key"`
+
+	Existed bool `json:"existed" datastore:"existed"` // If the key existed before the update
+	Changed bool `json:"changed" datastore:"changed"` // If the key was updated or not
 }
 
 // Based on OCSF reputation: https://schema.ocsf.io/1.8.0/objects/reputation
@@ -1369,7 +1394,7 @@ type CacheKeyData struct {
 	Value               string       `json:"value" datastore:"Value,noindex"`
 	Category            string       `json:"category" datastore:"category"`
 	Tags                []string     `json:"tags,omitempty" datastore:"tags"`
-	IgnoreSecurityRules bool         `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"`
+	IgnoreSecurityRules bool         `json:"ignore_security_rules,omitempty" datastore:"ignore_security_rules,noindex"` // Whether to follow 'Automation for X" security rules or not. These are category-wide rules.
 	Enrichments         []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
 
 	Created int64 `json:"created" datastore:"Created"`
@@ -4465,7 +4490,12 @@ type CacheReturn struct {
 	Config     DatastoreCategoryUpdate `json:"category_config,omitempty"`
 	Categories []string                `json:"categories,omitempty"`
 
-	Keys []CacheKeyData `json:"keys"`
+	Keys  []CacheKeyData           `json:"keys,omitempty"`
+	Items []map[string]interface{} `json:"items,omitempty"`
+
+	Reason string `json:"reason,omitempty"`
+	Key    string `json:"key,omitempty"`
+	Value  string `json:"value,omitempty"`
 }
 
 type GCPIncident struct {
@@ -4887,6 +4917,9 @@ type AgentOutput struct {
 	AllowedActions []string `json:"allowed_actions,omitempty" datastore:"allowed_actions"`
 	Output         string   `json:"output,omitempty" datastore:"output"`
 
+	// ExecutionMode controls how tool actions are dispatched for this agent run. i.e singul or direct
+	ExecutionMode string `json:"execution_mode,omitempty" datastore:"execution_mode"`
+
 	// Usage tracking for guardrails
 	LLMCallCount     int   `json:"llm_call_count,omitempty" datastore:"llm_call_count"`
 	TotalTokens      int64 `json:"total_tokens,omitempty" datastore:"total_tokens"`
@@ -4989,6 +5022,31 @@ type MinimalParameter struct {
 	Value string `json:"value"`
 }
 
+func (m *MinimalParameter) UnmarshalJSON(data []byte) error {
+	type Alias MinimalParameter
+	var aux struct {
+		Value json.RawMessage `json:"value"`
+		*Alias
+	}
+	aux.Alias = (*Alias)(m)
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	if len(aux.Value) > 0 {
+		if aux.Value[0] == '"' {
+			var str string
+			if err := json.Unmarshal(aux.Value, &str); err != nil {
+				return err
+			}
+			m.Value = str
+		} else {
+			m.Value = string(aux.Value)
+		}
+	}
+	return nil
+}
+
 // MinimalAction - action with position and basic info
 type MinimalAction struct {
 	AppName    string             `json:"app_name"`
@@ -5039,11 +5097,11 @@ type MinimalConditionParam struct {
 
 // MinimalWorkflow - minimal workflow structure with node positions and connections
 type MinimalWorkflow struct {
-	Actions         []MinimalAction  `json:"actions"`
-	Branches        []MinimalBranch  `json:"branches"`
-	Triggers        []MinimalTrigger `json:"triggers"`
-	Errors          []string         `json:"errors,omitempty"`
-	StartTriggerID  string           `json:"start_trigger_id,omitempty"`
+	Actions        []MinimalAction  `json:"actions"`
+	Branches       []MinimalBranch  `json:"branches"`
+	Triggers       []MinimalTrigger `json:"triggers"`
+	Errors         []string         `json:"errors,omitempty"`
+	StartTriggerID string           `json:"start_trigger_id,omitempty"`
 }
 
 type NGramItem struct {
@@ -5059,21 +5117,6 @@ type AIConfig struct {
 	Prompt    string `json:"prompt" datastore:"prompt"`
 	Model     string `json:"model" datastore:"model"`
 	Status    string `json:"status" datastore:"status"`
-}
-
-// EDR and Audit Log Monitoring Structs
-type AuditLogEntry struct {
-	Timestamp   time.Time              `json:"timestamp"`
-	EventID     string                 `json:"event_id"`
-	EventType   string                 `json:"event_type"`
-	Source      string                 `json:"source"`
-	Level       string                 `json:"level"`
-	ProcessInfo *ProcessInfo           `json:"process_info,omitempty"`
-	UserInfo    *UserInfo              `json:"user_info,omitempty"`
-	Message     string                 `json:"message"`
-	RawData     string                 `json:"raw_data,omitempty"`
-	Platform    string                 `json:"platform"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 type ProcessInfo struct {
@@ -5111,12 +5154,19 @@ type TelemetryFilter struct {
 	Exclude []string `json:"exclude,omitempty"`
 }
 
-type AuditLogCollector struct {
-	Config     TelemetryConfig
-	Platform   string
-	LogChannel chan AuditLogEntry
-	StopChan   chan bool
-	mu         sync.Mutex
+// EDR and Audit Log Monitoring Structs
+type AuditLogEntry struct {
+	Timestamp   time.Time              `json:"timestamp"`
+	EventID     string                 `json:"event_id"`
+	EventType   string                 `json:"event_type"`
+	Source      string                 `json:"source"`
+	Level       string                 `json:"level"`
+	ProcessInfo *ProcessInfo           `json:"process_info,omitempty"`
+	UserInfo    *UserInfo              `json:"user_info,omitempty"`
+	Message     string                 `json:"message"`
+	RawData     string                 `json:"raw_data,omitempty"`
+	Platform    string                 `json:"platform"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // Thread conversation access control structs
@@ -5209,12 +5259,6 @@ type AgentStartResponse struct {
 	Authorization string `json:"authorization"`
 }
 
-type StreamsResultResponse struct {
-	Result  string         `json:"result"`
-	Results []ActionResult `json:"results"`
-	Status  string         `json:"status"`
-}
-
 type AgentStartRequest struct {
 	ID          string              `json:"id"`
 	Name        string              `json:"name"`
@@ -5223,6 +5267,12 @@ type AgentStartRequest struct {
 	AppVersion  string              `json:"app_version"`
 	Environment string              `json:"environment"`
 	Parameters  []map[string]string `json:"parameters"`
+}
+
+type StreamsResultResponse struct {
+	Result  string         `json:"result"`
+	Results []ActionResult `json:"results"`
+	Status  string         `json:"status"`
 }
 
 type StreamsResultRequest struct {
@@ -5244,61 +5294,69 @@ type TestResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
+type MCPRequestInput struct {
+	Text  string `json:"text"`
+	Voice string `json:"voice"`
+
+	Images []struct {
+		URL    string `json:"url"`
+		Detail string `json:"detail,omitempty"`
+	}
+
+	// Special cases for templates
+	WorkflowId string `json:"workflow_id,omitempty"`
+}
+
+type MCPRequestParams struct {
+	ToolName string          `json:"tool_name"`
+	Input    MCPRequestInput `json:"input"`
+	Context  struct {
+		SessionID string `json:"session_id"`
+	} `json:"context"`
+	ToolID string `json:"tool_id"`
+
+	Environment      string `json:"environment"`
+	EnableQuestions  bool   `json:"enable_questions"`
+	AuthenticationId string `json:"authentication_id"`
+	Reasoning        string `json:"reasoning"`
+	Template         string `json:"template"` // Controls presets like "workflow-edit" to add special backend-controlled system messages
+
+	// From testing in Lovable
+	ProtocolVersion string `json:"protocolVersion"`
+	Capabilities    struct {
+		Roots struct {
+			ListChanged bool `json:"listChanged"`
+		} `json:"roots"`
+		Sampling struct {
+		} `json:"sampling"`
+		Tools struct {
+			ListChanged bool `json:"listChanged"`
+		} `json:"tools"`
+
+		// OpenAI testing
+		Experimental struct {
+			OpenaiVisibility struct {
+				Enabled bool `json:"enabled"`
+			} `json:"openai/visibility"`
+		} `json:"openAiVisibility"`
+		Extensions struct {
+			IoModelContextProtocolUi struct {
+				MimeTypes []string `json:"mimeTypes"`
+			} `json:"io.modelcontextprotocol/ui"`
+		} `json:"extensions"`
+	} `json:"capabilities"`
+	ClientInfo struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	} `json:"clientInfo"`
+}
+
 // Standard used for MCP
 type MCPRequest struct {
-	Jsonrpc string `json:"jsonrpc"`
-	ID      int    `json:"id"`
-	Method  string `json:"method"`
-	Params  struct {
-		ToolName string `json:"tool_name"`
-		Input    struct {
-			Text  string `json:"text"`
-			Voice string `json:"voice"`
-
-			Images []struct {
-				URL    string `json:"url"`
-				Detail string `json:"detail,omitempty"`
-			}
-		} `json:"input"`
-		Context struct {
-			SessionID string `json:"session_id"`
-		} `json:"context"`
-		ToolID string `json:"tool_id"`
-
-		Environment      string `json:"environment"`
-		EnableQuestions  bool   `json:"enable_questions"`
-		AuthenticationId string `json:"authentication_id"`
-		Reasoning        string `json:"reasoning"`
-
-		// From testing in Lovable
-		ProtocolVersion string `json:"protocolVersion"`
-		Capabilities    struct {
-			Roots struct {
-				ListChanged bool `json:"listChanged"`
-			} `json:"roots"`
-			Sampling struct {
-			} `json:"sampling"`
-			Tools struct {
-				ListChanged bool `json:"listChanged"`
-			} `json:"tools"`
-
-			// OpenAI testing
-			Experimental struct {
-				OpenaiVisibility struct {
-					Enabled bool `json:"enabled"`
-				} `json:"openai/visibility"`
-			} `json:"openAiVisibility"`
-			Extensions struct {
-				IoModelContextProtocolUi struct {
-					MimeTypes []string `json:"mimeTypes"`
-				} `json:"io.modelcontextprotocol/ui"`
-			} `json:"extensions"`
-		} `json:"capabilities"`
-		ClientInfo struct {
-			Name    string `json:"name"`
-			Version string `json:"version"`
-		} `json:"clientInfo"`
-	} `json:"params"`
+	Jsonrpc string           `json:"jsonrpc"`
+	ID      int              `json:"id"`
+	Method  string           `json:"method"`
+	Params  MCPRequestParams `json:"params"`
 }
 
 type MCPResponse struct {
@@ -5434,28 +5492,28 @@ type AppBuildRequest struct {
 }
 
 type AgentsOpsError struct {
-	Create             string `json:"create"`
-	Run                string `json:"run"`
-	Delete             string `json:"delete"`
-	RunFinished        string `json:"run_finished"`
+	Create          string `json:"create"`
+	Run             string `json:"run"`
+	Delete          string `json:"delete"`
+	RunFinished     string `json:"run_finished"`
 	AgentValidation string `json:"agent_validation"`
 }
 
 type AgentHealth struct {
-	Create             bool    			`json:"create"`
-	Run                bool    			`json:"run"`
-	BackendVersion     string  			`json:"backend_version"`
-	RunFinished        bool    			`json:"run_finished"`
-	ExecutionTook      float64 			`json:"execution_took"`
-	RunStatus          string  			`json:"run_status"`
-	Delete             bool    			`json:"delete"`
-	ExecutionId        string  			`json:"execution_id"`
-	WorkflowId         string  			`json:"workflow_id"`
-	AgentNodeId        string  			`json:"agent_node_id"`
-	AgentStatus        string  			`json:"agent_status"`         // Status of the agent itself (RUNNING, FINISHED, ABORTED)
-	AgentDecisionCount int     			`json:"agent_decision_count"` // Number of decisions made by the agent
-	LLMCallSuccess     bool    			`json:"llm_call_success"`     // Whether the LLM call succeeded
-	Error   		   AgentsOpsError 	`json:"error"`
+	Create             bool           `json:"create"`
+	Run                bool           `json:"run"`
+	BackendVersion     string         `json:"backend_version"`
+	RunFinished        bool           `json:"run_finished"`
+	ExecutionTook      float64        `json:"execution_took"`
+	RunStatus          string         `json:"run_status"`
+	Delete             bool           `json:"delete"`
+	ExecutionId        string         `json:"execution_id"`
+	WorkflowId         string         `json:"workflow_id"`
+	AgentNodeId        string         `json:"agent_node_id"`
+	AgentStatus        string         `json:"agent_status"`         // Status of the agent itself (RUNNING, FINISHED, ABORTED)
+	AgentDecisionCount int            `json:"agent_decision_count"` // Number of decisions made by the agent
+	LLMCallSuccess     bool           `json:"llm_call_success"`     // Whether the LLM call succeeded
+	Error              AgentsOpsError `json:"error"`
 }
 
 type WttrResponse struct {
@@ -5786,14 +5844,21 @@ type DisplaySize struct {
 	OffsetX int `json:"offset_x,omitempty"`
 	OffsetY int `json:"offset_y,omitempty"`
 }
+
 // Added remote control capabilities for windows
-type RemoteControl struct{
-	Op     string                 `json:"op"`
-	Params map[string]any        `json:"params"`
+type RemoteControl struct {
+	Op     string         `json:"op"`
+	Params map[string]any `json:"params"`
 }
 
 type RemoteControlActionBatch struct {
 	Actions []RemoteControl `json:"actions"`
+}
+
+type AgentVerifierResult struct {
+	Pass    bool
+	Reason  string // Skipped is true when the verifier was not run (missing input, LLM error, parse error). In that case the caller should accept the finish as-is.
+	Skipped bool
 }
 
 // AppSummary - Lightweight app info for AI agents (name + description + id)
@@ -5812,18 +5877,17 @@ type ActionParameter struct {
 
 // ActionSummary - minimal action info for AI agents
 type ActionSummary struct {
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	Parameters  []ActionParameter  `json:"parameters"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Parameters  []ActionParameter `json:"parameters"`
 }
 
 // AppActionResponse - actions grouped by app
 type AppActionResponse struct {
-	AppName string           `json:"app_name"`
-	AppID   string           `json:"app_id"`
-	Actions []ActionSummary  `json:"actions"`
+	AppName string          `json:"app_name"`
+	AppID   string          `json:"app_id"`
+	Actions []ActionSummary `json:"actions"`
 }
-
 
 // WorkflowOperation represents a single modification operation
 type WorkflowOperation struct {
@@ -5855,4 +5919,16 @@ type WorkflowSetOpsResponse struct {
 	CacheExpiresIn    int               `json:"cache_expires_in"`     // seconds
 	Error             string            `json:"error,omitempty"`
 	FailedAtOp        int               `json:"failed_at_op,omitempty"`
+}
+
+type rawField struct {
+	Name  string      `json:"name"`
+	Key   string      `json:"key,omitempty"`
+	Value interface{} `json:"value"`
+}
+
+type agentResponse struct {
+	Success       bool   `json:"success"`
+	ExecutionId   string `json:"execution_id"`
+	Authorization string `json:"authorization"`
 }
