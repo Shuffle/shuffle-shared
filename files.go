@@ -90,7 +90,7 @@ func fileExecutionAuthentication(request *http.Request) (string, error) {
 }
 
 // https://golangcode.com/check-if-a-file-exists/
-func fileExists(filename string) bool {
+func FileExists(filename string) bool {
 	info, err := os.Stat(filename)
 	if os.IsNotExist(err) {
 		return false
@@ -372,7 +372,7 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 			}
 
 		} else {
-			if fileExists(file.DownloadPath) {
+			if FileExists(file.DownloadPath) {
 				err = os.Remove(file.DownloadPath)
 				if err != nil {
 					log.Printf("[ERROR] Failed deleting file locally: %s", err)
@@ -1024,7 +1024,7 @@ func GetFileContent(ctx context.Context, file *File, resp http.ResponseWriter) (
 		obj := bucket.Object(file.DownloadPath)
 		fileReader, err := obj.NewReader(ctx)
 		if err != nil {
-			log.Printf("[ERROR] Reader error for %s in bucket %s: %s", downloadPath, orgFileBucket, err)
+			//log.Printf("[ERROR] Reader error for %s in bucket %s: %s", downloadPath, orgFileBucket, err)
 
 			file.Status = "deleted"
 			err = SetFile(ctx, *file)
