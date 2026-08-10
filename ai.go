@@ -9585,6 +9585,9 @@ data_filter:
 								IncrementCache(ctx, subOrgId, "agent_cached_tokens", cachedTokens)
 							}
 						}
+						if cachedTokens > 0 {
+							IncrementCache(ctx, currentOrgId, "agent_cached_tokens", cachedTokens)
+						}
 					}()
 
 					if cachedTokens > 0 && debug {
