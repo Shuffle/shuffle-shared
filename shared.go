@@ -28205,6 +28205,11 @@ func loadGithubWorkflows(url, username, password, userId, branch, orgId string) 
 
 	log.Printf("Starting load of %s with branch %s", url, branch)
 
+	if err := checkAllowedUrl(url); err != nil {
+		log.Printf("[ERROR] Blocked workflow git clone URL: %s", err)
+		return err
+	}
+
 	cloneOptions := &git.CloneOptions{
 		URL: url,
 	}
@@ -28350,6 +28355,11 @@ func listGithubWorkflowsInfo(url, username, password, branch, orgId string) ([]R
 			}
 			url = baseURL + ".git"
 		}
+	}
+
+	if err := checkAllowedUrl(url); err != nil {
+		log.Printf("[ERROR] Blocked workflow git clone URL: %s", err)
+		return nil, err
 	}
 
 	cloneOptions := &git.CloneOptions{URL: url}
@@ -28552,6 +28562,11 @@ func importSingleRemoteWorkflow(url, username, password, branch, originalWorkflo
 			}
 			url = baseURL + ".git"
 		}
+	}
+
+	if err := checkAllowedUrl(url); err != nil {
+		log.Printf("[ERROR] Blocked workflow git clone URL: %s", err)
+		return err
 	}
 
 	cloneOptions := &git.CloneOptions{URL: url}
@@ -38483,4 +38498,23 @@ func canReach(wf *Workflow, from, to string) bool {
 	}
 
 	return false
+}
+
+func checkAllowedUrl(rawUrl string) error {
+	parsedUrl, err := url.Parse(rawUrl)
+	if err != nil {
+		return fmt.Errorf("invalid git url: %s", err)
+	}
+
+	host := strings.ToLower(parsedUrl.Hostname())
+
+	if parsedUrl.Scheme != "https" {
+		return fmt.Errorf("unsupported git url scheme")
+	}
+
+	if host != "github.com" && host != "gitlab.com" && host != "bitbucket.org" && host != "dev.azure.com" {
+		return fmt.Errorf("unsupported git host")
+	}
+
+	return nil
 }
