@@ -14040,7 +14040,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 	*/
 
-	// Update Billing email alert threshold
+	// Update Billing email alert threshold (cloud)
 	tmpDataAlert := tmpData.Billing.AlertThreshold
 	orgAlertThreshold := org.Billing.AlertThreshold
 
@@ -14051,6 +14051,23 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			for i := 0; i < len(tmpDataAlert); i++ {
 				if tmpDataAlert[i].Percentage != orgAlertThreshold[i].Percentage || tmpDataAlert[i].Count != orgAlertThreshold[i].Count {
 					org.Billing.AlertThreshold = tmpData.Billing.AlertThreshold
+					break
+				}
+			}
+		}
+	}
+
+	// Update Billing email alert threshold (onprem) - independent list from cloud above
+	tmpDataOnpremAlert := tmpData.Billing.OnpremAlertThreshold
+	orgOnpremAlertThreshold := org.Billing.OnpremAlertThreshold
+
+	if len(tmpDataOnpremAlert) > 0 {
+		if len(tmpDataOnpremAlert) != len(orgOnpremAlertThreshold) {
+			org.Billing.OnpremAlertThreshold = tmpData.Billing.OnpremAlertThreshold
+		} else {
+			for i := 0; i < len(tmpDataOnpremAlert); i++ {
+				if tmpDataOnpremAlert[i].Percentage != orgOnpremAlertThreshold[i].Percentage || tmpDataOnpremAlert[i].Count != orgOnpremAlertThreshold[i].Count {
+					org.Billing.OnpremAlertThreshold = tmpData.Billing.OnpremAlertThreshold
 					break
 				}
 			}

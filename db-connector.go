@@ -5131,32 +5131,57 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 
 var defaultAlertThresholdPercentages = []int{50, 75, 90, 100}
 
-func addDefaultAlertThresholds(org *Org) bool {
-	if org.Billing.DefaultAlertsApplied {
+
+func isOnpremAlertEligible(org *Org) bool {
+	if !org.CloudSyncActive {
 		return false
 	}
 
-	limit := org.SyncFeatures.AppExecutions.Limit
-	if limit <= 0 {
-		return false
-	}
+	return org.LeadInfo.EnterpriseLicenseOnprem ||
+		org.LeadInfo.BusinessLicenseOnprem ||
+		org.LeadInfo.ScaleLicenseOnpremCustomer
+}
 
+func mergeDefaultAlertThresholds(thresholds []AlertThreshold, limit int64) []AlertThreshold {
 	existingPercentages := map[int]bool{}
-	for _, threshold := range org.Billing.AlertThreshold {
+	for _, threshold := range thresholds {
 		existingPercentages[threshold.Percentage] = true
 	}
 
 	for _, percentage := range defaultAlertThresholdPercentages {
 		if !existingPercentages[percentage] {
-			org.Billing.AlertThreshold = append(org.Billing.AlertThreshold, AlertThreshold{
+			thresholds = append(thresholds, AlertThreshold{
 				Percentage: percentage,
 				Count:      int(float64(percentage) / 100 * float64(limit)),
 			})
 		}
 	}
 
-	org.Billing.DefaultAlertsApplied = true
-	return true
+	return thresholds
+}
+
+func addDefaultAlertThresholds(org *Org) bool {
+	changed := false
+
+	if !org.Billing.DefaultAlertsApplied {
+		limit := org.SyncFeatures.AppExecutions.Limit
+		if limit > 0 {
+			org.Billing.AlertThreshold = mergeDefaultAlertThresholds(org.Billing.AlertThreshold, limit)
+			org.Billing.DefaultAlertsApplied = true
+			changed = true
+		}
+	}
+
+	if !org.Billing.DefaultOnpremAlertsApplied {
+		onpremLimit := org.SyncFeatures.OnpremAppExecutions.Limit
+		if onpremLimit > 0 && isOnpremAlertEligible(org) {
+			org.Billing.OnpremAlertThreshold = mergeDefaultAlertThresholds(org.Billing.OnpremAlertThreshold, onpremLimit)
+			org.Billing.DefaultOnpremAlertsApplied = true
+			changed = true
+		}
+	}
+
+	return changed
 }
 
 // ListBooks returns a list of books, ordered by title.
@@ -9489,7 +9514,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 			for _, sub := range licenseOrg.Subscriptions {
 				if sub.Active {
 					subName := strings.ToLower(sub.Name)
-					if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") {
+					if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") || strings.Contains(subName, "scale") {
 						planStartDate = sub.Startdate
 						break
 					}
