@@ -22024,7 +22024,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		workflowExecution.ExecutionSource = action.SourceWorkflow
 		workflowExecution.ExecutionParent = action.SourceExecution
 		if debug { 
-			log.Printf("\n\n\nHERE PRE OVERRIDE: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
+			log.Printf("\n\n\nHERE PRE OVERRIDE %s: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionId, workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
 		}
 
 		// Updated action stuff, ensuring everything is on par
@@ -22114,7 +22114,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 
 		if debug { 
-			log.Printf("\n\n\nHERE PRE OVERRIDE 2: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
+			log.Printf("\n\n\nHERE PRE OVERRIDE %s 2: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionId, workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
 		}
 
 		workflowExecution.ExecutionArgument = oldExec.ExecutionArgument
@@ -22250,7 +22250,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			go RunAgentDecisionAction(*oldExec, mappedOutput, mappedOutput.Decisions[foundDecisionIndex])
 
 			if debug { 
-				log.Printf("\n\n\nHERE PRE OVERRIDE 3: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
+				log.Printf("\n\n\nHERE PRE OVERRIDE %s 3: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionId, workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
 			}
 
 			// FIXME: This is to ensure hadnling of the EXACT SAME decision happens.
@@ -22269,7 +22269,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 	}
 
 	if debug { 
-		log.Printf("\n\n\nHERE PRE OVERRIDE 4: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
+		log.Printf("\n\n\nHERE PRE OVERRIDE %s 4: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionId, workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
 	}
 
 	if user.ActiveOrg.Id != "" {
@@ -22282,9 +22282,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		workflowExecution.ExecutionSource = "single_action"
 
 		// Fredrik fixing onprem
-		if debug { 
-			os.Exit(3)
-		}
+		//if debug { 
+		//	os.Exit(3)
+		//}
 
 		// parentRequest 
 	}
