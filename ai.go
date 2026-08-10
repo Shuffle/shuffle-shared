@@ -8823,7 +8823,7 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 4. Do NOT ask unnecessary questions. Make assumptions for the user.
 5. DO NOT LIE. Only say you did something if you actually did.
 6. "action" should be the EXACT name of the function, without paranthesis or parameters.
-7. If future scheduling may be necessary, ignore it and run it right now. Scheduling is a separate process.
+7. If action delay is required, set the "delay" in seconds for that decision. Max delay is 31 days ("delay": "2678400"). Delay should be relative to original start time.
 8. App Actions show up in the python function format. Put the function name in the 'action' field and the parameters in 'fields' array. Don't add empty fields.
 9. IF an App Action parameter contains a value, use it and fill it in with relevant values. Ask questions, if important data is missing. Do not add random values to nested JSON bodies unless necessary.
 
@@ -8850,8 +8850,8 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 **Only proceed if the task is NOT done.**
 1. **Auth Failure (401/403):** STOP. Output: category="finish", action="finish", output="**Authentication Failed**".
 2. **General Failure:**
-   - If "runs" >= 3: STOP. Output: category="finish", action="finish", output="**Task Failed**".
-   - If "runs" < 3: RETRY same action. Reason: "Attempt [runs+1]/3."
+   - If "runs" >= 5: STOP. Output: category="finish", action="finish", output="**Task Failed**".
+   - If "runs" < 5: RETRY same action. Reason: "Attempt [runs+1]/5."
 
 ### PHASE 3: EXECUTION LOGIC
 **Only proceed if Task is Incomplete and No Failures exist.**
@@ -8895,6 +8895,7 @@ data_filter:
     "tool": "tool_name", // Name of the tool. Use "core" for finish/ask
     "confidence": 1.0,
     "runs": "1", 
+	"delay": "0", // delay in SECONDS before executing the action. 
     "approval_required": false, // true IF the action seems risky or destructive and requires user approval. Otherwise false.
     "data_filter": "list", // for fetch list/search: "list" | "full"
     "fields_needed": ["<List of fields>"], // use this when data_filter is "list": exact fields you need from each item
@@ -9957,6 +9958,7 @@ data_filter:
 				// Do we run the singul action directly?
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+
 
 				go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
 

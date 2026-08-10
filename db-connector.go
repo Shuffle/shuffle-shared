@@ -2489,7 +2489,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 								}
 							}
 						} else {
-							if decision.RunDetails.CompletedAt > 0 {
+							if decision.RunDetails.CompletedAt > 0 && decision.RunDetails.Status != "WAITING" {
 								if debug {
 									log.Printf("[DEBUG] Rewriting decision %s to FINISHED based on completed at timestamp.", decision.RunDetails.Id)
 								}
@@ -2502,6 +2502,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 								if err == nil {
 									err = SetCache(ctx, decisionId, marshalledDecision, 60)
 								}
+
 								continue
 							} else {
 								if decision.Action == "finish" && decision.RunDetails.Status == "" {
@@ -2641,6 +2642,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						if debug { 
 							log.Printf("[INFO][%s] Agent action %s marked as FINISHED, updating result status to SUCCESS.", workflowExecution.ExecutionId, action.ID)
 						}
+
 						workflowExecution.Results[resultIndex].Status = "SUCCESS"
 						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 					}
@@ -11312,6 +11314,9 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 }
 
 func GetApikey(ctx context.Context, apikey string) (User, error) {
+	if len(apikey) == 0 {
+		return User{}, errors.New("No apikey provided")
+	}
 
 	// Query for the specific API-key in users
 	nameKey := "Users"

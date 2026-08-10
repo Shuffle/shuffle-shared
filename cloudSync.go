@@ -2070,12 +2070,27 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	log.Printf("[DEBUG][%s] DirectAppCall: Auth resolution took %s", execution.ExecutionId, time.Since(authStart))
 	*/
 
+	// strconv for decision.Delay
+	selectedDelay := int64(0)
+	parsedDelay, err := strconv.Atoi(decision.Delay)
+	if err == nil {
+		if parsedDelay < 0 || parsedDelay > 2678400 {
+			parsedDelay = 0
+		} else {
+			selectedDelay = int64(parsedDelay)
+		}
+	} else {
+		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed to parse Agent decision.Delay '%s' as int: %s", execution.ExecutionId, decision.Delay, err)
+	}
+
 	action := Action{
 		AppID:            resolvedAppId,
 		AppName:          resolvedAppName,
 		Name:             decision.Action, // overwritten below if schema match found
 		//AuthenticationId: resolvedAuthId,
 		Parameters:       []WorkflowAppActionParameter{},
+
+		ExecutionDelay: selectedDelay,
 	}
 
 	decisionActionLower := strings.ToLower(decision.Action)
@@ -2154,15 +2169,19 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		}
 	}
 
-	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=60", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg)
+	//ExecutionDelay: selectedDelay,
+	timeout := time.Duration(30) * time.Second
 
-	//if debug { 
-	//	log.Printf("[DEBUG][%s] DirectAppCall: Calling /run for tool '%s' action '%s' -> %s", execution.ExecutionId, resolvedAppName, action.Name, requestUrl)
-	//}
+	// Immediate exist. 3 seconds due to body transfer worst case
+	if selectedDelay > 0 { 
+		timeout = time.Duration(2) * time.Second
+	}
+
+	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=%d&delay=%d", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg, (timeout/1000000000)-1, selectedDelay)
 
 	//httpStart := time.Now()
 	client := GetExternalClientWithTimeout(requestUrl, 0)
-	client.Timeout = 30 * time.Second
+	client.Timeout = timeout
 
 
 	req, reqErr := http.NewRequest("POST", requestUrl, bytes.NewBuffer(actionBytes))
@@ -2622,7 +2641,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			}
 		} else {
 		// Singul handler
-			rawResponse, debugUrl, appname, categoryLabels, actionName, err := RunAgentDecisionSingulActionHandler(execution, decision, agentOutput.ExecutionMode)
+			rawResponse, debugUrl, appname, categoryLabels, actionName, runError := RunAgentDecisionSingulActionHandler(execution, decision, agentOutput.ExecutionMode)
 
 			if len(appname) > 0 {
 				decision.Tool = appname
@@ -2637,17 +2656,28 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			//	log.Printf("[DEBUG] RawResp agent: %s", string(rawResponse))
 			//}
 
-			if err != nil {
+			parsedDelay, delayErr := strconv.Atoi(decision.Delay)
+			if delayErr == nil {
+				if parsedDelay < 0 || parsedDelay > 2678400 {
+					parsedDelay = 0
+				}
+			} 
+
+			// Handles the case where the action is delayed on purpose (scheduled)
+			if parsedDelay > 0 { 
+				decision.RunDetails.Status = "WAITING"
+
+			} else if runError != nil {
 				if debug { 
-					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
+					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, runError)
 				} else {
-					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision.RunDetails.Id, err)
+					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision.RunDetails.Id, runError)
 				}
 
 				decision.RunDetails.Status = "FAILURE"
 
 				if len(decision.RunDetails.RawResponse) == 0 {
-					decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start decision action. Raw Error: %s", err)
+					decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start decision action. Raw Error: %s", runError)
 				}
 			} else {
 				decision.RunDetails.Status = "FINISHED"
