@@ -18739,9 +18739,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 									}
 
 									decisionFound = true 
-									log.Printf("[DEBUG][%s] Decision %s found. Status: %s", workflowExecution.ExecutionId, decisionValue, decision.RunDetails.Status)
-
-									if decision.RunDetails.Status != "WAITING" {
+									if decision.RunDetails.Status != "WAITING" && decision.RunDetails.Status != "RUNNING" {
 										break
 									}
 
@@ -18757,25 +18755,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 										log.Printf("[ERROR][%s] Failed to marshal updated decision for delayed decision update: %s", workflowExecution.ExecutionId, err)
 									}
 
-									//decisionCacheId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
-									//SetCache(ctx, decisionValue, marshalledDecision, 30)
-
-									//marshalledAgentOutput, err := json.Marshal(agentOutput)
-									//if err != nil {
-									//	log.Printf("[ERROR][%s] Failed to marshal updated agent output for delayed decision update: %s", workflowExecution.ExecutionId, err)
-									//}
-									//actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, result.Action.ID)
-									//SetCache(ctx, actionCacheId, marshalledAgentOutput, 30)
-
-									//parentExecution.Results[resultIndex].Result = string(marshalledAgentOutput)
-									//err = SetWorkflowExecution(ctx, *parentExecution, true)
-									//if err != nil { 
-									//	log.Printf("[ERROR][%s] Failed to update parent execution for delayed decision update: %s", workflowExecution.ExecutionId, err)
-									//}
-
-									//sendAgentActionSelfRequest("SUCCESS", *parentExecution, actionResult) 
-									log.Printf("[DEBUG][%s] Updated parent decision %s to FINISHED", workflowExecution.ExecutionId, decisionValue)
-
 									baseUrl := "https://shuffler.io"
 									if os.Getenv("BASE_URL") != "" {
 										baseUrl = os.Getenv("BASE_URL")
@@ -18785,12 +18764,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 										baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 									}
 
-									//url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 									url := fmt.Sprintf("%s/api/v1/streams", baseUrl)
-
 									if debug { 
 										log.Printf("[DEBUG][%s] Sending agent decision response %s with status %s. Node: %s. URL: %s", workflowExecution.ExecutionId, decisionValue, agentOutput.Decisions[decisionIndex].RunDetails.Status, agentOutput.NodeId, url)
 									}
+
 									client := GetExternalClient(url)
 									parsedAction := ActionResult{
 										ExecutionId:   parentExecution.ExecutionId,
@@ -18805,10 +18783,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 										Status: fmt.Sprintf("agent_%s", decision.RunDetails.Id),
 										Result: string(marshalledDecision),
 									}
-
-									// Handle 
-									//if len(foundAction.ID) > 0 { 
-									//}
 
 									marshalledAction, err := json.Marshal(parsedAction)
 									if err != nil {
