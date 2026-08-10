@@ -1566,6 +1566,46 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		}
 	}
 
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_cached_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_agent_cached_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_executions") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_executions", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_executions_successful") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_executions_successful", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_executions_failed") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_executions_failed", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_max_loops_hit") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_max_loops_hit", int(dbDumpInterval))
+			}
+		}
+	}
+
 	concurrentTxn := false
 	errMsg := ""
 
@@ -2184,11 +2224,11 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		obj := bucket.Object(fullParsedPath)
 		fileReader, err := obj.NewReader(ctx)
 		if err != nil {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Failed reading file '%s' from bucket %s: %s. Will try with alternative solution.", fullParsedPath, bucketName, err)
 			}
 
-			// Cache sip for the minute 
+			// Cache sip for the minute
 			SetCache(ctx, cacheKey, []byte{}, 1)
 
 			if projectName != "shuffler" {
@@ -2198,7 +2238,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 				fileReader, err = obj.NewReader(ctx)
 				if err != nil {
 					//log.Printf("[ERROR] Failed reading file '%s' again from bucket %s: %s", fullParsedPath, bucketName, err)
-		
+
 					return "", err
 				}
 			} else {
@@ -2341,7 +2381,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		workflowExecution.Workflow.Validation = validation
 	}
 
-	//if debug { 
+	//if debug {
 	//	log.Printf("\n\n[DEBUG][%s] EXEC CHECK? Actions: %d, Results: %d\n\n", workflowExecution.ExecutionId, len(workflowExecution.Workflow.Actions), len(workflowExecution.Results))
 	//}
 
@@ -2357,7 +2397,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 			// Very weird edgecase handling for agent cleanup
 			// This is for auto-correctiveness of executions
-			if len(workflowExecution.Workflow.Actions) == 1 && action.Name == "agent" && innerresult.Action.Name == "agent" && innerresult.Action.ID == "" { 
+			if len(workflowExecution.Workflow.Actions) == 1 && action.Name == "agent" && innerresult.Action.Name == "agent" && innerresult.Action.ID == "" {
 				innerresult.Action.ID = action.ID
 				innerresult.Action.AppName = "AI Agent"
 			}
@@ -2425,25 +2465,25 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				}
 
 				finishFound := false
-				for decisionIndex, decision := range mappedOutput.Decisions { 
-					if decision.Action == "finish" || decision.Category == "finish" { 
+				for decisionIndex, decision := range mappedOutput.Decisions {
+					if decision.Action == "finish" || decision.Category == "finish" {
 
-						if decision.RunDetails.Status != "FINISHED" {  
-							if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 { 
-								mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli() 
+						if decision.RunDetails.Status != "FINISHED" {
+							if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
+								mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 							}
 
-							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli() 
+							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
 							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 							decisionsUpdated = true
 						}
-				
+
 						finishFound = true
 					}
 				}
 
-				if finishFound { 
-					//if debug { 
+				if finishFound {
+					//if debug {
 					//	log.Printf("[DEBUG][%s] SELF AGENT FINISH FOUND", workflowExecution.ExecutionId)
 					//}
 
@@ -2479,7 +2519,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						if decision.Action == "finish" {
 							finishDecisionFound = true
 
-							if decision.RunDetails.Status == "" { 
+							if decision.RunDetails.Status == "" {
 								decision.RunDetails.Status = "FINISHED"
 								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 							}
@@ -2678,7 +2718,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}()
 						}
 					} else if (result.Status == "" || result.Status == "WAITING") && mappedOutput.Status == "FINISHED" {
-						if debug { 
+						if debug {
 							log.Printf("[INFO][%s] Agent action %s marked as FINISHED, updating result status to SUCCESS.", workflowExecution.ExecutionId, action.ID)
 						}
 						workflowExecution.Results[resultIndex].Status = "SUCCESS"
@@ -4904,7 +4944,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				_, err = it.Next(&innerWorkflow)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						if debug { 
+						if debug {
 							//log.Printf("[DEBUG] Workflow load iterator issue: %s", err)
 						}
 
@@ -4918,7 +4958,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Public {
-					//if debug { 
+					//if debug {
 					//	log.Printf("[DEBUG] Skipping public workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
 					//}
 
@@ -4926,7 +4966,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Hidden {
-					//if debug { 
+					//if debug {
 					//	log.Printf("[DEBUG] Skipping HIDDEN workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
 					//}
 
@@ -4950,12 +4990,12 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 			}
 
-			// Fallback for when the iterator fails due to a datastore issue 
+			// Fallback for when the iterator fails due to a datastore issue
 			// (e.g. "cannot load field" error) and similar
 			if err != iterator.Done {
 				log.Printf("[WARNING] Failed fetching workflow results for org %s: %v", user.ActiveOrg.Id, err)
 
-				// Check if query contains edited or not 
+				// Check if query contains edited or not
 				if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition desc") && strings.Contains(fmt.Sprintf("%s", query), "edited") {
 					log.Printf("[ERROR] Retrying workflow query without Edited sort due to error: %s", err)
 
@@ -4991,7 +5031,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 	})
 
 	if len(workflows) > maxAmount {
-		if debug { 
+		if debug {
 			log.Printf("[WARNING] Found %d workflows for user %s (%s) in org %s, but limiting to %d", len(workflows), user.Username, user.Id, user.ActiveOrg.Id, maxAmount)
 		}
 
@@ -5130,7 +5170,6 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 }
 
 var defaultAlertThresholdPercentages = []int{50, 75, 90, 100}
-
 
 func isOnpremAlertEligible(org *Org) bool {
 	if !org.CloudSyncActive {
@@ -9500,8 +9539,8 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 				}
 				totalAppExecutions = annualAppRuns
 			} else {
-			limit = limit * 2
-		}
+				limit = limit * 2
+			}
 
 		} else if licenseOrg.CloudSync && licenseOrg.SyncFeatures.AnnualAppRunsGrouping.Active {
 			limit = limit * 12 * 2
@@ -11514,7 +11553,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	}
 
 	if debug {
-		log.Printf("[DEBUG] API key cache miss; looking up user") 
+		log.Printf("[DEBUG] API key cache miss; looking up user")
 	}
 
 	if project.DbType == "opensearch" {
@@ -12250,7 +12289,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			"size": 1000,
 			"sort": map[string]interface{}{
 				"updated_at": map[string]interface{}{
-					"order": "desc",
+					"order":         "desc",
 					"unmapped_type": "long",
 				},
 			},
@@ -15203,7 +15242,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 							oldDoc := config.Value
 							newDoc := cacheData.Value
 
-							if debug { 
+							if debug {
 								log.Printf("\n\nOLD: %s\n\nNEW: %s\n\n", oldDoc, newDoc)
 							}
 
@@ -15228,9 +15267,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						break
 					}
 
-					// This NEVER triggers. RLS just returns the merged JSON 
-					// and we trust it. If we don't trust it, we can set 
-					// ruleValid to false above. 
+					// This NEVER triggers. RLS just returns the merged JSON
+					// and we trust it. If we don't trust it, we can set
+					// ruleValid to false above.
 					if !ruleValid {
 						// Break out
 						if debug {
@@ -15239,8 +15278,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 						keyUpdated = false
 
-						cacheData.Existed = true 
-						cacheData.Changed = keyUpdated 
+						cacheData.Existed = true
+						cacheData.Changed = keyUpdated
 						datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
 						cacheKeys <- cacheData
 						return
@@ -17726,37 +17765,37 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		if parentOrgDepth >= 3 {
 			log.Printf("[ERROR] Reached maximum parent org lookup depth (%d) for org %s. Skipping parent org cache lookup to prevent infinite recursion.", parentOrgDepth, orgId)
 		} else {
-		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
-		if err != nil {
+			parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+			if err != nil {
 				if debug {
 					log.Printf("[DEBUG] Could not find parent org %s for org %s (possibly in different region): %s", foundOrg.CreatorOrg, orgId, err)
 				}
-		} else {
+			} else {
 				parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, "", max, inputcursor, cleanupDepth, parentOrgDepth+1)
-			if err != nil {
+				if err != nil {
 					if debug {
 						log.Printf("[DEBUG] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
 					}
-			} else {
-				if debug {
-					//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
-				}
-
-				for _, parentCache := range parentOrgCache {
-					/*
-						if debug && len(parentCache.SuborgDistribution) > 0 {
-							log.Printf("[DEBUG] Parent org %s keys: %#v", parentOrg.Id, parentCache.SuborgDistribution)
-						}
-					*/
-
-					if !ArrayContains(parentCache.SuborgDistribution, orgId) {
-						continue
+				} else {
+					if debug {
+						//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
 					}
 
-					// Clean up just in case
-					parentCache.PublicAuthorization = ""
-					parentCache.SuborgDistribution = []string{orgId}
-					cacheKeys = append(cacheKeys, parentCache)
+					for _, parentCache := range parentOrgCache {
+						/*
+							if debug && len(parentCache.SuborgDistribution) > 0 {
+								log.Printf("[DEBUG] Parent org %s keys: %#v", parentOrg.Id, parentCache.SuborgDistribution)
+							}
+						*/
+
+						if !ArrayContains(parentCache.SuborgDistribution, orgId) {
+							continue
+						}
+
+						// Clean up just in case
+						parentCache.PublicAuthorization = ""
+						parentCache.SuborgDistribution = []string{orgId}
+						cacheKeys = append(cacheKeys, parentCache)
 					}
 				}
 			}
