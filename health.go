@@ -1019,6 +1019,27 @@ func GetLiveExecutionStats(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(dataJSON)
 }
 
+func redactCacheHealthResult(raw string) string {
+	if len(raw) == 0 {
+		return raw
+	}
+
+	parsed := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return ""
+	}
+
+	delete(parsed, "updated_by")
+	delete(parsed, "public_authorization")
+
+	redacted, err := json.Marshal(parsed)
+	if err != nil {
+		return ""
+	}
+
+	return string(redacted)
+}
+
 func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1128,6 +1149,10 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 		if len(newHealthChecks) > 0 {
 			healthChecks = newHealthChecks
 		}
+	}
+
+	for i := range healthChecks {
+		healthChecks[i].Datastore.Result = redactCacheHealthResult(healthChecks[i].Datastore.Result)
 	}
 
 	healthChecksData, err := json.MarshalIndent(healthChecks, "", "  ")
