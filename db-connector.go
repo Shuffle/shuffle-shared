@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"regexp"
 
 	//"github.com/goccy/go-json"
 
@@ -74,6 +75,8 @@ type ShuffleStorage struct {
 	CloudUrl      string
 	BucketName    string
 }
+
+var maxCacheKeyLength = 250
 
 // Create ElasticSearch/OpenSearch index prefix
 // It is used where a single cluster of ElasticSearch/OpenSearch utilized by several
@@ -234,6 +237,10 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 	}
 
 	name = strings.Replace(name, " ", "_", -1)
+	originalKey := name
+	if len(name) > maxCacheKeyLength || !regexp.MustCompile(`^[a-zA-Z0-9_.:-]+$`).MatchString(name) {
+		name = md5sum([]byte(name))
+	}
 
 	if len(memcached) > 0 {
 		item, err := mc.Get(name)
@@ -272,22 +279,22 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 				}
 
 				if len(totalData) == 0 {
-					log.Printf("[ERROR] Cache payload invalid for key %s", name)
-					return "", fmt.Errorf("Cache payload invalid for %s", name)
+					log.Printf("[ERROR] Cache payload invalid for key %s", originalKey)
+					return "", fmt.Errorf("Cache payload invalid for %s", originalKey)
 				}
 
 				return totalData, nil
 			} else {
 				if len(item.Value) == 0 {
-					log.Printf("[ERROR] Cache payload invalid for %s", name)
-					return "", fmt.Errorf("Cache payload invalid for %s", name)
+					log.Printf("[ERROR] Cache payload invalid for %s", originalKey)
+					return "", fmt.Errorf("Cache payload invalid for %s", originalKey)
 				}
 
 				return item.Value, nil
 			}
 		}
 
-		return "", errors.New(fmt.Sprintf("No cache found in SHUFFLE_MEMCACHED for %s", name))
+		return "", errors.New(fmt.Sprintf("No cache found in SHUFFLE_MEMCACHED for %s", originalKey))
 	}
 
 	if false {
@@ -295,7 +302,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		if item, err := memcache.Get(ctx, name); err != nil {
 
 		} else if err != nil {
-			return "", errors.New(fmt.Sprintf("Failed getting CLOUD cache for %s: %s", name, err))
+			return "", errors.New(fmt.Sprintf("Failed getting CLOUD cache for %s: %s", originalKey, err))
 		} else {
 			// Loops if cachesize is more than max allowed in memcache (multikey)
 			if len(item.Value) == maxCacheSize {
@@ -332,18 +339,18 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		if value, found := requestCache.Get(name); found {
 			return value, nil
 		} else {
-			return "", errors.New(fmt.Sprintf("Failed getting ONPREM cache for %s", name))
+			return "", errors.New(fmt.Sprintf("Failed getting ONPREM cache for %s", originalKey))
 		}
 	} else {
 		if value, found := requestCache.Get(name); found {
 			return value, nil
 		} else {
-			return "", errors.New(fmt.Sprintf("Failed getting cache for %s", name))
+			return "", errors.New(fmt.Sprintf("Failed getting cache for %s", originalKey))
 		}
 		//return "", errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
 	}
 
-	return "", errors.New(fmt.Sprintf("No cache found for %s", name))
+	return "", errors.New(fmt.Sprintf("No cache found for %s", originalKey))
 }
 
 // Sets a key in cache. Expiration is in minutes, unless you pass in useMilliseconds=true
@@ -358,8 +365,14 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 		return nil
 	}
 
+	name = strings.Replace(name, " ", "_", -1)
+	originalKey := name
+	if len(name) > maxCacheKeyLength || !regexp.MustCompile(`^[a-zA-Z0-9_.:-]+$`).MatchString(name) {
+		name = md5sum([]byte(name))
+	}
+
 	if len(data) == 0 {
-		log.Printf("[WARNING] Data is empty with key %s and expiration %d. Skipping cache", name, expiration)
+		log.Printf("[WARNING] Data is empty with key %s and expiration %d. Skipping cache", originalKey, expiration)
 	}
 
 	useMilliseconds := false
@@ -369,8 +382,6 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 		}
 	}
 
-	// Maxsize ish~
-	name = strings.Replace(name, " ", "_", -1)
 
 	// Splitting into multiple cache items
 	//if project.Environment == "cloud" || len(memcached) > 0 {
@@ -426,7 +437,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 
 				if err != nil {
 					if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
-						log.Printf("[ERROR] Failed setting cache for '%s' (1): %s", keyname, err)
+						log.Printf("[ERROR] Failed setting cache for '%s' (1): %s", originalKey, err)
 					}
 					break
 				} else {
@@ -435,7 +446,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 					nextStep += chunkSize
 
 					keyAmount += 1
-					//log.Printf("%s: %d: %d", keyname, totalAdded, len(data))
+					//log.Printf("%s: %d: %d", originalKey, totalAdded, len(data))
 
 					keyname = fmt.Sprintf("%s_%d", name, keyAmount)
 					if totalAdded > len(data) {
@@ -471,9 +482,9 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 
 			if err != nil {
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
-					log.Printf("[ERROR] Failed setting memcache for key '%s' with data size %d (2): %s", name, len(data), err)
+					log.Printf("[ERROR] Failed setting memcache for key '%s' with data size %d (2): %s", originalKey, len(data), err)
 				} else {
-					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", name, err)
+					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", originalKey, err)
 				}
 			}
 		}

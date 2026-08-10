@@ -22023,7 +22023,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		workflowExecution.Workflow.ID = action.SourceWorkflow
 		workflowExecution.ExecutionSource = action.SourceWorkflow
 		workflowExecution.ExecutionParent = action.SourceExecution
-		log.Printf("\n\n\nHERE PRE OVERRIDE: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
+		if debug { 
+			log.Printf("\n\n\nHERE PRE OVERRIDE: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
+		}
 
 		// Updated action stuff, ensuring everything is on par
 		if len(workflowExecution.Workflow.Actions) == 1 {
@@ -22111,7 +22113,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		}
 
 
-		log.Printf("\n\n\nHERE PRE OVERRIDE 2: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
+		if debug { 
+			log.Printf("\n\n\nHERE PRE OVERRIDE 2: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
+		}
 
 		workflowExecution.ExecutionArgument = oldExec.ExecutionArgument
 
@@ -22245,7 +22249,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 			go RunAgentDecisionAction(*oldExec, mappedOutput, mappedOutput.Decisions[foundDecisionIndex])
 
-			log.Printf("\n\n\nHERE PRE OVERRIDE 3: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
+			if debug { 
+				log.Printf("\n\n\nHERE PRE OVERRIDE 3: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
+			}
 
 			// FIXME: This is to ensure hadnling of the EXACT SAME decision happens.
 			return workflowExecution, errors.New(fmt.Sprintf("Successfully started rerun of decision %s. This will replace the current result.", decisionId))
@@ -22262,7 +22268,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		}
 	}
 
-	log.Printf("\n\n\nHERE PRE OVERRIDE 4: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
+	if debug { 
+		log.Printf("\n\n\nHERE PRE OVERRIDE 4: source '%s' and parent node '%s'\n\n", workflowExecution.ExecutionSource, workflowExecution.ExecutionParent)
+	}
 
 	if user.ActiveOrg.Id != "" {
 		workflow.ExecutingOrg = user.ActiveOrg
