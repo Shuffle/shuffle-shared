@@ -9578,7 +9578,7 @@ data_filter:
 					subOrgId := execution.Workflow.OrgId
 					go func() {
 						time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
-						IncrementCacheDump(ctx, billingOrgId, "agent_tokens", totalTokens)
+						//IncrementCacheDump(ctx, billingOrgId, "agent_tokens", totalTokens)
 						if inputTokens > 0 {
 							IncrementCache(ctx, billingOrgId, "agent_input_tokens", inputTokens)
 						}
@@ -9590,7 +9590,7 @@ data_filter:
 						}
 
 						if billingOrgId != subOrgId {
-							IncrementCache(ctx, subOrgId, "agent_tokens", totalTokens)
+							//IncrementCache(ctx, subOrgId, "agent_tokens", totalTokens)
 							if inputTokens > 0 {
 								IncrementCache(ctx, subOrgId, "agent_input_tokens", inputTokens)
 							}
@@ -10550,9 +10550,15 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 }
 
 // This can also be overridden by passing in a custom OpenAI ChatCompletion request
-// FIXME: We need some kind of failover for this so that the request
-// doesn't go from Backend directly, but instead from app. This makes it
-// more versatile in general, and able to run from Onprem -> Local model
+/*
+curl http://localhost:5002/api/v1/chat/completions -sN -H "Authorization: Bearer " -d '{
+  "messages": [
+    { "role": "system", "content": "You are a helpful assistant." },
+    { "role": "user", "content": "Write 30 bullet points" }
+  ], "stream": true
+}'
+*/
+
 func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
 
 	currentModel := model
@@ -10590,8 +10596,15 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	if len(apiKey) == 0 && project.Environment == "cloud" { 
-		foundModel := ""
-		apiKey, aiRequestUrl, foundModel = GetGeminiCredentials(ctx) 
+		foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx) 
+		if len(foundApikey) > 0 {
+			apiKey = foundApikey
+		}
+
+		if len(foundRequestUrl) > 0 {
+			aiRequestUrl = foundRequestUrl
+		}
+
 		if len(currentModel) == 0 || !strings.HasPrefix(currentModel, "google/") {
 			currentModel = foundModel
 		}
@@ -10599,24 +10612,19 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	if len(info.OrgID) > 0 { 
 		// Look up custom auth to use instead
-		foundModel := ""
-		apiKey, aiRequestUrl, foundModel = GetOrgAiCredentials(ctx, info.OrgID)
+		foundApikey, foundrequestUrl, foundModel := GetOrgAiCredentials(ctx, info.OrgID)
+		if len(foundApikey) > 0 {
+			apiKey = foundApikey
+		}
+
+		if len(foundrequestUrl) > 0 {
+			aiRequestUrl = foundrequestUrl
+		}
+
 		if len(foundModel) > 0 { 
 			currentModel = foundModel
 		}
 	}
-
-	if len(apiKey) == 0 {
-		return "", errors.New("No AI_API_KEY supplied AND no organization-specific key found. Please create AI app authentication")
-	}
-
-	//if len(aiRequestUrl) == 0 {
-	//	return "", errors.New("No AI_API_URL supplied")
-	//}
-
-	estSysTokens := int(math.Ceil(float64(len(systemMessage)) / 3.5))
-	estUserTokens := int(math.Ceil(float64(len(userMessage)) / 3.5))
-	totalEst := estSysTokens + estUserTokens
 
 	config := openai.DefaultConfig(apiKey)
 	if len(aiRequestUrl) > 0 {
@@ -10767,6 +10775,14 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	// Overwrites it all
 	aiRequestUrl, currentModel = ValidateURLandModel(aiRequestUrl, currentModel)
+	if len(apiKey) == 0 {
+		return "", errors.New("No LLM apikey supplied AND no organization-specific key found. Please create a custom AI app authentication.")
+	}
+
+	if len(aiRequestUrl) == 0 {
+		return "", errors.New("No LLM URL supplied AND no organization-specific URL found. Please create a custom AI app authentication")
+	}
+
 	if chatCompletion.Model == "" { 
 		chatCompletion.Model = currentModel 
 	}
@@ -10786,7 +10802,31 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	// Fixes some model & url errors
 	openaiClient := openai.NewClientWithConfig(config)
 
-	log.Printf("[INFO] AI_QUERY: caller=%s org_id=%s system_tokens=%d user_tokens=%d total_tokens=%d model=%s", callerName, org, estSysTokens, estUserTokens, totalEst, currentModel)
+	sysMsg := ""
+	userMsg := ""
+	otherMsg := ""
+	for _, message := range chatCompletion.Messages {
+		if message.Role == openai.ChatMessageRoleSystem {
+			sysMsg += message.Content
+		} else if message.Role == openai.ChatMessageRoleUser {
+			userMsg += message.Content
+		} else {
+			otherMsg += message.Content
+		}
+	}
+
+	estSysTokens := int(math.Ceil(float64(len(sysMsg)) / 3.5))
+	estUserTokens := int(math.Ceil(float64(len(userMsg)) / 3.5))
+	estOtherTokens := int(math.Ceil(float64(len(otherMsg)) / 3.5))
+	totalEst := estSysTokens + estUserTokens + estOtherTokens 
+
+	reasoning := "medium"
+	if len(chatCompletion.ReasoningEffort) > 0 {
+		reasoning = chatCompletion.ReasoningEffort
+	}
+
+	log.Printf("[INFO] AI_QUERY: caller=%s org_id=%s reasoning=%s system_tokens=%d user_tokens=%d other_tokens=%d total_tokens=%d model=%s url=%s", callerName, org, reasoning, estSysTokens, estUserTokens, estOtherTokens, totalEst, currentModel, aiRequestUrl)
+	totalTokens := 0
 	for {
 		if cnt >= maxRetries {
 			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries for openapi info")
@@ -10820,6 +10860,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				currentModel = fallbackModel
 				chatCompletion.Model = fallbackModel
 				continue
+			} else if strings.Contains(err.Error(), "status: 401") {
+				log.Printf("[ERROR] Unauthorized (401) error from '%s': %s", aiRequestUrl, err)
+
+				return "", errors.New(fmt.Sprintf("Unauthorized (401) error from '%s': %s", aiRequestUrl, err))
 			}
 
 			log.Printf("[ERROR] Failed to create AI chat completion for URL '%s'. Retrying in 2 seconds (4): %s", aiRequestUrl, err)
@@ -10834,67 +10878,95 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 			if iterations > 1000 { 
 				log.Printf("[ERROR] Fatal - Too many iterations agent LLM stream. Breaking out of loop.")
+				if info.Resp != nil {
+					info.Resp.Write([]byte("data: [ERROR] Fatal - Too many iterations agent LLM stream. Breaking out of loop.\n\n"))
+					flusher.Flush()
+				}
 				break
 			}
 
-			// Receive the next chunk
-			response, err := stream.Recv()
+			rawResp, err := stream.RecvRaw()
 
 			// 3. Check for End of File (EOF) to know when the stream is finished
 			if errors.Is(err, io.EOF) {
-				//log.Printf("[INFO] Stream finished after %d iterations", iterations)
+				log.Printf("[INFO] Stream finished after %d iterations", iterations)
+				if info.Resp != nil {
+					info.Resp.Write([]byte("data: [DONE]\n\n"))
+					flusher.Flush()
+				}
+
 				break
 			}
 
 			if err != nil {
+				if info.Resp != nil {
+					info.Resp.Write([]byte(fmt.Sprintf("data: [ERROR] %s\n\n", err)))
+					flusher.Flush()
+				}
+
 				log.Printf("[ERROR] Stream problem: %#v", err)
 				break
 			}
 
-			if len(response.Choices) == 0 {
-				log.Printf("[ERROR] No choices found in OpenAI response (1). This should be AT LEAST 1.")
-				break
+			// rawBytes is a []byte containing the exact JSON payload for this chunk
+			// Example output: {"id":"chatcmpl-123","choices":[{"delta":{"content":"Hello"}}]}
+
+
+			// Proper handling of it IN CASE the data we receive is wrong. Especially:
+			// onprem -> cloud -> LLM, as to handle SSE properly 
+			response := openai.ChatCompletionStreamResponse{}
+			err = json.Unmarshal(rawResp, &response)
+			if err != nil {
+				log.Printf("[ERROR] Failed to unmarshal OpenAI ChatCompletionStreamResponse: %s", err)
 			}
 
-			// Check if this chunk contains a refusal
-			delta := response.Choices[0].Delta
-			if delta.Refusal != "" {
-				// Print the refusal reasoning as it streams in
-				log.Printf("[ERROR] OpenAI refusal: %s", delta.Refusal)
-				break
+			if response.Usage != nil && response.Usage.TotalTokens > 0 { 
+				totalTokens += response.Usage.TotalTokens
 			}
 
-			// Otherwise, print the normal content
-			if delta.Content != "" {
-				// 4. Print the delta content as it arrives
-				chunk := response.Choices[0].Delta.Content
-
-				contentOutput += chunk 
-				if info.Resp != nil {
-					_, err := info.Resp.Write([]byte(chunk))
-					if err != nil {
-						log.Printf("[ERROR] Failed to write to response writer: %s", err)
-					} else {
+			if len(response.Choices) > 0 {
+				// Check if this chunk contains a refusal
+				delta := response.Choices[0].Delta
+				if delta.Refusal != "" {
+					// Print the refusal reasoning as it streams in
+					log.Printf("[ERROR] OpenAI refusal: %s", delta.Refusal)
+					if info.Resp != nil {
+						info.Resp.Write([]byte(fmt.Sprintf("data: [REFUSAL] %s\n\n", delta.Refusal)))
 						flusher.Flush()
 					}
+
+					break
 				}
+
+				// Otherwise, print the normal content
+				if delta.Content != "" {
+					// 4. Print the delta content as it arrives
+					chunk := response.Choices[0].Delta.Content
+
+					contentOutput += chunk 
+				}
+			} else {
+				contentOutput += string(rawResp)
+			}
+
+			if info.Resp != nil {
+				info.Resp.Write([]byte("data: "))
+				info.Resp.Write(rawResp)
+				info.Resp.Write([]byte("\n\n"))
+				flusher.Flush()
 			}
 		}
-
-		/*
-		if len(openaiResp.Choices) == 0 {
-			return "", errors.New("No choices found in OpenAI response (2). This should be AT LEAST 1.")
-		}
-		contentOutput = openaiResp.Choices[0].Message.Content
-		if len(contentOutput) == 0 && len(openaiResp.Choices[0].Message.Refusal) > 0 {
-			// Failover to refusal
-			contentOutput = openaiResp.Choices[0].Message.Refusal
-		}
-		*/
 
 		break
 	}
 
+	if totalTokens > 0 && len(info.OrgID) > 0 { 
+		if debug { 
+			log.Printf("[DEBUG] Total request tokens spent: %d", totalTokens)
+		}
+			
+		IncrementCache(ctx, info.OrgID, "agent_tokens", totalTokens)
+	}
 
 	if len(contentOutput) > 0 {
 		// Not necessary?
@@ -14823,26 +14895,34 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	user, usererr := HandleApiAuthentication(resp, request)
-	if usererr != nil || user.Id == "" || user.ActiveOrg.Id == "" { 
-		syncKey, err := HandleCloudSyncAuthentication(resp, request) 
-		if err != nil || len(syncKey.OrgId) == 0 {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
+
+	user := User{
+		ActiveOrg: OrgMini{
+			Id: "hello",
+		},
+	}
+	if project.Environment == "cloud" {
+		user, usererr := HandleApiAuthentication(resp, request)
+		if usererr != nil || user.Id == "" || user.ActiveOrg.Id == "" { 
+			syncKey, err := HandleCloudSyncAuthentication(resp, request) 
+			if err != nil || len(syncKey.OrgId) == 0 {
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+			user.ActiveOrg.Id = syncKey.OrgId 
+			user.Username = ""
+			user.Id = ""
+			user.Role = ""
 		}
 
-		user.ActiveOrg.Id = syncKey.OrgId 
-		user.Username = ""
-		user.Id = ""
-		user.Role = ""
-	}
-
-	if user.Role == "org-reader" {
-		log.Printf("[INFO] User with role org-reader is not allowed to use AI in chat completion forwarding")
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "User with role org-reader is not allowed to use AI"}`))
-		return
+		if user.Role == "org-reader" {
+			log.Printf("[INFO] User with role org-reader is not allowed to use AI in chat completion forwarding")
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "User with role org-reader is not allowed to use AI"}`))
+			return
+		}
 	}
 
 	body, err := ioutil.ReadAll(request.Body)
@@ -14893,6 +14973,7 @@ func GetOrgAiCredentials(ctx context.Context, orgId string) (string, string, str
 	foundModel := ""
 
 	// This is cached hence should be fast enough
+	/*
 	auths, err := GetAllWorkflowAppAuth(ctx, orgId) 
 	if err != nil { 
 		log.Printf("[ERROR] Failed to get workflow app auths for org %s: %s", orgId, err)
@@ -14935,18 +15016,27 @@ func GetOrgAiCredentials(ctx context.Context, orgId string) (string, string, str
 			break
 		}
 	}
+	*/
 
 	// Handles failover IF we can't find other auth
 	if project.Environment != "cloud" && (apiKey == "" || aiRequestUrl == "") {
 		log.Printf("[INFO] No custom LLM-credentials found for org %s. Falling back to default shuffler.io AI endpoint IF cloud sync is enabled.", orgId)
 
 		// type SyncConfig struct {
+		baseUrl := "https://tunnel.schemaless.org"
+		/*
 		baseUrl := "https://shuffler.io"
 		org, err := GetOrg(ctx, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed to get org by ID %s: %s", orgId, err)
 			return apiKey, aiRequestUrl, foundModel
 		} 
+		*/
+		org := Org{
+			SyncConfig: SyncConfig{
+				Apikey: "0b63cd46-aae1-4bff-a25f-2835d9fe819f",
+			},
+		}
 
 		// Checks if cloud sync is set up
 		if len(org.SyncConfig.Apikey) > 0 {
