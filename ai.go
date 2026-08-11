@@ -14940,8 +14940,8 @@ func GetOrgAiCredentials(ctx context.Context, orgId string) (string, string, str
 	if project.Environment != "cloud" && (apiKey == "" || aiRequestUrl == "") {
 		log.Printf("[INFO] No custom LLM-credentials found for org %s. Falling back to default shuffler.io AI endpoint IF cloud sync is enabled.", orgId)
 
-		aiRequestUrl = "https://shuffler.io/api/v1"
-
+		// type SyncConfig struct {
+		baseUrl := "https://shuffler.io"
 		org, err := GetOrg(ctx, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed to get org by ID %s: %s", orgId, err)
@@ -14954,6 +14954,13 @@ func GetOrgAiCredentials(ctx context.Context, orgId string) (string, string, str
 		} else {
 			return "", "", ""
 		}
+
+		// In case it's stored from cloudsync
+		if strings.Contains(org.SyncConfig.URL, "shuffler.io") && strings.HasPrefix(org.SyncConfig.URL, "https://") {
+			baseUrl = org.SyncConfig.URL
+		}
+			
+		aiRequestUrl = fmt.Sprintf("%s/api/v1", baseUrl)
 	}
 
 	// To avoid recursion of self-requesting backing to the same endpoint
@@ -14973,9 +14980,7 @@ func ValidateURLandModel(aiRequestUrl string, currentModel string) (string, stri
 
 	// Just handling misconfigs of the most common ones
 	if strings.Contains(aiRequestUrl, "shuffler.io") {
-		aiRequestUrl = "https://shuffler.io/api/v1"
-
-		// Fails over to whatever cloud uses
+		//aiRequestUrl = "https://shuffler.io/api/v1"
 		currentModel = ""
 	} else if strings.Contains(aiRequestUrl, "api.openai.com") {
 		aiRequestUrl = "https://api.openai.com/v1"

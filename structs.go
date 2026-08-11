@@ -1,11 +1,11 @@
 package shuffle
 
 import (
+	"encoding/json"
+	"encoding/xml"
+	"net/http"
 	"sync"
 	"time"
-	"net/http"
-	"encoding/xml"
-	"encoding/json"
 
 	"github.com/shuffle/opensearch-go/v4/opensearchapi"
 )
@@ -1337,6 +1337,7 @@ type CacheKeyData struct {
 }
 
 type SyncConfig struct {
+	URL      string `json:"url" datastore:"url"`
 	Interval int64  `json:"interval" datastore:"interval"`
 	Apikey   string `json:"api_key" datastore:"api_key"`
 	Source   string `json:"source" datastore:"source"`
