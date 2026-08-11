@@ -10586,6 +10586,14 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		orgId = os.Getenv("OPENAI_API_ORG")
 	}
 
+	if len(apiKey) == 0 && project.Environment == "cloud" { 
+		foundModel := ""
+		apiKey, aiRequestUrl, foundModel = GetGeminiCredentials(ctx) 
+		if len(model) == 0 || !strings.HasPrefix(model, "google/") {
+			model = foundModel
+		}
+	}
+
 	if len(apiKey) == 0 {
 		return "", errors.New("No AI_API_KEY supplied")
 	}
@@ -10729,16 +10737,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 	}
 
-	/*
 	if debug { 
-		marshalledPayload, err := json.Marshal(chatCompletion)
-		if err != nil { 
-			log.Printf("[ERROR] Failed to marshal chatCompletion for debug: %s", err)
-		}
-		log.Printf("PAYLOAD: %s", string(marshalledPayload))
-		os.Exit(3)
+		log.Printf("[DEBUG] URL: %s, APIKEY: %s, MODEL: %s", aiRequestUrl, apiKey, model)
 	}
-	*/
+
 
 	maxRetries := 3
 	sleepTimer := time.Duration(2)
@@ -10767,6 +10769,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				log.Printf("[ERROR] Invalid JSON payload received: %s", err) 
 				break
 			} else if strings.Contains(err.Error(), "does not exist") {
+				log.Printf("[ERROR] Model '%s' does not exist. Attempting to fallback to FALLBACK_AI_MODEL: %s", model, err)
 				if len(fallbackModel) == 0 {
 					return "", errors.New(fmt.Sprintf("Model '%s' does not exist and no FALLBACK_AI_MODEL set: %s", model, err))
 				}
