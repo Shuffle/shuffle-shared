@@ -9578,7 +9578,7 @@ data_filter:
 					subOrgId := execution.Workflow.OrgId
 					go func() {
 						time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
-						//IncrementCacheDump(ctx, billingOrgId, "agent_tokens", totalTokens)
+						IncrementCacheDump(ctx, billingOrgId, "agent_tokens", totalTokens)
 						if inputTokens > 0 {
 							IncrementCache(ctx, billingOrgId, "agent_input_tokens", inputTokens)
 						}
@@ -9590,7 +9590,7 @@ data_filter:
 						}
 
 						if billingOrgId != subOrgId {
-							//IncrementCache(ctx, subOrgId, "agent_tokens", totalTokens)
+							IncrementCache(ctx, subOrgId, "agent_tokens", totalTokens)
 							if inputTokens > 0 {
 								IncrementCache(ctx, subOrgId, "agent_input_tokens", inputTokens)
 							}
@@ -10966,7 +10966,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			log.Printf("[DEBUG] Total request tokens spent: %d", totalTokens)
 		}
 			
-		IncrementCache(ctx, info.OrgID, "agent_tokens", totalTokens)
+		//IncrementCache(ctx, info.OrgID, "agent_tokens", totalTokens)
 	}
 
 	if len(contentOutput) > 0 {
