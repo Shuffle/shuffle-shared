@@ -961,6 +961,32 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	parentOrgLocations := []Locations{}
+	parentEnvs, err := GetEnvironments(ctx, org.Id)
+	if err == nil {
+		for _, env := range parentEnvs {
+			if strings.ToLower(env.Name) == "cloud" {
+				continue
+			}
+			status := "active"
+			if env.Archived {
+				status = "disabled"
+			}
+			parentOrgLocations = append(parentOrgLocations, Locations{
+				OrgId:     org.Id,
+				OrgName:   org.Name,
+				Name:      env.Name,
+				Id:        env.Id,
+				CreatedAt: time.Unix(env.Created, 0).Format(time.RFC3339),
+				Status:    status,
+			})
+		}
+	}
+
+	if len(parentOrgLocations) > 0 {
+		info.Locations = append(parentOrgLocations, info.Locations...)
+	}
+
 	skipMultiRegion := false
 	if skipList, ok := request.URL.Query()["skip_multi_region"]; ok && len(skipList) > 0 && skipList[0] == "true" {
 		skipMultiRegion = true
