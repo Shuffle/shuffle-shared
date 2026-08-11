@@ -9572,22 +9572,6 @@ data_filter:
 						if cachedTokens > 0 {
 							IncrementCache(ctx, billingOrgId, "agent_cached_tokens", cachedTokens)
 						}
-
-						if billingOrgId != subOrgId {
-							IncrementCache(ctx, subOrgId, "agent_tokens", totalTokens)
-							if inputTokens > 0 {
-								IncrementCache(ctx, subOrgId, "agent_input_tokens", inputTokens)
-							}
-							if outputTokens > 0 {
-								IncrementCache(ctx, subOrgId, "agent_output_tokens", outputTokens)
-							}
-							if cachedTokens > 0 {
-								IncrementCache(ctx, subOrgId, "agent_cached_tokens", cachedTokens)
-							}
-						}
-						if cachedTokens > 0 {
-							IncrementCache(ctx, currentOrgId, "agent_cached_tokens", cachedTokens)
-						}
 					}()
 
 					if cachedTokens > 0 && debug {

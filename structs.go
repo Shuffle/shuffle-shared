@@ -5884,9 +5884,10 @@ type ActionSummary struct {
 
 // AppActionResponse - actions grouped by app
 type AppActionResponse struct {
-	AppName string          `json:"app_name"`
-	AppID   string          `json:"app_id"`
-	Actions []ActionSummary `json:"actions"`
+	AppName        string          `json:"app_name"`
+	AppDescription string          `json:"app_description"`
+	AppID          string          `json:"app_id"`
+	Actions        []ActionSummary `json:"actions"`
 }
 
 // WorkflowOperation represents a single modification operation
