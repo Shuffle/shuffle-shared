@@ -14445,6 +14445,19 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Reset limits to defaults (2000 app runs / 1 env / 3 tenants) for org %s (no license)", org.Id)
 		}
 
+
+		if newLeadinfo.EnterpriseLicenseCloud ||
+			newLeadinfo.EnterpriseLicenseOnprem ||
+			newLeadinfo.ShuffleEnterpriseLicenseOldCustomer ||
+			newLeadinfo.BusinessLicenseCloud ||
+			newLeadinfo.BusinessLicenseOnprem ||
+			newLeadinfo.ScaleLicenseOnpremCustomer ||
+			newLeadinfo.ScaleLicenseCloudCustomer ||
+			newLeadinfo.POV {
+			newLeadinfo.ScaleLicenseCloudTrial = false
+			org.LeadInfo.ScaleLicenseCloudTrial = false
+		}
+
 		// Update active subscription name to match the new license status
 		subName := ""
 		if newLeadinfo.EnterpriseLicenseCloud {
