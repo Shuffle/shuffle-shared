@@ -9026,7 +9026,7 @@ data_filter:
 	}
 
 	if project.Environment == "cloud" {
-		completionRequest.Store = true
+		//completionRequest.Store = true
 		completionRequest.MaxCompletionTokens = 5000
 	} else {
 		// For on-prem
@@ -10728,6 +10728,17 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 	}
 
+	/*
+	if debug { 
+		marshalledPayload, err := json.Marshal(chatCompletion)
+		if err != nil { 
+			log.Printf("[ERROR] Failed to marshal chatCompletion for debug: %s", err)
+		}
+		log.Printf("PAYLOAD: %s", string(marshalledPayload))
+		os.Exit(3)
+	}
+	*/
+
 	maxRetries := 3
 	sleepTimer := time.Duration(2)
 	contentOutput := ""
@@ -10751,6 +10762,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				chatCompletion.MaxTokens = 0
 				chatCompletion.MaxCompletionTokens = aiMaxTokens
 				continue
+			} else if strings.Contains(err.Error(), "Invalid JSON payload received") {
+				log.Printf("[ERROR] Invalid JSON payload received: %s", err) 
+				break
 			} else if strings.Contains(err.Error(), "does not exist") {
 				if len(fallbackModel) == 0 {
 					return "", errors.New(fmt.Sprintf("Model '%s' does not exist and no FALLBACK_AI_MODEL set: %s", model, err))
@@ -14031,7 +14045,7 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 				},
 			},
 		},
-		Store: oai.Bool(false),
+		//Store: oai.Bool(false),
 	}
 
 	resp, err := oaiClient.Responses.New(ctx, params, aioption.WithJSONSet("input", rawInput))
@@ -14254,7 +14268,7 @@ func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, inp
 				},
 			},
 		},
-		Store: oai.Bool(false),
+		//Store: oai.Bool(false),
 	}
 
 	stream := oaiClient.Responses.NewStreaming(ctx, params, aioption.WithJSONSet("input", rawInput))

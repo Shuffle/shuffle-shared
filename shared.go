@@ -25452,12 +25452,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					decisionId = decisionIds[0]
 
 					agentic = true
-					if len(workflow.Actions) == 1 {
+					if len(workflow.Actions) == 1 && len(oldExecution.Results) > 0  {
 						start = append(start, workflow.Actions[0].ID)
 						oldExecution.Results[0].Status = "WAITING"
 					} else {
-
-						log.Printf("QUERIES: %#v", request.URL.Query())
 
 						// Can loop for it
 						nodeIds, nodeIdsOk := request.URL.Query()["node_id"]

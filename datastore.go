@@ -1811,9 +1811,9 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(existed) == 0 {
-		log.Printf("[INFO] Successfully set key '%s' for org '%s' (%s). Category: %s", tmpData.Key, org.Name, tmpData.OrgId, tmpData.Category)
+		//log.Printf("[INFO] Successfully set key '%s' for org '%s' (%s). Category: %s", tmpData.Key, org.Name, tmpData.OrgId, tmpData.Category)
 	} else {
-		log.Printf("[INFO] Successfully set key '%s' for org '%s' (%s). New key: %#v. Category: %s", tmpData.Key, org.Name, tmpData.OrgId, !existed[0].Existed, tmpData.Category)
+		//log.Printf("[INFO] Successfully set key '%s' for org '%s' (%s). New key: %#v. Category: %s", tmpData.Key, org.Name, tmpData.OrgId, !existed[0].Existed, tmpData.Category)
 	}
 
 	type returnStruct struct {
