@@ -2932,12 +2932,12 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if project.Environment == "cloud" {
-		//foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
-		//if err != nil {
-		//	resp.WriteHeader(401)
-		//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
-		//	return
-		//}
+		foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
+			return
+		}
 
 		// FIXME: Removed need for syncfeatures to be enabled
 		// September 2022
@@ -2948,6 +2948,28 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Adding multiple environments requires an active hybrid, enterprise or MSSP subscription"}`)))
 		//	return
 		//}
+
+		if len(foundOrg.CreatorOrg) > 0 {
+			foundOrg, err = GetOrg(ctx, foundOrg.CreatorOrg)
+			if err != nil {
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
+				return
+			}
+		}
+
+		envs, err := GetEnvironments(ctx, foundOrg.Id)
+		if err != nil {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environments of organization"}`)))
+			return
+		}
+
+		if int64(len(envs)) > foundOrg.SyncFeatures.MultiEnv.Limit {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have reached the limit of %d environments for your subscription. Upgrade to an enterprise plan or contact support@shuffler.io for more info."}`, foundOrg.SyncFeatures.MultiEnv.Limit)))
+			return
+		}
 	}
 
 	if project.Environment == "onprem" {
