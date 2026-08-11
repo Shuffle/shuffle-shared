@@ -9631,7 +9631,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 			} else {
 
 				if len(executions) > 1 {
-					log.Printf("[INFO] Rate limiting (3): Org %s exceeded the 25K app run quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalAppExecutions)
+					log.Printf("[INFO] Rate limiting (3): Org %s exceeded the %v app run montly quota (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, limit, len(executions), totalAppExecutions)
 					executions = executions[0:1]
 				}
 

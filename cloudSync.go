@@ -932,18 +932,16 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
 	}
 
-	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == true && validationOrg.LeadInfo.Customer {
 		now := time.Now().Unix()
 		isExpiredAnnualPlan := false
-		var planStartDate int64
+	planStartDate := int64(0)
 
 		for _, sub := range validationOrg.Subscriptions {
 			if sub.Active {
 				subName := strings.ToLower(sub.Name)
-				if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") || strings.Contains(subName, "scale") {
+			if (strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") || strings.Contains(subName, "scale")) && !strings.Contains(subName, "trial") {
 					planStartDate = sub.Startdate
-
-					if sub.Enddate > 0 && sub.Enddate < now {
+				if sub.Active && sub.Enddate > 0 && sub.Enddate < now {
 						isExpiredAnnualPlan = true
 					}
 					break
@@ -971,9 +969,12 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 			if len(orgAdmin.ApiKey) > 0 {
 				log.Printf("[AUDIT] Sending license expired request with user %s for org %s", orgAdmin.Username, validationOrg.Id)
 				go SendLicenseExpiredRequest(validationOrg.Id, orgAdmin.ApiKey)
+		}
 			}
 
-		} else if planStartDate > 0 {
+	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == true && validationOrg.LeadInfo.Customer {
+
+		if planStartDate > 0 {
 			var annualAppRuns int64
 			for _, stat := range validationOrgStats.DailyStatistics {
 				if stat.Date.Unix() >= planStartDate {
@@ -998,12 +999,15 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	}
 
 	// Allows partners and POV users to run workflows without limits
-	if validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.ChannelPartner || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.ServicePartner {
+	if validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.ChannelPartner || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.ServicePartner {
 		return validationOrg, nil
 	}
 
-	// If enterprise customer or pov then don't block them
-	if (validationOrg.LeadInfo.Customer || validationOrg.LeadInfo.POV) && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+	if validationOrg.LeadInfo.Customer && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+		extendedLimit := validationOrg.SyncFeatures.AppExecutions.Limit * 10
+		if totalAppExecutions >= extendedLimit {
+			return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, extendedLimit))
+		}
 		return validationOrg, nil
 	}
 
