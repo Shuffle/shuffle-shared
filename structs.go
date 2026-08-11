@@ -1,10 +1,11 @@
 package shuffle
 
 import (
-	"encoding/json"
-	"encoding/xml"
 	"sync"
 	"time"
+	"net/http"
+	"encoding/xml"
+	"encoding/json"
 
 	"github.com/shuffle/opensearch-go/v4/opensearchapi"
 )
@@ -5752,6 +5753,8 @@ type VulnerabilityQuery struct {
 type AiCallInfo struct {
 	Caller string
 	OrgID  string
+
+	Resp http.ResponseWriter
 }
 
 type ScreenshotWrapper struct {

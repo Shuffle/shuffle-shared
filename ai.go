@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 	"math"
+	"io"
 	openai "github.com/sashabaranov/go-openai"
 	uuid "github.com/satori/go.uuid"
 	"google.golang.org/api/customsearch/v1"
@@ -10737,12 +10738,32 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 	}
 
+	// Fallback
+	if chatCompletion.Model == "" { 
+		chatCompletion.Model = model
+	}
+
+	flusher := http.Flusher(nil)
+	if info.Resp != nil {
+		info.Resp.Header().Set("Content-Type", "text/event-stream")
+		info.Resp.Header().Set("Cache-Control", "no-cache")
+		info.Resp.Header().Set("Connection", "keep-alive")
+
+		// 2. Type-assert the ResponseWriter to an http.Flusher
+		var ok bool
+		flusher, ok = info.Resp.(http.Flusher)
+		if !ok {
+			http.Error(info.Resp, "Streaming unsupported!", http.StatusInternalServerError)
+			return "", errors.New("Streaming unsupported!")
+		}
+	}
+
 	if debug { 
 		log.Printf("[DEBUG] URL: %s, APIKEY: %s, MODEL: %s", aiRequestUrl, apiKey, model)
 	}
 
-
 	maxRetries := 3
+	chatCompletion.Stream = true
 	sleepTimer := time.Duration(2)
 	contentOutput := ""
 	log.Printf("[INFO] AI_QUERY: caller=%s org_id=%s system_tokens=%d user_tokens=%d total_tokens=%d model=%s", callerName, org, estSysTokens, estUserTokens, totalEst, model)
@@ -10753,7 +10774,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			return "", errors.New("Failed to match JSON in runActionAI after 5 tries for openapi info")
 		}
 
-		openaiResp, err := openaiClient.CreateChatCompletion(
+		stream, err := openaiClient.CreateChatCompletionStream(
 			context.Background(),
 			chatCompletion,
 		)
@@ -10785,20 +10806,81 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			continue
 		}
 
+		// 2. Iterate over the stream
+		iterations := 0
+		contentOutput = ""
+		for {
+			iterations += 1
+
+			if iterations > 1000 { 
+				log.Printf("[ERROR] Fatal - Too many iterations agent LLM stream. Breaking out of loop.")
+				break
+			}
+
+			// Receive the next chunk
+			response, err := stream.Recv()
+
+			// 3. Check for End of File (EOF) to know when the stream is finished
+			if errors.Is(err, io.EOF) {
+				//log.Printf("[INFO] Stream finished after %d iterations", iterations)
+				break
+			}
+
+			if err != nil {
+				log.Printf("[ERROR] Stream problem: %#v", err)
+				break
+			}
+
+			if len(response.Choices) == 0 {
+				log.Printf("[ERROR] No choices found in OpenAI response (1). This should be AT LEAST 1.")
+				break
+			}
+
+			// Check if this chunk contains a refusal
+			delta := response.Choices[0].Delta
+			if delta.Refusal != "" {
+				// Print the refusal reasoning as it streams in
+				log.Printf("[ERROR] OpenAI refusal: %s", delta.Refusal)
+				break
+			}
+
+			// Otherwise, print the normal content
+			if delta.Content != "" {
+				// 4. Print the delta content as it arrives
+				chunk := response.Choices[0].Delta.Content
+
+				contentOutput += chunk 
+				if info.Resp != nil {
+					_, err := info.Resp.Write([]byte(chunk))
+					if err != nil {
+						log.Printf("[ERROR] Failed to write to response writer: %s", err)
+					} else {
+						flusher.Flush()
+					}
+				}
+			}
+		}
+
+		/*
 		if len(openaiResp.Choices) == 0 {
 			return "", errors.New("No choices found in OpenAI response (2). This should be AT LEAST 1.")
 		}
-
 		contentOutput = openaiResp.Choices[0].Message.Content
 		if len(contentOutput) == 0 && len(openaiResp.Choices[0].Message.Refusal) > 0 {
 			// Failover to refusal
 			contentOutput = openaiResp.Choices[0].Message.Refusal
 		}
+		*/
 
 		break
 	}
 
+
 	if len(contentOutput) > 0 {
+		if info.Resp != nil {
+			info.Resp.WriteHeader(http.StatusOK)
+		}
+
 		chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleAssistant,
 			Content: contentOutput,
@@ -14711,3 +14793,74 @@ func balanceJSONLikeString(s string) string {
 	return string(result)
 }
 */
+
+// Wrapper for RunAiQuery() using Shuffle Credentials
+func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, usererr := HandleApiAuthentication(resp, request)
+	if usererr != nil || user.Id == "" || user.ActiveOrg.Id == "" { 
+		syncKey, err := HandleCloudSyncAuthentication(resp, request) 
+		if err != nil || len(syncKey.OrgId) == 0 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		user.ActiveOrg.Id = syncKey.OrgId 
+		user.Username = ""
+		user.Id = ""
+		user.Role = ""
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[INFO] User with role org-reader is not allowed to use AI in chat completion forwarding")
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "User with role org-reader is not allowed to use AI"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read request body in chat completion forwarding: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"messages": [{ "role": "system", "content": "You are a helpful assistant." },{ "role": "user", "content": "Write a haiku about rain." }]}`))
+		return
+	}
+
+	var chatCompletion openai.ChatCompletionRequest
+	err = json.Unmarshal(body, &chatCompletion)
+	if err != nil {
+		log.Printf("[ERROR] Failed to parse request body in chat completion forwarding: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"messages": [{ "role": "system", "content": "You are a helpful assistant." },{ "role": "user", "content": "Write a haiku about rain." }]}`))
+		return
+	}
+
+	callInfo := AiCallInfo{
+		Caller: "RequestForwarding", 
+		OrgID: user.ActiveOrg.Id,
+	}
+
+	if chatCompletion.Stream == true { 
+		callInfo.Resp = resp
+	}
+
+	contentOutput, err := RunAiQuery(ctx, callInfo, "", "", chatCompletion)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in chat completion forwarding: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to run AI query"}`))
+		return
+	}
+
+	if !chatCompletion.Stream { 
+		// Already wrote through callInfo.Resp
+		resp.WriteHeader(200)
+		resp.Write([]byte(contentOutput))
+	}
+}
