@@ -94,46 +94,6 @@ func GetProject() ShuffleStorage {
 	return project
 }
 
-var compressWrapper func(http.Handler) http.HandlerFunc
-func init() { 
-	var err error
-	compressWrapper, err = gzhttp.NewWrapper(
-		gzhttp.MinSize(1400),
-		gzhttp.CompressionLevel(3),
-		gzhttp.ExceptContentTypes([]string{
-			"image/jpeg", "image/png", "image/gif", "image/webp",
-			"application/zip", "application/x-gzip", "application/pdf",
-		}),
-	)
-
-	// This should NEVER fail
-	if err != nil {
-		panic(fmt.Sprintf("[ERROR] Failed to initialize gzip middleware: %v", err))
-	}
-}
-
-func Compress(next http.HandlerFunc) http.HandlerFunc {
-	return compressWrapper(next).ServeHTTP
-}
-
-// Injects the header in all requests
-func RequestMiddleware(next http.Handler) http.Handler {
-	// NON-compressed responses
-	//return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	//	w.Header().Set("Content-Type", "application/json")
-
-	//	next.ServeHTTP(w, r)
-	//})
-
-	// Default compression on ALL. Can be done AFTER extensive testing
-	compressedNext := compressWrapper(next)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		compressedNext.ServeHTTP(w, r)
-	})
-
-}
 
 // In case we need custom context control in the future
 // This is used ~everywhere, and used to exist due to GCP AppEngine's custom
@@ -38604,4 +38564,50 @@ func canReach(wf *Workflow, from, to string) bool {
 	}
 
 	return false
+}
+
+// Injects the header in all requests
+func RequestMiddleware(next http.Handler) http.Handler {
+	// NON-compressed responses
+	//return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	//	w.Header().Set("Content-Type", "application/json")
+
+	//	next.ServeHTTP(w, r)
+	//})
+
+	// Default compression on ALL. Can be done AFTER extensive testing
+	compressedNext := compressWrapper(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/chat/completions" || r.Header.Get("Accept") == "text/event-stream" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		compressedNext.ServeHTTP(w, r)
+	})
+
+}
+
+var compressWrapper func(http.Handler) http.HandlerFunc
+func init() { 
+	var err error
+	compressWrapper, err = gzhttp.NewWrapper(
+		gzhttp.MinSize(1400),
+		gzhttp.CompressionLevel(3),
+		gzhttp.ExceptContentTypes([]string{
+			"image/jpeg", "image/png", "image/gif", "image/webp",
+			"application/zip", "application/x-gzip", "application/pdf",
+		}),
+	)
+
+	// This should NEVER fail
+	if err != nil {
+		panic(fmt.Sprintf("[ERROR] Failed to initialize gzip middleware: %v", err))
+	}
+}
+
+func Compress(next http.HandlerFunc) http.HandlerFunc {
+	return compressWrapper(next).ServeHTTP
 }

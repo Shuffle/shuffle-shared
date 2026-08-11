@@ -45,7 +45,8 @@ import (
 var standalone bool
 
 // var model = "gpt-5-mini"
-var model = "gpt-5-mini"
+//var model = "gpt-5-mini"
+var model = "google/gemini-3.6-flash"
 //var model = "gpt-5.4-nano"
 //var model = "gpt-5.2-codex"
 
@@ -10554,6 +10555,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 // more versatile in general, and able to run from Onprem -> Local model
 func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
 
+	currentModel := model
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -10590,8 +10592,17 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	if len(apiKey) == 0 && project.Environment == "cloud" { 
 		foundModel := ""
 		apiKey, aiRequestUrl, foundModel = GetGeminiCredentials(ctx) 
-		if len(model) == 0 || !strings.HasPrefix(model, "google/") {
-			model = foundModel
+		if len(currentModel) == 0 || !strings.HasPrefix(currentModel, "google/") {
+			currentModel = foundModel
+		}
+	}
+
+	if len(info.OrgID) > 0 { 
+		// Look up custom auth to use instead
+		foundModel := ""
+		apiKey, aiRequestUrl, foundModel = GetOrgAiCredentials(ctx, info.OrgID)
+		if len(foundModel) > 0 { 
+			currentModel = foundModel
 		}
 	}
 
@@ -10644,7 +10655,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	//}
 
 	chatCompletion := openai.ChatCompletionRequest{
-		Model:     model,
+		Model:     currentModel,
 		Messages:  []openai.ChatCompletionMessage{},
 		MaxTokens: aiMaxTokens,
 
@@ -10666,7 +10677,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	// FIXME: Too specific. Should be self-corrective.. :)
-	if chatCompletion.MaxTokens > 0 && (model == "o4-mini" || model == "gpt-5-mini" || model == "gpt-5-nano") {
+	if chatCompletion.MaxTokens > 0 && (currentModel == "o4-mini" || currentModel == "gpt-5-mini" || currentModel == "gpt-5-nano") {
 		chatCompletion.MaxCompletionTokens = chatCompletion.MaxTokens
 		chatCompletion.MaxTokens = 0
 	}
@@ -10740,8 +10751,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	// Fallback
 	if chatCompletion.Model == "" { 
-		chatCompletion.Model = model
+		chatCompletion.Model = currentModel 
 	}
+
 
 	flusher := http.Flusher(nil)
 	if info.Resp != nil {
@@ -10758,15 +10770,17 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 	}
 
-	if debug { 
-		log.Printf("[DEBUG] URL: %s, APIKEY: %s, MODEL: %s", aiRequestUrl, apiKey, model)
-	}
+	// Fixes some model & url errors
+	aiRequestUrl, currentModel = ValidateURLandModel(aiRequestUrl, currentModel)
 
 	maxRetries := 3
+	contentOutput := ""
+
+	// Forcing stream, as there really is no downside to it.
+	// Also allows us to realtime stream with *.shuffler.io/api/v1/chat/completions
 	chatCompletion.Stream = true
 	sleepTimer := time.Duration(2)
-	contentOutput := ""
-	log.Printf("[INFO] AI_QUERY: caller=%s org_id=%s system_tokens=%d user_tokens=%d total_tokens=%d model=%s", callerName, org, estSysTokens, estUserTokens, totalEst, model)
+	log.Printf("[INFO] AI_QUERY: caller=%s org_id=%s system_tokens=%d user_tokens=%d total_tokens=%d model=%s", callerName, org, estSysTokens, estUserTokens, totalEst, currentModel)
 	for {
 		if cnt >= maxRetries {
 			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries for openapi info")
@@ -10787,28 +10801,26 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				chatCompletion.MaxCompletionTokens = aiMaxTokens
 				continue
 			} else if strings.Contains(err.Error(), "Invalid JSON payload received") {
-				log.Printf("[ERROR] Invalid JSON payload received: %s", err) 
+				log.Printf("[ERROR] Invalid JSON payload received from '%s': %s", aiRequestUrl, err) 
 				break
 			} else if strings.Contains(err.Error(), "does not exist") {
-				log.Printf("[ERROR] Model '%s' does not exist. Attempting to fallback to FALLBACK_AI_MODEL: %s", model, err)
+				log.Printf("[ERROR] Model '%s' does not exist. Attempting to fallback to FALLBACK_AI_MODEL: %s", currentModel, err)
 				if len(fallbackModel) == 0 {
-					return "", errors.New(fmt.Sprintf("Model '%s' does not exist and no FALLBACK_AI_MODEL set: %s", model, err))
+					return "", errors.New(fmt.Sprintf("Model '%s' does not exist and no FALLBACK_AI_MODEL set: %s", currentModel, err))
 				}
 
-				model = fallbackModel
+				currentModel = fallbackModel
 				chatCompletion.Model = fallbackModel
-				log.Printf("[DEBUG] Changed default model to %s", model)
 				continue
 			}
 
-			log.Printf("[ERROR] Failed to create AI chat completion. Retrying in 2 seconds (4): %s", err)
+			log.Printf("[ERROR] Failed to create AI chat completion for URL '%s'. Retrying in 2 seconds (4): %s", aiRequestUrl, err)
 			time.Sleep(sleepTimer * time.Second)
 			continue
 		}
 
 		// 2. Iterate over the stream
 		iterations := 0
-		contentOutput = ""
 		for {
 			iterations += 1
 
@@ -10877,9 +10889,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 
 	if len(contentOutput) > 0 {
-		if info.Resp != nil {
-			info.Resp.WriteHeader(http.StatusOK)
-		}
+		// Not necessary?
+		//if info.Resp != nil {
+		//	info.Resp.WriteHeader(http.StatusOK)
+		//}
 
 		chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleAssistant,
@@ -14854,7 +14867,7 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in chat completion forwarding: %s", err)
 		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to run AI query"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed to run AI query. This is most likely due to an invalid API key or model name. Please check your AI credentials on the https://shuffler.io/agents page."}`))
 		return
 	}
 
@@ -14863,4 +14876,135 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(200)
 		resp.Write([]byte(contentOutput))
 	}
+}
+
+//apiKey, aiRequestUrl, foundModel 
+func GetOrgAiCredentials(ctx context.Context, orgId string) (string, string, string) {
+	apiKey := ""
+	aiRequestUrl := ""
+	foundModel := ""
+
+	// This is cached hence should be fast enough
+	auths, err := GetAllWorkflowAppAuth(ctx, orgId) 
+	if err != nil { 
+		log.Printf("[ERROR] Failed to get workflow app auths for org %s: %s", orgId, err)
+		return apiKey, aiRequestUrl, foundModel
+	}
+
+	for _, auth := range auths {
+		if strings.ToLower(auth.App.Name) != "openai" { 
+			continue
+		}
+
+		for _, field := range auth.Fields {
+			// Check if the auth has a valid API key
+			if field.Key == "apikey" { 
+				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
+				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+				if err == nil { 
+					apiKey = string(decrypted)
+				}
+			}
+
+			if field.Key == "url" { 
+				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
+				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+				if err == nil { 
+					aiRequestUrl = string(decrypted)
+				}
+			}
+
+			if field.Key== "model" { 
+				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
+				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+				if err == nil { 
+					foundModel = string(decrypted)
+				}
+			}
+		}
+
+		if len(apiKey) > 0 && len(aiRequestUrl) > 0 {
+			break
+		}
+	}
+
+	// To avoid recursion of self-requesting backing to the same endpoint
+	if project.Environment == "cloud" && strings.Contains(aiRequestUrl, "shuffler.io") { 
+		return "", "", ""
+	}
+
+	return apiKey, aiRequestUrl, foundModel
+}
+
+// Simple validator for whether things are correct or not
+// Such as: default endpoint for openai etc
+func ValidateURLandModel(aiRequestUrl string, currentModel string) (string, string) {
+
+	// Just handling misconfigs of the most common ones
+	if strings.Contains(aiRequestUrl, "shuffler.io") {
+		aiRequestUrl = "https://shuffler.io/api/v1"
+
+		// Fails over to whatever cloud uses
+		currentModel = ""
+	} else if strings.Contains(aiRequestUrl, "api.openai.com") {
+		aiRequestUrl = "https://api.openai.com/v1"
+
+		if currentModel == "" { 
+			currentModel = "gpt-5.4-mini"
+		}
+	} else if strings.Contains(aiRequestUrl, "api.anthropic.com") {
+		aiRequestUrl = "https://api.anthropic.com/v1"
+
+		if currentModel == "" {
+			currentModel = "claude-haiku-4-5"
+		}
+	} else if strings.Contains(aiRequestUrl, "googleapis.com") {
+		if currentModel == "" {
+			currentModel = "gemini-3.6-flash"
+		}
+	} else if strings.Contains(aiRequestUrl, "api.mistral.ai") {
+		aiRequestUrl = "https://api.mistral.ai/v1"
+
+		if currentModel == "" {
+			currentModel = "mistral-small-2603"
+		}
+	} else if strings.Contains(aiRequestUrl, "api.groq.com") {
+		aiRequestUrl = "https://api.groq.com/v1"
+
+		// This one is weird. Not their own model primarily
+		if currentModel == "" {
+			currentModel = "groq/compound-mini"
+		}
+	} else if strings.Contains(aiRequestUrl, "api.deepseek.com") {
+		aiRequestUrl = "https://api.deepseek.com"
+
+		if currentModel == "" {
+			currentModel = "deepseek-v4-flash"
+		}
+	} else if strings.Contains(aiRequestUrl, "aliyuncs.com") {
+		aiRequestUrl = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+
+		if currentModel == "" {
+			currentModel = "qwen3.6-flash"
+		}
+	} else if strings.Contains(aiRequestUrl, "moonshot.ai") {
+		aiRequestUrl = "https://api.moonshot.ai/v1"
+
+		if currentModel == "" {
+			currentModel = "kimi-k3"
+		}
+	} else if strings.Contains(aiRequestUrl, "z.ai") {
+		aiRequestUrl = "https://api.z.ai/api/paas/v4"
+
+		if currentModel == "" {
+			currentModel = "glm-4.7-flash"
+		}
+	}
+
+	// Added in the RunAiQuery() request
+	if strings.HasSuffix(aiRequestUrl, "/chat/completions") {
+		aiRequestUrl = strings.TrimSuffix(aiRequestUrl, "/chat/completions")
+	}
+
+	return aiRequestUrl, currentModel
 }
