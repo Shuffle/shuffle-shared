@@ -1484,6 +1484,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return org.Subscriptions[i].Active && !org.Subscriptions[j].Active
 	})
 
+	org.CloudSync = org.CloudSyncActive
+
 	newjson, err := json.Marshal(org)
 	if err != nil {
 		log.Printf("[ERROR] Failed unmarshal of org %s (%s): %s", org.Name, org.Id, err)
