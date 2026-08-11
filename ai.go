@@ -10607,7 +10607,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	if len(apiKey) == 0 {
-		return "", errors.New("No AI_API_KEY supplied")
+		return "", errors.New("No AI_API_KEY supplied AND no organization-specific key found. Please create AI app authentication")
 	}
 
 	//if len(aiRequestUrl) == 0 {
@@ -10635,15 +10635,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 	}
 
-	if len(orgId) > 0 {
-		config.OrgID = orgId
-	}
 
-	if len(aiApiVersion) > 0 {
-		config.APIVersion = aiApiVersion
-	}
-
-	openaiClient := openai.NewClientWithConfig(config)
 	if len(systemMessage) > maxCharacters {
 		systemMessage = systemMessage[:maxCharacters]
 	}
@@ -10652,7 +10644,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		log.Printf("[WARNING] User message too long. Cutting off from %d to %d characters", len(userMessage), maxCharacters)
 		userMessage = userMessage[:maxCharacters]
 	}
-	//}
 
 	chatCompletion := openai.ChatCompletionRequest{
 		Model:     currentModel,
@@ -10749,11 +10740,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 	}
 
-	// Fallback
-	if chatCompletion.Model == "" { 
-		chatCompletion.Model = currentModel 
-	}
-
 
 	flusher := http.Flusher(nil)
 	if info.Resp != nil {
@@ -10770,8 +10756,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 	}
 
-	// Fixes some model & url errors
-	aiRequestUrl, currentModel = ValidateURLandModel(aiRequestUrl, currentModel)
 
 	maxRetries := 3
 	contentOutput := ""
@@ -10780,6 +10764,28 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	// Also allows us to realtime stream with *.shuffler.io/api/v1/chat/completions
 	chatCompletion.Stream = true
 	sleepTimer := time.Duration(2)
+
+	// Overwrites it all
+	aiRequestUrl, currentModel = ValidateURLandModel(aiRequestUrl, currentModel)
+	if chatCompletion.Model == "" { 
+		chatCompletion.Model = currentModel 
+	}
+
+	if len(aiRequestUrl) > 0 {
+		config.BaseURL = aiRequestUrl
+	}
+
+	if len(orgId) > 0 {
+		config.OrgID = orgId
+	}
+
+	if len(aiApiVersion) > 0 {
+		config.APIVersion = aiApiVersion
+	}
+
+	// Fixes some model & url errors
+	openaiClient := openai.NewClientWithConfig(config)
+
 	log.Printf("[INFO] AI_QUERY: caller=%s org_id=%s system_tokens=%d user_tokens=%d total_tokens=%d model=%s", callerName, org, estSysTokens, estUserTokens, totalEst, currentModel)
 	for {
 		if cnt >= maxRetries {
@@ -10800,9 +10806,11 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				chatCompletion.MaxTokens = 0
 				chatCompletion.MaxCompletionTokens = aiMaxTokens
 				continue
+				
 			} else if strings.Contains(err.Error(), "Invalid JSON payload received") {
 				log.Printf("[ERROR] Invalid JSON payload received from '%s': %s", aiRequestUrl, err) 
 				break
+
 			} else if strings.Contains(err.Error(), "does not exist") {
 				log.Printf("[ERROR] Model '%s' does not exist. Attempting to fallback to FALLBACK_AI_MODEL: %s", currentModel, err)
 				if len(fallbackModel) == 0 {
@@ -14928,6 +14936,26 @@ func GetOrgAiCredentials(ctx context.Context, orgId string) (string, string, str
 		}
 	}
 
+	// Handles failover IF we can't find other auth
+	if project.Environment != "cloud" && (apiKey == "" || aiRequestUrl == "") {
+		log.Printf("[INFO] No custom LLM-credentials found for org %s. Falling back to default shuffler.io AI endpoint IF cloud sync is enabled.", orgId)
+
+		aiRequestUrl = "https://shuffler.io/api/v1"
+
+		org, err := GetOrg(ctx, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get org by ID %s: %s", orgId, err)
+			return apiKey, aiRequestUrl, foundModel
+		} 
+
+		// Checks if cloud sync is set up
+		if len(org.SyncConfig.Apikey) > 0 {
+			apiKey = org.SyncConfig.Apikey
+		} else {
+			return "", "", ""
+		}
+	}
+
 	// To avoid recursion of self-requesting backing to the same endpoint
 	if project.Environment == "cloud" && strings.Contains(aiRequestUrl, "shuffler.io") { 
 		return "", "", ""
@@ -14939,6 +14967,9 @@ func GetOrgAiCredentials(ctx context.Context, orgId string) (string, string, str
 // Simple validator for whether things are correct or not
 // Such as: default endpoint for openai etc
 func ValidateURLandModel(aiRequestUrl string, currentModel string) (string, string) {
+	if !strings.Contains(aiRequestUrl, "googleapis.com") && strings.Contains(currentModel, "gemini") {
+		currentModel = ""
+	}
 
 	// Just handling misconfigs of the most common ones
 	if strings.Contains(aiRequestUrl, "shuffler.io") {
@@ -14950,7 +14981,7 @@ func ValidateURLandModel(aiRequestUrl string, currentModel string) (string, stri
 		aiRequestUrl = "https://api.openai.com/v1"
 
 		if currentModel == "" { 
-			currentModel = "gpt-5.4-mini"
+			currentModel = "gpt-5.6-terra"
 		}
 	} else if strings.Contains(aiRequestUrl, "api.anthropic.com") {
 		aiRequestUrl = "https://api.anthropic.com/v1"
@@ -14999,11 +15030,6 @@ func ValidateURLandModel(aiRequestUrl string, currentModel string) (string, stri
 		if currentModel == "" {
 			currentModel = "glm-4.7-flash"
 		}
-	}
-
-	// Added in the RunAiQuery() request
-	if strings.HasSuffix(aiRequestUrl, "/chat/completions") {
-		aiRequestUrl = strings.TrimSuffix(aiRequestUrl, "/chat/completions")
 	}
 
 	return aiRequestUrl, currentModel
