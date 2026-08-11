@@ -8010,7 +8010,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 			marshalledAction, err := json.Marshal(repeaterNode)
 			if err != nil {
-				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed marshaling shuffle-tools request during LLM setup: %s", execution.ExecutionId, err)
+				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Failed marshaling shuffle-tools request during LLM setup: %s", execution.ExecutionId, execution.Workflow.OrgId, err)
 				//return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 			} else {
 				fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s&parent_node=%s", backendUrl, repeaterNode.AppID, execution.ExecutionId, execution.Authorization, startNode.ID)
@@ -8024,7 +8024,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				)
 
 				if err != nil {
-					log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed creating shuffle-tools request during LLM setup: %s", execution.ExecutionId, err)
+					log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Failed creating shuffle-tools request during LLM setup: %s", execution.ExecutionId, execution.Workflow.OrgId, err)
 					//return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
 				} else {
 
@@ -8032,17 +8032,17 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 					newresp, err := client.Do(req)
 					if err != nil {
-						log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed sending request during LLM setup: %s", execution.ExecutionId, err)
+						log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Failed sending request during LLM setup: %s", execution.ExecutionId, execution.Workflow.OrgId, err)
 					} else {
 						defer newresp.Body.Close()
 						body, err := ioutil.ReadAll(newresp.Body)
 						if err != nil {
-							log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed reading response during LLM setup: %s", execution.ExecutionId, err)
+							log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Failed reading response during LLM setup: %s", execution.ExecutionId, execution.Workflow.OrgId, err)
 						} else { 
 							// Check the results of the output
 							toolsResultMapping := SingleResult{}
 							if err := json.Unmarshal(body, &toolsResultMapping); err != nil {
-								log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed parsing response during LLM setup: %s", execution.ExecutionId, err)
+								log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Failed parsing response during LLM setup: %s", execution.ExecutionId, execution.Workflow.OrgId, err)
 							} else {
 								if len(toolsResultMapping.Result) > 0 {
 									mappedResult := map[string]string{}
@@ -8094,7 +8094,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 									} 
 
 									if unmarshalErr != nil {
-										log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed parsing final result during LLM setup: %s", execution.ExecutionId, unmarshalErr)
+										log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Failed parsing final result during LLM setup: %s", execution.ExecutionId, execution.Workflow.OrgId, unmarshalErr)
 									} 
 
 									for paramIndex, param := range startNode.Parameters {
@@ -9312,7 +9312,7 @@ data_filter:
 			)
 
 			if err != nil {
-				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed creating request during LLM setup: %s", execution.ExecutionId, err)
+				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Failed creating request during LLM setup: %s", execution.ExecutionId, execution.Workflow.OrgId, err)
 				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
 			}
 
@@ -10102,7 +10102,7 @@ data_filter:
 
 	} else {
 		// LLM returned an empty result body — this is a failure
-		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Empty result body from LLM response (status %d). Aborting agent.", execution.ExecutionId, llmStatusCode)
+		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Empty result body from LLM response (status %d). Aborting agent.", execution.ExecutionId, execution.Workflow.OrgId, llmStatusCode)
 		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "empty_llm_result", fmt.Sprintf("LLM returned empty response body with HTTP status %d", llmStatusCode))
 	}
 

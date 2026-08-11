@@ -2571,7 +2571,7 @@ func isAgentToolAllowed(agentOutput AgentOutput, decision AgentDecision) (bool, 
 func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput, decision AgentDecision) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[ERROR] AI_AGENT_PANIC: execution_id=%s decision_id=%s panic=%v", execution.ExecutionId, decision.RunDetails.Id, r)
+			log.Printf("[ERROR][%s] AI_AGENT_PANIC: org=%s decision_id=%s panic=%v", execution.ExecutionId,execution.Workflow.OrgId, decision.RunDetails.Id, r)
 
 			// Mark decision as failed so agent doesn't get stuck
 			decision.RunDetails.Status = "FAILURE"
