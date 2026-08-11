@@ -2026,25 +2026,59 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		} else {
 			toolLower := strings.ToLower(decision.Tool)
 			for _, app := range allApps {
-				if strings.ToLower(app.Name) == toolLower ||
-					strings.ToLower(app.ID) == toolLower ||
-					strings.ReplaceAll(strings.ToLower(app.Name), " ", "") == toolLower {
-					resolvedAppId = app.ID
-					resolvedAppName = app.Name
-					resolvedApp = app
-					//log.Printf("[DEBUG][%s] DirectAppCall: Resolved tool '%s' -> App '%s' (ID: %s)", execution.ExecutionId, decision.Tool, app.Name, app.ID)
-					if project.CacheDb {
-						SetCache(ctx, cacheKey, []byte(app.ID), 3600)
-					}
-					break
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+					continue
+				} 
+
+				resolvedAppId = app.ID
+				resolvedAppName = app.Name
+				resolvedApp = app
+				//log.Printf("[DEBUG][%s] DirectAppCall: Resolved tool '%s' -> App '%s' (ID: %s)", execution.ExecutionId, decision.Tool, app.Name, app.ID)
+				if project.CacheDb {
+					SetCache(ctx, cacheKey, []byte(app.ID), 3600)
 				}
+				break
 			}
 		}
 	}
 
-	//if debug { 
-	//	log.Printf("[DEBUG][%s] DirectAppCall: App resolution took %s", execution.ExecutionId, time.Since(startTime))
-	//}
+	if resolvedAppId == "" && project.Environment == "cloud" {
+		algoliaApp, err := HandleAlgoliaAppSearch(ctx, decision.Tool)
+		if err == nil {
+
+			foundApp, err := GetApp(ctx, resolvedAppId, minUser, false)
+			if err == nil {
+				//log.Printf("[ERROR][%s] DirectAppCall: Failed to get app by ID '%s' from Algolia search result: %s", execution.ExecutionId, resolvedAppId, err)
+			} else {
+				resolvedAppId = algoliaApp.ObjectID
+				resolvedAppName = algoliaApp.Name
+
+				resolvedApp = *foundApp
+			}
+		}
+	}
+
+	if resolvedAppId == "" {
+		foundApps, err := FindWorkflowAppByName(ctx, decision.Tool)
+		if err == nil {
+			toolLower := strings.ToLower(decision.Tool)
+			for _, app := range foundApps {
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+					continue
+				} 
+
+				resolvedAppId = app.ID
+				resolvedAppName = app.Name
+				resolvedApp = app
+				//log.Printf("[DEBUG][%s] DirectAppCall: Resolved tool '%s' -> App '%s' (ID: %s)", execution.ExecutionId, decision.Tool, app.Name, app.ID)
+				if project.CacheDb {
+					SetCache(ctx, cacheKey, []byte(app.ID), 3600)
+				}
+
+				break
+			}
+		}
+	}
 
 	if resolvedAppId == "" {
 		return nil, "", decision.Tool, nil, "", fmt.Errorf("DirectAppCall: could not resolve tool '%s' to any installed app for org '%s'", decision.Tool, execution.ExecutionOrg)

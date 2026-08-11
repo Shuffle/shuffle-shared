@@ -8535,6 +8535,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				break
 			}
 
+			//marshalledDecisions = []byte(strings.ReplaceAll(string(marshalledDecisions), "\\\\\"", "'"))
 			//if debug {
 			//	log.Printf("[DEBUG] DECISIONS: %s", string(marshalledDecisions))
 			//}
@@ -9036,29 +9037,6 @@ data_filter:
 		}
 	}
 
-	// Build the USER REQUEST message.
-	// For a normal run: USER REQUEST = the original user input.
-	// For a continuation (user sent a follow-up to a finished agent): the continuation is the live task that PHASE 1 should check against. The original question goes in as read-only context so the LLM knows the prior topic without re-executing it.
-	if len(continuationMessage) > 0 {
-		// Continuation run: new message is the actual task
-		if len(userMessage) > 0 {
-			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-				Role:    openai.ChatMessageRoleUser,
-				Content: fmt.Sprintf("ORIGINAL REQUEST (already completed, visible in HISTORY): %s", userMessage),
-			})
-		}
-		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
-			Content: fmt.Sprintf("USER REQUEST: %s", continuationMessage),
-		})
-	} else {
-		// Normal run: original input is the task
-		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
-			Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
-		})
-	}
-
 	if len(marshalledDecisions) > 4 {
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,
@@ -9086,6 +9064,29 @@ data_filter:
 		Role:    openai.ChatMessageRoleUser,
 		Content: fmt.Sprintf("Current time: %s", time.Now().Format(time.RFC3339)),
 	})
+
+	// Build the USER REQUEST message.
+	// For a normal run: USER REQUEST = the original user input.
+	// For a continuation (user sent a follow-up to a finished agent): the continuation is the live task that PHASE 1 should check against. The original question goes in as read-only context so the LLM knows the prior topic without re-executing it.
+	if len(continuationMessage) > 0 {
+		// Continuation run: new message is the actual task
+		if len(userMessage) > 0 {
+			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleUser,
+				Content: fmt.Sprintf("ORIGINAL REQUEST (already completed, visible in HISTORY): %s", userMessage),
+			})
+		}
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: fmt.Sprintf("USER REQUEST: %s", continuationMessage),
+		})
+	} else {
+		// Normal run: original input is the task
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
+		})
+	}
     
 	// Let's try to make the prompt cache key sticky
 	type ExtendedRequest struct {
