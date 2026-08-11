@@ -10550,15 +10550,16 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 }
 
 // This can also be overridden by passing in a custom OpenAI ChatCompletion request
+// Example request, which also works onprem with redirects.
+// stream: true makes it stream chunks back
 /*
-curl http://localhost:5002/api/v1/chat/completions -sN -H "Authorization: Bearer " -d '{
+curl https://shuffler.io/api/v1/chat/completions -sN -H "Authorization: Bearer " -d '{
   "messages": [
     { "role": "system", "content": "You are a helpful assistant." },
     { "role": "user", "content": "Write 30 bullet points" }
   ], "stream": true
 }'
 */
-
 func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
 
 	currentModel := model
@@ -14895,34 +14896,26 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-
-	user := User{
-		ActiveOrg: OrgMini{
-			Id: "hello",
-		},
-	}
-	if project.Environment == "cloud" {
-		user, usererr := HandleApiAuthentication(resp, request)
-		if usererr != nil || user.Id == "" || user.ActiveOrg.Id == "" { 
-			syncKey, err := HandleCloudSyncAuthentication(resp, request) 
-			if err != nil || len(syncKey.OrgId) == 0 {
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false}`))
-				return
-			}
-
-			user.ActiveOrg.Id = syncKey.OrgId 
-			user.Username = ""
-			user.Id = ""
-			user.Role = ""
-		}
-
-		if user.Role == "org-reader" {
-			log.Printf("[INFO] User with role org-reader is not allowed to use AI in chat completion forwarding")
-			resp.WriteHeader(403)
-			resp.Write([]byte(`{"success": false, "reason": "User with role org-reader is not allowed to use AI"}`))
+	user, usererr := HandleApiAuthentication(resp, request)
+	if usererr != nil || user.Id == "" || user.ActiveOrg.Id == "" { 
+		syncKey, err := HandleCloudSyncAuthentication(resp, request) 
+		if err != nil || len(syncKey.OrgId) == 0 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+
+		user.ActiveOrg.Id = syncKey.OrgId 
+		user.Username = ""
+		user.Id = ""
+		user.Role = ""
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[INFO] User with role org-reader is not allowed to use AI in chat completion forwarding")
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "User with role org-reader is not allowed to use AI"}`))
+		return
 	}
 
 	body, err := ioutil.ReadAll(request.Body)
@@ -14973,7 +14966,6 @@ func GetOrgAiCredentials(ctx context.Context, orgId string) (string, string, str
 	foundModel := ""
 
 	// This is cached hence should be fast enough
-	/*
 	auths, err := GetAllWorkflowAppAuth(ctx, orgId) 
 	if err != nil { 
 		log.Printf("[ERROR] Failed to get workflow app auths for org %s: %s", orgId, err)
@@ -15016,27 +15008,18 @@ func GetOrgAiCredentials(ctx context.Context, orgId string) (string, string, str
 			break
 		}
 	}
-	*/
 
 	// Handles failover IF we can't find other auth
 	if project.Environment != "cloud" && (apiKey == "" || aiRequestUrl == "") {
 		log.Printf("[INFO] No custom LLM-credentials found for org %s. Falling back to default shuffler.io AI endpoint IF cloud sync is enabled.", orgId)
 
 		// type SyncConfig struct {
-		baseUrl := "https://tunnel.schemaless.org"
-		/*
 		baseUrl := "https://shuffler.io"
 		org, err := GetOrg(ctx, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed to get org by ID %s: %s", orgId, err)
 			return apiKey, aiRequestUrl, foundModel
 		} 
-		*/
-		org := Org{
-			SyncConfig: SyncConfig{
-				Apikey: "0b63cd46-aae1-4bff-a25f-2835d9fe819f",
-			},
-		}
 
 		// Checks if cloud sync is set up
 		if len(org.SyncConfig.Apikey) > 0 {
