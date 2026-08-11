@@ -2088,25 +2088,59 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		} else {
 			toolLower := strings.ToLower(decision.Tool)
 			for _, app := range allApps {
-				if strings.ToLower(app.Name) == toolLower ||
-					strings.ToLower(app.ID) == toolLower ||
-					strings.ReplaceAll(strings.ToLower(app.Name), " ", "") == toolLower {
-					resolvedAppId = app.ID
-					resolvedAppName = app.Name
-					resolvedApp = app
-					//log.Printf("[DEBUG][%s] DirectAppCall: Resolved tool '%s' -> App '%s' (ID: %s)", execution.ExecutionId, decision.Tool, app.Name, app.ID)
-					if project.CacheDb {
-						SetCache(ctx, cacheKey, []byte(app.ID), 3600)
-					}
-					break
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+					continue
+				} 
+
+				resolvedAppId = app.ID
+				resolvedAppName = app.Name
+				resolvedApp = app
+				//log.Printf("[DEBUG][%s] DirectAppCall: Resolved tool '%s' -> App '%s' (ID: %s)", execution.ExecutionId, decision.Tool, app.Name, app.ID)
+				if project.CacheDb {
+					SetCache(ctx, cacheKey, []byte(app.ID), 3600)
 				}
+				break
 			}
 		}
 	}
 
-	//if debug { 
-	//	log.Printf("[DEBUG][%s] DirectAppCall: App resolution took %s", execution.ExecutionId, time.Since(startTime))
-	//}
+	if resolvedAppId == "" && project.Environment == "cloud" {
+		algoliaApp, err := HandleAlgoliaAppSearch(ctx, decision.Tool)
+		if err == nil {
+
+			foundApp, err := GetApp(ctx, resolvedAppId, minUser, false)
+			if err == nil {
+				//log.Printf("[ERROR][%s] DirectAppCall: Failed to get app by ID '%s' from Algolia search result: %s", execution.ExecutionId, resolvedAppId, err)
+			} else {
+				resolvedAppId = algoliaApp.ObjectID
+				resolvedAppName = algoliaApp.Name
+
+				resolvedApp = *foundApp
+			}
+		}
+	}
+
+	if resolvedAppId == "" {
+		foundApps, err := FindWorkflowAppByName(ctx, decision.Tool)
+		if err == nil {
+			toolLower := strings.ToLower(decision.Tool)
+			for _, app := range foundApps {
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+					continue
+				} 
+
+				resolvedAppId = app.ID
+				resolvedAppName = app.Name
+				resolvedApp = app
+				//log.Printf("[DEBUG][%s] DirectAppCall: Resolved tool '%s' -> App '%s' (ID: %s)", execution.ExecutionId, decision.Tool, app.Name, app.ID)
+				if project.CacheDb {
+					SetCache(ctx, cacheKey, []byte(app.ID), 3600)
+				}
+
+				break
+			}
+		}
+	}
 
 	if resolvedAppId == "" {
 		return nil, "", decision.Tool, nil, "", fmt.Errorf("DirectAppCall: could not resolve tool '%s' to any installed app for org '%s'", decision.Tool, execution.ExecutionOrg)
@@ -2132,12 +2166,29 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	log.Printf("[DEBUG][%s] DirectAppCall: Auth resolution took %s", execution.ExecutionId, time.Since(authStart))
 	*/
 
+	// strconv for decision.Delay
+	selectedDelay := int64(0)
+	parsedDelay, err := strconv.Atoi(decision.Delay)
+	if err == nil {
+		if parsedDelay < 0 || parsedDelay > 2678400 {
+			parsedDelay = 0
+		} else {
+			selectedDelay = int64(parsedDelay)
+		}
+	} else {
+		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed to parse Agent decision.Delay '%s' as int: %s", execution.ExecutionId, decision.Delay, err)
+	}
+
 	action := Action{
 		AppID:            resolvedAppId,
 		AppName:          resolvedAppName,
 		Name:             decision.Action, // overwritten below if schema match found
 		//AuthenticationId: resolvedAuthId,
 		Parameters:       []WorkflowAppActionParameter{},
+
+		ExecutionDelay: selectedDelay,
+		SourceWorkflow: execution.Workflow.ID,
+		SourceExecution: execution.ExecutionId,
 	}
 
 	decisionActionLower := strings.ToLower(decision.Action)
@@ -2191,6 +2242,13 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		Value: "true",
 	})
 
+	if len(decision.RunDetails.Id) > 0 { 
+		action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+			Name:  decisionParameterName,
+			Value: decision.RunDetails.Id,
+		})
+	}
+
 	//if debug { 
 	//	for _, p := range action.Parameters {
 	//		log.Printf("[DEBUG][%s] DirectAppCall: PARAMS: %s = %s", execution.ExecutionId, p.Name, p.Value)
@@ -2216,15 +2274,31 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		}
 	}
 
-	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=60", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg)
+	//ExecutionDelay: selectedDelay,
+	timeout := time.Duration(30) * time.Second
+
+	// Immediate exist. 3 seconds due to body transfer worst case
+	if selectedDelay > 0 { 
+		timeout = time.Duration(2) * time.Second
+	}
+
+	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=%d&delay=%d&decision_id=%s", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg, (timeout/1000000000)-1, selectedDelay, decision.RunDetails.Id)
+
+	parentNode := ""
+	if len(parentNode) > 0 { 
+		requestUrl += fmt.Sprintf("parent_node=%s", parentNode)
+	}
 
 	//if debug { 
-	//	log.Printf("[DEBUG][%s] DirectAppCall: Calling /run for tool '%s' action '%s' -> %s", execution.ExecutionId, resolvedAppName, action.Name, requestUrl)
+	//	if strings.Contains(strings.ToLower(action.AppName), "gmail") {
+	//		log.Printf("REQUEST URL: %#v", requestUrl)
+	//		os.Exit(3)
+	//	}
 	//}
 
 	//httpStart := time.Now()
 	client := GetExternalClientWithTimeout(requestUrl, 0)
-	client.Timeout = 30 * time.Second
+	client.Timeout = timeout
 
 
 	req, reqErr := http.NewRequest("POST", requestUrl, bytes.NewBuffer(actionBytes))
@@ -2683,8 +2757,11 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 				log.Printf("[WARNING][%s] AI Agent blocked disallowed tool '%s' for decision %s. Allowed tools: %s", execution.ExecutionId, decision.Tool, decision.RunDetails.Id, strings.Join(allowedTools, ", "))
 			}
 		} else {
-		// Singul handler
-			rawResponse, debugUrl, appname, categoryLabels, actionName, err := RunAgentDecisionSingulActionHandler(execution, decision, agentOutput.ExecutionMode)
+			// Singul handler
+			if debug { 
+				log.Printf("[DEBUG][%s] Running agent decision %s with action '%s' and tool '%s'", execution.ExecutionId, decision.RunDetails.Id, decision.Action, decision.Tool)
+			}
+			rawResponse, debugUrl, appname, categoryLabels, actionName, runError := RunAgentDecisionSingulActionHandler(execution, decision, agentOutput.ExecutionMode)
 
 			if len(appname) > 0 {
 				decision.Tool = appname
@@ -2699,17 +2776,28 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			//	log.Printf("[DEBUG] RawResp agent: %s", string(rawResponse))
 			//}
 
-			if err != nil {
+			parsedDelay, delayErr := strconv.Atoi(decision.Delay)
+			if delayErr == nil {
+				if parsedDelay < 0 || parsedDelay > 2678400 {
+					parsedDelay = 0
+				}
+			} 
+
+			// Handles the case where the action is delayed on purpose (scheduled)
+			if parsedDelay > 0 { 
+				decision.RunDetails.Status = "WAITING"
+
+			} else if runError != nil {
 				if debug { 
-					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
+					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, runError)
 				} else {
-					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision.RunDetails.Id, err)
+					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision.RunDetails.Id, runError)
 				}
 
 				decision.RunDetails.Status = "FAILURE"
 
 				if len(decision.RunDetails.RawResponse) == 0 {
-					decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start decision action. Raw Error: %s", err)
+					decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start decision action. Raw Error: %s", runError)
 				}
 			} else {
 				decision.RunDetails.Status = "FINISHED"
@@ -2770,7 +2858,9 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	//url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 	url := fmt.Sprintf("%s/api/v1/streams", baseUrl)
 
-	log.Printf("[DEBUG][%s] Sending agent decision response %s with status %s. Node: %s. URL: %s", execution.ExecutionId, decision.RunDetails.Id, decision.RunDetails.Status, agentOutput.NodeId, url)
+	if debug { 
+		log.Printf("[DEBUG][%s] Sending agent decision response %s with status %s. Node: %s. URL: %s", execution.ExecutionId, decision.RunDetails.Id, decision.RunDetails.Status, agentOutput.NodeId, url)
+	}
 
 	//?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 	client := GetExternalClient(url)
@@ -2816,6 +2906,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 		log.Printf("[ERROR][%s] AI Agent: All attempts to POST decision %s to streams failed: %v. Falling back to in-process handler.", execution.ExecutionId, decision.RunDetails.Id, streamErr)
 	}
+
  	// Try the in-process handler to keep the agent moving when the streams API is unavailable.
 	freshExec, err := GetWorkflowExecution(context.Background(), execution.ExecutionId)
 	if err != nil {

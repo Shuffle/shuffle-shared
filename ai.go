@@ -57,6 +57,7 @@ var skipAgentWait = os.Getenv("SHUFFLE_SKIP_AGENT_WAIT")
 var agentRunLocation = os.Getenv("SHUFFLE_AGENT_RUN_LOCATION")
 var assistantModel = model
 
+var decisionParameterName = "shuffle_agent_decision_id"
 var aiMaxTokens = 4096 // Controllable with AI_MAX_TOKENS env
 var aiReasoningEffort = ""
 
@@ -8542,6 +8543,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				break
 			}
 
+			//marshalledDecisions = []byte(strings.ReplaceAll(string(marshalledDecisions), "\\\\\"", "'"))
 			//if debug {
 			//	log.Printf("[DEBUG] DECISIONS: %s", string(marshalledDecisions))
 			//}
@@ -8831,7 +8833,7 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 4. Do NOT ask unnecessary questions. Make assumptions for the user.
 5. DO NOT LIE. Only say you did something if you actually did.
 6. "action" should be the EXACT name of the function, without paranthesis or parameters.
-7. If future scheduling may be necessary, ignore it and run it right now. Scheduling is a separate process.
+7. If action delay is required, set the "delay" in seconds for that decision. Max delay is 31 days ("delay": "2678400"). Delay should be relative to original start time.
 8. App Actions show up in the python function format. Put the function name in the 'action' field and the parameters in 'fields' array. Don't add empty fields.
 9. IF an App Action parameter contains a value, use it and fill it in with relevant values. Ask questions, if important data is missing. Do not add random values to nested JSON bodies unless necessary.
 
@@ -8858,8 +8860,8 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 **Only proceed if the task is NOT done.**
 1. **Auth Failure (401/403):** STOP. Output: category="finish", action="finish", output="**Authentication Failed**".
 2. **General Failure:**
-   - If "runs" >= 3: STOP. Output: category="finish", action="finish", output="**Task Failed**".
-   - If "runs" < 3: RETRY same action. Reason: "Attempt [runs+1]/3."
+   - If "runs" >= 5: STOP. Output: category="finish", action="finish", output="**Task Failed**".
+   - If "runs" < 5: RETRY same action. Reason: "Attempt [runs+1]/5."
 
 ### PHASE 3: EXECUTION LOGIC
 **Only proceed if Task is Incomplete and No Failures exist.**
@@ -8903,6 +8905,7 @@ data_filter:
     "tool": "tool_name", // Name of the tool. Use "core" for finish/ask
     "confidence": 1.0,
     "runs": "1", 
+	"delay": "0", // delay in SECONDS before executing the action. 
     "approval_required": false, // true IF the action seems risky or destructive and requires user approval. Otherwise false.
     "data_filter": "list", // for fetch list/search: "list" | "full"
     "fields_needed": ["<List of fields>"], // use this when data_filter is "list": exact fields you need from each item
@@ -9032,7 +9035,7 @@ data_filter:
 	}
 
 	if project.Environment == "cloud" {
-		completionRequest.Store = true
+		//completionRequest.Store = true
 		completionRequest.MaxCompletionTokens = 5000
 	} else {
 		// For on-prem
@@ -9040,29 +9043,6 @@ data_filter:
 		if aiReasoningEffort != "" {
 			completionRequest.ReasoningEffort = aiReasoningEffort
 		}
-	}
-
-	// Build the USER REQUEST message.
-	// For a normal run: USER REQUEST = the original user input.
-	// For a continuation (user sent a follow-up to a finished agent): the continuation is the live task that PHASE 1 should check against. The original question goes in as read-only context so the LLM knows the prior topic without re-executing it.
-	if len(continuationMessage) > 0 {
-		// Continuation run: new message is the actual task
-		if len(userMessage) > 0 {
-			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-				Role:    openai.ChatMessageRoleUser,
-				Content: fmt.Sprintf("ORIGINAL REQUEST (already completed, visible in HISTORY): %s", userMessage),
-			})
-		}
-		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
-			Content: fmt.Sprintf("USER REQUEST: %s", continuationMessage),
-		})
-	} else {
-		// Normal run: original input is the task
-		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
-			Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
-		})
 	}
 
 	if len(marshalledDecisions) > 4 {
@@ -9093,6 +9073,29 @@ data_filter:
 		Content: fmt.Sprintf("Current time: %s", time.Now().Format(time.RFC3339)),
 	})
 
+	// Build the USER REQUEST message.
+	// For a normal run: USER REQUEST = the original user input.
+	// For a continuation (user sent a follow-up to a finished agent): the continuation is the live task that PHASE 1 should check against. The original question goes in as read-only context so the LLM knows the prior topic without re-executing it.
+	if len(continuationMessage) > 0 {
+		// Continuation run: new message is the actual task
+		if len(userMessage) > 0 {
+			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleUser,
+				Content: fmt.Sprintf("ORIGINAL REQUEST (already completed, visible in HISTORY): %s", userMessage),
+			})
+		}
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: fmt.Sprintf("USER REQUEST: %s", continuationMessage),
+		})
+	} else {
+		// Normal run: original input is the task
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: fmt.Sprintf("USER REQUEST: %s", userMessage),
+		})
+	}
+    
 	// Let's try to make the prompt cache key sticky
 	type ExtendedRequest struct {
 		openai.ChatCompletionRequest
@@ -9950,6 +9953,7 @@ data_filter:
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 
+
 				go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
 
 			} else {
@@ -10573,6 +10577,14 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		orgId = os.Getenv("OPENAI_API_ORG")
 	}
 
+	if len(apiKey) == 0 && project.Environment == "cloud" { 
+		foundModel := ""
+		apiKey, aiRequestUrl, foundModel = GetGeminiCredentials(ctx) 
+		if len(model) == 0 || !strings.HasPrefix(model, "google/") {
+			model = foundModel
+		}
+	}
+
 	if len(apiKey) == 0 {
 		return "", errors.New("No AI_API_KEY supplied")
 	}
@@ -10716,6 +10728,11 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 	}
 
+	if debug { 
+		log.Printf("[DEBUG] URL: %s, APIKEY: %s, MODEL: %s", aiRequestUrl, apiKey, model)
+	}
+
+
 	maxRetries := 3
 	sleepTimer := time.Duration(2)
 	contentOutput := ""
@@ -10739,7 +10756,11 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				chatCompletion.MaxTokens = 0
 				chatCompletion.MaxCompletionTokens = aiMaxTokens
 				continue
+			} else if strings.Contains(err.Error(), "Invalid JSON payload received") {
+				log.Printf("[ERROR] Invalid JSON payload received: %s", err) 
+				break
 			} else if strings.Contains(err.Error(), "does not exist") {
+				log.Printf("[ERROR] Model '%s' does not exist. Attempting to fallback to FALLBACK_AI_MODEL: %s", model, err)
 				if len(fallbackModel) == 0 {
 					return "", errors.New(fmt.Sprintf("Model '%s' does not exist and no FALLBACK_AI_MODEL set: %s", model, err))
 				}
@@ -14019,7 +14040,7 @@ func runSupportAgent(ctx context.Context, input QueryInput, user User) (string, 
 				},
 			},
 		},
-		Store: oai.Bool(false),
+		//Store: oai.Bool(false),
 	}
 
 	resp, err := oaiClient.Responses.New(ctx, params, aioption.WithJSONSet("input", rawInput))
@@ -14242,7 +14263,7 @@ func StreamSupportLLMResponse(ctx context.Context, resp http.ResponseWriter, inp
 				},
 			},
 		},
-		Store: oai.Bool(false),
+		//Store: oai.Bool(false),
 	}
 
 	stream := oaiClient.Responses.NewStreaming(ctx, params, aioption.WithJSONSet("input", rawInput))
@@ -14407,317 +14428,6 @@ func buildManualInputList(history []ConversationMessage, newPrompt string) []map
 	})
 
 	return items
-}
-
-// /api/v1/apps/{appid}/mcp
-// /api/v1/mcp
-func RunMCPAction(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	ctx := GetContext(request)
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		// Look for org_id query as app may be private
-		// No validation is done here, as it's just running the app
-		// to find a user
-		orgId := request.URL.Query().Get("org_id")
-		if len(orgId) > 0 {
-			user.ActiveOrg.Id = orgId
-		} else {
-			executionId := request.URL.Query().Get("execution_id")
-			authorization := request.URL.Query().Get("authorization")
-			if len(executionId) == 0 || len(authorization) == 0 {
-				log.Printf("[WARNING] Bad execution id/auth in single action validate (1): %#v, %#v. Continuing with the 'public' org id", executionId, authorization)
-				err := ValidateRequestOverload(resp, request)
-				if err != nil {
-					log.Printf("[INFO] Request overload for IP %s in single action execution", GetRequestIp(request))
-					resp.WriteHeader(429)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests. Please try again in 30 seconds."}`)))
-					return
-				}
-
-				user.Username = GetRequestIp(request)
-				user.ActiveOrg.Name = GetRequestIp(request)
-				user.ActiveOrg.Id = "public"
-
-			} else {
-				// Find the execution
-				exec, err := GetWorkflowExecution(ctx, executionId)
-				if err != nil {
-					log.Printf("[WARNING] Bad execution id in single action validate (2): %s", err)
-					resp.WriteHeader(401)
-					resp.Write([]byte(`{"success": false, "reason": "Bad execution mapping (1)"}`))
-					return
-				}
-
-				if exec.Authorization != authorization {
-					log.Printf("[WARNING] Bad execution auth in single action validate (3): %#v, %#v", exec.Authorization, authorization)
-					resp.WriteHeader(403)
-					resp.Write([]byte(`{"success": false, "reason": "Bad execution mapping (2)"}`))
-					return
-				}
-
-				//log.Printf("[INFO] Found org_id from execution: %#v. Executionorg: %#v", exec.OrgId, exec.ExecutionOrg)
-				user.ActiveOrg.Id = exec.OrgId
-				if len(user.ActiveOrg.Id) == 0 {
-					user.ActiveOrg.Id = exec.ExecutionOrg
-				}
-
-				user.Username = fmt.Sprintf("org %s", user.ActiveOrg.Id)
-			}
-		}
-
-		if len(user.ActiveOrg.Id) == 0 {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "No org_id found to map back to"}`))
-			return
-		}
-	}
-
-	location := strings.Split(request.URL.String(), "/")
-	var fileId string
-	if location[1] == "api" {
-		if len(location) <= 4 {
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		fileId = location[4]
-	}
-
-	//log.Printf("[AUDIT] User Authentication failed in execute SINGLE action - CONTINUING ANYWAY: %s. Found OrgID: %#v", err, user.ActiveOrg.Id)
-	log.Printf("[AUDIT] User %s (%s) in org %s (%s) is running SINGLE App run for App ID '%s'", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id, fileId)
-
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		log.Printf("[INFO] Failed single execution POST body read: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	foundRequest := MCPRequest{}
-	//func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, createNextActions bool) (Action, error) {
-	// Unmarshal it
-	err = json.Unmarshal(body, &foundRequest)
-	if err != nil {
-		log.Printf("[INFO] Failed single execution POST body unmarshal: %s", err)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	foundEnvironment := "cloud"
-	if len(foundRequest.Params.Environment) > 0 {
-		foundEnvironment = foundRequest.Params.Environment
-	}
-
-	if len(foundRequest.Params.Input.Text) < 5 {
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Input text is required and must be at least 5 characters"}`))
-		return
-	}
-
-	foundId := ""
-	if len(foundRequest.Params.ToolID) > 0 {
-		foundId = foundRequest.Params.ToolID
-	} else {
-		if len(foundRequest.Params.ToolName) == 32 {
-			foundId = foundRequest.Params.ToolName
-		} else {
-			foundApps, err := FindWorkflowAppByName(ctx, foundRequest.Params.ToolName)
-			if err != nil || len(foundApps) == 0 {
-				log.Printf("[INFO] Failed to find app by name '%s' in single execution: %s", foundRequest.Params.ToolName, err)
-				resp.WriteHeader(400)
-				resp.Write([]byte(`{"success": false, "reason": "Valid param.tool_id (app ID) is required"}`))
-				return
-			}
-
-			for _, app := range foundApps {
-				if app.Name == foundRequest.Params.ToolName {
-					foundId = app.ID
-					break
-				}
-			}
-		}
-	}
-
-	app, err := GetApp(ctx, foundId, User{}, false)
-	if err != nil {
-		log.Printf("[INFO] Failed to find app by id '%s' in single execution: %s", foundId, err)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if !app.Public && project.Environment == "cloud" {
-		if user.Id == app.Owner || user.ActiveOrg.Id == app.ReferenceOrg || ArrayContains(app.Contributors, user.Id) {
-			log.Printf("[AUDIT] Support & Admin user %s (%s) got access to app %s (MCP)", user.Username, user.Id, app.ID)
-
-		} else if user.Role == "admin" && app.Owner == "" {
-			log.Printf("[AUDIT] Any admin can GET %s (%s), since it doesn't have an owner (GET - MCP).", app.Name, app.ID)
-		} else {
-			log.Printf("[AUDIT] User %s (%s) in org %s (%s) was denied access to app %s (MCP)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id, app.ID)
-			resp.WriteHeader(403)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-	} else {
-		log.Printf("[AUDIT] User %s (%s) in org %s (%s) got access to public app %s (MCP)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id, app.ID)
-	}
-
-	// Check permissions
-	parsedName := strings.ToLower(strings.ReplaceAll(app.Name, " ", "_"))
-	parsedApp := fmt.Sprintf("app:%s:%s", app.ID, parsedName)
-
-	// Run the action
-	newAction := Action{
-		Name:        "agent",
-		AppName:     "AI Agent",
-		AppID:       "shuffle_agent",
-		AppVersion:  "1.0.0",
-		Environment: foundEnvironment,
-		Parameters: []WorkflowAppActionParameter{
-			WorkflowAppActionParameter{
-				Name:  "app_name",
-				Value: "openai",
-			},
-			WorkflowAppActionParameter{
-				Name:  "input",
-				Value: foundRequest.Params.Input.Text,
-			},
-			WorkflowAppActionParameter{
-				Name:  "app_name",
-				Value: parsedApp,
-			},
-		},
-	}
-
-	marshalledAction, err := json.Marshal(newAction)
-	if err != nil {
-		log.Printf("[ERROR] Failed to marshal single action body: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	workflowExecution, err := PrepareSingleAction(ctx, request, user, "agent", marshalledAction, false, "")
-	if fileId == "agent_starter" {
-		log.Printf("[INFO] Returning early for agent_starter single action execution: %s", workflowExecution.ExecutionId)
-		resp.WriteHeader(200)
-		resp.Write([]byte(fmt.Sprintf(`{"success": true, "execution_id": "%s", "authorization": "%s"}`, workflowExecution.ExecutionId, workflowExecution.Authorization)))
-		return
-	}
-
-	debugUrl := fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId)
-	resp.Header().Add("X-Debug-Url", debugUrl)
-
-	if err != nil {
-		returndata := ResultChecker{
-			Success: false,
-			Reason:  fmt.Sprintf("%s", err),
-		}
-
-		// Special handler for decision reruns~
-		if strings.Contains(err.Error(), "Successfully") {
-			returndata.Success = true
-			resp.WriteHeader(200)
-		} else {
-			log.Printf("[INFO] Failed workflowrequest POST read in single action (4): %s", err)
-			resp.WriteHeader(400)
-		}
-
-		respBytes, err := json.Marshal(returndata)
-		if err != nil {
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		resp.Write(respBytes)
-		return
-	}
-
-	foundEnv := ""
-	params := []string{}
-	for _, action := range workflowExecution.Workflow.Actions {
-		for _, param := range action.Parameters {
-			params = append(params, param.Name)
-		}
-
-		if len(action.Environment) > 0 {
-			foundEnv = action.Environment
-			break
-		}
-	}
-
-	go IncrementCache(ctx, workflowExecution.OrgId, "workflow_executions")
-	if foundEnv == "" || strings.ToLower(foundEnv) == "default" || strings.ToLower(foundEnv) == "cloud" {
-		//go deployAppShuffleCloud(ctx, workflowExecution, workflowExecution.Start)
-		log.Printf("[ERROR] No environment found for single action execution %s. This should not happen, as it should have been set to 'cloud' by default. Failing the execution to avoid it getting lost in the void.", workflowExecution.ExecutionId)
-		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Something that should not have happened, happened. This is the wrong environment. Please contact support with the execution ID: %s"}`, workflowExecution.ExecutionId)))
-		return
-	} else {
-		executionRequest := ExecutionRequest{
-			ExecutionId:   workflowExecution.ExecutionId,
-			WorkflowId:    workflowExecution.Workflow.ID,
-			Authorization: workflowExecution.Authorization,
-			Environments:  []string{foundEnv},
-		}
-
-		parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(foundEnv, " ", "-"), "_", "-")), workflowExecution.ExecutionOrg)
-
-		// Check if environment is distributed from parent org
-		if len(workflowExecution.ExecutionOrg) > 0 {
-			environments, err := GetEnvironments(ctx, workflowExecution.ExecutionOrg)
-			if err != nil {
-				log.Printf("[ERROR] Failed getting environments for org %s in single action. May fail to verify env.: %s", workflowExecution.ExecutionOrg, err)
-			} else {
-				for _, env := range environments {
-					if env.Archived {
-						continue
-					}
-
-					if env.Name != foundEnv {
-						continue
-					}
-
-					if env.OrgId != workflowExecution.ExecutionOrg && len(env.OrgId) > 0 {
-						if debug {
-							log.Printf("[DEBUG][%s] Found suborg environment %s for org %s in single action. Re-mapping it to org-id %s", workflowExecution.ExecutionId, env.Name, env.OrgId, env.OrgId)
-						}
-
-						parsedEnv = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(foundEnv, " ", "-"), "_", "-")), env.OrgId)
-						break
-					}
-				}
-			}
-		}
-
-		log.Printf("[INFO][%s] Adding new single-action job to env queue (4): %s", workflowExecution.ExecutionId, parsedEnv)
-		err = SetWorkflowQueue(ctx, executionRequest, parsedEnv)
-		if err != nil {
-			log.Printf("[WARNING][%s] Failed adding %s to db (single action queue): %s", workflowExecution.ExecutionId, parsedEnv, err)
-		}
-	}
-
-	actionId := ""
-	if len(workflowExecution.Workflow.Actions) == 1 {
-		actionId = workflowExecution.Workflow.Actions[0].ID
-	}
-
-	returnBody := HandleRetValidation(ctx, workflowExecution, 1, 15, actionId)
-	returnBytes, err := json.Marshal(returnBody)
-	if err != nil {
-		log.Printf("[ERROR] Failed to marshal retStruct in single execution: %s", err)
-	}
-
-	resp.WriteHeader(200)
-	resp.Write([]byte(returnBytes))
 }
 
 func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (MCPInitResponse, error) {

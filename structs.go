@@ -4892,6 +4892,7 @@ type AgentDecision struct {
 	Reason           string         `json:"reason" datastore:"reason"`
 	ApprovalRequired bool           `json:"approval_required" datastore:"approval_required"`   // Set TRUE only for destructive/high-risk actions
 	DataFilter       string         `json:"data_filter,omitempty" datastore:"data_filter"`     // DataFilter controls how the raw tool response is reduced before being fed back into the agent.
+	Delay            string         `json:"delay,omitempty" datastore:"delay"`                 // Delay is the number of seconds to wait before executing the next decision.
 	FieldsNeeded     []string       `json:"fields_needed,omitempty" datastore:"fields_needed"` // FieldsNeeded is set by the agent alongside data_filter:"list".
 
 	// Responses
@@ -5884,9 +5885,10 @@ type ActionSummary struct {
 
 // AppActionResponse - actions grouped by app
 type AppActionResponse struct {
-	AppName string          `json:"app_name"`
-	AppID   string          `json:"app_id"`
-	Actions []ActionSummary `json:"actions"`
+	AppName        string          `json:"app_name"`
+	AppDescription string          `json:"app_description"`
+	AppID          string          `json:"app_id"`
+	Actions        []ActionSummary `json:"actions"`
 }
 
 // WorkflowOperation represents a single modification operation
