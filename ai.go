@@ -10784,10 +10784,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			contentOutput = openaiResp.Choices[0].Message.Refusal
 		}
 
-		if info.Usage != nil {
-			*info.Usage = openaiResp.Usage
-		}
-
 		break
 	}
 
