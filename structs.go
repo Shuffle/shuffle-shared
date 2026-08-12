@@ -2009,7 +2009,9 @@ type AppAuthenticationStorage struct {
 	AutoDistribute    bool                  `json:"auto_distribute" datastore:"auto_distribute"`
 
 	Environment        string   `json:"environment" datastore:"environment"`               // In case an auth should ALWAYS be mapped to an environment. Can help out with Oauth2 refresh (e.g. running partially on cloud and partially onprem), as well as for KMS. For now ONLY KMS has a frontend.
+
 	SuborgDistributed  bool     `json:"suborg_distributed" datastore:"suborg_distributed"` // Decides if it's distributed to suborgs or not
+
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 
 	Validation TypeValidation `json:"validation" datastore:"validation"`
@@ -5769,7 +5771,9 @@ type AiCallInfo struct {
 	Caller string
 	OrgID  string
 
-	Resp http.ResponseWriter
+	AuthenticationId string // To choose the Authentication ID to use 
+
+	Resp http.ResponseWriter // Used to respond automatically if it exists
 }
 
 type ScreenshotWrapper struct {

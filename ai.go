@@ -10630,7 +10630,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	if len(info.OrgID) > 0 { 
 		// Look up custom auth to use instead
-		foundApikey, foundrequestUrl, foundModel := GetOrgAiCredentials(ctx, info.OrgID)
+		foundApikey, foundrequestUrl, foundModel := GetOrgAiCredentials(ctx, info)
 		if len(foundApikey) > 0 {
 			apiKey = foundApikey
 		}
@@ -10767,22 +10767,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 
-	flusher := http.Flusher(nil)
-	if info.Resp != nil {
-		info.Resp.Header().Set("Content-Type", "text/event-stream")
-		info.Resp.Header().Set("Cache-Control", "no-cache")
-		info.Resp.Header().Set("Connection", "keep-alive")
-
-		// 2. Type-assert the ResponseWriter to an http.Flusher
-		var ok bool
-		flusher, ok = info.Resp.(http.Flusher)
-		if !ok {
-			http.Error(info.Resp, "Streaming unsupported!", http.StatusInternalServerError)
-			return "", errors.New("Streaming unsupported!")
-		}
-	}
-
-
 	maxRetries := 3
 	contentOutput := ""
 
@@ -10796,9 +10780,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		return "", errors.New("No LLM URL supplied AND no organization-specific URL found. Please create a custom AI app authentication")
 	}
 
-	if chatCompletion.Model == "" { 
-		chatCompletion.Model = currentModel 
-	}
+	// FIXME: Allow model control? 
+	chatCompletion.Model = currentModel 
 
 	if len(aiRequestUrl) > 0 {
 		config.BaseURL = aiRequestUrl
@@ -10842,21 +10825,57 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	originalStreamEnabled := chatCompletion.Stream
 
+	flusher := http.Flusher(nil)
+	if info.Resp != nil {
+		if originalStreamEnabled { 
+			info.Resp.Header().Set("Content-Type", "text/event-stream")
+			info.Resp.Header().Set("Cache-Control", "no-cache")
+			info.Resp.Header().Set("Connection", "keep-alive")
+		}
+
+		// 2. Type-assert the ResponseWriter to an http.Flusher
+		var ok bool
+		flusher, ok = info.Resp.(http.Flusher)
+		if !ok {
+			http.Error(info.Resp, "Streaming unsupported!", http.StatusInternalServerError)
+			return "", errors.New("Streaming unsupported!")
+		}
+	}
 
 	// Forcing stream, as there really is no downside to it.
 	// Also allows us to realtime stream with *.shuffler.io/api/v1/chat/completions
 	chatCompletion.Stream = true
-	sleepTimer := time.Duration(2)
+	sleepTimer := time.Duration(1)
 
 	// In case of non-streaming Resp input
 	totalTokens := 0
+	var lastError error
 	choicesMap := make(map[int]*openai.ChatCompletionChoice)
 	var fullResp openai.ChatCompletionResponse
 	for {
 		if cnt >= maxRetries {
-			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries for openapi info")
 
-			return "", errors.New("Failed to match JSON in runActionAI after 5 tries for openapi info")
+			if info.Resp != nil && lastError != nil {
+
+				result := ResultChecker{ 
+					Success: false, 
+					Reason: lastError.Error(),
+				}
+
+				info.Resp.WriteHeader(400)
+				marshalledResult, err := json.Marshal(result)
+				if err != nil { 
+					info.Resp.Write([]byte(lastError.Error()))
+				} else {
+					info.Resp.Write(marshalledResult)
+				}
+
+				flusher.Flush()
+				return "", nil
+			}
+
+			log.Printf("[ERROR] Failed to in runActionAI after 5 tries for openapi info: %s", lastError)
+			return "", lastError
 		}
 
 		stream, err := openaiClient.CreateChatCompletionStream(
@@ -10867,11 +10886,11 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		if err != nil {
 			cnt += 1
 
-			if strings.Contains(err.Error(), "not supported MaxTokens") {
+			if strings.Contains(err.Error(), "not supported MaxTokens") || strings.Contains(err.Error(), "Unsupported parameter: 'max_tokens'") {
+				chatCompletion.MaxCompletionTokens = chatCompletion.MaxTokens
 				chatCompletion.MaxTokens = 0
-				chatCompletion.MaxCompletionTokens = aiMaxTokens
 				continue
-				
+
 			} else if strings.Contains(err.Error(), "Invalid JSON payload received") {
 				log.Printf("[ERROR] Invalid JSON payload received from '%s': %s", aiRequestUrl, err) 
 				break
@@ -10885,11 +10904,14 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				currentModel = fallbackModel
 				chatCompletion.Model = fallbackModel
 				continue
+
 			} else if strings.Contains(err.Error(), "status: 401") {
 				log.Printf("[ERROR] Unauthorized (401) error from '%s': %s", aiRequestUrl, err)
 
 				return "", errors.New(fmt.Sprintf("Unauthorized (401) error from '%s': %s", aiRequestUrl, err))
 			}
+
+			lastError = err
 
 			log.Printf("[ERROR] Failed to create AI chat completion for URL '%s'. Retrying in 2 seconds (4): %s", aiRequestUrl, err)
 			time.Sleep(sleepTimer * time.Second)
@@ -10914,7 +10936,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 			// 3. Check for End of File (EOF) to know when the stream is finished
 			if errors.Is(err, io.EOF) {
-				log.Printf("[INFO] Stream finished after %d iterations", iterations)
+				//log.Printf("[INFO] Stream finished after %d iterations", iterations)
 				if info.Resp != nil && originalStreamEnabled {
 
 					info.Resp.Write([]byte("data: [DONE]\n\n"))
@@ -15036,7 +15058,13 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 		Resp: resp,
 	}
 
-	_, err = RunAiQuery(ctx, callInfo, "", "", chatCompletion)
+	// Look for the "authentication_id" query and add to AiCallInfo
+	authId := request.URL.Query().Get("authentication_id")
+	if len(authId) > 0 { 
+		callInfo.AuthenticationId = authId
+	}
+
+	contentOutput, err := RunAiQuery(ctx, callInfo, "", "", chatCompletion)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in chat completion forwarding: %s", err)
 		resp.WriteHeader(500)
@@ -15045,10 +15073,42 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Nothing to respond with, since RunAiQuery() takes care of it with callInfo.Resp
+	// Check status code of resp
+	if len(authId) > 0 && len(contentOutput) > 0 {
+		// Get the auth and set verified
+		auth, err := GetWorkflowAppAuthDatastore(ctx, authId)
+		if err != nil || auth.Id != authId {
+			return
+		}
+
+		// No need to redo validation
+		if auth.Validation.Valid == true {
+			return
+		}
+
+		// Update if not valid
+		auth.Validation.Valid = true
+		auth.Validation.ChangedAt = time.Now().Unix()
+		auth.Validation.LastValid = time.Now().Unix()
+		auth.Validation.ValidationRan = true
+
+		err = SetWorkflowAppAuthDatastore(ctx, *auth, auth.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed to update workflow app auth validation for auth %s in org %s: %s", authId, user.ActiveOrg.Id, err)
+		} else {
+			log.Printf("[INFO] Set workflow app auth validation to valid for auth %s in org %s", authId, user.ActiveOrg.Id)
+		}
+	}
 }
 
 //apiKey, aiRequestUrl, foundModel 
-func GetOrgAiCredentials(ctx context.Context, orgId string) (string, string, string) {
+func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, string, string) {
+
+	orgId := callInfo.OrgID
+	if len(orgId) == 0 {
+		return "", "", ""
+	}
+
 	apiKey := ""
 	aiRequestUrl := ""
 	foundModel := ""
@@ -15061,6 +15121,10 @@ func GetOrgAiCredentials(ctx context.Context, orgId string) (string, string, str
 	}
 
 	for _, auth := range auths {
+		if len(callInfo.AuthenticationId) > 0 && auth.Id != callInfo.AuthenticationId {
+			continue
+		} 
+
 		if strings.ToLower(auth.App.Name) != "openai" { 
 			continue
 		}
@@ -15092,7 +15156,8 @@ func GetOrgAiCredentials(ctx context.Context, orgId string) (string, string, str
 			}
 		}
 
-		if len(apiKey) > 0 && len(aiRequestUrl) > 0 {
+		// openai auth.Active is the primary one at all times
+		if auth.Active && len(apiKey) > 0 && len(aiRequestUrl) > 0 {
 			break
 		}
 	}
