@@ -9024,7 +9024,7 @@ data_filter:
 	}
 
 	if project.Environment == "cloud" {
-		completionRequest.Store = true
+		// completionRequest.Store = true
 		completionRequest.MaxCompletionTokens = 5000
 	} else {
 		// For on-prem
@@ -9086,19 +9086,20 @@ data_filter:
 	})
     
 	// Let's try to make the prompt cache key sticky
-	type ExtendedRequest struct {
-		openai.ChatCompletionRequest
-		PromptCacheKey       string `json:"prompt_cache_key,omitempty"`
-		PromptCacheRetention string `json:"prompt_cache_retention,omitempty"`
-	}
 
-	extendedReq := ExtendedRequest{
-		ChatCompletionRequest: completionRequest,
-		PromptCacheKey:        execution.ExecutionId,
-		PromptCacheRetention:  "24h",
-	}
+	// type ExtendedRequest struct {
+	// 	openai.ChatCompletionRequest
+	// 	PromptCacheKey       string `json:"prompt_cache_key,omitempty"`
+	// 	PromptCacheRetention string `json:"prompt_cache_retention,omitempty"`
+	// }
+	// extendedReq := ExtendedRequest{
+	// 	ChatCompletionRequest: completionRequest,
+	// 	PromptCacheKey:        execution.ExecutionId,
+	// 	PromptCacheRetention:  "24h",
+	// }
+	// initialAgentRequestBody, err := json.MarshalIndent(extendedReq, "", "  ")
 
-	initialAgentRequestBody, err := json.MarshalIndent(extendedReq, "", "  ")
+	initialAgentRequestBody, err := json.MarshalIndent(completionRequest, "", "  ")
 
 	if err != nil {
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling input for action %s: %s", execution.ExecutionId, startNode.ID, err)
@@ -9106,7 +9107,8 @@ data_filter:
 	}
 
 	if !json.Valid(initialAgentRequestBody) {
-		initialAgentRequestBody, err = json.Marshal(extendedReq)
+		// initialAgentRequestBody, err = json.Marshal(extendedReq) // use this line instead if ExtendedRequest is re-enabled above
+		initialAgentRequestBody, err = json.Marshal(completionRequest)
 		if err != nil {
 			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "marshal_request_body_fallback_failed", fmt.Sprintf("Failed to start AI Agent (4b): %s", err.Error()))
 		}
