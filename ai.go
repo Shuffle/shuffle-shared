@@ -10913,7 +10913,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 			lastError = err
 
-			log.Printf("[ERROR] Failed to create AI chat completion for URL '%s'. Retrying in 2 seconds (4): %s", aiRequestUrl, err)
+			log.Printf("[ERROR] Failed to create AI chat completion for URL '%s'. Retrying in 1 second (4): %s", aiRequestUrl, err)
 			time.Sleep(sleepTimer * time.Second)
 			continue
 		}
@@ -11016,7 +11016,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				delta := response.Choices[0].Delta
 				if delta.Refusal != "" {
 					// Print the refusal reasoning as it streams in
-					log.Printf("[ERROR] OpenAI refusal: %s", delta.Refusal)
+					log.Printf("[ERROR] OpenAI refusal response: %s", delta.Refusal)
 					if info.Resp != nil && originalStreamEnabled {
 						info.Resp.Write([]byte(fmt.Sprintf("data: [REFUSAL] %s\n\n", delta.Refusal)))
 						flusher.Flush()
