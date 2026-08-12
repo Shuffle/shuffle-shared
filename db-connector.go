@@ -1347,6 +1347,51 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	return workflowExecution, getErr
 }
 
+func getOrgStatsByAliasSearch(ctx context.Context, aliasName, orgId string) (*opensearch.Response, error) {
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"query": map[string]interface{}{
+			"ids": map[string]interface{}{
+				"values": []string{orgId},
+			},
+		},
+		"sort": []map[string]interface{}{
+			{
+				"edited": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
+			{
+				"created": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
+		},
+	}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return nil, err
+	}
+
+	resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+		Indices: []string{aliasName},
+		Body:    &buf,
+		Params: opensearchapi.SearchParams{
+			TrackTotalHits: true,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	res := resp.Inspect().Response
+	defer res.Body.Close()
+
+	return res, nil
+}
+
 func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string) (*WorkflowExecution, error) {
 	var buf bytes.Buffer
 	query := map[string]interface{}{
@@ -1577,6 +1622,13 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		}
 
 		res := resp.Inspect().Response
+		if err != nil && strings.Contains(err.Error(), "has more than one index associated with it") {
+			res, err = getOrgStatsByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
+			if err != nil {
+				log.Printf("[WARNING] Error in org STATS alias get: %s", err)
+			}
+		}
+
 		defer res.Body.Close()
 		respBody, bodyErr := ioutil.ReadAll(res.Body)
 		if err != nil || bodyErr != nil || res.StatusCode >= 300 {
@@ -4539,17 +4591,34 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 			DocumentID: orgId,
 		})
 
-		if err != nil && !strings.Contains(err.Error(), "status: 404") {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
-			return stats, err
-		}
-
 		if err != nil && strings.Contains(err.Error(), "status: 404") {
 			shouldInitializeStats = true
 		}
 
+		var fallbackResp *opensearch.Response
+		var fallbackErr error
+		aliasLookup := false
+
+
+		if err != nil && strings.Contains(err.Error(), "has more than one index associated with it") {
+			fallbackResp, fallbackErr = getOrgStatsByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), orgId)
+			if fallbackErr != nil {
+				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+				log.Printf("[ERROR] Org stats alias fallback failed for %s: %s", cacheKey, fallbackErr)
+				return stats, fallbackErr
+			}
+			aliasLookup = true
+		}
+
 		if !shouldInitializeStats {
-			res := resp.Inspect().Response
+			// FIXME: Hacky way to do it, too lazy to write a wrapper for this
+			var res *opensearch.Response
+			if aliasLookup {
+				res = fallbackResp
+			} else {
+				res = resp.Inspect().Response
+			}
+
 			defer res.Body.Close()
 			if res.StatusCode == 404 {
 				shouldInitializeStats = true
@@ -14781,7 +14850,9 @@ func GetDatastoreCategoryConfig(ctx context.Context, orgId, category string) (*D
 			DocumentID: id,
 		})
 		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			if debug {
+				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			}
 			return categoryData, err
 		}
 
