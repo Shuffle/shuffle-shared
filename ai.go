@@ -8982,7 +8982,7 @@ data_filter:
 	if skipAgentWait == "true" { 
 	} else if len(userMessage) == 0 {
 		log.Printf("[ERROR][%s] AI Agent: No user message/input found for action %s", execution.ExecutionId, startNode.ID)
-		return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "no_user_message", "No user message/input found for AI Agent start")
+		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "no_user_message", "No user message/input found for AI Agent start")
 	}
 
 	// Track who initiated this agent (for audit trail)
@@ -9156,14 +9156,14 @@ data_filter:
 
 	if err != nil {
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling input for action %s: %s", execution.ExecutionId, startNode.ID, err)
-		return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "marshal_request_body_failed", fmt.Sprintf("Failed to start AI Agent (4): %s", err.Error()))
+		return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "marshal_request_body_failed", fmt.Sprintf("Failed to start AI Agent (4): %s", err.Error()))
 	}
 
 	if !json.Valid(initialAgentRequestBody) {
 		// initialAgentRequestBody, err = json.Marshal(extendedReq) // use this line instead if ExtendedRequest is re-enabled above
 		initialAgentRequestBody, err = json.Marshal(completionRequest)
 		if err != nil {
-			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "marshal_request_body_fallback_failed", fmt.Sprintf("Failed to start AI Agent (4b): %s", err.Error()))
+			return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "marshal_request_body_fallback_failed", fmt.Sprintf("Failed to start AI Agent (4b): %s", err.Error()))
 		}
 
 		if !json.Valid(initialAgentRequestBody) {
@@ -9268,7 +9268,7 @@ data_filter:
 
 		if err != nil { 
 			log.Printf("[ERROR][%s] AI Agent: Failed running AI query for action %s: %s", execution.ExecutionId, startNode.ID, err)
-			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "run_ai_query_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
+			return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "run_ai_query_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 		}
 		
 		IncrementAgentTokens(ctx, execution.ExecutionId, execution.Workflow.OrgId, billingOrgId, &llmUsage)
@@ -9339,7 +9339,7 @@ data_filter:
 		marshalledAction, err := json.Marshal(aiNode)
 		if err != nil {
 			log.Printf("[ERROR][%s] AI Agent: Failed marshalling action for AI Agent (first agent request): %s", execution.ExecutionId, err)
-			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "marshal_ai_action_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
+			return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "marshal_ai_action_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 		}
 
 		fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s&parent_node=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization, startNode.ID)
@@ -9535,7 +9535,7 @@ data_filter:
 			if err != nil {
 				// resultMapping.Result is not a valid HTTPOutput wrapper — this usually means the Shuffle HTTP action itself failed (timeout,  or something like connection refused etc) and returned a bare error string instead of its normal JSON response.
 				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error_type=http_wrapper_parse_error unmarshal_err=%s raw_response=%s", execution.ExecutionId, execution.Workflow.OrgId, err, string(resultMapping.Result))
-				return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "llm_response_unmarshal_failed", fmt.Sprintf("LLM HTTP wrapper parse error: %s", err))
+				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_response_unmarshal_failed", fmt.Sprintf("LLM HTTP wrapper parse error: %s", err))
 			}
 
 			if outputMap.Status != 200 {
@@ -9559,7 +9559,7 @@ data_filter:
 				bodyString, err = json.Marshal(bodyMap)
 				if err != nil {
 					log.Printf("[ERROR] AI Agent: Failed marshalling body to string in AI Agent response: %s", err)
-					return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "llm_body_marshal_failed", fmt.Sprintf("Failed to start AI Agent (3): %s", err.Error()))
+					return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_body_marshal_failed", fmt.Sprintf("Failed to start AI Agent (3): %s", err.Error()))
 				}
 			}
 
