@@ -1347,12 +1347,132 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	return workflowExecution, getErr
 }
 
-func getOrgStatsByAliasSearch(ctx context.Context, aliasName, orgId string) (*opensearch.Response, error) {
+// Handles org_statistics aliases pointing to more than one index by resolving
+// every concrete index and reading the document directly from each one.
+func getOrgStatisticsFromAliasIndices(ctx context.Context, aliasName, id string) (*ExecutionInfo, error) {
+	aliasResp, err := project.Es.Indices.Alias.Get(ctx, opensearchapi.AliasGetReq{
+		Indices: []string{"*"},
+		Alias:   []string{aliasName},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed resolving org_statistics alias %s: %w", aliasName, err)
+	}
+
+	type aliasDetails struct {
+		IsWriteIndex bool `json:"is_write_index,omitempty"`
+	}
+	type candidate struct {
+		Index        string
+		IsWriteIndex bool
+		Stats        ExecutionInfo
+	}
+
+	indices := make([]candidate, 0, len(aliasResp.Indices))
+	for indexName, index := range aliasResp.Indices {
+		rawAlias, ok := index.Aliases[aliasName]
+		if !ok {
+			continue
+		}
+
+		details := aliasDetails{}
+		if len(rawAlias) > 0 {
+			if err := json.Unmarshal(rawAlias, &details); err != nil {
+				return nil, fmt.Errorf("failed parsing alias %s metadata for index %s: %w", aliasName, indexName, err)
+			}
+		}
+		indices = append(indices, candidate{Index: indexName, IsWriteIndex: details.IsWriteIndex})
+	}
+	if len(indices) == 0 {
+		return nil, fmt.Errorf("org_statistics alias %s has no concrete indices", aliasName)
+	}
+
+	ids := []string{id}
+	if loweredID := strings.ToLower(id); loweredID != id {
+		ids = append(ids, loweredID)
+	}
+
+	candidates := []candidate{}
+	for _, index := range indices {
+		for _, documentID := range ids {
+			resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+				Index:      index.Index,
+				DocumentID: documentID,
+			})
+			if err != nil {
+				if strings.Contains(err.Error(), "status: 404") {
+					continue
+				}
+				return nil, fmt.Errorf("failed reading org statistics %s from index %s: %w", id, index.Index, err)
+			}
+
+			if !resp.Found {
+				continue
+			}
+
+			stats := ExecutionInfo{}
+			if err := json.Unmarshal(resp.Source, &stats); err != nil {
+				return nil, fmt.Errorf("failed parsing org statistics %s from index %s: %w", id, index.Index, err)
+			}
+
+			index.Stats = stats
+			candidates = append(candidates, index)
+			break
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, errors.New("Org statistics doesn't exist")
+	}
+
+	// Prefer the most complete history. Date and rollover metadata only break
+	// ties, so usage counter values do not influence which document is returned.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		iEntries := len(candidates[i].Stats.DailyStatistics) + len(candidates[i].Stats.OnpremStats)
+		jEntries := len(candidates[j].Stats.DailyStatistics) + len(candidates[j].Stats.OnpremStats)
+		if iEntries != jEntries {
+			return iEntries > jEntries
+		}
+		iDate := latestOrgStatisticsDate(candidates[i].Stats)
+		jDate := latestOrgStatisticsDate(candidates[j].Stats)
+		if !iDate.Equal(jDate) {
+			return iDate.After(jDate)
+		}
+		if candidates[i].IsWriteIndex != candidates[j].IsWriteIndex {
+			return candidates[i].IsWriteIndex
+		}
+		iGeneration := getOpensearchGeneration(candidates[i].Index)
+		jGeneration := getOpensearchGeneration(candidates[j].Index)
+		if iGeneration != jGeneration {
+			return iGeneration > jGeneration
+		}
+		return candidates[i].Index > candidates[j].Index
+	})
+
+	return &candidates[0].Stats, nil
+}
+
+func latestOrgStatisticsDate(stats ExecutionInfo) time.Time {
+	latest := time.Time{}
+	for _, daily := range stats.DailyStatistics {
+		if daily.Date.After(latest) {
+			latest = daily.Date
+		}
+	}
+	for _, daily := range stats.OnpremStats {
+		if daily.Date.After(latest) {
+			latest = daily.Date
+		}
+	}
+
+	return latest
+}
+
+func getNotificationAliasSearch(ctx context.Context, aliasName, id string) (*Notification, error) {
 	var buf bytes.Buffer
 	query := map[string]interface{}{
+		"size": 1,
 		"query": map[string]interface{}{
 			"ids": map[string]interface{}{
-				"values": []string{orgId},
+				"values": []string{id},
 			},
 		},
 		"sort": []map[string]interface{}{
@@ -1371,7 +1491,7 @@ func getOrgStatsByAliasSearch(ctx context.Context, aliasName, orgId string) (*op
 		},
 	}
 
-		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
 		return nil, err
 	}
 
@@ -1389,7 +1509,31 @@ func getOrgStatsByAliasSearch(ctx context.Context, aliasName, orgId string) (*op
 	res := resp.Inspect().Response
 	defer res.Body.Close()
 
-	return res, nil
+	if res.StatusCode == 404 {
+		return nil, errors.New("notification doesn't exist")
+	}
+
+	respBody, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if res.StatusCode != 200 && res.StatusCode != 201 {
+		return nil, fmt.Errorf("failed notitication alias lookup. status=%d body=%s", res.StatusCode, string(respBody))
+	}
+
+	wrapped := NotificationSearchWrapper{}
+	err = json.Unmarshal(respBody, &wrapped)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(wrapped.Hits.Hits) == 0 {
+		return nil, errors.New("notification doesn't exist")
+	}
+
+	found := wrapped.Hits.Hits[0].Source
+	return &found, nil
 }
 
 func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string) (*WorkflowExecution, error) {
@@ -1614,56 +1758,57 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			DocumentID: id,
 		})
 
-		if err != nil {
-			if debug {
-				log.Printf("[WARNING] Error in org STATS get: %s", err)
-			}
-			//return err
-		}
-
-		res := resp.Inspect().Response
+		loadedFromAlias := false
 		if err != nil && strings.Contains(err.Error(), "has more than one index associated with it") {
-			res, err = getOrgStatsByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
+			orgStatistics, err = getOrgStatisticsFromAliasIndices(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 			if err != nil {
 				log.Printf("[WARNING] Error in org STATS alias get: %s", err)
+				return err
 			}
+			loadedFromAlias = true
+		} else if err != nil && !strings.Contains(err.Error(), "status: 404") {
+			log.Printf("[WARNING] Error in org STATS get: %s", err)
+			return err
 		}
 
-		defer res.Body.Close()
-		respBody, bodyErr := ioutil.ReadAll(res.Body)
-		if err != nil || bodyErr != nil || res.StatusCode >= 300 {
-			log.Printf("[WARNING] Failed getting org STATS body: %s. Resp: %d. Body err: %s", err, res.StatusCode, bodyErr)
+		if !loadedFromAlias {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			respBody, bodyErr := ioutil.ReadAll(res.Body)
+			if err != nil || bodyErr != nil || res.StatusCode >= 300 {
+				log.Printf("[WARNING] Failed getting org STATS body: %s. Resp: %d. Body err: %s", err, res.StatusCode, bodyErr)
 
-			// Init the org stats if it doesn't exist
-			if res.StatusCode == 404 {
-				orgStatistics.OrgId = orgId
-				orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
-				orgStatistics = handleDailyCacheUpdate(orgStatistics)
+				// Init the org stats if it doesn't exist
+				if res.StatusCode == 404 {
+					orgStatistics.OrgId = orgId
+					orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
+					orgStatistics = handleDailyCacheUpdate(orgStatistics)
 
-				marshalledData, err := json.Marshal(orgStatistics)
-				if err != nil {
-					log.Printf("[ERROR] Failed marshalling org STATS body: %s", err)
-				} else {
-					err := indexEs(ctx, nameKey, id, marshalledData)
+					marshalledData, err := json.Marshal(orgStatistics)
 					if err != nil {
-						log.Printf("[ERROR] Failed indexing org STATS body: %s", err)
+						log.Printf("[ERROR] Failed marshalling org STATS body: %s", err)
 					} else {
-						log.Printf("[DEBUG] Indexed org STATS body for %s", orgId)
+						err := indexEs(ctx, nameKey, id, marshalledData)
+						if err != nil {
+							log.Printf("[ERROR] Failed indexing org STATS body: %s", err)
+						} else {
+							log.Printf("[DEBUG] Indexed org STATS body for %s", orgId)
+						}
 					}
 				}
+
+				return err
 			}
 
-			return err
-		}
+			orgStatsWrapper := &ExecutionInfoWrapper{}
+			err = json.Unmarshal(respBody, &orgStatsWrapper)
+			if err != nil {
+				log.Printf("[ERROR] Failed unmarshalling org STATS body: %s", err)
+				return err
+			}
 
-		orgStatsWrapper := &ExecutionInfoWrapper{}
-		err = json.Unmarshal(respBody, &orgStatsWrapper)
-		if err != nil {
-			log.Printf("[ERROR] Failed unmarshalling org STATS body: %s", err)
-			return err
+			orgStatistics = &orgStatsWrapper.Source
 		}
-
-		orgStatistics = &orgStatsWrapper.Source
 		if orgStatistics.OrgName == "" || orgStatistics.OrgName == orgStatistics.OrgId {
 			org, err := GetOrg(ctx, orgId)
 			if err == nil {
@@ -4585,6 +4730,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 
 	if project.DbType == "opensearch" {
 		shouldInitializeStats := false
+		loadedFromAlias := false
 
 		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
 			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
@@ -4595,30 +4741,22 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 			shouldInitializeStats = true
 		}
 
-		var fallbackResp *opensearch.Response
-		var fallbackErr error
-		aliasLookup := false
-
-
 		if err != nil && strings.Contains(err.Error(), "has more than one index associated with it") {
-			fallbackResp, fallbackErr = getOrgStatsByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), orgId)
+			fallbackStats, fallbackErr := getOrgStatisticsFromAliasIndices(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), orgId)
 			if fallbackErr != nil {
 				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 				log.Printf("[ERROR] Org stats alias fallback failed for %s: %s", cacheKey, fallbackErr)
 				return stats, fallbackErr
 			}
-			aliasLookup = true
+			stats = fallbackStats
+			loadedFromAlias = true
+		} else if err != nil && !strings.Contains(err.Error(), "status: 404") {
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			return stats, err
 		}
 
-		if !shouldInitializeStats {
-			// FIXME: Hacky way to do it, too lazy to write a wrapper for this
-			var res *opensearch.Response
-			if aliasLookup {
-				res = fallbackResp
-			} else {
-				res = resp.Inspect().Response
-			}
-
+		if !shouldInitializeStats && !loadedFromAlias {
+			res := resp.Inspect().Response
 			defer res.Body.Close()
 			if res.StatusCode == 404 {
 				shouldInitializeStats = true
@@ -11767,7 +11905,16 @@ func GetNotification(ctx context.Context, id string) (*Notification, error) {
 			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
 			DocumentID: id,
 		})
-		if err != nil {
+
+		if err != nil && strings.Contains(err.Error(), "has more than one index associated with it") {
+			curFile, err = getNotificationAliasSearch(ctx, nameKey, id)
+			if err != nil {
+				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+				return &Notification{}, err
+			}
+
+			return curFile, nil
+		} else if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &Notification{}, err
 		}
