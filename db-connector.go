@@ -2312,10 +2312,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		workflowExecution.Workflow.Validation = validation
 	}
 
-	//if debug { 
-	//	log.Printf("\n\n[DEBUG][%s] EXEC CHECK? Actions: %d, Results: %d\n\n", workflowExecution.ExecutionId, len(workflowExecution.Workflow.Actions), len(workflowExecution.Results))
-	//}
-
 	// Make sure to not having missing items in the execution
 	lastexecVar := map[string]ActionResult{}
 	for actionIndex, action := range workflowExecution.Workflow.Actions {
@@ -2395,8 +2391,17 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					}
 				}
 
+
+				// Overwrites missing statuses
+				setFinished := mappedOutput.Status == "FINISHED" && mappedOutput.CompletedAt > 0 
 				finishFound := false
 				for decisionIndex, decision := range mappedOutput.Decisions { 
+					if setFinished && decision.RunDetails.Status == "" { 
+						mappedOutput.Decisions[decisionIndex].RunDetails.Status = "IGNORED"
+						mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
+						decisionsUpdated = true
+					}
+
 					if decision.Action == "finish" || decision.Category == "finish" { 
 
 						if decision.RunDetails.Status != "FINISHED" {  
@@ -2414,10 +2419,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				}
 
 				if finishFound { 
-					//if debug { 
-					//	log.Printf("[DEBUG][%s] SELF AGENT FINISH FOUND", workflowExecution.ExecutionId)
-					//}
-
 					mappedOutput.Status = "FINISHED"
 
 					result.Status = "SUCCESS"
@@ -2427,7 +2428,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					break
 				}
 
-				if !finishFound && (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") {
+				if !finishFound && (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") || decisionsUpdated { 
 					if workflowExecution.Results[resultIndex].StartedAt == 0 {
 						workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMilli()
 					}

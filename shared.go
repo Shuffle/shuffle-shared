@@ -15281,8 +15281,8 @@ func startWebhookTrigger(ctx context.Context, workflowId, triggerId, triggerName
 		Environment:    environment,
 		Auth:           auth,
 		CustomResponse: customResponse,
-		Version:        version,        // MISSING FIELD ADDED
-		VersionTimeout: versionTimeout, // MISSING FIELD ADDED
+		Version:        version,        
+		VersionTimeout: versionTimeout, 
 	}
 
 	// EXACTLY like HandleNewHook - set to running AFTER creation
@@ -18167,13 +18167,13 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	decisionIdResultIndex := -1 // Index of the item in the decision list
 	decisionIndex := -1         // Assigned index to it by LLM
 	for resultDecisionIndex, resultDecision := range mappedResult.Decisions {
-		if resultDecision.RunDetails.Id == decisionId {
-			//log.Printf("[DEBUG][%s] Current decision (%s) status is '%s'", workflowExecution.ExecutionId, resultDecision.RunDetails.Id, resultDecision.RunDetails.Status)
-
-			decisionIdResultIndex = resultDecisionIndex
-			decisionIndex = resultDecision.I
-			break
+		if resultDecision.RunDetails.Id != decisionId {
+			continue
 		}
+
+		decisionIdResultIndex = resultDecisionIndex
+		decisionIndex = resultDecision.I
+		break
 	}
 
 	if decisionIdResultIndex < 0 {
@@ -25481,7 +25481,15 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					cleanupFailures := false
 					fieldsChanged := false
-					for decisionIndex, decision := range unmarshalledDecision.Decisions {
+
+					lastIndex := -1
+					decisionIndex := -1
+					selectedDecision := AgentDecision{} 
+					for curIndex, decision := range unmarshalledDecision.Decisions {
+						if decision.I > lastIndex { 
+							lastIndex = decision.I
+						}
+
 						if decision.RunDetails.Id != decisionId {
 							continue
 						}
@@ -25533,7 +25541,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									log.Printf("[ERROR][%s] Invalid value for 'approve': %s", oldExecution.ExecutionId, value)
 								}
 
-								unmarshalledDecision.Decisions[decisionIndex] = decision
+								unmarshalledDecision.Decisions[curIndex] = decision
 								break
 							}
 
@@ -25562,7 +25570,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 									// Make the value max 50 bytes
 									decision.Reason = fmt.Sprintf("User Input: %.50s", value)
-									unmarshalledDecision.Decisions[decisionIndex] = decision
+									unmarshalledDecision.Decisions[curIndex] = decision
 
 									fieldsChanged = true
 									cleanupFailures = true
@@ -25601,23 +25609,72 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							fieldsChanged = true
 						}
 
-						if fieldsChanged {
-							decision.RunDetails.Status = "FINISHED"
-							decision.RunDetails.CompletedAt = time.Now().UnixMilli()
-							unmarshalledDecision.Decisions[decisionIndex] = decision
-
-							// Updates cache live
-							decisionId := fmt.Sprintf("agent-%s-%s", oldExecution.ExecutionId, decision.RunDetails.Id)
-							marshalledDecision, err := json.Marshal(decision)
-							if err != nil {
-								log.Printf("[ERROR][%s] Failed marshalling decision during agentic decision handling: %s", oldExecution.ExecutionId, err)
-							} else {
-								SetCache(ctx, decisionId, marshalledDecision, 600)
-							}
-
+						if fieldsChanged { 
+							selectedDecision = decision
+							decisionIndex = curIndex
 						}
 
 						break
+					}
+
+					// A recovery mechanism for possible errors, as to allow continues
+					// almost no matter what
+					if strings.HasPrefix(decisionId, "MISSING_") && !fieldsChanged { 
+						// Map execArg into map[string]string and find "continue" 
+						parsedArg := execArg
+						if strings.Contains(parsedArg, "continue") { 
+							mappedArg := map[string]string{}
+							err = json.Unmarshal([]byte(execArg), &mappedArg)
+							if arg, ok := mappedArg["continue"]; ok {
+								parsedArg = arg
+							}
+						}
+						
+						// Build a new 
+						selectedDecision = AgentDecision{
+							I: lastIndex+1,
+							Action: "ask", 
+							Tool: "ask", 
+							Category: "standalone",
+							Confidence: 1, 
+							Runs: "1",
+							Fields: []Valuereplace{
+								Valuereplace{
+									Key: "continue",
+									Value: "How do you want to continue?",
+									Answer: parsedArg,
+								},
+							},
+							Reason: fmt.Sprintf("User Input: %s", parsedArg),
+							ApprovalRequired: false,
+							DataFilter: "full",
+							Delay: "0", 
+							RunDetails: AgentDecisionRunDetails{ 
+								Id: decisionId,
+								Status: "FINISHED",
+								StartedAt: time.Now().UnixMilli(),
+								CompletedAt: time.Now().UnixMilli(),
+							},
+						}
+
+						unmarshalledDecision.Decisions = append(unmarshalledDecision.Decisions, selectedDecision)
+						decisionIndex = len(unmarshalledDecision.Decisions) - 1
+						fieldsChanged = true
+					}
+
+					if fieldsChanged && decisionIndex >= 0 {
+						selectedDecision.RunDetails.Status = "FINISHED"
+						selectedDecision.RunDetails.CompletedAt = time.Now().UnixMilli()
+						unmarshalledDecision.Decisions[decisionIndex] = selectedDecision
+
+						// Updates cache live
+						decisionId := fmt.Sprintf("agent-%s-%s", oldExecution.ExecutionId, selectedDecision.RunDetails.Id)
+						marshalledDecision, err := json.Marshal(selectedDecision)
+						if err != nil {
+							log.Printf("[ERROR][%s] Failed marshalling decision during agentic decision handling: %s", oldExecution.ExecutionId, err)
+						} else {
+							SetCache(ctx, decisionId, marshalledDecision, 600)
+						}
 					}
 
 					// Cleans them up to be "IGNORED" instead
@@ -27454,7 +27511,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				break
 			}
 
-			log.Printf("[ERROR][%s] Duplicate Field in Action: %#v", workflowExecution.ExecutionId, param.Name)
+			log.Printf("[ERROR][%s] Duplicate Field in Action %s (%s): %#v", workflowExecution.ExecutionId, workflowExecution.Workflow.Actions[actionIndex].Name, workflowExecution.Workflow.Actions[actionIndex].ID, param.Name)
 		}
 
 		workflowExecution.Workflow.Actions[actionIndex].Parameters = newparams
@@ -30849,7 +30906,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			}
 		}
 
-		//log.Printf("SOMETHING IS MISSING!: %s", notFound)
 		for _, item := range notFound {
 			if ArrayContains(executed, item) {
 				log.Printf("%s has already executed but no result!", item)

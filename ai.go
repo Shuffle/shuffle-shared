@@ -15,6 +15,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"reflect"
@@ -60,6 +61,40 @@ var assistantModel = model
 var decisionParameterName = "shuffle_agent_decision_id"
 var aiMaxTokens = 4096 // Controllable with AI_MAX_TOKENS env
 var aiReasoningEffort = ""
+
+// The overall Agent controller
+// Moved it here from structs due to openai mapping
+type AgentOutput struct {
+	Status    string          `json:"status" datastore:"status"`
+	Error     string          `json:"error,omitempty" datastore:"error"`
+	Decisions []AgentDecision `json:"decisions,omitempty" datastore:"decisions"`
+
+	// For easy testing
+	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
+	// For tracking of details parent<->child
+	StartedAt      int64                           `json:"started_at,omitempty" datastore:"started_at"`
+	CompletedAt    int64                           `json:"completed_at,omitempty" datastore:"completed_at"`
+	ExecutionId    string                          `json:"execution_id,omitempty" datastore:"execution_id"`
+	NodeId         string                          `json:"node_id,omitempty" datastore:"node_id"`
+	Memory         string                          `json:"memory,omitempty" datastore:"memory"`
+	Input          string                          `json:"input,omitempty" datastore:"input"`
+	OriginalInput  string                          `json:"original_input,omitempty" datastore:"original_input"`
+	AllowedActions []string                        `json:"allowed_actions,omitempty" datastore:"allowed_actions"`
+	Output         string                          `json:"output,omitempty" datastore:"output"`
+
+	// ExecutionMode controls how tool actions are dispatched for this agent run. i.e singul or direct
+	ExecutionMode string `json:"execution_mode,omitempty" datastore:"execution_mode"`
+
+	// Usage tracking for guardrails
+	LLMCallCount     int   `json:"llm_call_count,omitempty" datastore:"llm_call_count"`
+	TotalTokens      int64 `json:"total_tokens,omitempty" datastore:"total_tokens"`
+	PromptTokens     int64 `json:"prompt_tokens,omitempty" datastore:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens,omitempty" datastore:"completion_tokens"`
+
+	// Ordered debug info for full understanding
+	LLMRequests    []openai.ChatCompletionRequest `json:"llm_requests,omitempty" datastore:"llm_requests"`
+	LLMResponses []openai.ChatCompletionResponse `json:"llm_responses,omitempty" datastore:"llm_responses"`
+}
 
 func init() {
 	if tok := os.Getenv("AI_MAX_TOKENS"); tok != "" {
@@ -8866,7 +8901,7 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 1. **Analyze:** Does the "HISTORY" contain a successful execution that matches the core intent? An action's own "success: true" only confirms that the CALL succeeded (e.g. a process was started) - it does NOT by itself confirm the underlying task actually completed successfully. If a separate action exists to check the result/status of what you started (its description will say to call it after), you must call it and see a completed/successful result before treating the task as done.
 2. **Decision:**
    - **IF DONE:** Select "finish".
-   - **Fields:** category="finish", action="finish", fields=[{ "key": "output", "value": "Summary..." }]
+   - **Fields:** category="finish", action="finish", fields=[{ "key": "output", "value": "Complete markdown output with all the relevant details" }], reason=""
 
 ### PHASE 2: RECOVERY & RETRY
 **Only proceed if the task is NOT done.**
@@ -9220,9 +9255,14 @@ data_filter:
 	openaiOutput := openai.ChatCompletionResponse{}
 
 	if agentRunLocation == "local" { 
+		// Fake net/http response writer
+		recorder := httptest.NewRecorder()
+
 		callInfo := AiCallInfo{
 			Caller: "aiAgentRunner", 
 			OrgID: execution.Workflow.OrgId,
+
+			Resp: recorder,
 		}
 
 		output, err := RunAiQuery(
@@ -9238,6 +9278,21 @@ data_filter:
 			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "run_ai_query_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 		}
 
+		if recorder != nil {
+			result := recorder.Result()
+			defer result.Body.Close()
+
+			body, err := io.ReadAll(result.Body)
+			if err == nil {
+				err = json.Unmarshal(body, &openaiOutput)
+				if err != nil {
+					log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling AI query response for action %s: %s", execution.ExecutionId, startNode.ID, err)
+				}
+			} else {
+				log.Printf("[ERROR][%s] AI Agent: Failed reading AI query response body for action %s: %s", execution.ExecutionId, startNode.ID, err)
+			}
+		}
+
 		bodyString = []byte(output)
 		resultMapping.Result = output
 		resultMapping.ExecutionId = execution.ExecutionId
@@ -9249,6 +9304,8 @@ data_filter:
 
 		decisionString = output
 		skipHttpParsing = true
+
+		//openaiOutput := openai.ChatCompletionResponse{}
 
 	} else {
 		// FIXME: This part is almost never used anymore. Used to be necessary 
@@ -9700,6 +9757,13 @@ data_filter:
 			StartedAt:     time.Now().UnixMilli(),
 			CompletedAt:   0,
 
+			LLMRequests: []openai.ChatCompletionRequest{
+				completionRequest,
+			},
+			LLMResponses: []openai.ChatCompletionResponse{
+				openaiOutput,
+			},
+
 			Memory:        memorizationEngine,
 			ExecutionMode: executionMode,
 
@@ -9757,6 +9821,24 @@ data_filter:
 
 				agentOutput.Decisions = append(agentOutput.Decisions, mappedDecision)
 			}
+
+			if len(openaiOutput.ID) > 0 { 
+				found := false
+				for _, llmrequest := range agentOutput.LLMResponses {
+					if llmrequest.ID == openaiOutput.ID {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					agentOutput.LLMResponses = append(agentOutput.LLMResponses, openaiOutput)
+				
+					agentOutput.LLMRequests = append(agentOutput.LLMRequests, completionRequest)
+				}
+			
+			}
+
 
 			// Realtime update so that it looks correct in the UI between requests
 			if len(mappedDecisions) > 0 {
@@ -15130,9 +15212,16 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 			continue
 		} 
 
+		if len(callInfo.AuthenticationId) == 0 && auth.Active == false {
+			// Disallowing unactive auth, as that's how we control which to use
+			// from the agent frontend
+			continue
+		}
+
 		if strings.ToLower(auth.App.Name) != "openai" { 
 			continue
 		}
+
 
 		for _, field := range auth.Fields {
 			// Check if the auth has a valid API key
