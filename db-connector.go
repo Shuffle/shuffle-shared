@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"regexp"
 
 	//"github.com/goccy/go-json"
 
@@ -74,6 +75,8 @@ type ShuffleStorage struct {
 	CloudUrl      string
 	BucketName    string
 }
+
+var maxCacheKeyLength = 250
 
 // Create ElasticSearch/OpenSearch index prefix
 // It is used where a single cluster of ElasticSearch/OpenSearch utilized by several
@@ -234,6 +237,10 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 	}
 
 	name = strings.Replace(name, " ", "_", -1)
+	originalKey := name
+	if len(name) > maxCacheKeyLength || !regexp.MustCompile(`^[a-zA-Z0-9_.:-]+$`).MatchString(name) {
+		name = md5sum([]byte(name))
+	}
 
 	if len(memcached) > 0 {
 		item, err := mc.Get(name)
@@ -272,22 +279,22 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 				}
 
 				if len(totalData) == 0 {
-					log.Printf("[ERROR] Cache payload invalid for key %s", name)
-					return "", fmt.Errorf("Cache payload invalid for %s", name)
+					log.Printf("[ERROR] Cache payload invalid for key %s", originalKey)
+					return "", fmt.Errorf("Cache payload invalid for %s", originalKey)
 				}
 
 				return totalData, nil
 			} else {
 				if len(item.Value) == 0 {
-					log.Printf("[ERROR] Cache payload invalid for %s", name)
-					return "", fmt.Errorf("Cache payload invalid for %s", name)
+					log.Printf("[ERROR] Cache payload invalid for %s", originalKey)
+					return "", fmt.Errorf("Cache payload invalid for %s", originalKey)
 				}
 
 				return item.Value, nil
 			}
 		}
 
-		return "", errors.New(fmt.Sprintf("No cache found in SHUFFLE_MEMCACHED for %s", name))
+		return "", errors.New(fmt.Sprintf("No cache found in SHUFFLE_MEMCACHED for %s", originalKey))
 	}
 
 	if false {
@@ -295,7 +302,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		if item, err := memcache.Get(ctx, name); err != nil {
 
 		} else if err != nil {
-			return "", errors.New(fmt.Sprintf("Failed getting CLOUD cache for %s: %s", name, err))
+			return "", errors.New(fmt.Sprintf("Failed getting CLOUD cache for %s: %s", originalKey, err))
 		} else {
 			// Loops if cachesize is more than max allowed in memcache (multikey)
 			if len(item.Value) == maxCacheSize {
@@ -332,18 +339,18 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		if value, found := requestCache.Get(name); found {
 			return value, nil
 		} else {
-			return "", errors.New(fmt.Sprintf("Failed getting ONPREM cache for %s", name))
+			return "", errors.New(fmt.Sprintf("Failed getting ONPREM cache for %s", originalKey))
 		}
 	} else {
 		if value, found := requestCache.Get(name); found {
 			return value, nil
 		} else {
-			return "", errors.New(fmt.Sprintf("Failed getting cache for %s", name))
+			return "", errors.New(fmt.Sprintf("Failed getting cache for %s", originalKey))
 		}
 		//return "", errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
 	}
 
-	return "", errors.New(fmt.Sprintf("No cache found for %s", name))
+	return "", errors.New(fmt.Sprintf("No cache found for %s", originalKey))
 }
 
 // ClaimCacheKey atomically creates a short-lived key in shared Memcached.
@@ -378,8 +385,14 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 		return nil
 	}
 
+	name = strings.Replace(name, " ", "_", -1)
+	originalKey := name
+	if len(name) > maxCacheKeyLength || !regexp.MustCompile(`^[a-zA-Z0-9_.:-]+$`).MatchString(name) {
+		name = md5sum([]byte(name))
+	}
+
 	if len(data) == 0 {
-		log.Printf("[WARNING] Data is empty with key %s and expiration %d. Skipping cache", name, expiration)
+		log.Printf("[WARNING] Data is empty with key %s and expiration %d. Skipping cache", originalKey, expiration)
 	}
 
 	useMilliseconds := false
@@ -389,8 +402,6 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 		}
 	}
 
-	// Maxsize ish~
-	name = strings.Replace(name, " ", "_", -1)
 
 	// Splitting into multiple cache items
 	//if project.Environment == "cloud" || len(memcached) > 0 {
@@ -446,7 +457,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 
 				if err != nil {
 					if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
-						log.Printf("[ERROR] Failed setting cache for '%s' (1): %s", keyname, err)
+						log.Printf("[ERROR] Failed setting cache for '%s' (1): %s", originalKey, err)
 					}
 					break
 				} else {
@@ -455,7 +466,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 					nextStep += chunkSize
 
 					keyAmount += 1
-					//log.Printf("%s: %d: %d", keyname, totalAdded, len(data))
+					//log.Printf("%s: %d: %d", originalKey, totalAdded, len(data))
 
 					keyname = fmt.Sprintf("%s_%d", name, keyAmount)
 					if totalAdded > len(data) {
@@ -491,9 +502,9 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 
 			if err != nil {
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
-					log.Printf("[ERROR] Failed setting memcache for key '%s' with data size %d (2): %s", name, len(data), err)
+					log.Printf("[ERROR] Failed setting memcache for key '%s' with data size %d (2): %s", originalKey, len(data), err)
 				} else {
-					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", name, err)
+					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", originalKey, err)
 				}
 			}
 		}
@@ -2436,7 +2447,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					break
 				}
 
-				if !finishFound && innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS" {
+				if !finishFound && (innerresult.Status == "WAITING" || innerresult.Status == "SUCCESS") {
 					if workflowExecution.Results[resultIndex].StartedAt == 0 {
 						workflowExecution.Results[resultIndex].StartedAt = time.Now().UnixMilli()
 					}
@@ -2465,6 +2476,11 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}
 						}
 
+						parsedDelay, err := strconv.Atoi(decision.Delay)
+						if err != nil { 
+							parsedDelay = 0
+						}
+
 						decisionId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
 						if decision.RunDetails.Status == "FINISHED" || decision.RunDetails.Status == "IGNORED" {
 							finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
@@ -2473,13 +2489,14 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 							failedFound = true
 							continue
-						} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" {
+						} else if decision.RunDetails.Status == "RUNNING" && decision.Action != "ask" && parsedDelay <= 0 {
 
 							// Max runtime of a decision at 5 minutes
 							startedTs := decision.RunDetails.StartedAt
 							if startedTs > 0 && startedTs < maxSecondsTimestamp {
 								startedTs *= 1000
 							}
+
 							if startedTs > 0 && time.Now().UnixMilli()-startedTs > 300000 {
 								timeoutFlagKey := fmt.Sprintf("agent-%s-%s-timeout-handled", workflowExecution.ExecutionId, decision.RunDetails.Id)
 								if _, err := GetCache(ctx, timeoutFlagKey); err == nil {
@@ -2509,7 +2526,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 								}
 							}
 						} else {
-							if decision.RunDetails.CompletedAt > 0 {
+							if decision.RunDetails.CompletedAt > 0 && decision.RunDetails.Status != "WAITING" {
 								if debug {
 									log.Printf("[DEBUG] Rewriting decision %s to FINISHED based on completed at timestamp.", decision.RunDetails.Id)
 								}
@@ -2522,6 +2539,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 								if err == nil {
 									err = SetCache(ctx, decisionId, marshalledDecision, 60)
 								}
+
 								continue
 							} else {
 								if decision.Action == "finish" && decision.RunDetails.Status == "" {
@@ -2546,7 +2564,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}
 						}
 
-						//log.Printf("[DEBUG] Check cache for %s with status %s", decision.RunDetails.Id, decision.RunDetails.Status)
 						cache, err := GetCache(ctx, decisionId)
 						if err == nil {
 							foundDecision := AgentDecision{}
@@ -2661,6 +2678,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						if debug { 
 							log.Printf("[INFO][%s] Agent action %s marked as FINISHED, updating result status to SUCCESS.", workflowExecution.ExecutionId, action.ID)
 						}
+
 						workflowExecution.Results[resultIndex].Status = "SUCCESS"
 						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 					}
@@ -4870,7 +4888,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		//log.Printf("\n\n\nLooking for workflows for org %s with user %s (%s)\n\n\n", user.ActiveOrg.Id, user.Username, user.Id)
 
 		cursorStr := ""
+		// Sort by edited
 		query := datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
+		query = query.Order("-edited")
 		for {
 			it := project.Dbclient.Run(ctx, query)
 			if len(workflows) >= maxAmount {
@@ -4882,6 +4902,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				_, err = it.Next(&innerWorkflow)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+						if debug { 
+							//log.Printf("[DEBUG] Workflow load iterator issue: %s", err)
+						}
 
 					} else {
 						if !strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
@@ -4893,10 +4916,18 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Public {
+					//if debug { 
+					//	log.Printf("[DEBUG] Skipping public workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
+					//}
+
 					continue
 				}
 
 				if innerWorkflow.Hidden {
+					//if debug { 
+					//	log.Printf("[DEBUG] Skipping HIDDEN workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
+					//}
+
 					continue
 				}
 
@@ -4917,9 +4948,20 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 			}
 
+			// Fallback for when the iterator fails due to a datastore issue 
+			// (e.g. "cannot load field" error) and similar
 			if err != iterator.Done {
-				log.Printf("[INFO] Failed fetching workflow results: %v", err)
-				break
+				log.Printf("[WARNING] Failed fetching workflow results for org %s: %v", user.ActiveOrg.Id, err)
+
+				// Check if query contains edited or not 
+				if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition desc") && strings.Contains(fmt.Sprintf("%s", query), "edited") {
+					log.Printf("[ERROR] Retrying workflow query without Edited sort due to error: %s", err)
+
+					query = datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
+					continue
+				} else {
+					break
+				}
 			}
 
 			// Get the cursor for the next page of results.
@@ -4941,17 +4983,34 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 
 	//log.Printf("Found %d workflows for user %s (%s) in org %s", len(workflows), user.Username, user.Id, user.ActiveOrg.Id)
 
+	// Sort them by edited timestap
+	sort.Slice(workflows, func(i, j int) bool {
+		return workflows[i].Edited > workflows[j].Edited
+	})
+
 	if len(workflows) > maxAmount {
+		if debug { 
+			log.Printf("[WARNING] Found %d workflows for user %s (%s) in org %s, but limiting to %d", len(workflows), user.Username, user.Id, user.ActiveOrg.Id, maxAmount)
+		}
+
 		workflows = workflows[:maxAmount]
 	}
 
 	fixedWorkflows := []Workflow{}
 	for _, workflow := range workflows {
 		if workflow.Hidden {
+			if debug {
+				log.Printf("[DEBUG] Skipping HIDDEN workflow %s (%s) for org %s", workflow.Name, workflow.ID, user.ActiveOrg.Id)
+			}
+
 			continue
 		}
 
 		if len(workflow.Name) == 0 && len(workflow.Actions) <= 1 {
+			if debug {
+				log.Printf("[DEBUG] Skipping workflow '%s' (%s) for org %s because it has no name and only 1 action", workflow.Name, workflow.ID, user.ActiveOrg.Id)
+			}
+
 			continue
 		}
 
@@ -4962,10 +5021,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 
 		fixedWorkflows = append(fixedWorkflows, workflow)
 	}
-
-	slice.Sort(fixedWorkflows[:], func(i, j int) bool {
-		return fixedWorkflows[i].Edited > fixedWorkflows[j].Edited
-	})
 
 	if project.CacheDb {
 		newjson, err := json.Marshal(fixedWorkflows)
@@ -6713,6 +6768,10 @@ func FindUserBySSOIdentity(ctx context.Context, sub, clientID, orgID, email stri
 func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 	var users []User
 
+	if len(username) == 0 {
+		return users, errors.New("username is required (2)")
+	}
+
 	nameKey := "Users"
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -6812,6 +6871,10 @@ func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 
 func FindUser(ctx context.Context, username string) ([]User, error) {
 	var users []User
+
+	if len(username) == 0 {
+		return users, errors.New("username is required (3)")
+	}
 
 	nameKey := "Users"
 	if project.DbType == "opensearch" {
@@ -6917,6 +6980,10 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 func GetUser(ctx context.Context, username string) (*User, error) {
 	curUser := &User{}
 
+	if len(username) == 0 {
+		return curUser, errors.New("username is empty")
+	}
+
 	parsedKey := strings.ToLower(username)
 	cacheKey := fmt.Sprintf("user_%s", parsedKey)
 	if project.CacheDb {
@@ -6967,7 +7034,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 		if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
 			// Handles migration of the user
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[DEBUG] Failed loading user %s (this is ok): %s", username, err)
+				log.Printf("[DEBUG] Failed loading user '%s' (this is ok): %s", username, err)
 			} else {
 				log.Printf("[WARNING] Failed loading user %s - does it have to change? %s", username, err)
 				return &User{}, err
@@ -11281,6 +11348,9 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 }
 
 func GetApikey(ctx context.Context, apikey string) (User, error) {
+	if len(apikey) == 0 {
+		return User{}, errors.New("No apikey provided")
+	}
 
 	// Query for the specific API-key in users
 	nameKey := "Users"

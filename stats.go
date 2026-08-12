@@ -1392,6 +1392,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.DailyAgentExecutions = 0
 	executionInfo.DailyAgentExecutionsSuccessful = 0
 	executionInfo.DailyAgentExecutionsFailed = 0
+	executionInfo.DailyAgentMaxLoopsHit = 0
 	executionInfo.DailyAgentTokens = 0
 	executionInfo.DailyAgentInputTokens = 0
 	executionInfo.DailyAgentOutputTokens = 0
@@ -1437,6 +1438,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyAgentExecutions = 0
 		executionInfo.MonthlyAgentExecutionsSuccessful = 0
 		executionInfo.MonthlyAgentExecutionsFailed = 0
+		executionInfo.MonthlyAgentMaxLoopsHit = 0
 		executionInfo.MonthlyAgentTokens = 0
 		executionInfo.MonthlyAgentInputTokens = 0
 		executionInfo.MonthlyAgentOutputTokens = 0
@@ -1597,6 +1599,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalAgentExecutionsFailed += int64(increment)
 		orgStatistics.MonthlyAgentExecutionsFailed += int64(increment)
 		orgStatistics.DailyAgentExecutionsFailed += int64(increment)
+	} else if dataType == "agent_max_loops_hit" {
+		orgStatistics.TotalAgentMaxLoopsHit += int64(increment)
+		orgStatistics.MonthlyAgentMaxLoopsHit += int64(increment)
+		orgStatistics.DailyAgentMaxLoopsHit += int64(increment)
 	} else if dataType == "agent_tokens" {
 		orgStatistics.TotalAgentTokens += int64(increment)
 		orgStatistics.MonthlyAgentTokens += int64(increment)
@@ -1613,6 +1619,34 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalAgentCachedTokens += int64(increment)
 		orgStatistics.MonthlyAgentCachedTokens += int64(increment)
 		orgStatistics.DailyAgentCachedTokens += int64(increment)
+	} else if dataType == "child_org_agent_executions" {
+		orgStatistics.TotalChildOrgAgentExecutions += int64(increment)
+		orgStatistics.MonthlyChildOrgAgentExecutions += int64(increment)
+		orgStatistics.DailyChildOrgAgentExecutions += int64(increment)
+	} else if dataType == "child_org_agent_executions_successful" {
+		orgStatistics.TotalChildOrgAgentExecutionsSuccessful += int64(increment)
+		orgStatistics.MonthlyChildOrgAgentExecutionsSuccessful += int64(increment)
+		orgStatistics.DailyChildOrgAgentExecutionsSuccessful += int64(increment)
+	} else if dataType == "child_org_agent_executions_failed" {
+		orgStatistics.TotalChildOrgAgentExecutionsFailed += int64(increment)
+		orgStatistics.MonthlyChildOrgAgentExecutionsFailed += int64(increment)
+		orgStatistics.DailyChildOrgAgentExecutionsFailed += int64(increment)
+	} else if dataType == "child_org_agent_tokens" {
+		orgStatistics.TotalChildOrgAgentTokens += int64(increment)
+		orgStatistics.MonthlyChildOrgAgentTokens += int64(increment)
+		orgStatistics.DailyChildOrgAgentTokens += int64(increment)
+	} else if dataType == "child_org_agent_input_tokens" {
+		orgStatistics.TotalChildOrgAgentInputTokens += int64(increment)
+		orgStatistics.MonthlyChildOrgAgentInputTokens += int64(increment)
+		orgStatistics.DailyChildOrgAgentInputTokens += int64(increment)
+	} else if dataType == "child_org_agent_output_tokens" {
+		orgStatistics.TotalChildOrgAgentOutputTokens += int64(increment)
+		orgStatistics.MonthlyChildOrgAgentOutputTokens += int64(increment)
+		orgStatistics.DailyChildOrgAgentOutputTokens += int64(increment)
+	} else if dataType == "child_org_agent_cached_tokens" {
+		orgStatistics.TotalChildOrgAgentCachedTokens += int64(increment)
+		orgStatistics.MonthlyChildOrgAgentCachedTokens += int64(increment)
+		orgStatistics.DailyChildOrgAgentCachedTokens += int64(increment)
 	} else {
 		//log.Printf("\n\n[ERROR] Unknown data type in stats increment for org %s: %s. Appending to custom list.\n\n", orgStatistics.OrgId, dataType)
 		appendCustom = true

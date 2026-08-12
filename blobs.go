@@ -112,6 +112,12 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 				if !workflowIdFound {
 					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+					automationOption := DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					}
+
+					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 				}
 
 				datastoreCategoryConfigEdited = true
@@ -159,7 +165,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 		// 3 year retention
 		if categoryConfig.Settings.Timeout == 0 {
-			categoryConfig.Settings.Timeout = 946080000
+			categoryConfig.Settings.Timeout = 94608000
 			datastoreCategoryConfigEdited = true
 		}
 
@@ -438,6 +444,12 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 				if !workflowIdFound {
 					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+					automationOption := DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					}
+
+					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 				}
 
 				datastoreCategoryConfigEdited = true
@@ -520,6 +532,12 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 				if !workflowIdFound {
 					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+					automationOption := DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					}
+
+					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 				}
 
 				datastoreCategoryConfigEdited = true

@@ -3,6 +3,7 @@ package shuffle
 import (
 	"encoding/json"
 	"encoding/xml"
+	"net/http"
 	"sync"
 	"time"
 
@@ -397,24 +398,31 @@ type IncrementInCache struct {
 type DailyStatistics struct {
 	Date time.Time `json:"date" datastore:"date"`
 
-	AppExecutions              int64 `json:"app_executions" datastore:"app_executions"`
-	ChildAppExecutions         int64 `json:"child_app_executions" datastore:"child_app_executions"`
-	AppExecutionsFailed        int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
-	SubflowExecutions          int64 `json:"subflow_executions" datastore:"subflow_executions"`
-	WorkflowExecutions         int64 `json:"workflow_executions" datastore:"workflow_executions"`
-	WorkflowExecutionsFinished int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
-	WorkflowExecutionsFailed   int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
-	OrgSyncActions             int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
-	CloudExecutions            int64 `json:"cloud_executions" datastore:"cloud_executions"`
-	OnpremExecutions           int64 `json:"onprem_executions" datastore:"onprem_executions"`
-	AIUsage                    int64 `json:"ai_executions" datastore:"ai_executions"`
-	AgentExecutions            int64 `json:"agent_executions" datastore:"agent_executions"`
-	AgentExecutionsSuccessful  int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
-	AgentExecutionsFailed      int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
-	AgentTokens                int64 `json:"agent_tokens" datastore:"agent_tokens"`
-	AgentInputTokens           int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
-	AgentOutputTokens          int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
-	AgentCachedTokens          int64 `json:"agent_cached_tokens" datastore:"agent_cached_tokens"`
+	AppExecutions                     int64 `json:"app_executions" datastore:"app_executions"`
+	ChildAppExecutions                int64 `json:"child_app_executions" datastore:"child_app_executions"`
+	AppExecutionsFailed               int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
+	SubflowExecutions                 int64 `json:"subflow_executions" datastore:"subflow_executions"`
+	WorkflowExecutions                int64 `json:"workflow_executions" datastore:"workflow_executions"`
+	WorkflowExecutionsFinished        int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
+	WorkflowExecutionsFailed          int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
+	OrgSyncActions                    int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
+	CloudExecutions                   int64 `json:"cloud_executions" datastore:"cloud_executions"`
+	OnpremExecutions                  int64 `json:"onprem_executions" datastore:"onprem_executions"`
+	AIUsage                           int64 `json:"ai_executions" datastore:"ai_executions"`
+	AgentExecutions                   int64 `json:"agent_executions" datastore:"agent_executions"`
+	AgentExecutionsSuccessful         int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
+	AgentExecutionsFailed             int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
+	AgentTokens                       int64 `json:"agent_tokens" datastore:"agent_tokens"`
+	AgentInputTokens                  int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
+	AgentOutputTokens                 int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
+	AgentCachedTokens                 int64 `json:"agent_cached_tokens" datastore:"agent_cached_tokens"`
+	ChildOrgAgentExecutions           int64 `json:"child_org_agent_executions" datastore:"child_org_agent_executions"`
+	ChildOrgAgentExecutionsSuccessful int64 `json:"child_org_agent_executions_successful" datastore:"child_org_agent_executions_successful"`
+	ChildOrgAgentExecutionsFailed     int64 `json:"child_org_agent_executions_failed" datastore:"child_org_agent_executions_failed"`
+	ChildOrgAgentTokens               int64 `json:"child_org_agent_tokens" datastore:"child_org_agent_tokens"`
+	ChildOrgAgentInputTokens          int64 `json:"child_org_agent_input_tokens" datastore:"child_org_agent_input_tokens"`
+	ChildOrgAgentOutputTokens         int64 `json:"child_org_agent_output_tokens" datastore:"child_org_agent_output_tokens"`
+	ChildOrgAgentCachedTokens         int64 `json:"child_org_agent_cached_tokens" datastore:"child_org_agent_cached_tokens"`
 
 	ApiUsage int64      `json:"api_usage" datastore:"api_usage"`
 	AppUsage []AppUsage `json:"app_usage" datastore:"app_usage"`
@@ -434,46 +442,64 @@ type ExecutionInfo struct {
 	DailyStatistics []DailyStatistics `json:"daily_statistics" datastore:"daily_statistics"`
 	OnpremStats     []DailyStatistics `json:"onprem_stats,omitempty" datastore:"onprem_stats"`
 
-	TotalAppExecutions              int64 `json:"total_app_executions" datastore:"total_app_executions"`
-	TotalChildAppExecutions         int64 `json:"total_child_app_executions" datastore:"total_child_app_executions"`
-	TotalAppExecutionsFailed        int64 `json:"total_app_executions_failed" datastore:"total_app_executions_failed"`
-	TotalSubflowExecutions          int64 `json:"total_subflow_executions" datastore:"total_subflow_executions"`
-	TotalWorkflowExecutions         int64 `json:"total_workflow_executions" datastore:"total_workflow_executions"`
-	TotalWorkflowExecutionsFinished int64 `json:"total_workflow_executions_finished" datastore:"total_workflow_executions_finished"`
-	TotalWorkflowExecutionsFailed   int64 `json:"total_workflow_executions_failed" datastore:"total_workflow_executions_failed"`
-	TotalOrgSyncActions             int64 `json:"total_org_sync_actions" datastore:"total_org_sync_actions"`
-	TotalCloudExecutions            int64 `json:"total_cloud_executions" datastore:"total_cloud_executions"`
-	TotalOnpremExecutions           int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
-	TotalAIUsage                    int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
-	TotalAgentExecutions            int64 `json:"total_agent_executions" datastore:"total_agent_executions"`
-	TotalAgentExecutionsSuccessful  int64 `json:"total_agent_executions_successful" datastore:"total_agent_executions_successful"`
-	TotalAgentExecutionsFailed      int64 `json:"total_agent_executions_failed" datastore:"total_agent_executions_failed"`
-	TotalAgentTokens                int64 `json:"total_agent_tokens" datastore:"total_agent_tokens"`
-	TotalAgentInputTokens           int64 `json:"total_agent_input_tokens" datastore:"total_agent_input_tokens"`
-	TotalAgentOutputTokens          int64 `json:"total_agent_output_tokens" datastore:"total_agent_output_tokens"`
-	TotalAgentCachedTokens          int64 `json:"total_agent_cached_tokens" datastore:"total_agent_cached_tokens"`
-	TotalChildWorkflowExecutions    int64 `json:"total_child_workflow_executions" datastore:"total_child_workflow_executions"`
+	TotalAppExecutions                     int64 `json:"total_app_executions" datastore:"total_app_executions"`
+	TotalChildAppExecutions                int64 `json:"total_child_app_executions" datastore:"total_child_app_executions"`
+	TotalAppExecutionsFailed               int64 `json:"total_app_executions_failed" datastore:"total_app_executions_failed"`
+	TotalSubflowExecutions                 int64 `json:"total_subflow_executions" datastore:"total_subflow_executions"`
+	TotalWorkflowExecutions                int64 `json:"total_workflow_executions" datastore:"total_workflow_executions"`
+	TotalWorkflowExecutionsFinished        int64 `json:"total_workflow_executions_finished" datastore:"total_workflow_executions_finished"`
+	TotalWorkflowExecutionsFailed          int64 `json:"total_workflow_executions_failed" datastore:"total_workflow_executions_failed"`
+	TotalOrgSyncActions                    int64 `json:"total_org_sync_actions" datastore:"total_org_sync_actions"`
+	TotalCloudExecutions                   int64 `json:"total_cloud_executions" datastore:"total_cloud_executions"`
+	TotalOnpremExecutions                  int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
+	TotalAIUsage                           int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
+	TotalAgentExecutions                   int64 `json:"total_agent_executions" datastore:"total_agent_executions"`
+	TotalAgentExecutionsSuccessful         int64 `json:"total_agent_executions_successful" datastore:"total_agent_executions_successful"`
+	TotalAgentExecutionsFailed             int64 `json:"total_agent_executions_failed" datastore:"total_agent_executions_failed"`
+	TotalAgentTokens                       int64 `json:"total_agent_tokens" datastore:"total_agent_tokens"`
+	TotalAgentInputTokens                  int64 `json:"total_agent_input_tokens" datastore:"total_agent_input_tokens"`
+	TotalAgentOutputTokens                 int64 `json:"total_agent_output_tokens" datastore:"total_agent_output_tokens"`
+	TotalAgentCachedTokens                 int64 `json:"total_agent_cached_tokens" datastore:"total_agent_cached_tokens"`
+	TotalAgentMaxLoopsHit                  int64 `json:"total_agent_max_loops_hit" datastore:"total_agent_max_loops_hit"`
+	TotalChildOrgAgentExecutions           int64 `json:"total_child_org_agent_executions" datastore:"total_child_org_agent_executions"`
+	TotalChildOrgAgentExecutionsSuccessful int64 `json:"total_child_org_agent_executions_successful" datastore:"total_child_org_agent_executions_successful"`
+	TotalChildOrgAgentExecutionsFailed     int64 `json:"total_child_org_agent_executions_failed" datastore:"total_child_org_agent_executions_failed"`
+	TotalChildOrgAgentTokens               int64 `json:"total_child_org_agent_tokens" datastore:"total_child_org_agent_tokens"`
+	TotalChildOrgAgentInputTokens          int64 `json:"total_child_org_agent_input_tokens" datastore:"total_child_org_agent_input_tokens"`
+	TotalChildOrgAgentOutputTokens         int64 `json:"total_child_org_agent_output_tokens" datastore:"total_child_org_agent_output_tokens"`
+	TotalChildOrgAgentCachedTokens         int64 `json:"total_child_org_agent_cached_tokens" datastore:"total_child_org_agent_cached_tokens"`
+	TotalChildOrgAgentMaxLoopsHit          int64 `json:"total_child_org_agent_max_loops_hit" datastore:"total_child_org_agent_max_loops_hit"`
+	TotalChildWorkflowExecutions           int64 `json:"total_child_workflow_executions" datastore:"total_child_workflow_executions"`
 
-	MonthlyApiUsage                   int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
-	MonthlyChildAppExecutions         int64 `json:"monthly_child_app_executions,omitempty" datastore:"monthly_child_app_executions"`
-	MonthlyAppExecutions              int64 `json:"monthly_app_executions,omitempty" datastore:"monthly_app_executions"`
-	MonthlyAppExecutionsFailed        int64 `json:"monthly_app_executions_failed,omitempty" datastore:"monthly_app_executions_failed"`
-	MonthlySubflowExecutions          int64 `json:"monthly_subflow_executions,omitempty" datastore:"monthly_subflow_executions"`
-	MonthlyWorkflowExecutions         int64 `json:"monthly_workflow_executions,omitempty" datastore:"monthly_workflow_executions"`
-	MonthlyChildWorkflowExecutions    int64 `json:"monthly_child_workflow_executions,omitempty" datastore:"monthly_child_workflow_executions"`
-	MonthlyWorkflowExecutionsFinished int64 `json:"monthly_workflow_executions_finished,omitempty" datastore:"monthly_workflow_executions_finished"`
-	MonthlyWorkflowExecutionsFailed   int64 `json:"monthly_workflow_executions_failed,omitempty" datastore:"monthly_workflow_executions_failed"`
-	MonthlyOrgSyncActions             int64 `json:"monthly_org_sync_actions,omitempty" datastore:"monthly_org_sync_actions"`
-	MonthlyCloudExecutions            int64 `json:"monthly_cloud_executions,omitempty" datastore:"monthly_cloud_executions"`
-	MonthlyOnpremExecutions           int64 `json:"monthly_onprem_executions,omitempty" datastore:"monthly_onprem_executions"`
-	MonthlyAIUsage                    int64 `json:"monthly_ai_executions,omitempty" datastore:"monthly_ai_executions"`
-	MonthlyAgentExecutions            int64 `json:"monthly_agent_executions,omitempty" datastore:"monthly_agent_executions"`
-	MonthlyAgentExecutionsSuccessful  int64 `json:"monthly_agent_executions_successful,omitempty" datastore:"monthly_agent_executions_successful"`
-	MonthlyAgentExecutionsFailed      int64 `json:"monthly_agent_executions_failed,omitempty" datastore:"monthly_agent_executions_failed"`
-	MonthlyAgentTokens                int64 `json:"monthly_agent_tokens,omitempty" datastore:"monthly_agent_tokens"`
-	MonthlyAgentInputTokens           int64 `json:"monthly_agent_input_tokens,omitempty" datastore:"monthly_agent_input_tokens"`
-	MonthlyAgentOutputTokens          int64 `json:"monthly_agent_output_tokens,omitempty" datastore:"monthly_agent_output_tokens"`
-	MonthlyAgentCachedTokens          int64 `json:"monthly_agent_cached_tokens,omitempty" datastore:"monthly_agent_cached_tokens"`
+	MonthlyApiUsage                          int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
+	MonthlyChildAppExecutions                int64 `json:"monthly_child_app_executions,omitempty" datastore:"monthly_child_app_executions"`
+	MonthlyAppExecutions                     int64 `json:"monthly_app_executions,omitempty" datastore:"monthly_app_executions"`
+	MonthlyAppExecutionsFailed               int64 `json:"monthly_app_executions_failed,omitempty" datastore:"monthly_app_executions_failed"`
+	MonthlySubflowExecutions                 int64 `json:"monthly_subflow_executions,omitempty" datastore:"monthly_subflow_executions"`
+	MonthlyWorkflowExecutions                int64 `json:"monthly_workflow_executions,omitempty" datastore:"monthly_workflow_executions"`
+	MonthlyChildWorkflowExecutions           int64 `json:"monthly_child_workflow_executions,omitempty" datastore:"monthly_child_workflow_executions"`
+	MonthlyWorkflowExecutionsFinished        int64 `json:"monthly_workflow_executions_finished,omitempty" datastore:"monthly_workflow_executions_finished"`
+	MonthlyWorkflowExecutionsFailed          int64 `json:"monthly_workflow_executions_failed,omitempty" datastore:"monthly_workflow_executions_failed"`
+	MonthlyOrgSyncActions                    int64 `json:"monthly_org_sync_actions,omitempty" datastore:"monthly_org_sync_actions"`
+	MonthlyCloudExecutions                   int64 `json:"monthly_cloud_executions,omitempty" datastore:"monthly_cloud_executions"`
+	MonthlyOnpremExecutions                  int64 `json:"monthly_onprem_executions,omitempty" datastore:"monthly_onprem_executions"`
+	MonthlyAIUsage                           int64 `json:"monthly_ai_executions,omitempty" datastore:"monthly_ai_executions"`
+	MonthlyAgentExecutions                   int64 `json:"monthly_agent_executions,omitempty" datastore:"monthly_agent_executions"`
+	MonthlyAgentExecutionsSuccessful         int64 `json:"monthly_agent_executions_successful,omitempty" datastore:"monthly_agent_executions_successful"`
+	MonthlyAgentExecutionsFailed             int64 `json:"monthly_agent_executions_failed,omitempty" datastore:"monthly_agent_executions_failed"`
+	MonthlyAgentTokens                       int64 `json:"monthly_agent_tokens,omitempty" datastore:"monthly_agent_tokens"`
+	MonthlyAgentInputTokens                  int64 `json:"monthly_agent_input_tokens,omitempty" datastore:"monthly_agent_input_tokens"`
+	MonthlyAgentOutputTokens                 int64 `json:"monthly_agent_output_tokens,omitempty" datastore:"monthly_agent_output_tokens"`
+	MonthlyAgentCachedTokens                 int64 `json:"monthly_agent_cached_tokens,omitempty" datastore:"monthly_agent_cached_tokens"`
+	MonthlyAgentMaxLoopsHit                  int64 `json:"monthly_agent_max_loops_hit,omitempty" datastore:"monthly_agent_max_loops_hit"`
+	MonthlyChildOrgAgentExecutions           int64 `json:"monthly_child_org_agent_executions,omitempty" datastore:"monthly_child_org_agent_executions"`
+	MonthlyChildOrgAgentExecutionsSuccessful int64 `json:"monthly_child_org_agent_executions_successful,omitempty" datastore:"monthly_child_org_agent_executions_successful"`
+	MonthlyChildOrgAgentExecutionsFailed     int64 `json:"monthly_child_org_agent_executions_failed,omitempty" datastore:"monthly_child_org_agent_executions_failed"`
+	MonthlyChildOrgAgentTokens               int64 `json:"monthly_child_org_agent_tokens,omitempty" datastore:"monthly_child_org_agent_tokens"`
+	MonthlyChildOrgAgentInputTokens          int64 `json:"monthly_child_org_agent_input_tokens,omitempty" datastore:"monthly_child_org_agent_input_tokens"`
+	MonthlyChildOrgAgentOutputTokens         int64 `json:"monthly_child_org_agent_output_tokens,omitempty" datastore:"monthly_child_org_agent_output_tokens"`
+	MonthlyChildOrgAgentCachedTokens         int64 `json:"monthly_child_org_agent_cached_tokens,omitempty" datastore:"monthly_child_org_agent_cached_tokens"`
+	MonthlyChildOrgAgentMaxLoopsHit          int64 `json:"monthly_child_org_agent_max_loops_hit,omitempty" datastore:"monthly_child_org_agent_max_loops_hit"`
 
 	WeeklyAppExecutions              int64 `json:"weekly_app_executions,omitempty" datastore:"weekly_app_executions"`
 	WeeklyChildAppExecutions         int64 `json:"weekly_child_app_executions,omitempty" datastore:"weekly_child_app_executions"`
@@ -488,25 +514,34 @@ type ExecutionInfo struct {
 	WeeklyOnpremExecutions           int64 `json:"weekly_onprem_executions,omitempty" datastore:"weekly_onprem_executions"`
 	WeeklyAIUsage                    int64 `json:"weekly_ai_executions,omitempty" datastore:"weekly_ai_executions"`
 
-	DailyAppExecutions              int64 `json:"daily_app_executions" datastore:"daily_app_executions"`
-	DailyChildAppExecutions         int64 `json:"daily_child_app_executions" datastore:"daily_child_app_executions"`
-	DailyAppExecutionsFailed        int64 `json:"daily_app_executions_failed" datastore:"daily_app_executions_failed"`
-	DailySubflowExecutions          int64 `json:"daily_subflow_executions" datastore:"daily_subflow_executions"`
-	DailyWorkflowExecutions         int64 `json:"daily_workflow_executions" datastore:"daily_workflow_executions"`
-	DailyChildWorkflowExecutions    int64 `json:"daily_child_workflow_executions" datastore:"daily_child_workflow_executions"`
-	DailyWorkflowExecutionsFinished int64 `json:"daily_workflow_executions_finished" datastore:"daily_workflow_executions_finished"`
-	DailyWorkflowExecutionsFailed   int64 `json:"daily_workflow_executions_failed" datastore:"daily_workflow_executions_failed"`
-	DailyOrgSyncActions             int64 `json:"daily_org_sync_actions" datastore:"daily_org_sync_actions"`
-	DailyCloudExecutions            int64 `json:"daily_cloud_executions" datastore:"daily_cloud_executions"`
-	DailyOnpremExecutions           int64 `json:"daily_onprem_executions" datastore:"daily_onprem_executions"`
-	DailyAIUsage                    int64 `json:"daily_ai_executions" datastore:"daily_ai_executions"`
-	DailyAgentExecutions            int64 `json:"daily_agent_executions" datastore:"daily_agent_executions"`
-	DailyAgentExecutionsSuccessful  int64 `json:"daily_agent_executions_successful" datastore:"daily_agent_executions_successful"`
-	DailyAgentExecutionsFailed      int64 `json:"daily_agent_executions_failed" datastore:"daily_agent_executions_failed"`
-	DailyAgentTokens                int64 `json:"daily_agent_tokens" datastore:"daily_agent_tokens"`
-	DailyAgentInputTokens           int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
-	DailyAgentOutputTokens          int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`
-	DailyAgentCachedTokens          int64 `json:"daily_agent_cached_tokens" datastore:"daily_agent_cached_tokens"`
+	DailyAppExecutions                     int64 `json:"daily_app_executions" datastore:"daily_app_executions"`
+	DailyChildAppExecutions                int64 `json:"daily_child_app_executions" datastore:"daily_child_app_executions"`
+	DailyAppExecutionsFailed               int64 `json:"daily_app_executions_failed" datastore:"daily_app_executions_failed"`
+	DailySubflowExecutions                 int64 `json:"daily_subflow_executions" datastore:"daily_subflow_executions"`
+	DailyWorkflowExecutions                int64 `json:"daily_workflow_executions" datastore:"daily_workflow_executions"`
+	DailyChildWorkflowExecutions           int64 `json:"daily_child_workflow_executions" datastore:"daily_child_workflow_executions"`
+	DailyWorkflowExecutionsFinished        int64 `json:"daily_workflow_executions_finished" datastore:"daily_workflow_executions_finished"`
+	DailyWorkflowExecutionsFailed          int64 `json:"daily_workflow_executions_failed" datastore:"daily_workflow_executions_failed"`
+	DailyOrgSyncActions                    int64 `json:"daily_org_sync_actions" datastore:"daily_org_sync_actions"`
+	DailyCloudExecutions                   int64 `json:"daily_cloud_executions" datastore:"daily_cloud_executions"`
+	DailyOnpremExecutions                  int64 `json:"daily_onprem_executions" datastore:"daily_onprem_executions"`
+	DailyAIUsage                           int64 `json:"daily_ai_executions" datastore:"daily_ai_executions"`
+	DailyAgentExecutions                   int64 `json:"daily_agent_executions" datastore:"daily_agent_executions"`
+	DailyAgentExecutionsSuccessful         int64 `json:"daily_agent_executions_successful" datastore:"daily_agent_executions_successful"`
+	DailyAgentExecutionsFailed             int64 `json:"daily_agent_executions_failed" datastore:"daily_agent_executions_failed"`
+	DailyAgentTokens                       int64 `json:"daily_agent_tokens" datastore:"daily_agent_tokens"`
+	DailyAgentInputTokens                  int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
+	DailyAgentOutputTokens                 int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`
+	DailyAgentCachedTokens                 int64 `json:"daily_agent_cached_tokens" datastore:"daily_agent_cached_tokens"`
+	DailyAgentMaxLoopsHit                  int64 `json:"daily_agent_max_loops_hit,omitempty" datastore:"daily_agent_max_loops_hit"`
+	DailyChildOrgAgentExecutions           int64 `json:"daily_child_org_agent_executions" datastore:"daily_child_org_agent_executions"`
+	DailyChildOrgAgentExecutionsSuccessful int64 `json:"daily_child_org_agent_executions_successful" datastore:"daily_child_org_agent_executions_successful"`
+	DailyChildOrgAgentExecutionsFailed     int64 `json:"daily_child_org_agent_executions_failed" datastore:"daily_child_org_agent_executions_failed"`
+	DailyChildOrgAgentTokens               int64 `json:"daily_child_org_agent_tokens" datastore:"daily_child_org_agent_tokens"`
+	DailyChildOrgAgentInputTokens          int64 `json:"daily_child_org_agent_input_tokens" datastore:"daily_child_org_agent_input_tokens"`
+	DailyChildOrgAgentOutputTokens         int64 `json:"daily_child_org_agent_output_tokens" datastore:"daily_child_org_agent_output_tokens"`
+	DailyChildOrgAgentCachedTokens         int64 `json:"daily_child_org_agent_cached_tokens" datastore:"daily_child_org_agent_cached_tokens"`
+	DailyChildOrgAgentMaxLoopsHit          int64 `json:"daily_child_org_agent_max_loops_hit,omitempty" datastore:"daily_child_org_agent_max_loops_hit"`
 
 	HourlyAppExecutions              int64 `json:"hourly_app_executions,omitempty" datastore:"hourly_app_executions"`
 	HourlyChildAppExecutions         int64 `json:"hourly_child_app_executions,omitempty" datastore:"hourly_child_app_executions"`
@@ -1226,10 +1261,10 @@ type DatastoreCategoryUpdate struct {
 }
 
 type DatastoreKeyMini struct {
-	Key     string `json:"key" datastore:"key"`
+	Key string `json:"key" datastore:"key"`
 
-	Existed bool   `json:"existed" datastore:"existed"` // If the key existed before the update
-	Changed bool   `json:"changed" datastore:"changed"` // If the key was updated or not 
+	Existed bool `json:"existed" datastore:"existed"` // If the key existed before the update
+	Changed bool `json:"changed" datastore:"changed"` // If the key was updated or not
 }
 
 // Based on OCSF reputation: https://schema.ocsf.io/1.8.0/objects/reputation
@@ -1302,6 +1337,7 @@ type CacheKeyData struct {
 }
 
 type SyncConfig struct {
+	URL      string `json:"url" datastore:"url"`
 	Interval int64  `json:"interval" datastore:"interval"`
 	Apikey   string `json:"api_key" datastore:"api_key"`
 	Source   string `json:"source" datastore:"source"`
@@ -4380,7 +4416,8 @@ type CacheReturn struct {
 	Config     DatastoreCategoryUpdate `json:"category_config,omitempty"`
 	Categories []string                `json:"categories,omitempty"`
 
-	Keys []CacheKeyData `json:"keys"`
+	Keys  []CacheKeyData           `json:"keys,omitempty"`
+	Items []map[string]interface{} `json:"items,omitempty"`
 
 	Reason string `json:"reason,omitempty"`
 	Key    string `json:"key,omitempty"`
@@ -4781,6 +4818,7 @@ type AgentDecision struct {
 	Reason           string         `json:"reason" datastore:"reason"`
 	ApprovalRequired bool           `json:"approval_required" datastore:"approval_required"`   // Set TRUE only for destructive/high-risk actions
 	DataFilter       string         `json:"data_filter,omitempty" datastore:"data_filter"`     // DataFilter controls how the raw tool response is reduced before being fed back into the agent.
+	Delay            string         `json:"delay,omitempty" datastore:"delay"`                 // Delay is the number of seconds to wait before executing the next decision.
 	FieldsNeeded     []string       `json:"fields_needed,omitempty" datastore:"fields_needed"` // FieldsNeeded is set by the agent alongside data_filter:"list".
 
 	// Responses
@@ -5008,21 +5046,6 @@ type AIConfig struct {
 	Status    string `json:"status" datastore:"status"`
 }
 
-// EDR and Audit Log Monitoring Structs
-type AuditLogEntry struct {
-	Timestamp   time.Time              `json:"timestamp"`
-	EventID     string                 `json:"event_id"`
-	EventType   string                 `json:"event_type"`
-	Source      string                 `json:"source"`
-	Level       string                 `json:"level"`
-	ProcessInfo *ProcessInfo           `json:"process_info,omitempty"`
-	UserInfo    *UserInfo              `json:"user_info,omitempty"`
-	Message     string                 `json:"message"`
-	RawData     string                 `json:"raw_data,omitempty"`
-	Platform    string                 `json:"platform"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
-}
-
 type ProcessInfo struct {
 	PID         int32  `json:"pid"`
 	PPID        int32  `json:"ppid,omitempty"`
@@ -5058,12 +5081,19 @@ type TelemetryFilter struct {
 	Exclude []string `json:"exclude,omitempty"`
 }
 
-type AuditLogCollector struct {
-	Config     TelemetryConfig
-	Platform   string
-	LogChannel chan AuditLogEntry
-	StopChan   chan bool
-	mu         sync.Mutex
+// EDR and Audit Log Monitoring Structs
+type AuditLogEntry struct {
+	Timestamp   time.Time              `json:"timestamp"`
+	EventID     string                 `json:"event_id"`
+	EventType   string                 `json:"event_type"`
+	Source      string                 `json:"source"`
+	Level       string                 `json:"level"`
+	ProcessInfo *ProcessInfo           `json:"process_info,omitempty"`
+	UserInfo    *UserInfo              `json:"user_info,omitempty"`
+	Message     string                 `json:"message"`
+	RawData     string                 `json:"raw_data,omitempty"`
+	Platform    string                 `json:"platform"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // Thread conversation access control structs
@@ -5724,6 +5754,8 @@ type VulnerabilityQuery struct {
 type AiCallInfo struct {
 	Caller string
 	OrgID  string
+
+	Resp http.ResponseWriter
 }
 
 type ScreenshotWrapper struct {
@@ -5782,7 +5814,7 @@ type ActionSummary struct {
 // AppActionResponse - actions grouped by app
 type AppActionResponse struct {
 	AppName        string          `json:"app_name"`
-	AppDescription string           `json:"app_description"`
+	AppDescription string          `json:"app_description"`
 	AppID          string          `json:"app_id"`
 	Actions        []ActionSummary `json:"actions"`
 }
