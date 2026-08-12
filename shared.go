@@ -1204,7 +1204,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		info, err := GetOrgStatistics(ctx, fileId)
 		if err == nil {
 			org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
-			org.SyncFeatures.AgentTokens.Usage = info.MonthlyAgentTokens
+			//org.SyncFeatures.AgentTokens.Usage = info.MonthlyAgentTokens
+			org.SyncFeatures.AgentTokens.Usage = info.MonthlyLLMTokens
 		}
 
 		envs, err := GetEnvironments(ctx, fileId)

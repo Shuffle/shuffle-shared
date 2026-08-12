@@ -897,7 +897,10 @@ Input JSON Payload (ensure VALID JSON):
 		ReasoningEffort:     "low",
 	}
 
-	callInfo := AiCallInfo{Caller: "RunSelfCorrectingRequest"}
+	callInfo := AiCallInfo{
+		Caller: "RunSelfCorrectingRequest",
+		//OrgID: orgID,
+	}
 	contentOutput, err := RunAiQuery(ctx, callInfo, systemMessage, inputData, chatCompletion)
 	if err != nil {
 		return action, additionalInfo, err
@@ -1197,7 +1200,10 @@ func getOpenApiInformation(ctx context.Context, appname, action string) string {
 	systemMessage := fmt.Sprintf("Output a valid JSON body format for a HTTP request %s in the %s API?", action, appname)
 
 	//log.Printf("[INFO] System message (find API documentation): %s", systemMessage)
-	callInfo := AiCallInfo{Caller: "getOpenApiInformation"}
+	callInfo := AiCallInfo{
+		Caller: "getOpenApiInformation",
+		//OrgID: orgId,
+	}
 	contentOutput, err = RunAiQuery(ctx, callInfo, systemMessage, "")
 	if err != nil {
 		log.Printf("[ERROR] Failed to run API query: %s", err)
@@ -1229,7 +1235,10 @@ func UpdateActionBody(ctx context.Context, action WorkflowAppAction) (string, er
 		log.Printf("\n\n[DEBUG] BODY CREATE SYSTEM MESSAGE: %s\n\n", systemMessage)
 	}
 
-	callInfo := AiCallInfo{Caller: "UpdateActionBody"}
+	callInfo := AiCallInfo{
+		Caller: "UpdateActionBody",
+		//OrgID: action.OrgID,
+	}
 	contentOutput, err := RunAiQuery(ctx, callInfo, systemMessage, userMessage)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run API query: %s", err)
@@ -1876,7 +1885,10 @@ func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys [
 				}
 			}
 
-			callInfo := AiCallInfo{Caller: "AutofixAppLabels"}
+			callInfo := AiCallInfo{
+				Caller: "AutofixAppLabels",
+				//OrgID: orgId,
+			}
 			output, err := RunAiQuery(ctx, callInfo, systemMessage, userMessage)
 			log.Printf("[DEBUG] Autocomplete output for category '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
 			if err != nil {
@@ -2107,7 +2119,10 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 			ReasoningEffort:     "medium",
 		}
 
-		callInfo := AiCallInfo{Caller: "AutofixAppLabels"}
+		callInfo := AiCallInfo{
+			Caller: "AutofixAppLabels",
+			//OrgID: orgId,
+		}
 		output, err := RunAiQuery(ctx, callInfo, systemMessage, userMessage, chatCompletion)
 		if err != nil {
 			log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
@@ -3531,7 +3546,10 @@ func findRelevantOutput(ctx context.Context, inputQuery string, org Org, user Us
 
 	//log.Printf("[INFO] User message (find relevant output type): %s", userMessage)
 
-	callInfo := AiCallInfo{Caller: "findRelevantOutput", OrgID: org.Id}
+	callInfo := AiCallInfo{
+		Caller: "findRelevantOutput", 
+		OrgID: org.Id,
+	}
 	contentOutput, err := RunAiQuery(ctx, callInfo, "", userMessage)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in findRelevantOutput: %s", err)
@@ -9161,7 +9179,8 @@ data_filter:
 		orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
 		monthlyTokensUsed := int64(0)
 		if statsErr == nil && orgStats != nil {
-			monthlyTokensUsed = orgStats.MonthlyAgentTokens
+			//monthlyTokensUsed = orgStats.MonthlyAgentTokens
+			monthlyTokensUsed = orgStats.MonthlyLLMTokens
 		}
 
 		tokenLimit := int64(0)
@@ -9578,7 +9597,6 @@ data_filter:
 					subOrgId := execution.Workflow.OrgId
 					go func() {
 						time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
-						IncrementCacheDump(ctx, billingOrgId, "agent_tokens", totalTokens)
 						if inputTokens > 0 {
 							IncrementCache(ctx, billingOrgId, "agent_input_tokens", inputTokens)
 						}
@@ -9590,7 +9608,6 @@ data_filter:
 						}
 
 						if billingOrgId != subOrgId {
-							IncrementCache(ctx, subOrgId, "agent_tokens", totalTokens)
 							if inputTokens > 0 {
 								IncrementCache(ctx, subOrgId, "agent_input_tokens", inputTokens)
 							}
@@ -10769,11 +10786,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	maxRetries := 3
 	contentOutput := ""
 
-	// Forcing stream, as there really is no downside to it.
-	// Also allows us to realtime stream with *.shuffler.io/api/v1/chat/completions
-	chatCompletion.Stream = true
-	sleepTimer := time.Duration(2)
-
 	// Overwrites it all
 	aiRequestUrl, currentModel = ValidateURLandModel(aiRequestUrl, currentModel)
 	if len(apiKey) == 0 {
@@ -10827,7 +10839,19 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	log.Printf("[INFO] AI_QUERY: caller=%s org_id=%s reasoning=%s system_tokens=%d user_tokens=%d other_tokens=%d total_tokens=%d model=%s url=%s", callerName, org, reasoning, estSysTokens, estUserTokens, estOtherTokens, totalEst, currentModel, aiRequestUrl)
+
+	originalStreamEnabled := chatCompletion.Stream
+
+
+	// Forcing stream, as there really is no downside to it.
+	// Also allows us to realtime stream with *.shuffler.io/api/v1/chat/completions
+	chatCompletion.Stream = true
+	sleepTimer := time.Duration(2)
+
+	// In case of non-streaming Resp input
 	totalTokens := 0
+	choicesMap := make(map[int]*openai.ChatCompletionChoice)
+	var fullResp openai.ChatCompletionResponse
 	for {
 		if cnt >= maxRetries {
 			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries for openapi info")
@@ -10879,7 +10903,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 			if iterations > 1000 { 
 				log.Printf("[ERROR] Fatal - Too many iterations agent LLM stream. Breaking out of loop.")
-				if info.Resp != nil {
+				if info.Resp != nil && originalStreamEnabled {
 					info.Resp.Write([]byte("data: [ERROR] Fatal - Too many iterations agent LLM stream. Breaking out of loop.\n\n"))
 					flusher.Flush()
 				}
@@ -10891,7 +10915,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			// 3. Check for End of File (EOF) to know when the stream is finished
 			if errors.Is(err, io.EOF) {
 				log.Printf("[INFO] Stream finished after %d iterations", iterations)
-				if info.Resp != nil {
+				if info.Resp != nil && originalStreamEnabled {
+
 					info.Resp.Write([]byte("data: [DONE]\n\n"))
 					flusher.Flush()
 				}
@@ -10900,7 +10925,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			}
 
 			if err != nil {
-				if info.Resp != nil {
+				if info.Resp != nil && originalStreamEnabled {
 					info.Resp.Write([]byte(fmt.Sprintf("data: [ERROR] %s\n\n", err)))
 					flusher.Flush()
 				}
@@ -10921,17 +10946,56 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				log.Printf("[ERROR] Failed to unmarshal OpenAI ChatCompletionStreamResponse: %s", err)
 			}
 
-			if response.Usage != nil && response.Usage.TotalTokens > 0 { 
-				totalTokens += response.Usage.TotalTokens
+			if fullResp.ID == "" && response.ID != "" {
+				fullResp.ID = response.ID
+				fullResp.Created = response.Created
+				fullResp.Model = response.Model
+				fullResp.SystemFingerprint = response.SystemFingerprint
+				fullResp.Object = "chat.completion" // Convert from "chat.completion.chunk"
+			}
+			// 2. Capture Usage if available (requires StreamOptions.IncludeUsage = true)
+			if response.Usage != nil {
+				fullResp.Usage = *response.Usage
+
+				if response.Usage.TotalTokens > 0 { 
+					totalTokens += response.Usage.TotalTokens
+				}
 			}
 
 			if len(response.Choices) > 0 {
+				// Recreation of the full response from the streamed chunks
+				for _, choice := range response.Choices {
+					c, exists := choicesMap[choice.Index]
+					if !exists {
+						c = &openai.ChatCompletionChoice{
+							Index: choice.Index,
+						}
+
+						choicesMap[choice.Index] = c
+					}
+
+					// Capture role when provided
+					if choice.Delta.Role != "" {
+						c.Message.Role = choice.Delta.Role
+					}
+
+					// Stitch content and refusal strings
+					c.Message.Content += choice.Delta.Content
+					c.Message.Refusal += choice.Delta.Refusal
+
+					// Capture finish reason
+					if choice.FinishReason != "" {
+						c.FinishReason = choice.FinishReason
+					}
+				}
+
+
 				// Check if this chunk contains a refusal
 				delta := response.Choices[0].Delta
 				if delta.Refusal != "" {
 					// Print the refusal reasoning as it streams in
 					log.Printf("[ERROR] OpenAI refusal: %s", delta.Refusal)
-					if info.Resp != nil {
+					if info.Resp != nil && originalStreamEnabled {
 						info.Resp.Write([]byte(fmt.Sprintf("data: [REFUSAL] %s\n\n", delta.Refusal)))
 						flusher.Flush()
 					}
@@ -10950,7 +11014,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				contentOutput += string(rawResp)
 			}
 
-			if info.Resp != nil {
+			if info.Resp != nil && originalStreamEnabled {
 				info.Resp.Write([]byte("data: "))
 				info.Resp.Write(rawResp)
 				info.Resp.Write([]byte("\n\n"))
@@ -10958,7 +11022,24 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			}
 		}
 
+		// 4. Assemble the ordered choices slice
+		fullResp.Choices = make([]openai.ChatCompletionChoice, len(choicesMap))
+		for idx, choice := range choicesMap {
+			fullResp.Choices[idx] = *choice
+		}
+
 		break
+	}
+
+	if info.Resp != nil && !originalStreamEnabled {
+		// Marshal and send fullResp
+		marshalledData, err := json.Marshal(fullResp)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal full response: %s", err)
+		} 
+
+		info.Resp.Write(marshalledData)
+		flusher.Flush()
 	}
 
 	if totalTokens > 0 && len(info.OrgID) > 0 { 
@@ -10966,15 +11047,16 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			log.Printf("[DEBUG] Total request tokens spent: %d", totalTokens)
 		}
 			
-		//IncrementCache(ctx, info.OrgID, "agent_tokens", totalTokens)
+		// Count LLM tokens no matter what
+		IncrementCache(ctx, info.OrgID, "llm_tokens", totalTokens)
+
+		// Count agent tokens IF it's agent performing the task
+		if info.Caller == "aiAgentRunner" { 
+			IncrementCache(ctx, info.OrgID, "agent_tokens", totalTokens)
+		}
 	}
 
 	if len(contentOutput) > 0 {
-		// Not necessary?
-		//if info.Resp != nil {
-		//	info.Resp.WriteHeader(http.StatusOK)
-		//}
-
 		chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleAssistant,
 			Content: contentOutput,
@@ -11469,7 +11551,10 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		// 	workflowGenerationModel = ""
 		// }
 
-		callInfo := AiCallInfo{Caller: "generateWorkflowJson", OrgID: user.ActiveOrg.Id}
+		callInfo := AiCallInfo{
+			Caller: "generateWorkflowJson", 
+			OrgID: user.ActiveOrg.Id,
+		}
 		finalContentOutput, err = RunAiQuery(ctx, callInfo, systemMessage, currentInput)
 		if err != nil {
 			log.Printf("[ERROR] Failed to run AI query in generateWorkflowJson: %s", err)
@@ -12259,11 +12344,17 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 			chatCompletion.MaxCompletionTokens = aiMaxTokens
 		}
 
-		callInfo := AiCallInfo{Caller: "getTaskBreakdown"}
+		callInfo := AiCallInfo{
+			Caller: "getTaskBreakdown",
+			//OrgId: user.ActiveOrg.Id,
+		}
 		contentOutput, err = RunAiQuery(ctx, callInfo, "", "", chatCompletion)
 
 	} else {
-		callInfo := AiCallInfo{Caller: "getTaskBreakdown"}
+		callInfo := AiCallInfo{
+			Caller: "getTaskBreakdown2",
+			//OrgId: user.ActiveOrg.Id,
+		}
 		contentOutput, err = RunAiQuery(ctx, callInfo, systemMessage, input.Query)
 
 	}
@@ -12275,6 +12366,7 @@ Produce a minimal, correct, atomic plan for turning vague security workflows int
 	if len(contentOutput) == 0 {
 		return "", errors.New("AI response is empty")
 	}
+
 	return contentOutput, nil
 }
 
@@ -12628,7 +12720,10 @@ FINAL OUTPUT RULE
 IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you return ONLY valid JSON in the exact format specified in the system instructions. Do not include any explanations, markdown formatting, or extra text - just the pure JSON object.`, userPrompt)
 		}
 
-		callInfo := AiCallInfo{Caller: "editWorkflowWithLLM", OrgID: user.ActiveOrg.Id}
+		callInfo := AiCallInfo{
+			Caller: "editWorkflowWithLLM", 
+			OrgID: user.ActiveOrg.Id,
+		}
 		contentOutput, err = RunAiQuery(ctx, callInfo, systemMessage, currentUserPrompt)
 		if err != nil {
 			// No need to retry, as RunAiQuery already has retry logic
@@ -14938,13 +15033,10 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	callInfo := AiCallInfo{
 		Caller: "RequestForwarding", 
 		OrgID: user.ActiveOrg.Id,
+		Resp: resp,
 	}
 
-	if chatCompletion.Stream == true { 
-		callInfo.Resp = resp
-	}
-
-	contentOutput, err := RunAiQuery(ctx, callInfo, "", "", chatCompletion)
+	_, err = RunAiQuery(ctx, callInfo, "", "", chatCompletion)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in chat completion forwarding: %s", err)
 		resp.WriteHeader(500)
@@ -14952,11 +15044,7 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if !chatCompletion.Stream { 
-		// Already wrote through callInfo.Resp
-		resp.WriteHeader(200)
-		resp.Write([]byte(contentOutput))
-	}
+	// Nothing to respond with, since RunAiQuery() takes care of it with callInfo.Resp
 }
 
 //apiKey, aiRequestUrl, foundModel 
