@@ -10613,9 +10613,11 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		orgId = os.Getenv("OPENAI_API_ORG")
 	}
 
+	defaultCreds := false
 	if len(apiKey) == 0 && project.Environment == "cloud" { 
 		foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx) 
 		if len(foundApikey) > 0 {
+			defaultCreds = true
 			apiKey = foundApikey
 		}
 
@@ -10632,6 +10634,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		// Look up custom auth to use instead
 		foundApikey, foundrequestUrl, foundModel := GetOrgAiCredentials(ctx, info)
 		if len(foundApikey) > 0 {
+			defaultCreds = false
 			apiKey = foundApikey
 		}
 
@@ -11064,13 +11067,15 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		flusher.Flush()
 	}
 
-	if totalTokens > 0 && len(info.OrgID) > 0 { 
+	if totalTokens > 0 && len(info.OrgID) > 0 {
 		if debug { 
 			log.Printf("[DEBUG] Total request tokens spent: %d", totalTokens)
 		}
 			
 		// Count LLM tokens no matter what
-		IncrementCache(ctx, info.OrgID, "llm_tokens", totalTokens)
+		if defaultCreds { 
+			IncrementCache(ctx, info.OrgID, "llm_tokens", totalTokens)
+		}
 
 		// Count agent tokens IF it's agent performing the task
 		if info.Caller == "aiAgentRunner" { 
