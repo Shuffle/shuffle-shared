@@ -25,6 +25,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/go-querystring/query"
 	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 
 	"path/filepath"
 
@@ -2087,4 +2088,37 @@ func GetCurrentPodNetworkConfig(ctx context.Context, clientset *kubernetes.Clien
 		return nil, err
 	}
 	return &pod.Status, nil
+}
+
+// returns apikey, url based on project
+func GetGeminiCredentials(ctx context.Context) (string, string, string) { 
+	foundModel := "google/gemini-3.6-flash"  
+
+	projectID := os.Getenv("SHUFFLE_GCEPROJECT")
+	if len(projectID) == 0 { 
+		projectID = os.Getenv("GOOGLE_CLOUD_PROJECT")
+	}
+
+	location := os.Getenv("SHUFFLE_GCE_LOCATION")
+	if len(projectID) == 0 || len(location) == 0 {
+		return "", "", foundModel
+	}
+
+	// 1. Get Application Default Credentials (ADC) with Cloud Platform scope
+	creds, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
+	if err != nil {
+		log.Printf("[ERROR] Failed to find GCP credentials: %v", err)
+		return "", "", foundModel
+	}
+
+	// 2. TokenSource caches tokens in memory automatically.
+	// Reuse this tokenSource across your entire application lifecycle.
+	tok, err := creds.TokenSource.Token()
+	if err != nil {
+		log.Printf("[ERROR] Failed to get token from TokenSource: %v", err)
+		return "", "", foundModel
+	}
+
+	parsedUrl := fmt.Sprintf("https://aiplatform.googleapis.com/v1/projects/%s/locations/%s/endpoints/openapi", projectID, location)
+	return tok.AccessToken, parsedUrl, foundModel
 }
