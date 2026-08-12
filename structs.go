@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/shuffle/opensearch-go/v4/opensearchapi"
+	"github.com/sashabaranov/go-openai"
 )
 
 type AppContext struct {
@@ -5752,6 +5753,7 @@ type VulnerabilityQuery struct {
 type AiCallInfo struct {
 	Caller string
 	OrgID  string
+	Usage  *openai.Usage `json:"usage,omitempty"`
 }
 
 type ScreenshotWrapper struct {
