@@ -1414,59 +1414,6 @@ func UpdateActionBody(ctx context.Context, action WorkflowAppAction) (string, er
 	return contentOutput, nil
 }
 
-func IncrementAgentTokens(ctx context.Context, executionId string, execOrgId string, billingOrgId string, usage *openai.Usage) {
-	if usage == nil || usage.TotalTokens == 0 || len(execOrgId) == 0 {
-		return
-	}
-
-	cachedTokens := 0
-	if usage.PromptTokensDetails != nil {
-		cachedTokens = usage.PromptTokensDetails.CachedTokens
-	}
-
-	reasoningTokens := 0
-	if usage.CompletionTokensDetails != nil {
-		reasoningTokens = usage.CompletionTokensDetails.ReasoningTokens
-	}
-
-	inputTokens := int(usage.PromptTokens)
-	outputTokens := int(usage.CompletionTokens)
-	totalTokens := int(usage.TotalTokens)
-
-	go func() {
-		time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
-		IncrementCacheDump(ctx, billingOrgId, "agent_tokens", totalTokens)
-		if inputTokens > 0 {
-			IncrementCache(ctx, billingOrgId, "agent_input_tokens", inputTokens)
-		}
-		if outputTokens > 0 {
-			IncrementCache(ctx, billingOrgId, "agent_output_tokens", outputTokens)
-		}
-		if cachedTokens > 0 {
-			IncrementCache(ctx, billingOrgId, "agent_cached_tokens", cachedTokens)
-		}
-
-		if billingOrgId != execOrgId {
-			IncrementCache(ctx, execOrgId, "agent_tokens", totalTokens)
-			if inputTokens > 0 {
-				IncrementCache(ctx, execOrgId, "agent_input_tokens", inputTokens)
-			}
-			if outputTokens > 0 {
-				IncrementCache(ctx, execOrgId, "agent_output_tokens", outputTokens)
-			}
-			if cachedTokens > 0 {
-				IncrementCache(ctx, execOrgId, "agent_cached_tokens", cachedTokens)
-			}
-		}
-	}()
-
-	if cachedTokens > 0 {
-		log.Printf("[DEBUG][%s] PROMPT CACHING HIT! Saved %d tokens on this request.", executionId, cachedTokens)
-	}
-
-	log.Printf("[AUDIT][%s] Incremented AI Agent usage for billing_org=%s exec_org=%s total=%d input=%d output=%d cached=%d reasoning=%d", executionId, billingOrgId, execOrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
-}
-
 // Uploads modifyable parameter data to file storage, as to be used in the future executions of the app
 func UploadParameterBase(ctx context.Context, fields []Valuereplace, orgId, appId, actionName, originalActionName, paramName, paramValue, paramExample string) error {
 	timeNow := time.Now().Unix()
@@ -9250,12 +9197,10 @@ data_filter:
 	resultMapping := ActionResult{}
 	openaiOutput := openai.ChatCompletionResponse{}
 
-	if agentRunLocation == "local" {
-		var llmUsage openai.Usage
+	if agentRunLocation == "local" { 
 		callInfo := AiCallInfo{
 			Caller: "aiAgentRunner", 
 			OrgID: execution.Workflow.OrgId,
-			Usage: &llmUsage,
 		}
 
 		output, err := RunAiQuery(
@@ -9270,8 +9215,6 @@ data_filter:
 			log.Printf("[ERROR][%s] AI Agent: Failed running AI query for action %s: %s", execution.ExecutionId, startNode.ID, err)
 			return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "run_ai_query_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 		}
-		
-		IncrementAgentTokens(ctx, execution.ExecutionId, execution.Workflow.OrgId, billingOrgId, &llmUsage)
 
 		bodyString = []byte(output)
 		resultMapping.Result = output
@@ -9610,9 +9553,58 @@ data_filter:
 				}
 			} else {
 				choicesString = openaiOutput.Choices[0].Message.Content
+				//if debug {
+				//	log.Printf("[DEBUG] Found choices string (2) in AI Agent response - len: %d: %s", len(choicesString), choicesString)
+				//}
 
 				if openaiOutput.Usage.TotalTokens > 0 && len(execution.Workflow.OrgId) > 0 {
-					IncrementAgentTokens(ctx, execution.ExecutionId, execution.Workflow.OrgId, billingOrgId, &openaiOutput.Usage)
+					cachedTokens := 0
+					if openaiOutput.Usage.PromptTokensDetails != nil {
+						cachedTokens = openaiOutput.Usage.PromptTokensDetails.CachedTokens
+					}
+
+					reasoningTokens := 0
+					if openaiOutput.Usage.CompletionTokensDetails != nil {
+						reasoningTokens = openaiOutput.Usage.CompletionTokensDetails.ReasoningTokens
+					}
+
+					inputTokens := int(openaiOutput.Usage.PromptTokens)
+					outputTokens := int(openaiOutput.Usage.CompletionTokens)
+					totalTokens := int(openaiOutput.Usage.TotalTokens)
+
+					subOrgId := execution.Workflow.OrgId
+					go func() {
+						time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
+						IncrementCacheDump(ctx, billingOrgId, "agent_tokens", totalTokens)
+						if inputTokens > 0 {
+							IncrementCache(ctx, billingOrgId, "agent_input_tokens", inputTokens)
+						}
+						if outputTokens > 0 {
+							IncrementCache(ctx, billingOrgId, "agent_output_tokens", outputTokens)
+						}
+						if cachedTokens > 0 {
+							IncrementCache(ctx, billingOrgId, "agent_cached_tokens", cachedTokens)
+						}
+
+						if billingOrgId != subOrgId {
+							IncrementCache(ctx, subOrgId, "agent_tokens", totalTokens)
+							if inputTokens > 0 {
+								IncrementCache(ctx, subOrgId, "agent_input_tokens", inputTokens)
+							}
+							if outputTokens > 0 {
+								IncrementCache(ctx, subOrgId, "agent_output_tokens", outputTokens)
+							}
+							if cachedTokens > 0 {
+								IncrementCache(ctx, subOrgId, "agent_cached_tokens", cachedTokens)
+							}
+						}
+					}()
+					
+					if cachedTokens > 0 && debug {
+						log.Printf("[DEBUG][%s] PROMPT CACHING HIT! Saved %d tokens on this request.", execution.ExecutionId, cachedTokens)
+					}
+					
+					log.Printf("[AUDIT][%s] Incremented AI Agent usage for billing_org=%s exec_org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
 				}
 
 				// Handles reasoning models for Refusal control edgecases
