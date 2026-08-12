@@ -398,27 +398,31 @@ type IncrementInCache struct {
 type DailyStatistics struct {
 	Date time.Time `json:"date" datastore:"date"`
 
-	AppExecutions                     int64 `json:"app_executions" datastore:"app_executions"`
-	ChildAppExecutions                int64 `json:"child_app_executions" datastore:"child_app_executions"`
-	AppExecutionsFailed               int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
-	SubflowExecutions                 int64 `json:"subflow_executions" datastore:"subflow_executions"`
-	WorkflowExecutions                int64 `json:"workflow_executions" datastore:"workflow_executions"`
-	WorkflowExecutionsFinished        int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
-	WorkflowExecutionsFailed          int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
-	OrgSyncActions                    int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
-	CloudExecutions                   int64 `json:"cloud_executions" datastore:"cloud_executions"`
-	OnpremExecutions                  int64 `json:"onprem_executions" datastore:"onprem_executions"`
-	AIUsage                           int64 `json:"ai_executions" datastore:"ai_executions"`
-	AgentExecutions                   int64 `json:"agent_executions" datastore:"agent_executions"`
-	AgentExecutionsSuccessful         int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
-	AgentExecutionsFailed             int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
-	AgentTokens                       int64 `json:"agent_tokens" datastore:"agent_tokens"`
-	AgentInputTokens                  int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
-	AgentOutputTokens                 int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
-	AgentCachedTokens                 int64 `json:"agent_cached_tokens" datastore:"agent_cached_tokens"`
+	AppExecutions              int64 `json:"app_executions" datastore:"app_executions"`
+	ChildAppExecutions         int64 `json:"child_app_executions" datastore:"child_app_executions"`
+	AppExecutionsFailed        int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
+	SubflowExecutions          int64 `json:"subflow_executions" datastore:"subflow_executions"`
+	WorkflowExecutions         int64 `json:"workflow_executions" datastore:"workflow_executions"`
+	WorkflowExecutionsFinished int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
+	WorkflowExecutionsFailed   int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
+	OrgSyncActions             int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
+	CloudExecutions            int64 `json:"cloud_executions" datastore:"cloud_executions"`
+	OnpremExecutions           int64 `json:"onprem_executions" datastore:"onprem_executions"`
+	AIUsage                    int64 `json:"ai_executions" datastore:"ai_executions"`
+	AgentExecutions            int64 `json:"agent_executions" datastore:"agent_executions"`
+	AgentExecutionsSuccessful  int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
+	AgentExecutionsFailed      int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
+
+	LLMTokens         int64 `json:"llm_tokens" datastore:"llm_tokens"`
+	AgentTokens       int64 `json:"agent_tokens" datastore:"agent_tokens"`
+	AgentInputTokens  int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
+	AgentOutputTokens int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
+	AgentCachedTokens int64 `json:"agent_cached_tokens" datastore:"agent_cached_tokens"`
+
 	ChildOrgAgentExecutions           int64 `json:"child_org_agent_executions" datastore:"child_org_agent_executions"`
 	ChildOrgAgentExecutionsSuccessful int64 `json:"child_org_agent_executions_successful" datastore:"child_org_agent_executions_successful"`
 	ChildOrgAgentExecutionsFailed     int64 `json:"child_org_agent_executions_failed" datastore:"child_org_agent_executions_failed"`
+	ChildOrgLLMTokens                 int64 `json:"child_org_llm_tokens" datastore:"child_org_llm_tokens"`
 	ChildOrgAgentTokens               int64 `json:"child_org_agent_tokens" datastore:"child_org_agent_tokens"`
 	ChildOrgAgentInputTokens          int64 `json:"child_org_agent_input_tokens" datastore:"child_org_agent_input_tokens"`
 	ChildOrgAgentOutputTokens         int64 `json:"child_org_agent_output_tokens" datastore:"child_org_agent_output_tokens"`
@@ -456,6 +460,7 @@ type ExecutionInfo struct {
 	TotalAgentExecutions                   int64 `json:"total_agent_executions" datastore:"total_agent_executions"`
 	TotalAgentExecutionsSuccessful         int64 `json:"total_agent_executions_successful" datastore:"total_agent_executions_successful"`
 	TotalAgentExecutionsFailed             int64 `json:"total_agent_executions_failed" datastore:"total_agent_executions_failed"`
+	TotalLLMTokens                         int64 `json:"total_llm_tokens" datastore:"total_llm_tokens"`
 	TotalAgentTokens                       int64 `json:"total_agent_tokens" datastore:"total_agent_tokens"`
 	TotalAgentInputTokens                  int64 `json:"total_agent_input_tokens" datastore:"total_agent_input_tokens"`
 	TotalAgentOutputTokens                 int64 `json:"total_agent_output_tokens" datastore:"total_agent_output_tokens"`
@@ -464,6 +469,7 @@ type ExecutionInfo struct {
 	TotalChildOrgAgentExecutions           int64 `json:"total_child_org_agent_executions" datastore:"total_child_org_agent_executions"`
 	TotalChildOrgAgentExecutionsSuccessful int64 `json:"total_child_org_agent_executions_successful" datastore:"total_child_org_agent_executions_successful"`
 	TotalChildOrgAgentExecutionsFailed     int64 `json:"total_child_org_agent_executions_failed" datastore:"total_child_org_agent_executions_failed"`
+	TotalChildOrgLLMTokens                 int64 `json:"total_child_org_llm_tokens" datastore:"total_child_org_llm_tokens"`
 	TotalChildOrgAgentTokens               int64 `json:"total_child_org_agent_tokens" datastore:"total_child_org_agent_tokens"`
 	TotalChildOrgAgentInputTokens          int64 `json:"total_child_org_agent_input_tokens" datastore:"total_child_org_agent_input_tokens"`
 	TotalChildOrgAgentOutputTokens         int64 `json:"total_child_org_agent_output_tokens" datastore:"total_child_org_agent_output_tokens"`
@@ -487,6 +493,7 @@ type ExecutionInfo struct {
 	MonthlyAgentExecutions                   int64 `json:"monthly_agent_executions,omitempty" datastore:"monthly_agent_executions"`
 	MonthlyAgentExecutionsSuccessful         int64 `json:"monthly_agent_executions_successful,omitempty" datastore:"monthly_agent_executions_successful"`
 	MonthlyAgentExecutionsFailed             int64 `json:"monthly_agent_executions_failed,omitempty" datastore:"monthly_agent_executions_failed"`
+	MonthlyLLMTokens                         int64 `json:"monthly_llm_tokens,omitempty" datastore:"monthly_llm_tokens"`
 	MonthlyAgentTokens                       int64 `json:"monthly_agent_tokens,omitempty" datastore:"monthly_agent_tokens"`
 	MonthlyAgentInputTokens                  int64 `json:"monthly_agent_input_tokens,omitempty" datastore:"monthly_agent_input_tokens"`
 	MonthlyAgentOutputTokens                 int64 `json:"monthly_agent_output_tokens,omitempty" datastore:"monthly_agent_output_tokens"`
@@ -495,6 +502,7 @@ type ExecutionInfo struct {
 	MonthlyChildOrgAgentExecutions           int64 `json:"monthly_child_org_agent_executions,omitempty" datastore:"monthly_child_org_agent_executions"`
 	MonthlyChildOrgAgentExecutionsSuccessful int64 `json:"monthly_child_org_agent_executions_successful,omitempty" datastore:"monthly_child_org_agent_executions_successful"`
 	MonthlyChildOrgAgentExecutionsFailed     int64 `json:"monthly_child_org_agent_executions_failed,omitempty" datastore:"monthly_child_org_agent_executions_failed"`
+	MonthlyChildOrgLLMTokens                 int64 `json:"monthly_child_org_llm_tokens,omitempty" datastore:"monthly_child_org_llm_tokens"`
 	MonthlyChildOrgAgentTokens               int64 `json:"monthly_child_org_agent_tokens,omitempty" datastore:"monthly_child_org_agent_tokens"`
 	MonthlyChildOrgAgentInputTokens          int64 `json:"monthly_child_org_agent_input_tokens,omitempty" datastore:"monthly_child_org_agent_input_tokens"`
 	MonthlyChildOrgAgentOutputTokens         int64 `json:"monthly_child_org_agent_output_tokens,omitempty" datastore:"monthly_child_org_agent_output_tokens"`
@@ -529,6 +537,7 @@ type ExecutionInfo struct {
 	DailyAgentExecutions                   int64 `json:"daily_agent_executions" datastore:"daily_agent_executions"`
 	DailyAgentExecutionsSuccessful         int64 `json:"daily_agent_executions_successful" datastore:"daily_agent_executions_successful"`
 	DailyAgentExecutionsFailed             int64 `json:"daily_agent_executions_failed" datastore:"daily_agent_executions_failed"`
+	DailyLLMTokens                         int64 `json:"daily_llm_tokens" datastore:"daily_llm_tokens"`
 	DailyAgentTokens                       int64 `json:"daily_agent_tokens" datastore:"daily_agent_tokens"`
 	DailyAgentInputTokens                  int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
 	DailyAgentOutputTokens                 int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`
@@ -537,6 +546,7 @@ type ExecutionInfo struct {
 	DailyChildOrgAgentExecutions           int64 `json:"daily_child_org_agent_executions" datastore:"daily_child_org_agent_executions"`
 	DailyChildOrgAgentExecutionsSuccessful int64 `json:"daily_child_org_agent_executions_successful" datastore:"daily_child_org_agent_executions_successful"`
 	DailyChildOrgAgentExecutionsFailed     int64 `json:"daily_child_org_agent_executions_failed" datastore:"daily_child_org_agent_executions_failed"`
+	DailyChildOrgLLMTokens                 int64 `json:"daily_child_org_llm_tokens" datastore:"daily_child_org_llm_tokens"`
 	DailyChildOrgAgentTokens               int64 `json:"daily_child_org_agent_tokens" datastore:"daily_child_org_agent_tokens"`
 	DailyChildOrgAgentInputTokens          int64 `json:"daily_child_org_agent_input_tokens" datastore:"daily_child_org_agent_input_tokens"`
 	DailyChildOrgAgentOutputTokens         int64 `json:"daily_child_org_agent_output_tokens" datastore:"daily_child_org_agent_output_tokens"`
@@ -1398,7 +1408,9 @@ type SyncUsage struct {
 	Apps                SyncDataUsage `json:"apps" datastore:"apps"`
 	ShuffleGPT          SyncDataUsage `json:"shuffle_gpt" datastore:"shuffle_gpt"`
 	AgentExecutions     SyncDataUsage `json:"agent_executions" datastore:"agent_executions"`
-	AgentTokens         SyncDataUsage `json:"agent_tokens" datastore:"agent_tokens"`
+
+	LLMTokens   SyncDataUsage `json:"llm_tokens" datastore:"llm_tokens"`
+	AgentTokens SyncDataUsage `json:"agent_tokens" datastore:"agent_tokens"`
 }
 
 type SyncDataUsage struct {
@@ -1449,8 +1461,10 @@ type SyncFeatures struct {
 	ShuffleGPT          SyncData    `json:"shuffle_gpt" datastore:"shuffle_gpt"`
 	Branding            SyncData    `json:"branding" datastore:"branding"`
 	AgentExecutions     SyncData    `json:"agent_executions" datastore:"agent_executions"`
-	AgentTokens         SyncData    `json:"agent_tokens" datastore:"agent_tokens"`
-	Multiplayer         SyncData    `json:"multiplayer" datastore:"multiplayer"`
+
+	LLMTokens   SyncData `json:"llm_tokens" datastore:"llm_tokens"`
+	AgentTokens SyncData `json:"agent_tokens" datastore:"agent_tokens"`
+	Multiplayer SyncData `json:"multiplayer" datastore:"multiplayer"`
 }
 
 type SyncData struct {
