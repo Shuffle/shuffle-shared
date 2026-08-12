@@ -21,11 +21,11 @@ import (
 	"crypto/sha256"
 	"math"
 	"math/rand"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-	"regexp"
 
 	//"github.com/goccy/go-json"
 
@@ -94,6 +94,7 @@ func GetESIndexPrefix(index string) string {
 func GetOpensearchBaseIndexes() []string {
 	return []string{
 		"workflowexecution",
+		"workflowexecution_live",
 		"datastore_ngram",
 		"org_cache",
 		"org_cache_revisions",
@@ -106,6 +107,149 @@ func GetOpensearchBaseIndexes() []string {
 		"workflow_revisions",
 		"datastore_category",
 	}
+}
+
+// GetOpensearchRolloverIndexes returns the subset of base indexes that are
+// genuinely append-only (or, for workflowexecution, append-only AFTER the
+// hot/cold lifecycle split below) and therefore want alias + automatic
+// rollover + ISM retention.
+//
+// notifications and workflowexecution_live are stateful keyed stores where
+// the same _id is re-written in place (notifications toggle read/ignored
+// flags forever; workflowexecution_live holds in-flight executions before
+// they reach a terminal status) - OpenSearch always routes alias writes to
+// the current write-index generation, so rolling them would split an _id
+// across generations and silently produce duplicate documents. They stay on
+// a single backing index like the other keyed stores.
+func GetOpensearchRolloverIndexes() []string {
+	return []string{
+		"shuffle_logs",
+		// Content-addressed / fresh-id-per-write revision stores: a given _id is
+		// never rewritten once created, so alias+rollover is safe here (unlike
+		// workflowexecution_live/notifications, which mutate the same _id in place).
+		"workflow_revisions",  // _id = md5(name+id+actions+triggers+variables)
+		"org_cache_revisions", // _id = <org>_<key>[_<category>]_<uuid>
+		// workflowexecution is the ARCHIVE for confirmed-terminal
+		// executions (see execution_lifecycle.go). Nothing writes to it
+		// except archiveExecutionDocument, which resolves any existing copy of an
+		// execution_id to its concrete backing index before writing (rather than
+		// writing through the alias blindly), so rollover is safe here even though
+		// the same execution_id can in rare cases be revisited (see the unarchive
+		// path in writeExecutionDocument).
+		"workflowexecution",
+	}
+}
+
+// opensearchCoreMappings holds pragmatic field mappings applied only when an
+// index is created fresh (OpenSearch mappings are immutable after creation, so
+// existing deployments keep whatever mappings they already have). Keys are the
+// base index names from GetOpensearchBaseIndexes.
+//
+// id/ref fields are keyword, date/epoch fields are date (epoch_second), and
+// numeric counters/priorities are long so numeric sorting and filtering work.
+// The default strings_as_keywords dynamic template only handles strings; these
+// explicit types keep the mapping stable regardless of how a value is written.
+//
+// Large/binary blobs (images) are mapped with index:false + doc_values:false:
+// they stay retrievable via _source but are never added to the inverted index
+// or doc_values, avoiding index bloat and too-big-field failures. Add a field
+// only when its type is known to be stable and it is actually sorted/filtered
+// on (or when it must be excluded from indexing).
+//
+// created/edited/started_at on workflowexecution are deliberately "long", not
+// "date": these three fields are sorted across workflowexecution_live+archive
+// (started_at, in GetUnfinishedExecutions/GetAllWorkflowExecutions[V2]/
+// GetWorkflowRunsBySearch) or across archive generations (created/edited, in
+// findExecutionInArchive). OpenSearch stores "date" doc values internally as
+// epoch milliseconds regardless of the "format" annotation - format only
+// affects range-query parsing, not the raw value a sort clause returns. Any
+// pre-existing customer index created before this mapping existed has these
+// fields dynamically inferred as "long" (the app always wrote raw epoch
+// SECONDS as JSON numbers). Mapping them "date" here would make freshly
+// created generations sort in milliseconds while old/legacy generations sort
+// in seconds - since ms values are ~1000x larger, every doc in a
+// date-mapped generation would silently outrank every doc in a long-mapped
+// generation regardless of true chronological order.
+// Keeping these three fields "long" matches what already-deployed clusters
+// have and keeps sort units identical across every generation, old and new.
+// completed_at has no cross-generation/cross-index sort today (only a
+// same-index numeric range filter in the archival sweep), so it is left as
+// "date" for existing single-index range-query compatibility.
+var opensearchCoreMappings = map[string]map[string]interface{}{
+	"workflowexecution": {
+		"properties": map[string]interface{}{
+			"execution_id":  map[string]interface{}{"type": "keyword"},
+			"workflow_id":   map[string]interface{}{"type": "keyword"},
+			"execution_org": map[string]interface{}{"type": "keyword"},
+			"status":        map[string]interface{}{"type": "keyword"},
+			"created":       map[string]interface{}{"type": "long"},
+			"edited":        map[string]interface{}{"type": "long"},
+			"started_at":    map[string]interface{}{"type": "long"},
+			"completed_at":  map[string]interface{}{"type": "date", "format": "epoch_second"},
+			"priority":      map[string]interface{}{"type": "long"},
+		},
+	},
+	"notifications": {
+		"properties": map[string]interface{}{
+			"id":                  map[string]interface{}{"type": "keyword"},
+			"org_id":              map[string]interface{}{"type": "keyword"},
+			"user_id":             map[string]interface{}{"type": "keyword"},
+			"execution_id":        map[string]interface{}{"type": "keyword"},
+			"workflow_id":         map[string]interface{}{"type": "keyword"},
+			"org_notification_id": map[string]interface{}{"type": "keyword"},
+			"created_at":          map[string]interface{}{"type": "date", "format": "epoch_second"},
+			"updated_at":          map[string]interface{}{"type": "date", "format": "epoch_second"},
+			"amount":              map[string]interface{}{"type": "long"},
+			"image":               map[string]interface{}{"type": "keyword", "index": false, "doc_values": false},
+			"read":                map[string]interface{}{"type": "boolean"},
+			"ignored":             map[string]interface{}{"type": "boolean"},
+			"dismissable":         map[string]interface{}{"type": "boolean"},
+			"personal":            map[string]interface{}{"type": "boolean"},
+		},
+	},
+	"org_statistics": {
+		"properties": map[string]interface{}{
+			"org_id":                      map[string]interface{}{"type": "keyword"},
+			"last_cleared":                map[string]interface{}{"type": "date", "format": "epoch_second"},
+			"total_app_executions":        map[string]interface{}{"type": "long"},
+			"total_workflow_executions":   map[string]interface{}{"type": "long"},
+			"total_agent_executions":      map[string]interface{}{"type": "long"},
+			"total_agent_tokens":          map[string]interface{}{"type": "long"},
+			"total_ai_executions":         map[string]interface{}{"type": "long"},
+			"total_app_executions_failed": map[string]interface{}{"type": "long"},
+		},
+	},
+	"datastore_ngram": {
+		"properties": map[string]interface{}{
+			"key":    map[string]interface{}{"type": "keyword"},
+			"org_id": map[string]interface{}{"type": "keyword"},
+			"amount": map[string]interface{}{"type": "long"},
+		},
+	},
+	"workflow": {
+		"properties": map[string]interface{}{
+			"id":           map[string]interface{}{"type": "keyword"},
+			"org_id":       map[string]interface{}{"type": "keyword"},
+			"created":      map[string]interface{}{"type": "date", "format": "epoch_second"},
+			"edited":       map[string]interface{}{"type": "date", "format": "epoch_second"},
+			"last_runtime": map[string]interface{}{"type": "long"},
+		},
+	},
+	"workflowapp": {
+		"properties": map[string]interface{}{
+			"app_id":      map[string]interface{}{"type": "keyword"},
+			"app_version": map[string]interface{}{"type": "keyword"},
+			"generated":   map[string]interface{}{"type": "boolean"},
+			"small_image": map[string]interface{}{"type": "keyword", "index": false, "doc_values": false},
+			"large_image": map[string]interface{}{"type": "keyword", "index": false, "doc_values": false},
+		},
+	},
+	"org_cache": {
+		"properties": map[string]interface{}{
+			"key":    map[string]interface{}{"type": "keyword"},
+			"org_id": map[string]interface{}{"type": "keyword"},
+		},
+	},
 }
 
 func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error {
@@ -381,7 +525,6 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 			useMilliseconds = true
 		}
 	}
-
 
 	// Splitting into multiple cache items
 	//if project.Environment == "cloud" || len(memcached) > 0 {
@@ -714,7 +857,11 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 			log.Printf("[DEBUG] Final string size of execution is: %d", len(executionData))
 		}
 
-		err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
+		err = writeExecutionDocument(ctx, workflowExecution.ExecutionId, workflowExecution.Status, executionData)
+		if err == ErrExecutionArchived {
+			log.Printf("[INFO][%s] Rejected write to archived execution", workflowExecution.ExecutionId)
+			return ErrExecutionArchived
+		}
 		if err != nil {
 			if strings.Contains(err.Error(), "immense term") {
 				retried := false
@@ -783,7 +930,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 					}
 
 					log.Printf("[DEBUG][%s] Retrying OpenSearch save after trimming remaining oversized values", workflowExecution.ExecutionId)
-					err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
+					err = writeExecutionDocument(ctx, workflowExecution.ExecutionId, workflowExecution.Status, executionData)
 				}
 			}
 
@@ -1122,48 +1269,12 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 	var getErr error = nil
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
-
-		if err != nil {
-			if strings.Contains(err.Error(), "has more than one index associated with it") {
-				fallbackExec, fallbackErr := getWorkflowExecutionByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
-				if fallbackErr != nil {
-					log.Printf("[WARNING][%s] Error for %s: %s", workflowExecution.ExecutionId, cacheKey, err)
-					log.Printf("[WARNING][%s] WorkflowExecution alias fallback failed for %s: %s", workflowExecution.ExecutionId, cacheKey, fallbackErr)
-					return workflowExecution, fallbackErr
-				}
-
-				workflowExecution = fallbackExec
-			} else {
-				log.Printf("[WARNING][%s] Error for %s: %s", workflowExecution.ExecutionId, cacheKey, err)
-				return workflowExecution, err
-			}
+		fetched, fetchErr := getExecutionDocument(ctx, id)
+		if fetchErr != nil {
+			return workflowExecution, fetchErr
 		}
 
-		if err == nil {
-			res := resp.Inspect().Response
-			defer res.Body.Close()
-			if res.StatusCode == 404 {
-				return workflowExecution, errors.New("execution doesn't exist")
-			}
-
-			respBody, err := ioutil.ReadAll(res.Body)
-			if err != nil {
-				return workflowExecution, err
-			}
-
-			wrapped := ExecWrapper{}
-			err = json.Unmarshal(respBody, &wrapped)
-			//err = gojson.Unmarshal(respBody, &wrapped)
-			if err != nil && len(wrapped.Source.ExecutionId) == 0 {
-				return workflowExecution, err
-			}
-
-			workflowExecution = &wrapped.Source
-		}
+		workflowExecution = fetched
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if getErr = project.Dbclient.Get(ctx, key, workflowExecution); getErr != nil {
@@ -1544,54 +1655,39 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		// Get it from opensearch (may be prone to more issues at scale (thousands/second) due to no transactional locking)
 
 		id := strings.ToLower(orgId)
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
-
-		if err != nil {
-			if debug {
-				log.Printf("[WARNING] Error in org STATS get: %s", err)
-			}
-			//return err
+		data, found, getErr := getDocumentByID(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id, "last_cleared")
+		if getErr != nil {
+			log.Printf("[WARNING] Failed getting org STATS body: %s", getErr)
+			return getErr
 		}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		respBody, bodyErr := ioutil.ReadAll(res.Body)
-		if err != nil || bodyErr != nil || res.StatusCode >= 300 {
-			log.Printf("[WARNING] Failed getting org STATS body: %s. Resp: %d. Body err: %s", err, res.StatusCode, bodyErr)
-
+		if !found {
 			// Init the org stats if it doesn't exist
-			if res.StatusCode == 404 {
-				orgStatistics.OrgId = orgId
-				orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
-				orgStatistics = handleDailyCacheUpdate(orgStatistics)
+			orgStatistics.OrgId = orgId
+			orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
+			orgStatistics = handleDailyCacheUpdate(orgStatistics)
 
-				marshalledData, err := json.Marshal(orgStatistics)
-				if err != nil {
-					log.Printf("[ERROR] Failed marshalling org STATS body: %s", err)
+			marshalledData, marshalErr := json.Marshal(orgStatistics)
+			if marshalErr != nil {
+				log.Printf("[ERROR] Failed marshalling org STATS body: %s", marshalErr)
+			} else {
+				if indexErr := indexEs(ctx, nameKey, id, marshalledData); indexErr != nil {
+					log.Printf("[ERROR] Failed indexing org STATS body: %s", indexErr)
 				} else {
-					err := indexEs(ctx, nameKey, id, marshalledData)
-					if err != nil {
-						log.Printf("[ERROR] Failed indexing org STATS body: %s", err)
-					} else {
-						log.Printf("[DEBUG] Indexed org STATS body for %s", orgId)
-					}
+					log.Printf("[DEBUG] Indexed org STATS body for %s", orgId)
 				}
 			}
 
-			return err
+			return nil
 		}
 
-		orgStatsWrapper := &ExecutionInfoWrapper{}
-		err = json.Unmarshal(respBody, &orgStatsWrapper)
-		if err != nil {
-			log.Printf("[ERROR] Failed unmarshalling org STATS body: %s", err)
-			return err
+		source := ExecutionInfo{}
+		if unmarshalErr := json.Unmarshal(data, &source); unmarshalErr != nil {
+			log.Printf("[ERROR] Failed unmarshalling org STATS body: %s", unmarshalErr)
+			return unmarshalErr
 		}
 
-		orgStatistics = &orgStatsWrapper.Source
+		orgStatistics = &source
 		if orgStatistics.OrgName == "" || orgStatistics.OrgName == orgStatistics.OrgId {
 			org, err := GetOrg(ctx, orgId)
 			if err == nil {
@@ -1611,9 +1707,8 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			return err
 		}
 
-		err = indexEs(ctx, nameKey, id, marshalledData)
-		if err != nil {
-			log.Printf("[ERROR] Failed indexing org STATS body (2): %s", err)
+		if indexErr := indexEs(ctx, nameKey, id, marshalledData); indexErr != nil {
+			log.Printf("[ERROR] Failed indexing org STATS body (2): %s", indexErr)
 		}
 
 		//log.Printf("[DEBUG] Incremented org stats for %s", orgId)
@@ -2155,11 +2250,11 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		obj := bucket.Object(fullParsedPath)
 		fileReader, err := obj.NewReader(ctx)
 		if err != nil {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Failed reading file '%s' from bucket %s: %s. Will try with alternative solution.", fullParsedPath, bucketName, err)
 			}
 
-			// Cache sip for the minute 
+			// Cache sip for the minute
 			SetCache(ctx, cacheKey, []byte{}, 1)
 
 			if projectName != "shuffler" {
@@ -2169,7 +2264,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 				fileReader, err = obj.NewReader(ctx)
 				if err != nil {
 					//log.Printf("[ERROR] Failed reading file '%s' again from bucket %s: %s", fullParsedPath, bucketName, err)
-		
+
 					return "", err
 				}
 			} else {
@@ -2312,7 +2407,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		workflowExecution.Workflow.Validation = validation
 	}
 
-	//if debug { 
+	//if debug {
 	//	log.Printf("\n\n[DEBUG][%s] EXEC CHECK? Actions: %d, Results: %d\n\n", workflowExecution.ExecutionId, len(workflowExecution.Workflow.Actions), len(workflowExecution.Results))
 	//}
 
@@ -2328,7 +2423,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 			// Very weird edgecase handling for agent cleanup
 			// This is for auto-correctiveness of executions
-			if len(workflowExecution.Workflow.Actions) == 1 && action.Name == "agent" && innerresult.Action.Name == "agent" && innerresult.Action.ID == "" { 
+			if len(workflowExecution.Workflow.Actions) == 1 && action.Name == "agent" && innerresult.Action.Name == "agent" && innerresult.Action.ID == "" {
 				innerresult.Action.ID = action.ID
 				innerresult.Action.AppName = "AI Agent"
 			}
@@ -2396,25 +2491,25 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				}
 
 				finishFound := false
-				for decisionIndex, decision := range mappedOutput.Decisions { 
-					if decision.Action == "finish" || decision.Category == "finish" { 
+				for decisionIndex, decision := range mappedOutput.Decisions {
+					if decision.Action == "finish" || decision.Category == "finish" {
 
-						if decision.RunDetails.Status != "FINISHED" {  
-							if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 { 
-								mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli() 
+						if decision.RunDetails.Status != "FINISHED" {
+							if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
+								mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 							}
 
-							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli() 
+							mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
 							mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 							decisionsUpdated = true
 						}
-				
+
 						finishFound = true
 					}
 				}
 
-				if finishFound { 
-					//if debug { 
+				if finishFound {
+					//if debug {
 					//	log.Printf("[DEBUG][%s] SELF AGENT FINISH FOUND", workflowExecution.ExecutionId)
 					//}
 
@@ -2450,14 +2545,14 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						if decision.Action == "finish" {
 							finishDecisionFound = true
 
-							if decision.RunDetails.Status == "" { 
+							if decision.RunDetails.Status == "" {
 								decision.RunDetails.Status = "FINISHED"
 								mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 							}
 						}
 
 						parsedDelay, err := strconv.Atoi(decision.Delay)
-						if err != nil { 
+						if err != nil {
 							parsedDelay = 0
 						}
 
@@ -2655,7 +2750,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							}()
 						}
 					} else if (result.Status == "" || result.Status == "WAITING") && mappedOutput.Status == "FINISHED" {
-						if debug { 
+						if debug {
 							log.Printf("[INFO][%s] Agent action %s marked as FINISHED, updating result status to SUCCESS.", workflowExecution.ExecutionId, action.ID)
 						}
 
@@ -3917,6 +4012,10 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 
 	if project.DbType == "opensearch" {
 		// count WorkflowExecution where workflowId = id
+		// Uses a cardinality aggregation on execution_id instead of
+		// track_total_hits so a duplicate _id across live+archive (the narrow
+		// crash/sweep-race window described in execution_lifecycle.go) is
+		// counted once, not twice.
 		query := map[string]interface{}{
 			"size": 0,
 			"query": map[string]interface{}{
@@ -3938,6 +4037,13 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 					},
 				},
 			},
+			"aggs": map[string]interface{}{
+				"unique_executions": map[string]interface{}{
+					"cardinality": map[string]interface{}{
+						"field": "execution_id",
+					},
+				},
+			},
 		}
 
 		var buf bytes.Buffer
@@ -3947,10 +4053,11 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 		}
 
 		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
-			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Indices: executionSearchIndices(),
 			Body:    &buf,
 			Params: opensearchapi.SearchParams{
-				TrackTotalHits: true,
+				AllowNoIndices:    opensearchapi.ToPointer(true),
+				IgnoreUnavailable: opensearchapi.ToPointer(true),
 			},
 		})
 
@@ -3999,7 +4106,7 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 			return 0, err
 		}
 
-		count = wrapped.Hits.Total.Value
+		count = wrapped.Aggregations.UniqueExecutions.Value
 	} else {
 		// count WorkflowExecution where workflowId = id
 		//query := datastore.NewQuery(nameKey).Filter("workflow_id =", strings.ToLower(id))
@@ -4514,43 +4621,20 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 	if project.DbType == "opensearch" {
 		shouldInitializeStats := false
 
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: orgId,
-		})
-
-		if err != nil && !strings.Contains(err.Error(), "status: 404") {
+		data, found, err := getDocumentByID(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), orgId, "last_cleared")
+		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return stats, err
 		}
 
-		if err != nil && strings.Contains(err.Error(), "status: 404") {
+		if !found {
 			shouldInitializeStats = true
-		}
-
-		if !shouldInitializeStats {
-			res := resp.Inspect().Response
-			defer res.Body.Close()
-			if res.StatusCode == 404 {
-				shouldInitializeStats = true
-			} else {
-				respBody, err := ioutil.ReadAll(res.Body)
-				if err != nil {
-					return stats, err
-				}
-
-				wrapped := ExecutionInfoWrapper{}
-				err = json.Unmarshal(respBody, &wrapped)
-				if err != nil {
-					return stats, err
-				}
-
-				if !wrapped.Found {
-					shouldInitializeStats = true
-				} else {
-					stats = &wrapped.Source
-				}
+		} else {
+			source := ExecutionInfo{}
+			if unmarshalErr := json.Unmarshal(data, &source); unmarshalErr != nil {
+				return stats, unmarshalErr
 			}
+			stats = &source
 		}
 
 		if shouldInitializeStats {
@@ -4882,7 +4966,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				_, err = it.Next(&innerWorkflow)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						if debug { 
+						if debug {
 							//log.Printf("[DEBUG] Workflow load iterator issue: %s", err)
 						}
 
@@ -4896,7 +4980,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Public {
-					//if debug { 
+					//if debug {
 					//	log.Printf("[DEBUG] Skipping public workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
 					//}
 
@@ -4904,7 +4988,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Hidden {
-					//if debug { 
+					//if debug {
 					//	log.Printf("[DEBUG] Skipping HIDDEN workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
 					//}
 
@@ -4928,12 +5012,12 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 			}
 
-			// Fallback for when the iterator fails due to a datastore issue 
+			// Fallback for when the iterator fails due to a datastore issue
 			// (e.g. "cannot load field" error) and similar
 			if err != iterator.Done {
 				log.Printf("[WARNING] Failed fetching workflow results for org %s: %v", user.ActiveOrg.Id, err)
 
-				// Check if query contains edited or not 
+				// Check if query contains edited or not
 				if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition desc") && strings.Contains(fmt.Sprintf("%s", query), "edited") {
 					log.Printf("[ERROR] Retrying workflow query without Edited sort due to error: %s", err)
 
@@ -4969,7 +5053,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 	})
 
 	if len(workflows) > maxAmount {
-		if debug { 
+		if debug {
 			log.Printf("[WARNING] Found %d workflows for user %s (%s) in org %s, but limiting to %d", len(workflows), user.Username, user.Id, user.ActiveOrg.Id, maxAmount)
 		}
 
@@ -11356,7 +11440,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	}
 
 	if debug {
-		log.Printf("[DEBUG] API key cache miss; looking up user") 
+		log.Printf("[DEBUG] API key cache miss; looking up user")
 	}
 
 	if project.DbType == "opensearch" {
@@ -11675,34 +11759,20 @@ func GetNotification(ctx context.Context, id string) (*Notification, error) {
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	curFile := &Notification{}
 	if project.DbType == "opensearch" {
-		//log.Printf("GETTING ES USER %s",
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		data, found, err := getDocumentByID(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id, "updated_at")
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &Notification{}, err
 		}
-
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
+		if !found {
 			return &Notification{}, errors.New("Notification with that ID doesn't exist")
 		}
 
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return &Notification{}, err
+		source := Notification{}
+		if unmarshalErr := json.Unmarshal(data, &source); unmarshalErr != nil {
+			return &Notification{}, unmarshalErr
 		}
-
-		wrapped := NotificationWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return &Notification{}, err
-		}
-
-		curFile = &wrapped.Source
+		curFile = &source
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, curFile); err != nil {
@@ -12092,7 +12162,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			"size": 1000,
 			"sort": map[string]interface{}{
 				"updated_at": map[string]interface{}{
-					"order": "desc",
+					"order":         "desc",
 					"unmapped_type": "long",
 				},
 			},
@@ -13274,7 +13344,8 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 			"size": 1000,
 			"sort": map[string]interface{}{
 				"started_at": map[string]interface{}{
-					"order": "desc",
+					"order":         "desc",
+					"unmapped_type": "long",
 				},
 			},
 			"query": map[string]interface{}{
@@ -13302,18 +13373,15 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 
 		// Perform the search request.
 		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
-			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Indices: executionSearchIndices(),
 			Body:    &buf,
 			Params: opensearchapi.SearchParams{
-				TrackTotalHits: true,
+				TrackTotalHits:    true,
+				AllowNoIndices:    opensearchapi.ToPointer(true),
+				IgnoreUnavailable: opensearchapi.ToPointer(true),
 			},
 		})
 		if err != nil {
-			if strings.Contains(err.Error(), "index_not_found_exception") {
-				return executions, nil
-			}
-
-			log.Printf("[ERROR] Error getting response from Opensearch (get workflow executions): %s", err)
 			return executions, err
 		}
 
@@ -13357,6 +13425,7 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 		for _, hit := range wrapped.Hits.Hits {
 			executions = append(executions, hit.Source)
 		}
+		executions = dedupExecutionsByID(executions)
 
 		return executions, nil
 	} else {
@@ -13489,7 +13558,8 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			},
 			"sort": map[string]interface{}{
 				"started_at": map[string]interface{}{
-					"order": "desc",
+					"order":         "desc",
+					"unmapped_type": "long",
 				},
 			},
 		}
@@ -13500,10 +13570,12 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 
 		// Perform the search request.
 		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
-			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Indices: executionSearchIndices(),
 			Body:    &buf,
 			Params: opensearchapi.SearchParams{
-				TrackTotalHits: true,
+				TrackTotalHits:    true,
+				AllowNoIndices:    opensearchapi.ToPointer(true),
+				IgnoreUnavailable: opensearchapi.ToPointer(true),
 			},
 		})
 		if err != nil {
@@ -13557,6 +13629,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 				executions = append(executions, hit.Source)
 			}
 		}
+		executions = dedupExecutionsByID(executions)
 
 	} else {
 		query := datastore.NewQuery(nameKey).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
@@ -13878,7 +13951,8 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			},
 			"sort": map[string]interface{}{
 				"started_at": map[string]interface{}{
-					"order": "desc",
+					"order":         "desc",
+					"unmapped_type": "long",
 				},
 			},
 		}
@@ -13889,10 +13963,12 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 
 		// Perform the search request.
 		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
-			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Indices: executionSearchIndices(),
 			Body:    &buf,
 			Params: opensearchapi.SearchParams{
-				TrackTotalHits: true,
+				TrackTotalHits:    true,
+				AllowNoIndices:    opensearchapi.ToPointer(true),
+				IgnoreUnavailable: opensearchapi.ToPointer(true),
 			},
 		})
 		if err != nil {
@@ -13946,6 +14022,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 				executions = append(executions, hit.Source)
 			}
 		}
+		executions = dedupExecutionsByID(executions)
 
 		//return executions, nil
 	} else {
@@ -15045,7 +15122,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 							oldDoc := config.Value
 							newDoc := cacheData.Value
 
-							if debug { 
+							if debug {
 								log.Printf("\n\nOLD: %s\n\nNEW: %s\n\n", oldDoc, newDoc)
 							}
 
@@ -15070,9 +15147,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						break
 					}
 
-					// This NEVER triggers. RLS just returns the merged JSON 
-					// and we trust it. If we don't trust it, we can set 
-					// ruleValid to false above. 
+					// This NEVER triggers. RLS just returns the merged JSON
+					// and we trust it. If we don't trust it, we can set
+					// ruleValid to false above.
 					if !ruleValid {
 						// Break out
 						if debug {
@@ -15081,8 +15158,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 						keyUpdated = false
 
-						cacheData.Existed = true 
-						cacheData.Changed = keyUpdated 
+						cacheData.Existed = true
+						cacheData.Changed = keyUpdated
 						datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
 						cacheKeys <- cacheData
 						return
@@ -16349,6 +16426,130 @@ func getCacheKeyByAliasSearch(ctx context.Context, aliasName, id string) (*Cache
 	return &item, nil
 }
 
+type esDocGetWrapper struct {
+	Found  bool            `json:"found"`
+	Source json.RawMessage `json:"_source"`
+}
+
+type esSearchDocWrapper struct {
+	Hits struct {
+		Hits []struct {
+			Source json.RawMessage `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
+// buildAliasSearchBody builds an ids _search query for a single document. When
+// sortField is non-empty the result is ordered desc on that field so the most
+// recent generation wins when an alias spans multiple backing indices.
+func buildAliasSearchBody(sortField, id string) ([]byte, error) {
+	query := map[string]interface{}{
+		"size": 1,
+		"query": map[string]interface{}{
+			"ids": map[string]interface{}{
+				"values": []string{id},
+			},
+		},
+	}
+
+	if sortField != "" {
+		query["sort"] = []map[string]interface{}{
+			{
+				sortField: map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+// getDocumentByID fetches a document by id from an OpenSearch index/alias and
+// returns its raw _source. If the target is a rollover alias spanning more than
+// one backing index (which fails for a single-document get), it falls back to an
+// ids _search across the alias (optionally sorted so the newest generation wins).
+// found=false with err=nil means the document does not exist.
+func getDocumentByID(ctx context.Context, indexName, id, sortField string) (doc []byte, found bool, err error) {
+	resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+		Index:      indexName,
+		DocumentID: id,
+	})
+
+	if err != nil {
+		if strings.Contains(err.Error(), "status: 404") {
+			return nil, false, nil
+		}
+
+		if !strings.Contains(err.Error(), "has more than one index associated with it") {
+			return nil, false, err
+		}
+
+		// Alias spans multiple backing indices: fall back to an ids search.
+		body, buildErr := buildAliasSearchBody(sortField, id)
+		if buildErr != nil {
+			return nil, false, buildErr
+		}
+
+		searchResp, searchErr := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{indexName},
+			Body:    bytes.NewReader(body),
+			Params:  opensearchapi.SearchParams{TrackTotalHits: true},
+		})
+		if searchErr != nil {
+			return nil, false, searchErr
+		}
+
+		searchRes := searchResp.Inspect().Response
+		defer searchRes.Body.Close()
+
+		respBody, readErr := ioutil.ReadAll(searchRes.Body)
+		if readErr != nil {
+			return nil, false, readErr
+		}
+		if searchRes.StatusCode != 200 && searchRes.StatusCode != 201 {
+			return nil, false, fmt.Errorf("failed alias fallback lookup. status=%d body=%s", searchRes.StatusCode, string(respBody))
+		}
+
+		wrapped := esSearchDocWrapper{}
+		if unmarshalErr := json.Unmarshal(respBody, &wrapped); unmarshalErr != nil {
+			return nil, false, unmarshalErr
+		}
+		if len(wrapped.Hits.Hits) == 0 {
+			return nil, false, nil
+		}
+
+		return wrapped.Hits.Hits[0].Source, true, nil
+	}
+
+	res := resp.Inspect().Response
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return nil, false, fmt.Errorf("failed document get. status=%d", res.StatusCode)
+	}
+
+	respBody, readErr := ioutil.ReadAll(res.Body)
+	if readErr != nil {
+		return nil, false, readErr
+	}
+
+	wrapped := esDocGetWrapper{}
+	if unmarshalErr := json.Unmarshal(respBody, &wrapped); unmarshalErr != nil {
+		return nil, false, unmarshalErr
+	}
+	if !wrapped.Found {
+		return nil, false, nil
+	}
+
+	return wrapped.Source, true, nil
+}
+
 var retryCount int
 
 func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool, dbType string, defaultCreds bool, count int) (ShuffleStorage, error) {
@@ -17534,37 +17735,37 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		if parentOrgDepth >= 3 {
 			log.Printf("[ERROR] Reached maximum parent org lookup depth (%d) for org %s. Skipping parent org cache lookup to prevent infinite recursion.", parentOrgDepth, orgId)
 		} else {
-		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
-		if err != nil {
+			parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+			if err != nil {
 				if debug {
 					log.Printf("[DEBUG] Could not find parent org %s for org %s (possibly in different region): %s", foundOrg.CreatorOrg, orgId, err)
 				}
-		} else {
+			} else {
 				parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, "", max, inputcursor, cleanupDepth, parentOrgDepth+1)
-			if err != nil {
+				if err != nil {
 					if debug {
 						log.Printf("[DEBUG] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
 					}
-			} else {
-				if debug {
-					//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
-				}
-
-				for _, parentCache := range parentOrgCache {
-					/*
-						if debug && len(parentCache.SuborgDistribution) > 0 {
-							log.Printf("[DEBUG] Parent org %s keys: %#v", parentOrg.Id, parentCache.SuborgDistribution)
-						}
-					*/
-
-					if !ArrayContains(parentCache.SuborgDistribution, orgId) {
-						continue
+				} else {
+					if debug {
+						//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
 					}
 
-					// Clean up just in case
-					parentCache.PublicAuthorization = ""
-					parentCache.SuborgDistribution = []string{orgId}
-					cacheKeys = append(cacheKeys, parentCache)
+					for _, parentCache := range parentOrgCache {
+						/*
+							if debug && len(parentCache.SuborgDistribution) > 0 {
+								log.Printf("[DEBUG] Parent org %s keys: %#v", parentOrg.Id, parentCache.SuborgDistribution)
+							}
+						*/
+
+						if !ArrayContains(parentCache.SuborgDistribution, orgId) {
+							continue
+						}
+
+						// Clean up just in case
+						parentCache.PublicAuthorization = ""
+						parentCache.SuborgDistribution = []string{orgId}
+						cacheKeys = append(cacheKeys, parentCache)
 					}
 				}
 			}
@@ -18888,7 +19089,8 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 			},
 			"sort": map[string]interface{}{
 				"started_at": map[string]interface{}{
-					"order": "desc",
+					"order":         "desc",
+					"unmapped_type": "long",
 				},
 			},
 		}
@@ -18989,10 +19191,12 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 
 		// Perform the search request.
 		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
-			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Indices: executionSearchIndices(),
 			Body:    &buf,
 			Params: opensearchapi.SearchParams{
-				TrackTotalHits: true,
+				TrackTotalHits:    true,
+				AllowNoIndices:    opensearchapi.ToPointer(true),
+				IgnoreUnavailable: opensearchapi.ToPointer(true),
 			},
 		})
 
@@ -19027,6 +19231,10 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		for _, hit := range wrapped.Hits.Hits {
 			executions = append(executions, hit.Source)
 		}
+		// Searching both workflowexecution_live and workflowexecution (archive)
+		// can surface the same execution_id twice in the narrow window between
+		// an unarchive write and its archive-side delete; dedupe defensively.
+		executions = dedupExecutionsByID(executions)
 
 		//return executions, "", errors.New("Not implemented yet")
 	} else {
@@ -19918,33 +20126,20 @@ func GetDatastoreNGramItem(ctx context.Context, key string) (*NGramItem, error) 
 	}
 
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: key,
-		})
+		data, found, err := getDocumentByID(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), key, "")
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return ngramItem, err
 		}
-
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
+		if !found {
 			return ngramItem, errors.New("Item doesn't exist")
 		}
 
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return ngramItem, err
+		source := NGramItem{}
+		if unmarshalErr := json.Unmarshal(data, &source); unmarshalErr != nil {
+			return ngramItem, unmarshalErr
 		}
-
-		wrapped := NgramItemWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return ngramItem, err
-		}
-
-		ngramItem = &wrapped.Source
+		ngramItem = &source
 	} else {
 		// Get the ngram item from the datastore
 		getNgramKey := datastore.NameKey(nameKey, key, nil)
@@ -19999,6 +20194,39 @@ func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
 	//fmt.Fprint(res, "OK")
 }
 
+// resolveAppendIndexCreationTarget decides which concrete backing index the
+// create-loop in InitOpensearchIndexes should target for a given append
+// (rollover) base index: either a brand new "-000001" generation (if none
+// exists yet) or the highest EXISTING generation (if the index has already
+// been created/rolled/collapsed before). existingIndices is the full list
+// of real index names currently in the cluster (from getOpensearchIndices).
+func resolveAppendIndexCreationTarget(existingIndices []string, index string) (target string, alreadyExists bool) {
+	prefix := index + "-"
+	highestGen := -1
+	highestName := ""
+
+	for _, name := range existingIndices {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+
+		gen := getOpensearchGeneration(name)
+		if gen <= 0 {
+			continue
+		}
+		if gen > highestGen {
+			highestGen = gen
+			highestName = name
+		}
+	}
+
+	if highestName == "" {
+		return fmt.Sprintf("%s-000001", index), false
+	}
+
+	return highestName, true
+}
+
 func InitOpensearchIndexes() {
 	if project.DbType != "opensearch" {
 		return
@@ -20020,6 +20248,22 @@ func InitOpensearchIndexes() {
 	relevantScaleIndexes := []string{}
 	for _, baseIndex := range GetOpensearchBaseIndexes() {
 		relevantScaleIndexes = append(relevantScaleIndexes, GetESIndexPrefix(baseIndex))
+	}
+
+	// Only append-heavy stores get rollover. Stateful keyed stores stay on a
+	// single backing index (rollover there splits _id across generations and
+	// breaks single-document reads, e.g. org_statistics).
+	appendIndexes := []string{}
+	for _, baseIndex := range GetOpensearchRolloverIndexes() {
+		appendIndexes = append(appendIndexes, strings.ToLower(GetESIndexPrefix(baseIndex)))
+	}
+
+	singleIndexes := []string{}
+	for _, index := range relevantScaleIndexes {
+		index = strings.ToLower(index)
+		if !ArrayContains(appendIndexes, index) {
+			singleIndexes = append(singleIndexes, index)
+		}
 	}
 
 	customConfig := os.Getenv("OPENSEARCH_INDEX_CONFIG")
@@ -20064,10 +20308,17 @@ func InitOpensearchIndexes() {
 
 	ismReady := false
 	if ismEnabled {
-		var err error
-		ismReady, err = ensureOpensearchISMRolloverPolicy(ctx, opensearchUrl, relevantScaleIndexes, rolloverConfig, ismPolicyName)
-		if err != nil {
-			log.Printf("[WARNING] Failed ensuring ISM rollover policy '%s': %s", ismPolicyName, err)
+		for _, baseIndex := range GetOpensearchRolloverIndexes() {
+			alias := strings.ToLower(GetESIndexPrefix(baseIndex))
+			retention := getOpensearchRetentionDays(baseIndex)
+			ready, err := ensureOpensearchISMRolloverPolicy(ctx, opensearchUrl, alias, rolloverConfig, retention, ismPolicyName)
+			if err != nil {
+				log.Printf("[WARNING] Failed ensuring ISM rollover policy '%s': %s", ismPolicyName, err)
+				continue
+			}
+			if ready {
+				ismReady = true
+			}
 		}
 	}
 
@@ -20077,6 +20328,16 @@ func InitOpensearchIndexes() {
 		log.Printf("[WARNING] Prefix repair before init completed with verification warnings: %s", fixResult.Reason)
 	} else {
 		log.Printf("[INFO] Prefix repair before init: expected aliases=%d found=%d", fixResult.ExpectedAliases, fixResult.FoundAliases)
+	}
+
+	if len(customConfig) == 0 {
+		ensureOpensearchMappingTemplates(ctx, opensearchUrl)
+	}
+
+	existingOpensearchIndices, existingIndicesErr := getOpensearchIndices(project.Es, opensearchUrl)
+	if existingIndicesErr != nil {
+		log.Printf("[WARNING] Failed listing existing OpenSearch indices before create-loop (falling back to blind -000001 creation for all indexes): %s", existingIndicesErr)
+		existingOpensearchIndices = []string{}
 	}
 
 	for _, index := range relevantScaleIndexes {
@@ -20134,61 +20395,78 @@ func InitOpensearchIndexes() {
 		}
 
 		index = strings.ToLower(index)
-		initialIndexName := fmt.Sprintf("%s-000001", index)
-		indexConfig = ensureOpensearchIndexRolloverAlias(indexConfig, index)
+		isAppend := ArrayContains(appendIndexes, index)
+		if len(customConfig) == 0 {
+			indexConfig = applyOpensearchCoreMappings(indexConfig, index)
+		}
+		initialIndexName, alreadyExists := resolveAppendIndexCreationTarget(existingOpensearchIndices, index)
+		if isAppend {
+			indexConfig = ensureOpensearchIndexRolloverAlias(indexConfig, index)
+		}
 		// Directly try to force create it. Opensearch throws a 400 if it fails.
 
-		resp, err := project.Es.Indices.Create(ctx, opensearchapi.IndicesCreateReq{
-			Index: initialIndexName,
-			Body:  bytes.NewReader(indexConfig),
-		})
-
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if err != nil {
-			if !strings.Contains(fmt.Sprintf("%s", err), "serverless mode") && !strings.Contains(fmt.Sprintf("%s", err), "resource_already_exists_exception") {
-				log.Printf("[WARNING] Error creating index %s: %s", index, err)
-			}
-
-			// Make sure if the resource exist it is part of correct alias
-			if strings.Contains(fmt.Sprintf("%s", err), "resource_already_exists_exception") {
-				body := fmt.Sprintf(`{
-				  "actions": [
-				    {
-				      "add": {
-				        "index": "%s",
-				        "alias": "%s",
-				        "is_write_index": true
-				      }
-				    }
-				  ]
-				}`, initialIndexName, index)
-
-				aliasResp, aerr := project.Es.Aliases(ctx, opensearchapi.AliasesReq{
-					Body: strings.NewReader(body),
-				})
-				if aerr != nil {
-					log.Printf("[WARNING] Failed to ensure alias %s for index %s: %s", index, initialIndexName, aerr)
-					return
-				}
-
-				res := aliasResp.Inspect().Response
-				defer res.Body.Close()
-
-				if res.StatusCode >= 300 {
-					log.Printf("[WARNING] Alias enforcement failed: %s", res.String())
-					return
-				}
-			}
+		var resp *opensearchapi.IndicesCreateResp
+		var err error
+		if alreadyExists {
+			log.Printf("[INFO] Index %s already exists at generation %s - skipping creation, ensuring ISM/rollover on existing index", index, initialIndexName)
 		} else {
-			if res.IsError() {
-				if !strings.Contains(res.String(), "resource_already_exists_exception") {
-					log.Printf("[DEBUG] Error creating index %s with custom config: %s", index, res.String())
+			resp, err = project.Es.Indices.Create(ctx, opensearchapi.IndicesCreateReq{
+				Index: initialIndexName,
+				Body:  bytes.NewReader(indexConfig),
+			})
+
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if err != nil {
+				if !strings.Contains(fmt.Sprintf("%s", err), "serverless mode") && !strings.Contains(fmt.Sprintf("%s", err), "resource_already_exists_exception") {
+					log.Printf("[WARNING] Error creating index %s: %s", index, err)
 				}
 
+				// Make sure if the resource exist it is part of correct alias
+				if strings.Contains(fmt.Sprintf("%s", err), "resource_already_exists_exception") {
+					body := fmt.Sprintf(`{
+					  "actions": [
+					    {
+					      "add": {
+					        "index": "%s",
+					        "alias": "%s",
+					        "is_write_index": true
+					      }
+					    }
+					  ]
+					}`, initialIndexName, index)
+
+					aliasResp, aerr := project.Es.Aliases(ctx, opensearchapi.AliasesReq{
+						Body: strings.NewReader(body),
+					})
+					if aerr != nil {
+						log.Printf("[WARNING] Failed to ensure alias %s for index %s: %s", index, initialIndexName, aerr)
+						return
+					}
+
+					res := aliasResp.Inspect().Response
+					defer res.Body.Close()
+
+					if res.StatusCode >= 300 {
+						log.Printf("[WARNING] Alias enforcement failed: %s", res.String())
+						return
+					}
+				}
 			} else {
-				log.Printf("[DEBUG] Successfully created index %s with custom config", index)
+				if res.IsError() {
+					if !strings.Contains(res.String(), "resource_already_exists_exception") {
+						log.Printf("[DEBUG] Error creating index %s with custom config: %s", index, res.String())
+					}
+
+				} else {
+					log.Printf("[DEBUG] Successfully created index %s with custom config", index)
+				}
 			}
+		}
+
+		// Non-append indexes stay on a single backing index - no rollover/ISM.
+		if !isAppend {
+			continue
 		}
 
 		if ismReady {
@@ -20196,8 +20474,9 @@ func InitOpensearchIndexes() {
 				log.Printf("[WARNING] Failed ensuring rollover_alias on index %s: %s", initialIndexName, err)
 			}
 
-			if err := ensureOpensearchIndexISMPolicy(ctx, opensearchUrl, initialIndexName, ismPolicyName); err != nil {
-				log.Printf("[WARNING] Failed attaching ISM policy '%s' to %s: %s", ismPolicyName, initialIndexName, err)
+			policyID := fmt.Sprintf("%s-%s", ismPolicyName, index)
+			if err := ensureOpensearchIndexISMPolicy(ctx, opensearchUrl, initialIndexName, policyID); err != nil {
+				log.Printf("[WARNING] Failed attaching ISM policy '%s' to %s: %s", policyID, initialIndexName, err)
 			}
 
 			continue
@@ -20224,6 +20503,26 @@ func InitOpensearchIndexes() {
 			log.Printf("[INFO] Rollover executed successfully for %s", index)
 		}
 
+	}
+
+	// Migrate existing deployments that rolled stateful indexes in the past:
+	// collapse all generations of each single index into its newest backing
+	// index and detach ISM so it never rolls again. Idempotent.
+	for _, singleIndex := range singleIndexes {
+		if err := collapseSingleIndexAliases(ctx, opensearchUrl, singleIndex); err != nil {
+			log.Printf("[WARNING] Failed collapsing single index %s: %s", singleIndex, err)
+		}
+	}
+
+	// Apply mapping migrations to existing single/keyed indexes when the live
+	// mapping has drifted from opensearchCoreMappings. Skipped when a custom
+	// OPENSEARCH_INDEX_CONFIG is set (the operator owns those mappings).
+	if len(customConfig) == 0 {
+		for _, singleIndex := range singleIndexes {
+			if err := migrateOpensearchSingleIndex(ctx, opensearchUrl, singleIndex); err != nil {
+				log.Printf("[WARNING] Failed migrating mapping for single index %s: %s", singleIndex, err)
+			}
+		}
 	}
 
 	if fixResult, fixErr := FixOpensearchIndexPrefix(ctx); fixErr != nil {
@@ -20256,6 +20555,431 @@ func ensureOpensearchIndexRolloverAlias(indexConfig []byte, alias string) []byte
 	}
 
 	return updated
+}
+
+// applyOpensearchCoreMappings injects the pragmatic core field mappings for a
+// base index into a fresh index-create body. Only used when no custom
+// OPENSEARCH_INDEX_CONFIG is set, and ignored by OpenSearch for indices that
+// already exist (mappings are immutable).
+func applyOpensearchCoreMappings(indexConfig []byte, index string) []byte {
+	key := strings.TrimPrefix(strings.ToLower(index), strings.ToLower(GetESIndexPrefix("")))
+	properties, ok := opensearchCoreMappings[key]
+	if !ok {
+		return indexConfig
+	}
+
+	unmarshalled := map[string]interface{}{}
+	if err := json.Unmarshal(indexConfig, &unmarshalled); err != nil {
+		return indexConfig
+	}
+
+	mappings, _ := unmarshalled["mappings"].(map[string]interface{})
+	if mappings == nil {
+		mappings = map[string]interface{}{}
+	}
+
+	if _, exists := mappings["properties"]; !exists {
+		mappings["properties"] = properties["properties"]
+	}
+	unmarshalled["mappings"] = mappings
+
+	updated, err := json.Marshal(unmarshalled)
+	if err != nil {
+		return indexConfig
+	}
+
+	return updated
+}
+
+// opensearchMappingsFor builds the mappings section (dynamic string->keyword
+// template plus the curated core field mappings) for a base index. Mirrors what
+// a freshly created index resolves to, so the migration check stays consistent
+// with fresh creation.
+func opensearchMappingsFor(baseIndex string) map[string]interface{} {
+	mappings := map[string]interface{}{
+		"dynamic_templates": []map[string]interface{}{
+			{
+				"strings_as_keywords": map[string]interface{}{
+					"match_mapping_type": "string",
+					"mapping":            map[string]interface{}{"type": "keyword"},
+				},
+			},
+		},
+	}
+
+	if props, ok := opensearchCoreMappings[baseIndex]["properties"]; ok {
+		mappings["properties"] = props
+	}
+
+	return mappings
+}
+
+// opensearchMappingsDiffer reports whether the live index mapping (its
+// "properties" subtree) is missing any curated field, or has a field whose
+// type/format/indexability no longer matches the desired core mappings. Only
+// fields we explicitly map are compared - the many auto-mapped string fields
+// are ignored.
+func opensearchMappingsDiffer(baseIndex string, actualProps map[string]interface{}) bool {
+	desired, ok := opensearchCoreMappings[baseIndex]["properties"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+
+	for name, dv := range desired {
+		desiredProp, _ := dv.(map[string]interface{})
+		actualProp, exists := actualProps[name].(map[string]interface{})
+		if !exists {
+			return true
+		}
+
+		if fmt.Sprint(desiredProp["type"]) != fmt.Sprint(actualProp["type"]) {
+			return true
+		}
+
+		if df, ok := desiredProp["format"]; ok && fmt.Sprint(actualProp["format"]) != fmt.Sprint(df) {
+			return true
+		}
+
+		if fmt.Sprint(desiredProp["index"]) == "false" && fmt.Sprint(actualProp["index"]) != "false" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// getOpensearchIndexProperties returns the "properties" subtree of an index's
+// live mappings.
+func getOpensearchIndexProperties(foundClient opensearchapi.Client, opensearchUrl, indexName string) (map[string]interface{}, error) {
+	mappingReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_mapping", opensearchUrl, indexName), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	mappingResp, err := foundClient.Client.Transport.Perform(mappingReq)
+	if err != nil {
+		return nil, err
+	}
+	defer mappingResp.Body.Close()
+
+	body, err := ioutil.ReadAll(mappingResp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if mappingResp.StatusCode >= 300 {
+		return nil, fmt.Errorf("failed reading mapping for %s: %d %s", indexName, mappingResp.StatusCode, string(body))
+	}
+
+	raw := map[string]interface{}{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+
+	for _, idxVal := range raw {
+		idxMap, _ := idxVal.(map[string]interface{})
+		mappings, _ := idxMap["mappings"].(map[string]interface{})
+		props, _ := mappings["properties"].(map[string]interface{})
+		return props, nil
+	}
+
+	return nil, nil
+}
+
+// createOpensearchIndexFromBody creates an index with an explicit create body.
+func createOpensearchIndexFromBody(ctx context.Context, opensearchUrl, indexName string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/%s", opensearchUrl, indexName), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := project.Es.Client.Transport.Perform(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("failed creating index %s: %d %s", indexName, resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// migrateOpensearchSingleIndex re-creates a single (keyed) index with the
+// current core mappings when its live mapping has drifted. It reindexes the
+// existing backing index into a fresh generation, atomically swaps the alias to
+// the new generation (so the alias never points at two indices), then drops the
+// old one. Safe to run repeatedly - it no-ops once mappings match.
+func migrateOpensearchSingleIndex(ctx context.Context, opensearchUrl, baseIndex string) error {
+	foundClient := project.Es
+	allIndices, err := getOpensearchIndices(foundClient, opensearchUrl)
+	if err != nil {
+		return err
+	}
+
+	generations := []string{}
+	for _, idx := range allIndices {
+		if idx == baseIndex || strings.HasPrefix(idx, baseIndex+"-") {
+			generations = append(generations, idx)
+		}
+	}
+	if len(generations) == 0 {
+		return nil
+	}
+
+	sort.Slice(generations, func(i, j int) bool {
+		return getOpensearchGeneration(generations[i]) > getOpensearchGeneration(generations[j])
+	})
+
+	// collapseSingleIndexAliases runs just before this; if multiple generations
+	// remain, defer to it rather than racing a partial collapse.
+	if len(generations) > 1 {
+		return nil
+	}
+
+	src := generations[0]
+	actualProps, err := getOpensearchIndexProperties(foundClient, opensearchUrl, src)
+	if err != nil {
+		return err
+	}
+	if !opensearchMappingsDiffer(baseIndex, actualProps) {
+		return nil
+	}
+
+	nextGen := getOpensearchGeneration(src) + 1
+	dest := fmt.Sprintf("%s-%06d", baseIndex, nextGen)
+
+	body := map[string]interface{}{
+		"settings": map[string]interface{}{
+			"number_of_shards":   3,
+			"number_of_replicas": 1,
+			"refresh_interval":   "30s",
+		},
+		"mappings": opensearchMappingsFor(baseIndex),
+	}
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	if err := createOpensearchIndexFromBody(ctx, opensearchUrl, dest, bodyJSON); err != nil {
+		return err
+	}
+	if err := reindexOpensearchIndex(ctx, opensearchUrl, src, dest); err != nil {
+		return err
+	}
+
+	// atomically move the write alias from the old generation to the new one
+	write := true
+	actions := []OpensearchAliasAction{
+		{Remove: &OpensearchAliasActionTarget{Index: src, Alias: baseIndex}},
+		{Add: &OpensearchAliasActionTarget{Index: dest, Alias: baseIndex, IsWriteIndex: &write}},
+	}
+	if err := updateOpensearchAliases(foundClient, opensearchUrl, actions); err != nil {
+		return err
+	}
+
+	if err := deleteOpensearchIndex(foundClient, opensearchUrl, src); err != nil {
+		return err
+	}
+
+	log.Printf("[INFO] Migrated mapping for %s: %s -> %s", baseIndex, src, dest)
+	return nil
+}
+
+// ensureOpensearchMappingTemplates registers an index mapping template per
+// append/rollover base index so every future rollover generation is created
+// with the current core mappings (existing generations are left untouched).
+func ensureOpensearchMappingTemplates(ctx context.Context, opensearchUrl string) {
+	for _, baseIndex := range GetOpensearchRolloverIndexes() {
+		alias := strings.ToLower(GetESIndexPrefix(baseIndex))
+
+		body := map[string]interface{}{
+			"index_patterns": []string{alias + "-*"},
+			"template": map[string]interface{}{
+				"mappings": opensearchMappingsFor(baseIndex),
+			},
+			"priority": 100,
+		}
+		bodyJSON, err := json.Marshal(body)
+		if err != nil {
+			log.Printf("[WARNING] Failed building mapping template for %s: %s", alias, err)
+			continue
+		}
+
+		templateName := fmt.Sprintf("shuffle-%s-mapping", baseIndex)
+		req, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/_index_template/%s", opensearchUrl, templateName), bytes.NewReader(bodyJSON))
+		if err != nil {
+			log.Printf("[WARNING] Failed to create mapping template request for %s: %s", alias, err)
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := project.Es.Client.Transport.Perform(req)
+		if err != nil {
+			log.Printf("[WARNING] Failed to register mapping template for %s: %s", alias, err)
+			continue
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			log.Printf("[WARNING] Failed to register mapping template for %s: status %d", alias, resp.StatusCode)
+		}
+	}
+}
+
+// collapseSingleIndexAliases migrates a stateful (non-append) index that may
+// have rolled over in previous versions to a single backing index: it merges
+// every older generation into the newest (newest document wins per _id), drops
+// the older generations, and detaches rollover so the index stays single. Safe
+// to run repeatedly.
+func collapseSingleIndexAliases(ctx context.Context, opensearchUrl, fullIndex string) error {
+	foundClient := project.Es
+	allIndices, err := getOpensearchIndices(foundClient, opensearchUrl)
+	if err != nil {
+		return err
+	}
+
+	generations := []string{}
+	for _, idx := range allIndices {
+		if idx == fullIndex || strings.HasPrefix(idx, fullIndex+"-") {
+			generations = append(generations, idx)
+		}
+	}
+
+	if len(generations) == 1 {
+		// A single surviving index - just make sure it can't roll over.
+		return detachOpensearchRollover(ctx, opensearchUrl, generations[0])
+	}
+	if len(generations) == 0 {
+		return nil
+	}
+
+	sort.Slice(generations, func(i, j int) bool {
+		return getOpensearchGeneration(generations[i]) > getOpensearchGeneration(generations[j])
+	})
+	writeGen := generations[0]
+	olderGens := generations[1:]
+
+	// Merge older generations into the newest (the surviving write target).
+	// reindexOpensearchIndex uses op_type:create, so a source _id that already
+	// exists in the newest generation is skipped (conflicts=proceed) and the
+	// newest copy wins; _ids that only live in older generations are copied
+	// across. Iteration order does not matter because the destination always
+	// wins on collision.
+	for _, older := range olderGens {
+		if err := reindexOpensearchIndex(ctx, opensearchUrl, older, writeGen); err != nil {
+			return err
+		}
+	}
+
+	actions := []OpensearchAliasAction{}
+	for _, older := range olderGens {
+		actions = append(actions, OpensearchAliasAction{
+			Remove: &OpensearchAliasActionTarget{Index: older, Alias: fullIndex},
+		})
+	}
+	if err := updateOpensearchAliases(foundClient, opensearchUrl, actions); err != nil {
+		return err
+	}
+
+	for _, older := range olderGens {
+		if err := deleteOpensearchIndex(foundClient, opensearchUrl, older); err != nil {
+			return err
+		}
+	}
+
+	return detachOpensearchRollover(ctx, opensearchUrl, writeGen)
+}
+
+// opensearchReindexBody builds the _reindex request body. op_type must live on
+// the dest object (per the Reindex API): "create" keeps an existing destination
+// document and skips the source copy on _id collision (newest-wins when merging
+// generations). Placing it at the top level would be silently ignored, so this
+// is kept pure and unit-tested.
+func opensearchReindexBody(source, dest string) map[string]interface{} {
+	return map[string]interface{}{
+		"source": map[string]interface{}{"index": source},
+		"dest": map[string]interface{}{
+			"index":   dest,
+			"op_type": "create",
+		},
+		"conflicts": "proceed",
+	}
+}
+
+func reindexOpensearchIndex(ctx context.Context, opensearchUrl, source, dest string) error {
+	body := opensearchReindexBody(source, dest)
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/_reindex", opensearchUrl), bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := project.Es.Client.Transport.Perform(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("reindex %s->%s failed: %d %s", source, dest, resp.StatusCode, string(respBody))
+	}
+
+	return nil
+}
+
+// detachOpensearchRollover removes the ISM rollover policy and clears the
+// rollover_alias index setting so a single (non-append) index never rolls over.
+func detachOpensearchRollover(ctx context.Context, opensearchUrl, indexName string) error {
+	// Remove the ISM rollover policy, if any. Missing policy / missing plugin
+	// (4xx) is fine - clearing the rollover_alias setting below is what truly
+	// stops rollover.
+	req, err := http.NewRequestWithContext(ctx, "POST", fmt.Sprintf("%s/_plugins/_ism/remove/%s", opensearchUrl, indexName), strings.NewReader("{}"))
+	if err == nil {
+		req.Header.Set("Content-Type", "application/json")
+		if removeResp, performErr := project.Es.Client.Transport.Perform(req); performErr == nil {
+			_ = removeResp.Body.Close()
+		}
+	}
+
+	settingsBody := map[string]interface{}{
+		"index": map[string]interface{}{
+			"plugins.index_state_management.rollover_alias": nil,
+		},
+	}
+
+	bodyData, marshalErr := json.Marshal(settingsBody)
+	if marshalErr != nil {
+		return marshalErr
+	}
+
+	settingsReq, settingsErr := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/%s/_settings", opensearchUrl, indexName), bytes.NewReader(bodyData))
+	if settingsErr != nil {
+		return settingsErr
+	}
+	settingsReq.Header.Set("Content-Type", "application/json")
+
+	settingsResp, settingsPerformErr := project.Es.Client.Transport.Perform(settingsReq)
+	if settingsPerformErr != nil {
+		return settingsPerformErr
+	}
+	defer settingsResp.Body.Close()
+
+	respBody, _ := ioutil.ReadAll(settingsResp.Body)
+	if settingsResp.StatusCode >= 300 && settingsResp.StatusCode != 404 {
+		return fmt.Errorf("clear rollover_alias on %s failed: %d %s", indexName, settingsResp.StatusCode, string(respBody))
+	}
+
+	return nil
 }
 
 func getOpensearchISMRolloverConditions(rolloverConfig []byte) map[string]interface{} {
@@ -20303,32 +21027,98 @@ func getOpensearchISMRolloverConditions(rolloverConfig []byte) map[string]interf
 	return conditions
 }
 
-func ensureOpensearchISMRolloverPolicy(ctx context.Context, opensearchUrl string, aliases []string, rolloverConfig []byte, policyName string) (bool, error) {
-	conditions := getOpensearchISMRolloverConditions(rolloverConfig)
+// StartExecutionLifecycleJobs starts the background jobs that keep
+// workflowexecution_live bounded.
+func StartExecutionLifecycleJobs(ctx context.Context) {
+	if project.DbType != "opensearch" {
+		return
+	}
 
-	patterns := []string{}
-	for _, alias := range aliases {
-		patterns = append(patterns, fmt.Sprintf("%s-*", alias))
+	if strings.ToLower(os.Getenv("SHUFFLE_SKIP_EXECUTION_LIVE_MIGRATION")) == "true" {
+		log.Printf("[INFO] Skipping in-flight execution migration to workflowexecution_live (SHUFFLE_SKIP_EXECUTION_LIVE_MIGRATION=true)")
+	} else if err := migrateInFlightExecutionsToLive(ctx); err != nil {
+		log.Printf("[WARNING] Failed migrating in-flight executions to live index: %s", err)
+	}
+
+	if strings.ToLower(os.Getenv("SHUFFLE_SKIP_EXECUTION_ARCHIVAL_SWEEP")) == "true" {
+		log.Printf("[WARNING] Execution archival sweep disabled (SHUFFLE_SKIP_EXECUTION_ARCHIVAL_SWEEP=true) - workflowexecution_live will grow unbounded")
+	} else {
+		go StartExecutionArchivalSweeper(context.Background())
+	}
+
+	go StartNotificationRetentionSweeper(context.Background())
+}
+
+func getOpensearchRetentionDays(baseIndex string) string {
+	defaults := map[string]string{
+		"shuffle_logs":      "90d",
+		"workflowexecution": "365d",
+	}
+
+	value := defaults[baseIndex]
+	if value == "" {
+		return ""
+	}
+
+	custom := strings.TrimSpace(os.Getenv("OPENSEARCH_INDEX_RETENTION_DAYS"))
+	if custom == "" {
+		return value
+	}
+
+	parsed := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(custom), &parsed); err != nil {
+		log.Printf("[WARNING] Invalid JSON in OPENSEARCH_INDEX_RETENTION_DAYS: %s", err)
+		return value
+	}
+
+	raw, ok := parsed[baseIndex]
+	if !ok {
+		return value
+	}
+	if days, ok := raw.(float64); ok {
+		return fmt.Sprintf("%dd", int(days))
+	}
+	if str, ok := raw.(string); ok {
+		return str
+	}
+
+	return value
+}
+
+func ensureOpensearchISMRolloverPolicy(ctx context.Context, opensearchUrl, alias string, rolloverConfig []byte, retentionAge, policyName string) (bool, error) {
+	conditions := getOpensearchISMRolloverConditions(rolloverConfig)
+	policyID := fmt.Sprintf("%s-%s", policyName, alias)
+
+	states := []map[string]interface{}{
+		{
+			"name":        "hot",
+			"actions":     []map[string]interface{}{{"rollover": conditions}},
+			"transitions": []interface{}{},
+		},
+	}
+
+	if retentionAge != "" {
+		states[0]["transitions"] = []map[string]interface{}{
+			{
+				"state_name": "delete",
+				"conditions": map[string]interface{}{"min_index_age": retentionAge},
+			},
+		}
+		states = append(states, map[string]interface{}{
+			"name":        "delete",
+			"actions":     []map[string]interface{}{{"delete": map[string]interface{}{}}},
+			"transitions": []interface{}{},
+		})
 	}
 
 	policyBody := map[string]interface{}{
 		"policy": map[string]interface{}{
-			"description":   "Shuffle rollover policy",
+			"description":   "Shuffle rollover + retention policy",
 			"default_state": "hot",
-			"states": []map[string]interface{}{
-				{
-					"name": "hot",
-					"actions": []map[string]interface{}{
-						{
-							"rollover": conditions,
-						},
-					},
-					"transitions": []interface{}{},
-				},
-			},
+			"states":        states,
 			"ism_template": []map[string]interface{}{
 				{
-					"index_patterns": patterns,
+					"index_patterns": []string{fmt.Sprintf("%s-*", alias)},
 					"priority":       100,
 				},
 			},
@@ -20340,7 +21130,7 @@ func ensureOpensearchISMRolloverPolicy(ctx context.Context, opensearchUrl string
 		return false, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/_plugins/_ism/policies/%s", opensearchUrl, policyName), bytes.NewReader(policyData))
+	req, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/_plugins/_ism/policies/%s", opensearchUrl, policyID), bytes.NewReader(policyData))
 	if err != nil {
 		return false, err
 	}
@@ -20364,7 +21154,7 @@ func ensureOpensearchISMRolloverPolicy(ctx context.Context, opensearchUrl string
 		return false, fmt.Errorf("status: %d, body: %s", resp.StatusCode, string(body))
 	}
 
-	log.Printf("[INFO] Ensured ISM rollover policy '%s' for %d index patterns", policyName, len(patterns))
+	log.Printf("[INFO] Ensured ISM rollover policy '%s' for alias %s", policyID, alias)
 	return true, nil
 }
 

@@ -3918,25 +3918,39 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 	}
 
 	if ismEnabled {
-		ismReady, ismErr := ensureOpensearchISMRolloverPolicy(ctx, opensearchUrl, expectedAliases, rolloverConfig, ismPolicyName)
-		if ismErr != nil {
-			log.Printf("[WARNING] Failed ensuring ISM rollover policy '%s' in prefix fix: %s", ismPolicyName, ismErr)
-		} else if ismReady {
-			for _, aliasName := range expectedAliases {
-				for indexName, aliases := range verifiedAliasInfo {
-					state, ok := aliases[aliasName]
-					if !ok || !state.Present {
-						continue
-					}
+		appendBase := map[string]bool{}
+		for _, baseIndex := range GetOpensearchRolloverIndexes() {
+			appendBase[strings.ToLower(baseIndex)] = true
+		}
 
-					if err := ensureOpensearchIndexRolloverAliasSetting(ctx, opensearchUrl, indexName, aliasName); err != nil {
-						log.Printf("[WARNING] Failed ensuring rollover alias on %s for alias %s: %s", indexName, aliasName, err)
-						continue
-					}
+		for _, aliasName := range expectedAliases {
+			bi := strings.TrimPrefix(strings.ToLower(aliasName), strings.ToLower(GetESIndexPrefix("")))
+			if !appendBase[bi] {
+				continue
+			}
+			retention := getOpensearchRetentionDays(bi)
+			policyID := fmt.Sprintf("%s-%s", ismPolicyName, aliasName)
+			ismReady, ismErr := ensureOpensearchISMRolloverPolicy(ctx, opensearchUrl, aliasName, rolloverConfig, retention, ismPolicyName)
+			if ismErr != nil {
+				log.Printf("[WARNING] Failed ensuring ISM rollover policy '%s' in prefix fix: %s", policyID, ismErr)
+				continue
+			}
+			if !ismReady {
+				continue
+			}
+			for indexName, aliases := range verifiedAliasInfo {
+				state, ok := aliases[aliasName]
+				if !ok || !state.Present {
+					continue
+				}
 
-					if err := ensureOpensearchIndexISMPolicy(ctx, opensearchUrl, indexName, ismPolicyName); err != nil {
-						log.Printf("[WARNING] Failed attaching ISM policy '%s' to %s: %s", ismPolicyName, indexName, err)
-					}
+				if err := ensureOpensearchIndexRolloverAliasSetting(ctx, opensearchUrl, indexName, aliasName); err != nil {
+					log.Printf("[WARNING] Failed ensuring rollover alias on %s for alias %s: %s", indexName, aliasName, err)
+					continue
+				}
+
+				if err := ensureOpensearchIndexISMPolicy(ctx, opensearchUrl, indexName, policyID); err != nil {
+					log.Printf("[WARNING] Failed attaching ISM policy '%s' to %s: %s", policyID, indexName, err)
 				}
 			}
 		}

@@ -2535,6 +2535,11 @@ type ExecutionSearchWrapper struct {
 			Source WorkflowExecution `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
+	Aggregations struct {
+		UniqueExecutions struct {
+			Value int `json:"value"`
+		} `json:"unique_executions"`
+	} `json:"aggregations"`
 }
 
 type OrgSearchWrapper struct {
