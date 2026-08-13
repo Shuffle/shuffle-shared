@@ -4224,8 +4224,19 @@ func getOpensearchAliases(foundClient opensearchapi.Client, opensearchUrl string
 	return aliasInfo, nil
 }
 
+// getOpensearchIndices resolves the concrete backing indices matching
+// Shuffle's own index patterns. Deliberately implemented via /_settings
+// rather than /_cat/indices: _cat/* endpoints are cluster-level actions in
+// OpenSearch's security plugin (requiring cluster:monitor/* even when the
+// path includes an index pattern) and, once granted, let the credential
+// query /_cluster/state or unscoped /_cat/indices directly to see every
+// index's name/mappings/settings cluster-wide - a real cross-tenant
+// metadata leak on a shared/multi-tenant cluster. /_settings (and /_alias
+// below), being genuine per-index API endpoints, are enforced per matched
+// index by the security plugin: a request for a pattern outside the role's
+// granted index_patterns is rejected outright.
 func getOpensearchIndices(foundClient opensearchapi.Client, opensearchUrl string) ([]string, error) {
-	indicesReq, err := http.NewRequest("GET", fmt.Sprintf("%s/_cat/indices/%s?format=json&h=index", opensearchUrl, shuffleOwnedOpensearchIndexPatterns()), nil)
+	indicesReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_settings?filter_path=*.settings.index.provided_name", opensearchUrl, shuffleOwnedOpensearchIndexPatterns()), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -4246,19 +4257,17 @@ func getOpensearchIndices(foundClient opensearchapi.Client, opensearchUrl string
 		return nil, fmt.Errorf("failed reading opensearch indices: %s", string(indicesBody))
 	}
 
-	type indexItem struct {
-		Index string `json:"index"`
-	}
-
-	parsedIndices := []indexItem{}
-	if err := json.Unmarshal(indicesBody, &parsedIndices); err != nil {
-		return nil, err
+	parsedIndices := map[string]interface{}{}
+	if len(bytes.TrimSpace(indicesBody)) > 0 {
+		if err := json.Unmarshal(indicesBody, &parsedIndices); err != nil {
+			return nil, err
+		}
 	}
 
 	indices := []string{}
-	for _, item := range parsedIndices {
-		if strings.TrimSpace(item.Index) != "" {
-			indices = append(indices, item.Index)
+	for indexName := range parsedIndices {
+		if strings.TrimSpace(indexName) != "" {
+			indices = append(indices, indexName)
 		}
 	}
 
