@@ -14126,7 +14126,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	}
 
 	if len(newArray) > 0 {
-		log.Printf("[INFO] SetDatastoreKeyBulk: Successfully set %d key(s) in category %s for org %s", len(newArray), mainCategory, orgId)
+		if debug { 
+			log.Printf("[INFO] SetDatastoreKeyBulk: Successfully set %d key(s) in category %s for org %s", len(newArray), mainCategory, orgId)
+		}
 	}
 
 	/*
