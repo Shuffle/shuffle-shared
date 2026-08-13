@@ -797,7 +797,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			agentHealthChannel <- agentHealth
 			errorChannel <- err
 		}()
-		
+
 		platformHealth.Agents = <-agentHealthChannel
 	}
 
@@ -2568,7 +2568,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 			for _, field := range action.Parameters {
 				if (field.Name == "app_name" || field.Name == "appname") && (field.Value == "" || field.Value == "noapp") {
 
-					if actionName == "Shuffle Agent" { 
+					if actionName == "Shuffle Agent" {
 						continue
 					}
 
@@ -4162,8 +4162,26 @@ type opensearchAliasState struct {
 	IsWriteIndex bool
 }
 
+// shuffleOwnedOpensearchIndexPatterns returns a comma-separated index pattern list
+// matching only the indexes Shuffle itself manages (GetOpensearchBaseIndexes,
+// combined with whatever SHUFFLE_OPENSEARCH_INDEX_PREFIX is configured - which
+// defaults to empty, i.e. no prefix). Scoping the cluster-wide _cat/indices and
+// _alias lookups below to this pattern lets a least-privilege OpenSearch role
+// grant indices:monitor/settings/get only on Shuffle's own indexes instead of
+// requiring visibility into every index in the cluster (which shared/enterprise
+// clusters with other tenants' indexes typically won't grant).
+func shuffleOwnedOpensearchIndexPatterns() string {
+	baseIndexes := GetOpensearchBaseIndexes()
+	patterns := make([]string, 0, len(baseIndexes))
+	for _, baseIndex := range baseIndexes {
+		patterns = append(patterns, strings.ToLower(GetESIndexPrefix(baseIndex))+"*")
+	}
+
+	return strings.Join(patterns, ",")
+}
+
 func getOpensearchAliases(foundClient opensearchapi.Client, opensearchUrl string) (map[string]map[string]opensearchAliasState, error) {
-	aliasReq, err := http.NewRequest("GET", fmt.Sprintf("%s/_aliases", opensearchUrl), nil)
+	aliasReq, err := http.NewRequest("GET", fmt.Sprintf("%s/%s/_alias", opensearchUrl, shuffleOwnedOpensearchIndexPatterns()), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -4207,7 +4225,7 @@ func getOpensearchAliases(foundClient opensearchapi.Client, opensearchUrl string
 }
 
 func getOpensearchIndices(foundClient opensearchapi.Client, opensearchUrl string) ([]string, error) {
-	indicesReq, err := http.NewRequest("GET", fmt.Sprintf("%s/_cat/indices?format=json&h=index", opensearchUrl), nil)
+	indicesReq, err := http.NewRequest("GET", fmt.Sprintf("%s/_cat/indices/%s?format=json&h=index", opensearchUrl, shuffleOwnedOpensearchIndexPatterns()), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -4702,7 +4720,7 @@ func startAgentExecution(baseUrl, apiKey, orgId string) (agentStartResult, error
 			"input": map[string]string{
 				"text": "Get the current weather of new york using https://wttr.in/New+York?format=%t api and just output the current weather temperature without any commentary, just output the number in celcius and dont include the decimals, use action as custom_action, tool as http and category as singul keep the url as it and not needed for any other hallucinated params or headers, just include the url as is and the method name which is GET.",
 			},
-			"tool_name" : "http",
+			"tool_name": "http",
 		},
 	}
 
@@ -4800,7 +4818,6 @@ func fetchAgentExecutionResults(baseUrl, apiKey, orgId, executionId, authorizati
 	return execution, nil
 }
 
-
 func extractAgentOutputFromResults(execution WorkflowExecution) (AgentOutput, bool) {
 	var agentOutput AgentOutput
 
@@ -4846,7 +4863,7 @@ func extractAgentOutputFromResults(execution WorkflowExecution) (AgentOutput, bo
 			return agentOutput, true
 		}
 	}
-	
+
 	return AgentOutput{}, false
 }
 
@@ -4856,7 +4873,7 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 	agentHealth := AgentHealth{
 		Create:         true, // Not creating workflow, but keeping for compatibility
 		BackendVersion: os.Getenv("SHUFFLE_BACKEND_VERSION"),
-		Delete:         true, 
+		Delete:         true,
 	}
 
 	baseUrl := resolveAgentBaseUrl(cloudRunUrl)
