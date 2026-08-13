@@ -1594,10 +1594,6 @@ func FixJSONNewlines(input string) string {
 }
 
 func FixContentOutput(contentOutput string) string {
-	if debug { 
-		log.Printf("[DEBUG] RAW: '%s'", contentOutput)
-	}
-
 	// Safely extract content from ```json or ``` blocks
 	if start := strings.Index(contentOutput, "```json"); start != -1 {
 		start += 7 // skip ```json
@@ -8003,7 +7999,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	// See: https://github.com/Shuffle/singul?tab=readme-ov-file#llm-controls
 	//openaiAllowedApps := []string{"openai"}
 	// runOpenaiRequest := false
-	chosenAiApp := ""
 	allowedActionString := ""
 
 	decidedApps := []string{}
@@ -8221,13 +8216,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 		}
 
-		if param.Name == "app_name" {
-			//if debug { 
-			//	log.Printf("[DEBUG] Rewriting app_name to action")
-			//}
-
-			param.Name = "action"
-		}
+		// Not relevant anymore. Using auth to control this
+		//if param.Name == "app_name" {
+		//	param.Name = "action"
+		//}
 
 		if param.Name == "execution_mode" {
 			executionMode = strings.ToLower(strings.TrimSpace(param.Value))
@@ -8240,112 +8232,125 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			allowedActionString = param.Value
 			for _, actionStr := range strings.Split(param.Value, ",") {
 				actionStr = strings.ToLower(strings.TrimSpace(actionStr))
+
+				//if debug { 
+				//	log.Printf("[DEBUG] STRING: %s", actionStr)
+				//}
+
 				if actionStr == "" || actionStr == "nothing" || actionStr == "shuffle ai" || actionStr == "api" {
+					if debug { 
+						log.Printf("[DEBUG][%s] Skipping action '%s' as it is not a valid action.", execution.ExecutionId, actionStr)
+					}
 					continue
 				}
 
-				if strings.HasPrefix(actionStr, "app:") {
+				if !strings.HasPrefix(actionStr, "app:") {
+					if debug { 
+						log.Printf("[DEBUG][%s] Skipping action '%s' as it is not a valid action.", execution.ExecutionId, actionStr)
+					}
 
-					trimmedActionStr := strings.TrimPrefix(actionStr, "app:")
-					sortedAppActions := getPrioritisedAppActions(ctx, trimmedActionStr, 15)
+					continue
+				} 
 
-					// Sort alphabetically so the action list is byte-for-byte identical across every LLM loop, keeping the prompt cache prefix stable.
-					sort.Slice(sortedAppActions, func(i, j int) bool {
-						return sortedAppActions[i].Name < sortedAppActions[j].Name
-					})
+				trimmedActionStr := strings.TrimPrefix(actionStr, "app:")
+				sortedAppActions := getPrioritisedAppActions(ctx, trimmedActionStr, 15)
 
-					if len(sortedAppActions) > 0 {
-						// Cuts off the potential md5:appname prefix
-						if len(trimmedActionStr) > 33 && string(trimmedActionStr[32]) == ":" {
-							trimmedActionStr = trimmedActionStr[33:]
-						}
+				// Sort alphabetically so the action list is byte-for-byte identical across every LLM loop, keeping the prompt cache prefix stable.
+				sort.Slice(sortedAppActions, func(i, j int) bool {
+					return sortedAppActions[i].Name < sortedAppActions[j].Name
+				})
 
-						decidedApps = append(decidedApps, trimmedActionStr)
-						specificAppMetadata += fmt.Sprintf("%d Available actions and fields for Tool '%s':\n", len(sortedAppActions), trimmedActionStr)
+				if len(sortedAppActions) > 0 {
+					// Cuts off the potential md5:appname prefix
+					if len(trimmedActionStr) > 33 && string(trimmedActionStr[32]) == ":" {
+						trimmedActionStr = trimmedActionStr[33:]
+					}
 
-						previousDesc := ""
-						for counter, sortedAppAction := range sortedAppActions {
-							requiredParams := []string{}
-							optionalParams := []string{}
-							for _, param := range sortedAppAction.Parameters {
-								if param.Name == "url" { 
-									continue
+					decidedApps = append(decidedApps, trimmedActionStr)
+					specificAppMetadata += fmt.Sprintf("\n\n**Available actions and fields for Tool '%s'**:\n", trimmedActionStr)
+
+					previousDesc := ""
+					for counter, sortedAppAction := range sortedAppActions {
+						requiredParams := []string{}
+						optionalParams := []string{}
+						for _, param := range sortedAppAction.Parameters {
+							if param.Name == "url" { 
+								continue
+							}
+
+							if param.Name == "body" && len(param.Example) > 0 { 
+								if len(param.Example) > 150 { 
+									param.Example = param.Example[:150] + "..."
 								}
 
-								if param.Name == "body" && len(param.Example) > 0 { 
-									if len(param.Example) > 150 { 
-										param.Example = param.Example[:150] + "..."
-									}
-
-									if strings.HasPrefix(param.Example, "{") || strings.HasPrefix(param.Example, "[") {
-										newExample := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(param.Example, "\n", ""), "\t", ""), "  ", ""), "\\\"", "\"")
-										requiredParams = append(requiredParams, fmt.Sprintf("body=%s", newExample))
-									} else {
-										requiredParams = append(requiredParams, fmt.Sprintf("body"))
-									}
-
-									continue
-								}
-
-								if param.Required {
-									if param.Configuration && param.Name != "url" { 
-										continue
-									}
-
-									requiredParams = append(requiredParams, param.Name)
+								if strings.HasPrefix(param.Example, "{") || strings.HasPrefix(param.Example, "[") {
+									newExample := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(param.Example, "\n", ""), "\t", ""), "  ", ""), "\\\"", "\"")
+									requiredParams = append(requiredParams, fmt.Sprintf("body=%s", newExample))
 								} else {
-									if len(optionalParams) >= 10 {
-										continue
-									}
-
-									if param.Name == "url" || param.Name == "username" || param.Name == "password" || param.Name == "token" || param.Name == "api_key" || param.Name == "key" || param.Name == "timeout" || param.Name == "ssl_verify" || param.Name == "to_file" {
-										continue
-									}
-
-									optionalParams = append(optionalParams, param.Name)
-								}
-							}
-
-							requiredString := ""
-							optionalString := ""
-							descString := ""
-							if len(requiredParams) > 0 {
-								requiredString = fmt.Sprintf("%s", strings.Join(requiredParams, ", "))
-								optionalString = ", "
-							}
-
-							if len(optionalParams) > 0 {
-								for _, optionalParam := range optionalParams {
-									optionalString += fmt.Sprintf(`%s="", `, optionalParam)
+									requiredParams = append(requiredParams, fmt.Sprintf("body"))
 								}
 
-								optionalString = strings.TrimSuffix(optionalString, ", ")
+								continue
+							}
+
+							if param.Required {
+								if param.Configuration && param.Name != "url" { 
+									continue
+								}
+
+								requiredParams = append(requiredParams, param.Name)
 							} else {
-								optionalString = ""
-							}
-
-							if len(sortedAppAction.Description) > 0 {
-								if len(sortedAppAction.Description) > 150 {
-									sortedAppAction.Description = sortedAppAction.Description[:100] + "..."
+								if len(optionalParams) >= 10 {
+									continue
 								}
-								descString = fmt.Sprintf(" # %s", sortedAppAction.Description)
-							} 
 
-							if descString == previousDesc {
-								descString = ""
-							} else {
-								previousDesc = descString
+								if param.Name == "url" || param.Name == "username" || param.Name == "password" || param.Name == "token" || param.Name == "api_key" || param.Name == "key" || param.Name == "timeout" || param.Name == "ssl_verify" || param.Name == "to_file" {
+									continue
+								}
+
+								optionalParams = append(optionalParams, param.Name)
 							}
-
-							specificAppMetadata += fmt.Sprintf("%d. %s(%s%s)%s\n", counter+1, strings.ReplaceAll(sortedAppAction.Name, " ", "_"), requiredString, optionalString, descString)
 						}
 
-					} else {
-						log.Printf("[ERROR] AI Agent: Failed getting prioritised app actions for app '%s'", strings.TrimPrefix(actionStr, "app:"))
+						requiredString := ""
+						optionalString := ""
+						descString := ""
+						if len(requiredParams) > 0 {
+							requiredString = fmt.Sprintf("%s", strings.Join(requiredParams, ", "))
+							optionalString = ", "
+						}
+
+						if len(optionalParams) > 0 {
+							for _, optionalParam := range optionalParams {
+								optionalString += fmt.Sprintf(`%s="", `, optionalParam)
+							}
+
+							optionalString = strings.TrimSuffix(optionalString, ", ")
+						} else {
+							optionalString = ""
+						}
+
+						if len(sortedAppAction.Description) > 0 {
+							if len(sortedAppAction.Description) > 130 {
+								sortedAppAction.Description = sortedAppAction.Description[:130] + ".."
+							}
+
+							// Remove %s, %d etc to not screw up fmt
+							descString = fmt.Sprintf(" # %s", strings.ReplaceAll(strings.ReplaceAll(sortedAppAction.Description, "\\%", " "), "\n", ""))
+						} 
+
+						if descString == previousDesc {
+							descString = ""
+						} else {
+							previousDesc = descString
+						}
+
+						parsedAction := strings.ReplaceAll(fmt.Sprintf("%d. %s(%s%s)%s", counter+1, strings.ReplaceAll(sortedAppAction.Name, " ", "_"), requiredString, optionalString, descString), "\n", " ")
+						specificAppMetadata += parsedAction + "\n"
 					}
 
 				} else {
-					//metadata += fmt.Sprintf("- %s\n", strings.ReplaceAll(actionStr, " ", "_"))
+					log.Printf("[ERROR] AI Agent: Failed getting prioritised app actions for app '%s'", strings.TrimPrefix(actionStr, "app:"))
 				}
 			}
 
@@ -8365,12 +8370,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				log.Printf("[DEBUG] Storage parameter found: %s", param.Value)
 			}
 		}
-	}
-
-	chosenAiApp = ""
-	if len(chosenAiApp) == 0 || chosenAiApp == "Shuffle AI" {
-		chosenAiApp = "openai"
-		// runOpenaiRequest = true
 	}
 
 	// If the fields are edited, don't forget to edit the AgentDecision struct
@@ -8690,162 +8689,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				}
 			}
 
-			// FIXME: Do we need users & admins? Skipping for now.
-			//if len(admins) > 0 {
-			//	metadata += fmt.Sprintf("admins: %s\n", strings.Join(admins, ", "))
-			//}
-
-			//if len(users) > 0 {
-			//	metadata += fmt.Sprintf("users: %s\n", strings.Join(users, ", "))
-			//}
-
 			if len(decidedApps) > 0 {
 				// Forces away all other apps
-				// if len(allowedActionString) == 0 {
-				// 	metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
-				// }
 				metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
-			} else {
-				// Used to inject default tools here, but that can quickly go to shit
-				// if the user doesn't want to run anything
-
-				/*
-				decidedApps := ""
-				appauth, autherr := GetAllWorkflowAppAuth(ctx, org.Id)
-				if autherr == nil && len(appauth) > 0 {
-					preferredApps := []WorkflowApp{
-						WorkflowApp{
-							Categories: []string{"internal"},
-							Name:       "shuffle datastore",
-						},
-					}
-					if len(org.SecurityFramework.SIEM.Name) > 0 {
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"siem"},
-							Name:       org.SecurityFramework.SIEM.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.EDR.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.EDR.Name) + ", "
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"eradication"},
-							Name:       org.SecurityFramework.EDR.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.Communication.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.Cases.Name) + ", "
-
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"cases"},
-							Name:       org.SecurityFramework.Communication.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.Cases.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.Cases.Name) + ", "
-
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"cases"},
-							Name:       org.SecurityFramework.Cases.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.Assets.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.Assets.Name) + ", "
-
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"assets"},
-							Name:       org.SecurityFramework.Assets.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.Network.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.Network.Name) + ", "
-
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"network"},
-							Name:       org.SecurityFramework.Network.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.Intel.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.Intel.Name) + ", "
-
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"intel"},
-							Name:       org.SecurityFramework.Intel.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.IAM.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.IAM.Name) + ", "
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"iam"},
-							Name:       org.SecurityFramework.IAM.Name,
-						})
-					}
-
-					for _, auth := range appauth {
-						// ALWAYS append valid auth
-						if !auth.Validation.Valid {
-							continue
-						}
-
-						if len(auth.App.Categories) > 0 {
-							found := false
-							for _, preApp := range preferredApps {
-								if len(preApp.Categories) == 0 {
-									continue
-								}
-
-								if ArrayContains(preApp.Categories, strings.ToLower(auth.App.Categories[0])) {
-									found = true
-									break
-								}
-							}
-
-							if found {
-								continue
-							}
-						}
-
-						if len(auth.App.Categories) > 0 && strings.ToUpper(auth.App.Categories[0]) == "AI" {
-							continue
-						}
-
-						preferredApps = append(preferredApps, auth.App)
-					}
-
-					// FIXME: Pre-filter before this to ensure we have good
-					// apps ONLY.
-					for _, preferredApp := range preferredApps {
-						if len(preferredApp.Name) == 0 {
-							continue
-						}
-
-						lowername := strings.ToLower(preferredApp.Name)
-						if strings.Contains(decidedApps, lowername) {
-							continue
-						}
-
-						decidedApps += lowername + ", "
-					}
-
-					//  Let's inject http.
-					if !strings.Contains(decidedApps, "http") {
-						decidedApps += "http, "
-					}
-				}
-
-				if len(decidedApps) > 0 {
-					// if len(allowedActionString) == 0 {
-					// 	metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
-					// }
-					metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
-				}
-				*/
 			}
 		}
 	}
@@ -9436,7 +9282,7 @@ data_filter:
 			req.Header.Set("X-Agent-Token", agentOneTimeToken)
 			newresp, err := client.Do(req)
 
-			log.Printf("[INFO][%s] Started AI Agent action %s with app '%s'. Waiting for results...", execution.ExecutionId, startNode.ID, chosenAiApp)
+			log.Printf("[INFO][%s] Started AI Agent action '%s'. Waiting for results...", execution.ExecutionId, startNode.ID)
 
 			if err != nil {
 				if skipAgentWait == "true" && strings.Contains(strings.ToLower(err.Error()), "timeout") { 
@@ -9775,6 +9621,11 @@ data_filter:
 			Content: string(bodyString),
 		})
 
+		allowedActions := []string{}
+		if len(allowedActionString) > 0 {
+			allowedActions = strings.Split(allowedActionString, ",")
+		}
+
 		agentOutput := AgentOutput{
 			Status:    "RUNNING",
 			Input:     userMessage,
@@ -9796,7 +9647,7 @@ data_filter:
 			Memory:        memorizationEngine,
 			ExecutionMode: executionMode,
 
-			AllowedActions: strings.Split(allowedActionString, ","),
+			AllowedActions: allowedActions,
 		}
 
 		if len(errorMessage) > 0 {
@@ -11179,10 +11030,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	if totalTokens > 0 && len(info.OrgID) > 0 {
-		if debug { 
-			log.Printf("[DEBUG] Total request tokens spent: %d", totalTokens)
-		}
-			
 		// Count LLM tokens no matter what
 		if defaultCreds { 
 			IncrementCache(ctx, info.OrgID, "llm_tokens", totalTokens)
@@ -15247,10 +15094,11 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 			continue
 		}
 
+		// FIXME: Do we need this? Keeping for now, as to sort it properly
+		// This is specifcally to keep the OpenAI request format.
 		if strings.ToLower(auth.App.Name) != "openai" { 
 			continue
 		}
-
 
 		for _, field := range auth.Fields {
 			// Check if the auth has a valid API key
