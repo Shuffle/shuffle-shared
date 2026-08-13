@@ -4423,102 +4423,8 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
-// GetWorkflowExecutionSingle returns a single workflow execution by ID.
-// Pass ?forAgent=true to get a version with auth tokens and sensitive
-// parameter values redacted, safe for handing to an LLM/agent.
-func GetWorkflowExecutionSingle(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
 
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in getting workflow execution: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	location := strings.Split(request.URL.String(), "/")
-	if location[1] != "api" || len(location) <= 6 {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	fileId := location[4]
-	executionId := strings.Split(location[6], "?")[0]
-	if len(fileId) != 36 || len(executionId) != 36 {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow or execution ID is not valid"}`))
-		return
-	}
-
-	ctx := GetContext(request)
-
-	workflow, err := GetWorkflow(ctx, fileId, true)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting the workflow %s locally (get execution): %s", fileId, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if user.Id != workflow.Owner || len(user.Id) == 0 {
-		if workflow.OrgId == user.ActiveOrg.Id {
-			log.Printf("[AUDIT] User %s is accessing workflow '%s' (%s) execution %s", user.Username, workflow.Name, workflow.ID, executionId)
-		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access execution %s for workflow %s", user.Username, executionId, fileId)
-		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get execution)", user.Username, workflow.ID)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-	}
-
-	execution, err := GetWorkflowExecution(ctx, executionId)
-	if err != nil || execution.WorkflowId != fileId {
-		log.Printf("[WARNING] Failed getting execution %s for workflow %s: %s", executionId, fileId, err)
-		resp.WriteHeader(404)
-		resp.Write([]byte(`{"success": false, "reason": "Execution not found"}`))
-		return
-	}
-
-	var newjson []byte
-	if request.URL.Query().Get("forAgent") == "true" {
-		sanitizeExecutionForAgent(execution)
-
-		minimalWorkflow := buildMinimalWorkflow(&execution.Workflow)
-
-		type agentWorkflowExecution struct {
-			*WorkflowExecution
-			Workflow *MinimalWorkflow `json:"workflow"`
-		}
-
-		response := agentWorkflowExecution{
-			WorkflowExecution: execution,
-			Workflow:          minimalWorkflow,
-		}
-
-		newjson, err = json.Marshal(response)
-	} else {
-		newjson, err = json.Marshal(execution)
-	}
-
-	if err != nil {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed unpacking workflow execution"}`))
-		return
-	}
-
-	resp.WriteHeader(200)
-	resp.Write(newjson)
-}
-
-
-func sanitizeExecutionForAgent(execution *WorkflowExecution) {
+func BanitizeExecutionForAgent(execution *WorkflowExecution) {
 	execution.Authorization = ""
 
 	for i := range execution.Results {
@@ -6966,7 +6872,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	var workflowjson []byte
 	if request.URL.Query().Get("minimal") == "true" {
-		minimalWorkflow := buildMinimalWorkflow(&workflow)
+		minimalWorkflow := BuildMinimalWorkflow(&workflow)
 		if minimalWorkflow == nil {
 			log.Printf("[ERROR] Failed building minimal workflow %s", workflow.ID)
 			resp.WriteHeader(http.StatusInternalServerError)
@@ -36830,7 +36736,7 @@ func GetWorkflowMinimal(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Build minimal workflow
-	minimalWorkflow := buildMinimalWorkflow(workflow)
+	minimalWorkflow := BuildMinimalWorkflow(workflow)
 	if minimalWorkflow == nil {
 		log.Printf("[ERROR] Failed building minimal workflow %s", workflowId)
 		resp.WriteHeader(500)
@@ -37566,7 +37472,7 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 	}
 
 	// Build response
-	minWf := buildMinimalWorkflow(workflow)
+	minWf := BuildMinimalWorkflow(workflow)
 	response := WorkflowSetOpsResponse{
 		Success:           true,
 		WorkflowID:        workflowID,
@@ -38647,4 +38553,15 @@ func init() {
 
 func Compress(next http.HandlerFunc) http.HandlerFunc {
 	return compressWrapper(next).ServeHTTP
+}
+
+func SanitizeExecutionForAgent(execution *WorkflowExecution) *WorkflowExecution {
+	execution.Authorization = ""
+
+	for i := range execution.Results {
+		execution.Results[i].Authorization = ""
+		redactSensitiveParameters(execution.Results[i].Action.Parameters)
+	}
+
+	return execution
 }

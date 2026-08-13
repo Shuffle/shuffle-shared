@@ -12515,7 +12515,7 @@ func editWorkflowWithLLM(ctx context.Context, workflow *Workflow, user User, inp
 		log.Printf("[ERROR] Failed to get apps in Generate workflow: %s", err)
 		return nil, err
 	}
-	minimalWorkflow := buildMinimalWorkflow(workflow)
+	minimalWorkflow := BuildMinimalWorkflow(workflow)
 	if minimalWorkflow == nil {
 		return nil, errors.New("failed to build minimal workflow")
 	}
@@ -13334,7 +13334,7 @@ func isSensitiveParameter(paramName string) bool {
 	return false
 }
 
-func buildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
+func BuildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
 	if w == nil {
 		return nil
 	}

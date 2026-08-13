@@ -5851,3 +5851,8 @@ type agentResponse struct {
 	ExecutionId   string `json:"execution_id"`
 	Authorization string `json:"authorization"`
 }
+
+type AgentWorkflowExecutionReturn struct {
+	WorkflowExecution WorkflowExecution `json:"workflow_execution"`
+	Workflow MinimalWorkflow `json:"workflow"`
+}
