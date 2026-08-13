@@ -1594,6 +1594,10 @@ func FixJSONNewlines(input string) string {
 }
 
 func FixContentOutput(contentOutput string) string {
+	if debug { 
+		log.Printf("[DEBUG] RAW: '%s'", contentOutput)
+	}
+
 	// Safely extract content from ```json or ``` blocks
 	if start := strings.Index(contentOutput, "```json"); start != -1 {
 		start += 7 // skip ```json
@@ -1797,6 +1801,8 @@ func extractDecisionJSONL(rawText string) ([]AgentDecision, error) {
 // parseAgentDecisions extracts AgentDecision structs from messy LLM output. It tries multiple strategies in order: JSON array, JSONL, then array after unescaping.
 func parseAgentDecisions(rawOutput string) ([]AgentDecision, error) {
 	cleanedText := FixContentOutput(rawOutput)
+	//if !strings.HasPrefix(cleanedText, "[") && !strings.HasPrefix(cleanedText, "{") {
+	//}
 
 	//Try to parse as a JSON array
 	parsedDecisions, extractionErr := extractDecisionArray(cleanedText)
@@ -8386,6 +8392,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	continuationMessage := "" // Tracks user continuation text (new message sent to a finished agent)
 
 	marshalledDecisions := []byte{}
+	relevantDecisions := []AgentDecision{}
 	if createNextActions == true {
 		// Sets the user message to the current value
 		for _, result := range execution.Results {
@@ -8448,8 +8455,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "max_agent_loops_reached", fmt.Sprintf("Agent reached maximum execution loops limit (%d) without finishing.", newLoopCount))
 			}
-
-			relevantDecisions := []AgentDecision{}
 
 			// Check for existing RUNNING/WAITING ask decisions - if found, return existing state without creating new decisions
 			const staleThreshold = int64(299 * 1000) // 4 min 59 sec in ms :-)
@@ -8874,7 +8879,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 You are an Action Execution Agent that performs actions in third-party tools. You can use ANY tool and platform to achieve these goals if they are presented by the user. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute tasks and **IMMEDIATELY** stop and summarize when done. Attempt to achieve what the users most likely intention is - not just exactly what they ask for. Iterate until the goal is achieved by using the USER CONTEXT tools and actions available to you. Don't be too verbose, and ask as few questions as possible. 
 
 ### RULES:
-1. ALWAYS output the strict decision JSON OUTPUT FORMAT and nothing else.
+1. ALWAYS output the decision list in the JSON OUTPUT FORMAT and NOTHING else.
 2. Look at user intent, not just words of the USER REQUEST. Do NOT stop until the user intent has been fulfilled. This means understanding the original user intent for them to make it more clear what they most likely wanted.
 3. Use tools and their actions to achieve the user request.
 4. Do NOT ask unnecessary questions. Make assumptions for the user.
@@ -9098,6 +9103,30 @@ data_filter:
 			Content: fmt.Sprintf("HISTORY:\n%s", string(marshalledDecisions)),
 		})
 	}
+
+	/*
+	// Contains history of executions
+	// Disabled as it screwed with the JSON output at times
+	if len(relevantDecisions) > 0 { 
+		// Even more context
+		for _, relevantDecision := range relevantDecisions {
+			if relevantDecision.Action == "ask" || relevantDecision.Action == "finish" || relevantDecision.Action == "question" || relevantDecision.Action == "" { 
+				continue
+			}
+
+			foundResult := relevantDecision.Reason
+			if len(relevantDecision.RunDetails.RawResponse) > 0 { 
+				foundResult = relevantDecision.RunDetails.RawResponse
+			}
+
+			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleTool,
+				ToolCallID: relevantDecision.RunDetails.Id,
+				Content: foundResult,
+			})
+		}
+	}
+	*/
 
 	// Let's put the USER ANSWERS after HISTORY so the frozen prefix [1][2][3] is never affected.
 	if len(previousAnswers) > 0 {
