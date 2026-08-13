@@ -9889,7 +9889,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		if err != nil {
 
 			// Make a notification for this
-			err = CreateOrgNotification(
+			CreateOrgNotification(
 				ctx,
 				fmt.Sprintf("Failed setting git workflow for %s (%s): %s", workflow.Name, workflow.ID, err),
 				fmt.Sprintf("User %s (%s) tried to upload %s (%s) but failed: %s. Make sure there is already a file in the repository, like README.md", user.Username, user.Id, workflow.Name, workflow.ID, err),
@@ -9899,13 +9899,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				"MEDIUM",
 				"git",
 			)
-
-			if err != nil {
-				log.Printf("[WARNING] Failed creating notification for failed git workflow for %s (%s): %s", workflow.Name, workflow.ID, err)
-			} else {
-				log.Printf("[WARNING] Failed setting git workflow for %s (%s). Notification created. %s", workflow.Name, workflow.ID, err)
-			}
-
 		}
 	}()
 
@@ -18880,7 +18873,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 
 			// Send notification for it
-			err := CreateOrgNotification(
+			go CreateOrgNotification(
 				ctx,
 				fmt.Sprintf("Bad Status code in Workflow %s: %d", workflowExecution.Workflow.Name, mapping.Status),
 				parsedDescription,
@@ -18892,9 +18885,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			)
 
 			workflowExecution.NotificationsCreated++
-			if err != nil {
-				log.Printf("[ERROR] Failed making org notification (1): %s", err)
-			}
 		}
 	}
 
@@ -18919,7 +18909,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if param.Name == "liquid_syntax_error" && !notificationSent {
 
 			// Send notification for it
-			err := CreateOrgNotification(
+			go CreateOrgNotification(
 				ctx,
 				fmt.Sprintf("Liquid Syntax Error in Workflow %s", workflowExecution.Workflow.Name),
 				fmt.Sprintf("Node %s in Workflow %s was found to have a Liquid Syntax Error. Click to investigate", actionResult.Action.Label, workflowExecution.Workflow.Name),
@@ -18931,11 +18921,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			)
 
 			workflowExecution.NotificationsCreated++
-			if err == nil {
-				notificationSent = true
-			} else {
-				log.Printf("[ERROR] Failed making org notification (2): %s", err)
-			}
+			notificationSent = true
 		}
 	}
 
@@ -18963,7 +18949,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// These could be "silent" issues
 			if actionResult.Status == "FAILURE" && workflowExecution.Workflow.Hidden == false {
 				log.Printf("[DEBUG] Result is %s for %s (%s). Making notification.", actionResult.Status, actionResult.Action.Label, actionResult.Action.ID)
-				err := CreateOrgNotification(
+				go CreateOrgNotification(
 					ctx,
 					fmt.Sprintf("Error in Workflow %s", workflowExecution.Workflow.Name),
 					fmt.Sprintf("Node %s in Workflow %s was found to have an error. Click to investigate", actionResult.Action.Label, workflowExecution.Workflow.Name),
@@ -18975,9 +18961,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				)
 
 				workflowExecution.NotificationsCreated++
-				if err != nil {
-					log.Printf("[ERROR] Failed making org notification (3): %s", err)
-				}
 			}
 		}
 
@@ -19386,7 +19369,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					description = fmt.Sprintf("Node '%s' in Workflow '%s' failed silently. Check the workflow run for more details.", actionResult.Action.Label, workflowExecution.Workflow.Name)
 				}
 
-				err = CreateOrgNotification(
+				go CreateOrgNotification(
 					ctx,
 					fmt.Sprintf("Potential error in Workflow '%s'", workflowExecution.Workflow.Name),
 					description,
@@ -19398,9 +19381,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				)
 
 				workflowExecution.NotificationsCreated++
-				if err != nil {
-					log.Printf("[ERROR] Failed making org notification for %s (4): %s", workflowExecution.ExecutionOrg, err)
-				}
 			}
 		} else {
 			//log.Printf("[ERROR] Failed unmarshaling result into resultChecker (%s): %s", err, actionResult)
@@ -19414,7 +19394,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		//actionResult.NotificationsCreated += 1
 		if strings.HasPrefix(strings.ToLower(param.Name), "shuffle") && strings.Contains(param.Name, "error") {
 			workflowExecution.NotificationsCreated += 1
-			CreateOrgNotification(
+			go CreateOrgNotification(
 				ctx,
 				fmt.Sprintf("App error for node %s in Workflow %s: %s", actionResult.Action.Label, workflowExecution.Workflow.Name, param.Name),
 				fmt.Sprintf("The node %s (%s) in workflow %s (%s) had the error: '%s' based on error '%s'", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID, param.Value, param.Name),
@@ -27429,7 +27409,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							if err == nil {
 								foundValues[k] = decrypted
 							} else {
-								CreateOrgNotification(
+								go CreateOrgNotification(
 									ctx,
 									fmt.Sprintf("Failed to decrypt KMS key '%s'", k),
 									fmt.Sprintf("Failed to decrypt KMS key '%s'. Error: %s", k, err),
@@ -27610,7 +27590,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 		log.Printf("[ERROR] App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id)
 
 		workflowExecution.NotificationsCreated += 1
-		CreateOrgNotification(
+		go CreateOrgNotification(
 			ctx,
 			fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
 			fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
@@ -27764,7 +27744,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 					Status:        "SKIPPED",
 				})
 
-				CreateOrgNotification(
+				go CreateOrgNotification(
 					ctx,
 					fmt.Sprintf("Failed to refresh Oauth2 tokens for auth '%s'. Did the credentials change?", curAuth.Label),
 					fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
@@ -27866,7 +27846,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 				if err != nil {
 					log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens (1): '%s'. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
 
-					CreateOrgNotification(
+					go CreateOrgNotification(
 						ctx,
 						fmt.Sprintf("Failed to refresh Oauth2 tokens for app '%s'", curAuth.Label),
 						fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
