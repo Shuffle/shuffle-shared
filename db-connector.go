@@ -21085,6 +21085,86 @@ func getOpensearchRetentionDays(baseIndex string) string {
 	return value
 }
 
+// existingOpensearchISMPolicy holds the parts of a GET
+// /_plugins/_ism/policies/<id> response needed to decide whether the policy
+// needs updating, and (if so) to perform a conflict-safe PUT.
+type existingOpensearchISMPolicy struct {
+	SeqNo         int64                  `json:"_seq_no"`
+	PrimaryTerm   int64                  `json:"_primary_term"`
+	RawConditions map[string]interface{} // hot state's rollover conditions
+	RawRetention  string                 // delete transition's min_index_age, if any
+}
+
+func getExistingOpensearchISMPolicy(ctx context.Context, opensearchUrl, policyID string) (*existingOpensearchISMPolicy, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/_plugins/_ism/policies/%s", opensearchUrl, policyID), nil)
+	if err != nil {
+		return nil, false, err
+	}
+
+	resp, err := project.Es.Client.Transport.Perform(req)
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		if resp.StatusCode == 404 || resp.StatusCode == 400 {
+			if strings.Contains(strings.ToLower(string(body)), "_plugins/_ism") || strings.Contains(strings.ToLower(string(body)), "no handler found") {
+				// ISM plugin isn't installed at all.
+				return nil, false, fmt.Errorf("ism plugin not available")
+			}
+		}
+
+		if resp.StatusCode == 404 {
+			// Genuinely doesn't exist yet - needs to be created.
+			return nil, false, nil
+		}
+
+		return nil, false, fmt.Errorf("status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	parsed := struct {
+		SeqNo       int64 `json:"_seq_no"`
+		PrimaryTerm int64 `json:"_primary_term"`
+		Policy      struct {
+			States []struct {
+				Name    string `json:"name"`
+				Actions []struct {
+					Rollover map[string]interface{} `json:"rollover"`
+				} `json:"actions"`
+				Transitions []struct {
+					Conditions struct {
+						MinIndexAge string `json:"min_index_age"`
+					} `json:"conditions"`
+				} `json:"transitions"`
+			} `json:"states"`
+		} `json:"policy"`
+	}{}
+
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, false, err
+	}
+
+	existing := &existingOpensearchISMPolicy{
+		SeqNo:       parsed.SeqNo,
+		PrimaryTerm: parsed.PrimaryTerm,
+	}
+	for _, state := range parsed.Policy.States {
+		if state.Name != "hot" {
+			continue
+		}
+		if len(state.Actions) > 0 {
+			existing.RawConditions = state.Actions[0].Rollover
+		}
+		if len(state.Transitions) > 0 {
+			existing.RawRetention = state.Transitions[0].Conditions.MinIndexAge
+		}
+	}
+
+	return existing, true, nil
+}
+
 func ensureOpensearchISMRolloverPolicy(ctx context.Context, opensearchUrl, alias string, rolloverConfig []byte, retentionAge, policyName string) (bool, error) {
 	conditions := getOpensearchISMRolloverConditions(rolloverConfig)
 	policyID := fmt.Sprintf("%s-%s", policyName, alias)
@@ -21130,7 +21210,49 @@ func ensureOpensearchISMRolloverPolicy(ctx context.Context, opensearchUrl, alias
 		return false, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "PUT", fmt.Sprintf("%s/_plugins/_ism/policies/%s", opensearchUrl, policyID), bytes.NewReader(policyData))
+	// Check whether the policy already exists, and if so, whether its
+	// rollover conditions/retention already match what we'd write - this
+	// lets us both (a) avoid a needless PUT (and its 409) when nothing
+	// changed, and (b) actually apply changes to OPENSEARCH_INDEX_ROLLOVER /
+	// OPENSEARCH_INDEX_RETENTION_DAYS on restart when something did change,
+	// which a blind "create-only" PUT can never do once the policy exists.
+	existing, found, err := getExistingOpensearchISMPolicy(ctx, opensearchUrl, policyID)
+	if err != nil {
+		if err.Error() == "ism plugin not available" {
+			log.Printf("[INFO] ISM plugin not available. Falling back to direct rollover")
+			return false, nil
+		}
+		return false, err
+	}
+
+	putUrl := fmt.Sprintf("%s/_plugins/_ism/policies/%s", opensearchUrl, policyID)
+	if found {
+		// Compare only the specific rollover condition keys Shuffle manages,
+		// not a full deep-equal of the stored object: OpenSearch enriches
+		// the stored rollover conditions with its own extra fields we never
+		// set (e.g. "copy_alias": false), so a full-map compare would never
+		// match and would cause a needless PUT (and misleading "changed -
+		// updating" log) on every single restart. %v formatting sidesteps
+		// int (our defaults) vs float64 (values decoded from OpenSearch's
+		// JSON response) type mismatches on otherwise-equal numbers.
+		conditionsMatch := true
+		for _, key := range []string{"min_index_age", "min_size", "min_doc_count"} {
+			if fmt.Sprintf("%v", existing.RawConditions[key]) != fmt.Sprintf("%v", conditions[key]) {
+				conditionsMatch = false
+				break
+			}
+		}
+		retentionMatches := existing.RawRetention == retentionAge
+		if conditionsMatch && retentionMatches {
+			log.Printf("[DEBUG] ISM rollover policy '%s' already up to date for alias %s - skipping", policyID, alias)
+			return true, nil
+		}
+
+		log.Printf("[INFO] ISM rollover policy '%s' conditions/retention changed for alias %s - updating", policyID, alias)
+		putUrl = fmt.Sprintf("%s?if_seq_no=%d&if_primary_term=%d", putUrl, existing.SeqNo, existing.PrimaryTerm)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "PUT", putUrl, bytes.NewReader(policyData))
 	if err != nil {
 		return false, err
 	}
