@@ -23340,6 +23340,7 @@ func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
 	org := &Org{}
 	code := request.URL.Query().Get("code")
 	if len(code) == 0 {
+		log.Printf("SSO callback failed. URL=%s, error=%s, error_description=%s, state=%s", request.URL.String(), request.URL.Query().Get("error"), request.URL.Query().Get("error_description"), request.URL.Query().Get("state"))
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must enable PKCE to use shuffle SSO"}`)))
 		resp.WriteHeader(401)
 		return
