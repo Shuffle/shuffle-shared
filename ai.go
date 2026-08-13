@@ -8279,8 +8279,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							}
 
 							if param.Name == "body" && len(param.Example) > 0 { 
-								if len(param.Example) > 150 { 
-									param.Example = param.Example[:150] + "..."
+								if len(param.Example) > 200 { 
+									param.Example = param.Example[:200] + "..."
 								}
 
 								if strings.HasPrefix(param.Example, "{") || strings.HasPrefix(param.Example, "[") {
