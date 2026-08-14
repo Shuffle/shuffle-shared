@@ -9878,9 +9878,9 @@ data_filter:
 			// A self-corrective measure for last-finished index
 			if decision.Action == "finish" || decision.Category == "finish" {
 				log.Printf("[INFO][%s] Decision %d is a finish decision. Marking the agent as finished...", execution.ExecutionId, decision.I)
-				decision.RunDetails.StartedAt = aiStarttime
-				decision.RunDetails.CompletedAt = time.Now().UnixMilli()
-				decision.RunDetails.Status = "FINISHED"
+				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = aiStarttime
+				agentOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
+				agentOutput.Decisions[decisionIndex].RunDetails.Status = "FINISHED"
 
 				agentOutput.Output = decision.Reason
 				for decisionFieldIndex, decisionField := range decision.Fields {
