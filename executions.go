@@ -211,7 +211,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 									finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 									failedFound = true
 								} else {
-									log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-startedTs)/1000)
+									log.Printf("[WARNING][%s] AI_AGENT_DECISION_TIMEOUT: org=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, workflowExecution.Workflow.OrgId, decision.Tool, decision.Action, (time.Now().UnixMilli()-startedTs)/1000)
 									SetCache(ctx, timeoutFlagKey, []byte("1"), 60) // 60 min TTL — long enough to outlive any recovery cycle
 
 									decisionsUpdated = true
