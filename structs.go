@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/shuffle/opensearch-go/v4/opensearchapi"
-	"github.com/sashabaranov/go-openai"
 )
 
 type AppContext struct {
