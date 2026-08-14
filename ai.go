@@ -15,6 +15,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"reflect"
@@ -60,6 +61,40 @@ var assistantModel = model
 var decisionParameterName = "shuffle_agent_decision_id"
 var aiMaxTokens = 4096 // Controllable with AI_MAX_TOKENS env
 var aiReasoningEffort = ""
+
+// The overall Agent controller
+// Moved it here from structs due to openai mapping
+type AgentOutput struct {
+	Status    string          `json:"status" datastore:"status"`
+	Error     string          `json:"error,omitempty" datastore:"error"`
+	Decisions []AgentDecision `json:"decisions,omitempty" datastore:"decisions"`
+
+	// For easy testing
+	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
+	// For tracking of details parent<->child
+	StartedAt      int64                           `json:"started_at,omitempty" datastore:"started_at"`
+	CompletedAt    int64                           `json:"completed_at,omitempty" datastore:"completed_at"`
+	ExecutionId    string                          `json:"execution_id,omitempty" datastore:"execution_id"`
+	NodeId         string                          `json:"node_id,omitempty" datastore:"node_id"`
+	Memory         string                          `json:"memory,omitempty" datastore:"memory"`
+	Input          string                          `json:"input,omitempty" datastore:"input"`
+	OriginalInput  string                          `json:"original_input,omitempty" datastore:"original_input"`
+	AllowedActions []string                        `json:"allowed_actions,omitempty" datastore:"allowed_actions"`
+	Output         string                          `json:"output,omitempty" datastore:"output"`
+
+	// ExecutionMode controls how tool actions are dispatched for this agent run. i.e singul or direct
+	ExecutionMode string `json:"execution_mode,omitempty" datastore:"execution_mode"`
+
+	// Usage tracking for guardrails
+	LLMCallCount     int   `json:"llm_call_count,omitempty" datastore:"llm_call_count"`
+	TotalTokens      int64 `json:"total_tokens,omitempty" datastore:"total_tokens"`
+	PromptTokens     int64 `json:"prompt_tokens,omitempty" datastore:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens,omitempty" datastore:"completion_tokens"`
+
+	// Ordered debug info for full understanding
+	LLMRequests    []openai.ChatCompletionRequest `json:"llm_requests,omitempty" datastore:"llm_requests"`
+	LLMResponses []openai.ChatCompletionResponse `json:"llm_responses,omitempty" datastore:"llm_responses"`
+}
 
 func init() {
 	if tok := os.Getenv("AI_MAX_TOKENS"); tok != "" {
@@ -1762,6 +1797,8 @@ func extractDecisionJSONL(rawText string) ([]AgentDecision, error) {
 // parseAgentDecisions extracts AgentDecision structs from messy LLM output. It tries multiple strategies in order: JSON array, JSONL, then array after unescaping.
 func parseAgentDecisions(rawOutput string) ([]AgentDecision, error) {
 	cleanedText := FixContentOutput(rawOutput)
+	//if !strings.HasPrefix(cleanedText, "[") && !strings.HasPrefix(cleanedText, "{") {
+	//}
 
 	//Try to parse as a JSON array
 	parsedDecisions, extractionErr := extractDecisionArray(cleanedText)
@@ -7962,7 +7999,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	// See: https://github.com/Shuffle/singul?tab=readme-ov-file#llm-controls
 	//openaiAllowedApps := []string{"openai"}
 	// runOpenaiRequest := false
-	chosenAiApp := ""
 	allowedActionString := ""
 
 	decidedApps := []string{}
@@ -8180,13 +8216,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 		}
 
-		if param.Name == "app_name" {
-			//if debug { 
-			//	log.Printf("[DEBUG] Rewriting app_name to action")
-			//}
-
-			param.Name = "action"
-		}
+		// Not relevant anymore. Using auth to control this
+		//if param.Name == "app_name" {
+		//	param.Name = "action"
+		//}
 
 		if param.Name == "execution_mode" {
 			executionMode = strings.ToLower(strings.TrimSpace(param.Value))
@@ -8199,112 +8232,125 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			allowedActionString = param.Value
 			for _, actionStr := range strings.Split(param.Value, ",") {
 				actionStr = strings.ToLower(strings.TrimSpace(actionStr))
+
+				//if debug { 
+				//	log.Printf("[DEBUG] STRING: %s", actionStr)
+				//}
+
 				if actionStr == "" || actionStr == "nothing" || actionStr == "shuffle ai" || actionStr == "api" {
+					if debug { 
+						log.Printf("[DEBUG][%s] Skipping action '%s' as it is not a valid action.", execution.ExecutionId, actionStr)
+					}
 					continue
 				}
 
-				if strings.HasPrefix(actionStr, "app:") {
+				if !strings.HasPrefix(actionStr, "app:") {
+					if debug { 
+						log.Printf("[DEBUG][%s] Skipping action '%s' as it is not a valid action.", execution.ExecutionId, actionStr)
+					}
 
-					trimmedActionStr := strings.TrimPrefix(actionStr, "app:")
-					sortedAppActions := getPrioritisedAppActions(ctx, trimmedActionStr, 15)
+					continue
+				} 
 
-					// Sort alphabetically so the action list is byte-for-byte identical across every LLM loop, keeping the prompt cache prefix stable.
-					sort.Slice(sortedAppActions, func(i, j int) bool {
-						return sortedAppActions[i].Name < sortedAppActions[j].Name
-					})
+				trimmedActionStr := strings.TrimPrefix(actionStr, "app:")
+				sortedAppActions := getPrioritisedAppActions(ctx, trimmedActionStr, 15)
 
-					if len(sortedAppActions) > 0 {
-						// Cuts off the potential md5:appname prefix
-						if len(trimmedActionStr) > 33 && string(trimmedActionStr[32]) == ":" {
-							trimmedActionStr = trimmedActionStr[33:]
-						}
+				// Sort alphabetically so the action list is byte-for-byte identical across every LLM loop, keeping the prompt cache prefix stable.
+				sort.Slice(sortedAppActions, func(i, j int) bool {
+					return sortedAppActions[i].Name < sortedAppActions[j].Name
+				})
 
-						decidedApps = append(decidedApps, trimmedActionStr)
-						specificAppMetadata += fmt.Sprintf("%d Available actions and fields for Tool '%s':\n", len(sortedAppActions), trimmedActionStr)
+				if len(sortedAppActions) > 0 {
+					// Cuts off the potential md5:appname prefix
+					if len(trimmedActionStr) > 33 && string(trimmedActionStr[32]) == ":" {
+						trimmedActionStr = trimmedActionStr[33:]
+					}
 
-						previousDesc := ""
-						for counter, sortedAppAction := range sortedAppActions {
-							requiredParams := []string{}
-							optionalParams := []string{}
-							for _, param := range sortedAppAction.Parameters {
-								if param.Name == "url" { 
-									continue
+					decidedApps = append(decidedApps, trimmedActionStr)
+					specificAppMetadata += fmt.Sprintf("\n\n**Available actions and fields for Tool '%s'**:\n", trimmedActionStr)
+
+					previousDesc := ""
+					for counter, sortedAppAction := range sortedAppActions {
+						requiredParams := []string{}
+						optionalParams := []string{}
+						for _, param := range sortedAppAction.Parameters {
+							if param.Name == "url" { 
+								continue
+							}
+
+							if param.Name == "body" && len(param.Example) > 0 { 
+								if len(param.Example) > 200 { 
+									param.Example = param.Example[:200] + "..."
 								}
 
-								if param.Name == "body" && len(param.Example) > 0 { 
-									if len(param.Example) > 150 { 
-										param.Example = param.Example[:150] + "..."
-									}
-
-									if strings.HasPrefix(param.Example, "{") || strings.HasPrefix(param.Example, "[") {
-										newExample := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(param.Example, "\n", ""), "\t", ""), "  ", ""), "\\\"", "\"")
-										requiredParams = append(requiredParams, fmt.Sprintf("body=%s", newExample))
-									} else {
-										requiredParams = append(requiredParams, fmt.Sprintf("body"))
-									}
-
-									continue
-								}
-
-								if param.Required {
-									if param.Configuration && param.Name != "url" { 
-										continue
-									}
-
-									requiredParams = append(requiredParams, param.Name)
+								if strings.HasPrefix(param.Example, "{") || strings.HasPrefix(param.Example, "[") {
+									newExample := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(param.Example, "\n", ""), "\t", ""), "  ", ""), "\\\"", "\"")
+									requiredParams = append(requiredParams, fmt.Sprintf("body=%s", newExample))
 								} else {
-									if len(optionalParams) >= 10 {
-										continue
-									}
-
-									if param.Name == "url" || param.Name == "username" || param.Name == "password" || param.Name == "token" || param.Name == "api_key" || param.Name == "key" || param.Name == "timeout" || param.Name == "ssl_verify" || param.Name == "to_file" {
-										continue
-									}
-
-									optionalParams = append(optionalParams, param.Name)
-								}
-							}
-
-							requiredString := ""
-							optionalString := ""
-							descString := ""
-							if len(requiredParams) > 0 {
-								requiredString = fmt.Sprintf("%s", strings.Join(requiredParams, ", "))
-								optionalString = ", "
-							}
-
-							if len(optionalParams) > 0 {
-								for _, optionalParam := range optionalParams {
-									optionalString += fmt.Sprintf(`%s="", `, optionalParam)
+									requiredParams = append(requiredParams, fmt.Sprintf("body"))
 								}
 
-								optionalString = strings.TrimSuffix(optionalString, ", ")
+								continue
+							}
+
+							if param.Required {
+								if param.Configuration && param.Name != "url" { 
+									continue
+								}
+
+								requiredParams = append(requiredParams, param.Name)
 							} else {
-								optionalString = ""
-							}
-
-							if len(sortedAppAction.Description) > 0 {
-								if len(sortedAppAction.Description) > 150 {
-									sortedAppAction.Description = sortedAppAction.Description[:100] + "..."
+								if len(optionalParams) >= 10 {
+									continue
 								}
-								descString = fmt.Sprintf(" # %s", sortedAppAction.Description)
-							} 
 
-							if descString == previousDesc {
-								descString = ""
-							} else {
-								previousDesc = descString
+								if param.Name == "url" || param.Name == "username" || param.Name == "password" || param.Name == "token" || param.Name == "api_key" || param.Name == "key" || param.Name == "timeout" || param.Name == "ssl_verify" || param.Name == "to_file" {
+									continue
+								}
+
+								optionalParams = append(optionalParams, param.Name)
 							}
-
-							specificAppMetadata += fmt.Sprintf("%d. %s(%s%s)%s\n", counter+1, strings.ReplaceAll(sortedAppAction.Name, " ", "_"), requiredString, optionalString, descString)
 						}
 
-					} else {
-						log.Printf("[ERROR] AI Agent: Failed getting prioritised app actions for app '%s'", strings.TrimPrefix(actionStr, "app:"))
+						requiredString := ""
+						optionalString := ""
+						descString := ""
+						if len(requiredParams) > 0 {
+							requiredString = fmt.Sprintf("%s", strings.Join(requiredParams, ", "))
+							optionalString = ", "
+						}
+
+						if len(optionalParams) > 0 {
+							for _, optionalParam := range optionalParams {
+								optionalString += fmt.Sprintf(`%s="", `, optionalParam)
+							}
+
+							optionalString = strings.TrimSuffix(optionalString, ", ")
+						} else {
+							optionalString = ""
+						}
+
+						if len(sortedAppAction.Description) > 0 {
+							if len(sortedAppAction.Description) > 130 {
+								sortedAppAction.Description = sortedAppAction.Description[:130] + ".."
+							}
+
+							// Remove %s, %d etc to not screw up fmt
+							descString = fmt.Sprintf(" # %s", strings.ReplaceAll(strings.ReplaceAll(sortedAppAction.Description, "\\%", " "), "\n", ""))
+						} 
+
+						if descString == previousDesc {
+							descString = ""
+						} else {
+							previousDesc = descString
+						}
+
+						parsedAction := strings.ReplaceAll(fmt.Sprintf("%d. %s(%s%s)%s", counter+1, strings.ReplaceAll(sortedAppAction.Name, " ", "_"), requiredString, optionalString, descString), "\n", " ")
+						specificAppMetadata += parsedAction + "\n"
 					}
 
 				} else {
-					//metadata += fmt.Sprintf("- %s\n", strings.ReplaceAll(actionStr, " ", "_"))
+					log.Printf("[ERROR] AI Agent: Failed getting prioritised app actions for app '%s'", strings.TrimPrefix(actionStr, "app:"))
 				}
 			}
 
@@ -8326,12 +8372,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		}
 	}
 
-	chosenAiApp = ""
-	if len(chosenAiApp) == 0 || chosenAiApp == "Shuffle AI" {
-		chosenAiApp = "openai"
-		// runOpenaiRequest = true
-	}
-
 	// If the fields are edited, don't forget to edit the AgentDecision struct
 	// FIXME: Using a different reference format as these are common to reasoning models
 	// such as:
@@ -8351,6 +8391,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	continuationMessage := "" // Tracks user continuation text (new message sent to a finished agent)
 
 	marshalledDecisions := []byte{}
+	relevantDecisions := []AgentDecision{}
 	if createNextActions == true {
 		// Sets the user message to the current value
 		for _, result := range execution.Results {
@@ -8413,8 +8454,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "max_agent_loops_reached", fmt.Sprintf("Agent reached maximum execution loops limit (%d) without finishing.", newLoopCount))
 			}
-
-			relevantDecisions := []AgentDecision{}
 
 			// Check for existing RUNNING/WAITING ask decisions - if found, return existing state without creating new decisions
 			const staleThreshold = int64(299 * 1000) // 4 min 59 sec in ms :-)
@@ -8650,162 +8689,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				}
 			}
 
-			// FIXME: Do we need users & admins? Skipping for now.
-			//if len(admins) > 0 {
-			//	metadata += fmt.Sprintf("admins: %s\n", strings.Join(admins, ", "))
-			//}
-
-			//if len(users) > 0 {
-			//	metadata += fmt.Sprintf("users: %s\n", strings.Join(users, ", "))
-			//}
-
 			if len(decidedApps) > 0 {
 				// Forces away all other apps
-				// if len(allowedActionString) == 0 {
-				// 	metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
-				// }
 				metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
-			} else {
-				// Used to inject default tools here, but that can quickly go to shit
-				// if the user doesn't want to run anything
-
-				/*
-				decidedApps := ""
-				appauth, autherr := GetAllWorkflowAppAuth(ctx, org.Id)
-				if autherr == nil && len(appauth) > 0 {
-					preferredApps := []WorkflowApp{
-						WorkflowApp{
-							Categories: []string{"internal"},
-							Name:       "shuffle datastore",
-						},
-					}
-					if len(org.SecurityFramework.SIEM.Name) > 0 {
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"siem"},
-							Name:       org.SecurityFramework.SIEM.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.EDR.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.EDR.Name) + ", "
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"eradication"},
-							Name:       org.SecurityFramework.EDR.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.Communication.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.Cases.Name) + ", "
-
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"cases"},
-							Name:       org.SecurityFramework.Communication.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.Cases.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.Cases.Name) + ", "
-
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"cases"},
-							Name:       org.SecurityFramework.Cases.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.Assets.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.Assets.Name) + ", "
-
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"assets"},
-							Name:       org.SecurityFramework.Assets.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.Network.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.Network.Name) + ", "
-
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"network"},
-							Name:       org.SecurityFramework.Network.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.Intel.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.Intel.Name) + ", "
-
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"intel"},
-							Name:       org.SecurityFramework.Intel.Name,
-						})
-					}
-
-					if len(org.SecurityFramework.IAM.Name) > 0 {
-						//preferredApps += strings.ToLower(org.SecurityFramework.IAM.Name) + ", "
-						preferredApps = append(preferredApps, WorkflowApp{
-							Categories: []string{"iam"},
-							Name:       org.SecurityFramework.IAM.Name,
-						})
-					}
-
-					for _, auth := range appauth {
-						// ALWAYS append valid auth
-						if !auth.Validation.Valid {
-							continue
-						}
-
-						if len(auth.App.Categories) > 0 {
-							found := false
-							for _, preApp := range preferredApps {
-								if len(preApp.Categories) == 0 {
-									continue
-								}
-
-								if ArrayContains(preApp.Categories, strings.ToLower(auth.App.Categories[0])) {
-									found = true
-									break
-								}
-							}
-
-							if found {
-								continue
-							}
-						}
-
-						if len(auth.App.Categories) > 0 && strings.ToUpper(auth.App.Categories[0]) == "AI" {
-							continue
-						}
-
-						preferredApps = append(preferredApps, auth.App)
-					}
-
-					// FIXME: Pre-filter before this to ensure we have good
-					// apps ONLY.
-					for _, preferredApp := range preferredApps {
-						if len(preferredApp.Name) == 0 {
-							continue
-						}
-
-						lowername := strings.ToLower(preferredApp.Name)
-						if strings.Contains(decidedApps, lowername) {
-							continue
-						}
-
-						decidedApps += lowername + ", "
-					}
-
-					//  Let's inject http.
-					if !strings.Contains(decidedApps, "http") {
-						decidedApps += "http, "
-					}
-				}
-
-				if len(decidedApps) > 0 {
-					// if len(allowedActionString) == 0 {
-					// 	metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
-					// }
-					metadata += fmt.Sprintf("\n\nALL TOOLS: %s\n\n", decidedApps)
-				}
-				*/
 			}
 		}
 	}
@@ -8839,7 +8725,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 You are an Action Execution Agent that performs actions in third-party tools. You can use ANY tool and platform to achieve these goals if they are presented by the user. You receive tools (USER CONTEXT), a request (USER REQUEST), and history. Your goal is to execute tasks and **IMMEDIATELY** stop and summarize when done. Attempt to achieve what the users most likely intention is - not just exactly what they ask for. Iterate until the goal is achieved by using the USER CONTEXT tools and actions available to you. Don't be too verbose, and ask as few questions as possible. 
 
 ### RULES:
-1. ALWAYS output the strict decision JSON OUTPUT FORMAT and nothing else.
+1. ALWAYS output the decision list in the JSON OUTPUT FORMAT and NOTHING else.
 2. Look at user intent, not just words of the USER REQUEST. Do NOT stop until the user intent has been fulfilled. This means understanding the original user intent for them to make it more clear what they most likely wanted.
 3. Use tools and their actions to achieve the user request.
 4. Do NOT ask unnecessary questions. Make assumptions for the user.
@@ -8866,7 +8752,7 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 1. **Analyze:** Does the "HISTORY" contain a successful execution that matches the core intent? An action's own "success: true" only confirms that the CALL succeeded (e.g. a process was started) - it does NOT by itself confirm the underlying task actually completed successfully. If a separate action exists to check the result/status of what you started (its description will say to call it after), you must call it and see a completed/successful result before treating the task as done.
 2. **Decision:**
    - **IF DONE:** Select "finish".
-   - **Fields:** category="finish", action="finish", fields=[{ "key": "output", "value": "Summary..." }]
+   - **Fields:** category="finish", action="finish", fields=[{ "key": "output", "value": "Complete markdown output with all the relevant details" }], reason=""
 
 ### PHASE 2: RECOVERY & RETRY
 **Only proceed if the task is NOT done.**
@@ -9076,6 +8962,30 @@ data_filter:
 		})
 	}
 
+	/*
+	// Contains history of executions
+	// Disabled as it screwed with the JSON output at times
+	if len(relevantDecisions) > 0 { 
+		// Even more context
+		for _, relevantDecision := range relevantDecisions {
+			if relevantDecision.Action == "ask" || relevantDecision.Action == "finish" || relevantDecision.Action == "question" || relevantDecision.Action == "" { 
+				continue
+			}
+
+			foundResult := relevantDecision.Reason
+			if len(relevantDecision.RunDetails.RawResponse) > 0 { 
+				foundResult = relevantDecision.RunDetails.RawResponse
+			}
+
+			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleTool,
+				ToolCallID: relevantDecision.RunDetails.Id,
+				Content: foundResult,
+			})
+		}
+	}
+	*/
+
 	// Let's put the USER ANSWERS after HISTORY so the frozen prefix [1][2][3] is never affected.
 	if len(previousAnswers) > 0 {
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
@@ -9234,9 +9144,14 @@ data_filter:
 	openaiOutput := openai.ChatCompletionResponse{}
 
 	if agentRunLocation == "local" { 
+		// Fake net/http response writer
+		recorder := httptest.NewRecorder()
+
 		callInfo := AiCallInfo{
 			Caller: "aiAgentRunner", 
 			OrgID: execution.Workflow.OrgId,
+
+			Resp: recorder,
 		}
 
 		output, err := RunAiQuery(
@@ -9252,6 +9167,21 @@ data_filter:
 			return abortAgentExecution(ctx, execution, startNode, agentOutput, "run_ai_query_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 		}
 
+		if recorder != nil {
+			result := recorder.Result()
+			defer result.Body.Close()
+
+			body, err := io.ReadAll(result.Body)
+			if err == nil {
+				err = json.Unmarshal(body, &openaiOutput)
+				if err != nil {
+					log.Printf("[ERROR][%s] AI Agent: Failed unmarshalling AI query response for action %s: %s", execution.ExecutionId, startNode.ID, err)
+				}
+			} else {
+				log.Printf("[ERROR][%s] AI Agent: Failed reading AI query response body for action %s: %s", execution.ExecutionId, startNode.ID, err)
+			}
+		}
+
 		bodyString = []byte(output)
 		resultMapping.Result = output
 		resultMapping.ExecutionId = execution.ExecutionId
@@ -9263,6 +9193,8 @@ data_filter:
 
 		decisionString = output
 		skipHttpParsing = true
+
+		//openaiOutput := openai.ChatCompletionResponse{}
 
 	} else {
 		// FIXME: This part is almost never used anymore. Used to be necessary 
@@ -9364,7 +9296,7 @@ data_filter:
 			req.Header.Set("X-Agent-Token", agentOneTimeToken)
 			newresp, err := client.Do(req)
 
-			log.Printf("[INFO][%s] Started AI Agent action %s with app '%s'. Waiting for results...", execution.ExecutionId, startNode.ID, chosenAiApp)
+			log.Printf("[INFO][%s] Started AI Agent action '%s'. Waiting for results...", execution.ExecutionId, startNode.ID)
 
 			if err != nil {
 				if skipAgentWait == "true" && strings.Contains(strings.ToLower(err.Error()), "timeout") { 
@@ -9672,14 +9604,15 @@ data_filter:
 
 		// Parse decisions using the refactored helper function
 		mappedDecisions, parsingErr := parseAgentDecisions(choicesString)
-
 		if len(mappedDecisions) == 0 {
 			if parsingErr == nil {
 				parsingErr = errors.New("no valid AgentDecision array or objects found in output")
 			}
+
 			if !strings.Contains(decisionString, conditionText) {
 				log.Printf("[ERROR][%s] AI Agent (6): Failed parsing decisions in AI Agent response: %s. String: %s", execution.ExecutionId, parsingErr, decisionString)
 			}
+
 			// Updating the OUTPUT in some way to help the user a bit.
 			if strings.Contains(decisionString, "conditions must be correct") {
 				errorMessage = fmt.Sprintf("Condition failed. See decision_string for details")
@@ -9780,6 +9713,24 @@ data_filter:
 
 				agentOutput.Decisions = append(agentOutput.Decisions, mappedDecision)
 			}
+
+			if len(openaiOutput.ID) > 0 { 
+				found := false
+				for _, llmrequest := range agentOutput.LLMResponses {
+					if llmrequest.ID == openaiOutput.ID {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					agentOutput.LLMResponses = append(agentOutput.LLMResponses, openaiOutput)
+				
+					agentOutput.LLMRequests = append(agentOutput.LLMRequests, completionRequest)
+				}
+			
+			}
+
 
 			// Realtime update so that it looks correct in the UI between requests
 			if len(mappedDecisions) > 0 {
@@ -10083,8 +10034,8 @@ data_filter:
 		}
 
 		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
-			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent.", execution.ExecutionId)
-			return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_decision_action_ran", "Agent produced decisions but none could be executed. This may indicate an unsupported action type or a bug in decision parsing.")
+			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent run.", execution.ExecutionId)
+			return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. Please try again. Raw decision: \n\n%s", decisionString))
 		}
 
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
@@ -11091,10 +11042,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	if totalTokens > 0 && len(info.OrgID) > 0 {
-		if debug { 
-			log.Printf("[DEBUG] Total request tokens spent: %d", totalTokens)
-		}
-			
 		// Count LLM tokens no matter what
 		if defaultCreds { 
 			IncrementCache(ctx, info.OrgID, "llm_tokens", totalTokens)
@@ -12427,7 +12374,7 @@ func editWorkflowWithLLM(ctx context.Context, workflow *Workflow, user User, inp
 		log.Printf("[ERROR] Failed to get apps in Generate workflow: %s", err)
 		return nil, err
 	}
-	minimalWorkflow := buildMinimalWorkflow(workflow)
+	minimalWorkflow := BuildMinimalWorkflow(workflow)
 	if minimalWorkflow == nil {
 		return nil, errors.New("failed to build minimal workflow")
 	}
@@ -13246,7 +13193,7 @@ func isSensitiveParameter(paramName string) bool {
 	return false
 }
 
-func buildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
+func BuildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
 	if w == nil {
 		return nil
 	}
@@ -15153,6 +15100,14 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 			continue
 		} 
 
+		if len(callInfo.AuthenticationId) == 0 && auth.Active == false {
+			// Disallowing unactive auth, as that's how we control which to use
+			// from the agent frontend
+			continue
+		}
+
+		// FIXME: Do we need this? Keeping for now, as to sort it properly
+		// This is specifcally to keep the OpenAI request format.
 		if strings.ToLower(auth.App.Name) != "openai" { 
 			continue
 		}
