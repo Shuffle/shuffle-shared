@@ -47,9 +47,9 @@ var standalone bool
 
 // var model = "gpt-5-mini"
 //var model = "gpt-5-mini"
-var model = "google/gemini-3.6-flash"
 //var model = "gpt-5.4-nano"
 //var model = "gpt-5.2-codex"
+var model = "google/gemini-3.7-flash"
 
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
@@ -8767,7 +8767,7 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 1. **Conversational & Meta-Query Check:**
    - **Trigger:** Is the user asking about YOU, your capabilities ("What can you do?"), or saying "Hi"/"Help"?
    - **Action:** Select "finish".
-   - **Field "output":** "I am the Shuffle Agent. I can help you with: [List generic categories from USER CONTEXT]..."
+   - **Field "output":** "I am the Shuffle Agent. I can help you with: [Markdown List from USER CONTEXT]..."
 
 2. **Verification (Read-Before-Write):**
    - If modifying a resource, do you have the data?
@@ -10024,7 +10024,7 @@ data_filter:
 
 		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
 			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent run.", execution.ExecutionId)
-			return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. Please try again. Raw decision: \n\n%s", decisionString))
+			return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions, but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. \n\nFailed Decision (debug): \n%s", decisionString))
 		}
 
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
@@ -10737,7 +10737,15 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	contentOutput := ""
 
 	// Overwrites it all
-	aiRequestUrl, currentModel = ValidateURLandModel(aiRequestUrl, currentModel)
+	retUrl, retModel := ValidateURLandModel(aiRequestUrl, currentModel)
+	if len(retUrl) > 0 {
+		aiRequestUrl = retUrl
+	}
+
+	if len(retModel) > 0 {
+		currentModel = retModel
+	}
+
 	if len(apiKey) == 0 {
 		return "", errors.New("No LLM apikey supplied AND no organization-specific key found. Please create a custom AI app authentication.")
 	}
@@ -10875,6 +10883,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				log.Printf("[ERROR] Unauthorized (401) error from '%s': %s", aiRequestUrl, err)
 
 				return "", errors.New(fmt.Sprintf("Unauthorized (401) error from '%s': %s", aiRequestUrl, err))
+			} else if strings.Contains(err.Error(), "exceeds the maximum number of tokens") {
+				log.Printf("[ERROR] Request from org %s with model '%s' exceeds the maximum number of tokens. %s", org, currentModel, err)
+
+				return "", errors.New(fmt.Sprintf("Request from org %s with model '%s' exceeds the maximum number of tokens. %s", org, currentModel, err))
 			}
 
 			lastError = err
@@ -15194,7 +15206,7 @@ func ValidateURLandModel(aiRequestUrl string, currentModel string) (string, stri
 		}
 	} else if strings.Contains(aiRequestUrl, "googleapis.com") {
 		if currentModel == "" {
-			currentModel = "gemini-3.6-flash"
+			currentModel = "gemini-3.7-flash"
 		}
 	} else if strings.Contains(aiRequestUrl, "api.mistral.ai") {
 		aiRequestUrl = "https://api.mistral.ai/v1"

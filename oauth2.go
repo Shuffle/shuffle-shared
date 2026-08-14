@@ -2092,7 +2092,7 @@ func GetCurrentPodNetworkConfig(ctx context.Context, clientset *kubernetes.Clien
 
 // returns apikey, url based on project
 func GetGeminiCredentials(ctx context.Context) (string, string, string) { 
-	foundModel := "google/gemini-3.6-flash"  
+	foundModel := "google/gemini-3.7-flash"  
 
 	projectID := os.Getenv("SHUFFLE_GCEPROJECT")
 	if len(projectID) == 0 { 
