@@ -9590,14 +9590,15 @@ data_filter:
 
 		// Parse decisions using the refactored helper function
 		mappedDecisions, parsingErr := parseAgentDecisions(choicesString)
-
 		if len(mappedDecisions) == 0 {
 			if parsingErr == nil {
 				parsingErr = errors.New("no valid AgentDecision array or objects found in output")
 			}
+
 			if !strings.Contains(decisionString, conditionText) {
 				log.Printf("[ERROR][%s] AI Agent (6): Failed parsing decisions in AI Agent response: %s. String: %s", execution.ExecutionId, parsingErr, decisionString)
 			}
+
 			// Updating the OUTPUT in some way to help the user a bit.
 			if strings.Contains(decisionString, "conditions must be correct") {
 				errorMessage = fmt.Sprintf("Condition failed. See decision_string for details")
@@ -10022,8 +10023,8 @@ data_filter:
 		}
 
 		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
-			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent.", execution.ExecutionId)
-			return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_decision_action_ran", "Agent produced decisions but none could be executed. This may indicate an unsupported action type or a bug in decision parsing.")
+			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent run.", execution.ExecutionId)
+			return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. Please try again. Raw decision: \n\n%s", decisionString))
 		}
 
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
