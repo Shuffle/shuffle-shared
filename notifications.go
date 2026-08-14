@@ -652,7 +652,7 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 	)
 
 	// Environment auth if possible.
-	req.Header.Add("Authorization", fmt.Sprintf(`Bearer %s`, userApikey))
+	req.Header.Add("Authorization", fmt.Sprintf(`%s`, userApikey))
 	envName := os.Getenv("ENVIRONMENT_NAME")
 	req.Header.Add("Org-Id", notification.OrgId)
 	if len(envName) > 0 {
@@ -673,6 +673,9 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 	}
 
 	log.Printf("[DEBUG] Finished notification request to %s with status %d. Data: %s", notificationUrl, newresp.StatusCode, string(respBody))
+	if newresp.StatusCode < 200 || newresp.StatusCode >= 300 {
+		return errors.New(fmt.Sprintf("Got status code %d when sending notification for org %s", newresp.StatusCode, notification.OrgId))
+	}
 	return nil
 }
 
@@ -860,9 +863,17 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 	// FIXME: Send a request to the backend here from worker when optimized
 	if project.Environment == "worker" {
 		log.Printf("[DEBUG] Creating backend notification for org %s", orgId)
-		forwardNotificationRequest(ctx, title, description, referenceUrl, orgId)
-		return nil
+		err := forwardNotificationRequest(ctx, title, description, referenceUrl, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed forwarding notification request for org %s: %s", orgId, err)
+		}
+		return err
 	}
+
+	// The frontend reads notifications through GetOrgNotifications, which is
+	// cached per org. Without this, notifications made by an execution land in
+	// the datastore but never show up in the panel until the cache expires.
+	defer DeleteCache(ctx, fmt.Sprintf("notifications_%s", orgId))
 
 	//log.Printf("[DEBUG] Creating notification for org '%s'", orgId)
 	notifications, err := GetOrgNotifications(ctx, orgId)
