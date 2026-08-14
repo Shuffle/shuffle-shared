@@ -398,27 +398,31 @@ type IncrementInCache struct {
 type DailyStatistics struct {
 	Date time.Time `json:"date" datastore:"date"`
 
-	AppExecutions                     int64 `json:"app_executions" datastore:"app_executions"`
-	ChildAppExecutions                int64 `json:"child_app_executions" datastore:"child_app_executions"`
-	AppExecutionsFailed               int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
-	SubflowExecutions                 int64 `json:"subflow_executions" datastore:"subflow_executions"`
-	WorkflowExecutions                int64 `json:"workflow_executions" datastore:"workflow_executions"`
-	WorkflowExecutionsFinished        int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
-	WorkflowExecutionsFailed          int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
-	OrgSyncActions                    int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
-	CloudExecutions                   int64 `json:"cloud_executions" datastore:"cloud_executions"`
-	OnpremExecutions                  int64 `json:"onprem_executions" datastore:"onprem_executions"`
-	AIUsage                           int64 `json:"ai_executions" datastore:"ai_executions"`
-	AgentExecutions                   int64 `json:"agent_executions" datastore:"agent_executions"`
-	AgentExecutionsSuccessful         int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
-	AgentExecutionsFailed             int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
-	AgentTokens                       int64 `json:"agent_tokens" datastore:"agent_tokens"`
-	AgentInputTokens                  int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
-	AgentOutputTokens                 int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
-	AgentCachedTokens                 int64 `json:"agent_cached_tokens" datastore:"agent_cached_tokens"`
+	AppExecutions              int64 `json:"app_executions" datastore:"app_executions"`
+	ChildAppExecutions         int64 `json:"child_app_executions" datastore:"child_app_executions"`
+	AppExecutionsFailed        int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
+	SubflowExecutions          int64 `json:"subflow_executions" datastore:"subflow_executions"`
+	WorkflowExecutions         int64 `json:"workflow_executions" datastore:"workflow_executions"`
+	WorkflowExecutionsFinished int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
+	WorkflowExecutionsFailed   int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
+	OrgSyncActions             int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
+	CloudExecutions            int64 `json:"cloud_executions" datastore:"cloud_executions"`
+	OnpremExecutions           int64 `json:"onprem_executions" datastore:"onprem_executions"`
+	AIUsage                    int64 `json:"ai_executions" datastore:"ai_executions"`
+	AgentExecutions            int64 `json:"agent_executions" datastore:"agent_executions"`
+	AgentExecutionsSuccessful  int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
+	AgentExecutionsFailed      int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
+
+	LLMTokens         int64 `json:"llm_tokens" datastore:"llm_tokens"`
+	AgentTokens       int64 `json:"agent_tokens" datastore:"agent_tokens"`
+	AgentInputTokens  int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
+	AgentOutputTokens int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
+	AgentCachedTokens int64 `json:"agent_cached_tokens" datastore:"agent_cached_tokens"`
+
 	ChildOrgAgentExecutions           int64 `json:"child_org_agent_executions" datastore:"child_org_agent_executions"`
 	ChildOrgAgentExecutionsSuccessful int64 `json:"child_org_agent_executions_successful" datastore:"child_org_agent_executions_successful"`
 	ChildOrgAgentExecutionsFailed     int64 `json:"child_org_agent_executions_failed" datastore:"child_org_agent_executions_failed"`
+	ChildOrgLLMTokens                 int64 `json:"child_org_llm_tokens" datastore:"child_org_llm_tokens"`
 	ChildOrgAgentTokens               int64 `json:"child_org_agent_tokens" datastore:"child_org_agent_tokens"`
 	ChildOrgAgentInputTokens          int64 `json:"child_org_agent_input_tokens" datastore:"child_org_agent_input_tokens"`
 	ChildOrgAgentOutputTokens         int64 `json:"child_org_agent_output_tokens" datastore:"child_org_agent_output_tokens"`
@@ -456,6 +460,7 @@ type ExecutionInfo struct {
 	TotalAgentExecutions                   int64 `json:"total_agent_executions" datastore:"total_agent_executions"`
 	TotalAgentExecutionsSuccessful         int64 `json:"total_agent_executions_successful" datastore:"total_agent_executions_successful"`
 	TotalAgentExecutionsFailed             int64 `json:"total_agent_executions_failed" datastore:"total_agent_executions_failed"`
+	TotalLLMTokens                         int64 `json:"total_llm_tokens" datastore:"total_llm_tokens"`
 	TotalAgentTokens                       int64 `json:"total_agent_tokens" datastore:"total_agent_tokens"`
 	TotalAgentInputTokens                  int64 `json:"total_agent_input_tokens" datastore:"total_agent_input_tokens"`
 	TotalAgentOutputTokens                 int64 `json:"total_agent_output_tokens" datastore:"total_agent_output_tokens"`
@@ -464,6 +469,7 @@ type ExecutionInfo struct {
 	TotalChildOrgAgentExecutions           int64 `json:"total_child_org_agent_executions" datastore:"total_child_org_agent_executions"`
 	TotalChildOrgAgentExecutionsSuccessful int64 `json:"total_child_org_agent_executions_successful" datastore:"total_child_org_agent_executions_successful"`
 	TotalChildOrgAgentExecutionsFailed     int64 `json:"total_child_org_agent_executions_failed" datastore:"total_child_org_agent_executions_failed"`
+	TotalChildOrgLLMTokens                 int64 `json:"total_child_org_llm_tokens" datastore:"total_child_org_llm_tokens"`
 	TotalChildOrgAgentTokens               int64 `json:"total_child_org_agent_tokens" datastore:"total_child_org_agent_tokens"`
 	TotalChildOrgAgentInputTokens          int64 `json:"total_child_org_agent_input_tokens" datastore:"total_child_org_agent_input_tokens"`
 	TotalChildOrgAgentOutputTokens         int64 `json:"total_child_org_agent_output_tokens" datastore:"total_child_org_agent_output_tokens"`
@@ -487,6 +493,7 @@ type ExecutionInfo struct {
 	MonthlyAgentExecutions                   int64 `json:"monthly_agent_executions,omitempty" datastore:"monthly_agent_executions"`
 	MonthlyAgentExecutionsSuccessful         int64 `json:"monthly_agent_executions_successful,omitempty" datastore:"monthly_agent_executions_successful"`
 	MonthlyAgentExecutionsFailed             int64 `json:"monthly_agent_executions_failed,omitempty" datastore:"monthly_agent_executions_failed"`
+	MonthlyLLMTokens                         int64 `json:"monthly_llm_tokens,omitempty" datastore:"monthly_llm_tokens"`
 	MonthlyAgentTokens                       int64 `json:"monthly_agent_tokens,omitempty" datastore:"monthly_agent_tokens"`
 	MonthlyAgentInputTokens                  int64 `json:"monthly_agent_input_tokens,omitempty" datastore:"monthly_agent_input_tokens"`
 	MonthlyAgentOutputTokens                 int64 `json:"monthly_agent_output_tokens,omitempty" datastore:"monthly_agent_output_tokens"`
@@ -495,6 +502,7 @@ type ExecutionInfo struct {
 	MonthlyChildOrgAgentExecutions           int64 `json:"monthly_child_org_agent_executions,omitempty" datastore:"monthly_child_org_agent_executions"`
 	MonthlyChildOrgAgentExecutionsSuccessful int64 `json:"monthly_child_org_agent_executions_successful,omitempty" datastore:"monthly_child_org_agent_executions_successful"`
 	MonthlyChildOrgAgentExecutionsFailed     int64 `json:"monthly_child_org_agent_executions_failed,omitempty" datastore:"monthly_child_org_agent_executions_failed"`
+	MonthlyChildOrgLLMTokens                 int64 `json:"monthly_child_org_llm_tokens,omitempty" datastore:"monthly_child_org_llm_tokens"`
 	MonthlyChildOrgAgentTokens               int64 `json:"monthly_child_org_agent_tokens,omitempty" datastore:"monthly_child_org_agent_tokens"`
 	MonthlyChildOrgAgentInputTokens          int64 `json:"monthly_child_org_agent_input_tokens,omitempty" datastore:"monthly_child_org_agent_input_tokens"`
 	MonthlyChildOrgAgentOutputTokens         int64 `json:"monthly_child_org_agent_output_tokens,omitempty" datastore:"monthly_child_org_agent_output_tokens"`
@@ -529,6 +537,7 @@ type ExecutionInfo struct {
 	DailyAgentExecutions                   int64 `json:"daily_agent_executions" datastore:"daily_agent_executions"`
 	DailyAgentExecutionsSuccessful         int64 `json:"daily_agent_executions_successful" datastore:"daily_agent_executions_successful"`
 	DailyAgentExecutionsFailed             int64 `json:"daily_agent_executions_failed" datastore:"daily_agent_executions_failed"`
+	DailyLLMTokens                         int64 `json:"daily_llm_tokens" datastore:"daily_llm_tokens"`
 	DailyAgentTokens                       int64 `json:"daily_agent_tokens" datastore:"daily_agent_tokens"`
 	DailyAgentInputTokens                  int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
 	DailyAgentOutputTokens                 int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`
@@ -537,6 +546,7 @@ type ExecutionInfo struct {
 	DailyChildOrgAgentExecutions           int64 `json:"daily_child_org_agent_executions" datastore:"daily_child_org_agent_executions"`
 	DailyChildOrgAgentExecutionsSuccessful int64 `json:"daily_child_org_agent_executions_successful" datastore:"daily_child_org_agent_executions_successful"`
 	DailyChildOrgAgentExecutionsFailed     int64 `json:"daily_child_org_agent_executions_failed" datastore:"daily_child_org_agent_executions_failed"`
+	DailyChildOrgLLMTokens                 int64 `json:"daily_child_org_llm_tokens" datastore:"daily_child_org_llm_tokens"`
 	DailyChildOrgAgentTokens               int64 `json:"daily_child_org_agent_tokens" datastore:"daily_child_org_agent_tokens"`
 	DailyChildOrgAgentInputTokens          int64 `json:"daily_child_org_agent_input_tokens" datastore:"daily_child_org_agent_input_tokens"`
 	DailyChildOrgAgentOutputTokens         int64 `json:"daily_child_org_agent_output_tokens" datastore:"daily_child_org_agent_output_tokens"`
@@ -1398,7 +1408,9 @@ type SyncUsage struct {
 	Apps                SyncDataUsage `json:"apps" datastore:"apps"`
 	ShuffleGPT          SyncDataUsage `json:"shuffle_gpt" datastore:"shuffle_gpt"`
 	AgentExecutions     SyncDataUsage `json:"agent_executions" datastore:"agent_executions"`
-	AgentTokens         SyncDataUsage `json:"agent_tokens" datastore:"agent_tokens"`
+
+	LLMTokens   SyncDataUsage `json:"llm_tokens" datastore:"llm_tokens"`
+	AgentTokens SyncDataUsage `json:"agent_tokens" datastore:"agent_tokens"`
 }
 
 type SyncDataUsage struct {
@@ -1449,8 +1461,10 @@ type SyncFeatures struct {
 	ShuffleGPT          SyncData    `json:"shuffle_gpt" datastore:"shuffle_gpt"`
 	Branding            SyncData    `json:"branding" datastore:"branding"`
 	AgentExecutions     SyncData    `json:"agent_executions" datastore:"agent_executions"`
-	AgentTokens         SyncData    `json:"agent_tokens" datastore:"agent_tokens"`
-	Multiplayer         SyncData    `json:"multiplayer" datastore:"multiplayer"`
+
+	LLMTokens   SyncData `json:"llm_tokens" datastore:"llm_tokens"`
+	AgentTokens SyncData `json:"agent_tokens" datastore:"agent_tokens"`
+	Multiplayer SyncData `json:"multiplayer" datastore:"multiplayer"`
 }
 
 type SyncData struct {
@@ -1994,8 +2008,10 @@ type AppAuthenticationStorage struct {
 	ReferenceWorkflow string                `json:"reference_workflow" datastore:"reference_workflow"`
 	AutoDistribute    bool                  `json:"auto_distribute" datastore:"auto_distribute"`
 
-	Environment        string   `json:"environment" datastore:"environment"`               // In case an auth should ALWAYS be mapped to an environment. Can help out with Oauth2 refresh (e.g. running partially on cloud and partially onprem), as well as for KMS. For now ONLY KMS has a frontend.
-	SuborgDistributed  bool     `json:"suborg_distributed" datastore:"suborg_distributed"` // Decides if it's distributed to suborgs or not
+	Environment string `json:"environment" datastore:"environment"` // In case an auth should ALWAYS be mapped to an environment. Can help out with Oauth2 refresh (e.g. running partially on cloud and partially onprem), as well as for KMS. For now ONLY KMS has a frontend.
+
+	SuborgDistributed bool `json:"suborg_distributed" datastore:"suborg_distributed"` // Decides if it's distributed to suborgs or not
+
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 
 	Validation TypeValidation `json:"validation" datastore:"validation"`
@@ -4812,10 +4828,10 @@ type AgentDecision struct {
 	Tool             string         `json:"tool" datastore:"tool"`
 	Category         string         `json:"category" datastore:"category"`
 	Confidence       float64        `json:"confidence" datastore:"confidence"`
-	Runs             string         `json:"runs" datastore:"runs"`
+	Runs             string         `json:"runs,omitempty" datastore:"runs"`
 	Sources          string         `json:"sources,omitempty" datastore:"sources"`
 	Fields           []Valuereplace `json:"fields" datastore:"fields"`
-	Reason           string         `json:"reason" datastore:"reason"`
+	Reason           string         `json:"reason,omitempty" datastore:"reason"`
 	ApprovalRequired bool           `json:"approval_required" datastore:"approval_required"`   // Set TRUE only for destructive/high-risk actions
 	DataFilter       string         `json:"data_filter,omitempty" datastore:"data_filter"`     // DataFilter controls how the raw tool response is reduced before being fed back into the agent.
 	Delay            string         `json:"delay,omitempty" datastore:"delay"`                 // Delay is the number of seconds to wait before executing the next decision.
@@ -4823,35 +4839,6 @@ type AgentDecision struct {
 
 	// Responses
 	RunDetails AgentDecisionRunDetails `json:"run_details" datastore:"run_details"`
-}
-
-// The overall Agent controller
-type AgentOutput struct {
-	Status    string          `json:"status" datastore:"status"`
-	Error     string          `json:"error,omitempty" datastore:"error"`
-	Decisions []AgentDecision `json:"decisions,omitempty" datastore:"decisions"`
-
-	// For easy testing
-	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
-	// For tracking of details parent<->child
-	StartedAt      int64    `json:"started_at,omitempty" datastore:"started_at"`
-	CompletedAt    int64    `json:"completed_at,omitempty" datastore:"completed_at"`
-	ExecutionId    string   `json:"execution_id,omitempty" datastore:"execution_id"`
-	NodeId         string   `json:"node_id,omitempty" datastore:"node_id"`
-	Memory         string   `json:"memory,omitempty" datastore:"memory"`
-	Input          string   `json:"input,omitempty" datastore:"input"`
-	OriginalInput  string   `json:"original_input,omitempty" datastore:"original_input"`
-	AllowedActions []string `json:"allowed_actions,omitempty" datastore:"allowed_actions"`
-	Output         string   `json:"output,omitempty" datastore:"output"`
-
-	// ExecutionMode controls how tool actions are dispatched for this agent run. i.e singul or direct
-	ExecutionMode string `json:"execution_mode,omitempty" datastore:"execution_mode"`
-
-	// Usage tracking for guardrails
-	LLMCallCount     int   `json:"llm_call_count,omitempty" datastore:"llm_call_count"`
-	TotalTokens      int64 `json:"total_tokens,omitempty" datastore:"total_tokens"`
-	PromptTokens     int64 `json:"prompt_tokens,omitempty" datastore:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens,omitempty" datastore:"completion_tokens"`
 }
 
 type HTTPWrapper struct {
@@ -5755,7 +5742,9 @@ type AiCallInfo struct {
 	Caller string
 	OrgID  string
 
-	Resp http.ResponseWriter
+	AuthenticationId string // To choose the Authentication ID to use
+
+	Resp http.ResponseWriter // Used to respond automatically if it exists
 }
 
 type ScreenshotWrapper struct {
@@ -5861,4 +5850,9 @@ type agentResponse struct {
 	Success       bool   `json:"success"`
 	ExecutionId   string `json:"execution_id"`
 	Authorization string `json:"authorization"`
+}
+
+type AgentWorkflowExecutionReturn struct {
+	WorkflowExecution WorkflowExecution `json:"workflow_execution"`
+	Workflow MinimalWorkflow `json:"workflow"`
 }
