@@ -7285,8 +7285,34 @@ func RunAgentFinishVerifier(ctx context.Context, orgId string, executionId strin
 
 // abortAgentExecution is the single, canonical way to terminate an agent run early.
 // Callers must return immediately after this call.
-func abortAgentExecution(ctx context.Context, execution WorkflowExecution, startNode Action, base AgentOutput, abortLabel, reason string, suppressLog ...bool) (Action, error) {
-	agentOutput := base
+func abortAgentExecution(ctx context.Context, execution WorkflowExecution, startNode Action, abortLabel, reason string, suppressLog ...bool) (Action, error) {
+	// Overwrite agent from scratch
+	newExec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
+	if err == nil {
+		execution = *newExec
+	}
+
+	// Problem with base: It can be missing data
+	foundResult := ActionResult{}
+	for _, result := range execution.Results {
+		if result.Action.ID == startNode.ID {
+			foundResult = result
+			break
+		}
+	}
+
+	if foundResult.Action.AppName != "AI Agent" && foundResult.Action.AppName != "Shuffle Agent" {
+		log.Printf("[ERROR] abortAgentExecution: start node %s is not an agent action (app=%s)", startNode.ID, foundResult.Action.AppName)
+		return Action{}, fmt.Errorf("abortAgentExecution: start node %s is not an agent action (app=%s)", startNode.ID, foundResult.Action.AppName)
+	}
+
+	// Check if result contains AgentOutput mapping as string
+	agentOutput := AgentOutput{} 
+	err = json.Unmarshal([]byte(foundResult.Result), &agentOutput)
+	if err != nil {
+		log.Printf("[ERROR] abortAgentExecution: failed to parse AgentOutput from result. This is NOT critical. Details: %s", err)
+	}
+
 	agentOutput.Status = "ABORTED"
 	agentOutput.Error = reason
 	agentOutput.CompletedAt = time.Now().UnixMilli()
@@ -7301,11 +7327,6 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 			agentOutput.Decisions[len(agentOutput.Decisions)-1].Reason = reason
 			agentOutput.Decisions[len(agentOutput.Decisions)-1].RunDetails.Status = "FINISHED"
 		}
-	}
-
-	// FIXME: Where do we find original_input?
-	// What if it doesn't exist?
-	if len(agentOutput.OriginalInput) == 0 {
 	}
 
 	if !lastDecisionIsFinish {
@@ -7373,7 +7394,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		execution.Results = append(execution.Results, abortResult)
 	}
 
-	go sendAgentActionSelfRequest("SUCCESS", execution, abortResult)
+	go sendAgentActionSelfRequest("FAILURE", execution, abortResult)
 
 	return startNode, errors.New(reason)
 }
@@ -7692,6 +7713,8 @@ When sending body to the post_control_mouse_and_keyboard function, the following
   ]
 }
 '''
+
+When choosing a hostname, NEVER guess which host. When available, ALWAYS use one that recently checked in or is active.
 
 ALWAYS validate if the action was successful by checking the output of the operations before AND after with screenshots or terminal input/output. If it was not successful, you must try again with a different approach.
 	`
@@ -8032,14 +8055,6 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	}
 
 	// Validate On-Prem Configuration immediately
-	if project.Environment != "cloud" {
-		if os.Getenv("AI_MODEL") == "" && os.Getenv("OPENAI_MODEL") == "" {
-			err := errors.New("AI Configuration Error: AI_MODEL or OPENAI_MODEL environment variable must be set for On-Premise AI Agent execution.")
-			log.Printf("[ERROR] %v", err)
-
-			return abortAgentExecution(ctx, execution, startNode, AgentOutput{}, "missing_onprem_ai_config", err.Error())
-		}
-	}
 
 	systemMessage := "" // Handled further down now
 	userMessage := ""
@@ -8117,7 +8132,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			marshalledAction, err := json.Marshal(repeaterNode)
 			if err != nil {
 				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Failed marshaling shuffle-tools request during LLM setup: %s", execution.ExecutionId, execution.Workflow.OrgId, err)
-				//return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
+				//return abortAgentExecution(ctx, execution, startNode, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 			} else {
 				fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s&parent_node=%s", backendUrl, repeaterNode.AppID, execution.ExecutionId, execution.Authorization, startNode.ID)
 				client := GetExternalClient(fullUrl)
@@ -8131,7 +8146,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 				if err != nil {
 					log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Failed creating shuffle-tools request during LLM setup: %s", execution.ExecutionId, execution.Workflow.OrgId, err)
-					//return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
+					//return abortAgentExecution(ctx, execution, startNode, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
 				} else {
 
 					// Just a request tree where any failure = skip
@@ -8441,6 +8456,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	marshalledDecisions := []byte{}
 	relevantDecisions := []AgentDecision{}
+
+	historyImagesIncluded := []string{}
 	if createNextActions == true {
 		// Sets the user message to the current value
 		for _, result := range execution.Results {
@@ -8501,7 +8518,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					IncrementCacheDump(ctx, execution.Workflow.OrgId, "agent_max_loops_hit", 1)
 				}()
 
-				return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "max_agent_loops_reached", fmt.Sprintf("Agent reached maximum execution loops limit (%d) without finishing.", newLoopCount))
+				return abortAgentExecution(ctx, execution, startNode, "max_agent_loops_reached", fmt.Sprintf("Agent reached maximum execution loops limit (%d) without finishing.", newLoopCount))
 			}
 
 			// Check for existing RUNNING/WAITING ask decisions - if found, return existing state without creating new decisions
@@ -8614,6 +8631,25 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					}
 				}
 
+				// Only find the LAST image and use that
+				//historyImagesIncluded = append(historyImagesIncluded, image)
+				if mappedDecision.Action == "post_take_screenshot" && len(mappedDecision.RunDetails.RawResponse) > 0 { 
+					// 1. HTTP response -> .Result
+					// 2. SingleResult -> stats == 200 => body
+					httpResp := HTTPOutput{} 
+					err = json.Unmarshal([]byte(mappedDecision.RunDetails.RawResponse), &httpResp)
+
+					if parsedBody, ok := httpResp.Body.(string); ok {
+						// Map it to SingleResult 
+						foundResult := SingleResult{}
+						err = json.Unmarshal([]byte(parsedBody), &foundResult)
+						if len(foundResult.Result) > 0 { 
+						}
+					} else {
+						log.Printf("[ERROR] Screenshot result body is not a string for decision at index %d", mappedDecision.I)
+					}
+				}
+
 				// Count how many times this exact action+tool combination has failed.
 				if mappedDecision.RunDetails.Status == "FAILURE" {
 					runsForThisDecision := 0
@@ -8685,7 +8721,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				// HARD ABORT — code-side enforcement regardless of LLM behavior.
 				const maxAgentFailureRounds = 4
 				if maxFailuresForOneTool >= maxAgentFailureRounds {
-					return abortAgentExecution(ctx, execution, startNode, oldAgentOutput, "hard_abort_tool_failures", fmt.Sprintf("Agent hard-aborted: the same tool failed %d times. Fix the app authentication/version and retry.", maxFailuresForOneTool))
+					return abortAgentExecution(ctx, execution, startNode, "hard_abort_tool_failures", fmt.Sprintf("Agent hard-aborted: the same tool failed %d times. Fix the app authentication/version and retry.", maxFailuresForOneTool))
 				}
 
 				// Warn the LLM once the retry limit is almost exhausted for a specific tool.
@@ -8863,6 +8899,7 @@ data_filter:
   }
 ]`, enableQuestionsString)
 
+
 	systemMessage = filterSystemPromptByTemplate(template, systemMessage)
 
 	// If a template is set, get secondary system rules + extra context.
@@ -8916,7 +8953,7 @@ data_filter:
 	if skipAgentWait == "true" {
 	} else if len(userMessage) == 0 {
 		log.Printf("[ERROR][%s] AI Agent: No user message/input found for action %s", execution.ExecutionId, startNode.ID)
-		return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_user_message", "No user message/input found for AI Agent start")
+		return abortAgentExecution(ctx, execution, startNode, "no_user_message", "No user message/input found for AI Agent start")
 	}
 
 	// Track who initiated this agent (for audit trail)
@@ -9023,10 +9060,35 @@ data_filter:
 	}
 
 	if len(marshalledDecisions) > 4 {
-		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+		historyString := fmt.Sprintf("HISTORY:\n%s", string(marshalledDecisions))
+		historyObject := openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,
-			Content: fmt.Sprintf("HISTORY:\n%s", string(marshalledDecisions)),
-		})
+			Content: historyString,
+		}
+
+		if len(historyImagesIncluded) > 0 { 
+			historyObject = openai.ChatCompletionMessage{
+				Role: openai.ChatMessageRoleUser,
+				MultiContent: []openai.ChatMessagePart{
+					openai.ChatMessagePart{
+						Type: openai.ChatMessagePartTypeText,
+						Text: historyString,
+					},
+				},
+			}
+
+			for _, imageIncluded := range historyImagesIncluded {
+				historyObject.MultiContent = append(historyObject.MultiContent, openai.ChatMessagePart{
+					Type: openai.ChatMessagePartTypeImageURL,
+					ImageURL: &openai.ChatMessageImageURL{
+						URL:    imageIncluded,
+						Detail: imageDetail,
+					},
+				})
+			}
+		}
+		
+		completionRequest.Messages = append(completionRequest.Messages, historyObject)
 	}
 
 	/*
@@ -9092,9 +9154,10 @@ data_filter:
 	}
 
 	// Append a fresh timestamp as the very last message so we will hit the cache without ruining prefix.
+	currentTime := time.Now()
 	completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 		Role:    openai.ChatMessageRoleUser,
-		Content: fmt.Sprintf("Current time: %s", time.Now().Format(time.RFC3339)),
+		Content: fmt.Sprintf("Current time: %s (%d)", currentTime.Format(time.RFC3339), currentTime.Unix()),
 	})
 
 	// Let's try to make the prompt cache key sticky
@@ -9115,14 +9178,14 @@ data_filter:
 
 	if err != nil {
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling input for action %s: %s", execution.ExecutionId, startNode.ID, err)
-		return abortAgentExecution(ctx, execution, startNode, agentOutput, "marshal_request_body_failed", fmt.Sprintf("Failed to start AI Agent (4): %s", err.Error()))
+		return abortAgentExecution(ctx, execution, startNode, "marshal_request_body_failed", fmt.Sprintf("Failed to start AI Agent (4): %s", err.Error()))
 	}
 
 	if !json.Valid(initialAgentRequestBody) {
 		// initialAgentRequestBody, err = json.Marshal(extendedReq) // use this line instead if ExtendedRequest is re-enabled above
 		initialAgentRequestBody, err = json.Marshal(completionRequest)
 		if err != nil {
-			return abortAgentExecution(ctx, execution, startNode, agentOutput, "marshal_request_body_fallback_failed", fmt.Sprintf("Failed to start AI Agent (4b): %s", err.Error()))
+			return abortAgentExecution(ctx, execution, startNode, "marshal_request_body_fallback_failed", fmt.Sprintf("Failed to start AI Agent (4b): %s", err.Error()))
 		}
 
 		if !json.Valid(initialAgentRequestBody) {
@@ -9198,7 +9261,7 @@ data_filter:
 					_ = SetCache(ctx, throttleKey, []byte("1"), 2*60)
 					go sendAITokenLimitAlert(ctx, execution, billingOrg, tokenLimit, monthlyTokensUsed)
 				}
-				return abortAgentExecution(ctx, execution, startNode, agentOutput, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit), alreadyThrottled)
+				return abortAgentExecution(ctx, execution, startNode, "token_limit_exceeded", fmt.Sprintf("AI Token limit reached: %d + %d > %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyTokensUsed, estimatedCurrentTokens, tokenLimit), alreadyThrottled)
 			}
 		}
 	}
@@ -9231,7 +9294,7 @@ data_filter:
 
 		if err != nil {
 			log.Printf("[ERROR][%s] AI Agent: Failed running AI query for action %s: %s", execution.ExecutionId, startNode.ID, err)
-			return abortAgentExecution(ctx, execution, startNode, agentOutput, "run_ai_query_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
+			return abortAgentExecution(ctx, execution, startNode, "run_ai_query_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 		}
 
 		if recorder != nil {
@@ -9315,7 +9378,7 @@ data_filter:
 		marshalledAction, err := json.Marshal(aiNode)
 		if err != nil {
 			log.Printf("[ERROR][%s] AI Agent: Failed marshalling action for AI Agent (first agent request): %s", execution.ExecutionId, err)
-			return abortAgentExecution(ctx, execution, startNode, agentOutput, "marshal_ai_action_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
+			return abortAgentExecution(ctx, execution, startNode, "marshal_ai_action_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 		}
 
 		fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s&parent_node=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization, startNode.ID)
@@ -9348,7 +9411,7 @@ data_filter:
 
 			if err != nil {
 				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Failed creating request during LLM setup: %s", execution.ExecutionId, execution.Workflow.OrgId, err)
-				return abortAgentExecution(ctx, execution, startNode, agentOutput, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
+				return abortAgentExecution(ctx, execution, startNode, "llm_request_build_failed", fmt.Sprintf("Failed to start AI Agent (7): %s", err.Error()))
 			}
 
 			// Generate a one-time-use token so PrepareSingleAction knows this request originated from a legitimate agent execution and is allowed to inject the system AI credentials.
@@ -9371,7 +9434,7 @@ data_filter:
 					return startNode, nil
 				} else {
 					log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error=%s", execution.ExecutionId, execution.Workflow.OrgId, strings.Replace(err.Error(), `"`, `\"`, -1))
-					return abortAgentExecution(ctx, execution, startNode, agentOutput, "llm_http_failure", fmt.Sprintf("LLM call failed after %ds: %s", int(client.Timeout.Seconds()), err.Error()))
+					return abortAgentExecution(ctx, execution, startNode, "llm_http_failure", fmt.Sprintf("LLM call failed after %ds: %s", int(client.Timeout.Seconds()), err.Error()))
 				}
 			}
 
@@ -9391,7 +9454,7 @@ data_filter:
 			body, err = ioutil.ReadAll(newresp.Body)
 			if err != nil {
 				log.Printf("[ERROR][%s] AI Agent: Failed reading response body from LLM: %s", execution.ExecutionId, err)
-				return abortAgentExecution(ctx, execution, startNode, agentOutput, "llm_body_read_failed", fmt.Sprintf("Failed to read LLM response body: %s", err.Error()))
+				return abortAgentExecution(ctx, execution, startNode, "llm_body_read_failed", fmt.Sprintf("Failed to read LLM response body: %s", err.Error()))
 			}
 
 			llmStatusCode = newresp.StatusCode
@@ -9511,7 +9574,7 @@ data_filter:
 			if err != nil {
 				// resultMapping.Result is not a valid HTTPOutput wrapper — this usually means the Shuffle HTTP action itself failed (timeout,  or something like connection refused etc) and returned a bare error string instead of its normal JSON response.
 				log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s error_type=http_wrapper_parse_error unmarshal_err=%s raw_response=%s", execution.ExecutionId, execution.Workflow.OrgId, err, string(resultMapping.Result))
-				return abortAgentExecution(ctx, execution, startNode, agentOutput, "llm_response_unmarshal_failed", fmt.Sprintf("LLM HTTP wrapper parse error: %s", err))
+				return abortAgentExecution(ctx, execution, startNode, "llm_response_unmarshal_failed", fmt.Sprintf("LLM HTTP wrapper parse error: %s", err))
 			}
 
 			if outputMap.Status != 200 {
@@ -9535,7 +9598,7 @@ data_filter:
 				bodyString, err = json.Marshal(bodyMap)
 				if err != nil {
 					log.Printf("[ERROR] AI Agent: Failed marshalling body to string in AI Agent response: %s", err)
-					return abortAgentExecution(ctx, execution, startNode, agentOutput, "llm_body_marshal_failed", fmt.Sprintf("Failed to start AI Agent (3): %s", err.Error()))
+					return abortAgentExecution(ctx, execution, startNode, "llm_body_marshal_failed", fmt.Sprintf("Failed to start AI Agent (3): %s", err.Error()))
 				}
 			}
 
@@ -9576,7 +9639,7 @@ data_filter:
 						log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
 					}
 
-					return abortAgentExecution(ctx, execution, startNode, agentOutput, abortReason, abortMessage)
+					return abortAgentExecution(ctx, execution, startNode, abortReason, abortMessage)
 				} else {
 					log.Printf("[ERROR][%s] AI Agent: No choices, nor error found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
 					resultMapping.Status = "FAILURE"
@@ -10102,7 +10165,7 @@ data_filter:
 
 		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
 			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent run.", execution.ExecutionId)
-			return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions, but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. \n\nFailed Decision (debug): \n%s", decisionString))
+			return abortAgentExecution(ctx, execution, startNode, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions, but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. \n\nFailed Decision (debug): \n%s", decisionString))
 		}
 
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
@@ -10167,7 +10230,7 @@ data_filter:
 	} else {
 		// LLM returned an empty result body — this is a failure
 		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Empty result body from LLM response (status %d). Aborting agent.", execution.ExecutionId, execution.Workflow.OrgId, llmStatusCode)
-		return abortAgentExecution(ctx, execution, startNode, agentOutput, "empty_llm_result", fmt.Sprintf("LLM returned empty response body with HTTP status %d", llmStatusCode))
+		return abortAgentExecution(ctx, execution, startNode, "empty_llm_result", fmt.Sprintf("LLM returned empty response body with HTTP status %d", llmStatusCode))
 	}
 
 	if memorizationEngine == "shuffle_db" {

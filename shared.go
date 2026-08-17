@@ -18392,7 +18392,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							}
 						}
 
-						go abortAgentExecution(ctx, *foundParentExec, startNode, oldAgentOutput, "llm_received_failure", foundError)
+						go abortAgentExecution(ctx, *foundParentExec, startNode, "llm_received_failure", foundError)
 					}
 				}
 
