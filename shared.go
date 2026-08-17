@@ -131,6 +131,8 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"https://singul.io",
 			"https://*.shutdown.no",
 			"https://shutdown.no",
+			"https://*.shuffle.security",
+			"https://shuffle.security",
 
 			// Local testing
 			"http://localhost:3002",
@@ -16751,6 +16753,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
+			newCookie.Domain = ".shuffle.security"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
 			newCookie.Domain = ".shuffler.io"
 			http.SetCookie(resp, newCookie)
 		}
@@ -16820,6 +16826,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 			newCookie.Name = "__session"
 			newCookie.Domain = ".shutdown.no"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			newCookie.Domain = ".shuffle.security"
 			http.SetCookie(resp, newCookie)
 		}
 
