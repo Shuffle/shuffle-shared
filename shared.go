@@ -37704,6 +37704,20 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		return nil
 
+	case "set_start_node":
+		startNodeID := op.ID
+		if resolved, ok := tempIDMap[op.ID]; ok {
+			startNodeID = resolved
+		}
+
+		dataBytes, _ := json.Marshal(map[string]bool{"isStartNode": true})
+		return []StreamWorkflowOperation{{
+			Item: "node",
+			Type: "configure",
+			ID:   startNodeID,
+			Data: dataBytes,
+		}}
+
 	default:
 		return nil
 	}
@@ -37785,10 +37799,19 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 
 	// ====== WORKFLOW OPERATIONS ======
 	case "set_start_node":
+		oldStart := wf.Start
+		newStart := op.ID
 		if realID, exists := tempIDMap[op.ID]; exists {
-			wf.Start = realID
-		} else {
-			wf.Start = op.ID
+			newStart = realID
+		}
+		wf.Start = newStart
+
+		for i := range wf.Actions {
+			if wf.Actions[i].ID == oldStart {
+				wf.Actions[i].IsStartNode = false
+			} else if wf.Actions[i].ID == newStart {
+				wf.Actions[i].IsStartNode = true
+			}
 		}
 		return nil
 
