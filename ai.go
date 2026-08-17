@@ -7654,21 +7654,23 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
-func getTemplateContext(ctx context.Context, template string, execution WorkflowExecution) (string, string, error) {
+func getTemplateContext(ctx context.Context, template string, execution WorkflowExecution) (string, string, []string, error) {
+	// FIXME: Handle dynamic templates here too, based on user input
+
 	switch template {
 	case "workflow-edit":
 		return buildWorkflowEditContext(ctx, execution)
 	case "computer-use":
 		return buildComputerUseContext(ctx, execution)
 	default:
-		return "", "", nil
+		return "", "", []string{}, nil
 	}
 }
 
-func buildComputerUseContext(ctx context.Context, execution WorkflowExecution) (string, string, error) {
+func buildComputerUseContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
 	systemRule := `You are a computer use agent that can execute commands to control a computer. Your goal is to use the Terminal, Keyboard, Mouse and Screenshots to perform the task the user intends in the best possible way. Make assumptions for what they most likely want to perform, and continue it is done.
 
-Use the 'post_control_mouse_and_keyboard' function for keyboard & mouse control if it is available. You can chain together escaped JSON commands in the the "actions" array using the operations detailed below.
+Use the 'post_control_mouse_and_keyboard' function for keyboard & mouse control if it is available. You can chain together escaped JSON commands in the the "actions" array using the operations detailed below. If an action takes more than 30 seconds, it will return an execution_id and authorization key to be used for polling results. When polling, always add a 30 second delay. 
 
 Params for each keyboard & mouse operation: 
 1. keyboard.press: {\"op\":\"keyboard.press\",\"params\":{\"key\":75}}
@@ -7691,13 +7693,18 @@ When sending body to the post_control_mouse_and_keyboard function, the following
 }
 '''
 
-Prioritise terminal commands before screenshots. IF an action takes more than 30 seconds, it will return an execution_id and authorization key to be used for polling results. ALWAYS validate if the action was successful by checking the output of the or a before and after screenshot. If it was not successful, you must try again with a different approach.
+ALWAYS validate if the action was successful by checking the output of the operations before AND after with screenshots or terminal input/output. If it was not successful, you must try again with a different approach.
 	`
 
-	return systemRule, "", nil
+	templateContext := ""
+	requiredApps := []string{
+		"app:48a954b9440b3913b8a2620e57b94a75:shuffle_host_monitors",
+	}
+
+	return systemRule, templateContext, requiredApps, nil
 }
 
-func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) (string, string, error) {
+func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
 	targetWorkflowId := execution.ExecutionArgument
 
 	user := User{
@@ -7711,7 +7718,7 @@ func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) 
 	appsJson, err := json.Marshal(appSummaries)
 	if err != nil {
 		log.Printf("[WARNING] buildWorkflowEditContext: failed marshaling app summaries for org %s: %s", execution.ExecutionOrg, err)
-		return "", "", fmt.Errorf("failed to marshal app summaries: %w", err)
+		return "", "", []string{}, fmt.Errorf("failed to marshal app summaries: %w", err)
 	}
 
 	// What we tell the agent about its workflow_id
@@ -7910,7 +7917,12 @@ CRITICAL RULES FOR THE AGENT
 %s
 <End of Available Apps>`, workflowIdLine, string(appsJson))
 
-	return systemRule, templateContext, nil
+	requiredApps := []string{
+		"app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps",
+		"app:de4ef2287bd41b9d5563e39989643ee6:shuffle_workflows_builder",
+	}
+
+	return systemRule, templateContext, requiredApps, nil
 }
 
 func getWorkflowEditPromptRemovals() []string {
@@ -8856,8 +8868,9 @@ data_filter:
 	// If a template is set, get secondary system rules + extra context.
 	templateSystemRule := ""
 	templateContext := ""
+	requiredApps := []string{}
 	if len(template) > 0 {
-		templateSystemRule, templateContext, err = getTemplateContext(ctx, template, execution)
+		templateSystemRule, templateContext, requiredApps, err = getTemplateContext(ctx, template, execution)
 		if err != nil {
 			log.Printf("[ERROR] Failed to get template context: %v", err)
 		}
@@ -8873,6 +8886,18 @@ data_filter:
 
 	if foundReasoning == "minimal" || foundReasoning == "low" || foundReasoning == "medium" || foundReasoning == "high" {
 		agentReasoningEffort = foundReasoning
+	}
+
+	added := false
+	for _, requiredApp := range requiredApps { 
+		if !strings.Contains(allowedActionString, requiredApp) {
+			added = true
+			allowedActionString += "," + requiredApp 
+		}
+	}
+
+	if added {
+		allowedActionString = strings.TrimPrefix(allowedActionString, ",")
 	}
 
 	agentOutput := AgentOutput{
@@ -8950,7 +8975,7 @@ data_filter:
 	if len(templateContext) > 0 {
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 			//Role:    openai.ChatMessageRoleUser,
-			Role:    openai.ChatMessageRoleSystem,
+			Role:    openai.ChatMessageRoleUser,
 			Content: "SKILL CONTEXT:\n" + templateContext,
 		})
 	}
