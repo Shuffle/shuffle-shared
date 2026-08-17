@@ -4299,6 +4299,7 @@ type SingleResult struct {
 	Success       bool           `json:"success"`
 	Result        string         `json:"result"`
 	Id            string         `json:"id"`
+	ExecutionId   string         `json:"execution_id"`
 	Authorization string         `json:"authorization"`
 	Errors        []string       `json:"errors"`
 	Validation    TypeValidation `json:"validation"`
@@ -5854,5 +5855,5 @@ type agentResponse struct {
 
 type AgentWorkflowExecutionReturn struct {
 	WorkflowExecution WorkflowExecution `json:"workflow_execution"`
-	Workflow MinimalWorkflow `json:"workflow"`
+	Workflow          MinimalWorkflow   `json:"workflow"`
 }

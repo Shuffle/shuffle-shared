@@ -22270,6 +22270,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	cnt := 0
 	returnBody := SingleResult{
 		Success:       true,
+		ExecutionId:            workflowExecution.ExecutionId,
 		Id:            workflowExecution.ExecutionId,
 		Authorization: workflowExecution.Authorization,
 		Result:        "",
