@@ -20358,7 +20358,8 @@ func InitOpensearchIndexes() {
 						"strings_as_keywords": {
 							"match_mapping_type": "string",
 							"mapping": {
-								"type": "keyword"
+								"type": "keyword",
+								"ignore_above": 256
 							}
 						}
 					}
@@ -20601,7 +20602,7 @@ func opensearchMappingsFor(baseIndex string) map[string]interface{} {
 			{
 				"strings_as_keywords": map[string]interface{}{
 					"match_mapping_type": "string",
-					"mapping":            map[string]interface{}{"type": "keyword"},
+					"mapping":            map[string]interface{}{"type": "keyword", "ignore_above": 256},
 				},
 			},
 		},
