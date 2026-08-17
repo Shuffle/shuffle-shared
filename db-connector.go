@@ -2446,6 +2446,19 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &env)
 			if err == nil {
+
+				timenow := time.Now().Unix()
+				if env.SensorGroup { 
+					for sensorIndex, _ := range env.SensorHosts {
+						sensor := env.SensorHosts[sensorIndex]
+							
+						env.SensorHosts[sensorIndex].Active = false 
+						if sensor.Checkin > 0 && timenow-sensor.Checkin < 300 {
+							env.SensorHosts[sensorIndex].Active = true
+						}
+					}
+				}
+
 				return env, nil
 			}
 		} else {
@@ -2566,8 +2579,8 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, env); err != nil {
+			log.Printf("[ERROR] Problem in environment loading of %s", id)
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[INFO] Error in environment loading of %s", id)
 				err = nil
 			} else {
 				return env, err
@@ -2575,7 +2588,17 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 		}
 	}
 
-	//log.Printf("[DEBUG] Got hit: %s", env)
+	timenow := time.Now().Unix()
+	if env.SensorGroup { 
+		for sensorIndex, _ := range env.SensorHosts {
+			sensor := env.SensorHosts[sensorIndex]
+				
+			env.SensorHosts[sensorIndex].Active = false 
+			if sensor.Checkin > 0 && timenow-sensor.Checkin < 300 {
+				env.SensorHosts[sensorIndex].Active = true
+			}
+		}
+	}
 
 	if project.CacheDb {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
@@ -6414,6 +6437,20 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 				//	log.Printf("[DEBUG] Got %d environments from cache for orgId '%s'", len(environments), orgId)
 				//}
 
+				timenow := time.Now().Unix()
+				for envIndex, env := range environments {
+					if env.SensorGroup { 
+						for sensorIndex, _ := range env.SensorHosts {
+							sensor := env.SensorHosts[sensorIndex]
+								
+							environments[envIndex].SensorHosts[sensorIndex].Active = false 
+							if sensor.Checkin > 0 && timenow-sensor.Checkin < 300 {
+								environments[envIndex].SensorHosts[sensorIndex].Active = true
+							}
+						}
+					}
+				}
+
 				return environments, nil
 			}
 		} else {
@@ -6584,6 +6621,18 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 	// Fixing environment return search problems
 	timenow := time.Now().Unix()
 	for envIndex, env := range environments {
+
+		if env.SensorGroup { 
+			for sensorIndex, _ := range env.SensorHosts {
+				sensor := env.SensorHosts[sensorIndex]
+					
+				environments[envIndex].SensorHosts[sensorIndex].Active = false 
+				if sensor.Checkin > 0 && timenow-sensor.Checkin < 300 {
+					environments[envIndex].SensorHosts[sensorIndex].Active = true
+				}
+			}
+		}
+
 		if env.Name == "Cloud" {
 			environments[envIndex].Type = "cloud"
 			environments[envIndex].RunType = "cloud"

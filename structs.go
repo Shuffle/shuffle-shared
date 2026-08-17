@@ -4299,6 +4299,7 @@ type SingleResult struct {
 	Success       bool           `json:"success"`
 	Result        string         `json:"result"`
 	Id            string         `json:"id"`
+	ExecutionId   string         `json:"execution_id"`
 	Authorization string         `json:"authorization"`
 	Errors        []string       `json:"errors"`
 	Validation    TypeValidation `json:"validation"`
@@ -5446,6 +5447,7 @@ type Parsed struct {
 type SensorDetails struct {
 	SensorMode bool   `json:"sensor_mode,omitempty" datastore:"sensor_mode"`
 	Checkin    int64  `json:"checkin" datastore:"checkin"`
+	Active     bool   `json:"active,omitempty" datastore:"active"`
 	Uuid       string `json:"uuid" datastore:"uuid"`
 
 	User     string `json:"user,omitempty" datastore:"user"`
@@ -5469,7 +5471,8 @@ type SensorDetails struct {
 
 // Related to Orborus Agent Mode. Used locally.
 type SensorMode struct {
-	Enabled bool `json:"enabled" datastore:"enabled"`
+	Enabled  bool   `json:"enabled" datastore:"enabled"`
+	Hostname string `json:"hostname" datastore:"hostname"`
 
 	// Compliance
 	ProcessListEnabled  string `json:"process_list_enabled" datastore:"process_list_enabled"`
@@ -5854,5 +5857,5 @@ type agentResponse struct {
 
 type AgentWorkflowExecutionReturn struct {
 	WorkflowExecution WorkflowExecution `json:"workflow_execution"`
-	Workflow MinimalWorkflow `json:"workflow"`
+	Workflow          MinimalWorkflow   `json:"workflow"`
 }

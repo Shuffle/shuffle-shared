@@ -22270,6 +22270,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	cnt := 0
 	returnBody := SingleResult{
 		Success:       true,
+		ExecutionId:            workflowExecution.ExecutionId,
 		Id:            workflowExecution.ExecutionId,
 		Authorization: workflowExecution.Authorization,
 		Result:        "",
@@ -36766,154 +36767,6 @@ func GetWorkflowMinimal(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(responseData)
 }
 
-func AgentWorkflowEditor(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	ctx := GetContext(request)
-	user, userErr := HandleApiAuthentication(resp, request)
-	if userErr != nil {
-		log.Printf("[AUDIT] Api authentication failed in AgentWorkflowEditor: %s", userErr)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		log.Printf("[WARNING] Failed reading body in AgentWorkflowEditor: %s", err)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	var req MCPRequest 
-	err = json.Unmarshal(body, &req)
-
-	if err != nil || len(strings.TrimSpace(req.Params.Input.Text)) == 0 {
-		log.Printf("[WARNING] Bad body in AgentWorkflowEditor. Error: %v, Body: %s", err, string(body))
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "input field is required"}`))
-		return
-	}
-
-	// Auth check: verify user has access to the target workflow before kicking off the agent
-	workflow, err := GetWorkflow(ctx, req.Params.Input.WorkflowId)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting workflow %s in AgentWorkflowEditor: %s", req.Params.Input.WorkflowId, err)
-		resp.WriteHeader(404)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
-		return
-	}
-
-	if user.Id != workflow.Owner && workflow.OrgId != user.ActiveOrg.Id {
-		log.Printf("[WARNING] User %s (%s) unauthorized to edit workflow %s (owner: %s, org: %s)", user.Username, user.Id, req.Params.Input.WorkflowId, workflow.Owner, workflow.OrgId)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Unauthorized"}`))
-		return
-	}
-
-	// All context building (workflow state, app actions, rules) is handled inside
-	// buildWorkflowEditContext which is called by getTemplateContext inside HandleAiAgentExecutionStart
-	toolApps := "app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps,app:de4ef2287bd41b9d5563e39989643ee6:shuffle_workflows_builder"
-
-	action := Action{
-		ID:             uuid.NewV4().String(),
-		Name:           "agent",
-		AppName:        "AI Agent",
-		AppID:          "shuffle_agent",
-		AppVersion:     "1.0.0",
-		Environment:    "cloud",
-		Parameters: []WorkflowAppActionParameter{
-			{
-				Name:  "input",
-				Value: req.Params.Input.Text,
-			},
-			{
-				Name:  "action",
-				Value: toolApps,
-			},
-			{
-				Name:  "template",
-				Value: "workflow-edit",
-			},
-			{
-				Name: "execution_mode",
-				Value: "direct",
-			},
-		},
-	}
-
-	workflowId := uuid.NewV4().String()
-	action.SourceWorkflow = workflowId
-
-	exec := WorkflowExecution{
-		Workflow: Workflow{
-			ID: workflowId,
-			Actions: []Action{
-				action,
-			},
-			OrgId:     user.ActiveOrg.Id,
-			Owner:     user.Username,
-			UpdatedBy: user.Username,
-			Start:     action.ID,
-		},
-		Type:             "AGENT",
-		Start:            action.ID,
-		Status:           "EXECUTING",
-		WorkflowId:       workflowId,
-		ExecutionId:      workflowId,
-		ExecutionOrg:     user.ActiveOrg.Id,
-		StartedAt:        int64(time.Now().Unix()),
-		Authorization:    uuid.NewV4().String(),
-		// Store the target workflow_id here so buildWorkflowEditContext can fetch it
-		ExecutionArgument: req.Params.Input.WorkflowId,
-	}
-
-	SetWorkflowExecution(ctx, exec, true)
-
-	log.Printf("[INFO] AgentWorkflowEditor: calling HandleAiAgentExecutionStart for user %s (%s), target_workflow_id=%s, execution_id=%s", user.Username, user.Id, req.Params.Input.WorkflowId, exec.ExecutionId)
-
-	returnAction, err := HandleAiAgentExecutionStart(exec, action, false, "AgentWorkflowEditor")
-	if err != nil {
-		log.Printf("[ERROR] HandleAiAgentExecutionStart failed in AgentWorkflowEditor: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err.Error())))
-		return
-	}
-
-	// Fetch the updated execution to return
-	newExec, err := GetWorkflowExecution(ctx, exec.ExecutionId)
-	if err != nil {
-		log.Printf("[ERROR] Failed to get workflow execution after agent start in AgentWorkflowEditor: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	_ = returnAction
-
-	respObj := agentResponse{
-		Success:       true,
-		ExecutionId:   newExec.ExecutionId,
-		Authorization: newExec.Authorization,
-	}
-
-	responseData, err := json.Marshal(respObj)
-	if err != nil {
-		log.Printf("[ERROR] Failed marshalling execution response in AgentWorkflowEditor: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	resp.Header().Set("Content-Type", "application/json")
-	resp.WriteHeader(200)
-	resp.Write(responseData)
-}
-
 func generateNodeID() string {
 	return uuid.NewV4().String()
 }
@@ -37704,6 +37557,20 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		return nil
 
+	case "set_start_node":
+		startNodeID := op.ID
+		if resolved, ok := tempIDMap[op.ID]; ok {
+			startNodeID = resolved
+		}
+
+		dataBytes, _ := json.Marshal(map[string]bool{"isStartNode": true})
+		return []StreamWorkflowOperation{{
+			Item: "node",
+			Type: "configure",
+			ID:   startNodeID,
+			Data: dataBytes,
+		}}
+
 	default:
 		return nil
 	}
@@ -37785,10 +37652,19 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 
 	// ====== WORKFLOW OPERATIONS ======
 	case "set_start_node":
+		oldStart := wf.Start
+		newStart := op.ID
 		if realID, exists := tempIDMap[op.ID]; exists {
-			wf.Start = realID
-		} else {
-			wf.Start = op.ID
+			newStart = realID
+		}
+		wf.Start = newStart
+
+		for i := range wf.Actions {
+			if wf.Actions[i].ID == oldStart {
+				wf.Actions[i].IsStartNode = false
+			} else if wf.Actions[i].ID == newStart {
+				wf.Actions[i].IsStartNode = true
+			}
 		}
 		return nil
 

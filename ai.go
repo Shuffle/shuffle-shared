@@ -8,11 +8,16 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"unicode/utf8"
 	"errors"
 	"fmt"
+	openai "github.com/sashabaranov/go-openai"
+	uuid "github.com/satori/go.uuid"
+	"google.golang.org/api/customsearch/v1"
+	option "google.golang.org/api/option"
+	"io"
 	"io/ioutil"
 	"log"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -25,12 +30,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"math"
-	"io"
-	openai "github.com/sashabaranov/go-openai"
-	uuid "github.com/satori/go.uuid"
-	"google.golang.org/api/customsearch/v1"
-	option "google.golang.org/api/option"
+	"unicode/utf8"
 
 	"github.com/frikky/kin-openapi/openapi3"
 	"github.com/frikky/schemaless"
@@ -46,16 +46,16 @@ import (
 var standalone bool
 
 // var model = "gpt-5-mini"
-//var model = "gpt-5-mini"
-var model = "google/gemini-3.6-flash"
-//var model = "gpt-5.4-nano"
-//var model = "gpt-5.2-codex"
+// var model = "gpt-5-mini"
+// var model = "gpt-5.4-nano"
+// var model = "gpt-5.2-codex"
+var model = "google/gemini-3.7-flash"
 
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
 var docsVectorStoreID = os.Getenv("OPENAI_DOCS_VS_ID")
-var skipAgentWait = os.Getenv("SHUFFLE_SKIP_AGENT_WAIT") 
-var agentRunLocation = os.Getenv("SHUFFLE_AGENT_RUN_LOCATION") 
+var skipAgentWait = os.Getenv("SHUFFLE_SKIP_AGENT_WAIT")
+var agentRunLocation = os.Getenv("SHUFFLE_AGENT_RUN_LOCATION")
 var assistantModel = model
 
 var decisionParameterName = "shuffle_agent_decision_id"
@@ -72,15 +72,16 @@ type AgentOutput struct {
 	// For easy testing
 	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
 	// For tracking of details parent<->child
-	StartedAt      int64                           `json:"started_at,omitempty" datastore:"started_at"`
-	CompletedAt    int64                           `json:"completed_at,omitempty" datastore:"completed_at"`
-	ExecutionId    string                          `json:"execution_id,omitempty" datastore:"execution_id"`
-	NodeId         string                          `json:"node_id,omitempty" datastore:"node_id"`
-	Memory         string                          `json:"memory,omitempty" datastore:"memory"`
-	Input          string                          `json:"input,omitempty" datastore:"input"`
-	OriginalInput  string                          `json:"original_input,omitempty" datastore:"original_input"`
-	AllowedActions []string                        `json:"allowed_actions,omitempty" datastore:"allowed_actions"`
-	Output         string                          `json:"output,omitempty" datastore:"output"`
+	StartedAt      int64    `json:"started_at,omitempty" datastore:"started_at"`
+	CompletedAt    int64    `json:"completed_at,omitempty" datastore:"completed_at"`
+	ExecutionId    string   `json:"execution_id,omitempty" datastore:"execution_id"`
+	NodeId         string   `json:"node_id,omitempty" datastore:"node_id"`
+	Memory         string   `json:"memory,omitempty" datastore:"memory"`
+	Input          string   `json:"input,omitempty" datastore:"input"`
+	OriginalInput  string   `json:"original_input,omitempty" datastore:"original_input"`
+	AllowedActions []string `json:"allowed_actions,omitempty" datastore:"allowed_actions"`
+	Output         string   `json:"output,omitempty" datastore:"output"`
+	Template       string   `json:"template,omitempty" datastore:"template"`
 
 	// ExecutionMode controls how tool actions are dispatched for this agent run. i.e singul or direct
 	ExecutionMode string `json:"execution_mode,omitempty" datastore:"execution_mode"`
@@ -92,7 +93,7 @@ type AgentOutput struct {
 	CompletionTokens int64 `json:"completion_tokens,omitempty" datastore:"completion_tokens"`
 
 	// Ordered debug info for full understanding
-	LLMRequests    []openai.ChatCompletionRequest `json:"llm_requests,omitempty" datastore:"llm_requests"`
+	LLMRequests  []openai.ChatCompletionRequest  `json:"llm_requests,omitempty" datastore:"llm_requests"`
 	LLMResponses []openai.ChatCompletionResponse `json:"llm_responses,omitempty" datastore:"llm_responses"`
 }
 
@@ -104,7 +105,7 @@ func init() {
 	}
 
 	reasoningEffort := os.Getenv("AI_REASONING_EFFORT")
-	if reasoningEffort == "minimal" || reasoningEffort == "low" || reasoningEffort == "medium" || reasoningEffort == "high" { 
+	if reasoningEffort == "minimal" || reasoningEffort == "low" || reasoningEffort == "medium" || reasoningEffort == "high" {
 		aiReasoningEffort = reasoningEffort
 	}
 
@@ -113,13 +114,13 @@ func init() {
 }
 
 func EstimatePromptTokens(messages []openai.ChatCompletionMessage) int64 {
-    totalChars := 0
-    for _, msg := range messages {
-        totalChars += utf8.RuneCountInString(msg.Content)
-        totalChars += 20 
-    }
-    
-    return int64((totalChars + 3) / 4)
+	totalChars := 0
+	for _, msg := range messages {
+		totalChars += utf8.RuneCountInString(msg.Content)
+		totalChars += 20
+	}
+
+	return int64((totalChars + 3) / 4)
 }
 
 // Provide an incident triage and response plan for the reported incident finding. Make a short list of actions to perform in the following format: [{"title": "Title of the task", "category": "triage/containment/recovery/communication/documentation", "completed": false, "createdBy": "ai-agent@shuffler.io"}]. ONLY output as JSON array and nothing more. After the list is made, add these to the metadata.extensions.custom_attributes.tasks[] in the next action.
@@ -450,7 +451,7 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 	// Make result into a body as well
 	err = json.Unmarshal([]byte(kmsResponse.Result), httpOutput)
 	if err != nil {
-		if len(kmsResponse.Result) > 0 { 
+		if len(kmsResponse.Result) > 0 {
 			log.Printf("[ERROR] Failed to unmarshal Schemaless HTTP Output response (2): %s. Data: %s", err, kmsResponse.Result)
 		}
 
@@ -1688,9 +1689,9 @@ func extractDecisionArray(rawText string) ([]AgentDecision, error) {
 		stringReader := strings.NewReader(rawText[byteIndex:])
 		jsonDecoder := json.NewDecoder(stringReader)
 		decodeErr := jsonDecoder.Decode(&decodedRawDecisions)
-		
+
 		if decodeErr != nil || len(decodedRawDecisions) == 0 {
-			continue 
+			continue
 		}
 
 		// Check if the first item has an "action" key
@@ -1703,7 +1704,7 @@ func extractDecisionArray(rawText string) ([]AgentDecision, error) {
 				var fields []rawField
 				if unmarshalErr := json.Unmarshal(rawFields, &fields); unmarshalErr == nil {
 					normalizeRawDecisionFields(fields)
-					
+
 					fixedFieldsBytes, marshalErr := json.Marshal(fields)
 					if marshalErr == nil {
 						decodedRawDecisions[mapIndex]["fields"] = fixedFieldsBytes
@@ -1716,13 +1717,13 @@ func extractDecisionArray(rawText string) ([]AgentDecision, error) {
 		if marshalErr != nil {
 			continue
 		}
-		
+
 		var finalDecisions []AgentDecision
 		structUnmarshalErr := json.Unmarshal(marshaledJSONBytes, &finalDecisions)
 		if structUnmarshalErr != nil {
 			continue
 		}
-		
+
 		return finalDecisions, nil
 	}
 
@@ -1748,17 +1749,17 @@ func extractDecisionJSONL(rawText string) ([]AgentDecision, error) {
 
 		bytesConsumedByDecoder := int(jsonDecoder.InputOffset())
 		if bytesConsumedByDecoder <= 0 {
-			byteIndex++ 
+			byteIndex++
 		} else {
 			byteIndex += bytesConsumedByDecoder
 		}
 
 		if decodeErr != nil {
-			continue 
+			continue
 		}
 
 		if _, hasAction := rawMap["action"]; !hasAction {
-			continue 
+			continue
 		}
 
 		// Fix the "fields" array if it exists
@@ -1965,7 +1966,7 @@ func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys [
 			}
 
 			// Update the actual app?
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] UPDATEINDEX CATEGORY (%s): %#v", app.Name, updatedIndex)
 			}
 		}
@@ -2007,7 +2008,7 @@ func AutofixAppLabels(ctx context.Context, app WorkflowApp, label string, keys [
 			actionStruct.Action = string(guessedActionString)
 		}
 	} else {
-		if debug { 
+		if debug {
 			//log.Printf("[DEBUG] Failed to get app from cache in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, cacheGeterr)
 		}
 	}
@@ -2244,7 +2245,7 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 
 	// FIXME: Add the label to the OpenAPI action as well?
 	// 0x0elliot: Would we want to do this through an API on standalone?
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] App: %#v, standalone: %v, updatedIndex: %d, len(app.Actions): %d", app.Name, standalone, updatedIndex, len(app.Actions))
 	}
 
@@ -2361,12 +2362,12 @@ Do not add explanations, comments, or extra formatting. Only return valid JSON.`
 }
 
 func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) ([]byte, error) {
-	if len(org.Id) == 0 { 
+	if len(org.Id) == 0 {
 		if len(input.OrgId) > 0 && user.ActiveOrg.Id == "" {
 			user.ActiveOrg.Id = input.OrgId
 		}
 
-		if len(user.ActiveOrg.Id) > 0 { 
+		if len(user.ActiveOrg.Id) > 0 {
 			newOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
 			if err != nil {
 				log.Printf("[ERROR] Failed to load orgid '%s' in ai response check", user.ActiveOrg.Id)
@@ -2386,7 +2387,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 	if project.Environment == "cloud" && !user.SupportAccess {
 		//if org.SyncFeatures.ShuffleGPT.Active && org.SyncFeatures.ShuffleGPT.Usage < org.SyncFeatures.ShuffleGPT.Limit {
 
-		// Most should never reach this 
+		// Most should never reach this
 		if org.SyncFeatures.ShuffleGPT.Usage < 1000 {
 			log.Printf("[AUDIT] Org %#v (%s) has access to the auto feature. Allowing user %s to use it", org.Name, org.Id, user.Username)
 			org.SyncFeatures.ShuffleGPT.Usage += 1
@@ -2629,7 +2630,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 		appname = appname1.(string)
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] Starting AI Translation with app '%s' and category '%s' for query '%s'", appname, category, inputQuery)
 	}
 
@@ -3584,8 +3585,8 @@ func findRelevantOutput(ctx context.Context, inputQuery string, org Org, user Us
 	//log.Printf("[INFO] User message (find relevant output type): %s", userMessage)
 
 	callInfo := AiCallInfo{
-		Caller: "findRelevantOutput", 
-		OrgID: org.Id,
+		Caller: "findRelevantOutput",
+		OrgID:  org.Id,
 	}
 	contentOutput, err := RunAiQuery(ctx, callInfo, "", userMessage)
 	if err != nil {
@@ -7236,7 +7237,7 @@ func RunAgentFinishVerifier(ctx context.Context, orgId string, executionId strin
 		}
 	}
 
-		verifierSystem := `You are a completion verifier for an AI agent system. Reply with ONLY valid JSON, no markdown:
+	verifierSystem := `You are a completion verifier for an AI agent system. Reply with ONLY valid JSON, no markdown:
 	{"pass": true, "reason": "one sentence"} or {"pass": false, "reason": "one sentence"}
 
 	Rules:
@@ -7304,7 +7305,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 
 	// FIXME: Where do we find original_input?
 	// What if it doesn't exist?
-	if len(agentOutput.OriginalInput) == 0 { 
+	if len(agentOutput.OriginalInput) == 0 {
 	}
 
 	if !lastDecisionIsFinish {
@@ -7653,17 +7654,57 @@ func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded
 
 // createNextActions = false => start of agent to find initial decisions
 // createNextActions = true => mid-agent to decide next steps
+func getTemplateContext(ctx context.Context, template string, execution WorkflowExecution) (string, string, []string, error) {
+	// FIXME: Handle dynamic templates here too, based on user input
 
-func getTemplateContext(ctx context.Context, template string, execution WorkflowExecution) (string, string, error) {
 	switch template {
 	case "workflow-edit":
 		return buildWorkflowEditContext(ctx, execution)
+	case "computer-use":
+		return buildComputerUseContext(ctx, execution)
 	default:
-		return "", "", nil
+		return "", "", []string{}, nil
 	}
 }
 
-func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) (string, string, error) {
+func buildComputerUseContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
+	systemRule := `You are a computer use agent that can execute commands to control a computer. Your goal is to use the Terminal, Keyboard, Mouse and Screenshots to perform the task the user intends in the best possible way. Make assumptions for what they most likely want to perform, and continue it is done.
+
+Use the 'post_control_mouse_and_keyboard' function for keyboard & mouse control if it is available. You can chain together escaped JSON commands in the the "actions" array using the operations detailed below. If an action takes more than 30 seconds, it will return an execution_id and authorization key to be used for polling results. When polling, always add a 30 second delay. 
+
+Params for each keyboard & mouse operation: 
+1. keyboard.press: {\"op\":\"keyboard.press\",\"params\":{\"key\":75}}
+2. mouse.click: {\"x\":600,\"y\":400,\"button\":\"left\",\"delay_ms\":100}
+3. mouse.move:  {\"x\":600,\"y\":400}
+4. mouse.drag:  {\"from_x\":600,\"from_y\":400,\"to_x\":800,\"to_y\":500,\"button\":\"left\"}
+5. system.wait: {\"op\":\"system.wait\",\"params\":{\"ms\":250}}
+
+When sending body to the post_control_mouse_and_keyboard function, the following body structure should be used:
+'''
+{
+  "app_id": "sensors",
+  "app_name": "sensors",
+  "name": "run_action",
+  "parameters": [
+	{ "name": "action", "value": "script:remote_control {\"actions\":[{\"op\":\"{operation}\",\"params\": {params}}]}"},
+	{ "name": "hosts", "value": "${hostname}" },
+	{ "name": "host_group", "value": "${host_group_optional}" }
+  ]
+}
+'''
+
+ALWAYS validate if the action was successful by checking the output of the operations before AND after with screenshots or terminal input/output. If it was not successful, you must try again with a different approach.
+	`
+
+	templateContext := ""
+	requiredApps := []string{
+		"app:48a954b9440b3913b8a2620e57b94a75:shuffle_host_monitors",
+	}
+
+	return systemRule, templateContext, requiredApps, nil
+}
+
+func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
 	targetWorkflowId := execution.ExecutionArgument
 
 	user := User{
@@ -7674,10 +7715,11 @@ func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) 
 		log.Printf("[ERROR] buildWorkflowEditContext: failed getting app summaries for org %s: %s", execution.ExecutionOrg, err)
 		return "", "", err
 	}
+
 	appsJson, err := json.Marshal(appSummaries)
 	if err != nil {
-		log.Printf("[ERROR] buildWorkflowEditContext: failed marshaling app summaries for org %s: %s", execution.ExecutionOrg, err)
-		return "", "", err
+		log.Printf("[WARNING] buildWorkflowEditContext: failed marshaling app summaries for org %s: %s", execution.ExecutionOrg, err)
+		return "", "", []string{}, fmt.Errorf("failed to marshal app summaries: %w", err)
 	}
 
 	// What we tell the agent about its workflow_id
@@ -7876,16 +7918,20 @@ CRITICAL RULES FOR THE AGENT
 %s
 <End of Available Apps>`, workflowIdLine, string(appsJson))
 
-	return systemRule, templateContext, nil
-}
+	requiredApps := []string{
+		"app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps",
+		"app:de4ef2287bd41b9d5563e39989643ee6:shuffle_workflows_builder",
+	}
 
+	return systemRule, templateContext, requiredApps, nil
+}
 
 func getWorkflowEditPromptRemovals() []string {
 	return []string{
 		`   - **Destructive Guard:**
      - If action is DESTRUCTIVE (stop/delete/remove) -> Set "approval_required": true on the action/tool.`,
-	 `// true IF the action seems risky or destructive and requires user approval. Otherwise false`,
-	 `### DATA REDUCTION:
+		`// true IF the action seems risky or destructive and requires user approval. Otherwise false`,
+		`### DATA REDUCTION:
 data_filter:
 - "full": The default value of the data_filter is full. Use for all non-data-returning calls or when you need the entire response.
 - "list": Use for ALL data calls. Request ONLY essential fields. If the schema is completely unknown, fallback to "full"`,
@@ -7899,7 +7945,7 @@ func filterSystemPromptByTemplate(template string, systemMessage string) string 
 	case "workflow-edit":
 		removals = getWorkflowEditPromptRemovals()
 	}
-	
+
 	for _, removal := range removals {
 		if removal != "" {
 			systemMessage = strings.ReplaceAll(systemMessage, removal, "")
@@ -7922,7 +7968,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	aiStarttime := time.Now().UnixMilli()
 
 	replacedExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)
-	if err == nil && len(replacedExecution.Results) > 0 && (execution.Status == "EXECUTING" || execution.Status == "WAITING") { 
+	if err == nil && len(replacedExecution.Results) > 0 && (execution.Status == "EXECUTING" || execution.Status == "WAITING") {
 		origStatus := execution.Status
 		origCompleted := execution.CompletedAt
 		origResults := execution.Results
@@ -7935,11 +7981,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		}
 	}
 
-	llmResponse := []byte{} 
-	if len(aiResponseWrapper) > 0 { 
-		if len(aiResponseWrapper[0]) > 0 { 
+	llmResponse := []byte{}
+	if len(aiResponseWrapper) > 0 {
+		if len(aiResponseWrapper[0]) > 0 {
 			llmResponse = aiResponseWrapper[0]
-			//createNextActions = false 
+			//createNextActions = false
 		}
 	}
 
@@ -7954,8 +8000,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		break
 	}
 
-	if execution.Status != "EXECUTING" && execution.Status != "WAITING" { 
-		return startNode, errors.New("Agent run already finished") 
+	if execution.Status != "EXECUTING" && execution.Status != "WAITING" {
+		return startNode, errors.New("Agent run already finished")
 	}
 
 	// Metadata = org-specific context
@@ -7968,24 +8014,23 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	//metadata += fmt.Sprintf("Current time: %s\n", time.Now().Format(time.RFC3339))
 
 	/*
-	categoryActions := GetAppCategories()
-	actionMetadata := "ALL Available actions sorted by category:\n"
-	for _, category := range categoryActions {
-		if category.Name == "AI" || category.Name == "Other" {
-			continue
-		}
+		categoryActions := GetAppCategories()
+		actionMetadata := "ALL Available actions sorted by category:\n"
+		for _, category := range categoryActions {
+			if category.Name == "AI" || category.Name == "Other" {
+				continue
+			}
 
-		actionMetadata += "\nCategory: " + category.Name + "\n"
-		for _, label := range category.ActionLabels {
-			actionMetadata += fmt.Sprintf("- %s\n", strings.ReplaceAll(label, "_", " "))
+			actionMetadata += "\nCategory: " + category.Name + "\n"
+			for _, label := range category.ActionLabels {
+				actionMetadata += fmt.Sprintf("- %s\n", strings.ReplaceAll(label, "_", " "))
+			}
 		}
-	}
 	*/
 
 	if len(execution.Workflow.OrgId) == 0 && len(execution.ExecutionOrg) > 0 {
 		execution.Workflow.OrgId = execution.ExecutionOrg
 	}
-
 
 	// Validate On-Prem Configuration immediately
 	if project.Environment != "cloud" {
@@ -8035,7 +8080,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		}
 
 		// Could this alleviate the need for the openai App itself?
-		if strings.Contains(param.Value, "$") { 
+		if strings.Contains(param.Value, "$") {
 			parsingBody[param.Name] = param.Value
 		}
 	}
@@ -8043,7 +8088,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	// Look for conditions leading into the startNode
 	hasConditions := false
 	for _, branch := range execution.Workflow.Branches {
-		if branch.DestinationID == startNode.ID && len(branch.Conditions) > 0 { 
+		if branch.DestinationID == startNode.ID && len(branch.Conditions) > 0 {
 			hasConditions = true
 			break
 		}
@@ -8051,7 +8096,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	llmStatusCode := 0
 	parsedAgentInput := ""
-	if hasConditions || len(parsingBody) > 0 { 
+	if hasConditions || len(parsingBody) > 0 {
 		marshalledBody, err := json.Marshal(parsingBody)
 		if err == nil && len(marshalledBody) > 0 {
 			repeaterNode := Action{}
@@ -8100,7 +8145,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 						body, err := ioutil.ReadAll(newresp.Body)
 						if err != nil {
 							log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Failed reading response during LLM setup: %s", execution.ExecutionId, execution.Workflow.OrgId, err)
-						} else { 
+						} else {
 							// Check the results of the output
 							toolsResultMapping := SingleResult{}
 							if err := json.Unmarshal(body, &toolsResultMapping); err != nil {
@@ -8117,20 +8162,20 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 											// Return IMMEDIATELY here pre-app run?
 											branchSkipOutput := AgentOutput{
 												Status:      "FINISHED",
-												StartedAt: time.Now().UnixMilli(),
+												StartedAt:   time.Now().UnixMilli(),
 												CompletedAt: time.Now().UnixMilli(),
 
-												ExecutionId: execution.ExecutionId,
-												NodeId:	startNode.ID,
-												LLMCallCount: 0, 
+												ExecutionId:  execution.ExecutionId,
+												NodeId:       startNode.ID,
+												LLMCallCount: 0,
 
 												OriginalInput: originalInput,
-												Output:      fmt.Sprintf("Branch Conditions failed: %s", reasonVal),
+												Output:        fmt.Sprintf("Branch Conditions failed: %s", reasonVal),
 											}
 
 											marshalledOutput, err := json.Marshal(branchSkipOutput)
 											if err != nil {
-												marshalledOutput = []byte(fmt.Sprintf("{\"status\":\"FINISHED\",\"output\":\"Branch Conditions failed. Failed to map reason.\",\"completed_at\":%d}",  time.Now().UnixMilli()))
+												marshalledOutput = []byte(fmt.Sprintf("{\"status\":\"FINISHED\",\"output\":\"Branch Conditions failed. Failed to map reason.\",\"completed_at\":%d}", time.Now().UnixMilli()))
 											}
 
 											successResult := ActionResult{
@@ -8153,11 +8198,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 											go sendAgentActionSelfRequest("SKIPPED", execution, successResult)
 											return startNode, nil
 										}
-									} 
+									}
 
 									if unmarshalErr != nil {
 										log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Failed parsing final result during LLM setup: %s", execution.ExecutionId, execution.Workflow.OrgId, unmarshalErr)
-									} 
+									}
 
 									for paramIndex, param := range startNode.Parameters {
 										if val, ok := mappedResult[param.Name]; ok {
@@ -8184,7 +8229,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 		if param.Name == "input" {
 			userMessage = param.Value
-	
+
 			parsedAgentInput = userMessage
 		}
 
@@ -8192,11 +8237,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			enableQuestions = true
 		}
 
-		if param.Name == "reasoning" { 
+		if param.Name == "reasoning" {
 			foundReasoning = strings.ToLower(strings.TrimSpace(param.Value))
 		}
 
-		if param.Name == "image" { 
+		if param.Name == "image" {
 			if strings.HasPrefix(param.Value, "http://") || strings.HasPrefix(param.Value, "https://") {
 				imagesIncluded = append(imagesIncluded, param.Value)
 			} else {
@@ -8209,7 +8254,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 		}
 
-		if param.Name == "image_detail" { 
+		if param.Name == "image_detail" {
 			if param.Value == "low" {
 				imageDetail = openai.ImageURLDetailLow
 			} else if param.Value == "high" {
@@ -8238,24 +8283,24 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			for _, actionStr := range strings.Split(param.Value, ",") {
 				actionStr = strings.ToLower(strings.TrimSpace(actionStr))
 
-				//if debug { 
+				//if debug {
 				//	log.Printf("[DEBUG] STRING: %s", actionStr)
 				//}
 
 				if actionStr == "" || actionStr == "nothing" || actionStr == "shuffle ai" || actionStr == "api" {
-					if debug { 
+					if debug {
 						log.Printf("[DEBUG][%s] Skipping action '%s' as it is not a valid action.", execution.ExecutionId, actionStr)
 					}
 					continue
 				}
 
 				if !strings.HasPrefix(actionStr, "app:") {
-					if debug { 
+					if debug {
 						log.Printf("[DEBUG][%s] Skipping action '%s' as it is not a valid action.", execution.ExecutionId, actionStr)
 					}
 
 					continue
-				} 
+				}
 
 				trimmedActionStr := strings.TrimPrefix(actionStr, "app:")
 				sortedAppActions := getPrioritisedAppActions(ctx, trimmedActionStr, 15)
@@ -8279,12 +8324,12 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 						requiredParams := []string{}
 						optionalParams := []string{}
 						for _, param := range sortedAppAction.Parameters {
-							if param.Name == "url" { 
+							if param.Name == "url" {
 								continue
 							}
 
-							if param.Name == "body" && len(param.Example) > 0 { 
-								if len(param.Example) > 200 { 
+							if param.Name == "body" && len(param.Example) > 0 {
+								if len(param.Example) > 200 {
 									param.Example = param.Example[:200] + "..."
 								}
 
@@ -8299,7 +8344,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 							}
 
 							if param.Required {
-								if param.Configuration && param.Name != "url" { 
+								if param.Configuration && param.Name != "url" {
 									continue
 								}
 
@@ -8342,7 +8387,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 							// Remove %s, %d etc to not screw up fmt
 							descString = fmt.Sprintf(" # %s", strings.ReplaceAll(strings.ReplaceAll(sortedAppAction.Description, "\\%", " "), "\n", ""))
-						} 
+						}
 
 						if descString == previousDesc {
 							descString = ""
@@ -8411,7 +8456,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			err := json.Unmarshal([]byte(result.Result), &mappedResult)
 			if err != nil {
 				log.Printf("[ERROR][%s] AI Agent (1): Failed unmarshalling result for action %s: %s", execution.ExecutionId, startNode.ID, err)
-				if debug { 
+				if debug {
 					log.Printf("[WARNING] FAILED AI AGENT THING: %s", result.Result)
 				}
 				break
@@ -8474,7 +8519,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					if debug {
 						log.Printf("[DEBUG][%s] Found existing WAITING decision at index %d (action=%s) - returning existing state", execution.ExecutionId, mappedDecision.I, mappedDecision.Action)
 					}
-					
+
 					hasActiveDecision = true
 					break
 				} else if status == "RUNNING" {
@@ -8547,7 +8592,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 						log.Printf("[ERROR][%s] Failed to unmarshal raw response for decision at index %d: %s", execution.ExecutionId, mappedDecision.I, err)
 					}
 
-					if parsedOutput.Status <= 0 && parsedOutput.Reason == "" { 
+					if parsedOutput.Status <= 0 && parsedOutput.Reason == "" {
 					} else {
 						parsedOutput.Headers = map[string]string{}
 						parsedOutput.Cookies = map[string]string{}
@@ -8680,7 +8725,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 
 			if len(foundUserId) > 0 {
-				foundUser, err := GetUser(ctx, foundUserId) 
+				foundUser, err := GetUser(ctx, foundUserId)
 				if err == nil && len(foundUser.Id) > 0 {
 					if len(foundUser.UserGeoInfo.Country.Name) > 0 {
 						metadata += fmt.Sprintf("Country: %s,", foundUser.UserGeoInfo.Country.Name)
@@ -8708,22 +8753,22 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 		//metadata += "\n" + actionMetadata
 	}
 
-	// Due to usually NOT wanting a question back, but pure run 
+	// Due to usually NOT wanting a question back, but pure run
 	enableQuestionsString := `
 2. **Explicit 'Ask' Command:** 
 	- Avoid asking questions. Have an action bias and make decisions for the user!
 `
 
-	if enableQuestions { 
+	if enableQuestions {
 		enableQuestionsString = `
 5. **Explicit 'Ask' Command:**
    - **Trigger:** LOWEST PRIORITY. Does the user explicitly COMMAND you to ask them for input (e.g., "Ask me for the IP")?
    - **Action:** Select "ask" (Category: "standalone").
    - **Field "question":** The specific questions you have. Make decisions FOR the user instead of asking. Do NOT ask questions about authentication or authorization. Do NOT ask to confirm the obvious. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, ask one question at a time as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}]`
 
-   // FIXME: Uncomment below and add to the enableQuestionsString. New feature for auto-generating and approving new apps. The generate API docs API supports this
+		// FIXME: Uncomment below and add to the enableQuestionsString. New feature for auto-generating and approving new apps. The generate API docs API supports this
 
-   	// If the tool is not mentioned in USER CONTEXT and you NEED them to allow those tools, set "action": "add_tool" and "tool": "EXACT toolname" and do not ask questions. If multiple tools are required, make multiple decisions - one for each required tool. Put the entire reasoning in the "reason" field - not as fields.
+		// If the tool is not mentioned in USER CONTEXT and you NEED them to allow those tools, set "action": "add_tool" and "tool": "EXACT toolname" and do not ask questions. If multiple tools are required, make multiple decisions - one for each required tool. Put the entire reasoning in the "reason" field - not as fields.
 	}
 
 	systemMessage += fmt.Sprintf(`### MISSION
@@ -8772,7 +8817,7 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 1. **Conversational & Meta-Query Check:**
    - **Trigger:** Is the user asking about YOU, your capabilities ("What can you do?"), or saying "Hi"/"Help"?
    - **Action:** Select "finish".
-   - **Field "output":** "I am the Shuffle Agent. I can help you with: [List generic categories from USER CONTEXT]..."
+   - **Field "output":** "I am the Shuffle Agent. I can help you with: [Markdown List from USER CONTEXT]..."
 
 2. **Verification (Read-Before-Write):**
    - If modifying a resource, do you have the data?
@@ -8824,8 +8869,12 @@ data_filter:
 	// If a template is set, get secondary system rules + extra context.
 	templateSystemRule := ""
 	templateContext := ""
+	requiredApps := []string{}
 	if len(template) > 0 {
-		templateSystemRule, templateContext, _ = getTemplateContext(ctx, template, execution)
+		templateSystemRule, templateContext, requiredApps, err = getTemplateContext(ctx, template, execution)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get template context: %v", err)
+		}
 	}
 
 	agentReasoningEffort := "low"
@@ -8840,6 +8889,18 @@ data_filter:
 		agentReasoningEffort = foundReasoning
 	}
 
+	added := false
+	for _, requiredApp := range requiredApps { 
+		if !strings.Contains(allowedActionString, requiredApp) {
+			added = true
+			allowedActionString += "," + requiredApp 
+		}
+	}
+
+	if added {
+		allowedActionString = strings.TrimPrefix(allowedActionString, ",")
+	}
+
 	agentOutput := AgentOutput{
 		Status:         "RUNNING",
 		Input:          userMessage,
@@ -8850,9 +8911,10 @@ data_filter:
 		Memory:         memorizationEngine,
 		ExecutionMode:  executionMode,
 		AllowedActions: strings.Split(allowedActionString, ","),
+		Template:       template,
 	}
 
-	if skipAgentWait == "true" { 
+	if skipAgentWait == "true" {
 	} else if len(userMessage) == 0 {
 		log.Printf("[ERROR][%s] AI Agent: No user message/input found for action %s", execution.ExecutionId, startNode.ID)
 		return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_user_message", "No user message/input found for AI Agent start")
@@ -8864,7 +8926,7 @@ data_filter:
 		initiatedBy = "system"
 	}
 
-	if len(llmResponse) > 0 { 
+	if len(llmResponse) > 0 {
 	} else if !createNextActions {
 		if strings.TrimSpace(callerName) == "" {
 			callerName = "unknown"
@@ -8913,8 +8975,9 @@ data_filter:
 	// Inject template-specific context as a completely separate user message
 	if len(templateContext) > 0 {
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			//Role:    openai.ChatMessageRoleUser,
 			Role:    openai.ChatMessageRoleUser,
-			Content: "TEMPLATE CONTEXT:\n" + templateContext,
+			Content: "SKILL CONTEXT:\n" + templateContext,
 		})
 	}
 
@@ -8927,10 +8990,10 @@ data_filter:
 		})
 	} else {
 		newMessage := openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
+			Role: openai.ChatMessageRoleUser,
 			MultiContent: []openai.ChatMessagePart{
 				openai.ChatMessagePart{
-					Type: openai.ChatMessagePartTypeText, 
+					Type: openai.ChatMessagePartTypeText,
 					Text: preparedContent,
 				},
 			},
@@ -8938,9 +9001,9 @@ data_filter:
 
 		for _, imageIncluded := range imagesIncluded {
 			newMessage.MultiContent = append(newMessage.MultiContent, openai.ChatMessagePart{
-				Type: openai.ChatMessagePartTypeImageURL, 
+				Type: openai.ChatMessagePartTypeImageURL,
 				ImageURL: &openai.ChatMessageImageURL{
-					URL:   imageIncluded,
+					URL:    imageIncluded,
 					Detail: imageDetail,
 				},
 			})
@@ -8968,27 +9031,27 @@ data_filter:
 	}
 
 	/*
-	// Contains history of executions
-	// Disabled as it screwed with the JSON output at times
-	if len(relevantDecisions) > 0 { 
-		// Even more context
-		for _, relevantDecision := range relevantDecisions {
-			if relevantDecision.Action == "ask" || relevantDecision.Action == "finish" || relevantDecision.Action == "question" || relevantDecision.Action == "" { 
-				continue
-			}
+		// Contains history of executions
+		// Disabled as it screwed with the JSON output at times
+		if len(relevantDecisions) > 0 {
+			// Even more context
+			for _, relevantDecision := range relevantDecisions {
+				if relevantDecision.Action == "ask" || relevantDecision.Action == "finish" || relevantDecision.Action == "question" || relevantDecision.Action == "" {
+					continue
+				}
 
-			foundResult := relevantDecision.Reason
-			if len(relevantDecision.RunDetails.RawResponse) > 0 { 
-				foundResult = relevantDecision.RunDetails.RawResponse
-			}
+				foundResult := relevantDecision.Reason
+				if len(relevantDecision.RunDetails.RawResponse) > 0 {
+					foundResult = relevantDecision.RunDetails.RawResponse
+				}
 
-			completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
-				Role:    openai.ChatMessageRoleTool,
-				ToolCallID: relevantDecision.RunDetails.Id,
-				Content: foundResult,
-			})
+				completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+					Role:    openai.ChatMessageRoleTool,
+					ToolCallID: relevantDecision.RunDetails.Id,
+					Content: foundResult,
+				})
+			}
 		}
-	}
 	*/
 
 	// Let's put the USER ANSWERS after HISTORY so the frozen prefix [1][2][3] is never affected.
@@ -9143,31 +9206,31 @@ data_filter:
 
 	bodyString := []byte{}
 	decisionString := ""
-	choicesString := "" 
+	choicesString := ""
 	skipHttpParsing := false
 	resultMapping := ActionResult{}
 	openaiOutput := openai.ChatCompletionResponse{}
 
-	if agentRunLocation == "local" { 
+	if agentRunLocation == "local" {
 		// Fake net/http response writer
 		recorder := httptest.NewRecorder()
 
 		callInfo := AiCallInfo{
-			Caller: "aiAgentRunner", 
-			OrgID: execution.Workflow.OrgId,
+			Caller: "aiAgentRunner",
+			OrgID:  execution.Workflow.OrgId,
 
 			Resp: recorder,
 		}
 
 		output, err := RunAiQuery(
-			ctx, 
-			callInfo, 
-			"", 
-			"", 
+			ctx,
+			callInfo,
+			"",
+			"",
 			completionRequest,
 		)
 
-		if err != nil { 
+		if err != nil {
 			log.Printf("[ERROR][%s] AI Agent: Failed running AI query for action %s: %s", execution.ExecutionId, startNode.ID, err)
 			return abortAgentExecution(ctx, execution, startNode, agentOutput, "run_ai_query_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 		}
@@ -9202,7 +9265,7 @@ data_filter:
 		//openaiOutput := openai.ChatCompletionResponse{}
 
 	} else {
-		// FIXME: This part is almost never used anymore. Used to be necessary 
+		// FIXME: This part is almost never used anymore. Used to be necessary
 		// before we had the ability to run AI queries with mapping locally.
 		// Should be removed.
 
@@ -9239,9 +9302,7 @@ data_filter:
 			// },
 		}
 
-		// Adding additional non-required params to make sure we get them parsed 
-
-
+		// Adding additional non-required params to make sure we get them parsed
 
 		// To ensure we get the context of an execution properly
 		// This gives it variables to run IN CONTEXT of the current execution,
@@ -9267,13 +9328,13 @@ data_filter:
 
 			client.Timeout = time.Minute * 5
 
-			// Test for whether we can ignore response wait time 
+			// Test for whether we can ignore response wait time
 			// This is to drastically reduce CPU use of Agent requests
 			// 1 second = enough to read the body, which is the only major
 			// obstacle
-			if skipAgentWait == "true" { 
-				//client.Timeout = time.Second * 1 
-				client.Timeout = time.Millisecond * 1000 
+			if skipAgentWait == "true" {
+				//client.Timeout = time.Second * 1
+				client.Timeout = time.Millisecond * 1000
 				fullUrl += "&skip_result_wait=true"
 			} else {
 				// Makes sure we wait as long as possible
@@ -9304,7 +9365,7 @@ data_filter:
 			log.Printf("[INFO][%s] Started AI Agent action '%s'. Waiting for results...", execution.ExecutionId, startNode.ID)
 
 			if err != nil {
-				if skipAgentWait == "true" && strings.Contains(strings.ToLower(err.Error()), "timeout") { 
+				if skipAgentWait == "true" && strings.Contains(strings.ToLower(err.Error()), "timeout") {
 					// Question when we return here:
 					// How do we get back to EXACTLY here when the AI is done?
 					// Point being: we need the same data anyway.
@@ -9333,7 +9394,7 @@ data_filter:
 				log.Printf("[ERROR][%s] AI Agent: Failed reading response body from LLM: %s", execution.ExecutionId, err)
 				return abortAgentExecution(ctx, execution, startNode, agentOutput, "llm_body_read_failed", fmt.Sprintf("Failed to read LLM response body: %s", err.Error()))
 			}
-		
+
 			llmStatusCode = newresp.StatusCode
 		}
 
@@ -9394,7 +9455,7 @@ data_filter:
 						continue
 					}
 
-					if debug { 
+					if debug {
 						log.Printf("[DEBUG][%s] AI Agent: Found body parameter which MAY contain the right user input. LEN: %d", execution.ExecutionId, len(param.Value))
 					}
 
@@ -9405,7 +9466,7 @@ data_filter:
 				}
 			}
 		}
-	}	
+	}
 
 	// Store the completion request in datastore?
 	if len(resultMapping.Result) > 0 {
@@ -9461,7 +9522,7 @@ data_filter:
 			}
 
 			// Parse the outputMap.Result to OpenAI response
-			// choicesString = "" 
+			// choicesString = ""
 			bodyMap, ok := outputMap.Body.(map[string]interface{})
 			if !ok {
 				log.Printf("[ERROR][%s] AI Agent: Failed to convert body to MAP in AI Agent response. Raw response: %s", execution.ExecutionId, string(resultMapping.Result))
@@ -9486,14 +9547,14 @@ data_filter:
 
 			// Edgecase handling for LLM not being available etc
 			if len(choicesString) > 0 {
-				if debug { 
+				if debug {
 					log.Printf("[ERROR][%s] AI Agent: Found choicesString (1) in AI Agent response error handling: %s", execution.ExecutionId, choicesString)
 				}
 
 			} else if len(openaiOutput.Choices) == 0 {
 				log.Printf("[ERROR][%s] AI Agent: No choices found in AI agent response (1). Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
 
-				// This is specific to OpenAI, but may work for others 
+				// This is specific to OpenAI, but may work for others
 				newOutput := openai.ErrorResponse{}
 				err = json.Unmarshal(bodyString, &newOutput)
 				if err == nil && len(newOutput.Error.Message) > 0 {
@@ -9570,11 +9631,11 @@ data_filter:
 							}
 						}
 					}()
-					
+
 					if cachedTokens > 0 && debug {
 						log.Printf("[DEBUG][%s] PROMPT CACHING HIT! Saved %d tokens on this request.", execution.ExecutionId, cachedTokens)
 					}
-					
+
 					log.Printf("[AUDIT][%s] Incremented AI Agent usage for billing_org=%s exec_org=%s total=%d input=%d output=%d cached=%d reasoning=%d", execution.ExecutionId, billingOrgId, execution.Workflow.OrgId, totalTokens, inputTokens, outputTokens, cachedTokens, reasoningTokens)
 				}
 
@@ -9655,14 +9716,18 @@ data_filter:
 		agentOutput.NodeId = startNode.ID
 		agentOutput.StartedAt = time.Now().UnixMilli()
 		agentOutput.CompletedAt = 0
-		
+
 		agentOutput.LLMRequests = []openai.ChatCompletionRequest{
 			completionRequest,
 		}
 		agentOutput.LLMResponses = []openai.ChatCompletionResponse{
 			openaiOutput,
 		}
-		
+
+		if len(template) > 0 { //&& len(templateContext) > 0 {
+			agentOutput.Template = template
+		}
+
 		agentOutput.Memory = memorizationEngine
 		agentOutput.ExecutionMode = executionMode
 		agentOutput.AllowedActions = allowedActions
@@ -9719,7 +9784,7 @@ data_filter:
 				agentOutput.Decisions = append(agentOutput.Decisions, mappedDecision)
 			}
 
-			if len(openaiOutput.ID) > 0 { 
+			if len(openaiOutput.ID) > 0 {
 				found := false
 				for _, llmrequest := range agentOutput.LLMResponses {
 					if llmrequest.ID == openaiOutput.ID {
@@ -9730,12 +9795,11 @@ data_filter:
 
 				if !found {
 					agentOutput.LLMResponses = append(agentOutput.LLMResponses, openaiOutput)
-				
+
 					agentOutput.LLMRequests = append(agentOutput.LLMRequests, completionRequest)
 				}
-			
-			}
 
+			}
 
 			// Realtime update so that it looks correct in the UI between requests
 			if len(mappedDecisions) > 0 {
@@ -9755,7 +9819,7 @@ data_filter:
 						execution.Results[resultIndex].Result = string(agentOutputMarshalled)
 					}
 
-					// Waiting 1 
+					// Waiting 1
 					execution.Results[resultIndex].Status = "WAITING"
 
 					// Update the result in cache as actions are self-corrective
@@ -9858,7 +9922,7 @@ data_filter:
 					err = CreateOrgNotification(
 						ctx,
 						fmt.Sprintf("Agent - approval required for '%s'", mappedDecision.Tool),
-						fmt.Sprintf("Approval required during agent run."), 
+						fmt.Sprintf("Approval required during agent run."),
 						fmt.Sprintf("/forms/%s?authorization=%s&reference_execution=%s&source_node=%s&decision_id=%s&backend_url=%s", execution.WorkflowId, execution.Authorization, execution.ExecutionId, startNode.ID, mappedDecision.RunDetails.Id, backendUrl),
 						execution.ExecutionOrg,
 						false,
@@ -9926,7 +9990,7 @@ data_filter:
 
 					log.Printf("[DEBUG][%s] AI Agent: Decision index %d is an 'ask' action. Setting approval required to true for manual review in the UI.", execution.ExecutionId, mappedDecision.I)
 					question := mappedDecision.Reason
-					if len(mappedDecision.Fields) > 0 { 
+					if len(mappedDecision.Fields) > 0 {
 						question = mappedDecision.Fields[0].Value
 					}
 
@@ -9958,7 +10022,6 @@ data_filter:
 				// Do we run the singul action directly?
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
-
 
 				go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
 
@@ -10040,7 +10103,7 @@ data_filter:
 
 		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
 			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent run.", execution.ExecutionId)
-			return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. Please try again. Raw decision: \n\n%s", decisionString))
+			return abortAgentExecution(ctx, execution, startNode, agentOutput, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions, but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. \n\nFailed Decision (debug): \n%s", decisionString))
 		}
 
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
@@ -10282,7 +10345,6 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	if categoryAction.ActionName == "remove" || categoryAction.ActionName == "disable" || categoryAction.ActionName == "stop" {
 
-
 		if workflowErr == nil && workflow.OrgId == user.ActiveOrg.Id {
 			// Delete the workflow
 			err = DeleteKey(ctx, "workflow", workflowId, user.ActiveOrg.Id)
@@ -10291,13 +10353,13 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			/*
-			if debug { 
-				log.Printf("[DEBUG] DELETING KEY: %s", deleteKey)
-				allWorkflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
-				if err == nil {
-					log.Printf("\n\n[DEBUG] FOUND WORKFLOWS AFTER DELETE: %d\n\n", len(allWorkflows))
+				if debug {
+					log.Printf("[DEBUG] DELETING KEY: %s", deleteKey)
+					allWorkflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
+					if err == nil {
+						log.Printf("\n\n[DEBUG] FOUND WORKFLOWS AFTER DELETE: %d\n\n", len(allWorkflows))
+					}
 				}
-			}
 			*/
 		} else {
 			log.Printf("[INFO] No existing workflow with ID %s to remove for category '%s'", workflowId, categoryAction.Label)
@@ -10508,7 +10570,7 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 			if len(workflow.Actions[actionIndex].LargeImage) == 0 {
 
-				if strings.Contains(strings.ToLower(action.AppName), "agent") || strings.Contains(strings.ToLower(action.AppName), "singul") || strings.Contains(strings.ToLower(action.AppName), "integration") { 
+				if strings.Contains(strings.ToLower(action.AppName), "agent") || strings.Contains(strings.ToLower(action.AppName), "singul") || strings.Contains(strings.ToLower(action.AppName), "integration") {
 					workflow.Actions[actionIndex].LargeImage = "/icons/workflow-page/shuffle_agent.png"
 				} else if debug {
 					log.Printf("[DEBUG] Missing app image for app '%s'", action.AppName)
@@ -10533,12 +10595,12 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	/*
-	if debug { 
-		allWorkflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
-		if err == nil {
-			log.Printf("\n\n[DEBUG] FOUND WORKFLOWS POST CREATE: %d\n\n", len(allWorkflows))
+		if debug {
+			allWorkflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
+			if err == nil {
+				log.Printf("\n\n[DEBUG] FOUND WORKFLOWS POST CREATE: %d\n\n", len(allWorkflows))
+			}
 		}
-	}
 	*/
 
 	resp.WriteHeader(http.StatusOK)
@@ -10593,8 +10655,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	defaultCreds := false
-	if len(apiKey) == 0 && project.Environment == "cloud" { 
-		foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx) 
+	if len(apiKey) == 0 && project.Environment == "cloud" {
+		foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
 		if len(foundApikey) > 0 {
 			defaultCreds = true
 			apiKey = foundApikey
@@ -10609,7 +10671,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 	}
 
-	if len(info.OrgID) > 0 { 
+	if len(info.OrgID) > 0 {
 		// Look up custom auth to use instead
 		foundApikey, foundrequestUrl, foundModel := GetOrgAiCredentials(ctx, info)
 		if len(foundApikey) > 0 {
@@ -10621,7 +10683,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			aiRequestUrl = foundrequestUrl
 		}
 
-		if len(foundModel) > 0 { 
+		if len(foundModel) > 0 {
 			currentModel = foundModel
 		}
 	}
@@ -10642,7 +10704,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			config.APIType = openai.APITypeOpenAI
 		}
 	}
-
 
 	if len(systemMessage) > maxCharacters {
 		systemMessage = systemMessage[:maxCharacters]
@@ -10743,17 +10804,24 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			}
 		}
 
-		if len(newMessages) > 5 { 
+		if len(newMessages) > 5 {
 			chatCompletion.Messages = newMessages
 		}
 	}
-
 
 	maxRetries := 3
 	contentOutput := ""
 
 	// Overwrites it all
-	aiRequestUrl, currentModel = ValidateURLandModel(aiRequestUrl, currentModel)
+	retUrl, retModel := ValidateURLandModel(aiRequestUrl, currentModel)
+	if len(retUrl) > 0 {
+		aiRequestUrl = retUrl
+	}
+
+	if len(retModel) > 0 {
+		currentModel = retModel
+	}
+
 	if len(apiKey) == 0 {
 		return "", errors.New("No LLM apikey supplied AND no organization-specific key found. Please create a custom AI app authentication.")
 	}
@@ -10762,8 +10830,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		return "", errors.New("No LLM URL supplied AND no organization-specific URL found. Please create a custom AI app authentication")
 	}
 
-	// FIXME: Allow model control? 
-	chatCompletion.Model = currentModel 
+	// FIXME: Allow model control?
+	chatCompletion.Model = currentModel
 
 	if len(aiRequestUrl) > 0 {
 		config.BaseURL = aiRequestUrl
@@ -10796,7 +10864,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	estSysTokens := int(math.Ceil(float64(len(sysMsg)) / 3.5))
 	estUserTokens := int(math.Ceil(float64(len(userMsg)) / 3.5))
 	estOtherTokens := int(math.Ceil(float64(len(otherMsg)) / 3.5))
-	totalEst := estSysTokens + estUserTokens + estOtherTokens 
+	totalEst := estSysTokens + estUserTokens + estOtherTokens
 
 	reasoning := "medium"
 	if len(chatCompletion.ReasoningEffort) > 0 {
@@ -10809,7 +10877,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	flusher := http.Flusher(nil)
 	if info.Resp != nil {
-		if originalStreamEnabled { 
+		if originalStreamEnabled {
 			info.Resp.Header().Set("Content-Type", "text/event-stream")
 			info.Resp.Header().Set("Cache-Control", "no-cache")
 			info.Resp.Header().Set("Connection", "keep-alive")
@@ -10839,14 +10907,14 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 			if info.Resp != nil && lastError != nil {
 
-				result := ResultChecker{ 
-					Success: false, 
-					Reason: lastError.Error(),
+				result := ResultChecker{
+					Success: false,
+					Reason:  lastError.Error(),
 				}
 
 				info.Resp.WriteHeader(400)
 				marshalledResult, err := json.Marshal(result)
-				if err != nil { 
+				if err != nil {
 					info.Resp.Write([]byte(lastError.Error()))
 				} else {
 					info.Resp.Write(marshalledResult)
@@ -10874,7 +10942,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				continue
 
 			} else if strings.Contains(err.Error(), "Invalid JSON payload received") {
-				log.Printf("[ERROR] Invalid JSON payload received from '%s': %s", aiRequestUrl, err) 
+				log.Printf("[ERROR] Invalid JSON payload received from '%s': %s", aiRequestUrl, err)
 				break
 
 			} else if strings.Contains(err.Error(), "does not exist") {
@@ -10891,6 +10959,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				log.Printf("[ERROR] Unauthorized (401) error from '%s': %s", aiRequestUrl, err)
 
 				return "", errors.New(fmt.Sprintf("Unauthorized (401) error from '%s': %s", aiRequestUrl, err))
+			} else if strings.Contains(err.Error(), "exceeds the maximum number of tokens") {
+				log.Printf("[ERROR] Request from org %s with model '%s' exceeds the maximum number of tokens. %s", org, currentModel, err)
+
+				return "", errors.New(fmt.Sprintf("Request from org %s with model '%s' exceeds the maximum number of tokens. %s", org, currentModel, err))
 			}
 
 			lastError = err
@@ -10905,7 +10977,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		for {
 			iterations += 1
 
-			if iterations > 1000 { 
+			if iterations > 1000 {
 				log.Printf("[ERROR] Fatal - Too many iterations agent LLM stream. Breaking out of loop.")
 				if info.Resp != nil && originalStreamEnabled {
 					info.Resp.Write([]byte("data: [ERROR] Fatal - Too many iterations agent LLM stream. Breaking out of loop.\n\n"))
@@ -10941,9 +11013,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			// rawBytes is a []byte containing the exact JSON payload for this chunk
 			// Example output: {"id":"chatcmpl-123","choices":[{"delta":{"content":"Hello"}}]}
 
-
 			// Proper handling of it IN CASE the data we receive is wrong. Especially:
-			// onprem -> cloud -> LLM, as to handle SSE properly 
+			// onprem -> cloud -> LLM, as to handle SSE properly
 			response := openai.ChatCompletionStreamResponse{}
 			err = json.Unmarshal(rawResp, &response)
 			if err != nil {
@@ -10961,7 +11032,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			if response.Usage != nil {
 				fullResp.Usage = *response.Usage
 
-				if response.Usage.TotalTokens > 0 { 
+				if response.Usage.TotalTokens > 0 {
 					totalTokens += response.Usage.TotalTokens
 				}
 			}
@@ -10993,7 +11064,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 					}
 				}
 
-
 				// Check if this chunk contains a refusal
 				delta := response.Choices[0].Delta
 				if delta.Refusal != "" {
@@ -11012,7 +11082,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 					// 4. Print the delta content as it arrives
 					chunk := response.Choices[0].Delta.Content
 
-					contentOutput += chunk 
+					contentOutput += chunk
 				}
 			} else {
 				contentOutput += string(rawResp)
@@ -11040,7 +11110,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		marshalledData, err := json.Marshal(fullResp)
 		if err != nil {
 			log.Printf("[ERROR] Failed to marshal full response: %s", err)
-		} 
+		}
 
 		info.Resp.Write(marshalledData)
 		flusher.Flush()
@@ -11048,12 +11118,12 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	if totalTokens > 0 && len(info.OrgID) > 0 {
 		// Count LLM tokens no matter what
-		if defaultCreds { 
+		if defaultCreds {
 			IncrementCache(ctx, info.OrgID, "llm_tokens", totalTokens)
 		}
 
 		// Count agent tokens IF it's agent performing the task
-		if info.Caller == "aiAgentRunner" { 
+		if info.Caller == "aiAgentRunner" {
 			IncrementCache(ctx, info.OrgID, "agent_tokens", totalTokens)
 		}
 	}
@@ -11554,8 +11624,8 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		// }
 
 		callInfo := AiCallInfo{
-			Caller: "generateWorkflowJson", 
-			OrgID: user.ActiveOrg.Id,
+			Caller: "generateWorkflowJson",
+			OrgID:  user.ActiveOrg.Id,
 		}
 		finalContentOutput, err = RunAiQuery(ctx, callInfo, systemMessage, currentInput)
 		if err != nil {
@@ -12723,8 +12793,8 @@ IMPORTANT: The previous attempt returned invalid JSON format. Please ensure you 
 		}
 
 		callInfo := AiCallInfo{
-			Caller: "editWorkflowWithLLM", 
-			OrgID: user.ActiveOrg.Id,
+			Caller: "editWorkflowWithLLM",
+			OrgID:  user.ActiveOrg.Id,
 		}
 		contentOutput, err = RunAiQuery(ctx, callInfo, systemMessage, currentUserPrompt)
 		if err != nil {
@@ -13214,7 +13284,7 @@ func BuildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
 			}
 			params = append(params, MinimalParameter{Name: p.Name, Value: paramValue})
 		}
-		
+
 		// Check if this action is the start node
 		isStart := false
 		if len(w.Start) > 0 && w.Start == a.ID {
@@ -13224,7 +13294,7 @@ func BuildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
 		if a.IsStartNode {
 			isStart = true
 		}
-		
+
 		minActs = append(minActs, MinimalAction{
 			AppName:    a.AppName,
 			AppID:      a.AppID,
@@ -13283,13 +13353,13 @@ func BuildMinimalWorkflow(w *Workflow) *MinimalWorkflow {
 			}
 			params = append(params, MinimalParameter{Name: p.Name, Value: paramValue})
 		}
-		
+
 		isStart := false
 		if len(w.Start) > 0 && w.Start == t.ID {
 			isStart = true
 			startTriggerID = t.ID
 		}
-		
+
 		minTrigs = append(minTrigs, MinimalTrigger{
 			ID:         t.ID,
 			AppName:    t.AppName,
@@ -14720,13 +14790,13 @@ func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (
 	foundServerVersion := "0.0.1"
 	tools := MCPInitResponse{
 		Jsonrpc: request.Jsonrpc,
-		ID:	  request.ID,
+		ID:      request.ID,
 		Result: MCPToolResult{
 			ProtocolVersion: "2024-11-05",
-			Tools: []MCPTool{},
-			Capabilities: MCPCapabilities{},
+			Tools:           []MCPTool{},
+			Capabilities:    MCPCapabilities{},
 			ServerInfo: MCPServerInfo{
-				Name: "shuffle",
+				Name:    "shuffle",
 				Version: foundServerVersion,
 			},
 		},
@@ -14734,11 +14804,11 @@ func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (
 
 	for cnt, action := range app.Actions {
 		tool := MCPTool{
-			Name: action.Name,
+			Name:        action.Name,
 			Description: action.Description,
 			InputSchema: MCPToolInputSchema{
-				Type: "object",
-				Required: []string{},
+				Type:       "object",
+				Required:   []string{},
 				Properties: map[string]MCPProperty{},
 			},
 		}
@@ -14763,12 +14833,12 @@ func HandleMCPMethodInitialize(request MCPRequest, user User, app WorkflowApp) (
 			}
 
 			parsedDescription := param.Description
-			if strings.Contains(parsedDescription, "Generated by") { 
+			if strings.Contains(parsedDescription, "Generated by") {
 				parsedDescription = ""
 			}
 
 			tool.InputSchema.Properties[param.Name] = MCPProperty{
-				Type: "string",
+				Type:        "string",
 				Description: parsedDescription,
 			}
 		}
@@ -14994,15 +15064,15 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	user, usererr := HandleApiAuthentication(resp, request)
-	if usererr != nil || user.Id == "" || user.ActiveOrg.Id == "" { 
-		syncKey, err := HandleCloudSyncAuthentication(resp, request) 
+	if usererr != nil || user.Id == "" || user.ActiveOrg.Id == "" {
+		syncKey, err := HandleCloudSyncAuthentication(resp, request)
 		if err != nil || len(syncKey.OrgId) == 0 {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
 
-		user.ActiveOrg.Id = syncKey.OrgId 
+		user.ActiveOrg.Id = syncKey.OrgId
 		user.Username = ""
 		user.Id = ""
 		user.Role = ""
@@ -15033,14 +15103,14 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	callInfo := AiCallInfo{
-		Caller: "RequestForwarding", 
-		OrgID: user.ActiveOrg.Id,
-		Resp: resp,
+		Caller: "RequestForwarding",
+		OrgID:  user.ActiveOrg.Id,
+		Resp:   resp,
 	}
 
 	// Look for the "authentication_id" query and add to AiCallInfo
 	authId := request.URL.Query().Get("authentication_id")
-	if len(authId) > 0 { 
+	if len(authId) > 0 {
 		callInfo.AuthenticationId = authId
 	}
 
@@ -15081,7 +15151,7 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	}
 }
 
-//apiKey, aiRequestUrl, foundModel 
+// apiKey, aiRequestUrl, foundModel
 func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, string, string) {
 
 	orgId := callInfo.OrgID
@@ -15094,8 +15164,8 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 	foundModel := ""
 
 	// This is cached hence should be fast enough
-	auths, err := GetAllWorkflowAppAuth(ctx, orgId) 
-	if err != nil { 
+	auths, err := GetAllWorkflowAppAuth(ctx, orgId)
+	if err != nil {
 		log.Printf("[ERROR] Failed to get workflow app auths for org %s: %s", orgId, err)
 		return apiKey, aiRequestUrl, foundModel
 	}
@@ -15103,7 +15173,7 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 	for _, auth := range auths {
 		if len(callInfo.AuthenticationId) > 0 && auth.Id != callInfo.AuthenticationId {
 			continue
-		} 
+		}
 
 		if len(callInfo.AuthenticationId) == 0 && auth.Active == false {
 			// Disallowing unactive auth, as that's how we control which to use
@@ -15113,32 +15183,32 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 
 		// FIXME: Do we need this? Keeping for now, as to sort it properly
 		// This is specifcally to keep the OpenAI request format.
-		if strings.ToLower(auth.App.Name) != "openai" { 
+		if strings.ToLower(auth.App.Name) != "openai" {
 			continue
 		}
 
 		for _, field := range auth.Fields {
 			// Check if the auth has a valid API key
-			if field.Key == "apikey" { 
+			if field.Key == "apikey" {
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
 				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
-				if err == nil { 
+				if err == nil {
 					apiKey = string(decrypted)
 				}
 			}
 
-			if field.Key == "url" { 
+			if field.Key == "url" {
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
 				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
-				if err == nil { 
+				if err == nil {
 					aiRequestUrl = string(decrypted)
 				}
 			}
 
-			if field.Key== "model" { 
+			if field.Key == "model" {
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
 				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
-				if err == nil { 
+				if err == nil {
 					foundModel = string(decrypted)
 				}
 			}
@@ -15160,7 +15230,7 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 		if err != nil {
 			log.Printf("[ERROR] Failed to get org by ID %s: %s", orgId, err)
 			return apiKey, aiRequestUrl, foundModel
-		} 
+		}
 
 		// Checks if cloud sync is set up
 		if len(org.SyncConfig.Apikey) > 0 {
@@ -15173,7 +15243,7 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 		if strings.Contains(org.SyncConfig.URL, "shuffler.io") && strings.HasPrefix(org.SyncConfig.URL, "https://") {
 			baseUrl = org.SyncConfig.URL
 		}
-			
+
 		aiRequestUrl = fmt.Sprintf("%s/api/v1", baseUrl)
 	}
 
@@ -15199,7 +15269,7 @@ func ValidateURLandModel(aiRequestUrl string, currentModel string) (string, stri
 	} else if strings.Contains(aiRequestUrl, "api.openai.com") {
 		aiRequestUrl = "https://api.openai.com/v1"
 
-		if currentModel == "" { 
+		if currentModel == "" {
 			currentModel = "gpt-5.6-terra"
 		}
 	} else if strings.Contains(aiRequestUrl, "api.anthropic.com") {
@@ -15210,7 +15280,7 @@ func ValidateURLandModel(aiRequestUrl string, currentModel string) (string, stri
 		}
 	} else if strings.Contains(aiRequestUrl, "googleapis.com") {
 		if currentModel == "" {
-			currentModel = "gemini-3.6-flash"
+			currentModel = "gemini-3.7-flash"
 		}
 	} else if strings.Contains(aiRequestUrl, "api.mistral.ai") {
 		aiRequestUrl = "https://api.mistral.ai/v1"
