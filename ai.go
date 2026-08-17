@@ -7671,9 +7671,14 @@ func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) 
 	}
 	appSummaries, err := getOrgAppSummaries(ctx, user)
 	if err != nil {
-		log.Printf("[WARNING] buildWorkflowEditContext: failed getting app summaries for org %s: %s", execution.ExecutionOrg, err)
+		log.Printf("[ERROR] buildWorkflowEditContext: failed getting app summaries for org %s: %s", execution.ExecutionOrg, err)
+		return "", "", err
 	}
-	appsJson, _ := json.Marshal(appSummaries)
+	appsJson, err := json.Marshal(appSummaries)
+	if err != nil {
+		log.Printf("[ERROR] buildWorkflowEditContext: failed marshaling app summaries for org %s: %s", execution.ExecutionOrg, err)
+		return "", "", err
+	}
 
 	// What we tell the agent about its workflow_id
 	workflowIdLine := "CRITICAL: You do NOT have an existing workflow yet. Your FIRST action MUST be to call create_workflow to create one, then ALWAYS use the returned workflow_id for ALL subsequent operations."
