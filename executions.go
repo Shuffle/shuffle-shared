@@ -76,6 +76,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 			// Special cleanup for agents
 			if innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent" {
+				/*
 				if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" { 
 					if workflowExecution.Status == "FINISHED" {
 						log.Printf("[DEBUG][%s] Fixexecution: Agent execution is finished, skipping agent result %s", workflowExecution.ExecutionId, innerresult.Action.ID)
@@ -83,6 +84,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 					break
 				}
+				*/
 
 				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, innerresult.Action.ID)
 				if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil {
