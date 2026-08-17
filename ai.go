@@ -7689,7 +7689,7 @@ func getTemplateContext(ctx context.Context, template string, execution Workflow
 }
 
 func buildComputerUseContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
-	systemRule := `Your goal is to use a computer to solve a task. Your goal is to use the Terminal, Keyboard, Mouse and Screenshots to perform the task the user intends in the best possible way. Make assumptions for what they most likely want to perform, and continue until it is done. Use screenshots and commands to validate whether your actions worked.
+	systemRule := `Your goal is to use a computer to solve a task. Your goal is to use the Screenshots, Keyboard, Mouse and CLI to perform the task the user intends in the best possible way. Make assumptions for what they most likely want to perform, and continue until it is done. Use screenshots and commands to validate whether your actions worked. ALWAYS verify when possible and use screenshots a lot.
 
 Use the 'post_control_mouse_and_keyboard' function for keyboard & mouse control if it is available. You can chain together escaped JSON commands in the the "actions" array using the operations detailed below. If an action takes more than 30 seconds, it will return an execution_id and authorization key to be used for polling results. When polling, always add a 30 second delay. 
 
