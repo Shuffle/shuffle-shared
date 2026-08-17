@@ -722,6 +722,82 @@ func GetEsConfig(defaultCreds bool) *opensearchapi.Client {
 	return es
 }
 
+// Document.Get refuses an alias that points at more than one index. When that
+// happens, search the alias instead and take the newest matching document.
+// Returns the raw _source so each caller can unmarshal its own struct.
+func getDocFromAliasSearch(ctx context.Context, aliasName, id string) (json.RawMessage, error) {
+	var buf bytes.Buffer
+	query := map[string]interface{}{
+		"size": 1,
+		"query": map[string]interface{}{
+			"ids": map[string]interface{}{
+				"values": []string{id},
+			},
+		},
+		"sort": []map[string]interface{}{
+			{
+				"edited": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
+			{
+				"created": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
+		},
+	}
+
+	if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		return nil, err
+	}
+
+	resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+		Indices: []string{aliasName},
+		Body:    &buf,
+		Params:  opensearchapi.SearchParams{TrackTotalHits: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	res := resp.Inspect().Response
+	defer res.Body.Close()
+
+	if res.StatusCode == 404 {
+		return nil, errors.New("document doesn't exist")
+	}
+
+	respBody, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if res.StatusCode != 200 && res.StatusCode != 201 {
+		return nil, fmt.Errorf("failed alias lookup on %s. status=%d body=%s", aliasName, res.StatusCode, string(respBody))
+	}
+
+	wrapped := struct {
+		Hits struct {
+			Hits []struct {
+				Source json.RawMessage `json:"_source"`
+			} `json:"hits"`
+		} `json:"hits"`
+	}{}
+
+	if err := json.Unmarshal(respBody, &wrapped); err != nil {
+		return nil, err
+	}
+
+	if len(wrapped.Hits.Hits) == 0 {
+		return nil, errors.New("document doesn't exist")
+	}
+
+	return wrapped.Hits.Hits[0].Source, nil
+}
+
 // Handles org_statistics aliases pointing to more than one index by resolving
 // every concrete index and reading the document directly from each one.
 func getOrgStatisticsFromAliasIndices(ctx context.Context, aliasName, id string) (*ExecutionInfo, error) {
@@ -4731,8 +4807,19 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			}
 
 			if len(orgUsers) > 0 {
+				usersOrg, err := GetOrg(ctx, data.Id)
+				if err != nil {
+					log.Printf("[ERROR] Error loading users during org autocorrecting: %s", err)
+				}
+
+				if len(usersOrg.Users) == len(orgUsers) {
+					data.Users = usersOrg.Users
+				} else {
+					log.Printf("[ERROR] Using actual Users[], this might cause roles issue")
+					data.Users = orgUsers
+				}
+
 				log.Printf("[ERROR] Found 0 users for org %s. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", data.Id, len(orgUsers))
-				data.Users = orgUsers
 			}
 		}
 
@@ -13695,30 +13782,42 @@ func GetDatastoreCategoryConfig(ctx context.Context, orgId, category string) (*D
 			DocumentID: id,
 		})
 		if err != nil {
-			if debug {
-				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			if !strings.Contains(err.Error(), "has more than one index associated with it") {
+				if debug {
+					log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+				}
+				return categoryData, err
 			}
-			return categoryData, err
-		}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return categoryData, errors.New("Key doesn't exist")
-		}
+			source, fallbackErr := getDocFromAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
+			if fallbackErr != nil {
+				log.Printf("[WARNING] Datastore category alias fallback failed for %s: %s", cacheKey, fallbackErr)
+				return categoryData, fallbackErr
+			}
 
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return categoryData, err
-		}
+			if err := json.Unmarshal(source, categoryData); err != nil {
+				return categoryData, err
+			}
+		} else {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if res.StatusCode == 404 {
+				return categoryData, errors.New("Key doesn't exist")
+			}
 
-		wrapped := DatastoreCategoryKeyWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return categoryData, err
-		}
+			respBody, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				return categoryData, err
+			}
 
-		categoryData = &wrapped.Source
+			wrapped := DatastoreCategoryKeyWrapper{}
+			err = json.Unmarshal(respBody, &wrapped)
+			if err != nil {
+				return categoryData, err
+			}
+
+			categoryData = &wrapped.Source
+		}
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 
@@ -18859,28 +18958,40 @@ func GetDatastoreNGramItem(ctx context.Context, key string) (*NGramItem, error) 
 			DocumentID: key,
 		})
 		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
-			return ngramItem, err
-		}
+			if !strings.Contains(err.Error(), "has more than one index associated with it") {
+				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+				return ngramItem, err
+			}
 
-		res := resp.Inspect().Response
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return ngramItem, errors.New("Item doesn't exist")
-		}
+			source, fallbackErr := getDocFromAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), key)
+			if fallbackErr != nil {
+				log.Printf("[WARNING] Ngram alias fallback failed for %s: %s", cacheKey, fallbackErr)
+				return ngramItem, fallbackErr
+			}
 
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return ngramItem, err
-		}
+			if err := json.Unmarshal(source, ngramItem); err != nil {
+				return ngramItem, err
+			}
+		} else {
+			res := resp.Inspect().Response
+			defer res.Body.Close()
+			if res.StatusCode == 404 {
+				return ngramItem, errors.New("Item doesn't exist")
+			}
 
-		wrapped := NgramItemWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return ngramItem, err
-		}
+			respBody, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				return ngramItem, err
+			}
 
-		ngramItem = &wrapped.Source
+			wrapped := NgramItemWrapper{}
+			err = json.Unmarshal(respBody, &wrapped)
+			if err != nil {
+				return ngramItem, err
+			}
+
+			ngramItem = &wrapped.Source
+		}
 	} else {
 		// Get the ngram item from the datastore
 		getNgramKey := datastore.NameKey(nameKey, key, nil)
