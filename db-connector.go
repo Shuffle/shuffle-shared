@@ -4530,8 +4530,19 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			}
 
 			if len(orgUsers) > 0 {
+				usersOrg, err := GetOrg(ctx, data.Id)
+				if err != nil {
+					log.Printf("[ERROR] Error loading users during org autocorrecting: %s", err)
+				}
+
+				if len(usersOrg.Users) == len(orgUsers) {
+					data.Users = usersOrg.Users
+				} else {
+					log.Printf("[ERROR] Using actual Users[], this might cause roles issue")
+					data.Users = orgUsers
+				}
+
 				log.Printf("[ERROR] Found 0 users for org %s. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", data.Id, len(orgUsers))
-				data.Users = orgUsers
 			}
 		}
 
