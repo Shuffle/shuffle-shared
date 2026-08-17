@@ -129,8 +129,6 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			// Related projects (maybe)
 			"https://*.singul.io",
 			"https://singul.io",
-			"https://*.shutdown.no",
-			"https://shutdown.no",
 			"https://*.shuffle.security",
 			"https://shuffle.security",
 
@@ -16749,10 +16747,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
-			newCookie.Domain = ".shutdown.no"
-			http.SetCookie(resp, newCookie)
-
-			newCookie.Name = "__session"
 			newCookie.Domain = ".shuffle.security"
 			http.SetCookie(resp, newCookie)
 
@@ -16822,10 +16816,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		if project.Environment == "cloud" {
 			newCookie.Name = "__session"
 			newCookie.Domain = ".singul.io"
-			http.SetCookie(resp, newCookie)
-
-			newCookie.Name = "__session"
-			newCookie.Domain = ".shutdown.no"
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"

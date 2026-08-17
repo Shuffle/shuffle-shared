@@ -8631,23 +8631,86 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					}
 				}
 
-				// Only find the LAST image and use that
-				//historyImagesIncluded = append(historyImagesIncluded, image)
+				// Finding and fixing images in the previous decisions
+				// This monstrosity is a mess right now, but that's ok
 				if mappedDecision.Action == "post_take_screenshot" && len(mappedDecision.RunDetails.RawResponse) > 0 { 
+
 					// 1. HTTP response -> .Result
 					// 2. SingleResult -> stats == 200 => body
 					httpResp := HTTPOutput{} 
 					err = json.Unmarshal([]byte(mappedDecision.RunDetails.RawResponse), &httpResp)
 
-					if parsedBody, ok := httpResp.Body.(string); ok {
+					// httpResp -> .Body -> SingleResult -> .Result -> RCEResult -> .Output -> ScreenshotWrapper[] -> .ImageBase64
+					//if parsedBody, ok := httpResp.Body.([]byte); ok {
+					//if foundResult, ok := httpResp.Body.(SingleResult); ok {
+					if httpRespMap, ok := httpResp.Body.(map[string]interface{}); ok {
+						// Marshal -> Back to SingleResult
+						parsedBody, err := json.Marshal(httpRespMap)	
+						if err != nil { 
+							log.Printf("[ERROR] Bad httpRespMap marshal")
+						} 
+
 						// Map it to SingleResult 
 						foundResult := SingleResult{}
 						err = json.Unmarshal([]byte(parsedBody), &foundResult)
-						if len(foundResult.Result) > 0 { 
+						if len(foundResult.Result) == 0 { 
+							log.Printf("[ERROR] No found result") 
+						} else {
+							// Map it to 
+							rceOutput := RCEResult{} 
+							err = json.Unmarshal([]byte(foundResult.Result), &rceOutput)
+							if len(rceOutput.Output) == 0 {
+								log.Printf("[ERROR] No rce output") 
+							} else {
+								screenOutput := []ScreenshotWrapper{} 
+								err = json.Unmarshal([]byte(rceOutput.Output), &screenOutput)
+								for screenIndex, screen := range screenOutput {
+									if len(screen.ImageBase64) > 0 {
+										historyImagesIncluded = append(historyImagesIncluded, screen.ImageBase64)
+										screenOutput[screenIndex].ImageBase64 = ""
+									}
+								}
+
+								// Rebuild, as we have found the images correctly 
+								if len(historyImagesIncluded) == 0 {
+									log.Printf("[ERROR] No history images found") 
+								} else {
+									// Rebuild the output with the images removed
+									screenOutputBytes, err := json.Marshal(screenOutput)
+									if err != nil {
+										log.Printf("[ERROR][%s] Failed to marshal screen Output without images for decision at index %d: %s", execution.ExecutionId, mappedDecision.I, err)
+									} else {
+										rceOutput.Output = string(screenOutputBytes)
+										marshalledRceOutput, err := json.Marshal(rceOutput)
+										if err != nil { 
+											log.Printf("[ERROR][%s] Failed to marshal RCE output without images for decision at index %d: %s", execution.ExecutionId, mappedDecision.I, err)
+										} else {
+											foundResult.Result = string(marshalledRceOutput)
+
+											foundResultBytes, err := json.Marshal(foundResult)
+											if err != nil {
+												log.Printf("[ERROR][%s] Failed to marshal Found Result Bytes without images for decision at index %d: %s", execution.ExecutionId, mappedDecision.I, err)
+											} else {
+												httpResp.Body = string(foundResultBytes)
+
+												marshalledHttpResp, err := json.Marshal(httpResp)
+												if err != nil { 
+													log.Printf("[ERROR][%s] Failed to marshal Found Result Bytes without images for decision at index %d: %s", execution.ExecutionId, mappedDecision.I, err)
+												} else {
+													mappedDecision.RunDetails.RawResponse = string(marshalledHttpResp)
+												}
+											}
+										}
+									}
+								}
+							}
 						}
 					} else {
-						log.Printf("[ERROR] Screenshot result body is not a string for decision at index %d", mappedDecision.I)
+						log.Printf("[ERROR] Screenshot result body is not a string for decision at index %d. Type: %s", mappedDecision.I, reflect.TypeOf(httpResp.Body))
 					}
+
+					//log.Printf("\n\n\n END OF BASE64 PARSE. IMAGES: %d\n\n", len(historyImagesIncluded)) 
+					//os.Exit(3)
 				}
 
 				// Count how many times this exact action+tool combination has failed.
@@ -9201,7 +9264,7 @@ data_filter:
 	// }
 
 	if debug {
-		log.Printf("\n\n\n[DEBUG] BODY for AI Agent (first request): %s\n\n\n", string(initialAgentRequestBody))
+		log.Printf("\n\n\n[DEBUG] BODY for AI Agent (first request): %s\n\n^ExecutionId: %s\n", string(initialAgentRequestBody), execution.ExecutionId)
 	}
 
 	billingOrgId := execution.Workflow.OrgId
@@ -10233,6 +10296,7 @@ data_filter:
 		return abortAgentExecution(ctx, execution, startNode, "empty_llm_result", fmt.Sprintf("LLM returned empty response body with HTTP status %d", llmStatusCode))
 	}
 
+	/*
 	if memorizationEngine == "shuffle_db" {
 		requestKey := fmt.Sprintf("chat_%s_%s", execution.ExecutionId, startNode.ID)
 
@@ -10265,6 +10329,7 @@ data_filter:
 			}
 		}
 	}
+	*/
 
 	if createNextActions {
 		return startNode, nil
