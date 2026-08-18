@@ -7847,10 +7847,12 @@ Format: Schedule Trigger
   "parameters": [
     { "name": "param_1", "value": "some_value" }
   ],
-  "x": 100,
-  "y": 100
+  "x": 0,
+  "y": 0
 }
 }
+
+POSITIONING (x/y): get_minimal_workflow returns the real x/y of every existing node — use it. The overall flow should progress left to right: a node's "x" should generally be greater than the node(s) before it in the sequence (e.g. roughly halfway between two neighbors' x values if inserting between them, or ~337 to the right of the last node if appending). "y" should match its predecessor UNLESS this node is one of several parallel branches running off the same source node — in that case, give each parallel branch its own distinct "y" (spread them apart, e.g. ±150-250) so they fan out and don't overlap, matching how the user's request implies the branches should look. If the user explicitly describes a specific layout or arrangement, follow that instead of these defaults. Only leave "x" and "y" at 0 when you have no neighbor position to go on (e.g. the very first action in a brand-new workflow) — the backend will auto-place it. NEVER reuse the exact same fixed x/y (e.g. 100,100) for multiple unrelated actions, that stacks them directly on top of each other.
 
 Every action’s response is stored under its label. You can reference it using:
 $label_name this itself gives you the parsed JSON output of the action
@@ -7858,7 +7860,7 @@ $label_name this itself gives you the parsed JSON output of the action
 * $python_2.message.email
 * For triggers use "$exec" for example $exec.field
 
-Note: You can vertically position the node between existing ones by adding "insert_before": "<node_id>" or "insert_after": "<node_id>" alongside the data field.
+Note: You can control WHERE in the sequence a new node is inserted (which also determines its horizontal position) by adding "insert_before": "<node_id>" or "insert_after": "<node_id>" alongside the data field.
 
 2. CONNECTING NODES (Adding a Branch)
 Connect your nodes using their real IDs (if they already exist) or the temp_id you assigned when creating them in the same payload. You can include an array of conditions if you are adding multiple to the same branch.
