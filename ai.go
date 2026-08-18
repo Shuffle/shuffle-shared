@@ -7757,8 +7757,7 @@ func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) 
 	}
 	appSummaries, err := getOrgAppSummaries(ctx, user)
 	if err != nil {
-		log.Printf("[ERROR] buildWorkflowEditContext: failed getting app summaries for org %s: %s", execution.ExecutionOrg, err)
-		return "", "", err
+		log.Printf("[WARNING] buildWorkflowEditContext: failed getting app summaries for org %s: %s", execution.ExecutionOrg, err)
 	}
 
 	appsJson, err := json.Marshal(appSummaries)
