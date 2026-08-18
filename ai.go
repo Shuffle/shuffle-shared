@@ -15195,7 +15195,7 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 	}
 
 	// To avoid recursion of self-requesting backing to the same endpoint
-	if project.Environment == "cloud" && strings.Contains(aiRequestUrl, "shuffler.io") { 
+	if project.Environment == "cloud" && (strings.Contains(aiRequestUrl, "shuffler.io") || (strings.Contains(aiRequestUrl, "shuffle") && strings.Contains(aiRequestUrl, "app.run"))) {
 		return "", "", ""
 	}
 
