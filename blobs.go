@@ -22,8 +22,8 @@ import (
 func IsShuffleApp(app WorkflowApp) bool {
 	parsedAppname := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
 
-	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors", "shuffle_apps"}
-	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75", "7db43ccd25261967b095cfbd467a75cc"} 
+	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors", "shuffle_apps", "shuffle_workflows_builder", "shuffle_incidents", "shuffle_vulnerabilities"}
+	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75", "7db43ccd25261967b095cfbd467a75cc", "de4ef2287bd41b9d5563e39989643ee6", "48793430d21468f9e371ace402efcd8e"} 
 
 	isShuffleApp := false
 	if project.Environment == "cloud" && len(app.ID) > 0 {
@@ -112,6 +112,12 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 				if !workflowIdFound {
 					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+					automationOption := DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					}
+
+					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 				}
 
 				datastoreCategoryConfigEdited = true
@@ -159,7 +165,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 		// 3 year retention
 		if categoryConfig.Settings.Timeout == 0 {
-			categoryConfig.Settings.Timeout = 946080000
+			categoryConfig.Settings.Timeout = 94608000
 			datastoreCategoryConfigEdited = true
 		}
 
@@ -169,8 +175,8 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 			Options: []DatastoreAutomationOption{
 				DatastoreAutomationOption{
 					Key:      "action",
-					Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.   If the incident has RELEVANT tasks that are not finished, modify them if necessary. Change the incident \"severity\" to info/low/medium/high/critical if relevant. When done, ALWAYS make sure the \"status\" is inProgress. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.\n\nWhen done sending the previous update, start tackling the tasks one by one if there are any, and update them in realtime. When starting them, self-assign @AIAgent to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.",
-					Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
+					Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.    Change the incident \"severity\" to info/low/medium/high/critical where relevant. When done, ALWAYS make sure the \"status\" is inProgress or Resolved if it is not already. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.\n\nWhen done sending the previous update, start tackling the tasks one by one. When starting them, self-assign @AIAgent to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.\n\nDo not stop until you are finished with the tasks relevant for you to handle.",
+					Apps: []string{"48793430d21468f9e371ace402efcd8e"},
 					Disabled: false,
 				},
 			},
@@ -377,8 +383,8 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
 			}
 		}
-	} else if actionType == "vulnerability_comparison" {
-		categoryCheck := "shuffle-security_sensors"
+	} else if actionType == "vulnerability_correlation" {
+		categoryCheck := "shuffle-security_packages"
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
@@ -438,6 +444,12 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 				if !workflowIdFound {
 					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+					automationOption := DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					}
+
+					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 				}
 
 				datastoreCategoryConfigEdited = true
@@ -520,6 +532,12 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 				if !workflowIdFound {
 					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+					automationOption := DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					}
+
+					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 				}
 
 				datastoreCategoryConfigEdited = true
@@ -566,6 +584,137 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 // I kind of think so ~
 // That means each algorithm needs to be written as if-statements to
 // replace a specific part of a workflow :thinking:
+
+func getVulnerabilityCorrelationScript(orgId string) string {
+	return fmt.Sprintf(`import json
+import time
+import requests
+
+raw = r"""$exec"""
+
+exec = json.loads(raw)
+if isinstance(exec, str):
+    exec = json.loads(exec)
+
+name = exec["name"]
+versions = exec.get("versions", [])
+
+DATASTORE_CATEGORY = "shuffle-security_vulnerabilities"
+
+ECOSYSTEM_MAP = {
+    "python": "PyPI", "pip": "PyPI", "pypi": "PyPI",
+    "golang": "Go", "go": "Go",
+    "javascript": "npm", "node": "npm", "npm": "npm",
+    "rust": "crates.io", "cargo": "crates.io",
+    "ruby": "RubyGems", "gem": "RubyGems",
+    "java": "Maven", "maven": "Maven",
+    "php": "Packagist", "composer": "Packagist",
+    "dotnet": "NuGet", "nuget": "NuGet",
+}
+raw_os = (exec.get("os") or "").strip()
+ecosystem = ECOSYSTEM_MAP.get(raw_os.lower(), raw_os)
+
+def normalize_version(v):
+    if not v:
+        return None
+    v = v.strip()
+    if v.startswith("=="):
+        v = v.lstrip("=")
+    if any(c in v for c in "<>=*~^ "):
+        return None
+    return v
+
+API = "https://shuffler.io/api/v1/vulnerabilities"
+MAX_RETRIES = 4
+RETRY_WAIT = 20
+
+def is_rate_limited(resp, data):
+    if resp.status_code == 429:
+        return True
+    reason = (data.get("reason") or "") if isinstance(data, dict) else ""
+    return isinstance(data, dict) and data.get("success") is False and "too many requests" in reason.lower()
+
+found = []
+errors = []
+rate_limited = False
+
+for raw_version in versions:
+    version = normalize_version(raw_version)
+    if not version:
+        continue
+    if not ecosystem:
+        errors.append("No ecosystem mapping for os=%r" % raw_os)
+        break
+
+    body = {"package": {"name": name, "ecosystem": ecosystem}, "version": version}
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            r = requests.post(API, json=body, timeout=30)
+        except Exception as e:
+            errors.append("Request failed for %s %s: %s" % (name, version, e))
+            break
+        try:
+            data = r.json()
+        except Exception:
+            errors.append("Bad response (%s) for %s %s: %s" % (r.status_code, name, version, r.text[:200]))
+            break
+
+        if is_rate_limited(r, data):
+            rate_limited = True
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_WAIT)
+                continue
+            errors.append("RATE LIMITED on %s %s after %s retries" % (name, version, MAX_RETRIES))
+            break
+
+        if isinstance(data, dict) and data.get("success") is False:
+            errors.append("API error for %s %s: %s" % (name, version, data.get("reason")))
+            break
+
+        found.extend(data.get("vulns") or data.get("vulnerabilities") or [])
+        break
+
+seen, deduped = set(), []
+for v in found:
+    vid = v.get("id")
+    if vid and vid not in seen:
+        seen.add(vid)
+        deduped.append(v)
+
+stored = []
+store_errors = []
+for v in deduped:
+    vid = v.get("id")
+    if not vid:
+        continue
+    try:
+        self.set_key(vid, json.dumps(v), category=DATASTORE_CATEGORY)
+        stored.append(vid)
+    except Exception as e:
+        store_errors.append("Failed storing %s: %s" % (vid, e))
+
+if rate_limited or errors or store_errors:
+    status = "unknown"
+elif deduped:
+    status = "vulnerable"
+else:
+    status = "not_vulnerable"
+
+result = {
+    "name": name,
+    "ecosystem": ecosystem,
+    "status": status,
+    "vuln_count": len(deduped),
+    "stored_count": len(stored),
+    "stored_ids": stored,
+    "rate_limited": rate_limited,
+    "errors": errors,
+    "store_errors": store_errors,
+}
+print(json.dumps(result, indent=2))
+`, "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%d", "%s", "%s", "%s", "%s", "%s")					
+}
 
 // Should workflows be written as YAML and be text-editable?
 func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction CategoryAction) (Workflow, error) {
@@ -726,7 +875,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
-	} else if parsedActiontype == "ingest_tickets" || parsedActiontype == "ingest_assets" || parsedActiontype == "ingest_users" {
+	} else if parsedActiontype == "ingest_tickets" || parsedActiontype == "ingest_assets" || parsedActiontype == "ingest_users" || parsedActiontype == "ingest_vulnerabilities" {
 		actionName := "Cases"
 		currentAction := WorkflowAppActionParameter{
 			Name:  "action",
@@ -757,11 +906,19 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				"Search users",
 				"Create user",
 			}
+		} else if parsedActiontype == "ingest_vulnerabilities" {
+			actionName = "Assets"
+			currentAction.Value = "List vulnerabilities"
+			currentAction.Options = []string{
+				"List vulnerabilities",
+				"Get vulnerability",
+				"Create vulnerability",
+			}
 		}
 
 		defaultWorkflow := Workflow{
 			Name:        actionType,
-			Description: "List tickets from different systems and ingest them",
+			Description: fmt.Sprintf("List %s from different systems and ingest them", strings.Split(parsedActiontype, "_")[1]),
 			OrgId:       orgId,
 			Start:       startActionId,
 			UsecaseIds:  []string{"SIEM to ticket"},
@@ -996,6 +1153,75 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		// For now while testing
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
+	} else if parsedActiontype == "vulnerabilities_webhook" {
+		defaultWorkflow := Workflow{
+			Name:        "Vulnerabilities Webhook",
+			Description: "Ingest vulnerabilities through a webhook",
+			OrgId:       orgId,
+			Start:       startActionId,
+			UsecaseIds:  []string{"SIEM to ticket", "SIEM alerts", "EDR alerts"},
+			Tags:        []string{"vulnerabilities", "ingest",},
+			Actions: []Action{
+				Action{
+					Name:        "Translate standard",
+					AppID:       "integration",
+					AppName:     "Singul",
+					LargeImage:  getSingulLogo(),
+					ID:          startActionId,
+					AppVersion:  "1.0.0",
+					Environment: actionEnv,
+					Label:       "Ingest Ticket from Webhook",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "source_data",
+							Value:     "$exec",
+							Multiline: true,
+						},
+						WorkflowAppActionParameter{
+							Name:        "standard",
+							Description: "The standard to use from https://github.com/Shuffle/standards/tree/main",
+							Value:       "vulnerability",
+							Multiline:   false,
+						},
+					},
+				},
+			},
+			Triggers: []Trigger{
+				Trigger{
+					ID:          startTriggerId,
+					Name:        "Webhook",
+					TriggerType: "WEBHOOK",
+					Label:       "Ingest",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "url",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "tmp",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "auth_header",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "custom_response_body",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "await_response",
+							Value: "",
+						},
+					},
+				},
+			},
+		}
+
+		// For now while testing
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
 
 	} else if parsedActiontype == "threatlist_monitor_webhook" {
 		secondActionId := uuid.NewV4().String()
@@ -1186,32 +1412,73 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
 
-	} else if parsedActiontype == "vulnerability_comparison" {
-		// FIXME: Work in progress during test: /workflows/c584fa73-e399-b395-c62d-a64d8bba67c4
+	} else if parsedActiontype == "vulnerability_correlation" {
+	createCaseId := uuid.NewV4().String()
+		//defaultWorkflow := getVulnerabilityCorrelationWorkflow(actionType, orgId, startActionId, actionEnv, categoryAction)
 		defaultWorkflow := Workflow{
 			Name:        actionType,
-			Description: "Based on available vulnerabilities in the shuffle-security_sensors (and otherwise), checks these realtime against available ones.",
+			Description: "For each software package + version coming from a host monitor, queries the Shuffle vulnerability API and stores any matching CVEs into the shuffle-security_vulnerabilities datastore category.",
 			OrgId:       orgId,
 			Start:       startActionId,
 			UsecaseIds:  []string{"vulnerabilities"},
-			Tags:        []string{"ingest", "correlate", "automatic"},
+			Tags:        []string{"correlate", "vulnerability", "automatic"},
 			Actions: []Action{
-				Action{
+				{
 					Name:        "execute_python",
-					AppID:       "Shuffle Tools",
+					AppID:       "3e2bdf9d5069fe3f4746c29d68785a6a",
 					AppName:     "Shuffle Tools",
 					ID:          startActionId,
 					AppVersion:  "1.2.0",
 					Environment: actionEnv,
-					Label:       "Add enrichments to entry",
+					Label:       "verify_package_vulnerability",
+					IsStartNode: true,
+					Sharing:     true,
 					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:      "code",
-							Value:     getVulnerabilityComparison(),
+						{
+							Name: "code",
+							Value: getVulnerabilityCorrelationScript(orgId),
 							Multiline: true,
 							Required:  true,
 						},
 					},
+				},
+				{
+					Name:        "Vulnerability upload",
+					AppID:       "integration",
+					AppName:     "Singul",
+					LargeImage:  getSingulLogo(),
+					ID:          createCaseId,
+					AppVersion:  "1.0.0",
+					Environment: actionEnv,
+					Label:       "Create ticket",
+					Parameters: []WorkflowAppActionParameter{
+						{
+							Name:  "app_name",
+							Value: categoryAction.AppName,
+						},
+						{
+							Name:  "action",
+							Value: "Create vulnerability",
+							Options: []string{
+								"List tickets",
+								"Create ticket",
+								"Close ticket",
+								"Add comment",
+							},
+						},
+						{
+							Name:      "fields",
+							Value:     "data=$verify_package_vulnerability",
+							Multiline: true,
+						},
+					},
+				},
+			},
+			Branches: []Branch{
+				{
+					SourceID:      startActionId,
+					DestinationID: createCaseId,
+					ID:            uuid.NewV4().String(),
 				},
 			},
 		}
@@ -1749,7 +2016,21 @@ func GetPublicDetections() []DetectionResponse {
 }
 
 func GetBaseDockerfile() []byte {
-	return []byte(`FROM frikky/shuffle:app_sdk as base
+	appSdkImage := "frikky/shuffle:app_sdk"
+
+	registry := os.Getenv("SHUFFLE_BASE_IMAGE_REGISTRY")
+	name := os.Getenv("SHUFFLE_BASE_IMAGE_NAME")
+	if name != "" {
+		if registry != "" {
+			appSdkImage = fmt.Sprintf("%s/%s:app_sdk", registry, name)
+		} else {
+			appSdkImage = fmt.Sprintf("%s:app_sdk", name)
+		}
+	} else if registry != "" {
+		appSdkImage = fmt.Sprintf("%s/frikky/shuffle:app_sdk", registry)
+	}
+
+	return []byte(fmt.Sprintf(`FROM %s as base`, appSdkImage) + `
 
 # We're going to stage away all of the bloat from the build tools so lets create a builder stage
 FROM base as builder
@@ -1839,6 +2120,12 @@ func GetAppCategories() []AppCategory {
 			Color:        "#FFC107",
 			Icon:         "AI",
 			ActionLabels: []string{"Answer Question", "Run Action", "Run LLM"},
+		},
+		AppCategory{
+			Name:         "Internal",
+			Color:        "#FFC107",
+			Icon:         "other",
+			ActionLabels: []string{"Get Workflow", "List Workflows", "Create Workflow", "Update Workflow", "Delete Workflow", "Run Workflow", "Get Run", "List Runs", "Create Run", "Update Run", "Delete Run"},
 		},
 		AppCategory{
 			Name:         "Other",
@@ -4017,12 +4304,9 @@ func GetUsecaseData() string {
         ],
         "description": "Correlate known vulnerabilities (CVEs, misconfigurations, missing patches) on affected assets with active incidents — surfacing exploitable weaknesses that elevate risk and guide containment priorities.",
         "agentic_description": "An agent matches observables and affected hosts in a case against the vulnerability inventory, identifies exploitable CVEs aligned with the attack technique, recalculates incident severity, and recommends remediation or compensating controls.",
-        "automation_area": "correlation",
-        "custom_action": {
-          "label": "Configure Vulnerabilities",
-          "href": "/vulnerabilities",
-          "description": "Open the vulnerability inventory to ingest CVEs from your scanners."
-        }
+        "automation_label": "Vulnerability Correlation",
+        "automation_category": "cases",
+        "automation_area": "correlation"
       },
       {
         "name": "Phishing IOCs",
@@ -4100,7 +4384,7 @@ func GetUsecaseData() string {
         "manual_verification": true
       },
       {
-        "name": "Incident Routing",
+        "name": "Incident Routing Rules",
         "type": "Cases",
         "destination": "Cases",
         "running": false,

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,15 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Stream Update request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
 	//// Removed check here as it may be a public workflow
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
@@ -51,7 +61,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
+			resp.Write([]byte(`{"success": false, "reason": "Workflow ID missing from request path"}`))
 			return
 		}
 
@@ -87,15 +97,16 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (SET workflow stream)", user.Username, workflow.ID)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
+			resp.Write([]byte(`{"success": false, "reason": "You do not have permission to update this workflow's stream"}`))
 			return
 		}
 	}
 
 	org, err := GetOrg(ctx, workflow.OrgId)
 	if err != nil || !org.SyncFeatures.Multiplayer.Active {
+		log.Printf("[AUDIT] Multiplayer not active for org %s (Workflow stream updates)", workflow.OrgId)
 		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false}`))
+		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
 		return
 	}
 
@@ -103,7 +114,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	if err != nil {
 		log.Printf("[WARNING] Error with body read in workflow stream: %s", err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
 		return
 	}
 
@@ -144,7 +155,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		if err != nil {
 			log.Printf("[WARNING] Failed to marshal stream state: %s", err)
 			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false}`))
+			resp.Write([]byte(`{"success": false, "reason": "Failed to save stream operation"}`))
 			return
 		}
 
@@ -192,7 +203,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		if err != nil {
 			log.Printf("[WARNING] Failed to marshal stream state: %s", err)
 			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false}`))
+			resp.Write([]byte(`{"success": false, "reason": "Failed to save stream operations"}`))
 			return
 		}
 
@@ -223,6 +234,15 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Stream Start request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[AUDIT] Api authentication failed in getting specific workflow (stream): %s. Continuing because it may be public.", err)
@@ -234,7 +254,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
+			resp.Write([]byte(`{"success": false, "reason": "Workflow ID missing from request path"}`))
 			return
 		}
 
@@ -273,15 +293,16 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow stream)", user.Username, workflow.ID)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
+			resp.Write([]byte(`{"success": false, "reason": "You do not have permission to access this workflow's stream"}`))
 			return
 		}
 	}
 
 	org, err := GetOrg(ctx, workflow.OrgId)
 	if err != nil || !org.SyncFeatures.Multiplayer.Active {
+		log.Printf("[AUDIT] Multiplayer not active for org %s (get workflow stream)", workflow.OrgId)
 		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false}`))
+		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
 		return
 	}
 
@@ -471,11 +492,20 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 		return
 	}
 
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Stream History request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[AUDIT] Api authentication failed in getting workflow stream history: %s", err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
+		resp.Write([]byte(`{"success": false, "reason": "Authentication required"}`))
 		return
 	}
 
@@ -484,7 +514,7 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
+			resp.Write([]byte(`{"success": false, "reason": "Workflow ID missing from request path"}`))
 			return
 		}
 		fileId = location[4]
@@ -517,15 +547,16 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (stream history)", user.Username, workflow.ID)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
+			resp.Write([]byte(`{"success": false, "reason": "You do not have permission to view this workflow's stream history"}`))
 			return
 		}
 	}
 
 	org, err := GetOrg(ctx, workflow.OrgId)
 	if err != nil || !org.SyncFeatures.Multiplayer.Active {
+		log.Printf("[AUDIT] Multiplayer not active for org %s (stream history)", workflow.OrgId)
 		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false}`))
+		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
 		return
 	}
 
