@@ -129,8 +129,8 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			// Related projects (maybe)
 			"https://*.singul.io",
 			"https://singul.io",
-			"https://*.shutdown.no",
-			"https://shutdown.no",
+			"https://*.shuffle.security",
+			"https://shuffle.security",
 
 			// Local testing
 			"http://localhost:3002",
@@ -16747,7 +16747,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
-			newCookie.Domain = ".shutdown.no"
+			newCookie.Domain = ".shuffle.security"
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
@@ -16819,7 +16819,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
-			newCookie.Domain = ".shutdown.no"
+			newCookie.Domain = ".shuffle.security"
 			http.SetCookie(resp, newCookie)
 		}
 
@@ -18392,7 +18392,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							}
 						}
 
-						go abortAgentExecution(ctx, *foundParentExec, startNode, oldAgentOutput, "llm_received_failure", foundError)
+						go abortAgentExecution(ctx, *foundParentExec, startNode, "llm_received_failure", foundError)
 					}
 				}
 
