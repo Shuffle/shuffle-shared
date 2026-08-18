@@ -10,10 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	openai "github.com/sashabaranov/go-openai"
-	uuid "github.com/satori/go.uuid"
-	"google.golang.org/api/customsearch/v1"
-	option "google.golang.org/api/option"
 	"io"
 	"io/ioutil"
 	"log"
@@ -35,6 +31,11 @@ import (
 	"github.com/frikky/kin-openapi/openapi3"
 	"github.com/frikky/schemaless"
 
+	openai "github.com/sashabaranov/go-openai"
+	uuid "github.com/satori/go.uuid"
+	"google.golang.org/api/customsearch/v1"
+	option "google.golang.org/api/option"
+	"github.com/bradfitz/slice"
 	oai "github.com/openai/openai-go/v3"
 	aioption "github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
@@ -7688,9 +7689,12 @@ func getTemplateContext(ctx context.Context, template string, execution Workflow
 	}
 }
 
+// Control a computer (Computer-Use)
+// Toolset: Screenshot, mouse & kb. CLI. API. 
 func buildComputerUseContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
 
-	// osascript -e 'tell application "System Events" to keystroke "Jay Gohil"' -e 'delay 1' -e 'tell application "System Events" to key code 36'
+	// Question: Can this be done in a "specialised" fashion as well?
+	// AKA: not a generalised computer agent, but one built for a specific usecase 
 
 	systemRule := `# ROLE & CAPABILITIES
 You are an autonomous Computer-Using Agent interacting with a desktop/browser environment. You interact with the system by taking screenshots, parsing UI elements, and emitting action tool calls. Make assumptions for what they most likely want to perform, and continue until it is done. 
@@ -7701,12 +7705,13 @@ You are an autonomous Computer-Using Agent interacting with a desktop/browser en
 - If an action takes more than 30 seconds, it will return an execution_id and authorization key to be used for polling results. When polling, always add 30 second or more delay. 
 - Ask for input IF: MFA challenges, CAPTCHAs, credit card payments, performing destrucive actions, 
 
-# CONTROL OVERVIEW 
-1. keyboard.press: {\"op\":\"keyboard.press\",\"params\":{\"key\":75}}
-2. mouse.click: {\"x\":600,\"y\":400,\"button\":\"left\",\"delay_ms\":100}
-3. mouse.move:  {\"x\":600,\"y\":400}
-4. mouse.drag:  {\"from_x\":600,\"from_y\":400,\"to_x\":800,\"to_y\":500,\"button\":\"left\"}
-5. system.wait: {\"op\":\"system.wait\",\"params\":{\"ms\":250}}
+# OPERATION OVERVIEW 
+1. keyboard.type: {"keys":"https://google.com"}
+2. keyboard.hotkey: {"keys":"control,tab"}
+3. mouse.click: {"x":600,"y":400,"button":"left","delay_ms":100}
+4. Mouse move:  {"x":600,"y":400}
+5. mouse.drag:  {"from_x":600,"from_y":400,"to_x":800,"to_y":500,"button":"left"}
+6. system.wait: {"ms":250}
 
 When sending body to the post_control_mouse_and_keyboard function, the following body structure should be used:
 '''
@@ -7728,7 +7733,7 @@ When choosing one or more hostnames, NEVER guess which host. When available, ALW
 
 # CRITICAL EXECUTION RULES
 - COORDINATES: All coordinates must be specified relative to the current image width and height. Always click in the center of clickable elements.
-- ONE ACTION AT A TIME: Never attempt multiple clicks or multi-step key sequences in a single turn unless using specific batch keyboard tools. Always inspect the updated screenshot first.
+- ONE ACTION AT A TIME: Perform a MAXIMUM of THREE keyboard- or ONE mouse operation in a single decision. 
 - STAGNATION PROTOCOL: If the screenshot does not change after an action:
   1. Do not repeat the action.
   2. Attempt to scroll or use keyboard navigation (e.g., press 'Tab' or 'Enter').
@@ -10330,8 +10335,10 @@ data_filter:
 		return abortAgentExecution(ctx, execution, startNode, "empty_llm_result", fmt.Sprintf("LLM returned empty response body with HTTP status %d", llmStatusCode))
 	}
 
-	/*
 	if memorizationEngine == "shuffle_db" {
+
+		/*
+		// This is NOT what Memory is used for...
 		requestKey := fmt.Sprintf("chat_%s_%s", execution.ExecutionId, startNode.ID)
 
 		for messageIndex, _ := range completionRequest.Messages {
@@ -10362,8 +10369,8 @@ data_filter:
 				log.Printf("[ERROR][%s] AI Agent: Failed updating AI requests: %s", execution.ExecutionId, err)
 			}
 		}
+		*/
 	}
-	*/
 
 	if createNextActions {
 		return startNode, nil
@@ -15331,14 +15338,19 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 		return apiKey, aiRequestUrl, foundModel
 	}
 
+	// Sort by editing time
+	slice.Sort(auths[:], func(i, j int) bool {
+		return auths[i].Edited > auths[j].Edited
+	})
+
 	for _, auth := range auths {
 		if len(callInfo.AuthenticationId) > 0 && auth.Id != callInfo.AuthenticationId {
 			continue
 		}
 
+		// Disallowing unactive auth, as that's how we control which to use
+		// If authId is specified, we don't care.
 		if len(callInfo.AuthenticationId) == 0 && auth.Active == false {
-			// Disallowing unactive auth, as that's how we control which to use
-			// from the agent frontend
 			continue
 		}
 
@@ -15376,7 +15388,7 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 		}
 
 		// openai auth.Active is the primary one at all times
-		if auth.Active && len(apiKey) > 0 && len(aiRequestUrl) > 0 {
+		if auth.Validation.Valid && len(apiKey) > 0 && len(aiRequestUrl) > 0 {
 			break
 		}
 	}

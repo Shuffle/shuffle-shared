@@ -18226,7 +18226,10 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	// FIXME: How do we handle 3rd party memory sources?
 	// This uses the built-in datastore mechanism so that the user
 	// can see and modify stuff themself as well.
+
 	if mappedResult.Memory == "shuffle_db" {
+		/*
+		// This is NOT what Memory is used for...
 		requestKey := fmt.Sprintf("chat_%s_%s", actionResult.ExecutionId, actionResult.Action.ID)
 		if debug {
 			log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
@@ -18242,6 +18245,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 				log.Printf("[DEBUG] No agent cache memory for key %s", requestKey)
 			}
 		}
+		*/
 	}
 
 	if len(allFinishedDecisions) == len(mappedResult.Decisions) {
