@@ -21174,6 +21174,14 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				action.ID = uuid.NewV4().String()
 			}
 
+			targetWorkflowId := ""
+			for _, param := range action.Parameters {
+				if param.Name == "workflow_id" {
+					targetWorkflowId = param.Value
+					break
+				}
+			}
+
 			exec := WorkflowExecution{
 				Workflow: Workflow{
 					ID: workflowId,
@@ -21194,6 +21202,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				ExecutionOrg:  user.ActiveOrg.Id,
 				StartedAt:     int64(time.Now().Unix()),
 				Authorization: uuid.NewV4().String(),
+				ExecutionArgument: targetWorkflowId,
 			}
 
 			SetWorkflowExecution(ctx, exec, true)
@@ -36410,6 +36419,7 @@ func buildAppActionResponses(matchedApps []WorkflowApp) []AppActionResponse {
 					Name:        param.Name,
 					Required:    param.Required,
 					Description: param.Description,
+					Example:     param.Example,
 				})
 			}
 
