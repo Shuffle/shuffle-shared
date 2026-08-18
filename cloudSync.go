@@ -2215,7 +2215,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	//ExecutionDelay: selectedDelay,
 	timeout := time.Duration(30) * time.Second
 
-	// Immediate exist. 3 seconds due to body transfer worst case
+	// Immediate exits. 3 seconds due to body transfer worst case
 	if selectedDelay > 0 { 
 		timeout = time.Duration(2) * time.Second
 	}
@@ -2227,17 +2227,14 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		requestUrl += fmt.Sprintf("parent_node=%s", parentNode)
 	}
 
-	//if debug { 
-	//	if strings.Contains(strings.ToLower(action.AppName), "gmail") {
-	//		log.Printf("REQUEST URL: %#v", requestUrl)
-	//		os.Exit(3)
-	//	}
-	//}
-
-	//httpStart := time.Now()
+	// Gives it time to return properly with +2 delay
 	client := GetExternalClientWithTimeout(requestUrl, 0)
-	client.Timeout = timeout
+	client.Timeout = timeout + (1 * time.Second)
 
+	//if debug { 
+		//log.Printf("\n\n\n\nRequest timeout: %d", client.Timeout)
+		//log.Printf("REQUEST URL: %#v\n\n\n\n", requestUrl)
+	//}
 
 	req, reqErr := http.NewRequest("POST", requestUrl, bytes.NewBuffer(actionBytes))
 	if reqErr != nil {
@@ -2842,6 +2839,9 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			return
 		}
 
+		if debug { 
+			log.Printf("\n\n\n[DEBUG] ERROR BELOW\n\n\n")
+		}
 		log.Printf("[ERROR][%s] AI Agent: All attempts to POST decision %s to streams failed: %v. Falling back to in-process handler.", execution.ExecutionId, decision.RunDetails.Id, streamErr)
 	}
 

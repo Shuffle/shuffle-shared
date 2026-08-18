@@ -7689,11 +7689,19 @@ func getTemplateContext(ctx context.Context, template string, execution Workflow
 }
 
 func buildComputerUseContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
-	systemRule := `Your goal is to use a computer to solve a task. Your goal is to use the Screenshots, Keyboard, Mouse and CLI to perform the task the user intends in the best possible way. Make assumptions for what they most likely want to perform, and continue until it is done. Use screenshots and commands to validate whether your actions worked. ALWAYS verify when possible and use screenshots a lot.
 
-Use the 'post_control_mouse_and_keyboard' function for keyboard & mouse control if it is available. You can chain together escaped JSON commands in the the "actions" array using the operations detailed below. If an action takes more than 30 seconds, it will return an execution_id and authorization key to be used for polling results. When polling, always add a 30 second delay. 
+	// osascript -e 'tell application "System Events" to keystroke "Jay Gohil"' -e 'delay 1' -e 'tell application "System Events" to key code 36'
 
-Params for each keyboard & mouse operation: 
+	systemRule := `# ROLE & CAPABILITIES
+You are an autonomous Computer-Using Agent interacting with a desktop/browser environment. You interact with the system by taking screenshots, parsing UI elements, and emitting action tool calls. Make assumptions for what they most likely want to perform, and continue until it is done. 
+
+# RULES & RESPONSIBILITIES
+- Use the 'post_control_mouse_and_keyboard' function for keyboard & mouse control if it is available. You can chain together escaped JSON commands in the the "actions" array using the operations detailed below. 
+- If an action produces no state change in the new screenshot, do NOT repeat the exact same action. Try an alternative input method (e.g., press Enter instead of clicking 'Search', or scroll to reveal hidden UI elements).
+- If an action takes more than 30 seconds, it will return an execution_id and authorization key to be used for polling results. When polling, always add 30 second or more delay. 
+- Ask for input IF: MFA challenges, CAPTCHAs, credit card payments, performing destrucive actions, 
+
+# CONTROL OVERVIEW 
 1. keyboard.press: {\"op\":\"keyboard.press\",\"params\":{\"key\":75}}
 2. mouse.click: {\"x\":600,\"y\":400,\"button\":\"left\",\"delay_ms\":100}
 3. mouse.move:  {\"x\":600,\"y\":400}
@@ -7714,10 +7722,19 @@ When sending body to the post_control_mouse_and_keyboard function, the following
 }
 '''
 
-When choosing a hostname, NEVER guess which host. When available, ALWAYS use one that recently checked in or is active.
+# HOST CHOICE
+When choosing one or more hostnames, NEVER guess which host. When available, ALWAYS use one that recently checked in or is active. 
 
-ALWAYS validate if the action was successful by checking the output of the operations before AND after with screenshots or terminal input/output. If it was not successful, you must try again with a different approach.
-	`
+
+# CRITICAL EXECUTION RULES
+- COORDINATES: All coordinates must be specified relative to the current image width and height. Always click in the center of clickable elements.
+- ONE ACTION AT A TIME: Never attempt multiple clicks or multi-step key sequences in a single turn unless using specific batch keyboard tools. Always inspect the updated screenshot first.
+- STAGNATION PROTOCOL: If the screenshot does not change after an action:
+  1. Do not repeat the action.
+  2. Attempt to scroll or use keyboard navigation (e.g., press 'Tab' or 'Enter').
+  3. If stuck for >3 turns on the same screen, set approval_required: true 
+- ACCESSIBILITY & POP-UPS: Always resolve overlays, cookie banners, or modal dialogs before trying to interact with background content.
+`
 
 	templateContext := ""
 	requiredApps := []string{
@@ -9130,6 +9147,9 @@ data_filter:
 		}
 
 		if len(historyImagesIncluded) > 0 { 
+			// Letting vendor control Reasoning in cases with images 
+			completionRequest.ReasoningEffort = "" 
+
 			historyObject = openai.ChatCompletionMessage{
 				Role: openai.ChatMessageRoleUser,
 				MultiContent: []openai.ChatMessagePart{
@@ -9138,6 +9158,12 @@ data_filter:
 						Text: historyString,
 					},
 				},
+			}
+
+			// Reduce it down to the 2 last images
+			keepAmount := 2
+			if len(historyImagesIncluded) > keepAmount { 
+				historyImagesIncluded = historyImagesIncluded[len(historyImagesIncluded)-1-keepAmount:len(historyImagesIncluded)-1]
 			}
 
 			for _, imageIncluded := range historyImagesIncluded {
@@ -9876,8 +9902,16 @@ data_filter:
 				}
 			}
 
+			// Validate if NOT FINISHED/ABORTED
+			tmpExecution, _ := GetWorkflowExecution(ctx, execution.ExecutionId)
+
 			if debug {
-				log.Printf("[DEBUG] Got %d NEW decision(s)", len(mappedDecisions))
+				log.Printf("[DEBUG][%s] Got %d NEW decision(s). Status: %s", execution.ExecutionId, len(mappedDecisions), tmpExecution)
+			}
+
+			if tmpExecution.Status == "FINISHED" || tmpExecution.Status == "ABORTED" {
+				log.Printf("[INFO][%s] Already finished. Stopping agent continuation.", execution.ExecutionId)
+				return startNode, errors.New("Agent Workflow run already finished") 
 			}
 
 			// Verbose error handling optimisations
@@ -10851,16 +10885,16 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 		// Needs overriding / control
 		// DRASTICALLY slows down requests
-		ReasoningEffort: "minimal",
+		ReasoningEffort: "low",
 	}
 
 	if len(os.Getenv("SHUFFLE_REASONING_EFFORT")) > 0 {
-		availableOptions := []string{"", "minimal", "low", "medium", "high"}
-		if ArrayContains(availableOptions, strings.ToLower(os.Getenv("SHUFFLE_REASONING_EFFORT"))) {
-			chatCompletion.ReasoningEffort = strings.ToLower(os.Getenv("SHUFFLE_REASONING_EFFORT"))
-		} else {
-			log.Printf("[WARNING] Invalid REASONING_EFFORT option '%s'. Available options: %v. Defaulting to 'minimal' for non-configured requests.", os.Getenv("SHUFFLE_REASONING_EFFORT"), availableOptions)
-		}
+		//availableOptions := []string{"", "minimal", "low", "medium", "high"}
+		//if ArrayContains(availableOptions, strings.ToLower(os.Getenv("SHUFFLE_REASONING_EFFORT"))) {
+		chatCompletion.ReasoningEffort = strings.ToLower(os.Getenv("SHUFFLE_REASONING_EFFORT"))
+		//} else {
+		//	log.Printf("[WARNING] Invalid REASONING_EFFORT option '%s'. Available options: %v. Defaulting to 'minimal' for non-configured requests.", os.Getenv("SHUFFLE_REASONING_EFFORT"), availableOptions)
+		//}
 	}
 
 	// FIXME: Too specific. Should be self-corrective.. :)

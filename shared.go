@@ -14621,7 +14621,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 			Status:        "FAILURE",
 		})
 	} else if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
-		log.Printf("[INFO] DONE - Nothing to add during abort!")
+		log.Printf("[INFO][%s] Abort DONE - Nothing to add during abort!", workflowExecution.ExecutionId)
 	} else {
 		//log.Printf("VALIDATING INPUT!")
 		node, nodeok := request.URL.Query()["node"]
@@ -21161,7 +21161,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 	}
 
 	if appId != action.AppID {
-
 		// Used for standalone runs controlled from /agents and /mcp
 		if appId == "agent_starter" {
 			workflowId := uuid.NewV4().String()
@@ -21244,6 +21243,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 		} else if strings.ToLower(appId) == "http" || strings.ToLower(action.AppID) == "http" {
 			action.AppID = "http"
+		} else if strings.ToLower(appId) == "sensors" || strings.ToLower(action.AppID) == "sensors" {
+			action.AppID = "sensors"
+			appId = "sensors"
 		} else {
 			log.Printf("[WARNING] Bad appid in single execution of App '%s'", appId)
 			return workflowExecution, errors.New(fmt.Sprintf("No matching app found for '%s'. Did you choose an app to run?", appId))
@@ -22289,7 +22291,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		maxSeconds = 180
 	}
 
-	if timeout > maxSeconds {
+	if timeout > 0 {
 		maxSeconds = timeout
 	}
 
@@ -22308,7 +22310,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		if time.Now().Unix()-startTime > int64(maxSeconds) {
 
 			returnBody.Success = true
-			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
+			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the GET /api/v1/executions/{executionId}?authorization={auth} API to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
 
 			break
 		}
