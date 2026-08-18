@@ -7762,15 +7762,15 @@ func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) 
 	}
 
 	// What we tell the agent about its workflow_id
-	workflowIdLine := "CRITICAL: You do NOT have an existing workflow yet. Your FIRST action MUST be to call create_workflow to create one, then ALWAYS use the returned workflow_id for ALL subsequent operations."
+	workflowIdLine := `CRITICAL: You do NOT have an existing workflow yet. Your FIRST action MUST be to call post_create_workflow to create one, then ALWAYS use the returned workflow_id for ALL subsequent operations. EXCEPTION: if the user's message itself mentions an ID that looks like a workflow ID (a UUID, e.g. "6bffd92a-49d6-480f-af72-ebd6900652e6"), especially alongside words like "workflow", treat that UUID as the existing target workflow_id instead of creating a new one — use it directly in put_agent_update and get_minimal_workflow.`
 	if len(targetWorkflowId) > 0 {
 		workflowIdLine = fmt.Sprintf(`CRITICAL: Working Workflow ID: %s 
-You MUST use this exact workflow_id in every single agent_update operation. DO NOT try to guess or create a new one.`, targetWorkflowId)
+You MUST use this exact workflow_id in every single put_agent_update operation. DO NOT try to guess or create a new one.`, targetWorkflowId)
 	}
 
-	systemRule := `[SECONDARY]: You are an autonomous workflow-building agent. You build or edit workflows that will eventually automate the task. Only use the special actions built for you — agent_update is the primary one you will use. If the user requests an integration that is not in your current context, you can still fetch its actions by passing the requested app name to your get_workflow_app_actions tool. The system will automatically search for the app and return its actions.
+	systemRule := `[SECONDARY]: You are an autonomous workflow-building agent. You build or edit workflows that will eventually automate the task. Only use the special actions built for you — put_agent_update is the primary one you will use. If the user requests an integration that is not in your current context, you can still fetch its actions by passing the requested app name to the post_get_app_actions_summary action on the shuffle_apps tool. The system will automatically search for the app and return its list of available actions.
 
-Only ask the user for information when it is genuinely unavailable through any allowed action. Use get_minimal_action to fetch the latest workflow state whenever you need to inspect or verify what is currently in the workflow — prefer this over relying on stale context.
+Only ask the user for information when it is genuinely unavailable through any allowed action. Use get_minimal_workflow to fetch the latest workflow state whenever you need to inspect or verify what is currently in the workflow — prefer this over relying on stale context.
 
 Payload Structure
 
@@ -7780,13 +7780,13 @@ Key is "body" and Value is {
 "operations": [ ...array of step-by-step operations... ]
 }
 
-CRITICAL: The "operations" field MUST be a JSON array of objects. NEVER write a natural language plan, summary, or string inside the "operations" field. This overrides the generic "value": "literal_value" example shown elsewhere in your instructions — for agent_update, "value" is ALWAYS an object, and "operations" inside it is ALWAYS an array, never a string.
+CRITICAL: The "operations" field MUST be a JSON array of objects. NEVER write a natural language plan, summary, or string inside the "operations" field. This overrides the generic "value": "literal_value" example shown elsewhere in your instructions — for put_agent_update, "value" is ALWAYS an object, and "operations" inside it is ALWAYS an array, never a string.
 
-Concrete example of a correct full decision using agent_update:
+Concrete example of a correct full decision using put_agent_update:
 {
-  "action": "agent_update",
+  "action": "put_agent_update",
   "category": "singul",
-  "tool": "agent_update",
+  "tool": "put_agent_update",
   "fields": [
     {
       "key": "body",
@@ -7947,8 +7947,8 @@ To use data from another node, reference its label.
 CRITICAL RULES FOR THE AGENT
 
 1. Handling Errors: If you make a mistake, the API will reject your request and tell you EXACTLY which operation failed and why (e.g., "Operation 1 failed: app_id is required"). Read the error carefully, fix the specific missing or incorrect field, and try again.
-2. Special actions are built exclusively for you. agent_update is the core action that does most of the heavy lifting.
-3. Use get_minimal_action to fetch the current workflow state only whenever you need it.
+2. Special actions are built exclusively for you. put_agent_update is the core action that does most of the heavy lifting.
+3. Use get_minimal_workflow to fetch the current workflow state only whenever you need it.
 4. Try not to use parallel decision calling; always do sequential tool calls.`
 
 	templateContext := fmt.Sprintf(`%s
@@ -8248,6 +8248,41 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 		} else {
 			log.Printf("[ERROR] Failed to marshal parsing body for shuffle tools translation: %v", err)
+		}
+	}
+	
+	templateSystemRule := ""
+	templateContext := ""
+	requiredApps := []string{}
+	for _, param := range startNode.Parameters {
+		if param.Name == "template" {
+			template = param.Value
+			break
+		}
+	}
+
+	if len(template) > 0 {
+		templateSystemRule, templateContext, requiredApps, err = getTemplateContext(ctx, template, execution)
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed to get template context: %v", execution.ExecutionId, err)
+		} else if len(requiredApps) > 0 {
+			requiredAppsValue := strings.Join(requiredApps, ",")
+
+			mergedIntoExisting := false
+			for paramIndex, param := range startNode.Parameters {
+				if param.Name == "action" {
+					startNode.Parameters[paramIndex].Value += "," + requiredAppsValue
+					mergedIntoExisting = true
+					break
+				}
+			}
+
+			if !mergedIntoExisting {
+				startNode.Parameters = append(startNode.Parameters, WorkflowAppActionParameter{
+					Name:  "action",
+					Value: requiredAppsValue,
+				})
+			}
 		}
 	}
 
@@ -8982,16 +9017,8 @@ data_filter:
 
 	systemMessage = filterSystemPromptByTemplate(template, systemMessage)
 
-	// If a template is set, get secondary system rules + extra context.
-	templateSystemRule := ""
-	templateContext := ""
-	requiredApps := []string{}
-	if len(template) > 0 {
-		templateSystemRule, templateContext, requiredApps, err = getTemplateContext(ctx, template, execution)
-		if err != nil {
-			log.Printf("[ERROR] Failed to get template context: %v", err)
-		}
-	}
+	// templateSystemRule, templateContext and requiredApps were already resolved
+	// earlier (before the "action" parameter merge), no need to fetch them again here.
 
 	agentReasoningEffort := "low"
 	newReasoningEffort := os.Getenv("AI_AGENT_REASONING_EFFORT")
