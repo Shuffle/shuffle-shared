@@ -1,9 +1,9 @@
 // This file is the single declarative source of truth for OpenSearch index
-// definitions: which base indexes Shuffle explicitly manages, which of
+// definitions: which base indices Shuffle explicitly manages, which of
 // those are safe to put behind alias+rollover, and their curated field mappings.
 // Nothing in this file talks to OpenSearch over the network - it only describes shape.
 //
-// For everything that acts on this data (creating indexes, migrating mappings,
+// For everything that acts on this data (creating indices, migrating mappings,
 // rolling over, fixing alias collisions, etc.), see opensearch_lifecycle.go.
 package shuffle
 
@@ -17,7 +17,7 @@ import (
 // opensearchIgnoreAboveLength is the single source of truth for the
 // "ignore_above" setting applied to dynamically mapped string fields (via the
 // strings_as_keywords dynamic template) across all explicitly managed
-// indexes. It mirrors OpenSearch's own default dynamic keyword mapping
+// indices. It mirrors OpenSearch's own default dynamic keyword mapping
 // (text+keyword sub-field with ignore_above:256).
 const opensearchIgnoreAboveLength = 256
 
@@ -48,7 +48,7 @@ func getOpensearchDefaultIndexSettings() map[string]interface{} {
 
 // getOpensearchDefaultRolloverConditions returns Shuffle's default rollover
 // thresholds in the Index Rollover API's "max_*" key format (used by
-// InitOpensearchIndexes/FixOpensearchIndexPrefix to build a direct
+// InitOpensearchIndices/FixOpensearchIndexPrefix to build a direct
 // POST <alias>/_rollover body). Override the whole set via
 // OPENSEARCH_INDEX_ROLLOVER.
 func getOpensearchDefaultRolloverConditions() map[string]interface{} {
@@ -86,10 +86,10 @@ func GetESIndexPrefix(index string) string {
 	return index
 }
 
-// GetOpensearchBaseIndexes returns a list of indexes managed by Shuffle.
-// Shuffle also uses other indexes, that are implicitly created on first write.
-// Indexes in this list are explicitly created by Shuffle on startup.
-func GetOpensearchBaseIndexes() []string {
+// GetOpensearchBaseIndices returns a list of indices managed by Shuffle.
+// Shuffle also uses other indices, that are implicitly created on first write.
+// Indices in this list are explicitly created by Shuffle on startup.
+func GetOpensearchBaseIndices() []string {
 	return []string{
 		"workflowexecution",
 		"workflowexecution_live",
@@ -107,11 +107,11 @@ func GetOpensearchBaseIndexes() []string {
 	}
 }
 
-// GetOpensearchRolloverIndexes returns the subset of base indexes that are
+// GetOpensearchRolloverIndices returns the subset of base indices that are
 // genuinely append-only (or, for workflowexecution, append-only AFTER the
 // hot/cold lifecycle split below) and therefore want alias + automatic
 // rollover + ISM retention.
-func GetOpensearchRolloverIndexes() []string {
+func GetOpensearchRolloverIndices() []string {
 	return []string{
 		"shuffle_logs",
 		// Content-addressed / fresh-id-per-write revision stores: a given _id is
@@ -129,13 +129,13 @@ func GetOpensearchRolloverIndexes() []string {
 	}
 }
 
-// opensearchCoreMappings holds the curated field mappings for base indexes:
+// opensearchCoreMappings holds the curated field mappings for base indices:
 // applied to fresh index-create bodies, and used as the target that
 // migrateOpensearchSingleIndex (opensearch_lifecycle.go) compares live
-// indexes against on every startup - a mismatch is migrated onto these
+// indices against on every startup - a mismatch is migrated onto these
 // mappings automatically via reindex + alias cutover, since OpenSearch
 // mappings themselves are immutable in place. Keys are the base index names
-// from GetOpensearchBaseIndexes.
+// from GetOpensearchBaseIndices.
 //
 // id/ref fields are keyword, date/epoch fields are date (epoch_second), and
 // numeric counters/priorities are long so numeric sorting and filtering work.

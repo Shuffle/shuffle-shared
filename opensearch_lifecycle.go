@@ -36,19 +36,19 @@ func resolveAliasWriteIndex(aliasInfo map[string]map[string]opensearchAliasState
 }
 
 // resolveAppendIndexCreationTarget decides which concrete backing index the
-// create-loop in InitOpensearchIndexes should target for a given append
+// create-loop in InitOpensearchIndices should target for a given append
 // (rollover) base index: either a brand new "-000001" generation (if none
 // exists yet) or the highest existing generation (if the index has already
 // been created/rolled/collapsed before).
 //
-// existingIndexes is the full list of real index names currently in the
-// cluster (from getOpensearchIndexes).
-func resolveAppendIndexCreationTarget(existingIndexes []string, index string) (target string, alreadyExists bool) {
+// existingIndices is the full list of real index names currently in the
+// cluster (from getOpensearchIndices).
+func resolveAppendIndexCreationTarget(existingIndices []string, index string) (target string, alreadyExists bool) {
 	prefix := index + "-"
 	highestGen := -1
 	highestName := ""
 
-	for _, name := range existingIndexes {
+	for _, name := range existingIndices {
 		if !strings.HasPrefix(name, prefix) {
 			continue
 		}
@@ -70,8 +70,8 @@ func resolveAppendIndexCreationTarget(existingIndexes []string, index string) (t
 	return highestName, true
 }
 
-// InitOpensearchIndexes is the entry point for OpenSearch startup
-// bootstrapping: creates every base index (from GetOpensearchBaseIndexes)
+// InitOpensearchIndices is the entry point for OpenSearch startup
+// bootstrapping: creates every base index (from GetOpensearchBaseIndices)
 // that doesn't exist yet, attaches rollover aliases/ISM policies for the
 // rollover-eligible subset, registers mapping templates for future rollover
 // generations, and migrates any single/keyed index whose live mapping has
@@ -81,7 +81,7 @@ func resolveAppendIndexCreationTarget(existingIndexes []string, index string) (t
 // concurrently - every step is idempotent or existence-checked first. No-op
 // if DbType isn't "opensearch" or if SHUFFLE_SKIP_OPENSEARCH_INDEX_INIT is
 // set.
-func InitOpensearchIndexes() {
+func InitOpensearchIndices() {
 	if project.DbType != "opensearch" {
 		return
 	}
@@ -91,7 +91,7 @@ func InitOpensearchIndexes() {
 	}
 
 	// Check if the "workflowexecution" index exists and configuring rollovers if possible
-	log.Printf("[INFO] Configuring Opensearch indexes for scaling")
+	log.Printf("[INFO] Configuring Opensearch indices for scaling")
 
 	ctx := context.Background()
 	opensearchUrl := strings.TrimRight(os.Getenv("SHUFFLE_OPENSEARCH_URL"), "/")
@@ -99,24 +99,24 @@ func InitOpensearchIndexes() {
 		opensearchUrl = "https://shuffle-opensearch:9200"
 	}
 
-	relevantScaleIndexes := []string{}
-	for _, baseIndex := range GetOpensearchBaseIndexes() {
-		relevantScaleIndexes = append(relevantScaleIndexes, GetESIndexPrefix(baseIndex))
+	relevantScaleIndices := []string{}
+	for _, baseIndex := range GetOpensearchBaseIndices() {
+		relevantScaleIndices = append(relevantScaleIndices, GetESIndexPrefix(baseIndex))
 	}
 
 	// Only append-heavy stores get rollover. Stateful keyed stores stay on a
 	// single backing index (rollover there splits _id across generations
 	// and breaks single-document reads, e.g. org_statistics).
-	appendIndexes := []string{}
-	for _, baseIndex := range GetOpensearchRolloverIndexes() {
-		appendIndexes = append(appendIndexes, strings.ToLower(GetESIndexPrefix(baseIndex)))
+	appendIndices := []string{}
+	for _, baseIndex := range GetOpensearchRolloverIndices() {
+		appendIndices = append(appendIndices, strings.ToLower(GetESIndexPrefix(baseIndex)))
 	}
 
-	singleIndexes := []string{}
-	for _, index := range relevantScaleIndexes {
+	singleIndices := []string{}
+	for _, index := range relevantScaleIndices {
 		index = strings.ToLower(index)
-		if !ArrayContains(appendIndexes, index) {
-			singleIndexes = append(singleIndexes, index)
+		if !ArrayContains(appendIndices, index) {
+			singleIndices = append(singleIndices, index)
 		}
 	}
 
@@ -127,7 +127,7 @@ func InitOpensearchIndexes() {
 			log.Printf("[ERROR] Invalid JSON in OPENSEARCH_INDEX_CONFIG: %s", err)
 			customConfig = ""
 		} else {
-			log.Printf("[DEBUG] Using custom index config for relevant scale indexes: %s", customConfig)
+			log.Printf("[DEBUG] Using custom index config for relevant scale indices: %s", customConfig)
 		}
 	}
 
@@ -138,7 +138,7 @@ func InitOpensearchIndexes() {
 			log.Printf("[ERROR] Invalid JSON in OPENSEARCH_INDEX_ROLLOVER: %s", err)
 			customRollover = ""
 		} else {
-			log.Printf("[DEBUG] Using custom rollover config for relevant scale indexes: %s", customRollover)
+			log.Printf("[DEBUG] Using custom rollover config for relevant scale indices: %s", customRollover)
 		}
 	}
 
@@ -163,7 +163,7 @@ func InitOpensearchIndexes() {
 	// Ensure all ISM rollover policies exist and are up to date.
 	ismReady := false
 	if ismEnabled {
-		for _, baseIndex := range GetOpensearchRolloverIndexes() {
+		for _, baseIndex := range GetOpensearchRolloverIndices() {
 			alias := strings.ToLower(GetESIndexPrefix(baseIndex))
 			retention := getOpensearchRetentionDays(baseIndex)
 			ready, err := ensureOpensearchISMRolloverPolicy(ctx, opensearchUrl, alias, rolloverConfig, retention, ismPolicyName)
@@ -177,7 +177,7 @@ func InitOpensearchIndexes() {
 		}
 	}
 
-	// Fix existing indexes
+	// Fix existing indices
 	if fixResult, fixErr := FixOpensearchIndexPrefix(ctx); fixErr != nil {
 		log.Printf("[WARNING] Prefix repair before init failed: %s", fixErr)
 	} else if !fixResult.Success {
@@ -186,15 +186,15 @@ func InitOpensearchIndexes() {
 		log.Printf("[INFO] Prefix repair before init: expected aliases=%d found=%d", fixResult.ExpectedAliases, fixResult.FoundAliases)
 	}
 
-	// Ensure an IndexTemplate exists for all rollover indexes.
+	// Ensure an IndexTemplate exists for all rollover indices.
 	if len(customConfig) == 0 {
 		ensureOpensearchMappingTemplates(ctx, opensearchUrl)
 	}
 
-	existingOpensearchIndexes, existingIndexesErr := getOpensearchIndexes(project.Es, opensearchUrl)
-	if existingIndexesErr != nil {
-		log.Printf("[WARNING] Failed listing existing OpenSearch indexes before create-loop (falling back to blind -000001 creation for all indexes): %s", existingIndexesErr)
-		existingOpensearchIndexes = []string{}
+	existingOpensearchIndices, existingIndicesErr := getOpensearchIndices(project.Es, opensearchUrl)
+	if existingIndicesErr != nil {
+		log.Printf("[WARNING] Failed listing existing OpenSearch indices before create-loop (falling back to blind -000001 creation for all indices): %s", existingIndicesErr)
+		existingOpensearchIndices = []string{}
 	}
 
 	existingOpensearchAliases, existingAliasesErr := getOpensearchAliases(project.Es, opensearchUrl)
@@ -203,7 +203,7 @@ func InitOpensearchIndexes() {
 		existingOpensearchAliases = map[string]map[string]opensearchAliasState{}
 	}
 
-	for _, index := range relevantScaleIndexes {
+	for _, index := range relevantScaleIndices {
 		indexConfig, err := json.Marshal(map[string]interface{}{
 			"aliases": map[string]interface{}{
 				index: map[string]bool{"is_write_index": true},
@@ -248,11 +248,11 @@ func InitOpensearchIndexes() {
 		}
 
 		index = strings.ToLower(index)
-		isAppend := ArrayContains(appendIndexes, index)
+		isAppend := ArrayContains(appendIndices, index)
 		if len(customConfig) == 0 {
 			indexConfig = applyOpensearchCoreMappings(indexConfig, index)
 		}
-		initialIndexName, alreadyExists := resolveAppendIndexCreationTarget(existingOpensearchIndexes, index)
+		initialIndexName, alreadyExists := resolveAppendIndexCreationTarget(existingOpensearchIndices, index)
 		if !alreadyExists {
 			// Name-prefix matching found nothing, but the alias may still
 			// already be served by a legacy, oddly-named backing index
@@ -260,7 +260,7 @@ func InitOpensearchIndexes() {
 			//
 			// Check the alias's actual write-index assignment before
 			// attempting to create a new index - creating one now would
-			// give the alias two write indexes and OpenSearch would reject
+			// give the alias two write indices and OpenSearch would reject
 			// it outright.
 			if writeIndex, aliasHasWriteIndex := resolveAliasWriteIndex(existingOpensearchAliases, index); aliasHasWriteIndex {
 				initialIndexName = writeIndex
@@ -272,12 +272,12 @@ func InitOpensearchIndexes() {
 		}
 		// Directly try to force create it. Opensearch throws a 400 if it fails.
 
-		var resp *opensearchapi.IndexesCreateResp
+		var resp *opensearchapi.IndicesCreateResp
 		var createErr error
 		if alreadyExists {
 			log.Printf("[INFO] Index %s already exists at generation %s - skipping creation, ensuring ISM/rollover on existing index", index, initialIndexName)
 		} else {
-			resp, createErr = project.Es.Indexes.Create(ctx, opensearchapi.IndexesCreateReq{
+			resp, createErr = project.Es.Indices.Create(ctx, opensearchapi.IndicesCreateReq{
 				Index: initialIndexName,
 				Body:  bytes.NewReader(indexConfig),
 			})
@@ -331,7 +331,7 @@ func InitOpensearchIndexes() {
 			}
 		}
 
-		// Non-append indexes stay on a single backing index - no rollover/ISM.
+		// Non-append indices stay on a single backing index - no rollover/ISM.
 		if !isAppend {
 			continue
 		}
@@ -349,7 +349,7 @@ func InitOpensearchIndexes() {
 			continue
 		}
 
-		rolloverResp, err := project.Es.Indexes.Rollover(ctx, opensearchapi.IndexesRolloverReq{
+		rolloverResp, err := project.Es.Indices.Rollover(ctx, opensearchapi.IndicesRolloverReq{
 			Alias: index,
 			Body:  bytes.NewReader(rolloverConfig),
 		})
@@ -372,20 +372,20 @@ func InitOpensearchIndexes() {
 
 	}
 
-	// Migrate existing deployments that rolled stateful indexes in the past:
+	// Migrate existing deployments that rolled stateful indices in the past:
 	// collapse all generations of each single index into its newest backing
 	// index and detach ISM so it never rolls again. Idempotent.
-	for _, singleIndex := range singleIndexes {
+	for _, singleIndex := range singleIndices {
 		if err := collapseSingleIndexAliases(ctx, opensearchUrl, singleIndex); err != nil {
 			log.Printf("[WARNING] Failed collapsing single index %s: %s", singleIndex, err)
 		}
 	}
 
-	// Apply mapping migrations to existing single/keyed indexes when the live
+	// Apply mapping migrations to existing single/keyed indices when the live
 	// mapping has drifted from opensearchCoreMappings. Skipped when a custom
 	// OPENSEARCH_INDEX_CONFIG is set (the operator owns those mappings).
 	if len(customConfig) == 0 {
-		for _, singleIndex := range singleIndexes {
+		for _, singleIndex := range singleIndices {
 			if err := migrateOpensearchSingleIndex(ctx, opensearchUrl, singleIndex); err != nil {
 				log.Printf("[WARNING] Failed migrating mapping for single index %s: %s", singleIndex, err)
 			}
@@ -404,12 +404,12 @@ func InitOpensearchIndexes() {
 
 // getOpensearchIndexProperties returns the "properties" subtree of an index's live mappings.
 func getOpensearchIndexProperties(foundClient opensearchapi.Client, opensearchUrl, indexName string) (map[string]interface{}, error) {
-	resp, err := foundClient.Indexes.Mapping.Get(context.Background(), &opensearchapi.MappingGetReq{Indexes: []string{indexName}})
+	resp, err := foundClient.Indices.Mapping.Get(context.Background(), &opensearchapi.MappingGetReq{Indices: []string{indexName}})
 	if err != nil {
 		return nil, fmt.Errorf("failed reading mapping for %s: %w", indexName, err)
 	}
 
-	for _, idx := range resp.Indexes {
+	for _, idx := range resp.Indices {
 		mappings := map[string]interface{}{}
 		if len(idx.Mappings) > 0 {
 			if err := json.Unmarshal(idx.Mappings, &mappings); err != nil {
@@ -425,7 +425,7 @@ func getOpensearchIndexProperties(foundClient opensearchapi.Client, opensearchUr
 
 // createOpensearchIndexFromBody creates an index with an explicit create body.
 func createOpensearchIndexFromBody(ctx context.Context, opensearchUrl, indexName string, body []byte) error {
-	if _, err := project.Es.Indexes.Create(ctx, opensearchapi.IndexesCreateReq{
+	if _, err := project.Es.Indices.Create(ctx, opensearchapi.IndicesCreateReq{
 		Index: indexName,
 		Body:  bytes.NewReader(body),
 	}); err != nil {
@@ -452,13 +452,13 @@ func createOpensearchIndexFromBody(ctx context.Context, opensearchUrl, indexName
 // every startup) to pick up from current state.
 func migrateOpensearchSingleIndex(ctx context.Context, opensearchUrl, baseIndex string) error {
 	foundClient := project.Es
-	allIndexes, err := getOpensearchIndexes(foundClient, opensearchUrl)
+	allIndices, err := getOpensearchIndices(foundClient, opensearchUrl)
 	if err != nil {
 		return err
 	}
 
 	generations := []string{}
-	for _, idx := range allIndexes {
+	for _, idx := range allIndices {
 		if idx == baseIndex || strings.HasPrefix(idx, baseIndex+"-") {
 			generations = append(generations, idx)
 		}
@@ -525,7 +525,7 @@ func migrateOpensearchSingleIndex(ctx context.Context, opensearchUrl, baseIndex 
 	}
 
 	// _count (like _search) only sees refreshed segments, not documents
-	// written moments ago - force a refresh on both indexes before trusting
+	// written moments ago - force a refresh on both indices before trusting
 	// the comparison below, otherwise the tail of the catch-up copy above
 	// can make destCount look behind even though the copy fully succeeded.
 	if err := refreshOpensearchIndex(foundClient, opensearchUrl, src); err != nil {
@@ -578,7 +578,7 @@ func migrateOpensearchSingleIndex(ctx context.Context, opensearchUrl, baseIndex 
 // append/rollover base index so every future rollover generation is created
 // with the current core mappings (existing generations are left untouched).
 func ensureOpensearchMappingTemplates(ctx context.Context, opensearchUrl string) {
-	for _, baseIndex := range GetOpensearchRolloverIndexes() {
+	for _, baseIndex := range GetOpensearchRolloverIndices() {
 		alias := strings.ToLower(GetESIndexPrefix(baseIndex))
 
 		body := map[string]interface{}{
@@ -612,13 +612,13 @@ func ensureOpensearchMappingTemplates(ctx context.Context, opensearchUrl string)
 // stays single. Safe to run repeatedly.
 func collapseSingleIndexAliases(ctx context.Context, opensearchUrl, fullIndex string) error {
 	foundClient := project.Es
-	allIndexes, err := getOpensearchIndexes(foundClient, opensearchUrl)
+	allIndices, err := getOpensearchIndices(foundClient, opensearchUrl)
 	if err != nil {
 		return err
 	}
 
 	generations := []string{}
-	for _, idx := range allIndexes {
+	for _, idx := range allIndices {
 		if idx == fullIndex || strings.HasPrefix(idx, fullIndex+"-") {
 			generations = append(generations, idx)
 		}
@@ -705,8 +705,8 @@ func detachOpensearchRollover(ctx context.Context, opensearchUrl, indexName stri
 		return marshalErr
 	}
 
-	if _, err := project.Es.Indexes.Settings.Put(ctx, opensearchapi.SettingsPutReq{
-		Indexes: []string{indexName},
+	if _, err := project.Es.Indices.Settings.Put(ctx, opensearchapi.SettingsPutReq{
+		Indices: []string{indexName},
 		Body:    bytes.NewReader(bodyData),
 	}); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "index_not_found_exception") {
@@ -1036,8 +1036,8 @@ func ensureOpensearchIndexRolloverAliasSetting(ctx context.Context, opensearchUr
 		return err
 	}
 
-	_, err = project.Es.Indexes.Settings.Put(ctx, opensearchapi.SettingsPutReq{
-		Indexes: []string{indexName},
+	_, err = project.Es.Indices.Settings.Put(ctx, opensearchapi.SettingsPutReq{
+		Indices: []string{indexName},
 		Body:    bytes.NewReader(body),
 	})
 	if err != nil {
@@ -1111,7 +1111,7 @@ type OpensearchPrefixFixResult struct {
 
 // FixOpensearchIndexPrefix verifies (and repairs) that every base index has
 // exactly one correctly-named write alias attached, for every base index
-// from GetOpensearchBaseIndexes.
+// from GetOpensearchBaseIndices.
 //
 // It detects two distinct problems and heals both without operator
 // interaction: (1) a legacy plain index colliding with its intended alias
@@ -1136,7 +1136,7 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 	}
 
 	foundClient := project.Es
-	allIndexes, err := getOpensearchIndexes(foundClient, opensearchUrl)
+	allIndices, err := getOpensearchIndices(foundClient, opensearchUrl)
 	if err != nil {
 		return result, err
 	}
@@ -1147,9 +1147,9 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 	}
 
 	prefix := strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_OPENSEARCH_INDEX_PREFIX")))
-	baseIndexes := GetOpensearchBaseIndexes()
+	baseIndices := GetOpensearchBaseIndices()
 	expectedAliases := []string{}
-	for _, baseIndex := range baseIndexes {
+	for _, baseIndex := range baseIndices {
 		expectedAliases = append(expectedAliases, strings.ToLower(GetESIndexPrefix(baseIndex)))
 	}
 
@@ -1176,10 +1176,10 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 		ismPolicyName = "shuffle-rollover"
 	}
 
-	for _, baseIndex := range baseIndexes {
+	for _, baseIndex := range baseIndices {
 		expectedAlias := strings.ToLower(GetESIndexPrefix(baseIndex))
 
-		if ArrayContains(allIndexes, expectedAlias) {
+		if ArrayContains(allIndices, expectedAlias) {
 			targetIndex := fmt.Sprintf("%s-000001", expectedAlias)
 			// Migration runs fully in the background (see
 			// startOpensearchCollisionMigrationAsync) - a legacy monolithic
@@ -1190,29 +1190,29 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 			// It resumes automatically (idempotently) on every restart
 			// until the alias is finally freed and swapped, with no
 			// operator action required.
-			startOpensearchCollisionMigrationAsync(foundClient, opensearchUrl, expectedAlias, targetIndex)
+			startOpensearchCollisionMigrationAsync(foundClient, opensearchUrl, expectedAlias, targetIndex, baseIndex)
 			result.MigrationTasks = append(result.MigrationTasks, fmt.Sprintf("%s -> %s (background migration running)", expectedAlias, targetIndex))
 			result.Skipped = append(result.Skipped, fmt.Sprintf("%s (collision migration running in background; alias unavailable until it completes)", expectedAlias))
 			continue
 		}
 
-		targetIndexes, writeIndex := selectOpensearchAliasTargets(baseIndex, prefix, aliasInfo, allIndexes)
-		if len(targetIndexes) == 0 {
+		targetIndices, writeIndex := selectOpensearchAliasTargets(baseIndex, prefix, aliasInfo, allIndices)
+		if len(targetIndices) == 0 {
 			newIndex := fmt.Sprintf("%s-000001", expectedAlias)
-			if !ArrayContains(allIndexes, newIndex) {
-				if err := createOpensearchIndex(foundClient, opensearchUrl, newIndex); err != nil {
+			if !ArrayContains(allIndices, newIndex) {
+				if err := createOpensearchIndex(foundClient, opensearchUrl, newIndex, baseIndex); err != nil {
 					return result, err
 				}
 				result.Created = append(result.Created, newIndex)
-				allIndexes = append(allIndexes, newIndex)
+				allIndices = append(allIndices, newIndex)
 			}
 
-			targetIndexes = []string{newIndex}
+			targetIndices = []string{newIndex}
 			writeIndex = newIndex
 		}
 
 		actions := []OpensearchAliasAction{}
-		for _, indexName := range targetIndexes {
+		for _, indexName := range targetIndices {
 			current, hasCurrent := aliasInfo[indexName][expectedAlias]
 			desiredWrite := indexName == writeIndex
 
@@ -1264,33 +1264,48 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 	result.ExpectedAliases = len(expectedAliases)
 	result.FoundAliases = 0
 	for _, aliasName := range expectedAliases {
-		indexes := []string{}
-		writeIndexes := []string{}
+		indices := []string{}
+		writeIndices := []string{}
 		for indexName, aliases := range verifiedAliasInfo {
 			state, ok := aliases[aliasName]
 			if !ok || !state.Present {
 				continue
 			}
 
-			indexes = append(indexes, indexName)
+			indices = append(indices, indexName)
 			if state.IsWriteIndex {
-				writeIndexes = append(writeIndexes, indexName)
+				writeIndices = append(writeIndices, indexName)
 			}
 		}
 
-		if len(indexes) == 0 {
+		if len(indices) == 0 {
 			result.MissingAliases = append(result.MissingAliases, aliasName)
 			continue
 		}
 
 		result.FoundAliases++
-		if len(writeIndexes) != 1 {
-			result.InvalidWriteAlias = append(result.InvalidWriteAlias, fmt.Sprintf("%s (write_indexes=%d)", aliasName, len(writeIndexes)))
+		if len(writeIndices) != 1 {
+			result.InvalidWriteAlias = append(result.InvalidWriteAlias, fmt.Sprintf("%s (write_indices=%d)", aliasName, len(writeIndices)))
 			continue
 		}
 
-		sorted := append([]string{}, indexes...)
+		// "Latest" prefers a canonically-named generation (aliasName or
+		// aliasName+"-NNNNNN") over raw generation number, same preference
+		// selectOpensearchAliasTargets uses to pick a write index. Without
+		// this, a legacy differently-prefixed generation kept attached
+		// read-only after double-prefix cleanup (see
+		// opensearchIndexBelongsTo) can coincidentally share its generation
+		// number with the canonical one, and a name-string tiebreak alone
+		// can then misidentify that legacy copy as "latest" and flag a
+		// perfectly correct write-index as invalid.
+		sorted := append([]string{}, indices...)
 		sort.Slice(sorted, func(i, j int) bool {
+			iCanonical := sorted[i] == aliasName || strings.HasPrefix(sorted[i], aliasName+"-")
+			jCanonical := sorted[j] == aliasName || strings.HasPrefix(sorted[j], aliasName+"-")
+			if iCanonical != jCanonical {
+				return iCanonical
+			}
+
 			gi := getOpensearchGeneration(sorted[i])
 			gj := getOpensearchGeneration(sorted[j])
 			if gi == gj {
@@ -1300,8 +1315,8 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 		})
 
 		latest := sorted[0]
-		if writeIndexes[0] != latest {
-			result.InvalidWriteAlias = append(result.InvalidWriteAlias, fmt.Sprintf("%s (write=%s latest=%s)", aliasName, writeIndexes[0], latest))
+		if writeIndices[0] != latest {
+			result.InvalidWriteAlias = append(result.InvalidWriteAlias, fmt.Sprintf("%s (write=%s latest=%s)", aliasName, writeIndices[0], latest))
 		}
 	}
 
@@ -1326,7 +1341,7 @@ func FixOpensearchIndexPrefix(ctx context.Context) (OpensearchPrefixFixResult, e
 
 	if ismEnabled {
 		appendBase := map[string]bool{}
-		for _, baseIndex := range GetOpensearchRolloverIndexes() {
+		for _, baseIndex := range GetOpensearchRolloverIndices() {
 			appendBase[strings.ToLower(baseIndex)] = true
 		}
 
@@ -1403,7 +1418,7 @@ var inFlightOpensearchCollisionMigrations sync.Map
 // deployment - cross-replica duplicate avoidance is handled inside
 // runOpensearchReindexToCompletion by checking OpenSearch's own _tasks API
 // for an already-running matching reindex before starting a new one.
-func startOpensearchCollisionMigrationAsync(foundClient opensearchapi.Client, opensearchUrl, sourceIndex, targetIndex string) {
+func startOpensearchCollisionMigrationAsync(foundClient opensearchapi.Client, opensearchUrl, sourceIndex, targetIndex, baseIndex string) {
 	if _, alreadyRunning := inFlightOpensearchCollisionMigrations.LoadOrStore(sourceIndex, true); alreadyRunning {
 		return
 	}
@@ -1411,7 +1426,7 @@ func startOpensearchCollisionMigrationAsync(foundClient opensearchapi.Client, op
 	go func() {
 		defer inFlightOpensearchCollisionMigrations.Delete(sourceIndex)
 
-		if err := runOpensearchCollisionMigration(foundClient, opensearchUrl, sourceIndex, targetIndex); err != nil {
+		if err := runOpensearchCollisionMigration(foundClient, opensearchUrl, sourceIndex, targetIndex, baseIndex); err != nil {
 			log.Printf("[ERROR] Opensearch collision migration %s -> %s did not complete: %s. Nothing was deleted; this will be retried automatically (from wherever the idempotent copy left off) the next time Opensearch index init runs.", sourceIndex, targetIndex, err)
 		}
 	}()
@@ -1433,18 +1448,18 @@ func startOpensearchCollisionMigrationAsync(foundClient opensearchapi.Client, op
 // conflicts:proceed copy, 404-tolerant delete, idempotent alias-add), and
 // runOpensearchReindexToCompletion additionally avoids starting duplicate
 // reindex work when another replica already has a matching task running.
-func runOpensearchCollisionMigration(foundClient opensearchapi.Client, opensearchUrl, sourceIndex, targetIndex string) error {
+func runOpensearchCollisionMigration(foundClient opensearchapi.Client, opensearchUrl, sourceIndex, targetIndex, baseIndex string) error {
 	targetExists, err := checkOpensearchIndexExists(foundClient, opensearchUrl, targetIndex)
 	if err != nil {
 		return fmt.Errorf("checking target index: %w", err)
 	}
 	if !targetExists {
-		if err := createOpensearchIndex(foundClient, opensearchUrl, targetIndex); err != nil {
+		if err := createOpensearchIndex(foundClient, opensearchUrl, targetIndex, baseIndex); err != nil {
 			return fmt.Errorf("creating target index: %w", err)
 		}
 	}
 
-	log.Printf("[INFO] Opensearch collision migration: starting bulk copy %s -> %s (large legacy indexes can take a long time here; safe to restart the backend during this phase)", sourceIndex, targetIndex)
+	log.Printf("[INFO] Opensearch collision migration: starting bulk copy %s -> %s (large legacy indices can take a long time here; safe to restart the backend during this phase)", sourceIndex, targetIndex)
 	if err := runOpensearchReindexToCompletion(foundClient, opensearchUrl, sourceIndex, targetIndex); err != nil {
 		return fmt.Errorf("bulk copy: %w", err)
 	}
@@ -1463,10 +1478,10 @@ func runOpensearchCollisionMigration(foundClient opensearchapi.Client, opensearc
 	}
 
 	// _count (like _search) only sees refreshed segments, not documents
-	// written moments ago - force a refresh on both indexes before trusting
+	// written moments ago - force a refresh on both indices before trusting
 	// the comparison below, otherwise the tail of the catch-up copy above
 	// can make targetCount look behind even though the copy fully
-	// succeeded, for indexes still receiving writes right up to the
+	// succeeded, for indices still receiving writes right up to the
 	// write-block (exactly the high-volume case this is built for).
 	if err := refreshOpensearchIndex(foundClient, opensearchUrl, sourceIndex); err != nil {
 		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, sourceIndex, false)
@@ -1712,8 +1727,8 @@ func setOpensearchIndexWriteBlock(foundClient opensearchapi.Client, opensearchUr
 		return err
 	}
 
-	if _, err := foundClient.Indexes.Settings.Put(context.Background(), opensearchapi.SettingsPutReq{
-		Indexes: []string{indexName},
+	if _, err := foundClient.Indices.Settings.Put(context.Background(), opensearchapi.SettingsPutReq{
+		Indices: []string{indexName},
 		Body:    bytes.NewReader(body),
 	}); err != nil {
 		return fmt.Errorf("failed setting write block=%v on %s: %w", block, indexName, err)
@@ -1725,7 +1740,7 @@ func setOpensearchIndexWriteBlock(foundClient opensearchapi.Client, opensearchUr
 // checkOpensearchIndexExists reports whether indexName currently exists,
 // via a plain HEAD (200 = exists, 404 = doesn't).
 func checkOpensearchIndexExists(foundClient opensearchapi.Client, opensearchUrl, indexName string) (bool, error) {
-	resp, err := foundClient.Indexes.Exists(context.Background(), opensearchapi.IndexesExistsReq{Indexes: []string{indexName}})
+	resp, err := foundClient.Indices.Exists(context.Background(), opensearchapi.IndicesExistsReq{Indices: []string{indexName}})
 	if err != nil {
 		if resp != nil && resp.StatusCode == 404 {
 			return false, nil
@@ -1739,14 +1754,14 @@ func checkOpensearchIndexExists(foundClient opensearchapi.Client, opensearchUrl,
 // refreshOpensearchIndex forces a refresh (POST <index>/_refresh) so
 // documents written moments ago become visible to _count/_search
 // immediately, instead of waiting for the index's normal refresh_interval
-// (30s by default on Shuffle-created indexes). Without this,
+// (30s by default on Shuffle-created indices). Without this,
 // getOpensearchIndexCount can under-count an index that just received
 // writes (e.g. the tail of a reindex catch-up copy), causing a false
 // "target count still behind source count" failure that would never
 // converge for an index still receiving writes right up to the
 // write-block.
 func refreshOpensearchIndex(foundClient opensearchapi.Client, opensearchUrl, indexName string) error {
-	_, err := foundClient.Indexes.Refresh(context.Background(), &opensearchapi.IndexesRefreshReq{Indexes: []string{indexName}})
+	_, err := foundClient.Indices.Refresh(context.Background(), &opensearchapi.IndicesRefreshReq{Indices: []string{indexName}})
 	if err != nil {
 		return fmt.Errorf("failed refreshing index %s: %w", indexName, err)
 	}
@@ -1757,7 +1772,7 @@ func refreshOpensearchIndex(foundClient opensearchapi.Client, opensearchUrl, ind
 // via _count. Callers that need this to be accurate right after a write
 // should call refreshOpensearchIndex first.
 func getOpensearchIndexCount(foundClient opensearchapi.Client, opensearchUrl, indexName string) (int64, error) {
-	resp, err := foundClient.Indexes.Count(context.Background(), &opensearchapi.IndexesCountReq{Indexes: []string{indexName}})
+	resp, err := foundClient.Indices.Count(context.Background(), &opensearchapi.IndicesCountReq{Indices: []string{indexName}})
 	if err != nil {
 		return 0, fmt.Errorf("failed counting index %s: %w", indexName, err)
 	}
@@ -1821,7 +1836,7 @@ func startOpensearchReindexTask(foundClient opensearchapi.Client, opensearchUrl,
 // (404) as success, so it's safe to call redundantly (e.g. after a partial
 // retry) without special-casing the not-found case at every call site.
 func deleteOpensearchIndex(foundClient opensearchapi.Client, opensearchUrl, indexName string) error {
-	resp, err := foundClient.Indexes.Delete(context.Background(), opensearchapi.IndexesDeleteReq{Indexes: []string{indexName}})
+	resp, err := foundClient.Indices.Delete(context.Background(), opensearchapi.IndicesDeleteReq{Indices: []string{indexName}})
 	if err != nil {
 		if resp != nil && resp.Inspect().Response != nil && resp.Inspect().Response.StatusCode == 404 {
 			return nil
@@ -1838,22 +1853,43 @@ type opensearchAliasState struct {
 }
 
 // shuffleOwnedOpensearchIndexPatterns returns a comma-separated index
-// pattern list matching only the indexes Shuffle itself manages
-// (GetOpensearchBaseIndexes, combined with whatever
+// pattern list matching only the indices Shuffle itself manages
+// (GetOpensearchBaseIndices, combined with whatever
 // SHUFFLE_OPENSEARCH_INDEX_PREFIX is configured - which defaults to empty,
 // i.e. no prefix).
 //
-// Scoping the cluster-wide _cat/indexes and _alias lookups below to this
+// Scoping the cluster-wide _cat/indices and _alias lookups below to this
 // pattern lets a least-privilege OpenSearch role grant
-// indexes:monitor/settings/get only on Shuffle's own indexes instead of
+// indices:monitor/settings/get only on Shuffle's own indices instead of
 // requiring visibility into every index in the cluster (which
-// shared/enterprise clusters with other tenants' indexes typically won't
-// grant).
+// shared/enterprise clusters with other tenants' indices typically won't
+// grant) - e.g. a role scoped to exactly "shuffle_*".
+//
+// When a prefix is configured, this returns a single "<prefix>_*" pattern
+// rather than one "<prefix>_<baseIndex>*" per base index: a legacy
+// double-prefixed name (e.g. "shuffle_shuffle_notifications-000001", from
+// the historical double-prefix bug) does not start with
+// "shuffle_notifications", but it still starts with "shuffle_" - so this
+// stays a strict subset of the customary "<prefix>_*" role grant while
+// still catching any depth of prefix duplication.
+// opensearchIndexBelongsTo strictly re-validates every name this turns up,
+// so the wider net here only widens what gets considered, never what gets
+// migrated.
+//
+// Without a prefix, "<prefix>_*" would be just "_*" (matching nothing
+// useful), so each base index keeps its own unprefixed "<baseIndex>*"
+// pattern instead - double-prefixing cannot occur without a prefix to
+// duplicate in the first place.
 func shuffleOwnedOpensearchIndexPatterns() string {
-	baseIndexes := GetOpensearchBaseIndexes()
-	patterns := make([]string, 0, len(baseIndexes))
-	for _, baseIndex := range baseIndexes {
-		patterns = append(patterns, strings.ToLower(GetESIndexPrefix(baseIndex))+"*")
+	prefix := strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_OPENSEARCH_INDEX_PREFIX")))
+	if prefix != "" {
+		return prefix + "_*"
+	}
+
+	baseIndices := GetOpensearchBaseIndices()
+	patterns := make([]string, 0, len(baseIndices))
+	for _, baseIndex := range baseIndices {
+		patterns = append(patterns, strings.ToLower(baseIndex)+"*")
 	}
 
 	return strings.Join(patterns, ",")
@@ -1915,37 +1951,37 @@ func getOpensearchAliases(foundClient opensearchapi.Client, opensearchUrl string
 	return aliasInfo, nil
 }
 
-// getOpensearchIndexes resolves the concrete backing indexes matching
+// getOpensearchIndices resolves the concrete backing indices matching
 // Shuffle's own index patterns.
 //
-// Deliberately implemented via /_settings rather than /_cat/indexes:
+// Deliberately implemented via /_settings rather than /_cat/indices:
 // _cat/* endpoints are cluster-level actions in OpenSearch's security
 // plugin (requiring cluster:monitor/* even when the path includes an index
 // pattern) and, once granted, let the credential query /_cluster/state or
-// unscoped /_cat/indexes directly to see every index's
+// unscoped /_cat/indices directly to see every index's
 // name/mappings/settings cluster-wide - a real cross-tenant metadata leak
 // on a shared/multi-tenant cluster.
 //
 // /_settings (and /_alias below), being genuine per-index API endpoints,
 // are enforced per matched index by the security plugin: a request for a
 // pattern outside the role's granted index_patterns is rejected outright.
-func getOpensearchIndexes(foundClient opensearchapi.Client, opensearchUrl string) ([]string, error) {
-	resp, err := foundClient.Indexes.Settings.Get(context.Background(), &opensearchapi.SettingsGetReq{
-		Indexes: []string{shuffleOwnedOpensearchIndexPatterns()},
+func getOpensearchIndices(foundClient opensearchapi.Client, opensearchUrl string) ([]string, error) {
+	resp, err := foundClient.Indices.Settings.Get(context.Background(), &opensearchapi.SettingsGetReq{
+		Indices: []string{shuffleOwnedOpensearchIndexPatterns()},
 		Params:  opensearchapi.SettingsGetParams{FilterPath: []string{"*.settings.index.provided_name"}},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed reading opensearch indexes: %w", err)
+		return nil, fmt.Errorf("failed reading opensearch indices: %w", err)
 	}
 
-	indexes := []string{}
-	for indexName := range resp.Indexes {
+	indices := []string{}
+	for indexName := range resp.Indices {
 		if strings.TrimSpace(indexName) != "" {
-			indexes = append(indexes, indexName)
+			indices = append(indices, indexName)
 		}
 	}
 
-	return indexes, nil
+	return indices, nil
 }
 
 // opensearchIndexBelongsTo reports whether name (an index name or an alias
@@ -1986,7 +2022,7 @@ func opensearchIndexBelongsTo(name, baseIndex, prefix string) bool {
 // Returns the full candidate list plus which one is (or should become) the
 // write index, preferring an already-correctly-named generation over the
 // highest generation number.
-func selectOpensearchAliasTargets(baseIndex, prefix string, aliasInfo map[string]map[string]opensearchAliasState, allIndexes []string) ([]string, string) {
+func selectOpensearchAliasTargets(baseIndex, prefix string, aliasInfo map[string]map[string]opensearchAliasState, allIndices []string) ([]string, string) {
 	expectedAlias := strings.ToLower(GetESIndexPrefix(baseIndex))
 	candidateMap := map[string]bool{}
 
@@ -1999,32 +2035,32 @@ func selectOpensearchAliasTargets(baseIndex, prefix string, aliasInfo map[string
 		}
 	}
 
-	for _, indexName := range allIndexes {
+	for _, indexName := range allIndices {
 		if opensearchIndexBelongsTo(indexName, baseIndex, prefix) {
 			candidateMap[indexName] = true
 		}
 	}
 
-	targetIndexes := []string{}
+	targetIndices := []string{}
 	for indexName := range candidateMap {
-		targetIndexes = append(targetIndexes, indexName)
+		targetIndices = append(targetIndices, indexName)
 	}
 
-	if len(targetIndexes) == 0 {
-		return targetIndexes, ""
+	if len(targetIndices) == 0 {
+		return targetIndices, ""
 	}
 
-	sort.Slice(targetIndexes, func(i, j int) bool {
-		gi := getOpensearchGeneration(targetIndexes[i])
-		gj := getOpensearchGeneration(targetIndexes[j])
+	sort.Slice(targetIndices, func(i, j int) bool {
+		gi := getOpensearchGeneration(targetIndices[i])
+		gj := getOpensearchGeneration(targetIndices[j])
 		if gi == gj {
-			return targetIndexes[i] > targetIndexes[j]
+			return targetIndices[i] > targetIndices[j]
 		}
 		return gi > gj
 	})
 
 	writeIndex := ""
-	for _, indexName := range targetIndexes {
+	for _, indexName := range targetIndices {
 		if indexName == expectedAlias || strings.HasPrefix(indexName, expectedAlias+"-") {
 			writeIndex = indexName
 			break
@@ -2032,10 +2068,10 @@ func selectOpensearchAliasTargets(baseIndex, prefix string, aliasInfo map[string
 	}
 
 	if writeIndex == "" {
-		writeIndex = targetIndexes[0]
+		writeIndex = targetIndices[0]
 	}
 
-	return targetIndexes, writeIndex
+	return targetIndices, writeIndex
 }
 
 // getOpensearchGeneration extracts the trailing "-NNNNNN" rollover
@@ -2071,7 +2107,14 @@ type OpensearchIndexConfig struct {
 // OPENSEARCH_INDEX_CONFIG (with any aliases stripped - alias attachment is
 // handled separately by the caller) or Shuffle's default settings/mappings
 // (3 shards, 1 replica, 30s refresh, strings_as_keywords dynamic template).
-func createOpensearchIndex(foundClient opensearchapi.Client, opensearchUrl, indexName string) error {
+//
+// baseIndex (the unprefixed, un-generationed alias name, e.g.
+// "workflowexecution_live") is used to look up opensearchCoreMappings so a
+// freshly created index already has its curated field types instead of
+// relying on migrateOpensearchSingleIndex to correct them moments later.
+// Pass "" if no curated mapping applies (e.g. an index not in
+// opensearchCoreMappings).
+func createOpensearchIndex(foundClient opensearchapi.Client, opensearchUrl, indexName, baseIndex string) error {
 	indexConfig := OpensearchIndexConfig{}
 	customConfig := strings.TrimSpace(os.Getenv("OPENSEARCH_INDEX_CONFIG"))
 	if customConfig != "" {
@@ -2085,18 +2128,25 @@ func createOpensearchIndex(foundClient opensearchapi.Client, opensearchUrl, inde
 	}
 
 	if len(indexConfig.Settings) == 0 && len(indexConfig.Mappings) == 0 {
-		indexConfig = OpensearchIndexConfig{
-			Settings: getOpensearchDefaultIndexSettings(),
+		mappings := map[string]interface{}{
 			// ignore_above matches OpenSearch's own default dynamic string
 			// mapping (text+keyword with ignore_above:256): without it, any
 			// document with a single string value over 32766 UTF-8 bytes
 			// (e.g. a large workflow execution result) is rejected outright
 			// on write, silently, with no visible error.
-			Mappings: map[string]interface{}{
-				"dynamic_templates": []map[string]interface{}{
-					opensearchStringsAsKeywordsDynamicTemplate(),
-				},
+			"dynamic_templates": []map[string]interface{}{
+				opensearchStringsAsKeywordsDynamicTemplate(),
 			},
+		}
+		if baseIndex != "" {
+			if props, ok := opensearchCoreMappings[baseIndex]["properties"]; ok {
+				mappings["properties"] = props
+			}
+		}
+
+		indexConfig = OpensearchIndexConfig{
+			Settings: getOpensearchDefaultIndexSettings(),
+			Mappings: mappings,
 		}
 	}
 
@@ -2105,7 +2155,7 @@ func createOpensearchIndex(foundClient opensearchapi.Client, opensearchUrl, inde
 		return err
 	}
 
-	if _, err := foundClient.Indexes.Create(context.Background(), opensearchapi.IndexesCreateReq{
+	if _, err := foundClient.Indices.Create(context.Background(), opensearchapi.IndicesCreateReq{
 		Index: indexName,
 		Body:  bytes.NewReader(indexConfigJson),
 	}); err != nil {
