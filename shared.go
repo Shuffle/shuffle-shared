@@ -14621,7 +14621,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 			Status:        "FAILURE",
 		})
 	} else if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
-		log.Printf("[INFO] DONE - Nothing to add during abort!")
+		log.Printf("[INFO][%s] Abort DONE - Nothing to add during abort!", workflowExecution.ExecutionId)
 	} else {
 		//log.Printf("VALIDATING INPUT!")
 		node, nodeok := request.URL.Query()["node"]
@@ -18226,7 +18226,10 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	// FIXME: How do we handle 3rd party memory sources?
 	// This uses the built-in datastore mechanism so that the user
 	// can see and modify stuff themself as well.
+
 	if mappedResult.Memory == "shuffle_db" {
+		/*
+		// This is NOT what Memory is used for...
 		requestKey := fmt.Sprintf("chat_%s_%s", actionResult.ExecutionId, actionResult.Action.ID)
 		if debug {
 			log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
@@ -18242,6 +18245,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 				log.Printf("[DEBUG] No agent cache memory for key %s", requestKey)
 			}
 		}
+		*/
 	}
 
 	if len(allFinishedDecisions) == len(mappedResult.Decisions) {
@@ -21161,7 +21165,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 	}
 
 	if appId != action.AppID {
-
 		// Used for standalone runs controlled from /agents and /mcp
 		if appId == "agent_starter" {
 			workflowId := uuid.NewV4().String()
@@ -21169,6 +21172,14 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 			if len(action.ID) != 36 {
 				action.ID = uuid.NewV4().String()
+			}
+
+			targetWorkflowId := ""
+			for _, param := range action.Parameters {
+				if param.Name == "workflow_id" {
+					targetWorkflowId = param.Value
+					break
+				}
 			}
 
 			exec := WorkflowExecution{
@@ -21191,6 +21202,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				ExecutionOrg:  user.ActiveOrg.Id,
 				StartedAt:     int64(time.Now().Unix()),
 				Authorization: uuid.NewV4().String(),
+				ExecutionArgument: targetWorkflowId,
 			}
 
 			SetWorkflowExecution(ctx, exec, true)
@@ -21244,6 +21256,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 		} else if strings.ToLower(appId) == "http" || strings.ToLower(action.AppID) == "http" {
 			action.AppID = "http"
+		} else if strings.ToLower(appId) == "sensors" || strings.ToLower(action.AppID) == "sensors" {
+			action.AppID = "sensors"
+			appId = "sensors"
 		} else {
 			log.Printf("[WARNING] Bad appid in single execution of App '%s'", appId)
 			return workflowExecution, errors.New(fmt.Sprintf("No matching app found for '%s'. Did you choose an app to run?", appId))
@@ -22289,7 +22304,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		maxSeconds = 180
 	}
 
-	if timeout > maxSeconds {
+	if timeout > 0 {
 		maxSeconds = timeout
 	}
 
@@ -22308,7 +22323,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		if time.Now().Unix()-startTime > int64(maxSeconds) {
 
 			returnBody.Success = true
-			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
+			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the GET /api/v1/executions/{executionId}?authorization={auth} API to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
 
 			break
 		}
@@ -36404,6 +36419,7 @@ func buildAppActionResponses(matchedApps []WorkflowApp) []AppActionResponse {
 					Name:        param.Name,
 					Required:    param.Required,
 					Description: param.Description,
+					Example:     param.Example,
 				})
 			}
 

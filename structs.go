@@ -5794,6 +5794,7 @@ type ActionParameter struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Required    bool   `json:"required"`
+	Example     string `json:"example,omitempty"`
 }
 
 // ActionSummary - minimal action info for AI agents
