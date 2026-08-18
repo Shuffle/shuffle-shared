@@ -5125,6 +5125,15 @@ func SetSession(ctx context.Context, user *User, value string) error {
 		}
 	}
 
+	// Always invalidate the cache entry for the (possibly reused) current
+	// session token after a successful write. Without this, reusing an
+	// existing token (e.g. SSO re-login for a user with an active session)
+	// left the previous cache invalidation branch above a no-op, allowing
+	// GetSessionNew to keep serving a stale SessionLastActivityAt snapshot
+	// for up to the cache TTL - which could incorrectly trip the idle/max
+	// session lifetime check and bounce the user back to /login.
+	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+
 	return nil
 }
 
