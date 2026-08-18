@@ -2008,9 +2008,9 @@ type AppAuthenticationStorage struct {
 	ReferenceWorkflow string                `json:"reference_workflow" datastore:"reference_workflow"`
 	AutoDistribute    bool                  `json:"auto_distribute" datastore:"auto_distribute"`
 
-	Environment        string   `json:"environment" datastore:"environment"`               // In case an auth should ALWAYS be mapped to an environment. Can help out with Oauth2 refresh (e.g. running partially on cloud and partially onprem), as well as for KMS. For now ONLY KMS has a frontend.
+	Environment string `json:"environment" datastore:"environment"` // In case an auth should ALWAYS be mapped to an environment. Can help out with Oauth2 refresh (e.g. running partially on cloud and partially onprem), as well as for KMS. For now ONLY KMS has a frontend.
 
-	SuborgDistributed  bool     `json:"suborg_distributed" datastore:"suborg_distributed"` // Decides if it's distributed to suborgs or not
+	SuborgDistributed bool `json:"suborg_distributed" datastore:"suborg_distributed"` // Decides if it's distributed to suborgs or not
 
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 
@@ -5357,81 +5357,6 @@ type MCPToolInputSchema struct {
 	Required   []string               `json:"required"`
 }
 
-type OpensearchPrefixFixResult struct {
-	Success           bool                               `json:"success"`
-	Reason            string                             `json:"reason,omitempty"`
-	ExpectedAliases   int                                `json:"expected_aliases,omitempty"`
-	FoundAliases      int                                `json:"found_aliases,omitempty"`
-	MissingAliases    []string                           `json:"missing_aliases,omitempty"`
-	InvalidWriteAlias []string                           `json:"invalid_write_aliases,omitempty"`
-	MigrationTasks    []string                           `json:"migration_tasks,omitempty"`
-	Created           []string                           `json:"created,omitempty"`
-	WriteIndexUpdates []string                           `json:"write_index_updates,omitempty"`
-	Reindexed         []string                           `json:"reindexed,omitempty"`
-	AliasUpdates      []string                           `json:"alias_updates,omitempty"`
-	Skipped           []string                           `json:"skipped,omitempty"`
-	Counts            []OpensearchPrefixFixCountSnapshot `json:"counts,omitempty"`
-}
-
-type OpensearchPrefixFixCountSnapshot struct {
-	SourceIndex string `json:"source_index"`
-	TargetIndex string `json:"target_index"`
-	SourceDocs  int64  `json:"source_docs"`
-	TargetDocs  int64  `json:"target_docs"`
-}
-
-type OpensearchAliasResponse map[string]OpensearchAliasEntry
-
-type OpensearchAliasEntry struct {
-	Aliases map[string]json.RawMessage `json:"aliases"`
-}
-
-type OpensearchIndexInfoResponse map[string]OpensearchIndexInfo
-
-type OpensearchIndexInfo struct {
-	Settings map[string]map[string]interface{} `json:"settings"`
-	Mappings map[string]interface{}            `json:"mappings"`
-}
-
-type OpensearchReindexRequest struct {
-	Source OpensearchReindexSourceDest `json:"source"`
-	Dest   OpensearchReindexSourceDest `json:"dest"`
-}
-
-type OpensearchReindexSourceDest struct {
-	Index string `json:"index"`
-}
-
-type OpensearchAliasActionsRequest struct {
-	Actions []OpensearchAliasAction `json:"actions"`
-}
-
-type OpensearchAliasAction struct {
-	Add    *OpensearchAliasActionTarget `json:"add,omitempty"`
-	Remove *OpensearchAliasActionTarget `json:"remove,omitempty"`
-}
-
-type OpensearchAliasActionTarget struct {
-	Index        string `json:"index"`
-	Alias        string `json:"alias"`
-	IsWriteIndex *bool  `json:"is_write_index,omitempty"`
-}
-
-type OpensearchCreateIndexRequest struct {
-	Settings map[string]interface{} `json:"settings,omitempty"`
-	Mappings map[string]interface{} `json:"mappings,omitempty"`
-}
-
-type OpensearchIndexConfig struct {
-	Aliases  map[string]OpensearchIndexAliasConfig `json:"aliases,omitempty"`
-	Settings map[string]interface{}                `json:"settings,omitempty"`
-	Mappings map[string]interface{}                `json:"mappings,omitempty"`
-}
-
-type OpensearchIndexAliasConfig struct {
-	IsWriteIndex bool `json:"is_write_index,omitempty"`
-}
-
 // Only partial part of it
 type AppBuildRequest struct {
 	Editing bool   `datastore:"editing"`
@@ -5776,7 +5701,7 @@ type AiCallInfo struct {
 	Caller string
 	OrgID  string
 
-	AuthenticationId string // To choose the Authentication ID to use 
+	AuthenticationId string // To choose the Authentication ID to use
 
 	Resp http.ResponseWriter // Used to respond automatically if it exists
 }
