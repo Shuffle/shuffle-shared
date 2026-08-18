@@ -4304,6 +4304,7 @@ type SingleResult struct {
 	Success       bool           `json:"success"`
 	Result        string         `json:"result"`
 	Id            string         `json:"id"`
+	ExecutionId   string         `json:"execution_id"`
 	Authorization string         `json:"authorization"`
 	Errors        []string       `json:"errors"`
 	Validation    TypeValidation `json:"validation"`
@@ -4833,10 +4834,10 @@ type AgentDecision struct {
 	Tool             string         `json:"tool" datastore:"tool"`
 	Category         string         `json:"category" datastore:"category"`
 	Confidence       float64        `json:"confidence" datastore:"confidence"`
-	Runs             string         `json:"runs" datastore:"runs"`
+	Runs             string         `json:"runs,omitempty" datastore:"runs"`
 	Sources          string         `json:"sources,omitempty" datastore:"sources"`
 	Fields           []Valuereplace `json:"fields" datastore:"fields"`
-	Reason           string         `json:"reason" datastore:"reason"`
+	Reason           string         `json:"reason,omitempty" datastore:"reason"`
 	ApprovalRequired bool           `json:"approval_required" datastore:"approval_required"`   // Set TRUE only for destructive/high-risk actions
 	DataFilter       string         `json:"data_filter,omitempty" datastore:"data_filter"`     // DataFilter controls how the raw tool response is reduced before being fed back into the agent.
 	Delay            string         `json:"delay,omitempty" datastore:"delay"`                 // Delay is the number of seconds to wait before executing the next decision.
@@ -4844,35 +4845,6 @@ type AgentDecision struct {
 
 	// Responses
 	RunDetails AgentDecisionRunDetails `json:"run_details" datastore:"run_details"`
-}
-
-// The overall Agent controller
-type AgentOutput struct {
-	Status    string          `json:"status" datastore:"status"`
-	Error     string          `json:"error,omitempty" datastore:"error"`
-	Decisions []AgentDecision `json:"decisions,omitempty" datastore:"decisions"`
-
-	// For easy testing
-	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
-	// For tracking of details parent<->child
-	StartedAt      int64    `json:"started_at,omitempty" datastore:"started_at"`
-	CompletedAt    int64    `json:"completed_at,omitempty" datastore:"completed_at"`
-	ExecutionId    string   `json:"execution_id,omitempty" datastore:"execution_id"`
-	NodeId         string   `json:"node_id,omitempty" datastore:"node_id"`
-	Memory         string   `json:"memory,omitempty" datastore:"memory"`
-	Input          string   `json:"input,omitempty" datastore:"input"`
-	OriginalInput  string   `json:"original_input,omitempty" datastore:"original_input"`
-	AllowedActions []string `json:"allowed_actions,omitempty" datastore:"allowed_actions"`
-	Output         string   `json:"output,omitempty" datastore:"output"`
-
-	// ExecutionMode controls how tool actions are dispatched for this agent run. i.e singul or direct
-	ExecutionMode string `json:"execution_mode,omitempty" datastore:"execution_mode"`
-
-	// Usage tracking for guardrails
-	LLMCallCount     int   `json:"llm_call_count,omitempty" datastore:"llm_call_count"`
-	TotalTokens      int64 `json:"total_tokens,omitempty" datastore:"total_tokens"`
-	PromptTokens     int64 `json:"prompt_tokens,omitempty" datastore:"prompt_tokens"`
-	CompletionTokens int64 `json:"completion_tokens,omitempty" datastore:"completion_tokens"`
 }
 
 type HTTPWrapper struct {
@@ -5405,6 +5377,7 @@ type Parsed struct {
 type SensorDetails struct {
 	SensorMode bool   `json:"sensor_mode,omitempty" datastore:"sensor_mode"`
 	Checkin    int64  `json:"checkin" datastore:"checkin"`
+	Active     bool   `json:"active,omitempty" datastore:"active"`
 	Uuid       string `json:"uuid" datastore:"uuid"`
 
 	User     string `json:"user,omitempty" datastore:"user"`
@@ -5428,7 +5401,8 @@ type SensorDetails struct {
 
 // Related to Orborus Agent Mode. Used locally.
 type SensorMode struct {
-	Enabled bool `json:"enabled" datastore:"enabled"`
+	Enabled  bool   `json:"enabled" datastore:"enabled"`
+	Hostname string `json:"hostname" datastore:"hostname"`
 
 	// Compliance
 	ProcessListEnabled  string `json:"process_list_enabled" datastore:"process_list_enabled"`
@@ -5809,4 +5783,9 @@ type agentResponse struct {
 	Success       bool   `json:"success"`
 	ExecutionId   string `json:"execution_id"`
 	Authorization string `json:"authorization"`
+}
+
+type AgentWorkflowExecutionReturn struct {
+	WorkflowExecution WorkflowExecution `json:"workflow_execution"`
+	Workflow          MinimalWorkflow   `json:"workflow"`
 }
