@@ -18289,6 +18289,14 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 				// push to the action result cache so GetWorkflowExecution inside HandleAiAgentExecutionStart picks up the fresh copy.
 				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
 				go SetCache(ctx, actionCacheId, marshalledResult, 600)
+
+				// Persist intermediate agent state to DB to prevent information loss on restarts
+				executionCacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
+				if marshalledExec, execMarshalErr := json.Marshal(workflowExecution); execMarshalErr == nil {
+					SetCache(ctx, executionCacheKey, marshalledExec, 600)
+				}
+				go SetWorkflowExecution(ctx, workflowExecution, true)
+
 			} else {
 				log.Printf("[WARNING][%s] Failed to marshal updated mappedResult before HandleAiAgentExecutionStart: %s", workflowExecution.ExecutionId, marshalErr)
 			}
@@ -25652,6 +25660,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					oldExecution.Results[resultIndex] = result
+					
+					// Persist intermediate agent state to DB to prevent handleAgentDecisionStreamResult from fetching a stale copy
+					executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExecution.ExecutionId)
+					if marshalledExec, execMarshalErr := json.Marshal(*oldExecution); execMarshalErr == nil {
+						SetCache(ctx, executionCacheKey, marshalledExec, 600)
+					}
+					go SetWorkflowExecution(ctx, *oldExecution, true)
 
 					// FIXME: Can we force continue the agent from here? Or do we send another action inbetween?
 					result.Status = fmt.Sprintf("%s_%s", "FINISHED", decisionId)
