@@ -17790,7 +17790,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 			log.Printf("[WARNING][%s] Cache error, falling back to DB check for agent self-request '%s'", workflowExecution.ExecutionId, status)
 			
 			// DB Fallback
-			dbExec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+			dbExec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId, true)
 			if err == nil {
 				for _, res := range dbExec.Results {
 					if res.Action.ID == actionResult.Action.ID {
