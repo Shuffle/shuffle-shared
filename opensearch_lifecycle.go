@@ -209,11 +209,7 @@ func InitOpensearchIndices() {
 				index: map[string]bool{"is_write_index": true},
 			},
 			"settings": getOpensearchDefaultIndexSettings(),
-			"mappings": map[string]interface{}{
-				"dynamic_templates": []map[string]interface{}{
-					opensearchStringsAsKeywordsDynamicTemplate(),
-				},
-			},
+			"mappings": opensearchDynamicMappingSettings(),
 		})
 		if err != nil {
 			log.Printf("[ERROR] Failed building default index config for %s: %s", index, err)
@@ -2128,16 +2124,7 @@ func createOpensearchIndex(foundClient opensearchapi.Client, opensearchUrl, inde
 	}
 
 	if len(indexConfig.Settings) == 0 && len(indexConfig.Mappings) == 0 {
-		mappings := map[string]interface{}{
-			// ignore_above matches OpenSearch's own default dynamic string
-			// mapping (text+keyword with ignore_above:256): without it, any
-			// document with a single string value over 32766 UTF-8 bytes
-			// (e.g. a large workflow execution result) is rejected outright
-			// on write, silently, with no visible error.
-			"dynamic_templates": []map[string]interface{}{
-				opensearchStringsAsKeywordsDynamicTemplate(),
-			},
-		}
+		mappings := opensearchDynamicMappingSettings()
 		if baseIndex != "" {
 			if props, ok := opensearchCoreMappings[baseIndex]["properties"]; ok {
 				mappings["properties"] = props

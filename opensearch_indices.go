@@ -73,6 +73,39 @@ func opensearchStringsAsKeywordsDynamicTemplate() map[string]interface{} {
 	}
 }
 
+// opensearchDynamicMappingSettings returns the "mappings"-level settings
+// that must accompany opensearchStringsAsKeywordsDynamicTemplate on every
+// index-create body, so dynamically-added fields are consistently typed by
+// that template alone.
+//
+// "date_detection" defaults to true in OpenSearch and runs BEFORE custom
+// dynamic_templates are considered: a dynamically-added string field whose
+// first-seen value happens to parse as a date (e.g. a user-authored
+// workflow action parameter's example value like "2024-01-01") gets
+// classified as "date" by this built-in check, which pre-empts
+// match_mapping_type:"string" ever matching - completely bypassing the
+// strings_as_keywords template for that field. Any later document whose
+// value for that same field path is plain text then fails with "mapper
+// [...] cannot be changed from type [date] to [keyword]", permanently
+// (mappings are immutable once set). Disabling date_detection ensures only
+// strings_as_keywords governs dynamic string typing, regardless of what a
+// field's value happens to look like.
+//
+// "numeric_detection" is the same content-sniffing hazard for numbers
+// instead of dates (a string like "42" would get promoted to long/double
+// instead of keyword). It already defaults to false, so this isn't fixing
+// an active bug - it's set explicitly so correctness here doesn't depend on
+// an OpenSearch/cluster-level default that could change out from under us.
+func opensearchDynamicMappingSettings() map[string]interface{} {
+	return map[string]interface{}{
+		"date_detection":    false,
+		"numeric_detection": false,
+		"dynamic_templates": []map[string]interface{}{
+			opensearchStringsAsKeywordsDynamicTemplate(),
+		},
+	}
+}
+
 // Create ElasticSearch/OpenSearch index prefix
 // It is used where a single cluster of ElasticSearch/OpenSearch utilized by several
 // Shuffle instance
@@ -306,11 +339,7 @@ func applyOpensearchCoreMappings(indexConfig []byte, index string) []byte {
 // opensearchMappingsFor builds the mappings section (dynamic string->keyword
 // template plus the curated core field mappings) for a base index.
 func opensearchMappingsFor(baseIndex string) map[string]interface{} {
-	mappings := map[string]interface{}{
-		"dynamic_templates": []map[string]interface{}{
-			opensearchStringsAsKeywordsDynamicTemplate(),
-		},
-	}
+	mappings := opensearchDynamicMappingSettings()
 
 	if props, ok := opensearchCoreMappings[baseIndex]["properties"]; ok {
 		mappings["properties"] = props
