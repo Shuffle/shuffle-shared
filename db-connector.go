@@ -451,6 +451,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 			if err != nil {
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
 					log.Printf("[ERROR] Failed setting memcache for key '%s' with data size %d (2): %s", originalKey, len(data), err)
+					return err
 				} else {
 					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", originalKey, err)
 				}
@@ -5819,7 +5820,10 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 
 		if len(user.Regions) > 1 {
 			go func() {
-				log.Printf("[INFO] Propagating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
+				if debug {
+					log.Printf("[DEBUG] Propagating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
+				}
+
 				err = propagateUser(*user, false)
 				if err != nil {
 					log.Printf("[ERROR] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)

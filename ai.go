@@ -10,10 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	openai "github.com/sashabaranov/go-openai"
-	uuid "github.com/satori/go.uuid"
-	"google.golang.org/api/customsearch/v1"
-	option "google.golang.org/api/option"
 	"io"
 	"io/ioutil"
 	"log"
@@ -35,6 +31,11 @@ import (
 	"github.com/frikky/kin-openapi/openapi3"
 	"github.com/frikky/schemaless"
 
+	openai "github.com/sashabaranov/go-openai"
+	uuid "github.com/satori/go.uuid"
+	"google.golang.org/api/customsearch/v1"
+	option "google.golang.org/api/option"
+	"github.com/bradfitz/slice"
 	oai "github.com/openai/openai-go/v3"
 	aioption "github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
@@ -7688,9 +7689,12 @@ func getTemplateContext(ctx context.Context, template string, execution Workflow
 	}
 }
 
+// Control a computer (Computer-Use)
+// Toolset: Screenshot, mouse & kb. CLI. API. 
 func buildComputerUseContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
 
-	// osascript -e 'tell application "System Events" to keystroke "Jay Gohil"' -e 'delay 1' -e 'tell application "System Events" to key code 36'
+	// Question: Can this be done in a "specialised" fashion as well?
+	// AKA: not a generalised computer agent, but one built for a specific usecase 
 
 	systemRule := `# ROLE & CAPABILITIES
 You are an autonomous Computer-Using Agent interacting with a desktop/browser environment. You interact with the system by taking screenshots, parsing UI elements, and emitting action tool calls. Make assumptions for what they most likely want to perform, and continue until it is done. 
@@ -7701,12 +7705,13 @@ You are an autonomous Computer-Using Agent interacting with a desktop/browser en
 - If an action takes more than 30 seconds, it will return an execution_id and authorization key to be used for polling results. When polling, always add 30 second or more delay. 
 - Ask for input IF: MFA challenges, CAPTCHAs, credit card payments, performing destrucive actions, 
 
-# CONTROL OVERVIEW 
-1. keyboard.press: {\"op\":\"keyboard.press\",\"params\":{\"key\":75}}
-2. mouse.click: {\"x\":600,\"y\":400,\"button\":\"left\",\"delay_ms\":100}
-3. mouse.move:  {\"x\":600,\"y\":400}
-4. mouse.drag:  {\"from_x\":600,\"from_y\":400,\"to_x\":800,\"to_y\":500,\"button\":\"left\"}
-5. system.wait: {\"op\":\"system.wait\",\"params\":{\"ms\":250}}
+# OPERATION OVERVIEW 
+1. keyboard.type: {"keys":"https://google.com"}
+2. keyboard.hotkey: {"keys":"control,tab"}
+3. mouse.click: {"x":600,"y":400,"button":"left","delay_ms":100}
+4. Mouse move:  {"x":600,"y":400}
+5. mouse.drag:  {"from_x":600,"from_y":400,"to_x":800,"to_y":500,"button":"left"}
+6. system.wait: {"ms":250}
 
 When sending body to the post_control_mouse_and_keyboard function, the following body structure should be used:
 '''
@@ -7728,7 +7733,7 @@ When choosing one or more hostnames, NEVER guess which host. When available, ALW
 
 # CRITICAL EXECUTION RULES
 - COORDINATES: All coordinates must be specified relative to the current image width and height. Always click in the center of clickable elements.
-- ONE ACTION AT A TIME: Never attempt multiple clicks or multi-step key sequences in a single turn unless using specific batch keyboard tools. Always inspect the updated screenshot first.
+- ONE ACTION AT A TIME: Perform a MAXIMUM of THREE keyboard- or ONE mouse operation in a single decision. 
 - STAGNATION PROTOCOL: If the screenshot does not change after an action:
   1. Do not repeat the action.
   2. Attempt to scroll or use keyboard navigation (e.g., press 'Tab' or 'Enter').
@@ -7762,15 +7767,15 @@ func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) 
 	}
 
 	// What we tell the agent about its workflow_id
-	workflowIdLine := "CRITICAL: You do NOT have an existing workflow yet. Your FIRST action MUST be to call create_workflow to create one, then ALWAYS use the returned workflow_id for ALL subsequent operations."
+	workflowIdLine := `CRITICAL: You do NOT have an existing workflow yet. Your FIRST action MUST be to call post_create_workflow to create one, then ALWAYS use the returned workflow_id for ALL subsequent operations. EXCEPTION: if the user's message itself mentions an ID that looks like a workflow ID (a UUID, e.g. "6bffd92a-49d6-480f-af72-ebd6900652e6"), especially alongside words like "workflow", treat that UUID as the existing target workflow_id instead of creating a new one — use it directly in put_agent_update and get_minimal_workflow.`
 	if len(targetWorkflowId) > 0 {
 		workflowIdLine = fmt.Sprintf(`CRITICAL: Working Workflow ID: %s 
-You MUST use this exact workflow_id in every single agent_update operation. DO NOT try to guess or create a new one.`, targetWorkflowId)
+You MUST use this exact workflow_id in every single put_agent_update operation. DO NOT try to guess or create a new one.`, targetWorkflowId)
 	}
 
-	systemRule := `[SECONDARY]: You are an autonomous workflow-building agent. You build or edit workflows that will eventually automate the task. Only use the special actions built for you — agent_update is the primary one you will use. If the user requests an integration that is not in your current context, you can still fetch its actions by passing the requested app name to your get_workflow_app_actions tool. The system will automatically search for the app and return its actions.
+	systemRule := `[SECONDARY]: You are an autonomous workflow-building agent. You build or edit workflows that will eventually automate the task. Only use the special actions built for you — put_agent_update is the primary one you will use. If the user requests an integration that is not in your current context, you can still fetch its actions by passing the requested app name to the post_get_app_actions_summary action on the shuffle_apps tool. The system will automatically search for the app and return its list of available actions.
 
-Only ask the user for information when it is genuinely unavailable through any allowed action. Use get_minimal_action to fetch the latest workflow state whenever you need to inspect or verify what is currently in the workflow — prefer this over relying on stale context.
+Only ask the user for information when it is genuinely unavailable through any allowed action. Use get_minimal_workflow to fetch the latest workflow state whenever you need to inspect or verify what is currently in the workflow — prefer this over relying on stale context.
 
 Payload Structure
 
@@ -7780,13 +7785,13 @@ Key is "body" and Value is {
 "operations": [ ...array of step-by-step operations... ]
 }
 
-CRITICAL: The "operations" field MUST be a JSON array of objects. NEVER write a natural language plan, summary, or string inside the "operations" field. This overrides the generic "value": "literal_value" example shown elsewhere in your instructions — for agent_update, "value" is ALWAYS an object, and "operations" inside it is ALWAYS an array, never a string.
+CRITICAL: The "operations" field MUST be a JSON array of objects. NEVER write a natural language plan, summary, or string inside the "operations" field. This overrides the generic "value": "literal_value" example shown elsewhere in your instructions — for put_agent_update, "value" is ALWAYS an object, and "operations" inside it is ALWAYS an array, never a string.
 
-Concrete example of a correct full decision using agent_update:
+Concrete example of a correct full decision using put_agent_update:
 {
-  "action": "agent_update",
+  "action": "put_agent_update",
   "category": "singul",
-  "tool": "agent_update",
+  "tool": "put_agent_update",
   "fields": [
     {
       "key": "body",
@@ -7847,10 +7852,12 @@ Format: Schedule Trigger
   "parameters": [
     { "name": "param_1", "value": "some_value" }
   ],
-  "x": 100,
-  "y": 100
+  "x": 0,
+  "y": 0
 }
 }
+
+POSITIONING (x/y): get_minimal_workflow returns the real x/y of every existing node — use it. The overall flow should progress left to right: a node's "x" should generally be greater than the node(s) before it in the sequence (e.g. roughly halfway between two neighbors' x values if inserting between them, or ~337 to the right of the last node if appending). "y" should match its predecessor UNLESS this node is one of several parallel branches running off the same source node — in that case, give each parallel branch its own distinct "y" (spread them apart, e.g. ±150-250) so they fan out and don't overlap, matching how the user's request implies the branches should look. If the user explicitly describes a specific layout or arrangement, follow that instead of these defaults. Only leave "x" and "y" at 0 when you have no neighbor position to go on (e.g. the very first action in a brand-new workflow) — the backend will auto-place it. NEVER reuse the exact same fixed x/y (e.g. 100,100) for multiple unrelated actions, that stacks them directly on top of each other.
 
 Every action’s response is stored under its label. You can reference it using:
 $label_name this itself gives you the parsed JSON output of the action
@@ -7858,7 +7865,7 @@ $label_name this itself gives you the parsed JSON output of the action
 * $python_2.message.email
 * For triggers use "$exec" for example $exec.field
 
-Note: You can vertically position the node between existing ones by adding "insert_before": "<node_id>" or "insert_after": "<node_id>" alongside the data field.
+Note: You can control WHERE in the sequence a new node is inserted (which also determines its horizontal position) by adding "insert_before": "<node_id>" or "insert_after": "<node_id>" alongside the data field.
 
 2. CONNECTING NODES (Adding a Branch)
 Connect your nodes using their real IDs (if they already exist) or the temp_id you assigned when creating them in the same payload. You can include an array of conditions if you are adding multiple to the same branch.
@@ -7947,8 +7954,8 @@ To use data from another node, reference its label.
 CRITICAL RULES FOR THE AGENT
 
 1. Handling Errors: If you make a mistake, the API will reject your request and tell you EXACTLY which operation failed and why (e.g., "Operation 1 failed: app_id is required"). Read the error carefully, fix the specific missing or incorrect field, and try again.
-2. Special actions are built exclusively for you. agent_update is the core action that does most of the heavy lifting.
-3. Use get_minimal_action to fetch the current workflow state only whenever you need it.
+2. Special actions are built exclusively for you. put_agent_update is the core action that does most of the heavy lifting.
+3. Use get_minimal_workflow to fetch the current workflow state only whenever you need it.
 4. Try not to use parallel decision calling; always do sequential tool calls.`
 
 	templateContext := fmt.Sprintf(`%s
@@ -8248,6 +8255,41 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 		} else {
 			log.Printf("[ERROR] Failed to marshal parsing body for shuffle tools translation: %v", err)
+		}
+	}
+	
+	templateSystemRule := ""
+	templateContext := ""
+	requiredApps := []string{}
+	for _, param := range startNode.Parameters {
+		if param.Name == "template" {
+			template = param.Value
+			break
+		}
+	}
+
+	if len(template) > 0 {
+		templateSystemRule, templateContext, requiredApps, err = getTemplateContext(ctx, template, execution)
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed to get template context: %v", execution.ExecutionId, err)
+		} else if len(requiredApps) > 0 {
+			requiredAppsValue := strings.Join(requiredApps, ",")
+
+			mergedIntoExisting := false
+			for paramIndex, param := range startNode.Parameters {
+				if param.Name == "action" {
+					startNode.Parameters[paramIndex].Value += "," + requiredAppsValue
+					mergedIntoExisting = true
+					break
+				}
+			}
+
+			if !mergedIntoExisting {
+				startNode.Parameters = append(startNode.Parameters, WorkflowAppActionParameter{
+					Name:  "action",
+					Value: requiredAppsValue,
+				})
+			}
 		}
 	}
 
@@ -8982,16 +9024,8 @@ data_filter:
 
 	systemMessage = filterSystemPromptByTemplate(template, systemMessage)
 
-	// If a template is set, get secondary system rules + extra context.
-	templateSystemRule := ""
-	templateContext := ""
-	requiredApps := []string{}
-	if len(template) > 0 {
-		templateSystemRule, templateContext, requiredApps, err = getTemplateContext(ctx, template, execution)
-		if err != nil {
-			log.Printf("[ERROR] Failed to get template context: %v", err)
-		}
-	}
+	// templateSystemRule, templateContext and requiredApps were already resolved
+	// earlier (before the "action" parameter merge), no need to fetch them again here.
 
 	agentReasoningEffort := "low"
 	newReasoningEffort := os.Getenv("AI_AGENT_REASONING_EFFORT")
@@ -10330,8 +10364,10 @@ data_filter:
 		return abortAgentExecution(ctx, execution, startNode, "empty_llm_result", fmt.Sprintf("LLM returned empty response body with HTTP status %d", llmStatusCode))
 	}
 
-	/*
 	if memorizationEngine == "shuffle_db" {
+
+		/*
+		// This is NOT what Memory is used for...
 		requestKey := fmt.Sprintf("chat_%s_%s", execution.ExecutionId, startNode.ID)
 
 		for messageIndex, _ := range completionRequest.Messages {
@@ -10362,8 +10398,8 @@ data_filter:
 				log.Printf("[ERROR][%s] AI Agent: Failed updating AI requests: %s", execution.ExecutionId, err)
 			}
 		}
+		*/
 	}
-	*/
 
 	if createNextActions {
 		return startNode, nil
@@ -15331,14 +15367,19 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 		return apiKey, aiRequestUrl, foundModel
 	}
 
+	// Sort by editing time
+	slice.Sort(auths[:], func(i, j int) bool {
+		return auths[i].Edited > auths[j].Edited
+	})
+
 	for _, auth := range auths {
 		if len(callInfo.AuthenticationId) > 0 && auth.Id != callInfo.AuthenticationId {
 			continue
 		}
 
+		// Disallowing unactive auth, as that's how we control which to use
+		// If authId is specified, we don't care.
 		if len(callInfo.AuthenticationId) == 0 && auth.Active == false {
-			// Disallowing unactive auth, as that's how we control which to use
-			// from the agent frontend
 			continue
 		}
 
@@ -15376,7 +15417,7 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 		}
 
 		// openai auth.Active is the primary one at all times
-		if auth.Active && len(apiKey) > 0 && len(aiRequestUrl) > 0 {
+		if auth.Validation.Valid && len(apiKey) > 0 && len(aiRequestUrl) > 0 {
 			break
 		}
 	}
