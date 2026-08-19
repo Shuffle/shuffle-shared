@@ -974,13 +974,18 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	return nil
 }
 
-func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
+func GetWorkflowExecution(ctx context.Context, id string, bypassCache ...bool) (*WorkflowExecution, error) {
 	nameKey := "workflowexecution"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 
+	skipCache := false
+	if len(bypassCache) > 0 && bypassCache[0] {
+		skipCache = true
+	}
+
 	// Loads of cache management to ensure we have the latest version of the execution no matter what
 	workflowExecution := &WorkflowExecution{}
-	if project.CacheDb {
+	if project.CacheDb && !skipCache {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
