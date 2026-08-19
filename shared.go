@@ -17787,8 +17787,23 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 		cacheErr := SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
 		if cacheErr != nil && (status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED") {
-			log.Printf("[WARNING][%s] Memcache down — skipping agent self-request for '%s' to prevent retry storm", workflowExecution.ExecutionId, status)
-			return nil
+			log.Printf("[WARNING][%s] Cache error, falling back to DB check for agent self-request '%s'", workflowExecution.ExecutionId, status)
+			
+			// DB Fallback
+			dbExec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+			if err == nil {
+				for _, res := range dbExec.Results {
+					if res.Action.ID == actionResult.Action.ID {
+						if res.Status == "SUCCESS" || res.Status == "FINISHED" || res.Status == "FAILURE" || res.Status == "ABORTED" {
+							log.Printf("[INFO][%s] Action '%s' is already finished in DB. Skipping duplicate request.", workflowExecution.ExecutionId, actionResult.Action.ID)
+							return nil
+						}
+					}
+				}
+			} else {
+				log.Printf("[ERROR][%s] DB error verifying execution status. Blocking request.", workflowExecution.ExecutionId)
+				return nil
+			}
 		}
 	}
 
