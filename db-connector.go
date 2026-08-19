@@ -482,6 +482,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 			if err != nil {
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
 					log.Printf("[ERROR] Failed setting memcache for key '%s' with data size %d (2): %s", originalKey, len(data), err)
+					return err
 				} else {
 					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", originalKey, err)
 				}
