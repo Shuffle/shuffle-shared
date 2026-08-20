@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,7 +10,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	gomemcache "github.com/bradfitz/gomemcache/memcache"
 )
 
 var streamPresenceColors = []string{
@@ -33,6 +37,120 @@ func presenceColor(userID string) string {
 var streamPresenceInterval = 100
 var streamPresenceTTL int32 = 5
 var streamPresenceStaleMs int64 = 30000 // 30 seconds stale threshold
+
+// Stream storage model (per workflow):
+//
+//	<id>_stream_seq       — monotonic counter, atomically incremented per op (source of sequence numbers)
+//	<id>_stream_op_<seq>  — one operation stored under its own key (O(1) writes, no read-modify-write race)
+//	<id>_stream_lastsave  — sequence of the last "save" op, used as the catch-up baseline
+//	<id>_presence         — presence/heartbeat state (unchanged)
+//
+// Writes only allocate a sequence (atomic INCR) and set a single op key, so concurrent
+// writers can never clobber each other. Readers poll the small counter key and only fetch
+// op payloads when it advances.
+var streamOpTTLMinutes int32 = 5     // individual op keys; also bounds catch-up history
+var streamSeqTTLMinutes int32 = 60   // counter + lastsave keys (SetCache uses minutes)
+var streamSeqTTLSeconds int32 = 3600 // counter key for direct memcache Add/Touch (seconds)
+var streamMaxCatchup int64 = 100     // cap replayed ops on connect/history
+var streamMissRetries = 30           // ~3s at 100ms/poll before skipping a never-materialised op
+
+// streamSeqMu guards the in-process counter path (single-instance deployments without memcache).
+var streamSeqMu sync.Mutex
+
+func streamSeqKey(id string) string           { return fmt.Sprintf("%s_stream_seq", id) }
+func streamLastSaveKey(id string) string      { return fmt.Sprintf("%s_stream_lastsave", id) }
+func streamOpKey(id string, seq int64) string { return fmt.Sprintf("%s_stream_op_%d", id, seq) }
+func streamPresenceKeyFor(id string) string   { return fmt.Sprintf("%s_presence", id) }
+
+// nextStreamSeq atomically allocates and returns the next stream sequence for a workflow.
+// It is race-free across instances via memcache atomic INCR (when SHUFFLE_MEMCACHED is set),
+// and falls back to a mutex-guarded in-process counter otherwise.
+func nextStreamSeq(workflowID string) (int64, error) {
+	key := streamSeqKey(workflowID)
+
+	if len(memcached) > 0 {
+		newVal, err := mc.Increment(key, 1)
+		if err == gomemcache.ErrCacheMiss {
+			// First op for this workflow: initialise the counter at 1. Add fails with
+			// ErrNotStored if another writer created it first, so fall through to INCR.
+			if addErr := mc.Add(&gomemcache.Item{Key: key, Value: []byte("1"), Expiration: streamSeqTTLSeconds}); addErr == nil {
+				return 1, nil
+			}
+			newVal, err = mc.Increment(key, 1)
+		}
+		if err != nil {
+			return 0, err
+		}
+		// Keep the counter alive across write-idle gaps so sequences never reset mid-session.
+		mc.Touch(key, streamSeqTTLSeconds)
+		return int64(newVal), nil
+	}
+
+	// In-process fallback — single instance, so a plain mutex is sufficient and race-free.
+	streamSeqMu.Lock()
+	defer streamSeqMu.Unlock()
+	var cur int64
+	if v, found := requestCache.Get(key); found {
+		if parsed, ok := v.(int64); ok {
+			cur = parsed
+		}
+	}
+	cur++
+	requestCache.Set(key, cur, time.Duration(streamSeqTTLSeconds)*time.Second)
+	return cur, nil
+}
+
+// parseSeqValue reads a sequence value stored either as ASCII bytes (memcache) or int64
+// (in-process cache) and returns it as an int64.
+func parseSeqValue(v interface{}) int64 {
+	switch t := v.(type) {
+	case []uint8:
+		seq, _ := strconv.ParseInt(strings.TrimSpace(string(t)), 10, 64)
+		return seq
+	case int64:
+		return t
+	case string:
+		seq, _ := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
+		return seq
+	}
+	return 0
+}
+
+// currentStreamSeq returns the highest allocated sequence for a workflow (0 if none exist yet).
+func currentStreamSeq(ctx context.Context, workflowID string) int64 {
+	v, err := GetCache(ctx, streamSeqKey(workflowID))
+	if err != nil {
+		return 0
+	}
+	return parseSeqValue(v)
+}
+
+// lastStreamSaveSeq returns the sequence of the most recent "save" op (0 if none).
+func lastStreamSaveSeq(ctx context.Context, workflowID string) int64 {
+	v, err := GetCache(ctx, streamLastSaveKey(workflowID))
+	if err != nil {
+		return 0
+	}
+	return parseSeqValue(v)
+}
+
+// getStreamOp fetches and decodes a single operation by sequence. The bool is false when the
+// op key is absent (expired, or not yet written in the brief window after its seq was allocated).
+func getStreamOp(ctx context.Context, workflowID string, seq int64) (StreamWorkflowOperation, bool) {
+	var op StreamWorkflowOperation
+	v, err := GetCache(ctx, streamOpKey(workflowID, seq))
+	if err != nil {
+		return op, false
+	}
+	raw, ok := v.([]uint8)
+	if !ok {
+		return op, false
+	}
+	if err := json.Unmarshal(raw, &op); err != nil {
+		return op, false
+	}
+	return op, true
+}
 
 func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -118,114 +236,58 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	// Try to parse as a single operation and assign sequence + timestamp
-	var op StreamWorkflowOperation
-	if err := json.Unmarshal(body, &op); err == nil && len(op.Item) > 0 {
-		op.Timestamp = time.Now().UnixMilli()
+	// Accept either a single operation or a batch, and normalise to a slice.
+	var ops []StreamWorkflowOperation
+	var single StreamWorkflowOperation
+	if err := json.Unmarshal(body, &single); err == nil && len(single.Item) > 0 {
+		ops = []StreamWorkflowOperation{single}
+	} else if err := json.Unmarshal(body, &ops); err != nil || len(ops) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No valid stream operations in body"}`))
+		return
+	}
 
-		if len(op.UserID) == 0 && len(user.Id) > 0 {
-			op.UserID = user.Id
+	now := time.Now().UnixMilli()
+	var lastSeq int64
+	for i := range ops {
+		// Atomic allocation — two writers can never receive the same sequence, so their
+		// ops can never overwrite each other (each lives under its own key).
+		seq, seqErr := nextStreamSeq(workflow.ID)
+		if seqErr != nil {
+			log.Printf("[ERROR] Failed allocating stream sequence for %s: %s", workflow.ID, seqErr)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to allocate stream sequence"}`))
+			return
+		}
+
+		ops[i].Sequence = seq
+		ops[i].Timestamp = now
+		if len(ops[i].UserID) == 0 && len(user.Id) > 0 {
+			ops[i].UserID = user.Id
 		}
 		if len(user.Username) > 0 {
-			op.Username = user.Username
+			ops[i].Username = user.Username
 		}
 
-		sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
-		var state StreamWorkflowState
-
-		cache, err := GetCache(ctx, sessionKey)
-		if err == nil {
-			cacheData, ok := cache.([]uint8)
-			if !ok {
-				log.Printf("[WARNING] Unexpected cache type for stream state %s", sessionKey)
-			} else if err := json.Unmarshal(cacheData, &state); err != nil {
-				log.Printf("[WARNING] Failed to unmarshal stream state for %s: %s", workflow.ID, err)
-			}
+		opBytes, marshalErr := json.Marshal(ops[i])
+		if marshalErr != nil {
+			log.Printf("[WARNING] Failed marshaling stream op for %s: %s", workflow.ID, marshalErr)
+			continue
+		}
+		if cacheErr := SetCache(ctx, streamOpKey(workflow.ID, seq), opBytes, streamOpTTLMinutes); cacheErr != nil {
+			log.Printf("[WARNING] Failed storing stream op %d for %s: %s", seq, workflow.ID, cacheErr)
 		}
 
-		op.Sequence = state.LastSeq + 1
-		state.Operations = append(state.Operations, op)
-		state.LastSeq = op.Sequence
-
-		if len(state.Operations) > 100 {
-			state.Operations = state.Operations[len(state.Operations)-100:]
+		// Record the save baseline so late joiners only replay unsaved changes.
+		if ops[i].Item == "workflow" && ops[i].Type == "save" {
+			SetCache(ctx, streamLastSaveKey(workflow.ID), []byte(strconv.FormatInt(seq, 10)), streamSeqTTLMinutes)
 		}
 
-		stateBytes, err := json.Marshal(state)
-		if err != nil {
-			log.Printf("[WARNING] Failed to marshal stream state: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed to save stream operation"}`))
-			return
-		}
-
-		err = SetCache(ctx, sessionKey, stateBytes, 120)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for stream: %s", err)
-		}
-
-		resp.WriteHeader(200)
-		resp.Write([]byte(fmt.Sprintf(`{"success": true, "sequence": %d}`, op.Sequence)))
-		return
-	}
-
-	// Fallback: batch of operations
-	var ops []StreamWorkflowOperation
-	if err := json.Unmarshal(body, &ops); err == nil && len(ops) > 0 {
-		sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
-		var state StreamWorkflowState
-
-		cache, err := GetCache(ctx, sessionKey)
-		if err == nil {
-			cacheData, ok := cache.([]uint8)
-			if !ok {
-				log.Printf("[WARNING] Unexpected cache type for stream state %s", sessionKey)
-			} else if err := json.Unmarshal(cacheData, &state); err != nil {
-				log.Printf("[WARNING] Failed to unmarshal stream state for %s: %s", workflow.ID, err)
-			}
-		}
-
-		for i := range ops {
-			ops[i].Sequence = state.LastSeq + 1
-			state.LastSeq = ops[i].Sequence
-			ops[i].Timestamp = time.Now().UnixMilli()
-			if len(ops[i].UserID) == 0 && len(user.Id) > 0 {
-				ops[i].UserID = user.Id
-			}
-			state.Operations = append(state.Operations, ops[i])
-		}
-
-		if len(state.Operations) > 100 {
-			state.Operations = state.Operations[len(state.Operations)-100:]
-		}
-
-		stateBytes, err := json.Marshal(state)
-		if err != nil {
-			log.Printf("[WARNING] Failed to marshal stream state: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed to save stream operations"}`))
-			return
-		}
-
-		err = SetCache(ctx, sessionKey, stateBytes, 120)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for stream: %s", err)
-		}
-
-		resp.WriteHeader(200)
-		resp.Write([]byte(fmt.Sprintf(`{"success": true, "sequence": %d, "count": %d}`, state.LastSeq, len(ops))))
-		return
-	}
-
-	// Legacy fallback: raw body overwrite (backwards compat for old clients)
-	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
-	err = SetCache(ctx, sessionKey, body, 30)
-	if err != nil {
-		log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
+		lastSeq = seq
 	}
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "sequence": %d, "count": %d}`, lastSeq, len(ops))))
 }
 
 func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
@@ -325,50 +387,50 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		sinceSeq, _ = strconv.ParseInt(sinceStr, 10, 64)
 	}
 
-	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
-	presenceKey := fmt.Sprintf("%s_presence", workflow.ID)
+	presenceKey := streamPresenceKeyFor(workflow.ID)
 	var lastSentSeq int64 = sinceSeq
 	var pollCount int
 
-	// On initial connect (since=0), flush the delta ops since the last save so late joiners
-	// catch up to unsaved changes made by other users before they arrived.
+	// On initial connect (since=0), replay the ops since the last save so late joiners catch
+	// up to unsaved changes made before they arrived. Bounded to the last streamMaxCatchup ops.
 	if sinceSeq == 0 {
-		cache, err := GetCache(ctx, sessionKey)
-		if err == nil {
-			cacheData, ok := cache.([]uint8)
-			if ok {
-				var state StreamWorkflowState
-				if err := json.Unmarshal(cacheData, &state); err == nil && len(state.Operations) > 0 {
-					// Find the sequence of the last save op — that's the catch-up baseline
-					var lastSaveSeq int64
-					for _, op := range state.Operations {
-						if op.Item == "workflow" && op.Type == "save" {
-							lastSaveSeq = op.Sequence
-						}
-					}
+		currentSeq := currentStreamSeq(ctx, workflow.ID)
+		if currentSeq > 0 {
+			start := lastStreamSaveSeq(ctx, workflow.ID) + 1
+			if floor := currentSeq - streamMaxCatchup + 1; start < floor {
+				start = floor
+			}
+			if start < 1 {
+				start = 1
+			}
 
-					for _, op := range state.Operations {
-						if op.Sequence <= lastSaveSeq {
-							continue
-						}
-
-						if op.Type == "select" || op.Type == "unselect" || op.Type == "hover" || op.Type == "enter" {
-							continue
-						}
-						opBytes, err := json.Marshal(op)
-						if err != nil {
-							continue
-						}
-						fmt.Fprintf(resp, "%s\n", string(opBytes))
-						lastSentSeq = op.Sequence
-					}
+			for seq := start; seq <= currentSeq; seq++ {
+				op, ok := getStreamOp(ctx, workflow.ID, seq)
+				if !ok {
+					continue
 				}
+				if op.Type == "select" || op.Type == "unselect" || op.Type == "hover" || op.Type == "enter" {
+					continue
+				}
+				opBytes, err := json.Marshal(op)
+				if err != nil {
+					continue
+				}
+				fmt.Fprintf(resp, "%s\n", string(opBytes))
 			}
 		}
 
+		// Everything up to currentSeq has been handled by catch-up; the live loop only
+		// forwards ops that arrive after this point.
+		lastSentSeq = currentSeq
 		fmt.Fprintf(resp, "%s\n", `{"item":"system","type":"init_complete"}`)
 		conn.Flush()
 	}
+
+	// stall tracking: guards against a sequence that was allocated but whose op key never
+	// materialised (writer died mid-request), so a single hole can't wedge the stream.
+	var stalledSeq int64 = -1
+	var stalledCount int
 
 	for {
 		pollCount++
@@ -430,56 +492,52 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			conn.Flush()
 		}
 
-		cache, err := GetCache(ctx, sessionKey)
-		if err == nil {
-			cacheData, ok := cache.([]uint8)
+		currentSeq := currentStreamSeq(ctx, workflow.ID)
+		for seq := lastSentSeq + 1; seq <= currentSeq; seq++ {
+			op, ok := getStreamOp(ctx, workflow.ID, seq)
 			if !ok {
-				log.Printf("[WARNING] Unexpected cache type for stream state %s", sessionKey)
-			} else {
-				var state StreamWorkflowState
-				if err := json.Unmarshal(cacheData, &state); err == nil {
-					for _, op := range state.Operations {
-						if op.Sequence <= lastSentSeq {
-							continue
-						}
-
-						// Skip ops from this user (they already applied them locally)
-						if len(user.Id) > 0 && op.UserID == user.Id {
-							lastSentSeq = op.Sequence
-							continue
-						}
-
-						opBytes, err := json.Marshal(op)
-						if err != nil {
-							continue
-						}
-
-						_, err = fmt.Fprintf(resp, "%s\n", string(opBytes))
-						if err != nil {
-							if strings.Contains(err.Error(), "broken pipe") {
-								return
-							}
-						}
-						lastSentSeq = op.Sequence
-						conn.Flush()
-					}
+				// The counter was bumped but this op isn't stored yet — normally a
+				// sub-millisecond write gap, so wait and retry on the next poll rather
+				// than skipping it (advancing would drop the op permanently). If it never
+				// shows up (writer crashed mid-request), skip it after streamMissRetries.
+				if stalledSeq == seq {
+					stalledCount++
 				} else {
-					// Legacy format: raw body (backwards compat)
-					if lastSentSeq == 0 {
-						if (len(user.Id) > 0 && !strings.Contains(string(cacheData), user.Id)) || len(user.Id) == 0 {
-							_, err := fmt.Fprintf(resp, "%s", string(cacheData))
-							if err != nil {
-								if strings.Contains(err.Error(), "broken pipe") {
-									return
-								}
-							} else {
-								conn.Flush()
-							}
-						}
-						lastSentSeq = 1
-					}
+					stalledSeq = seq
+					stalledCount = 1
+				}
+				if stalledCount >= streamMissRetries {
+					log.Printf("[WARNING] Stream v2: op %d for %s never materialised after %d retries, skipping", seq, workflow.ID, streamMissRetries)
+					lastSentSeq = seq
+					stalledSeq = -1
+					stalledCount = 0
+					continue
+				}
+				break
+			}
+			stalledSeq = -1
+			stalledCount = 0
+
+			// Skip ops from this user — they already applied them locally.
+			if len(user.Id) > 0 && op.UserID == user.Id {
+				lastSentSeq = seq
+				continue
+			}
+
+			opBytes, err := json.Marshal(op)
+			if err != nil {
+				lastSentSeq = seq
+				continue
+			}
+
+			_, err = fmt.Fprintf(resp, "%s\n", string(opBytes))
+			if err != nil {
+				if strings.Contains(err.Error(), "broken pipe") {
+					return
 				}
 			}
+			lastSentSeq = seq
+			conn.Flush()
 		}
 
 		time.Sleep(100 * time.Millisecond)
@@ -560,13 +618,19 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 		return
 	}
 
-	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
-	var state StreamWorkflowState
-	cache, err := GetCache(ctx, sessionKey)
-	if err == nil {
-		cacheData, ok := cache.([]uint8)
-		if ok {
-			json.Unmarshal(cacheData, &state)
+	// Reassemble the recent operation history (bounded to the last streamMaxCatchup ops)
+	// from the individual op keys.
+	currentSeq := currentStreamSeq(ctx, workflow.ID)
+	operations := []StreamWorkflowOperation{}
+	if currentSeq > 0 {
+		start := currentSeq - streamMaxCatchup + 1
+		if start < 1 {
+			start = 1
+		}
+		for seq := start; seq <= currentSeq; seq++ {
+			if op, ok := getStreamOp(ctx, workflow.ID, seq); ok {
+				operations = append(operations, op)
+			}
 		}
 	}
 
@@ -574,7 +638,7 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 	resp.WriteHeader(200)
 	result, _ := json.Marshal(map[string]interface{}{
 		"success":    true,
-		"operations": state.Operations,
+		"operations": operations,
 	})
 	resp.Write(result)
 }
