@@ -367,6 +367,8 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
 		return
 	}
+	
+	workflowID := workflow.ID
 
 	resp.Header().Set("Connection", "Keep-Alive")
 	resp.Header().Set("X-Content-Type-Options", "nosniff")
@@ -387,16 +389,16 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		sinceSeq, _ = strconv.ParseInt(sinceStr, 10, 64)
 	}
 
-	presenceKey := streamPresenceKeyFor(workflow.ID)
+	presenceKey := streamPresenceKeyFor(workflowID)
 	var lastSentSeq int64 = sinceSeq
 	var pollCount int
 
 	// On initial connect (since=0), replay the ops since the last save so late joiners catch
 	// up to unsaved changes made before they arrived. Bounded to the last streamMaxCatchup ops.
 	if sinceSeq == 0 {
-		currentSeq := currentStreamSeq(ctx, workflow.ID)
+		currentSeq := currentStreamSeq(ctx, workflowID)
 		if currentSeq > 0 {
-			start := lastStreamSaveSeq(ctx, workflow.ID) + 1
+			start := lastStreamSaveSeq(ctx, workflowID) + 1
 			if floor := currentSeq - streamMaxCatchup + 1; start < floor {
 				start = floor
 			}
@@ -405,7 +407,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			for seq := start; seq <= currentSeq; seq++ {
-				op, ok := getStreamOp(ctx, workflow.ID, seq)
+				op, ok := getStreamOp(ctx, workflowID, seq)
 				if !ok {
 					continue
 				}
@@ -442,7 +444,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 				if !ok {
 					log.Printf("[WARNING] Unexpected cache type for presence %s", presenceKey)
 				} else if err := json.Unmarshal(presenceData, &presence); err != nil {
-					log.Printf("[WARNING] Failed to unmarshal presence for %s: %s", workflow.ID, err)
+					log.Printf("[WARNING] Failed to unmarshal presence for %s: %s", workflowID, err)
 				}
 			}
 
@@ -474,7 +476,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 			presenceBytes, _ := json.Marshal(presence)
 			if err := SetCache(ctx, presenceKey, presenceBytes, streamPresenceTTL); err != nil {
-				log.Printf("[WARNING] Failed setting presence cache for %s: %s", workflow.ID, err)
+				log.Printf("[WARNING] Failed setting presence cache for %s: %s", workflowID, err)
 			}
 
 			// Send presence to client
@@ -492,9 +494,9 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			conn.Flush()
 		}
 
-		currentSeq := currentStreamSeq(ctx, workflow.ID)
+		currentSeq := currentStreamSeq(ctx, workflowID)
 		for seq := lastSentSeq + 1; seq <= currentSeq; seq++ {
-			op, ok := getStreamOp(ctx, workflow.ID, seq)
+			op, ok := getStreamOp(ctx, workflowID, seq)
 			if !ok {
 				// The counter was bumped but this op isn't stored yet — normally a
 				// sub-millisecond write gap, so wait and retry on the next poll rather
@@ -507,7 +509,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 					stalledCount = 1
 				}
 				if stalledCount >= streamMissRetries {
-					log.Printf("[WARNING] Stream v2: op %d for %s never materialised after %d retries, skipping", seq, workflow.ID, streamMissRetries)
+					log.Printf("[WARNING] Stream v2: op %d for %s never materialised after %d retries, skipping", seq, workflowID, streamMissRetries)
 					lastSentSeq = seq
 					stalledSeq = -1
 					stalledCount = 0
