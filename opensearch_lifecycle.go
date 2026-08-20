@@ -516,7 +516,7 @@ func migrateOpensearchSingleIndex(ctx context.Context, opensearchUrl, baseIndex 
 	}
 
 	if err := reindexOpensearchIndex(ctx, opensearchUrl, src, dest); err != nil {
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, src, false)
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, src)
 		return fmt.Errorf("final write-blocked catch-up copy: %w", err)
 	}
 
@@ -525,22 +525,22 @@ func migrateOpensearchSingleIndex(ctx context.Context, opensearchUrl, baseIndex 
 	// the comparison below, otherwise the tail of the catch-up copy above
 	// can make destCount look behind even though the copy fully succeeded.
 	if err := refreshOpensearchIndex(foundClient, opensearchUrl, src); err != nil {
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, src, false)
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, src)
 		return fmt.Errorf("refreshing source before final count check: %w", err)
 	}
 	if err := refreshOpensearchIndex(foundClient, opensearchUrl, dest); err != nil {
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, src, false)
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, src)
 		return fmt.Errorf("refreshing target before final count check: %w", err)
 	}
 
 	srcCount, err := getOpensearchIndexCount(foundClient, opensearchUrl, src)
 	if err != nil {
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, src, false)
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, src)
 		return fmt.Errorf("getting final source count: %w", err)
 	}
 	destCount, err := getOpensearchIndexCount(foundClient, opensearchUrl, dest)
 	if err != nil {
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, src, false)
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, src)
 		return fmt.Errorf("getting final target count: %w", err)
 	}
 	if destCount < srcCount {
@@ -548,7 +548,7 @@ func migrateOpensearchSingleIndex(ctx context.Context, opensearchUrl, baseIndex 
 		// idempotent and reruns on every startup) redo the copy - something
 		// left the target still behind, and deleting the source with data
 		// still missing would be permanent data loss.
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, src, false)
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, src)
 		return fmt.Errorf("target count %d still behind source count %d after write-blocked catch-up - not deleting source", destCount, srcCount)
 	}
 
@@ -559,6 +559,14 @@ func migrateOpensearchSingleIndex(ctx context.Context, opensearchUrl, baseIndex 
 		{Add: &OpensearchAliasActionTarget{Index: dest, Alias: baseIndex, IsWriteIndex: &write}},
 	}
 	if err := updateOpensearchAliases(foundClient, opensearchUrl, actions); err != nil {
+		// This request is atomic (OpenSearch applies remove+add as a single
+		// cluster-state update), so a failure here leaves src still holding
+		// the baseIndex alias, exactly as before the attempt - unblock it so
+		// the application can keep writing to it normally. Without this, src
+		// (the currently-serving index) would stay write-blocked until the
+		// next backend restart re-runs this idempotent migration, since
+		// nothing else retries it in between.
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, src)
 		return err
 	}
 
@@ -1469,7 +1477,7 @@ func runOpensearchCollisionMigration(foundClient opensearchapi.Client, opensearc
 	}
 
 	if err := runOpensearchReindexToCompletion(foundClient, opensearchUrl, sourceIndex, targetIndex); err != nil {
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, sourceIndex, false)
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, sourceIndex)
 		return fmt.Errorf("final write-blocked catch-up copy: %w", err)
 	}
 
@@ -1480,22 +1488,22 @@ func runOpensearchCollisionMigration(foundClient opensearchapi.Client, opensearc
 	// succeeded, for indices still receiving writes right up to the
 	// write-block (exactly the high-volume case this is built for).
 	if err := refreshOpensearchIndex(foundClient, opensearchUrl, sourceIndex); err != nil {
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, sourceIndex, false)
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, sourceIndex)
 		return fmt.Errorf("refreshing source before final count check: %w", err)
 	}
 	if err := refreshOpensearchIndex(foundClient, opensearchUrl, targetIndex); err != nil {
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, sourceIndex, false)
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, sourceIndex)
 		return fmt.Errorf("refreshing target before final count check: %w", err)
 	}
 
 	sourceCount, err := getOpensearchIndexCount(foundClient, opensearchUrl, sourceIndex)
 	if err != nil {
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, sourceIndex, false)
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, sourceIndex)
 		return fmt.Errorf("getting final source count: %w", err)
 	}
 	targetCount, err := getOpensearchIndexCount(foundClient, opensearchUrl, targetIndex)
 	if err != nil {
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, sourceIndex, false)
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, sourceIndex)
 		return fmt.Errorf("getting final target count: %w", err)
 	}
 	if targetCount < sourceCount {
@@ -1504,43 +1512,41 @@ func runOpensearchCollisionMigration(foundClient opensearchapi.Client, opensearc
 		// between the write-block taking effect and the catch-up reindex
 		// starting) left the target still behind, and deleting the source
 		// with data still missing would be permanent data loss.
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, sourceIndex, false)
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, sourceIndex)
 		return fmt.Errorf("target count %d still behind source count %d after write-blocked catch-up - not deleting source", targetCount, sourceCount)
 	}
 
-	if err := deleteOpensearchIndex(foundClient, opensearchUrl, sourceIndex); err != nil {
-		_ = setOpensearchIndexWriteBlock(foundClient, opensearchUrl, sourceIndex, false)
-		return fmt.Errorf("deleting source index after verified migration: %w", err)
-	}
-
+	// Delete the source index and create the alias in a SINGLE atomic
+	// _aliases request (remove_index + add), rather than two separate
+	// calls. OpenSearch applies all actions in one request as a single
+	// cluster-state update - it cannot partially apply this batch, so
+	// there is no "source deleted but alias not yet created" window for a
+	// crash/restart/network-blip to land in.
 	isWrite := true
 	actions := []OpensearchAliasAction{
-		{
-			Add: &OpensearchAliasActionTarget{Index: targetIndex, Alias: sourceIndex, IsWriteIndex: &isWrite},
-		},
+		{RemoveIndex: &OpensearchAliasActionTarget{Index: sourceIndex}},
+		{Add: &OpensearchAliasActionTarget{Index: targetIndex, Alias: sourceIndex, IsWriteIndex: &isWrite}},
 	}
-	// The source index (whose name equals the alias we're about to create)
-	// is already gone at this point - there's no going back to a "both
-	// exist" state to retry from later within this run.
-	//
-	// A transient failure here (network blip, master reelection) would
-	// otherwise leave the application-facing index name pointing at
-	// neither a physical index nor an alias until the next full backend
-	// restart picks it up via FixOpensearchIndexPrefix. Retry with backoff
-	// in-process instead of relying solely on that next restart.
-	var aliasErr error
+	var swapErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 		}
-		aliasErr = updateOpensearchAliases(foundClient, opensearchUrl, actions)
-		if aliasErr == nil {
+		swapErr = updateOpensearchAliases(foundClient, opensearchUrl, actions)
+		if swapErr == nil {
 			break
 		}
-		log.Printf("[WARNING] Opensearch collision migration %s -> %s: alias finalization attempt %d/5 failed (source is already deleted - retrying): %s", sourceIndex, targetIndex, attempt+1, aliasErr)
+		log.Printf("[WARNING] Opensearch collision migration %s -> %s: atomic delete-source+add-alias attempt %d/5 failed (source index is untouched - retrying): %s", sourceIndex, targetIndex, attempt+1, swapErr)
 	}
-	if aliasErr != nil {
-		return fmt.Errorf("finalizing alias swap after %d attempts (source index '%s' no longer exists - this MUST be fixed manually or by restarting the backend, since the alias '%s' has no target until this succeeds): %w", 5, sourceIndex, sourceIndex, aliasErr)
+	if swapErr != nil {
+		// The _aliases request failed as a whole, so - per OpenSearch's
+		// atomic-batch guarantee - neither remove_index nor add was applied:
+		// sourceIndex is fully intact with all its data. Unblock writes so
+		// the application can keep using it normally; the whole migration
+		// (bulk copy included) is idempotent and will simply retry from
+		// scratch on the next restart.
+		clearOpensearchIndexWriteBlockBestEffort(foundClient, opensearchUrl, sourceIndex)
+		return fmt.Errorf("finalizing atomic delete-source+add-alias after 5 attempts (source index '%s' is untouched and write access has been restored - safe to retry on next restart): %w", sourceIndex, swapErr)
 	}
 
 	log.Printf("[INFO] Opensearch collision migration complete: alias '%s' now served by '%s' (%d documents verified)", sourceIndex, targetIndex, targetCount)
@@ -1731,6 +1737,20 @@ func setOpensearchIndexWriteBlock(foundClient opensearchapi.Client, opensearchUr
 	}
 
 	return nil
+}
+
+// clearOpensearchIndexWriteBlockBestEffort undoes a write block after an
+// earlier migration step has already failed, so callers can return their
+// original (more relevant) error without it being shadowed by this
+// best-effort cleanup. A failure here is not merely cosmetic though: it
+// means indexName stays write-blocked - a real write outage on whatever
+// alias currently points at it - until the next successful retry, which for
+// these startup-only migrations can mean until the next backend restart.
+// That must not be silently dropped, so it's logged here.
+func clearOpensearchIndexWriteBlockBestEffort(foundClient opensearchapi.Client, opensearchUrl, indexName string) {
+	if err := setOpensearchIndexWriteBlock(foundClient, opensearchUrl, indexName, false); err != nil {
+		log.Printf("[ERROR] Failed to clear write block on %s after an earlier migration step failed - %s will remain write-blocked until the next successful retry: %s", indexName, indexName, err)
+	}
 }
 
 // checkOpensearchIndexExists reports whether indexName currently exists,
@@ -1939,7 +1959,9 @@ func getOpensearchAliases(foundClient opensearchapi.Client, opensearchUrl string
 		aliasInfo[indexName] = map[string]opensearchAliasState{}
 		for aliasName, aliasRaw := range aliasEntry.Aliases {
 			details := aliasDetails{}
-			_ = json.Unmarshal(aliasRaw, &details)
+			if err := json.Unmarshal(aliasRaw, &details); err != nil {
+				log.Printf("[WARNING] Failed parsing alias details for %s/%s - assuming is_write_index=false: %s", indexName, aliasName, err)
+			}
 			aliasInfo[indexName][aliasName] = opensearchAliasState{Present: true, IsWriteIndex: details.IsWriteIndex}
 		}
 	}
@@ -2162,14 +2184,26 @@ type OpensearchAliasActionsRequest struct {
 type OpensearchAliasAction struct {
 	Add    *OpensearchAliasActionTarget `json:"add,omitempty"`
 	Remove *OpensearchAliasActionTarget `json:"remove,omitempty"`
+	// RemoveIndex deletes the named index outright (equivalent to DELETE
+	// /index), but - unlike a separate DELETE call - can be batched into
+	// the same _aliases request as an Add action so both happen as a
+	// single atomic cluster-state update. Only Index is meaningful here.
+	RemoveIndex *OpensearchAliasActionTarget `json:"remove_index,omitempty"`
 }
 
 // OpensearchAliasActionTarget identifies the index/alias (and, for adds,
 // whether it should become the write index) an OpensearchAliasAction
 // applies to.
 type OpensearchAliasActionTarget struct {
-	Index        string `json:"index"`
-	Alias        string `json:"alias"`
+	Index string `json:"index"`
+	// Alias must be omitempty: RemoveIndex actions only ever set Index (no
+	// Alias), and OpenSearch's strict per-action parser rejects a
+	// remove_index action that includes an "alias" field at all - even an
+	// empty one. Without omitempty here, every RemoveIndex action would
+	// serialize as {"index":"x","alias":""} and get rejected with
+	// x_content_parse_exception, silently breaking every atomic
+	// delete+alias-add swap that relies on it.
+	Alias        string `json:"alias,omitempty"`
 	IsWriteIndex *bool  `json:"is_write_index,omitempty"`
 }
 
