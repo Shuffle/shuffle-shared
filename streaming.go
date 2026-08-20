@@ -37,6 +37,8 @@ func presenceColor(userID string) string {
 var streamPresenceInterval = 100
 var streamPresenceTTL int32 = 5
 var streamPresenceStaleMs int64 = 30000 // 30 seconds stale threshold
+var streamAllowRegionRedirect = os.Getenv("SHUFFLE_STREAM_REGION_REDIRECT") == "" // set SHUFFLE_STREAM_DISABLE_REGION_REDIRECT locally to always handle stream requests locally instead of redirecting by region; unset in prod so this stays true
+var streamSelfCloseAfter = 55 * time.Second // close cleanly before the platform force-cuts at 60s, always between ops - never mid-write
 
 // Stream storage model (per workflow):
 //
@@ -53,6 +55,7 @@ var streamSeqTTLMinutes int32 = 60   // counter + lastsave keys (SetCache uses m
 var streamSeqTTLSeconds int32 = 3600 // counter key for direct memcache Add/Touch (seconds)
 var streamMaxCatchup int64 = 100     // cap replayed ops on connect/history
 var streamMissRetries = 30           // ~3s at 100ms/poll before skipping a never-materialised op
+var streamPostSaveKeepOps int64 = 4  // ops just before a save are kept as a small safety buffer; older ones are pruned
 
 // streamSeqMu guards the in-process counter path (single-instance deployments without memcache).
 var streamSeqMu sync.Mutex
@@ -152,13 +155,23 @@ func getStreamOp(ctx context.Context, workflowID string, seq int64) (StreamWorkf
 	return op, true
 }
 
+func pruneStreamOpsBeforeSave(ctx context.Context, workflowID string, prevSaveSeq, newSaveSeq int64) {
+	start := prevSaveSeq - streamPostSaveKeepOps + 1
+	if start < 1 {
+		start = 1
+	}
+	for seq := start; seq <= newSaveSeq-streamPostSaveKeepOps; seq++ {
+		DeleteCache(ctx, streamOpKey(workflowID, seq))
+	}
+}
+
 func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
 
-	if project.Environment == "cloud" {
+	if streamAllowRegionRedirect && project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting Stream Update request to main site handler (shuffler.io)")
@@ -207,7 +220,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
-			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (SET workflow stream)", user.Username, workflow.ID)
+			// log.Printf("[AUDIT] User %s is accessing workflow %s as admin (SET workflow stream)", user.Username, workflow.ID)
 
 		} else if project.Environment == "cloud" && user.Verified == true && user.SupportAccess == true && user.Role == "admin" {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
@@ -280,7 +293,9 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 
 		// Record the save baseline so late joiners only replay unsaved changes.
 		if ops[i].Item == "workflow" && ops[i].Type == "save" {
+			prevSaveSeq := lastStreamSaveSeq(ctx, workflow.ID)
 			SetCache(ctx, streamLastSaveKey(workflow.ID), []byte(strconv.FormatInt(seq, 10)), streamSeqTTLMinutes)
+			go pruneStreamOpsBeforeSave(ctx, workflow.ID, prevSaveSeq, seq)
 		}
 
 		lastSeq = seq
@@ -291,12 +306,14 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 }
 
 func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
+	connStart := time.Now()
+
 	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
 
-	if project.Environment == "cloud" {
+	if streamAllowRegionRedirect && project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting Stream Start request to main site handler (shuffler.io)")
@@ -345,10 +362,10 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 
 		if workflow.OrgId == user.ActiveOrg.Id && user.Role != "" {
-			log.Printf("[AUDIT] User %s is accessing workflow %s as org member (get workflow stream)", user.Username, workflow.ID)
+			// log.Printf("[AUDIT] User %s is accessing workflow %s as org member (get workflow stream)", user.Username, workflow.ID)
 
 		} else if workflow.Public {
-			log.Printf("[AUDIT] Letting user %s access workflow %s for streaming because it's public (get workflow stream)", user.Username, workflow.ID)
+			// log.Printf("[AUDIT] Letting user %s access workflow %s for streaming because it's public (get workflow stream)", user.Username, workflow.ID)
 
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
@@ -393,15 +410,12 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	var lastSentSeq int64 = sinceSeq
 	var pollCount int
 
-	// On initial connect (since=0), replay the ops since the last save so late joiners catch
-	// up to unsaved changes made before they arrived. Bounded to the last streamMaxCatchup ops.
+	// On initial connect (since=0), replay every op since the last save so late joiners see
+	// the full unsaved backlog - it only exists in the stream, a reload wouldn't recover it.
 	if sinceSeq == 0 {
 		currentSeq := currentStreamSeq(ctx, workflowID)
 		if currentSeq > 0 {
 			start := lastStreamSaveSeq(ctx, workflowID) + 1
-			if floor := currentSeq - streamMaxCatchup + 1; start < floor {
-				start = floor
-			}
 			if start < 1 {
 				start = 1
 			}
@@ -435,6 +449,10 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	var stalledCount int
 
 	for {
+		if time.Since(connStart) > streamSelfCloseAfter {
+			return
+		}
+
 		pollCount++
 		if pollCount%streamPresenceInterval == 1 {
 			var presence StreamPresenceState
@@ -552,7 +570,7 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 		return
 	}
 
-	if project.Environment == "cloud" {
+	if streamAllowRegionRedirect && project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting Stream History request to main site handler (shuffler.io)")
