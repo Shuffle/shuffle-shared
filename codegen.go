@@ -151,11 +151,28 @@ func FormatAppfile(filedata string) (string, string) {
 }
 
 // Streams the data into a zip to be used for a cloud function
-func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bucketName string) (string, error) {
+func StreamZipdata(ctx context.Context, orgId, identifier, pythoncode, requirements, bucketName string) (string, error) {
 	filename := fmt.Sprintf("generated_cloudfunctions/%s.zip", identifier)
 
 	buf := new(bytes.Buffer)
 	zipWriter := zip.NewWriter(buf)
+
+	// Check if org has backup repo setup
+	if len(orgId) > 0 { 
+		if debug { 
+			log.Printf("[DEBUG] GIT APP UPLOAD OF %s", identifier)
+		}	
+
+		org, err := GetOrg(ctx, orgId)
+		if err != nil { 
+			log.Printf("[ERROR] Failed getting org '%s' in streamzip git upload", orgId)
+		} else {
+			err = UploadGitApp(ctx, identifier, pythoncode, requirements, "", org)
+			if err != nil { 
+				log.Printf("[ERROR] Failed upload to git for app '%s' in org '%s'", identifier, orgId)
+			}
+		}
+	}
 
 	if project.Environment == "cloud" {
 		client, err := storage.NewClient(ctx)

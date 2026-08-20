@@ -9790,8 +9790,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	go SetWorkflowRevision(ctx, workflow)
 
 	go func() {
-		ctx = context.Background()
-		err = SetGitWorkflow(ctx, workflow, org)
+		err = SetGitWorkflow(context.Background(), workflow, org)
 		if err != nil {
 
 			// Make a notification for this
@@ -17787,8 +17786,23 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 		cacheErr := SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
 		if cacheErr != nil && (status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED") {
-			log.Printf("[WARNING][%s] Memcache down — skipping agent self-request for '%s' to prevent retry storm", workflowExecution.ExecutionId, status)
-			return nil
+			log.Printf("[WARNING][%s] Cache error, falling back to DB check for agent self-request '%s'", workflowExecution.ExecutionId, status)
+			
+			// DB Fallback
+			dbExec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId, true)
+			if err == nil {
+				for _, res := range dbExec.Results {
+					if res.Action.ID == actionResult.Action.ID {
+						if res.Status == "SUCCESS" || res.Status == "FINISHED" || res.Status == "FAILURE" || res.Status == "ABORTED" {
+							log.Printf("[INFO][%s] Action '%s' is already finished in DB. Skipping duplicate request.", workflowExecution.ExecutionId, actionResult.Action.ID)
+							return nil
+						}
+					}
+				}
+			} else {
+				log.Printf("[ERROR][%s] DB error verifying execution status. Blocking request.", workflowExecution.ExecutionId)
+				return nil
+			}
 		}
 	}
 
@@ -18274,6 +18288,14 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 				// push to the action result cache so GetWorkflowExecution inside HandleAiAgentExecutionStart picks up the fresh copy.
 				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
 				go SetCache(ctx, actionCacheId, marshalledResult, 600)
+
+				// Persist intermediate agent state to DB to prevent information loss on restarts
+				executionCacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
+				if marshalledExec, execMarshalErr := json.Marshal(workflowExecution); execMarshalErr == nil {
+					SetCache(ctx, executionCacheKey, marshalledExec, 600)
+				}
+				go SetWorkflowExecution(ctx, workflowExecution, true)
+
 			} else {
 				log.Printf("[WARNING][%s] Failed to marshal updated mappedResult before HandleAiAgentExecutionStart: %s", workflowExecution.ExecutionId, marshalErr)
 			}
@@ -25637,6 +25659,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					oldExecution.Results[resultIndex] = result
+					
+					// Persist intermediate agent state to DB to prevent handleAgentDecisionStreamResult from fetching a stale copy
+					executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExecution.ExecutionId)
+					if marshalledExec, execMarshalErr := json.Marshal(*oldExecution); execMarshalErr == nil {
+						SetCache(ctx, executionCacheKey, marshalledExec, 600)
+					}
+					go SetWorkflowExecution(ctx, *oldExecution, true)
 
 					// FIXME: Can we force continue the agent from here? Or do we send another action inbetween?
 					result.Status = fmt.Sprintf("%s_%s", "FINISHED", decisionId)
