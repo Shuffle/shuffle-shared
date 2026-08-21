@@ -9940,7 +9940,7 @@ data_filter:
 			tmpExecution, _ := GetWorkflowExecution(ctx, execution.ExecutionId)
 
 			if debug {
-				log.Printf("[DEBUG][%s] Got %d NEW decision(s). Status: %s", execution.ExecutionId, len(mappedDecisions), tmpExecution)
+				log.Printf("[DEBUG][%s] Got %d NEW decision(s). Status: %s", execution.ExecutionId, len(mappedDecisions), tmpExecution.Status)
 			}
 
 			if tmpExecution.Status == "FINISHED" || tmpExecution.Status == "ABORTED" {
@@ -10852,7 +10852,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	defaultCreds := false
-	if len(apiKey) == 0 && project.Environment == "cloud" {
+	if project.Environment == "cloud" {
 		foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
 		if len(foundApikey) > 0 {
 			defaultCreds = true
@@ -10867,6 +10867,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			currentModel = foundModel
 		}
 	}
+
+	//if debug { 
+	//	log.Printf("[DEBUG] ORGID (1): %#v, apikey: %#v, requestUrl: %#v, model: %#v", info.OrgID, apiKey, aiRequestUrl, currentModel)
+	//}
 
 	if len(info.OrgID) > 0 {
 		// Look up custom auth to use instead
@@ -10884,6 +10888,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			currentModel = foundModel
 		}
 	}
+
+	//if debug { 
+	//	log.Printf("[DEBUG] ORGID (2): %#v, apikey: %#v, requestUrl: %#v, model: %#v", info.OrgID, apiKey, aiRequestUrl, currentModel)
+	//}
 
 	config := openai.DefaultConfig(apiKey)
 	if len(aiRequestUrl) > 0 {
