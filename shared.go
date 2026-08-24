@@ -22667,7 +22667,11 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 
 	//log.Printf("Docpath: %s", docPath)
 
-	httpClient := &http.Client{}
+	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+	tc := oauth2.NewClient(ctx, ts)
+
+	httpClient := tc
 	req, err := http.NewRequest(
 		"GET",
 		docPath,
@@ -22695,6 +22699,12 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if newresp.StatusCode != 200 {
+		resp.WriteHeader(newresp.StatusCode)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to fetch doc from Github"}`)))
+		return
+	}
+
 	commitOptions := &github.CommitsListOptions{
 		Path: fmt.Sprintf("%s/%s.md", path, location[4]),
 	}
@@ -22704,10 +22714,6 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		parsedLink = realPath
 	}
 
-	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
-
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	tc := oauth2.NewClient(ctx, ts)
 	client := github.NewClient(tc)
 	githubResp := GithubResp{
 		Name:         location[4],
@@ -22818,11 +22824,17 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 	owner := "shuffle"
 	repo := "shuffle-docs"
 
-	_, item1, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
+	_, item1, githubApiResp, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting docs list: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error listing directory"}`)))
+		return
+	}
+
+	if githubApiResp != nil && githubApiResp.StatusCode != 200 {
+		resp.WriteHeader(githubApiResp.StatusCode)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to fetch doc list from Github"}`)))
 		return
 	}
 
