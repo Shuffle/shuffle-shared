@@ -36,70 +36,87 @@ func presenceColor(userID string) string {
 // streamPresenceInterval: presence update every 100 poll iterations (~10s at 100ms/poll)
 var streamPresenceInterval = 100
 var streamPresenceTTL int32 = 5
-var streamPresenceStaleMs int64 = 30000 // 30 seconds stale threshold
+var streamPresenceStaleMs int64 = 30000                                           // 30 seconds stale threshold
 var streamAllowRegionRedirect = os.Getenv("SHUFFLE_STREAM_REGION_REDIRECT") == "" // set SHUFFLE_STREAM_DISABLE_REGION_REDIRECT locally to always handle stream requests locally instead of redirecting by region; unset in prod so this stays true
-var streamSelfCloseAfter = 55 * time.Second // close cleanly before the platform force-cuts at 60s, always between ops - never mid-write
+var streamSelfCloseAfter = 55 * time.Second                                       // close cleanly before the platform force-cuts at 60s, always between ops - never mid-write
 
 // Stream storage model (per workflow):
-//
-//	<id>_stream_seq       — monotonic counter, atomically incremented per op (source of sequence numbers)
+//	<id>_stream_seq       — monotonic counter, atomically incremented per op (source of sequence numbers) <id> : workflow ID
 //	<id>_stream_op_<seq>  — one operation stored under its own key (O(1) writes, no read-modify-write race)
 //	<id>_stream_lastsave  — sequence of the last "save" op, used as the catch-up baseline
 //	<id>_presence         — presence/heartbeat state (unchanged)
-//
+
 // Writes only allocate a sequence (atomic INCR) and set a single op key, so concurrent
 // writers can never clobber each other. Readers poll the small counter key and only fetch
 // op payloads when it advances.
-var streamOpTTLMinutes int32 = 5     // individual op keys; also bounds catch-up history
-var streamSeqTTLMinutes int32 = 60   // counter + lastsave keys (SetCache uses minutes)
-var streamSeqTTLSeconds int32 = 3600 // counter key for direct memcache Add/Touch (seconds)
-var streamMaxCatchup int64 = 100     // cap replayed ops on connect/history
-var streamMissRetries = 30           // ~3s at 100ms/poll before skipping a never-materialised op
-var streamPostSaveKeepOps int64 = 4  // ops just before a save are kept as a small safety buffer; older ones are pruned
+var streamOpTTLMinutes int32 = 5    // individual op keys; also bounds catch-up history
+var streamSeqTTLMinutes int32 = 60  // counter + lastsave keys (SetCache uses minutes; memcache/requestCache paths convert to seconds via *60)
+var streamMaxCatchup int64 = 100    // cap replayed ops on connect/history
+var streamMissRetries = 30          // ~3s at 100ms/poll before skipping a never-materialised op
+var streamPostSaveKeepOps int64 = 4 // ops just before a save are kept as a small safety buffer; older ones are pruned
 
 // streamSeqMu guards the in-process counter path (single-instance deployments without memcache).
 var streamSeqMu sync.Mutex
 
-func streamSeqKey(id string) string           { return fmt.Sprintf("%s_stream_seq", id) }
-func streamLastSaveKey(id string) string      { return fmt.Sprintf("%s_stream_lastsave", id) }
-func streamOpKey(id string, seq int64) string { return fmt.Sprintf("%s_stream_op_%d", id, seq) }
-func streamPresenceKeyFor(id string) string   { return fmt.Sprintf("%s_presence", id) }
+func streamSeqKey(id string) string {
+	return fmt.Sprintf("%s_stream_seq", id)
+}
+
+func streamLastSaveKey(id string) string {
+	return fmt.Sprintf("%s_stream_lastsave", id)
+}
+
+func streamOpKey(id string, seq int64) string {
+	return fmt.Sprintf("%s_stream_op_%d", id, seq)
+}
+
+func streamPresenceKeyFor(id string) string {
+	return fmt.Sprintf("%s_presence", id)
+}
 
 // nextStreamSeq atomically allocates and returns the next stream sequence for a workflow.
-// It is race-free across instances via memcache atomic INCR (when SHUFFLE_MEMCACHED is set),
-// and falls back to a mutex-guarded in-process counter otherwise.
 func nextStreamSeq(workflowID string) (int64, error) {
 	key := streamSeqKey(workflowID)
 
 	if len(memcached) > 0 {
 		newVal, err := mc.Increment(key, 1)
+
 		if err == gomemcache.ErrCacheMiss {
-			// First op for this workflow: initialise the counter at 1. Add fails with
-			// ErrNotStored if another writer created it first, so fall through to INCR.
-			if addErr := mc.Add(&gomemcache.Item{Key: key, Value: []byte("1"), Expiration: streamSeqTTLSeconds}); addErr == nil {
+			addErr := mc.Add(&gomemcache.Item{
+				Key:        key,
+				Value:      []byte("1"),
+				Expiration: streamSeqTTLMinutes * 60,
+			})
+
+			if addErr == nil {
 				return 1, nil
 			}
+
 			newVal, err = mc.Increment(key, 1)
 		}
+
 		if err != nil {
 			return 0, err
 		}
-		// Keep the counter alive across write-idle gaps so sequences never reset mid-session.
-		mc.Touch(key, streamSeqTTLSeconds)
+
+		mc.Touch(key, streamSeqTTLMinutes*60)
+
 		return int64(newVal), nil
 	}
 
-	// In-process fallback — single instance, so a plain mutex is sufficient and race-free.
 	streamSeqMu.Lock()
 	defer streamSeqMu.Unlock()
+
 	var cur int64
 	if v, found := requestCache.Get(key); found {
 		if parsed, ok := v.(int64); ok {
 			cur = parsed
 		}
 	}
+
 	cur++
-	requestCache.Set(key, cur, time.Duration(streamSeqTTLSeconds)*time.Second)
+	requestCache.Set(key, cur, time.Duration(streamSeqTTLMinutes)*time.Minute)
+
 	return cur, nil
 }
 
@@ -161,7 +178,9 @@ func pruneStreamOpsBeforeSave(ctx context.Context, workflowID string, prevSaveSe
 		start = 1
 	}
 	for seq := start; seq <= newSaveSeq-streamPostSaveKeepOps; seq++ {
-		DeleteCache(ctx, streamOpKey(workflowID, seq))
+		if err := DeleteCache(ctx, streamOpKey(workflowID, seq)); err != nil {
+			log.Printf("[WARNING] Failed pruning stream op %d for %s: %s", seq, workflowID, err)
+		}
 	}
 }
 
@@ -294,7 +313,9 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		// Record the save baseline so late joiners only replay unsaved changes.
 		if ops[i].Item == "workflow" && ops[i].Type == "save" {
 			prevSaveSeq := lastStreamSaveSeq(ctx, workflow.ID)
-			SetCache(ctx, streamLastSaveKey(workflow.ID), []byte(strconv.FormatInt(seq, 10)), streamSeqTTLMinutes)
+			if err := SetCache(ctx, streamLastSaveKey(workflow.ID), []byte(strconv.FormatInt(seq, 10)), streamSeqTTLMinutes); err != nil {
+				log.Printf("[WARNING] Failed setting stream lastsave key for %s: %s", workflow.ID, err)
+			}
 			go pruneStreamOpsBeforeSave(ctx, workflow.ID, prevSaveSeq, seq)
 		}
 
@@ -384,7 +405,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
 		return
 	}
-	
+
 	workflowID := workflow.ID
 
 	resp.Header().Set("Connection", "Keep-Alive")
@@ -527,7 +548,6 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 					stalledCount = 1
 				}
 				if stalledCount >= streamMissRetries {
-					log.Printf("[WARNING] Stream v2: op %d for %s never materialised after %d retries, skipping", seq, workflowID, streamMissRetries)
 					lastSentSeq = seq
 					stalledSeq = -1
 					stalledCount = 0
@@ -562,6 +582,11 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+type StreamWorkflowHistoryResponse struct {
+	Success    bool                      `json:"success"`
+	Operations []StreamWorkflowOperation `json:"operations"`
 }
 
 func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request) {
@@ -656,9 +681,9 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 
 	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(200)
-	result, _ := json.Marshal(map[string]interface{}{
-		"success":    true,
-		"operations": operations,
+	result, _ := json.Marshal(StreamWorkflowHistoryResponse{
+		Success:    true,
+		Operations: operations,
 	})
 	resp.Write(result)
 }

@@ -37424,17 +37424,8 @@ func streamWorkflowOperations(ctx context.Context, request *http.Request, workfl
 
 	streamURL := fmt.Sprintf("%s/api/v1/workflows/%s/stream", baseURL, workflowID)
 
-	sentCount := 0
-	for i, streamOp := range streamOps {
-
-		err := sendStreamOperation(ctx, request, streamURL, &streamOp)
-		if err != nil {
-			log.Printf("[WARNING] Failed to stream op %d (%s/%s) for workflow %s: %s", i, streamOp.Item, streamOp.Type, workflowID, err)
-		} else {
-			sentCount++
-		}
-
-		time.Sleep(50 * time.Millisecond)
+	if err := sendStreamOperations(ctx, request, streamURL, streamOps); err != nil {
+		log.Printf("[WARNING] Failed to stream %d ops for workflow %s: %s", len(streamOps), workflowID, err)
 	}
 }
 
@@ -37470,6 +37461,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		// The node is now in wf.Actions or wf.Triggers with its real ID.
 		for _, action := range wf.Actions {
 			if action.ID == realID {
+				action.LargeImage = ""
 				dataBytes, _ := json.Marshal(actionStreamNode{action, "ACTION"})
 				return []StreamWorkflowOperation{{
 					Item:     "node",
@@ -37482,6 +37474,8 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		for _, trigger := range wf.Triggers {
 			if trigger.ID == realID {
+				trigger.LargeImage = ""
+				trigger.IsValid = true
 				dataBytes, _ := json.Marshal(triggerStreamNode{trigger, "TRIGGER"})
 				return []StreamWorkflowOperation{{
 					Item:     "node",
@@ -37537,6 +37531,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 	case "edit_node":
 		for _, action := range wf.Actions {
 			if action.ID == realID {
+				action.LargeImage = ""
 				dataBytes, _ := json.Marshal(action)
 				return []StreamWorkflowOperation{{
 					Item: "node",
@@ -37548,6 +37543,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		for _, trigger := range wf.Triggers {
 			if trigger.ID == realID {
+				trigger.LargeImage = ""
 				dataBytes, _ := json.Marshal(trigger)
 				return []StreamWorkflowOperation{{
 					Item: "node",
@@ -37623,10 +37619,10 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 
 var streamHTTPClient = &http.Client{Timeout: 2 * time.Second}
 
-func sendStreamOperation(ctx context.Context, request *http.Request, streamURL string, streamOp *StreamWorkflowOperation) error {
-	opBytes, err := json.Marshal(streamOp)
+func sendStreamOperations(ctx context.Context, request *http.Request, streamURL string, streamOps []StreamWorkflowOperation) error {
+	opBytes, err := json.Marshal(streamOps)
 	if err != nil {
-		return fmt.Errorf("failed to marshal stream operation: %w", err)
+		return fmt.Errorf("failed to marshal stream operations: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, streamURL, bytes.NewReader(opBytes))
