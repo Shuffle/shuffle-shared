@@ -82,7 +82,7 @@ func nextStreamSeq(workflowID string) (int64, error) {
 		newVal, err := mc.Increment(key, 1)
 
 		if err == gomemcache.ErrCacheMiss {
-			addErr := mc.Add(&gomemcache.Item{
+			_, addErr := mc.Add(&gomemcache.Item{
 				Key:        key,
 				Value:      []byte("1"),
 				Expiration: streamSeqTTLMinutes * 60,

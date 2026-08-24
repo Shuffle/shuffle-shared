@@ -182,6 +182,94 @@ func (client *shuffleMemcacheClient) Add(item *gomemcache.Item) (bool, error) {
 	return false, nil
 }
 
+// Increment mirrors gomemcache's Increment across every available server, so
+// replicas stay in sync. The first successful value is returned.
+func (client *shuffleMemcacheClient) Increment(key string, delta uint64) (uint64, error) {
+	servers := client.availableServers(key)
+	if len(servers) == 0 {
+		return 0, gomemcache.ErrNoServers
+	}
+
+	var lastErr error
+	cacheMiss := false
+	incremented := false
+	newValue := uint64(0)
+	for _, server := range servers {
+		value, err := server.client.Increment(key, delta)
+		if err == nil {
+			if !incremented {
+				newValue = value
+				incremented = true
+			}
+
+			continue
+		}
+		if err == gomemcache.ErrCacheMiss {
+			cacheMiss = true
+			continue
+		}
+		if err == gomemcache.ErrMalformedKey {
+			return 0, err
+		}
+
+		lastErr = err
+		client.disableServer(server, err)
+	}
+
+	if incremented {
+		return newValue, nil
+	}
+	if cacheMiss {
+		return 0, gomemcache.ErrCacheMiss
+	}
+	if lastErr != nil {
+		return 0, lastErr
+	}
+
+	return 0, gomemcache.ErrNoServers
+}
+
+// Touch resets the expiration on every available server holding the key.
+func (client *shuffleMemcacheClient) Touch(key string, seconds int32) error {
+	servers := client.availableServers(key)
+	if len(servers) == 0 {
+		return gomemcache.ErrNoServers
+	}
+
+	var lastErr error
+	cacheMiss := false
+	touched := false
+	for _, server := range servers {
+		err := server.client.Touch(key, seconds)
+		if err == nil {
+			touched = true
+			continue
+		}
+		if err == gomemcache.ErrCacheMiss {
+			cacheMiss = true
+			continue
+		}
+		if err == gomemcache.ErrMalformedKey {
+			return err
+		}
+
+		lastErr = err
+		client.disableServer(server, err)
+	}
+
+	if touched {
+		return nil
+	}
+	if cacheMiss {
+		return gomemcache.ErrCacheMiss
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+
+	return gomemcache.ErrNoServers
+}
+
 func (client *shuffleMemcacheClient) Delete(key string) error {
 	servers := client.availableServers(key)
 	if len(servers) == 0 {
