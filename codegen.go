@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	dockerimage "github.com/docker/docker/api/types/image"
 	docker "github.com/docker/docker/client"
 	"gopkg.in/yaml.v2"
 
@@ -4522,6 +4523,19 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	//log.Printf("[DEBUG] Starting to load zip file for image %s. This is a background process and may take a while.", imageName)
 	//imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar, true)
 	defer dockercli.Close()
+
+	// Snapshot of what exists BEFORE the load, so we can find what the archive
+	// actually added. Private/generated apps are stored keyed by app ID, not by
+	// version, so the loaded image rarely carries the name we asked for.
+	preloadImages := map[string]bool{}
+	if existing, listErr := dockercli.ImageList(context.Background(), dockerimage.ListOptions{All: true}); listErr != nil {
+		log.Printf("[WARNING] Failed listing images before load of %s (continuing): %s", imageName, listErr)
+	} else {
+		for _, item := range existing {
+			preloadImages[item.ID] = true
+		}
+	}
+
 	//imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar)
 	imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar)
 	if err != nil {
@@ -4552,10 +4566,49 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		tag := baseTag[1]
 		//log.Printf("[DEBUG] Creating tag copies of downloaded containers from tag %s", tag)
 
-		// Remapping
 		ctx := context.Background()
-		dockercli.ImageTag(ctx, imageName, fmt.Sprintf("frikky/shuffle:%s", tag))
-		dockercli.ImageTag(ctx, imageName, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
+
+		// Find the image the archive just added. We can't assume it is already
+		// tagged as imageName: private apps are saved with a <name>_<appid> tag,
+		// while the worker looks the image up by <name>_<version>.
+		tagSource := imageName
+		if postload, listErr := dockercli.ImageList(ctx, dockerimage.ListOptions{All: true}); listErr != nil {
+			log.Printf("[WARNING] Failed listing images after load of %s (using requested name): %s", imageName, listErr)
+		} else {
+			for _, item := range postload {
+				if preloadImages[item.ID] {
+					continue
+				}
+
+				// Prefer an existing tag so the retag survives a shared layer ID
+				tagSource = item.ID
+				for _, repoTag := range item.RepoTags {
+					if !strings.Contains(repoTag, "<none>") {
+						tagSource = repoTag
+						break
+					}
+				}
+
+				break
+			}
+		}
+
+		if tagSource != imageName {
+			log.Printf("[DEBUG] Loaded image is '%s', retagging it as '%s'", tagSource, imageName)
+			if tagErr := dockercli.ImageTag(ctx, tagSource, imageName); tagErr != nil {
+				log.Printf("[ERROR] Failed retagging %s as %s: %s", tagSource, imageName, tagErr)
+				return tagErr
+			}
+		}
+
+		// Remapping
+		if tagErr := dockercli.ImageTag(ctx, tagSource, fmt.Sprintf("frikky/shuffle:%s", tag)); tagErr != nil {
+			log.Printf("[WARNING] Failed tagging %s as frikky/shuffle:%s: %s", tagSource, tag, tagErr)
+		}
+
+		if tagErr := dockercli.ImageTag(ctx, tagSource, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag)); tagErr != nil {
+			log.Printf("[WARNING] Failed tagging %s as registry.hub.docker.com/frikky/shuffle:%s: %s", tagSource, tag, tagErr)
+		}
 
 		downloadedImages = append(downloadedImages, fmt.Sprintf("frikky/shuffle:%s", tag))
 		downloadedImages = append(downloadedImages, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
