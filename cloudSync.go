@@ -1089,6 +1089,267 @@ func CheckCreatorSelfPermission(ctx context.Context, requestUser, creatorUser Us
 }
 
 // Uploads updates for a workflow to a specific file on git
+func UploadGitApp(ctx context.Context, identifier, pythoncode, requirements, dockerfile string, org *Org) error {
+	if len(org.Id) == 0 { 
+		return errors.New("No org id passed")
+	}
+
+	if org.Defaults.TokensEncrypted == true {
+		log.Printf("[DEBUG] Decrypting token for org %s (%s)", org.Name, org.Id)
+
+		parsedKey := fmt.Sprintf("%s_upload_token", org.Id)
+		newValue, err := HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadToken), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting token for org %s (%s): %s", org.Name, org.Id, err)
+		} else {
+			org.Defaults.WorkflowUploadToken = string(newValue)
+		}
+
+		parsedKey = fmt.Sprintf("%s_upload_username", org.Id)
+		newValue, err = HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadUsername), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting username for org %s (%s): %s", org.Name, org.Id, err)
+		} else {
+			org.Defaults.WorkflowUploadUsername = string(newValue)
+		}
+
+		parsedKey = fmt.Sprintf("%s_upload_repo", org.Id)
+		newValue, err = HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadRepo), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting repo for org %s (%s): %s", org.Name, org.Id, err)
+		} else {
+			org.Defaults.WorkflowUploadRepo = string(newValue)
+		}
+
+		parsedKey = fmt.Sprintf("%s_upload_branch", org.Id)
+		newValue, err = HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadBranch), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting branch for org %s (%s): %s", org.Name, org.Id, err)
+		} else {
+			org.Defaults.WorkflowUploadBranch = string(newValue)
+		}
+
+		log.Printf("[DEBUG] Decrypted token for org %s (%s): %s", org.Name, org.Id, newValue)
+	}
+
+	if len(org.Defaults.WorkflowUploadBranch) == 0 {
+		// Default to 'main' for Azure DevOps, 'master' for others
+		if strings.Contains(org.Defaults.WorkflowUploadRepo, "dev.azure.com") {
+			org.Defaults.WorkflowUploadBranch = "main"
+		} else {
+			org.Defaults.WorkflowUploadBranch = "master"
+		}
+	}
+
+	if org.Defaults.WorkflowUploadRepo == "" || org.Defaults.WorkflowUploadToken == "" {
+		if debug { 
+			log.Printf("[DEBUG] Missing Repo/Token during app backup upload for org %s (%s)", org.Name, org.Id)
+		}
+
+		//return errors.New("Missing repo or token")
+		return nil
+	}
+
+	org.Defaults.WorkflowUploadRepo = strings.TrimSpace(org.Defaults.WorkflowUploadRepo)
+
+	workflow := Workflow{}
+
+	commitMessage := fmt.Sprintf("User updated app '%s' with status '%s' at %s", identifier, workflow.Status, time.Now().Format("2006-01-02 15:04:05"))
+	repoURL := org.Defaults.WorkflowUploadRepo
+	repoURL = strings.TrimPrefix(repoURL, "https://")
+	repoURL = strings.TrimPrefix(repoURL, "http://")
+
+	var location string
+	var isAzureDevOps bool
+
+	if strings.Contains(repoURL, "dev.azure.com") {
+		isAzureDevOps = true
+		location = fmt.Sprintf("https://%s", repoURL)
+		log.Printf("[DEBUG] Detected Azure DevOps repository")
+	} else {
+		isAzureDevOps = false
+		// Only append .git if the URL contains github.com
+		if strings.Contains(repoURL, "github.com") && !strings.HasSuffix(repoURL, ".git") {
+			repoURL += ".git"
+		}
+
+		urlEncodedPassword := url.QueryEscape(org.Defaults.WorkflowUploadToken)
+		location = fmt.Sprintf("https://%s:%s@%s", org.Defaults.WorkflowUploadUsername, urlEncodedPassword, repoURL)
+
+	}
+
+
+	maskedRepo := strings.ReplaceAll(location, org.Defaults.WorkflowUploadToken, "****")
+	if urlEncodedPassword := url.QueryEscape(org.Defaults.WorkflowUploadToken); urlEncodedPassword != org.Defaults.WorkflowUploadToken {
+		maskedRepo = strings.ReplaceAll(maskedRepo, urlEncodedPassword, "****")
+	}
+
+	if debug { 
+		log.Printf("[DEBUG] Uploading app %s to repo: %s", identifier, maskedRepo)
+	}
+
+	fs := memfs.New()
+
+	pythonPath := fmt.Sprintf("%s/apps/%s/main.py", org.Id, identifier)
+	requirementsPath := fmt.Sprintf("%s/apps/%s/requirements.txt", org.Id, identifier)
+	dockerfilePath := fmt.Sprintf("%s/apps/%s/Dockerfile", org.Id, identifier)
+	cloneOptions := &git.CloneOptions{
+		URL: location,
+	}
+
+	// For Azure DevOps, add additional auth configuration and capability handling
+	if isAzureDevOps {
+		transport.UnsupportedCapabilities = []capability.Capability{
+			capability.ThinPack,
+		}
+
+		cloneOptions.Auth = &gitHttp.BasicAuth{
+			Username: org.Defaults.WorkflowUploadUsername, // Use the username for Azure DevOps
+			Password: org.Defaults.WorkflowUploadToken,
+		}
+	}
+
+	repo, err := git.Clone(memory.NewStorage(), fs, cloneOptions)
+	if err != nil {
+		errMsg := err.Error()
+		if isAzureDevOps {
+			log.Printf("[ERROR] Azure DevOps clone failed. Check: 1) PAT has Code(R/W) permissions, 2) Branch '%s' exists, 3) Repo URL is correct", org.Defaults.WorkflowUploadBranch)
+		}
+		log.Printf("[ERROR] Error cloning repo '%s': %s", maskedRepo, strings.ReplaceAll(errMsg, org.Defaults.WorkflowUploadToken, "****"))
+		return err
+	}
+
+	w, err := repo.Worktree()
+	if err != nil {
+		log.Printf("[ERROR] Error getting worktree for repo '%s': %s", maskedRepo, err)
+		return err
+	}
+
+	// Write the byte blob to the in-memory file system
+	pythonFile, err := fs.Create(pythonPath)
+	if err != nil {
+		log.Printf("[ERROR] Creating file in repo '%s': %v", maskedRepo, err)
+		return err
+	}
+
+	defer pythonFile.Close()
+	if _, err = io.Copy(pythonFile, bytes.NewReader([]byte(pythoncode))); err != nil {
+		log.Printf("[ERROR] Writing data to file: %v", err)
+		return err
+	}
+
+	if _, err = w.Add(pythonPath); err != nil {
+		log.Printf("[ERROR] Adding file to staging area: %s", err)
+		return err
+	}
+
+	requirementsFile, err := fs.Create(requirementsPath)
+	if err != nil {
+		log.Printf("[ERROR] Creating file in repo '%s': %v", maskedRepo, err)
+		return err
+	}
+
+	defer requirementsFile.Close()
+	if _, err = io.Copy(requirementsFile, bytes.NewReader([]byte(requirements))); err != nil {
+		log.Printf("[ERROR] Writing data to file: %v", err)
+		return err
+	}
+
+	if _, err = w.Add(requirementsPath); err != nil {
+		log.Printf("[ERROR] Adding file to staging area: %s", err)
+		return err
+	}
+
+	if len(dockerfile) <= 0 { 
+		dockerfile = string(GetBaseDockerfile())
+	}
+
+	dockerfileFile, err := fs.Create(dockerfilePath)
+	if err != nil {
+		log.Printf("[ERROR] Creating file in repo '%s': %v", maskedRepo, err)
+		return err
+	}
+
+	defer dockerfileFile.Close()
+	if _, err = io.Copy(dockerfileFile, bytes.NewReader([]byte(dockerfile))); err != nil {
+		log.Printf("[ERROR] Writing data to file: %v", err)
+		return err
+	}
+
+	if _, err = w.Add(dockerfilePath); err != nil {
+		log.Printf("[ERROR] Adding file to staging area: %s", err)
+		return err
+	}
+
+	// Check if there are any changes to commit
+	status, err := w.Status()
+	if err != nil {
+		log.Printf("[ERROR] Getting working tree status: %v", err)
+		return err
+	}
+
+	hasChanges := false
+	for _, fileStatus := range status {
+		if fileStatus.Staging != git.Unmodified {
+			hasChanges = true
+			break
+		}
+	}
+
+	if !hasChanges {
+		log.Printf("[INFO] No changes detected for workflow %s (%s). File content is identical to existing version.", workflow.Name, workflow.ID)
+		return nil
+	}
+
+	authorName := org.Defaults.WorkflowUploadUsername
+	if authorName == "" {
+		if isAzureDevOps {
+			authorName = "App Automation"
+		} else {
+			authorName = "Shuffle User"
+		}
+	}
+
+	_, err = w.Commit(commitMessage, &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  authorName,
+			Email: "",
+			When:  time.Now(),
+		},
+	})
+	if err != nil {
+		log.Printf("[ERROR] Committing changes: %v", err)
+		return err
+	}
+
+	//log.Printf("[DEBUG] Commit Hash: %s", commit)
+
+	// Push the changes to a remote repository (replace URL with your repository URL)
+	// fmt.Sprintf("refs/heads/%s:refs/heads/%s", org.Defaults.WorkflowUploadBranch, org.Defaults.WorkflowUploadBranch)},
+	ref := fmt.Sprintf("refs/heads/%s:refs/heads/%s", org.Defaults.WorkflowUploadBranch, org.Defaults.WorkflowUploadBranch)
+
+	pushOptions := &git.PushOptions{
+		RemoteName: "origin",
+		RefSpecs:   []config.RefSpec{config.RefSpec(ref)},
+	}
+
+	// Set authentication for push operations for both Azure DevOps and GitHub
+	pushOptions.Auth = &gitHttp.BasicAuth{
+		Username: org.Defaults.WorkflowUploadUsername,
+		Password: org.Defaults.WorkflowUploadToken,
+	}
+
+	err = repo.Push(pushOptions)
+	if err != nil {
+		log.Printf("[ERROR] Git push failed for repo '%s': %v", maskedRepo, err)
+		return err
+	}
+
+	log.Printf("[DEBUG] Workflow successfully uploaded to '%s'!", maskedRepo)
+	return nil
+}
+
+// Uploads updates for a workflow to a specific file on git
 func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	if workflow.BackupConfig.UploadRepo != "" || workflow.BackupConfig.UploadBranch != "" || workflow.BackupConfig.UploadUsername != "" || workflow.BackupConfig.UploadToken != "" {
 		//log.Printf("\n\n\n[DEBUG] Using workflow backup config for org %s (%s)\n\n\n", org.Name, org.Id)
@@ -1155,7 +1416,10 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	}
 
 	if org.Defaults.WorkflowUploadRepo == "" || org.Defaults.WorkflowUploadToken == "" {
-		//log.Printf("[DEBUG] Missing Repo/Token during Workflow backup upload for org %s (%s)", org.Name, org.Id)
+		if debug { 
+			log.Printf("[DEBUG] Missing Repo/Token during Workflow backup upload for org %s (%s)", org.Name, org.Id)
+		}
+
 		//return errors.New("Missing repo or token")
 		return nil
 	}
@@ -1216,7 +1480,9 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		}
 	}
 
-	log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, maskedRepo)
+	if debug { 
+		log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, maskedRepo)
+	}
 
 	fs := memfs.New()
 	if len(workflow.Status) == 0 {
@@ -2215,7 +2481,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	//ExecutionDelay: selectedDelay,
 	timeout := time.Duration(30) * time.Second
 
-	// Immediate exist. 3 seconds due to body transfer worst case
+	// Immediate exits. 3 seconds due to body transfer worst case
 	if selectedDelay > 0 { 
 		timeout = time.Duration(2) * time.Second
 	}
@@ -2227,17 +2493,14 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		requestUrl += fmt.Sprintf("parent_node=%s", parentNode)
 	}
 
-	//if debug { 
-	//	if strings.Contains(strings.ToLower(action.AppName), "gmail") {
-	//		log.Printf("REQUEST URL: %#v", requestUrl)
-	//		os.Exit(3)
-	//	}
-	//}
-
-	//httpStart := time.Now()
+	// Gives it time to return properly with +2 delay
 	client := GetExternalClientWithTimeout(requestUrl, 0)
-	client.Timeout = timeout
+	client.Timeout = timeout + (1 * time.Second)
 
+	//if debug { 
+		//log.Printf("\n\n\n\nRequest timeout: %d", client.Timeout)
+		//log.Printf("REQUEST URL: %#v\n\n\n\n", requestUrl)
+	//}
 
 	req, reqErr := http.NewRequest("POST", requestUrl, bytes.NewBuffer(actionBytes))
 	if reqErr != nil {
@@ -2645,7 +2908,7 @@ func isAgentToolAllowed(agentOutput AgentOutput, decision AgentDecision) (bool, 
 func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput, decision AgentDecision) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[ERROR] AI_AGENT_PANIC: execution_id=%s decision_id=%s panic=%v", execution.ExecutionId, decision.RunDetails.Id, r)
+			log.Printf("[ERROR][%s] AI_AGENT_PANIC: org=%s decision_id=%s panic=%v", execution.ExecutionId,execution.Workflow.OrgId, decision.RunDetails.Id, r)
 
 			// Mark decision as failed so agent doesn't get stuck
 			decision.RunDetails.Status = "FAILURE"
@@ -2842,6 +3105,9 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			return
 		}
 
+		if debug { 
+			log.Printf("\n\n\n[DEBUG] ERROR BELOW\n\n\n")
+		}
 		log.Printf("[ERROR][%s] AI Agent: All attempts to POST decision %s to streams failed: %v. Falling back to in-process handler.", execution.ExecutionId, decision.RunDetails.Id, streamErr)
 	}
 

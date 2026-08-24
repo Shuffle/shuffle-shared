@@ -264,6 +264,59 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 
 				// Makes the return better
 				if len(key) == 0 && len(cacheReturn.Keys) > 0 { 
+					reservedQueries := []string{
+						// Executions
+						"category",
+						"org_id",
+						"execution_id",
+						"authorization",
+
+						// Collection 
+						"top",
+						"cursor",
+
+						// Special
+						"key",
+						"search",
+						"type",
+						"fields",
+						"skip_fields",
+					}
+
+					includeFields := []string{}
+					queries := request.URL.Query()
+					skipFields := true
+
+					if skipField, ok := queries["skip_fields"]; ok {
+						if len(skipField) > 0 && skipField[0] == "false" {
+							skipFields = false
+						}
+					}
+
+					validators := make(map[string]string)
+					if len(queries) > 0 {
+						// Add a validator. E.g. "active=true" or "name=<asd>"
+						for key, values := range queries {
+							if key == "fields" && len(values) > 0 {
+								lowercased := strings.ToLower(values[0])
+								if lowercased == "all" || lowercased == "*" || lowercased == "true" {
+									continue
+								}
+
+								includeFields = strings.Split(lowercased, ",")
+								continue
+							}
+
+							if ArrayContains(reservedQueries, key) {
+								continue
+							}
+
+							if len(values) > 0 {
+								validators[key] = values[0]
+							}
+						}
+					}
+
 					newKeys := make([]map[string]interface{}, 0)
 					for _, cacheKey := range cacheReturn.Keys {
 						if len(cacheKey.Value) == 0 { 
@@ -278,6 +331,54 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 						err := json.Unmarshal([]byte(cacheKey.Value), &mappedValue)
 						if err != nil {
 							log.Printf("[ERROR] Failed to unmarshal cacheKey.Value in datastore redirect wrapper: %s", err)
+						}
+
+						// Validate if we should add the key at all
+						if len(validators) > 0 {
+							skipKey := false
+							for key, value := range validators {
+								if mappedValueValue, ok := mappedValue[key]; ok {
+									if fmt.Sprintf("%v", mappedValueValue) != value {
+										skipKey = true
+										continue
+									}
+								} else {
+									skipKey = true
+								}
+							}
+
+							if skipKey { 
+								continue
+							}
+						}
+
+						if len(includeFields) > 0 { 
+							for key, _ := range mappedValue {
+
+								if !ArrayContains(includeFields, strings.ToLower(key)) {
+									delete(mappedValue, key)
+								}
+							}
+						}
+
+						if len(mappedValue) == 0 {
+							continue
+						}
+
+						if skipFields != false {
+							// Look for large values. 
+							skippedFields := []string{}
+							for key, value := range mappedValue {
+								if interfaceLargerThan(value, 1000) { 
+									delete(mappedValue, key)
+									skippedFields = append(skippedFields, key)
+									continue
+								}
+							}
+
+							if len(skippedFields) > 0 {
+								mappedValue["skipped_fields"] = skippedFields 
+							}
 						}
 
 						newKeys = append(newKeys, mappedValue)
@@ -302,6 +403,33 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 
 	resp.WriteHeader(404)
 	resp.Write([]byte(`{"success": false, "reason": "No values found for this key and category"}`))
+}
+
+type limitWriter struct {
+	n   int
+	max int
+}
+
+func (w *limitWriter) Write(p []byte) (int, error) {
+	remaining := w.max - w.n
+	if remaining <= 0 {
+		return 0, io.ErrShortWrite
+	}
+
+	if len(p) > remaining {
+		w.n += remaining
+		return remaining, io.ErrShortWrite
+	}
+
+	w.n += len(p)
+	return len(p), nil
+}
+
+func interfaceLargerThan(v interface{}, maxLen int) bool {
+	w := &limitWriter{max: maxLen}
+	err := json.NewEncoder(w).Encode(v)
+
+	return w.n > maxLen || err == io.ErrShortWrite
 }
 
 func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {

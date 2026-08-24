@@ -129,8 +129,8 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			// Related projects (maybe)
 			"https://*.singul.io",
 			"https://singul.io",
-			"https://*.shutdown.no",
-			"https://shutdown.no",
+			"https://*.shuffle.security",
+			"https://shuffle.security",
 
 			// Local testing
 			"http://localhost:3002",
@@ -9811,8 +9811,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	go SetWorkflowRevision(ctx, workflow)
 
 	go func() {
-		ctx = context.Background()
-		err = SetGitWorkflow(ctx, workflow, org)
+		err = SetGitWorkflow(context.Background(), workflow, org)
 		if err != nil {
 
 			// Make a notification for this
@@ -14642,7 +14641,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 			Status:        "FAILURE",
 		})
 	} else if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
-		log.Printf("[INFO] DONE - Nothing to add during abort!")
+		log.Printf("[INFO][%s] Abort DONE - Nothing to add during abort!", workflowExecution.ExecutionId)
 	} else {
 		//log.Printf("VALIDATING INPUT!")
 		node, nodeok := request.URL.Query()["node"]
@@ -16768,7 +16767,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
-			newCookie.Domain = ".shutdown.no"
+			newCookie.Domain = ".shuffle.security"
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
@@ -16840,7 +16839,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
-			newCookie.Domain = ".shutdown.no"
+			newCookie.Domain = ".shuffle.security"
 			http.SetCookie(resp, newCookie)
 		}
 
@@ -17808,8 +17807,23 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 		cacheErr := SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
 		if cacheErr != nil && (status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED") {
-			log.Printf("[WARNING][%s] Memcache down — skipping agent self-request for '%s' to prevent retry storm", workflowExecution.ExecutionId, status)
-			return nil
+			log.Printf("[WARNING][%s] Cache error, falling back to DB check for agent self-request '%s'", workflowExecution.ExecutionId, status)
+			
+			// DB Fallback
+			dbExec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId, true)
+			if err == nil {
+				for _, res := range dbExec.Results {
+					if res.Action.ID == actionResult.Action.ID {
+						if res.Status == "SUCCESS" || res.Status == "FINISHED" || res.Status == "FAILURE" || res.Status == "ABORTED" {
+							log.Printf("[INFO][%s] Action '%s' is already finished in DB. Skipping duplicate request.", workflowExecution.ExecutionId, actionResult.Action.ID)
+							return nil
+						}
+					}
+				}
+			} else {
+				log.Printf("[ERROR][%s] DB error verifying execution status. Blocking request.", workflowExecution.ExecutionId)
+				return nil
+			}
 		}
 	}
 
@@ -18247,7 +18261,10 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	// FIXME: How do we handle 3rd party memory sources?
 	// This uses the built-in datastore mechanism so that the user
 	// can see and modify stuff themself as well.
+
 	if mappedResult.Memory == "shuffle_db" {
+		/*
+		// This is NOT what Memory is used for...
 		requestKey := fmt.Sprintf("chat_%s_%s", actionResult.ExecutionId, actionResult.Action.ID)
 		if debug {
 			log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
@@ -18263,6 +18280,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 				log.Printf("[DEBUG] No agent cache memory for key %s", requestKey)
 			}
 		}
+		*/
 	}
 
 	if len(allFinishedDecisions) == len(mappedResult.Decisions) {
@@ -18291,6 +18309,14 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 				// push to the action result cache so GetWorkflowExecution inside HandleAiAgentExecutionStart picks up the fresh copy.
 				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
 				go SetCache(ctx, actionCacheId, marshalledResult, 600)
+
+				// Persist intermediate agent state to DB to prevent information loss on restarts
+				executionCacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
+				if marshalledExec, execMarshalErr := json.Marshal(workflowExecution); execMarshalErr == nil {
+					SetCache(ctx, executionCacheKey, marshalledExec, 600)
+				}
+				go SetWorkflowExecution(ctx, workflowExecution, true)
+
 			} else {
 				log.Printf("[WARNING][%s] Failed to marshal updated mappedResult before HandleAiAgentExecutionStart: %s", workflowExecution.ExecutionId, marshalErr)
 			}
@@ -18413,7 +18439,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							}
 						}
 
-						go abortAgentExecution(ctx, *foundParentExec, startNode, oldAgentOutput, "llm_received_failure", foundError)
+						go abortAgentExecution(ctx, *foundParentExec, startNode, "llm_received_failure", foundError)
 					}
 				}
 
@@ -21182,7 +21208,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 	}
 
 	if appId != action.AppID {
-
 		// Used for standalone runs controlled from /agents and /mcp
 		if appId == "agent_starter" {
 			workflowId := uuid.NewV4().String()
@@ -21190,6 +21215,14 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 			if len(action.ID) != 36 {
 				action.ID = uuid.NewV4().String()
+			}
+
+			targetWorkflowId := ""
+			for _, param := range action.Parameters {
+				if param.Name == "workflow_id" {
+					targetWorkflowId = param.Value
+					break
+				}
 			}
 
 			exec := WorkflowExecution{
@@ -21212,6 +21245,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				ExecutionOrg:  user.ActiveOrg.Id,
 				StartedAt:     int64(time.Now().Unix()),
 				Authorization: uuid.NewV4().String(),
+				ExecutionArgument: targetWorkflowId,
 			}
 
 			SetWorkflowExecution(ctx, exec, true)
@@ -21265,6 +21299,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 		} else if strings.ToLower(appId) == "http" || strings.ToLower(action.AppID) == "http" {
 			action.AppID = "http"
+		} else if strings.ToLower(appId) == "sensors" || strings.ToLower(action.AppID) == "sensors" {
+			action.AppID = "sensors"
+			appId = "sensors"
 		} else {
 			log.Printf("[WARNING] Bad appid in single execution of App '%s'", appId)
 			return workflowExecution, errors.New(fmt.Sprintf("No matching app found for '%s'. Did you choose an app to run?", appId))
@@ -22291,6 +22328,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	cnt := 0
 	returnBody := SingleResult{
 		Success:       true,
+		ExecutionId:            workflowExecution.ExecutionId,
 		Id:            workflowExecution.ExecutionId,
 		Authorization: workflowExecution.Authorization,
 		Result:        "",
@@ -22309,7 +22347,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		maxSeconds = 180
 	}
 
-	if timeout > maxSeconds {
+	if timeout > 0 {
 		maxSeconds = timeout
 	}
 
@@ -22328,7 +22366,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		if time.Now().Unix()-startTime > int64(maxSeconds) {
 
 			returnBody.Success = true
-			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
+			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the GET /api/v1/executions/{executionId}?authorization={auth} API to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
 
 			break
 		}
@@ -25642,6 +25680,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					oldExecution.Results[resultIndex] = result
+					
+					// Persist intermediate agent state to DB to prevent handleAgentDecisionStreamResult from fetching a stale copy
+					executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExecution.ExecutionId)
+					if marshalledExec, execMarshalErr := json.Marshal(*oldExecution); execMarshalErr == nil {
+						SetCache(ctx, executionCacheKey, marshalledExec, 600)
+					}
+					go SetWorkflowExecution(ctx, *oldExecution, true)
 
 					// FIXME: Can we force continue the agent from here? Or do we send another action inbetween?
 					result.Status = fmt.Sprintf("%s_%s", "FINISHED", decisionId)
@@ -36424,6 +36469,7 @@ func buildAppActionResponses(matchedApps []WorkflowApp) []AppActionResponse {
 					Name:        param.Name,
 					Required:    param.Required,
 					Description: param.Description,
+					Example:     param.Example,
 				})
 			}
 
@@ -36777,154 +36823,6 @@ func GetWorkflowMinimal(resp http.ResponseWriter, request *http.Request) {
 	responseData, err := json.Marshal(minimalWorkflow)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshalling minimal workflow: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	resp.Header().Set("Content-Type", "application/json")
-	resp.WriteHeader(200)
-	resp.Write(responseData)
-}
-
-func AgentWorkflowEditor(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	ctx := GetContext(request)
-	user, userErr := HandleApiAuthentication(resp, request)
-	if userErr != nil {
-		log.Printf("[AUDIT] Api authentication failed in AgentWorkflowEditor: %s", userErr)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		log.Printf("[WARNING] Failed reading body in AgentWorkflowEditor: %s", err)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	var req MCPRequest 
-	err = json.Unmarshal(body, &req)
-
-	if err != nil || len(strings.TrimSpace(req.Params.Input.Text)) == 0 {
-		log.Printf("[WARNING] Bad body in AgentWorkflowEditor. Error: %v, Body: %s", err, string(body))
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "input field is required"}`))
-		return
-	}
-
-	// Auth check: verify user has access to the target workflow before kicking off the agent
-	workflow, err := GetWorkflow(ctx, req.Params.Input.WorkflowId)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting workflow %s in AgentWorkflowEditor: %s", req.Params.Input.WorkflowId, err)
-		resp.WriteHeader(404)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
-		return
-	}
-
-	if user.Id != workflow.Owner && workflow.OrgId != user.ActiveOrg.Id {
-		log.Printf("[WARNING] User %s (%s) unauthorized to edit workflow %s (owner: %s, org: %s)", user.Username, user.Id, req.Params.Input.WorkflowId, workflow.Owner, workflow.OrgId)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Unauthorized"}`))
-		return
-	}
-
-	// All context building (workflow state, app actions, rules) is handled inside
-	// buildWorkflowEditContext which is called by getTemplateContext inside HandleAiAgentExecutionStart
-	toolApps := "app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps,app:de4ef2287bd41b9d5563e39989643ee6:shuffle_workflows_builder"
-
-	action := Action{
-		ID:             uuid.NewV4().String(),
-		Name:           "agent",
-		AppName:        "AI Agent",
-		AppID:          "shuffle_agent",
-		AppVersion:     "1.0.0",
-		Environment:    "cloud",
-		Parameters: []WorkflowAppActionParameter{
-			{
-				Name:  "input",
-				Value: req.Params.Input.Text,
-			},
-			{
-				Name:  "action",
-				Value: toolApps,
-			},
-			{
-				Name:  "template",
-				Value: "workflow-edit",
-			},
-			{
-				Name: "execution_mode",
-				Value: "direct",
-			},
-		},
-	}
-
-	workflowId := uuid.NewV4().String()
-	action.SourceWorkflow = workflowId
-
-	exec := WorkflowExecution{
-		Workflow: Workflow{
-			ID: workflowId,
-			Actions: []Action{
-				action,
-			},
-			OrgId:     user.ActiveOrg.Id,
-			Owner:     user.Username,
-			UpdatedBy: user.Username,
-			Start:     action.ID,
-		},
-		Type:             "AGENT",
-		Start:            action.ID,
-		Status:           "EXECUTING",
-		WorkflowId:       workflowId,
-		ExecutionId:      workflowId,
-		ExecutionOrg:     user.ActiveOrg.Id,
-		StartedAt:        int64(time.Now().Unix()),
-		Authorization:    uuid.NewV4().String(),
-		// Store the target workflow_id here so buildWorkflowEditContext can fetch it
-		ExecutionArgument: req.Params.Input.WorkflowId,
-	}
-
-	SetWorkflowExecution(ctx, exec, true)
-
-	log.Printf("[INFO] AgentWorkflowEditor: calling HandleAiAgentExecutionStart for user %s (%s), target_workflow_id=%s, execution_id=%s", user.Username, user.Id, req.Params.Input.WorkflowId, exec.ExecutionId)
-
-	returnAction, err := HandleAiAgentExecutionStart(exec, action, false, "AgentWorkflowEditor")
-	if err != nil {
-		log.Printf("[ERROR] HandleAiAgentExecutionStart failed in AgentWorkflowEditor: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err.Error())))
-		return
-	}
-
-	// Fetch the updated execution to return
-	newExec, err := GetWorkflowExecution(ctx, exec.ExecutionId)
-	if err != nil {
-		log.Printf("[ERROR] Failed to get workflow execution after agent start in AgentWorkflowEditor: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	_ = returnAction
-
-	respObj := agentResponse{
-		Success:       true,
-		ExecutionId:   newExec.ExecutionId,
-		Authorization: newExec.Authorization,
-	}
-
-	responseData, err := json.Marshal(respObj)
-	if err != nil {
-		log.Printf("[ERROR] Failed marshalling execution response in AgentWorkflowEditor: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -37547,17 +37445,8 @@ func streamWorkflowOperations(ctx context.Context, request *http.Request, workfl
 
 	streamURL := fmt.Sprintf("%s/api/v1/workflows/%s/stream", baseURL, workflowID)
 
-	sentCount := 0
-	for i, streamOp := range streamOps {
-
-		err := sendStreamOperation(ctx, request, streamURL, &streamOp)
-		if err != nil {
-			log.Printf("[WARNING] Failed to stream op %d (%s/%s) for workflow %s: %s", i, streamOp.Item, streamOp.Type, workflowID, err)
-		} else {
-			sentCount++
-		}
-
-		time.Sleep(50 * time.Millisecond)
+	if err := sendStreamOperations(ctx, request, streamURL, streamOps); err != nil {
+		log.Printf("[WARNING] Failed to stream %d ops for workflow %s: %s", len(streamOps), workflowID, err)
 	}
 }
 
@@ -37593,6 +37482,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		// The node is now in wf.Actions or wf.Triggers with its real ID.
 		for _, action := range wf.Actions {
 			if action.ID == realID {
+				action.LargeImage = ""
 				dataBytes, _ := json.Marshal(actionStreamNode{action, "ACTION"})
 				return []StreamWorkflowOperation{{
 					Item:     "node",
@@ -37605,6 +37495,8 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		for _, trigger := range wf.Triggers {
 			if trigger.ID == realID {
+				trigger.LargeImage = ""
+				trigger.IsValid = true
 				dataBytes, _ := json.Marshal(triggerStreamNode{trigger, "TRIGGER"})
 				return []StreamWorkflowOperation{{
 					Item:     "node",
@@ -37660,6 +37552,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 	case "edit_node":
 		for _, action := range wf.Actions {
 			if action.ID == realID {
+				action.LargeImage = ""
 				dataBytes, _ := json.Marshal(action)
 				return []StreamWorkflowOperation{{
 					Item: "node",
@@ -37671,6 +37564,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		for _, trigger := range wf.Triggers {
 			if trigger.ID == realID {
+				trigger.LargeImage = ""
 				dataBytes, _ := json.Marshal(trigger)
 				return []StreamWorkflowOperation{{
 					Item: "node",
@@ -37725,6 +37619,20 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		return nil
 
+	case "set_start_node":
+		startNodeID := op.ID
+		if resolved, ok := tempIDMap[op.ID]; ok {
+			startNodeID = resolved
+		}
+
+		dataBytes, _ := json.Marshal(map[string]bool{"isStartNode": true})
+		return []StreamWorkflowOperation{{
+			Item: "node",
+			Type: "configure",
+			ID:   startNodeID,
+			Data: dataBytes,
+		}}
+
 	default:
 		return nil
 	}
@@ -37732,10 +37640,10 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 
 var streamHTTPClient = &http.Client{Timeout: 2 * time.Second}
 
-func sendStreamOperation(ctx context.Context, request *http.Request, streamURL string, streamOp *StreamWorkflowOperation) error {
-	opBytes, err := json.Marshal(streamOp)
+func sendStreamOperations(ctx context.Context, request *http.Request, streamURL string, streamOps []StreamWorkflowOperation) error {
+	opBytes, err := json.Marshal(streamOps)
 	if err != nil {
-		return fmt.Errorf("failed to marshal stream operation: %w", err)
+		return fmt.Errorf("failed to marshal stream operations: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, streamURL, bytes.NewReader(opBytes))
@@ -37806,10 +37714,19 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 
 	// ====== WORKFLOW OPERATIONS ======
 	case "set_start_node":
+		oldStart := wf.Start
+		newStart := op.ID
 		if realID, exists := tempIDMap[op.ID]; exists {
-			wf.Start = realID
-		} else {
-			wf.Start = op.ID
+			newStart = realID
+		}
+		wf.Start = newStart
+
+		for i := range wf.Actions {
+			if wf.Actions[i].ID == oldStart {
+				wf.Actions[i].IsStartNode = false
+			} else if wf.Actions[i].ID == newStart {
+				wf.Actions[i].IsStartNode = true
+			}
 		}
 		return nil
 
@@ -38291,6 +38208,14 @@ func opAddBranch(wf *Workflow, op *WorkflowOperation) error {
 	}
 	if !destExists {
 		return fmt.Errorf("destination node %s not found", branchData.DestinationID)
+	}
+
+	if findTriggerIndexByID(wf, branchData.SourceID) != -1 {
+		for _, existing := range wf.Branches {
+			if existing.SourceID == branchData.SourceID {
+				return fmt.Errorf("trigger %s already has an outgoing branch to %s - a trigger can only connect to one node", branchData.SourceID, existing.DestinationID)
+			}
+		}
 	}
 
 	newBranch := Branch{

@@ -76,6 +76,14 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 			// Special cleanup for agents
 			if innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent" {
+				if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" { 
+					//if workflowExecution.Status == "FINISHED" {
+					//	log.Printf("[DEBUG][%s] Fixexecution: Agent execution is finished, skipping agent result %s", workflowExecution.ExecutionId, innerresult.Action.ID)
+					//}
+
+					break
+				}
+
 				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, innerresult.Action.ID)
 				if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil {
 					cachedBytes := []byte(cachedData.([]uint8))
@@ -211,7 +219,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 									finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
 									failedFound = true
 								} else {
-									log.Printf("[WARNING] AI_AGENT_DECISION_TIMEOUT: execution_id=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, decision.Tool, decision.Action, (time.Now().UnixMilli()-startedTs)/1000)
+									log.Printf("[WARNING][%s] AI_AGENT_DECISION_TIMEOUT: org=%s tool=%s action=%s duration=%ds — marking FAILURE and triggering recovery", workflowExecution.ExecutionId, workflowExecution.Workflow.OrgId, decision.Tool, decision.Action, (time.Now().UnixMilli()-startedTs)/1000)
 									SetCache(ctx, timeoutFlagKey, []byte("1"), 60) // 60 min TTL — long enough to outlive any recovery cycle
 
 									decisionsUpdated = true
@@ -966,13 +974,18 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	return nil
 }
 
-func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
+func GetWorkflowExecution(ctx context.Context, id string, bypassCache ...bool) (*WorkflowExecution, error) {
 	nameKey := "workflowexecution"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 
+	skipCache := false
+	if len(bypassCache) > 0 && bypassCache[0] {
+		skipCache = true
+	}
+
 	// Loads of cache management to ensure we have the latest version of the execution no matter what
 	workflowExecution := &WorkflowExecution{}
-	if project.CacheDb {
+	if project.CacheDb && !skipCache {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))

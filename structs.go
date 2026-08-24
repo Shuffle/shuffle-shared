@@ -4299,6 +4299,7 @@ type SingleResult struct {
 	Success       bool           `json:"success"`
 	Result        string         `json:"result"`
 	Id            string         `json:"id"`
+	ExecutionId   string         `json:"execution_id"`
 	Authorization string         `json:"authorization"`
 	Errors        []string       `json:"errors"`
 	Validation    TypeValidation `json:"validation"`
@@ -5446,6 +5447,7 @@ type Parsed struct {
 type SensorDetails struct {
 	SensorMode bool   `json:"sensor_mode,omitempty" datastore:"sensor_mode"`
 	Checkin    int64  `json:"checkin" datastore:"checkin"`
+	Active     bool   `json:"active,omitempty" datastore:"active"`
 	Uuid       string `json:"uuid" datastore:"uuid"`
 
 	User     string `json:"user,omitempty" datastore:"user"`
@@ -5469,7 +5471,8 @@ type SensorDetails struct {
 
 // Related to Orborus Agent Mode. Used locally.
 type SensorMode struct {
-	Enabled bool `json:"enabled" datastore:"enabled"`
+	Enabled  bool   `json:"enabled" datastore:"enabled"`
+	Hostname string `json:"hostname" datastore:"hostname"`
 
 	// Compliance
 	ProcessListEnabled  string `json:"process_list_enabled" datastore:"process_list_enabled"`
@@ -5747,13 +5750,6 @@ type AiCallInfo struct {
 	Resp http.ResponseWriter // Used to respond automatically if it exists
 }
 
-type ScreenshotWrapper struct {
-	ScreenSize  DisplaySize `json:"screen_size"`
-	Cursor      Position    `json:"cursor"`
-	Image       []byte      `json:"image,omitempty"`
-	ImageBase64 string      `json:"image_base64"`
-}
-
 type DisplaySize struct {
 	DisplayID int `json:"display_id,omitempty"`
 	Width     int `json:"width"`
@@ -5791,6 +5787,7 @@ type ActionParameter struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Required    bool   `json:"required"`
+	Example     string `json:"example,omitempty"`
 }
 
 // ActionSummary - minimal action info for AI agents
@@ -5854,5 +5851,67 @@ type agentResponse struct {
 
 type AgentWorkflowExecutionReturn struct {
 	WorkflowExecution WorkflowExecution `json:"workflow_execution"`
-	Workflow MinimalWorkflow `json:"workflow"`
+	Workflow          MinimalWorkflow   `json:"workflow"`
+}
+
+type PixelFormat string
+type ElementRole string
+const (
+	FormatRGBA PixelFormat = "RGBA"
+	FormatBGRA PixelFormat = "BGRA"
+)
+
+const (
+	RoleButton    ElementRole = "button"
+	RoleText      ElementRole = "text"
+	RoleInput     ElementRole = "input"
+	RoleImage     ElementRole = "image"
+	RoleContainer ElementRole = "container"
+)
+
+// Frame represents standard screen data across macOS, Windows, and Linux.
+type Frame struct {
+	Width     int         `json:"width"`
+	Height    int         `json:"height"`
+	Stride    int         `json:"stride"` // Bytes per row (Width * 4 + padding)
+	Format    PixelFormat `json:"format"`
+	Timestamp time.Time   `json:"timestamp"`
+	Data      []byte      `json:"-"` // Raw uncompressed pixel array
+}
+
+type Rect struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
+type UIElement struct {
+	AppName    string `json:"app_name"`
+	Role       string `json:"role"`
+	Label      string `json:"label,omitempty"`
+	Value      string `json:"value,omitempty"`
+	ClickPoint Point  `json:"click_point"`
+	Rect       Rect   `json:"rect"`
+}
+
+type UIState struct {
+	Frame    *Frame      `json:"frame"`
+	Elements []UIElement `json:"elements"`
+}
+
+type ScreenshotWrapper struct {
+	ScreenSize  DisplaySize `json:"screen_size"`
+	Cursor      Position    `json:"cursor"`
+
+	// Image -> Base64 -> Empty .Image in sensors.go 
+	Image       []byte      `json:"image,omitempty"` // Raw
+	ImageBase64 string      `json:"image_base64,omitempty"` // base64.
+
+	ElementTree []UIElement `json:"element_tree,omitempty"`
+}
+
+type Point struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
 }
