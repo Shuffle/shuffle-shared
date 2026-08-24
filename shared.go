@@ -9790,8 +9790,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	go SetWorkflowRevision(ctx, workflow)
 
 	go func() {
-		ctx = context.Background()
-		err = SetGitWorkflow(ctx, workflow, org)
+		err = SetGitWorkflow(context.Background(), workflow, org)
 		if err != nil {
 
 			// Make a notification for this
@@ -17787,8 +17786,23 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 		cacheErr := SetCache(ctx, cacheKey, []byte("1"), cacheTTL)
 		if cacheErr != nil && (status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED") {
-			log.Printf("[WARNING][%s] Memcache down — skipping agent self-request for '%s' to prevent retry storm", workflowExecution.ExecutionId, status)
-			return nil
+			log.Printf("[WARNING][%s] Cache error, falling back to DB check for agent self-request '%s'", workflowExecution.ExecutionId, status)
+			
+			// DB Fallback
+			dbExec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId, true)
+			if err == nil {
+				for _, res := range dbExec.Results {
+					if res.Action.ID == actionResult.Action.ID {
+						if res.Status == "SUCCESS" || res.Status == "FINISHED" || res.Status == "FAILURE" || res.Status == "ABORTED" {
+							log.Printf("[INFO][%s] Action '%s' is already finished in DB. Skipping duplicate request.", workflowExecution.ExecutionId, actionResult.Action.ID)
+							return nil
+						}
+					}
+				}
+			} else {
+				log.Printf("[ERROR][%s] DB error verifying execution status. Blocking request.", workflowExecution.ExecutionId)
+				return nil
+			}
 		}
 	}
 
@@ -18274,6 +18288,14 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 				// push to the action result cache so GetWorkflowExecution inside HandleAiAgentExecutionStart picks up the fresh copy.
 				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
 				go SetCache(ctx, actionCacheId, marshalledResult, 600)
+
+				// Persist intermediate agent state to DB to prevent information loss on restarts
+				executionCacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
+				if marshalledExec, execMarshalErr := json.Marshal(workflowExecution); execMarshalErr == nil {
+					SetCache(ctx, executionCacheKey, marshalledExec, 600)
+				}
+				go SetWorkflowExecution(ctx, workflowExecution, true)
+
 			} else {
 				log.Printf("[WARNING][%s] Failed to marshal updated mappedResult before HandleAiAgentExecutionStart: %s", workflowExecution.ExecutionId, marshalErr)
 			}
@@ -25637,6 +25659,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					oldExecution.Results[resultIndex] = result
+					
+					// Persist intermediate agent state to DB to prevent handleAgentDecisionStreamResult from fetching a stale copy
+					executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExecution.ExecutionId)
+					if marshalledExec, execMarshalErr := json.Marshal(*oldExecution); execMarshalErr == nil {
+						SetCache(ctx, executionCacheKey, marshalledExec, 600)
+					}
+					go SetWorkflowExecution(ctx, *oldExecution, true)
 
 					// FIXME: Can we force continue the agent from here? Or do we send another action inbetween?
 					result.Status = fmt.Sprintf("%s_%s", "FINISHED", decisionId)
@@ -37395,17 +37424,8 @@ func streamWorkflowOperations(ctx context.Context, request *http.Request, workfl
 
 	streamURL := fmt.Sprintf("%s/api/v1/workflows/%s/stream", baseURL, workflowID)
 
-	sentCount := 0
-	for i, streamOp := range streamOps {
-
-		err := sendStreamOperation(ctx, request, streamURL, &streamOp)
-		if err != nil {
-			log.Printf("[WARNING] Failed to stream op %d (%s/%s) for workflow %s: %s", i, streamOp.Item, streamOp.Type, workflowID, err)
-		} else {
-			sentCount++
-		}
-
-		time.Sleep(50 * time.Millisecond)
+	if err := sendStreamOperations(ctx, request, streamURL, streamOps); err != nil {
+		log.Printf("[WARNING] Failed to stream %d ops for workflow %s: %s", len(streamOps), workflowID, err)
 	}
 }
 
@@ -37441,6 +37461,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		// The node is now in wf.Actions or wf.Triggers with its real ID.
 		for _, action := range wf.Actions {
 			if action.ID == realID {
+				action.LargeImage = ""
 				dataBytes, _ := json.Marshal(actionStreamNode{action, "ACTION"})
 				return []StreamWorkflowOperation{{
 					Item:     "node",
@@ -37453,6 +37474,8 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		for _, trigger := range wf.Triggers {
 			if trigger.ID == realID {
+				trigger.LargeImage = ""
+				trigger.IsValid = true
 				dataBytes, _ := json.Marshal(triggerStreamNode{trigger, "TRIGGER"})
 				return []StreamWorkflowOperation{{
 					Item:     "node",
@@ -37508,6 +37531,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 	case "edit_node":
 		for _, action := range wf.Actions {
 			if action.ID == realID {
+				action.LargeImage = ""
 				dataBytes, _ := json.Marshal(action)
 				return []StreamWorkflowOperation{{
 					Item: "node",
@@ -37519,6 +37543,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		for _, trigger := range wf.Triggers {
 			if trigger.ID == realID {
+				trigger.LargeImage = ""
 				dataBytes, _ := json.Marshal(trigger)
 				return []StreamWorkflowOperation{{
 					Item: "node",
@@ -37594,10 +37619,10 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 
 var streamHTTPClient = &http.Client{Timeout: 2 * time.Second}
 
-func sendStreamOperation(ctx context.Context, request *http.Request, streamURL string, streamOp *StreamWorkflowOperation) error {
-	opBytes, err := json.Marshal(streamOp)
+func sendStreamOperations(ctx context.Context, request *http.Request, streamURL string, streamOps []StreamWorkflowOperation) error {
+	opBytes, err := json.Marshal(streamOps)
 	if err != nil {
-		return fmt.Errorf("failed to marshal stream operation: %w", err)
+		return fmt.Errorf("failed to marshal stream operations: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, streamURL, bytes.NewReader(opBytes))
@@ -38162,6 +38187,14 @@ func opAddBranch(wf *Workflow, op *WorkflowOperation) error {
 	}
 	if !destExists {
 		return fmt.Errorf("destination node %s not found", branchData.DestinationID)
+	}
+
+	if findTriggerIndexByID(wf, branchData.SourceID) != -1 {
+		for _, existing := range wf.Branches {
+			if existing.SourceID == branchData.SourceID {
+				return fmt.Errorf("trigger %s already has an outgoing branch to %s - a trigger can only connect to one node", branchData.SourceID, existing.DestinationID)
+			}
+		}
 	}
 
 	newBranch := Branch{

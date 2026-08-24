@@ -7938,6 +7938,7 @@ Delete conditions:
 
 6. SETTING THE START NODE
 Defines the entry point of the workflow. You can use a real ID or a temp_id from the same payload.
+IMPORTANT: The start node must always be an ACTION, never a trigger. If the workflow begins with a trigger, connect it to its first action via add_branch, then pass that action's id (the trigger's destination) here — NOT the trigger's own id.
 {
 "op": "set_start_node",
 "id": "<real_node_id or temp_id>"
@@ -9940,7 +9941,7 @@ data_filter:
 			tmpExecution, _ := GetWorkflowExecution(ctx, execution.ExecutionId)
 
 			if debug {
-				log.Printf("[DEBUG][%s] Got %d NEW decision(s). Status: %s", execution.ExecutionId, len(mappedDecisions), tmpExecution)
+				log.Printf("[DEBUG][%s] Got %d NEW decision(s). Status: %s", execution.ExecutionId, len(mappedDecisions), tmpExecution.Status)
 			}
 
 			if tmpExecution.Status == "FINISHED" || tmpExecution.Status == "ABORTED" {
@@ -10852,7 +10853,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	defaultCreds := false
-	if len(apiKey) == 0 && project.Environment == "cloud" {
+	if project.Environment == "cloud" {
 		foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
 		if len(foundApikey) > 0 {
 			defaultCreds = true
@@ -10867,6 +10868,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			currentModel = foundModel
 		}
 	}
+
+	//if debug { 
+	//	log.Printf("[DEBUG] ORGID (1): %#v, apikey: %#v, requestUrl: %#v, model: %#v", info.OrgID, apiKey, aiRequestUrl, currentModel)
+	//}
 
 	if len(info.OrgID) > 0 {
 		// Look up custom auth to use instead
@@ -10884,6 +10889,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			currentModel = foundModel
 		}
 	}
+
+	//if debug { 
+	//	log.Printf("[DEBUG] ORGID (2): %#v, apikey: %#v, requestUrl: %#v, model: %#v", info.OrgID, apiKey, aiRequestUrl, currentModel)
+	//}
 
 	config := openai.DefaultConfig(apiKey)
 	if len(aiRequestUrl) > 0 {
