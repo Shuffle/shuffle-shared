@@ -4621,7 +4621,12 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 						}
 
 						repoSplit := strings.Split(repoTag, ":")
-						if len(repoSplit) > 1 && repoSplit[len(repoSplit)-1] == tag {
+						if len(repoSplit) < 2 {
+							continue
+						}
+
+						repoTagSuffix := repoSplit[len(repoSplit)-1]
+						if repoTagSuffix == tag || isSameAppOtherIdTag(tag, repoTagSuffix) {
 							tagSource = repoTag
 							break
 						}
@@ -4665,6 +4670,37 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	//log.Printf("[INFO] Successfully loaded image %s: %s", imageName, string(body))
 
 	return nil
+}
+
+// isSameAppOtherIdTag reports whether candidate is the same app as wanted, but
+// tagged with an app ID instead of a version. Private apps are stored as
+// <appname>_<appid>, while the worker asks for <appname>_<appversion>, so an
+// earlier download can leave the image on the host under a name we never look
+// for. Only a 32 character hex suffix counts, to avoid matching another version
+// of the same app.
+func isSameAppOtherIdTag(wanted, candidate string) bool {
+	cut := strings.LastIndex(wanted, "_")
+	if cut < 1 {
+		return false
+	}
+
+	prefix := wanted[:cut+1]
+	if !strings.HasPrefix(candidate, prefix) {
+		return false
+	}
+
+	suffix := candidate[len(prefix):]
+	if len(suffix) != 32 {
+		return false
+	}
+
+	for _, char := range suffix {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+
+	return true
 }
 
 // imageExistsLocally reports whether any of the listed images already carries
