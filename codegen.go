@@ -4265,9 +4265,10 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	baseUrl := os.Getenv("BASE_URL")
 	//log.Printf("[DEBUG] Trying to download image %s from backend %s as it doesn't exist", imageName, baseUrl)
 
-	if !ArrayContains(downloadedImages, imageName) {
-		downloadedImages = append(downloadedImages, imageName)
-	}
+	// NOTE: imageName is deliberately NOT added to downloadedImages here. Marking
+	// it before the load + retag actually succeed means a failed attempt makes
+	// every retry short-circuit on the check above and report a false success.
+	// It gets added at the end of this function instead.
 
 	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image?image=%s", baseUrl, strings.Replace(imageName, " ", "-", -1))
 
@@ -4608,6 +4609,29 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 
 				break
 			}
+
+			// The archive may hold an image the host already has, in which case
+			// nothing new shows up above. Fall back to any local image carrying
+			// the same tag suffix, so we still have something to retag from.
+			if tagSource == imageName && !imageExistsLocally(postload, imageName) {
+				for _, item := range postload {
+					for _, repoTag := range item.RepoTags {
+						if strings.Contains(repoTag, "<none>") {
+							continue
+						}
+
+						repoSplit := strings.Split(repoTag, ":")
+						if len(repoSplit) > 1 && repoSplit[len(repoSplit)-1] == tag {
+							tagSource = repoTag
+							break
+						}
+					}
+
+					if tagSource != imageName {
+						break
+					}
+				}
+			}
 		}
 
 		if tagSource != imageName {
@@ -4632,9 +4656,29 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 
 	}
 
+	// Only marked as downloaded once the image is loaded AND tagged as imageName,
+	// so a failure earlier on doesn't make later retries short-circuit.
+	if !ArrayContains(downloadedImages, imageName) {
+		downloadedImages = append(downloadedImages, imageName)
+	}
+
 	//log.Printf("[INFO] Successfully loaded image %s: %s", imageName, string(body))
 
 	return nil
+}
+
+// imageExistsLocally reports whether any of the listed images already carries
+// the exact reference we want, meaning no retag is needed.
+func imageExistsLocally(images []dockerimage.Summary, reference string) bool {
+	for _, item := range images {
+		for _, repoTag := range item.RepoTags {
+			if repoTag == reference {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error) {
