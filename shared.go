@@ -38189,6 +38189,14 @@ func opAddBranch(wf *Workflow, op *WorkflowOperation) error {
 		return fmt.Errorf("destination node %s not found", branchData.DestinationID)
 	}
 
+	if findTriggerIndexByID(wf, branchData.SourceID) != -1 {
+		for _, existing := range wf.Branches {
+			if existing.SourceID == branchData.SourceID {
+				return fmt.Errorf("trigger %s already has an outgoing branch to %s - a trigger can only connect to one node", branchData.SourceID, existing.DestinationID)
+			}
+		}
+	}
+
 	newBranch := Branch{
 		ID:            generateNodeID(),
 		SourceID:      branchData.SourceID,

@@ -7938,6 +7938,7 @@ Delete conditions:
 
 6. SETTING THE START NODE
 Defines the entry point of the workflow. You can use a real ID or a temp_id from the same payload.
+IMPORTANT: The start node must always be an ACTION, never a trigger. If the workflow begins with a trigger, connect it to its first action via add_branch, then pass that action's id (the trigger's destination) here — NOT the trigger's own id.
 {
 "op": "set_start_node",
 "id": "<real_node_id or temp_id>"
