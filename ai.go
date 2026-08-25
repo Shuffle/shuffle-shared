@@ -7302,16 +7302,19 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		}
 	}
 
-	if foundResult.Action.AppName != "AI Agent" && foundResult.Action.AppName != "Shuffle Agent" {
-		log.Printf("[ERROR] abortAgentExecution: start node %s is not an agent action (app=%s)", startNode.ID, foundResult.Action.AppName)
-		return Action{}, fmt.Errorf("abortAgentExecution: start node %s is not an agent action (app=%s)", startNode.ID, foundResult.Action.AppName)
+	// Use startNode.AppName instead of foundResult, as foundResult will be empty if the LLM query failed immediately : ).
+	if startNode.AppName != "AI Agent" && startNode.AppName != "Shuffle Agent" {
+		log.Printf("[ERROR][%s] abortAgentExecution: start node %s is not an agent action (app=%s)", execution.ExecutionId, startNode.ID, startNode.AppName)
+		return Action{}, fmt.Errorf("abortAgentExecution: start node %s is not an agent action (app=%s)", startNode.ID, startNode.AppName)
 	}
 
 	// Check if result contains AgentOutput mapping as string
 	agentOutput := AgentOutput{} 
-	err = json.Unmarshal([]byte(foundResult.Result), &agentOutput)
-	if err != nil {
-		log.Printf("[ERROR] abortAgentExecution: failed to parse AgentOutput from result. This is NOT critical. Details: %s", err)
+	if len(foundResult.Result) > 0 {
+		err = json.Unmarshal([]byte(foundResult.Result), &agentOutput)
+		if err != nil {
+			log.Printf("[ERROR][%s] abortAgentExecution: failed to parse AgentOutput from result. This is NOT critical. Details: %s", execution.ExecutionId, err)
+		}
 	}
 
 	agentOutput.Status = "ABORTED"
@@ -7394,6 +7397,9 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 	if !replaced {
 		execution.Results = append(execution.Results, abortResult)
 	}
+
+	// Save to DB immediately so callers (like PrepareSingleAction) see the abort state
+	SetWorkflowExecution(ctx, execution, true)
 
 	go sendAgentActionSelfRequest("FAILURE", execution, abortResult)
 
@@ -7939,6 +7945,7 @@ Delete conditions:
 
 6. SETTING THE START NODE
 Defines the entry point of the workflow. You can use a real ID or a temp_id from the same payload.
+IMPORTANT: The start node must always be an ACTION, never a trigger. If the workflow begins with a trigger, connect it to its first action via add_branch, then pass that action's id (the trigger's destination) here — NOT the trigger's own id.
 {
 "op": "set_start_node",
 "id": "<real_node_id or temp_id>"
@@ -10160,6 +10167,8 @@ data_filter:
 					}
 				}
 
+				// Basically the below line is overwriting the RunDetails we just set, So let's preserve it here.
+				decision.RunDetails = agentOutput.Decisions[decisionIndex].RunDetails
 				agentOutput.Decisions[decisionIndex] = decision
 				agentOutput.Status = "FINISHED"
 				agentOutput.CompletedAt = time.Now().UnixMilli()

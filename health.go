@@ -4880,7 +4880,20 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 					log.Printf("[DEBUG] Health check for Agent made %d decisions", len(agentOutput.Decisions))
 				}
 
-				agentTemp, err := strconv.Atoi(strings.TrimSpace(agentOutput.Output))
+				// Agent output can be anything like "19°C", "19 degrees", "~19", so extract the first
+				// contiguous run of digits before converting.
+				rawOutput := strings.TrimSpace(agentOutput.Output)
+				numStr := ""
+				for _, ch := range rawOutput {
+					if ch >= '0' && ch <= '9' {
+						numStr += string(ch)
+					} else if len(numStr) > 0 {
+						// Stop at first non-digit after we already collected some digits
+						break
+					}
+				}
+
+				agentTemp, err := strconv.Atoi(numStr)
 				if err != nil {
 					log.Printf("[ERROR] Agent Health check failed due to atoi conversion failure (output=%q): %s", agentOutput.Output, err)
 					agentHealth.Error.Run = fmt.Sprintf("Agent Health check failed due to atoi conversion failure (output=%q): %s", agentOutput.Output, err)
