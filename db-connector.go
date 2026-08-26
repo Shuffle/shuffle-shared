@@ -208,6 +208,45 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 }
 
 // Cache handlers
+
+// AcquireWorkflowLock acquires a short-lived per-workflow distributed lock.
+// mc.Add is atomic Set-If-Not-Exists — only the first concurrent caller wins.
+// Hard 10s TTL means the lock auto-expires if the server crashes before Release is called.
+// All agent op handlers call this; they never reference mc or requestCache directly.
+// Returns true if acquired, false after ~500ms of retries.
+func AcquireWorkflowLock(ctx context.Context, workflowID string) bool {
+	lockKey := fmt.Sprintf("agent_wf_lock_%s", workflowID)
+	const lockTTLSeconds = int32(10)
+	const maxRetries = 10
+
+	for i := 0; i < maxRetries; i++ {
+		if len(memcached) > 0 {
+			if err := mc.Add(&gomemcache.Item{Key: lockKey, Value: []byte("1"), Expiration: lockTTLSeconds}); err == nil {
+				return true
+			}
+		} else {
+			if err := requestCache.Add(lockKey, "1", time.Duration(lockTTLSeconds)*time.Second); err == nil {
+				return true
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
+// ReleaseWorkflowLock releases the lock acquired by AcquireWorkflowLock.
+func ReleaseWorkflowLock(ctx context.Context, workflowID string) {
+	lockKey := fmt.Sprintf("agent_wf_lock_%s", workflowID)
+	if len(memcached) > 0 {
+		if err := mc.Delete(lockKey); err != nil {
+			// Not fatal — the 10s TTL will auto-expire the lock anyway.
+			log.Printf("[WARNING] ReleaseWorkflowLock: failed to delete lock for workflow %s: %s", workflowID, err)
+		}
+	} else {
+		requestCache.Delete(lockKey)
+	}
+}
+
 func DeleteCache(ctx context.Context, name string) error {
 	if len(memcached) > 0 {
 		return mc.Delete(name)

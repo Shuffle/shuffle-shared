@@ -37394,13 +37394,1246 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 	resp.WriteHeader(200)
 	responseData, _ := json.Marshal(response)
 	resp.Write(responseData)
-
-
 	go streamWorkflowOperations(ctx, request, workflow.ID, streamOps)
 
 	if debug {
 		log.Printf("[INFO] Applied %d operations to workflow %s for user %s", len(setOpsReq.Operations), workflowID, user.Username)
 	}
+}
+
+// HandleAgentAddNode is the MCP tool handler for add_node.
+// Agent payload: workflow_id, node_type ("action"|"trigger"), and a MinimalAction
+// (app_id, app_name, action_name, label, x, y, params).
+// Delegates entirely to applyWorkflowOperationWithMapping — no add-node logic here.
+func HandleAgentAddNode(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in HandleAgentAddNode: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request"}`))
+		return
+	}
+	defer request.Body.Close()
+
+	type addNodeReq struct {
+		WorkflowID string        `json:"workflow_id"`
+		NodeType   string        `json:"node_type"`
+		Action     MinimalAction `json:"action"`
+	}
+
+	var req addNodeReq
+	if err = json.Unmarshal(body, &req); err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid JSON. Expected: {\"workflow_id\": \"<uuid>\", \"node_type\": \"action\", \"action\": {\"app_id\": \"...\", \"app_name\": \"...\", \"action_name\": \"...\", \"label\": \"...\", \"x\": 0, \"y\": 0, \"parameters\": []}}"}`))
+		return
+	}
+
+	if len(req.WorkflowID) != 36 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid or missing workflow_id"}`))
+		return
+	}
+	if len(req.Action.AppID) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "action.app_id is required. Use the search_apps tool to find the correct app_id first."}`))
+		return
+	}
+	if len(req.Action.Label) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "action.label is required. Provide a unique label for this node."}`))
+		return
+	}
+	if req.NodeType == "" {
+		req.NodeType = "action"
+	}
+
+	if !AcquireWorkflowLock(ctx, req.WorkflowID) {
+		log.Printf("[WARNING] HandleAgentAddNode: could not acquire lock for workflow %s", req.WorkflowID)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Could not acquire workflow lock"}`))
+		return
+	}
+	defer ReleaseWorkflowLock(ctx, req.WorkflowID)
+
+	// Load workflow draft — identical pattern to HandleAgentWorkflowOperations.
+	cacheKey := fmt.Sprintf("workflow_ops_cache_%s", req.WorkflowID)
+	var workflow *Workflow
+	if cachedWf, cErr := GetCache(ctx, cacheKey); cErr == nil && cachedWf != nil {
+		if b, ok := cachedWf.([]byte); ok {
+			workflow = &Workflow{}
+			if json.Unmarshal(b, workflow) != nil {
+				workflow = nil
+			}
+		}
+	}
+	if workflow == nil {
+		workflow, err = GetWorkflow(ctx, req.WorkflowID)
+		if err != nil {
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+			return
+		}
+	}
+
+	if workflow.OrgId != user.ActiveOrg.Id && workflow.Owner != user.Id {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+		return
+	}
+
+	dataBytes, err := json.Marshal(req.Action)
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal action"}`))
+		return
+	}
+
+	tempIDMap := make(map[string]string)
+	op := WorkflowOperation{
+		Op:       "add_node",
+		NodeType: req.NodeType,
+		TempID:   req.Action.Label, // agent uses this label to reference the node in add_branch
+		Data:     json.RawMessage(dataBytes),
+	}
+
+	branchCountBefore := len(workflow.Branches)
+	if applyErr := applyWorkflowOperationWithMapping(ctx, user, workflow, &op, tempIDMap); applyErr != nil {
+		log.Printf("[WARNING] HandleAgentAddNode: failed for workflow %s: %s", req.WorkflowID, applyErr)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, applyErr.Error())))
+		return
+	}
+
+	if wfBytes, mErr := json.Marshal(workflow); mErr == nil {
+		if setCacheErr := SetCache(ctx, cacheKey, wfBytes, 1800); setCacheErr != nil {
+			log.Printf("[WARNING] HandleAgentAddNode: failed caching workflow %s: %s", req.WorkflowID, setCacheErr)
+		}
+	}
+
+	// Stream only the specific node change to the frontend canvas.
+	go streamWorkflowOperations(ctx, request, workflow.ID, collectStreamOps(workflow, &op, tempIDMap, branchCountBefore, nil))
+
+	// Resolve real node ID — idempotent path means tempIDMap may already hold the existing ID.
+	realID := tempIDMap[req.Action.Label]
+	if len(realID) == 0 {
+		for _, a := range workflow.Actions {
+			if strings.EqualFold(a.Label, req.Action.Label) {
+				realID = a.ID
+				break
+			}
+		}
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(
+		`{"success": true, "node_id": "%s", "label": "%s", "app_name": "%s", "action_name": "%s"}`,
+		realID, req.Action.Label, req.Action.AppName, req.Action.Name,
+	)))
+}
+
+// HandleAgentEditNode is the MCP tool handler for configure_node / edit_node.
+// Agent payload: workflow_id, node_id, and optional fields (label, action_name, parameters).
+// This leverages opEditNode which auto-detects if the node is an action or trigger,
+// and applies partial updates (merging parameters).
+func HandleAgentEditNode(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in HandleAgentEditNode: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request"}`))
+		return
+	}
+	defer request.Body.Close()
+
+	// Flat schema - agent only sends what it wants to change.
+	type editNodeReq struct {
+		WorkflowID string             `json:"workflow_id"`
+		NodeID     string             `json:"node_id"`
+		Label      string             `json:"label,omitempty"`
+		ActionName string             `json:"action_name,omitempty"`
+		Parameters []MinimalParameter `json:"parameters,omitempty"`
+	}
+
+	var req editNodeReq
+	if err = json.Unmarshal(body, &req); err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid JSON format. Expected: {\"workflow_id\": \"<uuid>\", \"node_id\": \"<uuid>\", \"label\": \"...\", \"action_name\": \"...\", \"parameters\": []}"}`))
+		return
+	}
+
+	if len(req.WorkflowID) != 36 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid or missing workflow_id"}`))
+		return
+	}
+	if len(req.NodeID) == 0 {
+		resp.WriteHeader(400)
+		// Give a helpful error telling the agent to use the node_id it received from add_node.
+		resp.Write([]byte(`{"success": false, "reason": "node_id is required to identify the node to edit. Use the node_id returned by add_node."}`))
+		return
+	}
+
+	if !AcquireWorkflowLock(ctx, req.WorkflowID) {
+		log.Printf("[WARNING] HandleAgentEditNode: could not acquire lock for workflow %s", req.WorkflowID)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Could not acquire workflow lock"}`))
+		return
+	}
+	defer ReleaseWorkflowLock(ctx, req.WorkflowID)
+
+	cacheKey := fmt.Sprintf("workflow_ops_cache_%s", req.WorkflowID)
+	var workflow *Workflow
+	if cachedWf, cErr := GetCache(ctx, cacheKey); cErr == nil && cachedWf != nil {
+		if b, ok := cachedWf.([]byte); ok {
+			workflow = &Workflow{}
+			if json.Unmarshal(b, workflow) != nil {
+				workflow = nil
+			}
+		}
+	}
+	if workflow == nil {
+		workflow, err = GetWorkflow(ctx, req.WorkflowID)
+		if err != nil {
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+			return
+		}
+	}
+
+	if workflow.OrgId != user.ActiveOrg.Id && workflow.Owner != user.Id {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+		return
+	}
+
+	// Validate node exists to return a clear error immediately
+	actidx := findActionIndexByID(workflow, req.NodeID)
+	trigidx := findTriggerIndexByID(workflow, req.NodeID)
+	if actidx == -1 && trigidx == -1 {
+		resp.WriteHeader(404)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Node %s not found in workflow. Make sure you are using the correct node_id."}`, req.NodeID)))
+		return
+	}
+
+	// opEditNode expects a MinimalAction or MinimalTrigger payload.
+	// Since both share Label, Name (for action_name), and Parameters, we can use MinimalAction to marshal.
+	updateData := MinimalAction{
+		Label:      req.Label,
+		Name:       req.ActionName,
+		Parameters: req.Parameters,
+	}
+
+	dataBytes, err := json.Marshal(updateData)
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal update data"}`))
+		return
+	}
+
+	tempIDMap := make(map[string]string)
+	op := WorkflowOperation{
+		Op:   "edit_node",
+		ID:   req.NodeID,
+		Data: json.RawMessage(dataBytes),
+	}
+
+	branchCountBefore := len(workflow.Branches)
+	if applyErr := applyWorkflowOperationWithMapping(ctx, user, workflow, &op, tempIDMap); applyErr != nil {
+		log.Printf("[WARNING] HandleAgentEditNode: failed for workflow %s: %s", req.WorkflowID, applyErr)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, applyErr.Error())))
+		return
+	}
+
+	if wfBytes, mErr := json.Marshal(workflow); mErr == nil {
+		if setCacheErr := SetCache(ctx, cacheKey, wfBytes, 1800); setCacheErr != nil {
+			log.Printf("[WARNING] HandleAgentEditNode: failed caching workflow %s: %s", req.WorkflowID, setCacheErr)
+		}
+	}
+
+	go streamWorkflowOperations(ctx, request, workflow.ID, collectStreamOps(workflow, &op, tempIDMap, branchCountBefore, nil))
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "node_id": "%s", "message": "Node updated successfully"}`, req.NodeID)))
+}
+
+// HandleAgentAddBranch is the MCP tool handler for add_branch.
+// Agent payload: workflow_id, source_id, destination_id.
+// Connects two nodes with a branch (edge) without conditions (conditions are handled separately).
+func HandleAgentAddBranch(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in HandleAgentAddBranch: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request"}`))
+		return
+	}
+	defer request.Body.Close()
+
+	// Holy grail flat schema - minimum needed to connect two nodes.
+	type addBranchReq struct {
+		WorkflowID    string `json:"workflow_id"`
+		SourceID      string `json:"source_id"`
+		DestinationID string `json:"destination_id"`
+	}
+
+	var req addBranchReq
+	if err = json.Unmarshal(body, &req); err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid JSON format. Expected: {\"workflow_id\": \"<uuid>\", \"source_id\": \"<uuid>\", \"destination_id\": \"<uuid>\"}"}`))
+		return
+	}
+
+	if len(req.WorkflowID) != 36 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid or missing workflow_id"}`))
+		return
+	}
+	if len(req.SourceID) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "source_id is required. Use the node_id returned by add_node."}`))
+		return
+	}
+	if len(req.DestinationID) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "destination_id is required. Use the node_id returned by add_node."}`))
+		return
+	}
+
+	if !AcquireWorkflowLock(ctx, req.WorkflowID) {
+		log.Printf("[WARNING] HandleAgentAddBranch: could not acquire lock for workflow %s", req.WorkflowID)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Could not acquire workflow lock"}`))
+		return
+	}
+	defer ReleaseWorkflowLock(ctx, req.WorkflowID)
+
+	cacheKey := fmt.Sprintf("workflow_ops_cache_%s", req.WorkflowID)
+	var workflow *Workflow
+	if cachedWf, cErr := GetCache(ctx, cacheKey); cErr == nil && cachedWf != nil {
+		if b, ok := cachedWf.([]byte); ok {
+			workflow = &Workflow{}
+			if json.Unmarshal(b, workflow) != nil {
+				workflow = nil
+			}
+		}
+	}
+	if workflow == nil {
+		workflow, err = GetWorkflow(ctx, req.WorkflowID)
+		if err != nil {
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+			return
+		}
+	}
+
+	if workflow.OrgId != user.ActiveOrg.Id && workflow.Owner != user.Id {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+		return
+	}
+
+	// Prepare data for opAddBranchWithMapping
+	branchData := struct {
+		SourceID      string `json:"source_id"`
+		DestinationID string `json:"destination_id"`
+		Label         string `json:"label"` // Keep empty string for no-condition branches
+	}{
+		SourceID:      req.SourceID,
+		DestinationID: req.DestinationID,
+		Label:         "",
+	}
+
+	dataBytes, err := json.Marshal(branchData)
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal branch data"}`))
+		return
+	}
+
+	// TempID used for tracking branch ID in case agent wants to use it (optional)
+	tempID := fmt.Sprintf("branch_%s_%s", req.SourceID, req.DestinationID)
+	tempIDMap := make(map[string]string)
+	
+	op := WorkflowOperation{
+		Op:     "add_branch",
+		TempID: tempID,
+		Data:   json.RawMessage(dataBytes),
+	}
+
+	branchCountBefore := len(workflow.Branches)
+	if applyErr := applyWorkflowOperationWithMapping(ctx, user, workflow, &op, tempIDMap); applyErr != nil {
+		log.Printf("[WARNING] HandleAgentAddBranch: failed for workflow %s: %s", req.WorkflowID, applyErr)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, applyErr.Error())))
+		return
+	}
+
+	if wfBytes, mErr := json.Marshal(workflow); mErr == nil {
+		if setCacheErr := SetCache(ctx, cacheKey, wfBytes, 1800); setCacheErr != nil {
+			log.Printf("[WARNING] HandleAgentAddBranch: failed caching workflow %s: %s", req.WorkflowID, setCacheErr)
+		}
+	}
+
+	go streamWorkflowOperations(ctx, request, workflow.ID, collectStreamOps(workflow, &op, tempIDMap, branchCountBefore, nil))
+
+	// Return the new branch ID
+	realBranchID := tempIDMap[tempID]
+	if len(realBranchID) == 0 {
+		// Idempotency: branch already existed
+		for _, b := range workflow.Branches {
+			if b.SourceID == req.SourceID && b.DestinationID == req.DestinationID {
+				realBranchID = b.ID
+				break
+			}
+		}
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "branch_id": "%s", "message": "Branch added successfully"}`, realBranchID)))
+}
+
+// HandleAgentAddCondition is the MCP tool handler for add_condition.
+// Agent payload: workflow_id, branch_id, source, condition, destination.
+func HandleAgentAddCondition(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in HandleAgentAddCondition: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request"}`))
+		return
+	}
+	defer request.Body.Close()
+
+	type addConditionReq struct {
+		WorkflowID  string `json:"workflow_id"`
+		BranchID    string `json:"branch_id"`
+		Source      string `json:"source"`
+		Condition   string `json:"condition"`
+		Destination string `json:"destination"`
+	}
+
+	var req addConditionReq
+	if err = json.Unmarshal(body, &req); err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid JSON format. Expected: {\"workflow_id\": \"<uuid>\", \"branch_id\": \"<uuid>\", \"source\": \"...\", \"condition\": \"...\", \"destination\": \"...\"}"}`))
+		return
+	}
+
+	if len(req.WorkflowID) != 36 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid or missing workflow_id"}`))
+		return
+	}
+	if len(req.BranchID) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "branch_id is required. Use the branch_id returned by add_branch."}`))
+		return
+	}
+
+	validOperators := map[string]bool{
+		"equals": true, "larger than": true, "less than": true, "does not equal": true,
+		"startswith": true, "endswith": true, "is empty": true, "contains": true, "contains_any_of": true,
+	}
+
+	if !validOperators[req.Condition] {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid condition operator. Available operators: equals, larger than, less than, does not equal, startswith, endswith, is empty, contains, contains_any_of."}`))
+		return
+	}
+
+	if !AcquireWorkflowLock(ctx, req.WorkflowID) {
+		log.Printf("[WARNING] HandleAgentAddCondition: could not acquire lock for workflow %s", req.WorkflowID)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Could not acquire workflow lock"}`))
+		return
+	}
+	defer ReleaseWorkflowLock(ctx, req.WorkflowID)
+
+	cacheKey := fmt.Sprintf("workflow_ops_cache_%s", req.WorkflowID)
+	var workflow *Workflow
+	if cachedWf, cErr := GetCache(ctx, cacheKey); cErr == nil && cachedWf != nil {
+		if b, ok := cachedWf.([]byte); ok {
+			workflow = &Workflow{}
+			if json.Unmarshal(b, workflow) != nil {
+				workflow = nil
+			}
+		}
+	}
+	if workflow == nil {
+		workflow, err = GetWorkflow(ctx, req.WorkflowID)
+		if err != nil {
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+			return
+		}
+	}
+
+	if workflow.OrgId != user.ActiveOrg.Id && workflow.Owner != user.Id {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+		return
+	}
+
+	// Validate branch exists to return a clear error immediately
+	branchIdx := findBranchIndexByID(workflow, req.BranchID)
+	if branchIdx == -1 {
+		resp.WriteHeader(404)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Branch %s not found in workflow. Make sure you are using the correct branch_id."}`, req.BranchID)))
+		return
+	}
+
+	// opAddCondition expects an array of conditions to append
+	condData := struct {
+		Conditions []struct {
+			Source      string `json:"source"`
+			Condition   string `json:"condition"`
+			Destination string `json:"destination"`
+		} `json:"conditions"`
+	}{
+		Conditions: []struct {
+			Source      string `json:"source"`
+			Condition   string `json:"condition"`
+			Destination string `json:"destination"`
+		}{
+			{
+				Source:      req.Source,
+				Condition:   req.Condition,
+				Destination: req.Destination,
+			},
+		},
+	}
+
+	dataBytes, err := json.Marshal(condData)
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal condition data"}`))
+		return
+	}
+
+	tempIDMap := make(map[string]string)
+	op := WorkflowOperation{
+		Op:       "add_condition",
+		BranchID: req.BranchID,
+		Data:     json.RawMessage(dataBytes),
+	}
+
+	branchCountBefore := len(workflow.Branches)
+	if applyErr := applyWorkflowOperationWithMapping(ctx, user, workflow, &op, tempIDMap); applyErr != nil {
+		log.Printf("[WARNING] HandleAgentAddCondition: failed for workflow %s: %s", req.WorkflowID, applyErr)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, applyErr.Error())))
+		return
+	}
+
+	if wfBytes, mErr := json.Marshal(workflow); mErr == nil {
+		if setCacheErr := SetCache(ctx, cacheKey, wfBytes, 1800); setCacheErr != nil {
+			log.Printf("[WARNING] HandleAgentAddCondition: failed caching workflow %s: %s", req.WorkflowID, setCacheErr)
+		}
+	}
+
+	go streamWorkflowOperations(ctx, request, workflow.ID, collectStreamOps(workflow, &op, tempIDMap, branchCountBefore, nil))
+
+	// Get the generated condition_id to return to the agent
+	var newConditionID string
+	if bIdx := findBranchIndexByID(workflow, req.BranchID); bIdx != -1 {
+		conds := workflow.Branches[bIdx].Conditions
+		if len(conds) > 0 {
+			newConditionID = conds[len(conds)-1].Condition.ID
+		}
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "condition_id": "%s", "message": "Condition added successfully"}`, newConditionID)))
+}
+
+// HandleAgentDeleteNode is the MCP tool handler for delete_node.
+// Agent payload: workflow_id, node_id.
+// Deletes a node and auto-cleans any branches connected to it.
+func HandleAgentDeleteNode(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in HandleAgentDeleteNode: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request"}`))
+		return
+	}
+	defer request.Body.Close()
+
+	type deleteNodeReq struct {
+		WorkflowID string `json:"workflow_id"`
+		NodeID     string `json:"node_id"`
+	}
+
+	var req deleteNodeReq
+	if err = json.Unmarshal(body, &req); err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid JSON format. Expected: {\"workflow_id\": \"<uuid>\", \"node_id\": \"<uuid>\"}"}`))
+		return
+	}
+
+	if len(req.WorkflowID) != 36 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid or missing workflow_id"}`))
+		return
+	}
+	if len(req.NodeID) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "node_id is required."}`))
+		return
+	}
+
+	if !AcquireWorkflowLock(ctx, req.WorkflowID) {
+		log.Printf("[WARNING] HandleAgentDeleteNode: could not acquire lock for workflow %s", req.WorkflowID)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Could not acquire workflow lock"}`))
+		return
+	}
+	defer ReleaseWorkflowLock(ctx, req.WorkflowID)
+
+	cacheKey := fmt.Sprintf("workflow_ops_cache_%s", req.WorkflowID)
+	var workflow *Workflow
+	if cachedWf, cErr := GetCache(ctx, cacheKey); cErr == nil && cachedWf != nil {
+		if b, ok := cachedWf.([]byte); ok {
+			workflow = &Workflow{}
+			if json.Unmarshal(b, workflow) != nil {
+				workflow = nil
+			}
+		}
+	}
+	if workflow == nil {
+		workflow, err = GetWorkflow(ctx, req.WorkflowID)
+		if err != nil {
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+			return
+		}
+	}
+
+	if workflow.OrgId != user.ActiveOrg.Id && workflow.Owner != user.Id {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+		return
+	}
+
+	// Auto-detect node type so agent doesn't have to provide it.
+	nodeType := ""
+	if findActionIndexByID(workflow, req.NodeID) != -1 {
+		nodeType = "action"
+	} else if findTriggerIndexByID(workflow, req.NodeID) != -1 {
+		nodeType = "trigger"
+	} else {
+		// Idempotency: If node doesn't exist, say success.
+		resp.Header().Set("Content-Type", "application/json")
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true, "message": "Node deleted successfully (already gone)"}`))
+		return
+	}
+
+	tempIDMap := make(map[string]string)
+	op := WorkflowOperation{
+		Op:       "delete_node",
+		ID:       req.NodeID,
+		NodeType: nodeType,
+	}
+
+	branchCountBefore := len(workflow.Branches)
+	if applyErr := applyWorkflowOperationWithMapping(ctx, user, workflow, &op, tempIDMap); applyErr != nil {
+		log.Printf("[WARNING] HandleAgentDeleteNode: failed for workflow %s: %s", req.WorkflowID, applyErr)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, applyErr.Error())))
+		return
+	}
+
+	if wfBytes, mErr := json.Marshal(workflow); mErr == nil {
+		if setCacheErr := SetCache(ctx, cacheKey, wfBytes, 1800); setCacheErr != nil {
+			log.Printf("[WARNING] HandleAgentDeleteNode: failed caching workflow %s: %s", req.WorkflowID, setCacheErr)
+		}
+	}
+
+	go streamWorkflowOperations(ctx, request, workflow.ID, collectStreamOps(workflow, &op, tempIDMap, branchCountBefore, nil))
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "message": "Node deleted successfully"}`))
+}
+
+// HandleAgentDeleteBranch is the MCP tool handler for delete_branch.
+// Agent payload: workflow_id, branch_id.
+// Deletes a branch connecting two nodes.
+func HandleAgentDeleteBranch(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in HandleAgentDeleteBranch: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request"}`))
+		return
+	}
+	defer request.Body.Close()
+
+	type deleteBranchReq struct {
+		WorkflowID string `json:"workflow_id"`
+		BranchID   string `json:"branch_id"`
+	}
+
+	var req deleteBranchReq
+	if err = json.Unmarshal(body, &req); err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid JSON format. Expected: {\"workflow_id\": \"<uuid>\", \"branch_id\": \"<uuid>\"}"}`))
+		return
+	}
+
+	if len(req.WorkflowID) != 36 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid or missing workflow_id"}`))
+		return
+	}
+	if len(req.BranchID) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "branch_id is required."}`))
+		return
+	}
+
+	if !AcquireWorkflowLock(ctx, req.WorkflowID) {
+		log.Printf("[WARNING] HandleAgentDeleteBranch: could not acquire lock for workflow %s", req.WorkflowID)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Could not acquire workflow lock"}`))
+		return
+	}
+	defer ReleaseWorkflowLock(ctx, req.WorkflowID)
+
+	cacheKey := fmt.Sprintf("workflow_ops_cache_%s", req.WorkflowID)
+	var workflow *Workflow
+	if cachedWf, cErr := GetCache(ctx, cacheKey); cErr == nil && cachedWf != nil {
+		if b, ok := cachedWf.([]byte); ok {
+			workflow = &Workflow{}
+			if json.Unmarshal(b, workflow) != nil {
+				workflow = nil
+			}
+		}
+	}
+	if workflow == nil {
+		workflow, err = GetWorkflow(ctx, req.WorkflowID)
+		if err != nil {
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+			return
+		}
+	}
+
+	if workflow.OrgId != user.ActiveOrg.Id && workflow.Owner != user.Id {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+		return
+	}
+
+	// Idempotency: Verify branch actually exists before trying to delete
+	branchExists := false
+	for _, br := range workflow.Branches {
+		if br.ID == req.BranchID {
+			branchExists = true
+			break
+		}
+	}
+	if !branchExists {
+		resp.Header().Set("Content-Type", "application/json")
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true, "message": "Branch deleted successfully (already gone)"}`))
+		return
+	}
+
+	tempIDMap := make(map[string]string)
+	op := WorkflowOperation{
+		Op: "delete_branch",
+		ID: req.BranchID,
+	}
+
+	branchCountBefore := len(workflow.Branches)
+	if applyErr := applyWorkflowOperationWithMapping(ctx, user, workflow, &op, tempIDMap); applyErr != nil {
+		log.Printf("[WARNING] HandleAgentDeleteBranch: failed for workflow %s: %s", req.WorkflowID, applyErr)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, applyErr.Error())))
+		return
+	}
+
+	if wfBytes, mErr := json.Marshal(workflow); mErr == nil {
+		if setCacheErr := SetCache(ctx, cacheKey, wfBytes, 1800); setCacheErr != nil {
+			log.Printf("[WARNING] HandleAgentDeleteBranch: failed caching workflow %s: %s", req.WorkflowID, setCacheErr)
+		}
+	}
+
+	go streamWorkflowOperations(ctx, request, workflow.ID, collectStreamOps(workflow, &op, tempIDMap, branchCountBefore, nil))
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "message": "Branch deleted successfully"}`))
+}
+
+// HandleAgentDeleteCondition is the MCP tool handler for delete_condition.
+// Agent payload: workflow_id, branch_id, condition_id.
+// Deletes a specific condition from a branch.
+func HandleAgentDeleteCondition(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in HandleAgentDeleteCondition: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request"}`))
+		return
+	}
+	defer request.Body.Close()
+
+	type deleteConditionReq struct {
+		WorkflowID  string `json:"workflow_id"`
+		BranchID    string `json:"branch_id"`
+		ConditionID string `json:"condition_id"`
+	}
+
+	var req deleteConditionReq
+	if err = json.Unmarshal(body, &req); err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid JSON format. Expected: {\"workflow_id\": \"<uuid>\", \"branch_id\": \"<uuid>\", \"condition_id\": \"<uuid>\"}"}`))
+		return
+	}
+
+	if len(req.WorkflowID) != 36 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid or missing workflow_id"}`))
+		return
+	}
+	if len(req.BranchID) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "branch_id is required."}`))
+		return
+	}
+	if len(req.ConditionID) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "condition_id is required. Use the condition_id returned by add_condition."}`))
+		return
+	}
+
+	if !AcquireWorkflowLock(ctx, req.WorkflowID) {
+		log.Printf("[WARNING] HandleAgentDeleteCondition: could not acquire lock for workflow %s", req.WorkflowID)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Could not acquire workflow lock"}`))
+		return
+	}
+	defer ReleaseWorkflowLock(ctx, req.WorkflowID)
+
+	cacheKey := fmt.Sprintf("workflow_ops_cache_%s", req.WorkflowID)
+	var workflow *Workflow
+	if cachedWf, cErr := GetCache(ctx, cacheKey); cErr == nil && cachedWf != nil {
+		if b, ok := cachedWf.([]byte); ok {
+			workflow = &Workflow{}
+			if json.Unmarshal(b, workflow) != nil {
+				workflow = nil
+			}
+		}
+	}
+	if workflow == nil {
+		workflow, err = GetWorkflow(ctx, req.WorkflowID)
+		if err != nil {
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+			return
+		}
+	}
+
+	if workflow.OrgId != user.ActiveOrg.Id && workflow.Owner != user.Id {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+		return
+	}
+
+	// Make sure branch exists
+	branchIdx := findBranchIndexByID(workflow, req.BranchID)
+	if branchIdx == -1 {
+		resp.WriteHeader(404)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Branch %s not found in workflow."}`, req.BranchID)))
+		return
+	}
+
+	// Idempotency: verify condition actually exists
+	conditionExists := false
+	for _, c := range workflow.Branches[branchIdx].Conditions {
+		if c.Condition.ID == req.ConditionID {
+			conditionExists = true
+			break
+		}
+	}
+	if !conditionExists {
+		resp.Header().Set("Content-Type", "application/json")
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true, "message": "Condition deleted successfully (already gone)"}`))
+		return
+	}
+
+	// Prepare data for opDeleteCondition
+	deleteData := struct {
+		ConditionIDs []string `json:"condition_ids"`
+	}{
+		ConditionIDs: []string{req.ConditionID},
+	}
+
+	dataBytes, err := json.Marshal(deleteData)
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal condition data"}`))
+		return
+	}
+
+	tempIDMap := make(map[string]string)
+	op := WorkflowOperation{
+		Op:       "delete_condition",
+		BranchID: req.BranchID,
+		Data:     json.RawMessage(dataBytes),
+	}
+
+	branchCountBefore := len(workflow.Branches)
+	if applyErr := applyWorkflowOperationWithMapping(ctx, user, workflow, &op, tempIDMap); applyErr != nil {
+		log.Printf("[WARNING] HandleAgentDeleteCondition: failed for workflow %s: %s", req.WorkflowID, applyErr)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, applyErr.Error())))
+		return
+	}
+
+	if wfBytes, mErr := json.Marshal(workflow); mErr == nil {
+		if setCacheErr := SetCache(ctx, cacheKey, wfBytes, 1800); setCacheErr != nil {
+			log.Printf("[WARNING] HandleAgentDeleteCondition: failed caching workflow %s: %s", req.WorkflowID, setCacheErr)
+		}
+	}
+
+	go streamWorkflowOperations(ctx, request, workflow.ID, collectStreamOps(workflow, &op, tempIDMap, branchCountBefore, nil))
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "message": "Condition deleted successfully"}`))
+}
+
+// HandleAgentEditCondition is the MCP tool handler for edit_condition.
+// Agent payload: workflow_id, branch_id, condition_id, plus optional fields: source, condition, destination.
+func HandleAgentEditCondition(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in HandleAgentEditCondition: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication failed"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request"}`))
+		return
+	}
+	defer request.Body.Close()
+
+	type editConditionReq struct {
+		WorkflowID  string  `json:"workflow_id"`
+		BranchID    string  `json:"branch_id"`
+		ConditionID string  `json:"condition_id"`
+		Source      *string `json:"source,omitempty"`
+		Condition   *string `json:"condition,omitempty"`
+		Destination *string `json:"destination,omitempty"`
+	}
+
+	var req editConditionReq
+	if err = json.Unmarshal(body, &req); err != nil {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid JSON format. Expected: {\"workflow_id\": \"<uuid>\", \"branch_id\": \"<uuid>\", \"condition_id\": \"<uuid>\", \"source\": \"...\", \"condition\": \"...\", \"destination\": \"...\"}"}`))
+		return
+	}
+
+	if len(req.WorkflowID) != 36 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid or missing workflow_id"}`))
+		return
+	}
+	if len(req.BranchID) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "branch_id is required."}`))
+		return
+	}
+	if len(req.ConditionID) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "condition_id is required. Use the condition_id returned by add_condition."}`))
+		return
+	}
+
+	// Validate operator if provided
+	if req.Condition != nil {
+		validOperators := map[string]bool{
+			"equals": true, "larger than": true, "less than": true, "does not equal": true,
+			"startswith": true, "endswith": true, "is empty": true, "contains": true, "contains_any_of": true,
+		}
+		if !validOperators[*req.Condition] {
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Invalid condition operator. Available operators: equals, larger than, less than, does not equal, startswith, endswith, is empty, contains, contains_any_of."}`))
+			return
+		}
+	}
+
+	if !AcquireWorkflowLock(ctx, req.WorkflowID) {
+		log.Printf("[WARNING] HandleAgentEditCondition: could not acquire lock for workflow %s", req.WorkflowID)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Could not acquire workflow lock"}`))
+		return
+	}
+	defer ReleaseWorkflowLock(ctx, req.WorkflowID)
+
+	cacheKey := fmt.Sprintf("workflow_ops_cache_%s", req.WorkflowID)
+	var workflow *Workflow
+	if cachedWf, cErr := GetCache(ctx, cacheKey); cErr == nil && cachedWf != nil {
+		if b, ok := cachedWf.([]byte); ok {
+			workflow = &Workflow{}
+			if json.Unmarshal(b, workflow) != nil {
+				workflow = nil
+			}
+		}
+	}
+	if workflow == nil {
+		workflow, err = GetWorkflow(ctx, req.WorkflowID)
+		if err != nil {
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+			return
+		}
+	}
+
+	if workflow.OrgId != user.ActiveOrg.Id && workflow.Owner != user.Id {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+		return
+	}
+
+	// Make sure branch exists
+	branchIdx := findBranchIndexByID(workflow, req.BranchID)
+	if branchIdx == -1 {
+		resp.WriteHeader(404)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Branch %s not found in workflow."}`, req.BranchID)))
+		return
+	}
+
+	// Make sure condition exists
+	conditionExists := false
+	for _, c := range workflow.Branches[branchIdx].Conditions {
+		if c.Condition.ID == req.ConditionID {
+			conditionExists = true
+			break
+		}
+	}
+	if !conditionExists {
+		resp.WriteHeader(404)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Condition %s not found in branch %s."}`, req.ConditionID, req.BranchID)))
+		return
+	}
+
+	// Prepare data for opEditCondition
+	editData := struct {
+		Conditions []struct {
+			ID          string  `json:"id"`
+			Source      *string `json:"source"`
+			Condition   *string `json:"condition"`
+			Destination *string `json:"destination"`
+		} `json:"conditions"`
+	}{
+		Conditions: []struct {
+			ID          string  `json:"id"`
+			Source      *string `json:"source"`
+			Condition   *string `json:"condition"`
+			Destination *string `json:"destination"`
+		}{
+			{
+				ID:          req.ConditionID,
+				Source:      req.Source,
+				Condition:   req.Condition,
+				Destination: req.Destination,
+			},
+		},
+	}
+
+	dataBytes, err := json.Marshal(editData)
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal condition update data"}`))
+		return
+	}
+
+	tempIDMap := make(map[string]string)
+	op := WorkflowOperation{
+		Op:       "edit_condition",
+		BranchID: req.BranchID,
+		Data:     json.RawMessage(dataBytes),
+	}
+
+	branchCountBefore := len(workflow.Branches)
+	if applyErr := applyWorkflowOperationWithMapping(ctx, user, workflow, &op, tempIDMap); applyErr != nil {
+		log.Printf("[WARNING] HandleAgentEditCondition: failed for workflow %s: %s", req.WorkflowID, applyErr)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, applyErr.Error())))
+		return
+	}
+
+	if wfBytes, mErr := json.Marshal(workflow); mErr == nil {
+		if setCacheErr := SetCache(ctx, cacheKey, wfBytes, 1800); setCacheErr != nil {
+			log.Printf("[WARNING] HandleAgentEditCondition: failed caching workflow %s: %s", req.WorkflowID, setCacheErr)
+		}
+	}
+
+	go streamWorkflowOperations(ctx, request, workflow.ID, collectStreamOps(workflow, &op, tempIDMap, branchCountBefore, nil))
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "message": "Condition updated successfully"}`))
 }
 
 // streamWorkflowOperations sends stream ops to the streaming API endpoint.
