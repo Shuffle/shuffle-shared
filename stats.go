@@ -777,6 +777,49 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// Sideload GCS overflow onprem_stats (entries >60 days old archived from Datastore), cached 30 min.
+	if project.Environment == "cloud" && len(orgFileBucket) > 0 {
+		var gcsOnpremStats []DailyStatistics
+		gcsOnpremCacheKey := fmt.Sprintf("gcs_onprem_stats_%s", orgId)
+
+		if cached, cacheErr := GetCache(ctx, gcsOnpremCacheKey); cacheErr == nil {
+			_ = json.Unmarshal([]byte(cached.([]uint8)), &gcsOnpremStats)
+		} else {
+			bucketPath := fmt.Sprintf("org_statistics/%s/onprem_stats.json", orgId)
+			obj := project.StorageClient.Bucket(orgFileBucket).Object(bucketPath)
+			if gcsReader, gcsErr := obj.NewReader(ctx); gcsErr == nil {
+				gcsBytes, readErr := ioutil.ReadAll(gcsReader)
+				gcsReader.Close()
+				if readErr == nil && len(gcsBytes) > 0 {
+					if unmarshalErr := json.Unmarshal(gcsBytes, &gcsOnpremStats); unmarshalErr == nil {
+						_ = SetCache(ctx, gcsOnpremCacheKey, gcsBytes, 30)
+					}
+				}
+			}
+		}
+
+		if len(gcsOnpremStats) > 0 {
+			log.Printf("[DEBUG] HandleGetStatistics: merging %d GCS onprem overflow entries for org %s", len(gcsOnpremStats), orgId)
+			// Deduplicate by date; Datastore entries win on conflict.
+			dateMapCap := len(gcsOnpremStats)
+			if len(info.OnpremStats) > dateMapCap {
+				dateMapCap = len(info.OnpremStats)
+			}
+			dateMap := make(map[string]DailyStatistics, dateMapCap)
+			for _, d := range gcsOnpremStats {
+				dateMap[d.Date.UTC().Format("2006-01-02")] = d
+			}
+			for _, d := range info.OnpremStats {
+				dateMap[d.Date.UTC().Format("2006-01-02")] = d
+			}
+			merged := make([]DailyStatistics, 0, len(dateMap))
+			for _, d := range dateMap {
+				merged = append(merged, d)
+			}
+			info.OnpremStats = merged
+		}
+	}
+
 	// Sideload app runs, workflow runs and subflow runs (just in case)
 	// This makes numbers accurate even when less than  dbDumpInterval
 	key := fmt.Sprintf("cache_%s_app_executions", orgId)
@@ -1319,13 +1362,14 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 // 2. If there isn't, set it and clear out the daily records
 // Also: can we dump a list of apps that run? Maybe a list of them?
 func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
+
 	timeYesterday := time.Now().AddDate(0, 0, -1)
-	timeYesterdayFormatted := timeYesterday.Format("2006-12-02")
+	timeYesterdayFormatted := timeYesterday.Format("2006-01-02")
 
 	for _, day := range executionInfo.DailyStatistics {
 
 		// Check if the day.Date is the same as yesterday and return if it is
-		if day.Date.Format("2006-12-02") == timeYesterdayFormatted {
+		if day.Date.Format("2006-01-02") == timeYesterdayFormatted {
 			for additionIndex, _ := range executionInfo.Additions {
 				executionInfo.Additions[additionIndex].DailyValue = 0
 			}
