@@ -3187,6 +3187,7 @@ type HandleInfo struct {
 	UserGeoInfo         UserGeoInfo `json:"user_geo_info,omitempty"`
 	Theme               string      `json:"theme"`
 	AIEnabled           bool        `json:"ai_enabled"`
+	SSOInfos            []SSOInfo   `json:"sso_infos"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`
