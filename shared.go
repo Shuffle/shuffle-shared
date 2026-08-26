@@ -13635,6 +13635,8 @@ func BuildBaseSubscription(ctx context.Context, org *Org, monthlyExecLimit int64
 				}else if !org.LeadInfo.EnterpriseLicenseCloud {
 					org.LeadInfo.EnterpriseLicenseCloud = true
 				}
+				org.SyncFeatures.MultiTenant.Limit = 1000
+				org.SyncFeatures.MultiEnv.Limit = 250
 				isStatusChange = true
 			}
 		} else if (monthlyExecLimit >= 12000 && monthlyExecLimit < 150000) {
@@ -13653,6 +13655,8 @@ func BuildBaseSubscription(ctx context.Context, org *Org, monthlyExecLimit int64
 				org.LeadInfo.ScaleLicenseCloudTrial = false
 				org.LeadInfo.BusinessLicenseCloud = false
 				org.LeadInfo.EnterpriseLicenseCloud = false
+				org.SyncFeatures.MultiTenant.Limit = 3
+				org.SyncFeatures.MultiEnv.Limit = 1
 				isStatusChange = true
 			}
 		} else if monthlyExecLimit >= 2000 && monthlyExecLimit < 12000 {
@@ -13672,6 +13676,8 @@ func BuildBaseSubscription(ctx context.Context, org *Org, monthlyExecLimit int64
 				org.LeadInfo.ScaleLicenseCloudCustomer = false
 				org.LeadInfo.BusinessLicenseCloud = false
 				org.LeadInfo.EnterpriseLicenseCloud = false
+				org.SyncFeatures.MultiTenant.Limit = 3
+				org.SyncFeatures.MultiEnv.Limit = 1
 				isStatusChange = true
 			}
 		}
@@ -13694,7 +13700,6 @@ func BuildBaseSubscription(ctx context.Context, org *Org, monthlyExecLimit int64
 	endDate := int64(firstNextMonth.Unix())
 
 	if isStatusChange {
-		log.Printf("[INFO] Org %s LeadInfo status changed while building base subscription (plan: %s)", org.Id, planName)
 		if err := SetOrg(ctx, *org, org.Id); err != nil {
 			log.Printf("[WARNING] Failed to persist org %s status change in BuildBaseSubscription: %s", org.Id, err)
 		}
@@ -14002,7 +14007,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		subName := strings.ToLower(org.Subscriptions[idx].Name)
 
 		if (strings.Contains(subName, "enterprise") || strings.Contains(subName, "business")) && len(org.Subscriptions[idx].Reference) > 0 {
-			log.Printf("[INFO] Updating Stripe subscription for org %s with reference %s", org.Id, org.Subscriptions[idx].Reference)
+			log.Printf("[INFO] Updating Stripe subscription for (Business/Enterprise) org %s with reference %s", org.Id, org.Subscriptions[idx].Reference)
 			LinkStripeSubscriptionOrgId(*org, org.Subscriptions[idx].Reference)
 		}
 
