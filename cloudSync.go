@@ -23,6 +23,8 @@ import (
 
 	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
+	stripe "github.com/stripe/stripe-go/v72"
+	stripesub "github.com/stripe/stripe-go/v72/sub"
 	"github.com/frikky/schemaless"
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
@@ -82,6 +84,41 @@ func executeCloudAction(action CloudSyncJob, apikey string) error {
 		return errors.New(fmt.Sprintf("Cloud error from Shuffler: %s", responseData.Reason))
 	}
 
+	return nil
+}
+
+func LinkStripeSubscriptionOrgId(org Org, subscriptionReference string) error {
+	if len(subscriptionReference) == 0 {
+		return errors.New("missing subscription reference")
+	}
+
+	stripeKey := os.Getenv("STRIPE_APIKEY")
+	if len(stripeKey) == 0 {
+		return nil
+	}
+	stripe.Key = stripeKey
+
+	stripeSub, err := stripesub.Get(subscriptionReference, nil)
+	if err != nil {
+		log.Printf("[WARNING] Failed to get Stripe subscription %s for org %s: %s", subscriptionReference, org.Id, err)
+		return err
+	}
+
+	params := &stripe.SubscriptionParams{
+		Params: stripe.Params{
+			Metadata: map[string]string{
+				"org_id": org.Id,
+			},
+		},
+	}
+
+	_, err = stripesub.Update(stripeSub.ID, params)
+	if err != nil {
+		log.Printf("[WARNING] Failed to link org %s to Stripe subscription for the business or enterprise customer %s: %s", org.Id, subscriptionReference, err)
+		return err
+	}
+
+	log.Printf("[INFO] Linked org %s to Stripe subscription %s", org.Id, subscriptionReference)
 	return nil
 }
 

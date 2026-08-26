@@ -1278,7 +1278,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		if len(org.Subscriptions) == 0 && len(org.CreatorOrg) == 0 {
 			// Only when there is no subscription in the org and it's not a suborg :)
 			// Placeholder subscription that to add at very first time
-			base := BuildBaseSubscription(*org, org.SyncFeatures.AppExecutions.Limit)
+			base := BuildBaseSubscription(ctx, org, org.SyncFeatures.AppExecutions.Limit)
 			org.Subscriptions = append(org.Subscriptions, base)
 
 			if err := SetOrg(ctx, *org, org.Id); err != nil {
@@ -1314,7 +1314,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[INFO] Removed free subscription for org %s (active paid subscription exists)", org.Id)
 			} else if !hasActivePaidSubscription && !hasFreeSubscription {
 				// No active paid subscription and no free plan, add one
-				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(*org, 2000))
+				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(ctx, org, 2000))
 				updateSub = true
 				log.Printf("[INFO] Added free subscription for org %s (no active paid subscriptions found)", org.Id)
 			}
@@ -13596,7 +13596,7 @@ func getSignatureSample(org Org) PaymentSubscription {
 	return PaymentSubscription{}
 }
 
-func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription {
+func BuildBaseSubscription(ctx context.Context, org *Org, monthlyExecLimit int64) PaymentSubscription {
 
 	now := int64(time.Now().Unix())
 	log.Printf("[DEBUG] Building base subscription for org %s that has %d monthly exec limit", org.Id, monthlyExecLimit)
@@ -13607,10 +13607,11 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 	amount := "0"
 	parsedEula := GetOnpremPaidEula()
 	eulaSigned := false
+	isStatusChange := false
 
 	if project.Environment == "cloud" {
 		// Cloud licenses
-		if monthlyExecLimit >= 300000 {
+		if monthlyExecLimit > 150000 {
 			planName = "Business License (Cloud)"
 			supportLevel = "Enterprise Support"
 			features = []string{
@@ -13626,7 +13627,17 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 				"Custom Contract",
 			}
 			amount = "870" // Just for placeholder
-		} else if monthlyExecLimit >= 12000 {
+			if (!org.LeadInfo.Customer) {
+				org.LeadInfo.Customer = true
+				org.LeadInfo.ScaleLicenseCloudTrial = false
+				if !org.LeadInfo.BusinessLicenseCloud {
+					org.LeadInfo.BusinessLicenseCloud = true
+				}else if !org.LeadInfo.EnterpriseLicenseCloud {
+					org.LeadInfo.EnterpriseLicenseCloud = true
+				}
+				isStatusChange = true
+			}
+		} else if (monthlyExecLimit >= 12000 && monthlyExecLimit < 150000) {
 			planName = "Scale License (Cloud)"
 			supportLevel = "Standard Support"
 			features = []string{
@@ -13636,6 +13647,14 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 				"Select Datacenter Region",
 			}
 			amount = fmt.Sprintf("%d", int64(((monthlyExecLimit-2000)/10000)*32)) // Calculate based on app runs: (paid_runs / 10k) * $32
+			if !org.LeadInfo.Customer || !org.LeadInfo.ScaleLicenseCloudCustomer {
+				org.LeadInfo.Customer = true
+				org.LeadInfo.ScaleLicenseCloudCustomer = true
+				org.LeadInfo.ScaleLicenseCloudTrial = false
+				org.LeadInfo.BusinessLicenseCloud = false
+				org.LeadInfo.EnterpriseLicenseCloud = false
+				isStatusChange = true
+			}
 		} else if monthlyExecLimit >= 2000 && monthlyExecLimit < 12000 {
 			planName = "Scale License (Cloud Trial)"
 			supportLevel = "Community Support"
@@ -13647,6 +13666,14 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 				"5 Users",
 			}
 			amount = "0" // Just for placeholder
+			if org.LeadInfo.Customer || !org.LeadInfo.ScaleLicenseCloudTrial {
+				org.LeadInfo.Customer = false
+				org.LeadInfo.ScaleLicenseCloudTrial = true
+				org.LeadInfo.ScaleLicenseCloudCustomer = false
+				org.LeadInfo.BusinessLicenseCloud = false
+				org.LeadInfo.EnterpriseLicenseCloud = false
+				isStatusChange = true
+			}
 		}
 	} else {
 		// Open source licenses
@@ -13665,6 +13692,13 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 	t := time.Now().UTC()
 	firstNextMonth := time.Date(t.Year(), t.Month()+1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := int64(firstNextMonth.Unix())
+
+	if isStatusChange {
+		log.Printf("[INFO] Org %s LeadInfo status changed while building base subscription (plan: %s)", org.Id, planName)
+		if err := SetOrg(ctx, *org, org.Id); err != nil {
+			log.Printf("[WARNING] Failed to persist org %s status change in BuildBaseSubscription: %s", org.Id, err)
+		}
+	}
 
 	return PaymentSubscription{
 		Id:               uuid.NewV4().String(),
@@ -13867,7 +13901,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				if !hasBaseSubscription {
-					newSubs = append(newSubs, BuildBaseSubscription(*org, 2000))
+					newSubs = append(newSubs, BuildBaseSubscription(ctx, org, 2000))
 				}
 				org.Subscriptions = newSubs
 				org.SyncFeatures.MultiTenant.Limit = 3
@@ -13960,9 +13994,16 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[INFO] Removed free subscription for org %s (active paid subscription exists)", org.Id)
 			} else if !hasActivePaidSubscription && !hasFreeSubscription {
 				// No active paid subscription and no free plan, add one
-				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(*org, 2000))
+				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(ctx, org, 2000))
 				log.Printf("[INFO] Added free subscription for org %s (no active paid subscriptions found)", org.Id)
 			}
+		}
+
+		subName := strings.ToLower(org.Subscriptions[idx].Name)
+
+		if (strings.Contains(subName, "enterprise") || strings.Contains(subName, "business")) && len(org.Subscriptions[idx].Reference) > 0 {
+			log.Printf("[INFO] Updating Stripe subscription for org %s with reference %s", org.Id, org.Subscriptions[idx].Reference)
+			LinkStripeSubscriptionOrgId(*org, org.Subscriptions[idx].Reference)
 		}
 
 		if err := SetOrg(ctx, *org, org.Id); err != nil {
