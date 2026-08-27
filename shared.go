@@ -102,6 +102,43 @@ func GetContext(request *http.Request) context.Context {
 	return context.Background()
 }
 
+func AllowedDomain(referer string) bool { 
+	domains := []string{
+		"shuffler.io",
+		"singul.io",
+		"shuffle.security",
+		"tanuki.to",
+
+		// Local testing
+		"localhost",
+		"127.0.0.1",
+
+		// Additional testers. Disabled due to possible phishing.
+		// "lovable.app",
+		//"lovableproject.com",
+	}
+
+	parsedURL, err := url.Parse(referer)
+	if err != nil || parsedURL.Host == "" {
+		log.Printf("[WARNING] Invalid referer URL: %s", referer)
+		return false
+	}
+
+	// Extract hostname (remove port if present)
+	host := parsedURL.Host
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+
+	for _, domain := range domains { 
+		if strings.HasSuffix(host, domain) { 
+			return true
+		}
+	}
+
+	return false
+}
+
 func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	origin := request.Header["Origin"]
 	resp.Header().Set("Vary", "Origin")
@@ -137,23 +174,23 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			"http://localhost:3002",
 			"http://localhost:3000",
 
-			// Shuffle support
+			// Shuffle security 
 			"https://cases.shuffler.io",
 			"https://security.shuffler.io",
 			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
+			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
 
 			// tbd
 			"https://preview--shuffle-cases.lovable.app",
 			"https://9f29a11a-6489-4898-8044-ed7b8f848ef9.lovableproject.com",
 			"https://id-preview--9f29a11a-6489-4898-8044-ed7b8f848ef9.lovable.app",
 
-			// Support project
+			// Support project - testing.
 			"https://support.shuffler.io",
 			"https://compliance.shuffler.io",
 			"https://2538a36b-5c1c-4954-8700-ee5d6c6b9f91.lovableproject.com",
 
 			"https://shuffle-support.lovable.app",
-			"https://shuffle-support.lovable.app/",
 			"https://05364669-00ea-43be-ae8f-8e333ccc870c.lovableproject.com",
 			"https://preview--shuffle-support.lovable.app",
 		}
