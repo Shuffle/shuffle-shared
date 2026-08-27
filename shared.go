@@ -128,9 +128,10 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 
 			// Related projects (maybe)
 			"https://*.singul.io",
-			"https://singul.io",
+			"https://singul.io", 
 			"https://*.shuffle.security",
-			"https://shuffle.security",
+			"https://shuffle.security", // Shuffle Security
+			"https://tanuki.to", 		// For browser automation
 
 			// Local testing
 			"http://localhost:3002",
@@ -16750,6 +16751,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
+			newCookie.Domain = ".tanuki.to"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
 			newCookie.Domain = ".shuffler.io"
 			http.SetCookie(resp, newCookie)
 		}
@@ -16819,6 +16824,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 			newCookie.Name = "__session"
 			newCookie.Domain = ".shuffle.security"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			newCookie.Domain = ".tanuki.to"
 			http.SetCookie(resp, newCookie)
 		}
 
@@ -22345,7 +22354,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		if time.Now().Unix()-startTime > int64(maxSeconds) {
 
 			returnBody.Success = true
-			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the GET /api/v1/executions/{executionId}?authorization={auth} API to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
+			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the GET /api/v1/executions/%s?authorization=%s API to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
 
 			break
 		}
