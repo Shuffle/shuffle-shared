@@ -22714,10 +22714,15 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("Docpath: %s", docPath)
 
 	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	tc := oauth2.NewClient(ctx, ts)
 
-	httpClient := tc
+	var httpClient *http.Client
+	if len(token) > 0 {
+		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+		httpClient = oauth2.NewClient(ctx, ts)
+	} else {
+		httpClient = http.DefaultClient
+	}
+
 	req, err := http.NewRequest(
 		"GET",
 		docPath,
@@ -22760,7 +22765,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		parsedLink = realPath
 	}
 
-	client := github.NewClient(tc)
+	client := github.NewClient(httpClient)
 	githubResp := GithubResp{
 		Name:         location[4],
 		Contributors: []GithubAuthor{},
@@ -22864,9 +22869,15 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 
 	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
 
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	tc := oauth2.NewClient(ctx, ts)
-	client := github.NewClient(tc)
+	var client *github.Client
+	if len(token) > 0 {
+		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+		tc := oauth2.NewClient(ctx, ts)
+		client = github.NewClient(tc)
+	} else {
+		client = github.NewClient(nil)
+	}
+
 	owner := "shuffle"
 	repo := "shuffle-docs"
 
