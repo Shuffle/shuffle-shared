@@ -5057,7 +5057,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 }
 
 // Index = Username
-func SetSession(ctx context.Context, user User, value string) error {
+func SetSession(ctx context.Context, user *User, value string) error {
 	//parsedKey := strings.ToLower(user.Username)
 	// Non indexed User data
 	parsedKey := user.Id
@@ -5068,6 +5068,12 @@ func SetSession(ctx context.Context, user User, value string) error {
 	}
 
 	user.Session = value
+
+	now := time.Now().Unix()
+	if user.SessionCreatedAt == 0 {
+		user.SessionCreatedAt = now
+	}
+	user.SessionLastActivityAt = now
 
 	nameKey := "Users"
 	if project.DbType == "opensearch" {
@@ -5119,6 +5125,15 @@ func SetSession(ctx context.Context, user User, value string) error {
 			}
 		}
 	}
+
+	// Always invalidate the cache entry for the (possibly reused) current
+	// session token after a successful write. Without this, reusing an
+	// existing token (e.g. SSO re-login for a user with an active session)
+	// left the previous cache invalidation branch above a no-op, allowing
+	// GetSessionNew to keep serving a stale SessionLastActivityAt snapshot
+	// for up to the cache TTL - which could incorrectly trip the idle/max
+	// session lifetime check and bounce the user back to /login.
+	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 	return nil
 }
@@ -9959,6 +9974,72 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 	return pipelines, nil
 }
 
+// getSessionUserRealtime looks up the User owning sessionId via two
+// real-time (non-search) OpenSearch Document.Get calls: first the "sessions"
+// index (keyed by the session token itself as document ID, see SetSession),
+// then the "Users" index (keyed by user ID). Both Document.Get reads are
+// immediately consistent, unlike _search, which is only eventually
+// consistent up to the index refresh_interval. Returns (User{}, false) for
+// any failure (not found, decode error, mismatch) so callers can fall back
+// to the _search-based lookup.
+func getSessionUserRealtime(ctx context.Context, sessionId string) (User, bool) {
+	sessionResp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+		Index:      strings.ToLower(GetESIndexPrefix("sessions")),
+		DocumentID: sessionId,
+	})
+	if err != nil {
+		return User{}, false
+	}
+
+	sessionRes := sessionResp.Inspect().Response
+	defer sessionRes.Body.Close()
+	if sessionRes.StatusCode != 200 && sessionRes.StatusCode != 201 {
+		return User{}, false
+	}
+
+	sessionBody, err := ioutil.ReadAll(sessionRes.Body)
+	if err != nil {
+		return User{}, false
+	}
+
+	wrappedSession := SessionWrapper{}
+	if err := json.Unmarshal(sessionBody, &wrappedSession); err != nil || len(wrappedSession.Source.Id) == 0 {
+		return User{}, false
+	}
+
+	userResp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+		Index:      strings.ToLower(GetESIndexPrefix("Users")),
+		DocumentID: wrappedSession.Source.Id,
+	})
+	if err != nil {
+		return User{}, false
+	}
+
+	userRes := userResp.Inspect().Response
+	defer userRes.Body.Close()
+	if userRes.StatusCode != 200 && userRes.StatusCode != 201 {
+		return User{}, false
+	}
+
+	userBody, err := ioutil.ReadAll(userRes.Body)
+	if err != nil {
+		return User{}, false
+	}
+
+	wrappedUser := UserWrapper{}
+	if err := json.Unmarshal(userBody, &wrappedUser); err != nil {
+		return User{}, false
+	}
+
+	// Guard against a stale/mismatched "sessions" doc pointing at a user
+	// whose session has since changed (e.g. logged out, or session rotated).
+	if wrappedUser.Source.Session != sessionId {
+		return User{}, false
+	}
+
+	return wrappedUser.Source, true
+}
+
 func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 	cacheKey := fmt.Sprintf("session_%s", sessionId)
 	user := &User{}
@@ -9982,6 +10063,24 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 	nameKey := "Users"
 	var users []User
 	if project.DbType == "opensearch" {
+		// Real-time lookup path: session tokens are indexed with the token
+		// itself as the document ID in the "sessions" index (see SetSession),
+		// so a direct Document.Get is immediately consistent (unlike _search,
+		// below, which only sees documents after the next index refresh -
+		// default refresh_interval ~1s). Without this, a session created by a
+		// fresh login (e.g. SSO) could be briefly invisible to the very next
+		// request (getinfo right after the login redirect), making a
+		// just-logged-in user look logged out - surfacing as a bounce back to
+		// /login that required a second login attempt to succeed once the
+		// document became searchable. Falls back to the _search-based lookup
+		// below if this fails for any reason (e.g. a legacy session predating
+		// the "sessions" index, or a transient error).
+		if user, ok := getSessionUserRealtime(ctx, sessionId); ok {
+			users = []User{user}
+		}
+	}
+
+	if len(users) == 0 && project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
@@ -10060,7 +10159,7 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 			users = append(users, hit.Source)
 		}
 
-	} else {
+	} else if project.DbType != "opensearch" {
 		//log.Printf("[DEBUG] Searching for session %s", sessionId)
 		q := datastore.NewQuery(nameKey).Filter("session =", sessionId).Limit(1)
 		_, err := project.Dbclient.GetAll(ctx, q, &users)

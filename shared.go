@@ -3,6 +3,7 @@ package shuffle
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -17,16 +18,16 @@ import (
 	"path/filepath"
 	"reflect"
 
-	"sync"
 	"hash/fnv"
 	neturl "net/url"
 	"path"
 	"sort"
+	"sync"
 	"unicode"
 
-	openai "github.com/sashabaranov/go-openai"
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/memfs"
+	openai "github.com/sashabaranov/go-openai"
 	"google.golang.org/api/cloudfunctions/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
@@ -77,8 +78,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
 
+	"runtime"
+
 	"github.com/Masterminds/semver"
 	"github.com/klauspost/compress/gzhttp"
+	"github.com/shirou/gopsutil/v3/process"
 	dockerclient "github.com/docker/docker/client"
 )
 
@@ -315,6 +319,34 @@ func isLoop(arg string) bool {
 	return false
 }
 
+func getSessionIdleTimeout() time.Duration {
+	val := os.Getenv("SHUFFLE_SESSION_IDLE_TIMEOUT")
+	if val == "" {
+		return 3600 * time.Second
+	}
+	seconds, err := strconv.Atoi(val)
+	if err != nil || seconds <= 0 {
+		return 3600 * time.Second
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func getSessionMaxLifetime() time.Duration {
+	val := os.Getenv("SHUFFLE_SESSION_MAX_LIFETIME")
+	if val == "" {
+		return 0
+	}
+	seconds, err := strconv.Atoi(val)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func getSessionExpiration() time.Time {
+	return time.Now().Add(getSessionIdleTimeout())
+}
+
 func ConstructSessionCookie(value string, expires time.Time) *http.Cookie {
 	c := http.Cookie{
 		Name:     "session_token",
@@ -355,6 +387,23 @@ func constructSessionDeleteCookie() *http.Cookie {
 	c := ConstructSessionCookie("", time.Time{})
 	c.MaxAge = -1
 	return c
+}
+
+// expireSession clears the session on both the server (DB, cache) and client (cookie).
+func expireSession(ctx context.Context, resp http.ResponseWriter, user *User, reason string) error {
+	if resp != nil {
+		newCookie := constructSessionDeleteCookie()
+		http.SetCookie(resp, newCookie)
+		newCookie.Name = "__session"
+		http.SetCookie(resp, newCookie)
+	}
+	go DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+	user.Session = ""
+	user.SessionCreatedAt = 0
+	user.SessionLastActivityAt = 0
+	user.ValidatedSessionOrgs = []string{}
+	go SetUser(ctx, user, false)
+	return errors.New(reason)
 }
 
 func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
@@ -596,7 +645,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 
 		if len(user.Session) != 0 {
 			log.Printf("[INFO] User session exists - resetting session")
-			expiration := time.Now().Add(8 * time.Hour)
+			expiration := getSessionExpiration()
 
 			newCookie := ConstructSessionCookie(user.Session, expiration)
 
@@ -606,25 +655,12 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 
 			//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", user.Session)
-			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
-				Key:        "session_token",
-				Value:      user.Session,
-				Expiration: expiration.Unix(),
-			})
-
-			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
-				Key:        "__session",
-				Value:      user.Session,
-				Expiration: expiration.Unix(),
-			})
-
-			loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, user.Session, expiration.Unix())
 			newData, err := json.Marshal(returnValue)
 			if err == nil {
 				loginData = string(newData)
 			}
 
-			err = SetSession(ctx, user, user.Session)
+			err = SetSession(ctx, &user, user.Session)
 			if err != nil {
 				log.Printf("[WARNING] Error adding session to database: %s", err)
 			} else {
@@ -648,7 +684,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 
 			log.Printf("[INFO] User session for %s (%s) is empty - create one!", user.Username, user.Id)
 			sessionToken := uuid.NewV4().String()
-			expiration := time.Now().Add(8 * time.Hour)
+			expiration := getSessionExpiration()
 			newCookie := ConstructSessionCookie(sessionToken, expiration)
 
 			// Does it not set both?
@@ -658,24 +694,13 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 
 			// ADD TO DATABASE
-			err = SetSession(ctx, user, sessionToken)
+			err = SetSession(ctx, &user, sessionToken)
 			if err != nil {
 				log.Printf("[DEBUG] Error adding session to database: %s", err)
 			}
 
 			user.Session = sessionToken
 
-			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
-				Key:        "session_token",
-				Value:      sessionToken,
-				Expiration: expiration.Unix(),
-			})
-
-			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
-				Key:        "__session",
-				Value:      sessionToken,
-				Expiration: expiration.Unix(),
-			})
 			user.MFA = foundUser.MFA
 			err = SetUser(ctx, &user, true)
 			if err != nil {
@@ -685,7 +710,6 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-			loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, sessionToken, expiration.Unix())
 			newData, err := json.Marshal(returnValue)
 			if err == nil {
 				loginData = string(newData)
@@ -1810,6 +1834,8 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	userInfo.UsersLastSession = userInfo.Session
 
 	userInfo.Session = ""
+	userInfo.SessionCreatedAt = 0
+	userInfo.SessionLastActivityAt = 0
 	userInfo.ValidatedSessionOrgs = []string{}
 	err := SetUser(ctx, &userInfo, false)
 	if err != nil {
@@ -1944,7 +1970,7 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		newAuthField := auth
 
 		for index, _ := range auth.Fields {
-			// Allowing these fields specifically, as they typically aren't 
+			// Allowing these fields specifically, as they typically aren't
 			// sensitive, and the API is authenticated.
 			if auth.Fields[index].Key == "url" || auth.Fields[index].Key == "model" {
 
@@ -2419,23 +2445,23 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			// Removing as being strict on EXTRA fields don't matter much
 			// Apps can handle this anyway
 			/*
-			// Check if the items are correct
-			for _, field := range appAuth.Fields {
-				found := false
-				for _, param := range app.Authentication.Parameters {
-					//log.Printf("Fields: %s - %s", field, param.Name)
-					if field.Key == param.Name {
-						found = true
+				// Check if the items are correct
+				for _, field := range appAuth.Fields {
+					found := false
+					for _, param := range app.Authentication.Parameters {
+						//log.Printf("Fields: %s - %s", field, param.Name)
+						if field.Key == param.Name {
+							found = true
+						}
+					}
+
+					if !found {
+						log.Printf("[WARNING] Failed finding field '%s' in appauth fields for %s", field.Key, appAuth.App.Name)
+						resp.WriteHeader(409)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "All auth fields required"}`)))
+						return
 					}
 				}
-
-				if !found {
-					log.Printf("[WARNING] Failed finding field '%s' in appauth fields for %s", field.Key, appAuth.App.Name)
-					resp.WriteHeader(409)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "All auth fields required"}`)))
-					return
-				}
-			}
 			*/
 		}
 	}
@@ -3373,7 +3399,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		if len(environments) == 0 {
 			resp.WriteHeader(404)
 			resp.Write([]byte(`{"success": false, "reason": "Can't find environment. Does it exist?"}`))
-			return 
+			return
 		}
 	}
 
@@ -3764,7 +3790,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		if err != nil {
 			// Due to execution auth
 			if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") {
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
 				}
 			}
@@ -3866,7 +3892,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		} else {
 			// Check if both session tokens are set
 			// Compatibility issues
-			//expiration := time.Now().Add(8 * time.Hour)
+			//expiration := getSessionExpiration()
 			newCookie := ConstructSessionCookie(sessionToken, c.Expires)
 			newCookie.MaxAge = c.MaxAge
 
@@ -3940,6 +3966,39 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		//}
 
 		user.SessionLogin = true
+
+		// ── Session timeout enforcement ──────────────────────────────────
+		now := time.Now()
+		idleTimeout := getSessionIdleTimeout()
+		maxLifetime := getSessionMaxLifetime()
+
+		if user.Session != "" {
+			// Idle timeout: expire if the user hasn't made any request within the configured window
+			if user.SessionLastActivityAt > 0 && now.Unix()-user.SessionLastActivityAt > int64(idleTimeout.Seconds()) {
+				return User{}, expireSession(ctx, resp, &user, "Session expired due to inactivity")
+			}
+
+			// Max lifetime: expire if the session has existed longer than the absolute maximum,
+			// regardless of activity. Only enforced when SHUFFLE_SESSION_MAX_LIFETIME is set.
+			if maxLifetime > 0 && user.SessionCreatedAt > 0 && now.Unix()-user.SessionCreatedAt > int64(maxLifetime.Seconds()) {
+				return User{}, expireSession(ctx, resp, &user, "Session max lifetime exceeded")
+			}
+
+			// Refresh the session after every successful authenciation, but at most once every 60 seconds per session,
+			// to avoid hammering Opensearch on every keystroke or rapid-fire API call.
+			if now.Unix()-user.SessionLastActivityAt >= 60 {
+				user.SessionLastActivityAt = now.Unix()
+				go SetUser(ctx, &user, false)
+
+				// Slide the cookie's Expires forward so the browser also enforces the idle timeout at the HTTP level.
+				if resp != nil {
+					refreshedCookie := ConstructSessionCookie(user.Session, getSessionExpiration())
+					http.SetCookie(resp, refreshedCookie)
+					refreshedCookie.Name = "__session"
+					http.SetCookie(resp, refreshedCookie)
+				}
+			}
+		}
 
 		// Means session exists, but
 		return user, nil
@@ -4618,7 +4677,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 
 	cursor := ""
 	cursorList, cursorOk := request.URL.Query()["cursor"]
-	if cursorOk && len(cursorList) > 60{
+	if cursorOk && len(cursorList) > 60 {
 		cursor = cursorList[0]
 	}
 
@@ -13025,7 +13084,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	expiration := time.Now().Add(8 * time.Hour)
+	expiration := getSessionExpiration()
 
 	newCookie := ConstructSessionCookie(user.Session, expiration)
 	http.SetCookie(resp, newCookie)
@@ -16737,45 +16796,16 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	regionUrl := ""
-	if project.Environment == "cloud" {
-		if len(userdata.ActiveOrg.RegionUrl) > 0 {
-			regionUrl = userdata.ActiveOrg.RegionUrl
-		} else {
-			org, err := GetOrg(ctx, userdata.ActiveOrg.Id)
-			if err != nil {
-				log.Printf("[ERROR] Failed getting org %s during login for %s (%s): %s", userdata.ActiveOrg.Id, userdata.Username, userdata.Id, err)
-			} else {
-				if strings.Contains(strings.ToLower(org.RegionUrl), "http") {
-					regionUrl = strings.ToLower(org.RegionUrl)
-				}
-			}
-		}
-	}
-
 	// Had to set this due to session hashing rollback
 	if len(userdata.Session) != 0 && len(userdata.Session) == 36 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
-		expiration := time.Now().Add(8 * time.Hour)
+		expiration := getSessionExpiration()
 
 		newCookie := ConstructSessionCookie(userdata.Session, expiration)
 		http.SetCookie(resp, newCookie)
 
 		newCookie.Name = "__session"
 		http.SetCookie(resp, newCookie)
-
-		//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", userdata.Session)
-		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
-			Key:        "session_token",
-			Value:      userdata.Session,
-			Expiration: expiration.Unix(),
-		})
-
-		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
-			Key:        "__session",
-			Value:      userdata.Session,
-			Expiration: expiration.Unix(),
-		})
 
 		// Singul handler
 		if project.Environment == "cloud" {
@@ -16796,13 +16826,12 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 		}
 
-		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, userdata.Session, expiration.Unix(), regionUrl)
 		newData, err := json.Marshal(returnValue)
 		if err == nil {
 			loginData = string(newData)
 		}
 
-		err = SetSession(ctx, userdata, userdata.Session)
+		err = SetSession(ctx, &userdata, userdata.Session)
 		if err != nil {
 			log.Printf("[WARNING] Error adding session to database: %s", err)
 		} else {
@@ -16824,7 +16853,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] User session for %s (%s) is empty - create one!", userdata.Username, userdata.Id)
 
 		sessionToken := uuid.NewV4().String()
-		expiration := time.Now().Add(8 * time.Hour)
+		expiration := getSessionExpiration()
 		newCookie := ConstructSessionCookie(sessionToken, expiration)
 
 		// Does it not set both?
@@ -16834,24 +16863,12 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		http.SetCookie(resp, newCookie)
 
 		// ADD TO DATABASE
-		err = SetSession(ctx, userdata, sessionToken)
+		err = SetSession(ctx, &userdata, sessionToken)
 		if err != nil {
 			log.Printf("[DEBUG] Error adding session to database: %s", err)
 		}
 
 		userdata.Session = sessionToken
-
-		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
-			Key:        "session_token",
-			Value:      sessionToken,
-			Expiration: expiration.Unix(),
-		})
-
-		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
-			Key:        "__session",
-			Value:      sessionToken,
-			Expiration: expiration.Unix(),
-		})
 
 		// Singul handler
 		if project.Environment == "cloud" {
@@ -16876,7 +16893,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, sessionToken, expiration.Unix(), regionUrl)
 		newData, err := json.Marshal(returnValue)
 		if err == nil {
 			loginData = string(newData)
@@ -18397,61 +18413,61 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	// Special handler for AI Agent -> App run
 	setCache := true
-	if skipAgentWait == "true" && actionResult.Action.AppName == "openai" && len(workflowExecution.ExecutionParent) > 0 { 
+	if skipAgentWait == "true" && actionResult.Action.AppName == "openai" && len(workflowExecution.ExecutionParent) > 0 {
 
 		foundParentExec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionParent)
-		if err != nil || len(foundParentExec.ExecutionId) == 0 { 
+		if err != nil || len(foundParentExec.ExecutionId) == 0 {
 			log.Printf("[ERROR][%s] Failed to find AI Parent exec %s", workflowExecution.ExecutionId, workflowExecution.ExecutionParent)
 		} else {
 			// Question: How does it know where to send it?
-			// None of these methods work. 
+			// None of these methods work.
 			// Since it's based on Parent => Node, it should be ExecutionSourceNode being the AI one
 			// ExecutionSourceNode string         `json:"execution_source_node" yaml:"execution_source_node"`
 			startNode := Action{}
-			if len(workflowExecution.ExecutionSourceNode) == 0 { 
+			if len(workflowExecution.ExecutionSourceNode) == 0 {
 				log.Printf("[ERROR][%s] Agent run is missing ExecutionSourceNode from parent execution %s", workflowExecution.ExecutionId, foundParentExec.ExecutionId)
 			} else {
 				// This doesn't work due to e.g. having multiple nodes in the same one
 				// AKA it's guessing
-				for _, action := range foundParentExec.Workflow.Actions { 
-					if action.ID == workflowExecution.ExecutionSourceNode { 
+				for _, action := range foundParentExec.Workflow.Actions {
+					if action.ID == workflowExecution.ExecutionSourceNode {
 						startNode = action
 						break
 					}
 				}
 			}
 
-			if startNode.Name != "" { 
+			if startNode.Name != "" {
 				skipAgentContinue := false
-				if strings.Contains(actionResult.Result, "success") { 
+				if strings.Contains(actionResult.Result, "success") {
 					quickUnmarshal := ResultChecker{}
 					err := json.Unmarshal([]byte(actionResult.Result), &quickUnmarshal)
 					if err == nil && quickUnmarshal.Success == false {
 						skipAgentContinue = true
 						oldAgentOutput := AgentOutput{}
 						foundError := fmt.Sprintf("LLM received call failed from app: ")
-						if len(quickUnmarshal.Reason) > 0 { 
+						if len(quickUnmarshal.Reason) > 0 {
 							foundError += fmt.Sprintf(quickUnmarshal.Reason)
 						}
 
-						// Tries to map it in from the openai request 
+						// Tries to map it in from the openai request
 						if len(oldAgentOutput.OriginalInput) == 0 {
-							for _, param := range actionResult.Action.Parameters { 
-								if param.Name != "body" { 
+							for _, param := range actionResult.Action.Parameters {
+								if param.Name != "body" {
 									continue
 								}
 
-								// Marshal into openai conversation request 
+								// Marshal into openai conversation request
 								openaiReq := openai.ChatCompletionRequest{}
 								unmarshalledErr := json.Unmarshal([]byte(param.Value), &openaiReq)
 								if unmarshalledErr != nil {
 									log.Printf("[ERROR] Failed unmarshalling body into openai request: %s", unmarshalledErr)
 									break
-								} 
+								}
 
 								if len(openaiReq.Messages) > 0 {
 									for _, userMessage := range openaiReq.Messages {
-										if !strings.HasPrefix(userMessage.Content, "USER REQUEST:") { 
+										if !strings.HasPrefix(userMessage.Content, "USER REQUEST:") {
 											continue
 										}
 
@@ -18468,13 +18484,13 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 				}
 
-				if !skipAgentContinue { 
+				if !skipAgentContinue {
 					callerName := "ParsedExecutionResult"
 					marshalledResult, err := json.Marshal(actionResult)
-					if err != nil { 
+					if err != nil {
 						log.Printf("[ERROR] AI Agent (10): Failed marshalling actionResult: %s", err)
 					} else {
-						go HandleAiAgentExecutionStart(*foundParentExec, startNode, false, callerName, marshalledResult) 
+						go HandleAiAgentExecutionStart(*foundParentExec, startNode, false, callerName, marshalledResult)
 					}
 				}
 			} else {
@@ -18822,12 +18838,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
 			}
 			//			@yashsinghcodes: Something to force the executionVars to update. Not needed rn
-//			for i, executionVariable := range workflowExecution.Workflow.ExecutionVariables {
-//				if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
-//					workflowExecution.Workflow.ExecutionVariables[i] = actionResult.Action.ExecutionVariable
-//					break
-//				}
-//			}
+			//			for i, executionVariable := range workflowExecution.Workflow.ExecutionVariables {
+			//				if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
+			//					workflowExecution.Workflow.ExecutionVariables[i] = actionResult.Action.ExecutionVariable
+			//					break
+			//				}
+			//			}
 
 		} else {
 			log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Check previous errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
@@ -19852,7 +19868,7 @@ func setExecutionVariable(actionResult ActionResult) bool {
 // Finds execution results and parameters that are too large to manage and reduces them / saves data partly
 func compressExecution(ctx context.Context, workflowExecution WorkflowExecution, saveLocationInfo string) (WorkflowExecution, bool) {
 	workerCompressExecution := os.Getenv("SHUFFLE_WORKER_COMPRESS")
-	if project.Environment == "worker" && (len(workerCompressExecution) == 0 || workerCompressExecution == "false"){
+	if project.Environment == "worker" && (len(workerCompressExecution) == 0 || workerCompressExecution == "false") {
 		log.Printf("[DEBUG][%s] No need to make this execution any smaller", workflowExecution.ExecutionId)
 		return workflowExecution, false
 	}
@@ -21222,8 +21238,8 @@ func CheckHookAuth(request *http.Request, auth string) error {
 func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
 	workflowExecution := WorkflowExecution{}
 	if ctx == nil {
-        ctx = context.Background() 
-    }
+		ctx = context.Background()
+	}
 
 	var action Action
 	err := json.Unmarshal(body, &action)
@@ -21409,20 +21425,20 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				// Fallback if no group is supplied
 				found := false
 				for _, sensor := range env.SensorHosts {
-					for _, foundHost := range foundHosts { 
-						if sensor.Hostname == foundHost { 
+					for _, foundHost := range foundHosts {
+						if sensor.Hostname == foundHost {
 							found = true
 							break
 						}
 					}
 
 					// Fallback
-					if found { 
+					if found {
 						parsedEnv = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), env.OrgId)
 						break
 					}
 				}
-					
+
 				continue
 			}
 
@@ -21790,12 +21806,12 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 		app.ID = action.AppID
 	}
 
-	// Prevents overwriting of URL if auth injection is done 
-	shuffleAuthInjected := false 
+	// Prevents overwriting of URL if auth injection is done
+	shuffleAuthInjected := false
 
 	// Fallback to inject creds if the user don't have any. This is for internal +
 	// AI oriented APIs only. Check IsShuffleApp() for details
-	isShuffleApp := IsShuffleApp(app)	
+	isShuffleApp := IsShuffleApp(app)
 
 	if isShuffleApp && app.Generated && len(workflowExecution.OrgId) > 0 && len(action.AuthenticationId) == 0 && strings.ToLower(app.Name) != "openai" && strings.ToLower(action.Environment) == "cloud" {
 		shuffleAuthInjected = true
@@ -21912,9 +21928,9 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			action.Parameters[headerIndex].Value = fmt.Sprintf("%s\nOrg-Id: %s", action.Parameters[headerIndex].Value, workflowExecution.OrgId)
 		}
 
-	// Custom AI injection when necessary
+		// Custom AI injection when necessary
 	} else if strings.ToLower(app.Name) == "openai" && len(action.AuthenticationId) == 0 {
-		shuffleAuthInjected = true 
+		shuffleAuthInjected = true
 		// cloud => only do it on cloud location
 		// This prevents local users from being able to see it
 		if project.Environment != "cloud" || (project.Environment == "cloud" && strings.ToLower(action.Environment) == "cloud") {
@@ -22155,8 +22171,8 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 			// Makes them 'required' to run. Makes it possible to have conditions
 			// for AI Agents in workflows primarily
-			for _, branch := range oldExec.Workflow.Branches { 
-				if branch.DestinationID != parentActionId { 
+			for _, branch := range oldExec.Workflow.Branches {
+				if branch.DestinationID != parentActionId {
 					continue
 				}
 
@@ -22366,7 +22382,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 	// VERY short sleeptime here on purpose
 	// Increased to 30 seconds because a lot of APIs can take ~longish
-	maxSeconds := 30 
+	maxSeconds := 30
 	startTime := time.Now().Unix()
 	if project.Environment != "cloud" {
 		maxSeconds = 180
@@ -23776,7 +23792,7 @@ func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				// Session management
-				expiration := time.Now().Add(8 * time.Hour)
+				expiration := getSessionExpiration()
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (1)")
 					sessionToken := uuid.NewV4().String()
@@ -23785,7 +23801,7 @@ func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
 					newCookie.Name = "__session"
 					http.SetCookie(resp, newCookie)
 
-					err = SetSession(ctx, user, sessionToken)
+					err = SetSession(ctx, &user, sessionToken)
 					if err != nil {
 						log.Printf("[WARNING] Error creating session for user: %s", err)
 						resp.WriteHeader(401)
@@ -23801,7 +23817,7 @@ func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
 					newCookie.Name = "__session"
 					http.SetCookie(resp, newCookie)
 
-					err = SetSession(ctx, user, sessionToken)
+					err = SetSession(ctx, &user, sessionToken)
 					if err != nil {
 						log.Printf("[WARNING] Error creating session for user: %s", err)
 						resp.WriteHeader(401)
@@ -24031,7 +24047,7 @@ func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
 				user.SetSSOInfo(org.Id, orgSSOInfo)
 
 				// Session management
-				expiration := time.Now().Add(8 * time.Hour)
+				expiration := getSessionExpiration()
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
@@ -24040,7 +24056,7 @@ func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
 					newCookie.Name = "__session"
 					http.SetCookie(resp, newCookie)
 
-					err = SetSession(ctx, user, sessionToken)
+					err = SetSession(ctx, &user, sessionToken)
 					if err != nil {
 						log.Printf("[WARNING] Error creating session for user: %s", err)
 						resp.WriteHeader(401)
@@ -24056,7 +24072,7 @@ func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
 					newCookie.Name = "__session"
 					http.SetCookie(resp, newCookie)
 
-					err = SetSession(ctx, user, sessionToken)
+					err = SetSession(ctx, &user, sessionToken)
 					if err != nil {
 						log.Printf("[WARNING] Error creating session for user: %s", err)
 						resp.WriteHeader(401)
@@ -24470,7 +24486,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Role: role,
 				}
 
-				expiration := time.Now().Add(8 * time.Hour)
+				expiration := getSessionExpiration()
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (1)")
 					sessionToken := uuid.NewV4().String()
@@ -24481,7 +24497,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					newCookie.Name = "__session"
 					http.SetCookie(resp, newCookie)
 
-					err = SetSession(ctx, user, sessionToken)
+					err = SetSession(ctx, &user, sessionToken)
 					if err != nil {
 						log.Printf("[WARNING] Error creating session for user: %s", err)
 						resp.WriteHeader(401)
@@ -24499,7 +24515,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					newCookie.Name = "__session"
 					http.SetCookie(resp, newCookie)
 
-					err = SetSession(ctx, user, sessionToken)
+					err = SetSession(ctx, &user, sessionToken)
 					if err != nil {
 						log.Printf("[WARNING] Error creating session for user: %s", err)
 						resp.WriteHeader(401)
@@ -24645,7 +24661,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Role: role,
 				}
 
-				expiration := time.Now().Add(8 * time.Hour)
+				expiration := getSessionExpiration()
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
@@ -24655,7 +24671,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					newCookie.Name = "__session"
 					http.SetCookie(resp, newCookie)
 
-					err = SetSession(ctx, user, sessionToken)
+					err = SetSession(ctx, &user, sessionToken)
 					if err != nil {
 						log.Printf("[WARNING] Error creating session for user: %s", err)
 						resp.WriteHeader(401)
@@ -24673,7 +24689,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					newCookie.Name = "__session"
 					http.SetCookie(resp, newCookie)
 
-					err = SetSession(ctx, user, sessionToken)
+					err = SetSession(ctx, &user, sessionToken)
 					if err != nil {
 						log.Printf("[WARNING] Error creating session for user: %s", err)
 						resp.WriteHeader(401)
@@ -24827,7 +24843,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	newUser.Id = ID.String()
 	newUser.VerificationToken = verifyToken.String()
 
-	expiration := time.Now().Add(8 * time.Hour)
+	expiration := getSessionExpiration()
 	//if len(user.Session) == 0 {
 	log.Printf("[INFO] User does NOT have session - creating")
 	sessionToken := uuid.NewV4().String()
@@ -24838,7 +24854,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	newCookie.Name = "__session"
 	http.SetCookie(resp, newCookie)
 
-	err = SetSession(ctx, *newUser, sessionToken)
+	err = SetSession(ctx, newUser, sessionToken)
 	if err != nil {
 		log.Printf("[WARNING] Error creating session for user: %s", err)
 		resp.WriteHeader(401)
@@ -25291,7 +25307,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		var execution ExecutionRequest
 		err = json.Unmarshal(body, &execution)
 		if err != nil {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] JSON parsing problem in run workflow: %s", err)
 			}
 
@@ -25305,7 +25321,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		// Ensuring it works even if startpoint isn't defined
 		if execution.Start == "" && len(body) > 0 && len(execution.ExecutionSource) == 0 && len(execution.ExecutionArgument) == 0 {
 			// Check if "execution_argument" in body
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Fallback to full body usage for exec arg")
 			}
 
@@ -25318,7 +25334,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			workflowExecution.ExecutionArgument = execution.ExecutionArgument
 		}
 
-		//if debug { 
+		//if debug {
 		//	log.Printf("\n\n\n\n\n[DEBUG] INPUT BODY: %s \n\n\n\n\n", string(body))
 		//}
 
@@ -25994,8 +26010,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 										// Parse response to get execution ID and update result
 										var subflowResp struct {
-											Success     bool   `json:"success"`
-											ExecutionID string `json:"execution_id"`
+											Success       bool   `json:"success"`
+											ExecutionID   string `json:"execution_id"`
 											Authorization string `json:"authorization"`
 										}
 										if jsonErr := json.Unmarshal(respBody, &subflowResp); jsonErr == nil && len(subflowResp.ExecutionID) > 0 {
@@ -26023,16 +26039,16 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 												}
 
 												// Update result with decline subflow info
-											updatedResult, marshalErr := json.Marshal(userinputResp)
-											if marshalErr == nil {
-												result.Result = string(updatedResult)
-												for newresIndex, newres := range oldExecution.Results {
-													if newres.Action.ID == result.Action.ID {
-														oldExecution.Results[newresIndex] = result
-														break
+												updatedResult, marshalErr := json.Marshal(userinputResp)
+												if marshalErr == nil {
+													result.Result = string(updatedResult)
+													for newresIndex, newres := range oldExecution.Results {
+														if newres.Action.ID == result.Action.ID {
+															oldExecution.Results[newresIndex] = result
+															break
+														}
 													}
 												}
-											}
 											}
 
 											log.Printf("[INFO][%s] Decline subflow execution: %s, URL: %s", oldExecution.ExecutionId, subflowResp.ExecutionID, userinputResp.DeclineSubflowURL)
@@ -27155,7 +27171,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				workflowExecution.Workflow.Actions[actionIndex].Environment = "Cloud"
 				cloudExec = true
 			} else {
-				if project.Environment == "cloud" { 
+				if project.Environment == "cloud" {
 					action.Environment = "Cloud"
 					workflowExecution.Workflow.Actions[actionIndex].Environment = "Cloud"
 					cloudExec = true
@@ -30325,7 +30341,7 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 
 	org, updated = AddPriority(*org, Priority{
 		Name:        fmt.Sprintf("Try Shuffle Security"),
-		Description: fmt.Sprintf("Automatically handle alerts and vulnerabilities!"), 
+		Description: fmt.Sprintf("Automatically handle alerts and vulnerabilities!"),
 		Type:        "security",
 		Active:      true,
 		URL:         fmt.Sprintf("https://security.shuffler.io"),
@@ -36002,8 +36018,8 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 		if !found {
 			returnActions = append(returnActions, action)
 		} else {
-			if debug { 
-				log.Printf("[DEBUG] NOT adding priority; %#v", action.Name) 
+			if debug {
+				log.Printf("[DEBUG] NOT adding priority; %#v", action.Name)
 			}
 		}
 	}
@@ -36442,6 +36458,233 @@ func ValidateExecutionChronology(ctx context.Context, execution *WorkflowExecuti
 	return violations
 }
 
+func listProcessesWindows() ([]ProcessInfo, error) {
+	return collect()
+}
+
+func listProcessesDarwin() ([]ProcessInfo, error) {
+	return collect()
+}
+
+func listProcessesLinux() ([]ProcessInfo, error) {
+	return collect()
+}
+
+type cacheEntry struct {
+	hash  string
+	mtime time.Time
+	size  int64
+}
+
+var (
+	hashCache   = make(map[string]cacheEntry)
+	hashCacheMu sync.Mutex
+)
+
+// cachedHashFile returns the SHA256 of the file at path.
+// It only re-hashes if the file's mtime or size has changed since last call.
+func cachedHashFile(path string) string {
+	if path == "" {
+		return ""
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	mtime := info.ModTime()
+	size := info.Size()
+
+	hashCacheMu.Lock()
+	entry, ok := hashCache[path]
+	hashCacheMu.Unlock()
+
+	if ok && entry.mtime.Equal(mtime) && entry.size == size {
+		return entry.hash
+	}
+
+	// Cache miss or file changed — hash it.
+	hash := hashFile(path)
+	if hash == "" {
+		return ""
+	}
+
+	hashCacheMu.Lock()
+	hashCache[path] = cacheEntry{hash: hash, mtime: mtime, size: size}
+	hashCacheMu.Unlock()
+
+	return hash
+}
+
+// hashFile computes the SHA256 of a file by streaming it —
+// large binaries never fully land in memory.
+func hashFile(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func scrubArgs(args []string) []string {
+	if len(args) == 0 {
+		return args
+	}
+
+	out := make([]string, len(args))
+	copy(out, args)
+
+	for i, arg := range out {
+		// Style 1: --flag=value or -f=value
+		if eq := indexByte(arg, '='); eq >= 0 {
+			key := arg[:eq]
+			if isSecretKey(key) {
+				out[i] = key + "=[REDACTED]"
+			}
+			continue
+		}
+
+		// Style 2/3: --flag value or -f value — redact the next element.
+		if isSecretKey(arg) && i+1 < len(out) {
+			out[i+1] = "[REDACTED]"
+		}
+	}
+
+	return out
+}
+
+var secretKeywords = []string{
+	"token",
+	"secret",
+	"password",
+	"passwd",
+	"apikey",
+	"api_key",
+	"api-key",
+	"auth",
+	"credential",
+	"private_key",
+	"private-key",
+	"access_key",
+	"access-key",
+	"signing_key",
+	"signing-key",
+}
+
+// isSecretKey returns true if the flag name contains a secret keyword.
+func isSecretKey(flag string) bool {
+	// Strip leading dashes so "--api-key" and "api-key" both match.
+	lower := strings.ToLower(strings.TrimLeft(flag, "-"))
+	for _, kw := range secretKeywords {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// indexByte returns the index of the first occurrence of c in s, or -1.
+// Using this instead of strings.IndexByte to avoid an extra import.
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
+// collect is identical on both platforms — gopsutil handles the syscall difference.
+func collect() ([]ProcessInfo, error) {
+	procs, err := process.Processes()
+	if err != nil {
+		return nil, fmt.Errorf("listing processes: %w", err)
+	}
+
+	out := make([]ProcessInfo, 0, len(procs))
+	for _, p := range procs {
+		ppid, err := p.Ppid()
+		if err != nil {
+			ppid = 0
+		}
+
+		tty, err := p.Terminal() // "" if no controlling terminal
+		if err != nil {
+			tty = ""
+		}
+
+		cmd, err := p.Name() // argv[0] basename
+		if err != nil {
+			cmd = ""
+		}
+
+		user, err := p.Username()
+		if err != nil {
+			user = ""
+		}
+
+		exePath, err := p.Exe()
+		if err != nil {
+			exePath = ""
+		}
+
+		// kernel threads and SIP-protected processes.
+		args, err := p.CmdlineSlice()
+		if err != nil {
+			args = nil
+		}
+		args = scrubArgs(args)
+
+		createdAt, err := p.CreateTime()
+		if err != nil {
+			createdAt = 0
+		}
+
+		out = append(out, ProcessInfo{
+			PID:         p.Pid,
+			PPID:        ppid,
+			TTY:         tty,
+			CommandLine: cmd,
+			User:        user,
+
+			Args:         args,
+			CreationTime: createdAt,
+			ExePath:      exePath,
+
+			// Hash the binary on disk. Note: this is the file at rest, not the
+			// in-memory image — a binary replaced after launch won't be caught here.
+			SHA256: cachedHashFile(exePath),
+		})
+	}
+
+	if debug {
+		log.Printf("[INFO] Found %d processes", len(out))
+	}
+
+	return out, nil
+}
+
+// ListProcesses returns all running processes.
+// On macOS this calls sysctl kern.proc under the hood.
+// On Linux this reads /proc.
+func ListProcesses() ([]ProcessInfo, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		return listProcessesDarwin()
+	case "linux":
+		return listProcessesLinux()
+	case "windows":
+		return listProcessesWindows()
+	default:
+		return nil, fmt.Errorf("unsupported platform: %s", runtime.GOOS)
+	}
+}
 
 func getOrgAppSummaries(ctx context.Context, user User) ([]AppSummary, error) {
 	// Get prioritized apps
@@ -36851,7 +37094,7 @@ func GetWorkflowMinimal(resp http.ResponseWriter, request *http.Request) {
 	// Permission check: user owns it OR user is in same org
 	if user.Id != workflow.Owner {
 		if workflow.OrgId != user.ActiveOrg.Id {
-			log.Printf("[WARNING] User %s (%s) unauthorized to view workflow %s (owner: %s, org: %s)", 
+			log.Printf("[WARNING] User %s (%s) unauthorized to view workflow %s (owner: %s, org: %s)",
 				user.Username, user.Id, workflowId, workflow.Owner, workflow.OrgId)
 			resp.WriteHeader(403)
 			resp.Write([]byte(`{"success": false, "reason": "Unauthorized"}`))
@@ -37799,7 +38042,6 @@ func findNodePosition(wf *Workflow, nodeID string) (string, int, error) {
 	return "", -1, fmt.Errorf("node %s not found", nodeID)
 }
 
-
 func opAddNodeWithMapping(ctx context.Context, user User, wf *Workflow, op *WorkflowOperation, tempIDMap map[string]string) error {
 	// IDEMPOTENCY: if this temp_id was already resolved in a prior agent loop,
 	// the node already exists in the workflow (loaded from DB). Skip the add and
@@ -37885,7 +38127,7 @@ func opAddNode(ctx context.Context, user User, wf *Workflow, op *WorkflowOperati
 		if err != nil {
 			return fmt.Errorf("failed to enrich action: %w", err)
 		}
-        // Commented out parameter validation to allow agents to add new parameters dynamically
+		// Commented out parameter validation to allow agents to add new parameters dynamically
 		// for _, param := range newAction.Parameters {
 		// 	if param.Required && param.Value == "" {
 		// 		return fmt.Errorf("required parameter '%s' not provided for action %s", param.Name, realApp.Name)
@@ -38173,7 +38415,6 @@ func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
 	return nil
 }
 
-
 func opAddBranchWithMapping(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]string) error {
 	var branchData struct {
 		SourceID      string `json:"source_id"`
@@ -38320,10 +38561,9 @@ func opDeleteBranch(wf *Workflow, op *WorkflowOperation) error {
 	if debug {
 		log.Printf("[DEBUG] delete_branch: branch %s not found, already removed (likely cascade from delete_node) - skipping", op.ID)
 	}
-	
+
 	return nil
 }
-
 
 func opAddCondition(wf *Workflow, op *WorkflowOperation) error {
 	var condData struct {
@@ -38421,7 +38661,6 @@ func opDeleteCondition(wf *Workflow, op *WorkflowOperation) error {
 
 	return nil
 }
-
 
 func findActionIndexByID(wf *Workflow, id string) int {
 	for i, act := range wf.Actions {

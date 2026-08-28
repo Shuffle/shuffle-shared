@@ -752,6 +752,8 @@ type User struct {
 	SessionLogin         bool          `datastore:"session_login" json:"session_login"`                   // Whether it's a login with session or API (used to verify access)
 	ValidatedSessionOrgs []string      `datastore:"validated_session_orgs" json:"validated_session_orgs"` // Orgs that have been used in the current session for the user
 	UsersLastSession     string        `datastore:"users_last_session" json:"users_last_session"`
+	SessionCreatedAt      int64        `datastore:"session_created_at,noindex" json:"session_created_at,omitempty"`
+	SessionLastActivityAt int64        `datastore:"session_last_activity_at,noindex" json:"session_last_activity_at,omitempty"`
 	Theme                string        `datastore:"theme" json:"theme"`
 	PublicProfile        PublicProfile `datastore:"public_profile" json:"public_profile"`
 
@@ -788,6 +790,8 @@ type Session struct {
 	Id       string `datastore:"Id,noindex"`
 	UserId   string `datastore:"user_id,noindex"`
 	Session  string `datastore:"session,noindex"`
+	SessionCreatedAt      int64 `datastore:"session_created_at,noindex" json:"session_created_at,omitempty"`
+	SessionLastActivityAt int64 `datastore:"session_last_activity_at,noindex" json:"session_last_activity_at,omitempty"`
 }
 
 type Contact struct {
@@ -3158,28 +3162,27 @@ type Tutorial struct {
 }
 
 type HandleInfo struct {
-	Success              bool            `json:"success"`
-	Admin                string          `json:"admin"`
-	Username             string          `json:"username"`
-	PublicUsername       string          `json:"public_username"`
-	Name                 string          `json:"name"`
-	ActiveApps           []string        `json:"active_apps"`
-	Id                   string          `json:"id"`
-	Avatar               string          `json:"avatar"`
-	Orgs                 []OrgMini       `json:"orgs"`
-	ActiveOrg            OrgMini         `json:"active_org"`
-	EthInfo              EthInfo         `json:"eth_info,omitempty"`
-	ChatDisabled         bool            `json:"chat_disabled"`
-	Interests            []Priority      `json:"interests"`
-	Priorities           []Priority      `json:"priorities"`
-	Cookies              []SessionCookie `json:"cookies"`
-	AppExecutionsLimit   int64           `json:"app_execution_limit"`
-	AppExecutionsSuborgs int64           `json:"app_executions_suborgs"`
-	AppExecutionsUsage   int64           `json:"app_execution_usage"`
-	RegionUrl            string          `json:"region_url"`
-	Support              bool            `json:"support"`
-	Tutorials            []Tutorial      `json:"tutorials"`
-	OrgStatus            []string        `json:"org_status"`
+	Success              bool       `json:"success"`
+	Admin                string     `json:"admin"`
+	Username             string     `json:"username"`
+	PublicUsername       string     `json:"public_username"`
+	Name                 string     `json:"name"`
+	ActiveApps           []string   `json:"active_apps"`
+	Id                   string     `json:"id"`
+	Avatar               string     `json:"avatar"`
+	Orgs                 []OrgMini  `json:"orgs"`
+	ActiveOrg            OrgMini    `json:"active_org"`
+	EthInfo              EthInfo    `json:"eth_info,omitempty"`
+	ChatDisabled         bool       `json:"chat_disabled"`
+	Interests            []Priority `json:"interests"`
+	Priorities           []Priority `json:"priorities"`
+	AppExecutionsLimit   int64      `json:"app_execution_limit"`
+	AppExecutionsSuborgs int64      `json:"app_executions_suborgs"`
+	AppExecutionsUsage   int64      `json:"app_execution_usage"`
+	RegionUrl            string     `json:"region_url"`
+	Support              bool       `json:"support"`
+	Tutorials            []Tutorial `json:"tutorials"`
+	OrgStatus            []string   `json:"org_status"`
 
 	HasCardAvailable    bool        `json:"has_card_available,omitempty"`
 	ActivatedPayasyougo bool        `json:"activated_pay_as_you_go,omitempty"`
