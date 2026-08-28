@@ -7317,6 +7317,56 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		}
 	}
 
+	if agentOutput.ExecutionId == "" {
+		agentOutput.ExecutionId = execution.ExecutionId
+	}
+	if agentOutput.NodeId == "" {
+		agentOutput.NodeId = startNode.ID
+	}
+	if agentOutput.StartedAt == 0 {
+		if execution.StartedAt > 0 {
+			agentOutput.StartedAt = execution.StartedAt
+			const maxSecondsTimestamp int64 = 10_000_000_000
+			if agentOutput.StartedAt < maxSecondsTimestamp {
+				agentOutput.StartedAt *= 1000
+			}
+		} else {
+			agentOutput.StartedAt = time.Now().UnixMilli()
+		}
+	}
+	if agentOutput.Input == "" {
+		for _, param := range startNode.Parameters {
+			if param.Name == "input" || param.Name == "prompt" {
+				agentOutput.Input = param.Value
+				agentOutput.OriginalInput = param.Value
+				break
+			}
+		}
+		if agentOutput.Input == "" && len(execution.ExecutionArgument) > 0 {
+			agentOutput.Input = execution.ExecutionArgument
+			agentOutput.OriginalInput = execution.ExecutionArgument
+		}
+	}
+	if agentOutput.Memory == "" {
+		for _, param := range startNode.Parameters {
+			if param.Name == "memory" {
+				agentOutput.Memory = param.Value
+				break
+			}
+		}
+		if agentOutput.Memory == "" {
+			agentOutput.Memory = "shuffle_db"
+		}
+	}
+	if agentOutput.Template == "" {
+		for _, param := range startNode.Parameters {
+			if param.Name == "template" {
+				agentOutput.Template = param.Value
+				break
+			}
+		}
+	}
+
 	agentOutput.Status = "ABORTED"
 	agentOutput.Error = reason
 	agentOutput.CompletedAt = time.Now().UnixMilli()
