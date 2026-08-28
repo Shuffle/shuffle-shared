@@ -158,7 +158,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					result.Status = "SUCCESS"
 					innerresult.Status = "SUCCESS"
 					workflowExecution.Results[resultIndex].Status = "SUCCESS"
-					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 					break
 				}
 
@@ -336,11 +335,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							mappedOutput.CompletedAt = time.Now().UnixMilli()
 
 							workflowExecution.Results[resultIndex].Status = "SUCCESS"
-
-							go func() {
-								time.Sleep(1 * time.Second)
-								go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
-							}()
 						} else {
 							mostRecentCompletion := int64(0)
 							for _, dec := range mappedOutput.Decisions {
@@ -395,7 +389,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						}
 
 						workflowExecution.Results[resultIndex].Status = "SUCCESS"
-						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 					}
 				}
 
