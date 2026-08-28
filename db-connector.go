@@ -524,6 +524,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 					return err
 				} else {
 					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", originalKey, err)
+					return err
 				}
 			}
 		}
