@@ -104,6 +104,43 @@ func GetContext(request *http.Request) context.Context {
 	return context.Background()
 }
 
+func AllowedDomain(referer string) bool { 
+	domains := []string{
+		"shuffler.io",
+		"singul.io",
+		"shuffle.security",
+		"tanuki.to",
+
+		// Local testing
+		"localhost",
+		"127.0.0.1",
+
+		// Additional testers. Disabled due to possible phishing.
+		// "lovable.app",
+		//"lovableproject.com",
+	}
+
+	parsedURL, err := url.Parse(referer)
+	if err != nil || parsedURL.Host == "" {
+		log.Printf("[WARNING] Invalid referer URL: %s", referer)
+		return false
+	}
+
+	// Extract hostname (remove port if present)
+	host := parsedURL.Host
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+
+	for _, domain := range domains { 
+		if strings.HasSuffix(host, domain) { 
+			return true
+		}
+	}
+
+	return false
+}
+
 func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	origin := request.Header["Origin"]
 	resp.Header().Set("Vary", "Origin")
@@ -130,31 +167,32 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 
 			// Related projects (maybe)
 			"https://*.singul.io",
-			"https://singul.io",
+			"https://singul.io", 
 			"https://*.shuffle.security",
-			"https://shuffle.security",
+			"https://shuffle.security", // Shuffle Security
+			"https://tanuki.to", 		// For browser automation
 
 			// Local testing
 			"http://localhost:3002",
 			"http://localhost:3000",
 
-			// Shuffle support
+			// Shuffle security 
 			"https://cases.shuffler.io",
 			"https://security.shuffler.io",
 			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
+			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
 
 			// tbd
 			"https://preview--shuffle-cases.lovable.app",
 			"https://9f29a11a-6489-4898-8044-ed7b8f848ef9.lovableproject.com",
 			"https://id-preview--9f29a11a-6489-4898-8044-ed7b8f848ef9.lovable.app",
 
-			// Support project
+			// Support project - testing.
 			"https://support.shuffler.io",
 			"https://compliance.shuffler.io",
 			"https://2538a36b-5c1c-4954-8700-ee5d6c6b9f91.lovableproject.com",
 
 			"https://shuffle-support.lovable.app",
-			"https://shuffle-support.lovable.app/",
 			"https://05364669-00ea-43be-ae8f-8e333ccc870c.lovableproject.com",
 			"https://preview--shuffle-support.lovable.app",
 		}
@@ -16752,6 +16790,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
+			newCookie.Domain = ".tanuki.to"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
 			newCookie.Domain = ".shuffler.io"
 			http.SetCookie(resp, newCookie)
 		}
@@ -16821,6 +16863,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 			newCookie.Name = "__session"
 			newCookie.Domain = ".shuffle.security"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			newCookie.Domain = ".tanuki.to"
 			http.SetCookie(resp, newCookie)
 		}
 
@@ -22369,7 +22415,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		if time.Now().Unix()-startTime > int64(maxSeconds) {
 
 			returnBody.Success = true
-			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the GET /api/v1/executions/{executionId}?authorization={auth} API to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
+			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the GET /api/v1/executions/%s?authorization=%s API to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
 
 			break
 		}
@@ -22692,10 +22738,15 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("Docpath: %s", docPath)
 
 	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	tc := oauth2.NewClient(ctx, ts)
 
-	httpClient := tc
+	var httpClient *http.Client
+	if len(token) > 0 {
+		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+		httpClient = oauth2.NewClient(ctx, ts)
+	} else {
+		httpClient = http.DefaultClient
+	}
+
 	req, err := http.NewRequest(
 		"GET",
 		docPath,
@@ -22738,7 +22789,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		parsedLink = realPath
 	}
 
-	client := github.NewClient(tc)
+	client := github.NewClient(httpClient)
 	githubResp := GithubResp{
 		Name:         location[4],
 		Contributors: []GithubAuthor{},
@@ -22842,9 +22893,15 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 
 	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
 
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	tc := oauth2.NewClient(ctx, ts)
-	client := github.NewClient(tc)
+	var client *github.Client
+	if len(token) > 0 {
+		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+		tc := oauth2.NewClient(ctx, ts)
+		client = github.NewClient(tc)
+	} else {
+		client = github.NewClient(nil)
+	}
+
 	owner := "shuffle"
 	repo := "shuffle-docs"
 
