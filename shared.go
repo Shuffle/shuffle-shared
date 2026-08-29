@@ -16374,7 +16374,15 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[INFO] OpenID login for %s", org.Id)
 				redirectKey = "SSO_REDIRECT"
 
-				baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata, "signin")
+				mode := "signin"
+				userdata.InitSSOInfos()
+				existingSSOInfo, hasExistingSSO := userdata.GetSSOInfo(org.Id)
+				if !hasExistingSSO || existingSSOInfo.Sub == "" {
+					log.Printf("[INFO] User %s has no SSO identity bound for org %s yet - using first-time connect flow instead of signin", userdata.Username, org.Id)
+					mode = ""
+				}
+
+				baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata, mode)
 				if err != nil {
 					log.Printf("[ERROR] Failed getting OpenID URL for org %s: %s", org.Id, err)
 				}
@@ -23430,8 +23438,8 @@ func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	clientId := org.SSOConfig.OpenIdClientId
-	tokenUrl := org.SSOConfig.OpenIdToken
+	clientId := strings.TrimSpace(org.SSOConfig.OpenIdClientId)
+	tokenUrl := strings.TrimSpace(org.SSOConfig.OpenIdToken)
 	if len(tokenUrl) == 0 {
 		log.Printf("[ERROR] No token URL specified for OpenID. OrgID: %s", foundOrg)
 		resp.WriteHeader(401)
