@@ -3011,7 +3011,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			duration = (time.Now().UnixMilli() - decision.RunDetails.StartedAt) / 1000
 		}
 
-		log.Printf("[DEBUG][%s] AI_AGENT_TOOL: org=%s tool=%s action=%s status=%s duration=%ds", execution.ExecutionId, execution.Workflow.OrgId, decision.Tool, decision.Action, decision.RunDetails.Status, duration)
+		log.Printf("[INFO][%s] AI_AGENT_TOOL: org=%s tool=%s action=%s status=%s duration=%ds", execution.ExecutionId, execution.Workflow.OrgId, decision.Tool, decision.Action, decision.RunDetails.Status, duration)
 	}
 
 	// when there are late-returning goroutines like more than 5 mins then Fixexecution may have already stamped this decision as FAILURE (5-min timeout) and
