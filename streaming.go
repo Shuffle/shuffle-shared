@@ -33,8 +33,6 @@ func presenceColor(userID string) string {
 	return streamPresenceColors[hash%len(streamPresenceColors)]
 }
 
-// streamPresenceInterval: presence update every 100 poll iterations (~10s at 100ms/poll)
-var streamPresenceInterval = 100
 var streamPresenceTTL int32 = 5
 var streamPresenceStaleMs int64 = 30000                                           // 30 seconds stale threshold
 var streamAllowRegionRedirect = os.Getenv("SHUFFLE_STREAM_REGION_REDIRECT") == "" // Set SHUFFLE_STREAM_REGION_REDIRECT to any non-empty value to disable region redirects locally; unset in prod so this stays true
@@ -49,15 +47,78 @@ var streamSelfCloseAfter = 55 * time.Second                                     
 // Writes only allocate a sequence (atomic INCR) and set a single op key, so concurrent
 // writers can never clobber each other. Readers poll the small counter key and only fetch
 // op payloads when it advances.
-var streamOpTTLMinutes int32 = 5    // individual op keys; also bounds catch-up history
+var streamOpTTLMinutes int32 = 30   // individual op keys; also bounds catch-up history
 var streamSeqTTLMinutes int32 = 60  // counter + lastsave keys (SetCache uses minutes; memcache/requestCache paths convert to seconds via *60)
 var streamMaxCatchup int64 = 100    // cap replayed ops on connect/history
 var streamMissRetries = 30          // ~3s at 100ms/poll before skipping a never-materialised op
 var streamPostSaveKeepOps int64 = 4 // ops just before a save are kept as a small safety buffer; older ones are pruned
 var streamAuthCtxTTLMinutes int32 = 2
 
+// Adaptive polling: the read loop starts at streamPollFast and slows down
+// when no ops arrive, reducing idle memcache reads by ~97%. Any forwarded op
+// snaps the interval back to streamPollFast immediately.
+//
+// Tier        Idle duration     Poll interval
+// ─────────   ──────────────    ─────────────
+// Fast        0 – 2 min        100 ms
+// Medium      2 – 5 min        500 ms
+// Slow        5 – 15 min       1 s
+// Slowest     15 min+           3 s
+var (
+	streamPollFast    = 100 * time.Millisecond
+	streamPollMedium  = 500 * time.Millisecond
+	streamPollSlow    = 1 * time.Second
+	streamPollSlowest = 3 * time.Second
+
+	streamIdleMedium  = 2 * time.Minute
+	streamIdleSlow    = 5 * time.Minute
+	streamIdleSlowest = 15 * time.Minute
+)
+
 // streamSeqMu guards the in-process counter path (single-instance deployments without memcache).
 var streamSeqMu sync.Mutex
+
+// streamPollInterval picks the poll sleep based on idle duration.
+func streamPollInterval(lastActivity time.Time) time.Duration {
+	idle := time.Since(lastActivity)
+	switch {
+	case idle < streamIdleMedium:
+		return streamPollFast
+	case idle < streamIdleSlow:
+		return streamPollMedium
+	case idle < streamIdleSlowest:
+		return streamPollSlow
+	default:
+		return streamPollSlowest
+	}
+}
+
+// getStreamLastActivity reads the last-activity unix-ms timestamp from cache.
+// Returns (timestamp, true) on hit, or (time.Now(), false) on miss.
+func getStreamLastActivity(ctx context.Context, workflowID string) (time.Time, bool) {
+	v, err := GetCache(ctx, streamLastActivityKey(workflowID))
+	if err != nil {
+		return time.Now(), false
+	}
+	raw, ok := v.([]uint8)
+	if !ok {
+		return time.Now(), false
+	}
+	ms, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil || ms == 0 {
+		return time.Now(), false
+	}
+	return time.UnixMilli(ms), true
+}
+
+// setStreamLastActivity persists time.Now() as the last-activity timestamp.
+// TTL matches the seq counter (60 min) so it expires with the stream.
+func setStreamLastActivity(ctx context.Context, workflowID string) {
+	ms := time.Now().UnixMilli()
+	if err := SetCache(ctx, streamLastActivityKey(workflowID), []byte(strconv.FormatInt(ms, 10)), streamSeqTTLMinutes); err != nil {
+		log.Printf("[WARNING] Failed setting stream last-activity for %s: %s", workflowID, err)
+	}
+}
 
 func streamSeqKey(id string) string {
 	return fmt.Sprintf("%s_stream_seq", id)
@@ -69,6 +130,10 @@ func streamLastSaveKey(id string) string {
 
 func streamOpKey(id string, seq int64) string {
 	return fmt.Sprintf("%s_stream_op_%d", id, seq)
+}
+
+func streamLastActivityKey(id string) string {
+	return fmt.Sprintf("%s_stream_lastactivity", id)
 }
 
 func streamPresenceKeyFor(id string) string {
@@ -495,10 +560,10 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	presenceKey := streamPresenceKeyFor(workflowID)
 	var lastSentSeq int64 = sinceSeq
-	var pollCount int
 
-	// On initial connect (since=0), replay every op since the last save so late joiners see
-	// the full unsaved backlog - it only exists in the stream, a reload wouldn't recover it.
+	// On first connect (since=0), replay unsaved ops so late joiners see the
+	// current canvas state. Ops older than streamOpTTLMinutes are gone from
+	// cache and will be missed — saving the workflow resets the baseline.
 	if sinceSeq == 0 {
 		currentSeq := currentStreamSeq(ctx, workflowID)
 		if currentSeq > 0 {
@@ -506,7 +571,6 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			if start < 1 {
 				start = 1
 			}
-
 			for seq := start; seq <= currentSeq; seq++ {
 				op, ok := getStreamOp(ctx, workflowID, seq)
 				if !ok {
@@ -522,9 +586,6 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 				fmt.Fprintf(resp, "%s\n", string(opBytes))
 			}
 		}
-
-		// Everything up to currentSeq has been handled by catch-up; the live loop only
-		// forwards ops that arrive after this point.
 		lastSentSeq = currentSeq
 		fmt.Fprintf(resp, "%s\n", `{"item":"system","type":"init_complete"}`)
 		conn.Flush()
@@ -535,13 +596,26 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	var stalledSeq int64 = -1
 	var stalledCount int
 
+	// Adaptive polling: seed the activity timestamp on first connect so it
+	// persists across 55s reconnect cycles. Subsequent connects read the
+	// existing key; only the very first connection writes it.
+	lastActivity, exists := getStreamLastActivity(ctx, workflowID)
+	if !exists {
+		setStreamLastActivity(ctx, workflowID)
+	}
+	lastPresenceAt := time.Time{} // zero → sends presence on first iteration
+
 	for {
 		if time.Since(connStart) > streamSelfCloseAfter {
 			return
 		}
 
-		pollCount++
-		if pollCount%streamPresenceInterval == 1 {
+		// Presence: send every ~10 seconds regardless of poll speed.
+		// Using wall-clock interval instead of pollCount so it stays consistent
+		// even when the poll interval changes (adaptive polling).
+		if time.Since(lastPresenceAt) >= 10*time.Second {
+			lastPresenceAt = time.Now()
+
 			var presence StreamPresenceState
 			presenceCache, err := GetCache(ctx, presenceKey)
 			if err == nil {
@@ -624,7 +698,9 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			stalledSeq = -1
 			stalledCount = 0
 
-			// Skip ops from this user — they already applied them locally.
+			// Skip own-user ops (already applied locally). Don't reset
+			// lastActivity — the frontend's since-seq doesn't advance past
+			// skipped ops, so this fires on stale replays every reconnect.
 			if len(user.Id) > 0 && op.UserID == user.Id {
 				lastSentSeq = seq
 				continue
@@ -643,10 +719,13 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 			lastSentSeq = seq
+			lastActivity = time.Now()
+			setStreamLastActivity(ctx, workflowID)
 			conn.Flush()
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		pollInterval := streamPollInterval(lastActivity)
+		time.Sleep(pollInterval)
 	}
 }
 
