@@ -15415,7 +15415,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	app, err := GetApp(ctx, fileId, User{}, false)
-	if err != nil {
+	if err != nil || app.ID == "" {
 		log.Printf("[WARNING] Error getting app %s (app config): %s", fileId, err)
 
 		if project.Environment == "cloud" {
@@ -15437,6 +15437,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	/*
 	// FIXME: Should we redirect here?
 	if app.Public {
 		if project.Environment == "cloud" {
@@ -15449,8 +15450,8 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
-
 	}
+	*/
 
 	app.ReferenceUrl = ""
 	data, err := json.Marshal(app)
