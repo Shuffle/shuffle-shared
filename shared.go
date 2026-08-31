@@ -14004,13 +14004,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		subName := strings.ToLower(org.Subscriptions[idx].Name)
-
-		if (strings.Contains(subName, "enterprise") || strings.Contains(subName, "business")) && len(org.Subscriptions[idx].Reference) > 0 {
-			log.Printf("[INFO] Updating Stripe subscription for (Business/Enterprise) org %s with reference %s", org.Id, org.Subscriptions[idx].Reference)
-			LinkStripeSubscriptionOrgId(*org, org.Subscriptions[idx].Reference)
-		}
-
 		if err := SetOrg(ctx, *org, org.Id); err != nil {
 			log.Printf("[WARNING] Failed to update subscription for org %s: %s", org.Id, err)
 			resp.WriteHeader(500)
