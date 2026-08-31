@@ -11149,6 +11149,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	// Forcing stream, as there really is no downside to it.
 	// Also allows us to realtime stream with *.shuffler.io/api/v1/chat/completions
 	chatCompletion.Stream = true
+	chatCompletion.StreamOptions = &openai.StreamOptions{
+		IncludeUsage: true,
+	}
 	sleepTimer := time.Duration(1)
 
 	// In case of non-streaming Resp input
