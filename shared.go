@@ -37547,7 +37547,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		return nil
 
-	case "delete_node":
+	case "delete_node", "remove_node":
 		// Node is already removed. Emit node:remove first, then edge:remove for
 		// every branch the function auto-pruned (captured in prunedBranchIDs before apply).
 		result := []StreamWorkflowOperation{{
@@ -37633,12 +37633,27 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		return nil
 
-	case "delete_branch":
+	case "delete_branch", "remove_branch":
 		return []StreamWorkflowOperation{{
 			Item: "edge",
 			Type: "remove",
 			ID:   realID,
 		}}
+
+	case "edit_branch":
+		// Branch is already updated by opEditBranch. Emit edge:configure with the full branch.
+		for _, branch := range wf.Branches {
+			if branch.ID == realID {
+				dataBytes, _ := json.Marshal(branch)
+				return []StreamWorkflowOperation{{
+					Item: "edge",
+					Type: "configure",
+					ID:   branch.ID,
+					Data: dataBytes,
+				}}
+			}
+		}
+		return nil
 
 	case "add_condition", "edit_condition", "delete_condition":
 		// The branch already has its updated conditions applied.
@@ -37676,7 +37691,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 	}
 }
 
-var streamHTTPClient = &http.Client{Timeout: 2 * time.Second}
+var streamHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 func sendStreamOperations(ctx context.Context, request *http.Request, streamURL string, streamOps []StreamWorkflowOperation) error {
 	opBytes, err := json.Marshal(streamOps)
@@ -37720,10 +37735,19 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 	case "add_node":
 		return opAddNodeWithMapping(ctx, user, wf, op, tempIDMap)
 	case "edit_node":
+		if realID, exists := tempIDMap[op.ID]; exists {
+			op.ID = realID
+		}
 		return opEditNode(wf, op)
 	case "move_node":
+		if realID, exists := tempIDMap[op.ID]; exists {
+			op.ID = realID
+		}
 		return opMoveNode(wf, op)
 	case "delete_node", "remove_node":
+		if realID, exists := tempIDMap[op.ID]; exists {
+			op.ID = realID
+		}
 		return opDeleteNode(wf, op)
 
 	// ====== BRANCH OPERATIONS ======
@@ -38045,7 +38069,6 @@ func opEditNode(wf *Workflow, op *WorkflowOperation) error {
 						break
 					}
 				}
-				// If parameter not found, add it (allows agent to add new params)
 				if !found {
 					wf.Actions[actidx].Parameters = append(wf.Actions[actidx].Parameters, WorkflowAppActionParameter{
 						ID:    generateNodeID(),
@@ -38071,11 +38094,19 @@ func opEditNode(wf *Workflow, op *WorkflowOperation) error {
 
 		if len(updates.Parameters) > 0 {
 			for _, updateParam := range updates.Parameters {
+				found := false
 				for i := range wf.Triggers[trigidx].Parameters {
 					if strings.EqualFold(wf.Triggers[trigidx].Parameters[i].Name, updateParam.Name) {
 						wf.Triggers[trigidx].Parameters[i].Value = updateParam.Value
+						found = true
 						break
 					}
+				}
+				if !found {
+					wf.Triggers[trigidx].Parameters = append(wf.Triggers[trigidx].Parameters, WorkflowAppActionParameter{
+						Name:  updateParam.Name,
+						Value: updateParam.Value,
+					})
 				}
 			}
 		}
