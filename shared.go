@@ -83,8 +83,6 @@ import (
 )
 
 var project ShuffleStorage
-var agentNextLLMCallMu sync.Map // Mutex to prevent duplicate parallel agent LLM runs
-var agentSelfRequestMu sync.Map // Mutex to prevent duplicate terminal self-requests
 var baseDockerName = "frikky/shuffle"
 var SSOUrl = ""
 var kmsDebug = false
@@ -17821,15 +17819,6 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 	ctx := context.Background()
 
-	// In-process memory to prevent recursive terminal self-requests even if Memcache/DB are somehow failing
-	if status == "SUCCESS" || status == "FINISHED" || status == "FAILURE" || status == "ABORTED" {
-		lockKey := fmt.Sprintf("%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
-		if _, alreadySent := agentSelfRequestMu.LoadOrStore(lockKey, struct{}{}); alreadySent {
-			log.Printf("[INFO][%s] Terminal self-request '%s' already handled for action %s (in-process memory guard)", workflowExecution.ExecutionId, status, actionResult.Action.ID)
-			return nil
-		}
-	}
-
 	// Check if the request has been sent already (just in case)
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
 	_, err := GetCache(ctx, cacheKey)
@@ -18336,13 +18325,13 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			originalAction = actionResult.Action
 		}
 
-		// Mutex lock to prevent parallel tools finishing at the exact same millisecond from triggering multiple duplicate LLM calls
-		lockKey := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, originalAction.ID)
-		if _, alreadyLocked := agentNextLLMCallMu.LoadOrStore(lockKey, struct{}{}); alreadyLocked {
-			log.Printf("[INFO][%s] LLM re-entry lock held, skipping duplicate call for node %s", workflowExecution.ExecutionId, originalAction.ID)
+		lockKey := fmt.Sprintf("agent_llm_lock_%s_%s", workflowExecution.ExecutionId, originalAction.ID)
+		if _, err := GetCache(ctx, lockKey); err == nil {
+			log.Printf("[INFO][%s] LLM re-entry lock held in cache, skipping duplicate call for node %s", workflowExecution.ExecutionId, originalAction.ID)
 			return &workflowExecution, false, nil
 		}
-		defer agentNextLLMCallMu.Delete(lockKey)
+		_ = SetCache(ctx, lockKey, []byte("1"), 2)
+		defer DeleteCache(ctx, lockKey)
 
 		// If the execution is already FINISHED but a continuation was injected (user asked the agent to do more on top of what it already did), we need to reset the status back to EXECUTING so that HandleAiAgentExecutionStart doesn't exit with "Agent run already finished".
 		if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
