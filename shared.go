@@ -34720,13 +34720,15 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			active = false
 		}
 		recurrance := string("monthly")
+		appRunLimit:= license.AppRuns.Limit
 
 		if license.AppRunsGrouping {
 			recurrance = string("annual")
+			appRunLimit = appRunLimit*12
 		}
 
 		subscription := PaymentSubscription{
-			Name:             "Enterprise License",
+			Name:             "Air Gapped License",
 			Active:           active,
 			CancellationDate: cancellationDate,
 			SupportLevel:     "Enterprise Support",
@@ -34737,7 +34739,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			Currency:         string("USD"),
 			Level:            "1",
 			Reference:        "",
-			Limit:            1,
+			Limit:            appRunLimit,
 			Features:         features,
 			EulaSigned:       true,
 			Eula:             parsedEula,
