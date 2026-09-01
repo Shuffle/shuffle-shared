@@ -6045,6 +6045,39 @@ func HandleGetHooks(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+func handleDeviceUpsert(user User, device Device) (User, error) { 
+	if len(device.ID) == 0 { 
+		log.Printf("No ID in device upsert")
+		return user, errors.New("No device ID provided")
+	}
+
+	if len(device.Token) == 0 { 
+		log.Printf("No token in device upsert for %s", device.ID)
+		return user, errors.New("No device token provided")
+	}
+
+	device.EditedAt = time.Now().Unix()
+
+	foundIndex := -1
+	for deviceIndex, curDevices := range user.Devices {
+		if curDevices.ID != device.ID {
+			continue
+		}
+
+		foundIndex = deviceIndex
+		break
+	}
+
+	if foundIndex >= 0 {
+		device.CreatedAt = user.Devices[foundIndex].CreatedAt
+		user.Devices[foundIndex] = device
+	} else {
+		user.Devices = append(user.Devices, device)
+	}
+
+	return user, nil 
+}
+
 func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -6099,6 +6132,8 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		CreatorSocial      string          `json:"creator_social"`
 		SpecializedApps    []MinimizedApps `json:"specialized_apps"`
 		Theme              string          `json:"theme"`
+
+		Device Device `json:"device" datastore:"device"` 
 	}
 
 	ctx := GetContext(request)
@@ -6265,6 +6300,17 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	if len(t.CompanyRole) > 0 {
 		foundUser.PersonalInfo.Role = t.CompanyRole
+	}
+
+	if len(t.Device.ID) > 0 { 
+		retUser, err := handleDeviceUpsert(*foundUser, t.Device)
+		if err != nil {
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		}
+
+		foundUser = &retUser
 	}
 
 	if project.Environment == "cloud" {
