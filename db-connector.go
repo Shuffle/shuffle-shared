@@ -9227,6 +9227,11 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
 	}
 
+	// Drop the stream auth cache only when owner/org/public actually changes, not on ordinary saves.
+	if len(foundWorkflow.ID) > 0 && (foundWorkflow.Owner != workflow.Owner || foundWorkflow.OrgId != workflow.OrgId || foundWorkflow.Public != workflow.Public) {
+		DeleteCache(ctx, streamAuthCtxKey(id))
+	}
+
 	if project.CacheDb {
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
