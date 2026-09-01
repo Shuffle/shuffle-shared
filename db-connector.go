@@ -438,7 +438,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 					if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
 						log.Printf("[ERROR] Failed setting cache for '%s' (1): %s", originalKey, err)
 					}
-					break
+					return err
 				} else {
 					totalAdded += chunkSize
 					currentChunk = nextStep
@@ -485,6 +485,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 					return err
 				} else {
 					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", originalKey, err)
+					return err
 				}
 			}
 		}

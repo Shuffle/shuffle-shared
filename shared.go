@@ -17919,7 +17919,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	}
 
 	actionResultCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
-	go SetCache(context.Background(), actionResultCacheId, marshalledResult, 35)
+	_ = SetCache(context.Background(), actionResultCacheId, marshalledResult, 35)
 
 	fullUrl := fmt.Sprintf("%s/api/v1/streams", baseUrl)
 	client := &http.Client{}
@@ -18094,6 +18094,11 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed unmarshalling agent result: %s. Data: %s", workflowExecution.ExecutionId, err, actionResult.Result)
 		return &workflowExecution, false, err
+	}
+
+	if mappedResult.Status == "ABORTED" || (mappedResult.Status == "FINISHED" && workflowExecution.Status != "EXECUTING") {
+		log.Printf("[INFO][%s] Agent is already in status '%s'. Skipping late stream callback for decision %s", workflowExecution.ExecutionId, mappedResult.Status, decisionId)
+		return &workflowExecution, false, nil
 	}
 
 	// In test mode, if the placeholder has no decisions, we need to add the incoming decision
@@ -18311,7 +18316,15 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			originalAction = actionResult.Action
 		}
 
-		// If the execution is already FINISHED but a continuation was injected (user asked  the agent to do more on top of what it already did), we need to reset the status back to EXECUTING so that HandleAiAgentExecutionStart doesn't exit with "Agent run already finished". We also persist this to cache so the guard in
+		lockKey := fmt.Sprintf("agent_llm_lock_%s_%s", workflowExecution.ExecutionId, originalAction.ID)
+		if _, err := GetCache(ctx, lockKey); err == nil {
+			log.Printf("[INFO][%s] LLM re-entry lock held in cache, skipping duplicate call for node %s", workflowExecution.ExecutionId, originalAction.ID)
+			return &workflowExecution, false, nil
+		}
+		_ = SetCache(ctx, lockKey, []byte("1"), 2)
+		defer DeleteCache(ctx, lockKey)
+
+		// If the execution is already FINISHED but a continuation was injected (user asked the agent to do more on top of what it already did), we need to reset the status back to EXECUTING so that HandleAiAgentExecutionStart doesn't exit with "Agent run already finished".
 		if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
 			log.Printf("[INFO][%s] Agent continuation: resetting execution status from '%s' to 'EXECUTING' for continuation", workflowExecution.ExecutionId, workflowExecution.Status)
 			workflowExecution.Status = "EXECUTING"
@@ -18322,16 +18335,16 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			if marshalledResult, marshalErr := json.Marshal(mappedResult); marshalErr == nil {
 				workflowExecution.Results[foundActionResultIndex].Result = string(marshalledResult)
 
-				// push to the action result cache so GetWorkflowExecution inside HandleAiAgentExecutionStart picks up the fresh copy.
+				// push to the action result cache synchronously so the next step picks up the fresh copy.
 				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
-				go SetCache(ctx, actionCacheId, marshalledResult, 600)
+				SetCache(ctx, actionCacheId, marshalledResult, 600)
 
 				// Persist intermediate agent state to DB to prevent information loss on restarts
 				executionCacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
 				if marshalledExec, execMarshalErr := json.Marshal(workflowExecution); execMarshalErr == nil {
 					SetCache(ctx, executionCacheKey, marshalledExec, 600)
 				}
-				go SetWorkflowExecution(ctx, workflowExecution, true)
+				SetWorkflowExecution(ctx, workflowExecution, true)
 
 			} else {
 				log.Printf("[WARNING][%s] Failed to marshal updated mappedResult before HandleAiAgentExecutionStart: %s", workflowExecution.ExecutionId, marshalErr)
