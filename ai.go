@@ -9481,6 +9481,15 @@ data_filter:
 
 		if err != nil {
 			log.Printf("[ERROR][%s] AI Agent: Failed running AI query for action %s: %s", execution.ExecutionId, startNode.ID, err)
+			if strings.Contains(err.Error(), "429") {
+				rateLimitKey := fmt.Sprintf("openai_rate_limit_log_%s", execution.Workflow.OrgId)
+				if _, cacheErr := GetCache(ctx, rateLimitKey); cacheErr != nil {
+					log.Printf("[ERROR][%s] AI_OPENAI_RATE_LIMIT: org=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, err.Error())
+					_ = SetCache(ctx, rateLimitKey, []byte("1"), 30)
+				}
+
+				return abortAgentExecution(ctx, execution, startNode, "llm_rate_limit", "AI provider rate limit or credit quota exceeded. Please check your billing or API keys.")
+			}
 			return abortAgentExecution(ctx, execution, startNode, "run_ai_query_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 		}
 
@@ -11178,7 +11187,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				}
 
 				flusher.Flush()
-				return "", nil
+				return "", lastError
 			}
 
 			log.Printf("[ERROR] Failed to in runActionAI after 5 tries for openapi info: %s", lastError)
