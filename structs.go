@@ -724,6 +724,25 @@ type UserGeoInfo struct {
 	} `datastore:"country" json:"country"`
 }
 
+type DeviceNotificationPreferences struct {
+	CriticalPager bool `json:"critical_pager"` // Critical downtime siren alerts
+	AgentRequests bool `json:"agent_requests"` // AI agent human-in-the-loop approvals
+	GeneralAlerts bool `json:"general_alerts"` // General FYI updates & reports
+}
+
+type Device struct {
+	ID          string                        `json:"id"`                    // Unique device identifier
+	Token       string                        `json:"token"`                 // FCM registration token
+	Platform    string                        `json:"platform"`              // "ios", "android", "web", "desktop"
+	DeviceName  string                        `json:"device_name,omitempty"` // e.g., "iPhone 16 Pro", "Chrome macOS"
+	AppVersion  string                        `json:"app_version,omitempty"` // App version
+	Preferences DeviceNotificationPreferences `json:"preferences"`           // Granular notification settings
+
+	CreatedAt  int64 `json:"created_at"`   // Registration timestamp
+	EditedAt   int64 `json:"edited_at"`    // Last updated timestamp
+	LastSeenAt int64 `json:"last_seen_at"` // Last active timestamp
+}
+
 type User struct {
 	Username             string        `datastore:"Username" json:"username"`
 	Password             string        `datastore:"password,noindex" password:"password,omitempty"`
@@ -759,6 +778,7 @@ type User struct {
 	LoginInfo    []LoginInfo  `datastore:"login_info" json:"login_info"`
 	PersonalInfo PersonalInfo `datastore:"personal_info" json:"personal_info"`
 	Regions      []string     `datastore:"regions" json:"regions"`
+	Devices      []Device     `datastore:"devices" json:"devices"` // Handles phones and such for notifications
 
 	UserGeoInfo UserGeoInfo `datastore:"user_geo_info" json:"user_geo_info"`
 
@@ -3187,6 +3207,7 @@ type HandleInfo struct {
 	UserGeoInfo         UserGeoInfo `json:"user_geo_info,omitempty"`
 	Theme               string      `json:"theme"`
 	AIEnabled           bool        `json:"ai_enabled"`
+	SSOInfos            []SSOInfo   `json:"sso_infos"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`
@@ -5856,6 +5877,7 @@ type AgentWorkflowExecutionReturn struct {
 
 type PixelFormat string
 type ElementRole string
+
 const (
 	FormatRGBA PixelFormat = "RGBA"
 	FormatBGRA PixelFormat = "BGRA"
@@ -5901,12 +5923,12 @@ type UIState struct {
 }
 
 type ScreenshotWrapper struct {
-	ScreenSize  DisplaySize `json:"screen_size"`
-	Cursor      Position    `json:"cursor"`
+	ScreenSize DisplaySize `json:"screen_size"`
+	Cursor     Position    `json:"cursor"`
 
-	// Image -> Base64 -> Empty .Image in sensors.go 
-	Image       []byte      `json:"image,omitempty"` // Raw
-	ImageBase64 string      `json:"image_base64,omitempty"` // base64.
+	// Image -> Base64 -> Empty .Image in sensors.go
+	Image       []byte `json:"image,omitempty"`        // Raw
+	ImageBase64 string `json:"image_base64,omitempty"` // base64.
 
 	ElementTree []UIElement `json:"element_tree,omitempty"`
 }
@@ -5914,4 +5936,27 @@ type ScreenshotWrapper struct {
 type Point struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`
+}
+
+// NotificationRequest defines the incoming JSON structure.
+type NotificationRequest struct {
+	Type        string `json:"type"` // "critical", "agent_request", or "general"
+	Title       string `json:"title"`
+	Body        string `json:"body"`
+	Description string `json:"description,omitempty"`
+	Source      string `json:"source,omitempty"`
+	// Device Routing
+	TargetTokens []string `json:"target_tokens"`
+	TargetToken  string   `json:"target_token,omitempty"`
+	// Critical / Pager specific fields
+	IncidentID          string `json:"incident_id,omitempty"`
+	Severity            string `json:"severity,omitempty"`
+	Tier                int    `json:"tier,omitempty"`
+	AutoEscalateSeconds int    `json:"auto_escalate_seconds,omitempty"`
+	// Agent Request specific fields
+	ExecutionID string `json:"execution_id,omitempty"`
+	WorkflowID  string `json:"workflow_id,omitempty"`
+	Action      string `json:"action,omitempty"`
+	// General / FYI specific fields
+	ReferenceURL string `json:"reference_url,omitempty"`
 }

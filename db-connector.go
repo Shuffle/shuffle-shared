@@ -458,7 +458,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 					if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
 						log.Printf("[ERROR] Failed setting cache for '%s' (1): %s", originalKey, err)
 					}
-					break
+					return err
 				} else {
 					totalAdded += chunkSize
 					currentChunk = nextStep
@@ -505,6 +505,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 					return err
 				} else {
 					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", originalKey, err)
+					return err
 				}
 			}
 		}
@@ -9524,6 +9525,11 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	if len(workflow.ChildWorkflowIds) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
+	}
+
+	// Drop the stream auth cache only when owner/org/public actually changes, not on ordinary saves.
+	if len(foundWorkflow.ID) > 0 && (foundWorkflow.Owner != workflow.Owner || foundWorkflow.OrgId != workflow.OrgId || foundWorkflow.Public != workflow.Public) {
+		DeleteCache(ctx, streamAuthCtxKey(id))
 	}
 
 	if project.CacheDb {

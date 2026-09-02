@@ -2946,7 +2946,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 
-	go SetCache(ctx, decisionId, marshalledDecision, 600)
+	SetCache(ctx, decisionId, marshalledDecision, 600)
 
 	if decision.Action == "user_input" || decision.Action == "answer" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" || decision.Category == "standalone" {
 	} else {
@@ -3011,7 +3011,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			duration = (time.Now().UnixMilli() - decision.RunDetails.StartedAt) / 1000
 		}
 
-		log.Printf("[DEBUG][%s] AI_AGENT_TOOL: org=%s tool=%s action=%s status=%s duration=%ds", execution.ExecutionId, execution.Workflow.OrgId, decision.Tool, decision.Action, decision.RunDetails.Status, duration)
+		log.Printf("[INFO][%s] AI_AGENT_TOOL: org=%s tool=%s action=%s status=%s duration=%ds", execution.ExecutionId, execution.Workflow.OrgId, decision.Tool, decision.Action, decision.RunDetails.Status, duration)
 	}
 
 	// when there are late-returning goroutines like more than 5 mins then Fixexecution may have already stamped this decision as FAILURE (5-min timeout) and
@@ -3039,7 +3039,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling completed decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 
-	go SetCache(ctx, decisionId, marshalledDecision, 600)
+	SetCache(ctx, decisionId, marshalledDecision, 600)
 
 	// 1. Send an /api/v1/streams request? Due to concurrency, I think this is the only way (?)
 	// 2. On the streams API, make sure to:

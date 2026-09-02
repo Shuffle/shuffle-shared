@@ -33,11 +33,9 @@ func presenceColor(userID string) string {
 	return streamPresenceColors[hash%len(streamPresenceColors)]
 }
 
-// streamPresenceInterval: presence update every 100 poll iterations (~10s at 100ms/poll)
-var streamPresenceInterval = 100
 var streamPresenceTTL int32 = 5
 var streamPresenceStaleMs int64 = 30000                                           // 30 seconds stale threshold
-var streamAllowRegionRedirect = os.Getenv("SHUFFLE_STREAM_REGION_REDIRECT") == "" // set SHUFFLE_STREAM_DISABLE_REGION_REDIRECT locally to always handle stream requests locally instead of redirecting by region; unset in prod so this stays true
+var streamAllowRegionRedirect = os.Getenv("SHUFFLE_STREAM_REGION_REDIRECT") == "" // Set SHUFFLE_STREAM_REGION_REDIRECT to any non-empty value to disable region redirects locally; unset in prod so this stays true
 var streamSelfCloseAfter = 55 * time.Second                                       // close cleanly before the platform force-cuts at 60s, always between ops - never mid-write
 
 // Stream storage model (per workflow):
@@ -49,14 +47,78 @@ var streamSelfCloseAfter = 55 * time.Second                                     
 // Writes only allocate a sequence (atomic INCR) and set a single op key, so concurrent
 // writers can never clobber each other. Readers poll the small counter key and only fetch
 // op payloads when it advances.
-var streamOpTTLMinutes int32 = 5    // individual op keys; also bounds catch-up history
+var streamOpTTLMinutes int32 = 30   // individual op keys; also bounds catch-up history
 var streamSeqTTLMinutes int32 = 60  // counter + lastsave keys (SetCache uses minutes; memcache/requestCache paths convert to seconds via *60)
 var streamMaxCatchup int64 = 100    // cap replayed ops on connect/history
 var streamMissRetries = 30          // ~3s at 100ms/poll before skipping a never-materialised op
 var streamPostSaveKeepOps int64 = 4 // ops just before a save are kept as a small safety buffer; older ones are pruned
+var streamAuthCtxTTLMinutes int32 = 2
+
+// Adaptive polling: the read loop starts at streamPollFast and slows down
+// when no ops arrive, reducing idle memcache reads by ~97%. Any forwarded op
+// snaps the interval back to streamPollFast immediately.
+//
+// Tier        Idle duration     Poll interval
+// ─────────   ──────────────    ─────────────
+// Fast        0 – 2 min        100 ms
+// Medium      2 – 5 min        500 ms
+// Slow        5 – 15 min       1 s
+// Slowest     15 min+           3 s
+var (
+	streamPollFast    = 100 * time.Millisecond
+	streamPollMedium  = 500 * time.Millisecond
+	streamPollSlow    = 1 * time.Second
+	streamPollSlowest = 3 * time.Second
+
+	streamIdleMedium  = 2 * time.Minute
+	streamIdleSlow    = 5 * time.Minute
+	streamIdleSlowest = 15 * time.Minute
+)
 
 // streamSeqMu guards the in-process counter path (single-instance deployments without memcache).
 var streamSeqMu sync.Mutex
+
+// streamPollInterval picks the poll sleep based on idle duration.
+func streamPollInterval(lastActivity time.Time) time.Duration {
+	idle := time.Since(lastActivity)
+	switch {
+	case idle < streamIdleMedium:
+		return streamPollFast
+	case idle < streamIdleSlow:
+		return streamPollMedium
+	case idle < streamIdleSlowest:
+		return streamPollSlow
+	default:
+		return streamPollSlowest
+	}
+}
+
+// getStreamLastActivity reads the last-activity unix-ms timestamp from cache.
+// Returns (timestamp, true) on hit, or (time.Now(), false) on miss.
+func getStreamLastActivity(ctx context.Context, workflowID string) (time.Time, bool) {
+	v, err := GetCache(ctx, streamLastActivityKey(workflowID))
+	if err != nil {
+		return time.Now(), false
+	}
+	raw, ok := v.([]uint8)
+	if !ok {
+		return time.Now(), false
+	}
+	ms, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil || ms == 0 {
+		return time.Now(), false
+	}
+	return time.UnixMilli(ms), true
+}
+
+// setStreamLastActivity persists time.Now() as the last-activity timestamp.
+// TTL matches the seq counter (60 min) so it expires with the stream.
+func setStreamLastActivity(ctx context.Context, workflowID string) {
+	ms := time.Now().UnixMilli()
+	if err := SetCache(ctx, streamLastActivityKey(workflowID), []byte(strconv.FormatInt(ms, 10)), streamSeqTTLMinutes); err != nil {
+		log.Printf("[WARNING] Failed setting stream last-activity for %s: %s", workflowID, err)
+	}
+}
 
 func streamSeqKey(id string) string {
 	return fmt.Sprintf("%s_stream_seq", id)
@@ -70,8 +132,77 @@ func streamOpKey(id string, seq int64) string {
 	return fmt.Sprintf("%s_stream_op_%d", id, seq)
 }
 
+func streamLastActivityKey(id string) string {
+	return fmt.Sprintf("%s_stream_lastactivity", id)
+}
+
 func streamPresenceKeyFor(id string) string {
 	return fmt.Sprintf("%s_presence", id)
+}
+
+func streamAuthCtxKey(id string) string {
+	return fmt.Sprintf("%s_stream_authctx", id)
+}
+
+// streamWorkflowAuth is the tiny per-workflow fact set the stream handlers authorize against.
+// Cached per-workflow so the large GetWorkflow+GetOrg reads don't run on every ~55s reconnect.
+type streamWorkflowAuth struct {
+	ID                string `json:"id"`
+	Owner             string `json:"owner"`
+	OrgId             string `json:"org_id"`
+	Public            bool   `json:"public"`
+	MultiplayerActive bool   `json:"multiplayer_active"`
+}
+
+func getStreamWorkflowAuth(ctx context.Context, workflowID string) (streamWorkflowAuth, bool) {
+	key := streamAuthCtxKey(workflowID)
+
+	// Fast path: return the cached facts when the entry exists and decodes cleanly.
+	cached, cacheErr := GetCache(ctx, key)
+	if cacheErr == nil {
+		cacheBytes, ok := cached.([]uint8)
+		if ok {
+			var auth streamWorkflowAuth
+			unmarshalErr := json.Unmarshal(cacheBytes, &auth)
+			if unmarshalErr == nil && len(auth.ID) > 0 {
+				return auth, true
+			}
+		}
+	}
+
+	// Cache miss: read the workflow. A missing workflow means "not found".
+	workflow, err := GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return streamWorkflowAuth{}, false
+	}
+
+	auth := streamWorkflowAuth{
+		ID:     workflow.ID,
+		Owner:  workflow.Owner,
+		OrgId:  workflow.OrgId,
+		Public: workflow.Public,
+	}
+
+	// Read the org to find out whether multiplayer is enabled.
+	org, orgErr := GetOrg(ctx, workflow.OrgId)
+	if orgErr != nil {
+		// Org read failed: treat multiplayer as off and don't cache it.
+		return auth, true
+	}
+	auth.MultiplayerActive = org.SyncFeatures.Multiplayer.Active
+
+	// Cache only when multiplayer is on, so turning it on is picked up on the next request.
+	if auth.MultiplayerActive {
+		authBytes, marshalErr := json.Marshal(auth)
+		if marshalErr == nil {
+			setErr := SetCache(ctx, key, authBytes, streamAuthCtxTTLMinutes)
+			if setErr != nil {
+				log.Printf("[WARNING] Failed caching stream auth context for %s: %s", workflowID, setErr)
+			}
+		}
+	}
+
+	return auth, true
 }
 
 // nextStreamSeq atomically allocates and returns the next stream sequence for a workflow.
@@ -229,36 +360,37 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	}
 
 	ctx := GetContext(request)
-	workflow, err := GetWorkflow(ctx, fileId)
-	if err != nil {
+	workflowAuth, ok := getStreamWorkflowAuth(ctx, fileId)
+	if !ok {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow."}`))
 		return
 	}
 
-	if user.Id != workflow.Owner || len(user.Id) == 0 {
-		if workflow.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
-			// log.Printf("[AUDIT] User %s is accessing workflow %s as admin (SET workflow stream)", user.Username, workflow.ID)
+	if user.Id != workflowAuth.Owner || len(user.Id) == 0 {
+		if workflowAuth.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
+			// log.Printf("[AUDIT] User %s is accessing workflow %s as admin (SET workflow stream)", user.Username, workflowAuth.ID)
 
 		} else if project.Environment == "cloud" && user.Verified == true && user.SupportAccess == true && user.Role == "admin" {
-			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflowAuth.ID)
 
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (SET workflow stream)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (SET workflow stream)", user.Username, workflowAuth.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "You do not have permission to update this workflow's stream"}`))
 			return
 		}
 	}
 
-	org, err := GetOrg(ctx, workflow.OrgId)
-	if err != nil || !org.SyncFeatures.Multiplayer.Active {
-		log.Printf("[AUDIT] Multiplayer not active for org %s (Workflow stream updates)", workflow.OrgId)
+	if !workflowAuth.MultiplayerActive {
+		log.Printf("[AUDIT] Multiplayer not active for org %s (Workflow stream updates)", workflowAuth.OrgId)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
 		return
 	}
+
+	workflowID := workflowAuth.ID
 
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
@@ -284,9 +416,9 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	for i := range ops {
 		// Atomic allocation — two writers can never receive the same sequence, so their
 		// ops can never overwrite each other (each lives under its own key).
-		seq, seqErr := nextStreamSeq(workflow.ID)
+		seq, seqErr := nextStreamSeq(workflowID)
 		if seqErr != nil {
-			log.Printf("[ERROR] Failed allocating stream sequence for %s: %s", workflow.ID, seqErr)
+			log.Printf("[ERROR] Failed allocating stream sequence for %s: %s", workflowID, seqErr)
 			resp.WriteHeader(500)
 			resp.Write([]byte(`{"success": false, "reason": "Failed to allocate stream sequence"}`))
 			return
@@ -303,20 +435,20 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 
 		opBytes, marshalErr := json.Marshal(ops[i])
 		if marshalErr != nil {
-			log.Printf("[WARNING] Failed marshaling stream op for %s: %s", workflow.ID, marshalErr)
+			log.Printf("[WARNING] Failed marshaling stream op for %s: %s", workflowID, marshalErr)
 			continue
 		}
-		if cacheErr := SetCache(ctx, streamOpKey(workflow.ID, seq), opBytes, streamOpTTLMinutes); cacheErr != nil {
-			log.Printf("[WARNING] Failed storing stream op %d for %s: %s", seq, workflow.ID, cacheErr)
+		if cacheErr := SetCache(ctx, streamOpKey(workflowID, seq), opBytes, streamOpTTLMinutes); cacheErr != nil {
+			log.Printf("[WARNING] Failed storing stream op %d for %s: %s", seq, workflowID, cacheErr)
 		}
 
 		// Record the save baseline so late joiners only replay unsaved changes.
 		if ops[i].Item == "workflow" && ops[i].Type == "save" {
-			prevSaveSeq := lastStreamSaveSeq(ctx, workflow.ID)
-			if err := SetCache(ctx, streamLastSaveKey(workflow.ID), []byte(strconv.FormatInt(seq, 10)), streamSeqTTLMinutes); err != nil {
-				log.Printf("[WARNING] Failed setting stream lastsave key for %s: %s", workflow.ID, err)
+			prevSaveSeq := lastStreamSaveSeq(ctx, workflowID)
+			if err := SetCache(ctx, streamLastSaveKey(workflowID), []byte(strconv.FormatInt(seq, 10)), streamSeqTTLMinutes); err != nil {
+				log.Printf("[WARNING] Failed setting stream lastsave key for %s: %s", workflowID, err)
 			}
-			go pruneStreamOpsBeforeSave(ctx, workflow.ID, prevSaveSeq, seq)
+			go pruneStreamOpsBeforeSave(ctx, workflowID, prevSaveSeq, seq)
 		}
 
 		lastSeq = seq
@@ -372,41 +504,40 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	workflow, err := GetWorkflow(ctx, fileId)
-	if err != nil {
+	workflowAuth, ok := getStreamWorkflowAuth(ctx, fileId)
+	if !ok {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow."}`))
 		return
 	}
 
-	if user.Id != workflow.Owner || len(user.Id) == 0 {
+	if user.Id != workflowAuth.Owner || len(user.Id) == 0 {
 
-		if workflow.OrgId == user.ActiveOrg.Id && user.Role != "" {
-			// log.Printf("[AUDIT] User %s is accessing workflow %s as org member (get workflow stream)", user.Username, workflow.ID)
+		if workflowAuth.OrgId == user.ActiveOrg.Id && user.Role != "" {
+			// log.Printf("[AUDIT] User %s is accessing workflow %s as org member (get workflow stream)", user.Username, workflowAuth.ID)
 
-		} else if workflow.Public {
-			// log.Printf("[AUDIT] Letting user %s access workflow %s for streaming because it's public (get workflow stream)", user.Username, workflow.ID)
+		} else if workflowAuth.Public {
+			// log.Printf("[AUDIT] Letting user %s access workflow %s for streaming because it's public (get workflow stream)", user.Username, workflowAuth.ID)
 
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflowAuth.ID)
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow stream)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow stream)", user.Username, workflowAuth.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "You do not have permission to access this workflow's stream"}`))
 			return
 		}
 	}
 
-	org, err := GetOrg(ctx, workflow.OrgId)
-	if err != nil || !org.SyncFeatures.Multiplayer.Active {
-		log.Printf("[AUDIT] Multiplayer not active for org %s (get workflow stream)", workflow.OrgId)
+	if !workflowAuth.MultiplayerActive {
+		log.Printf("[AUDIT] Multiplayer not active for org %s (get workflow stream)", workflowAuth.OrgId)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
 		return
 	}
 
-	workflowID := workflow.ID
+	workflowID := workflowAuth.ID
 
 	resp.Header().Set("Connection", "Keep-Alive")
 	resp.Header().Set("X-Content-Type-Options", "nosniff")
@@ -429,10 +560,10 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	presenceKey := streamPresenceKeyFor(workflowID)
 	var lastSentSeq int64 = sinceSeq
-	var pollCount int
 
-	// On initial connect (since=0), replay every op since the last save so late joiners see
-	// the full unsaved backlog - it only exists in the stream, a reload wouldn't recover it.
+	// On first connect (since=0), replay unsaved ops so late joiners see the
+	// current canvas state. Ops older than streamOpTTLMinutes are gone from
+	// cache and will be missed — saving the workflow resets the baseline.
 	if sinceSeq == 0 {
 		currentSeq := currentStreamSeq(ctx, workflowID)
 		if currentSeq > 0 {
@@ -440,7 +571,6 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			if start < 1 {
 				start = 1
 			}
-
 			for seq := start; seq <= currentSeq; seq++ {
 				op, ok := getStreamOp(ctx, workflowID, seq)
 				if !ok {
@@ -456,9 +586,6 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 				fmt.Fprintf(resp, "%s\n", string(opBytes))
 			}
 		}
-
-		// Everything up to currentSeq has been handled by catch-up; the live loop only
-		// forwards ops that arrive after this point.
 		lastSentSeq = currentSeq
 		fmt.Fprintf(resp, "%s\n", `{"item":"system","type":"init_complete"}`)
 		conn.Flush()
@@ -469,13 +596,26 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	var stalledSeq int64 = -1
 	var stalledCount int
 
+	// Adaptive polling: seed the activity timestamp on first connect so it
+	// persists across 55s reconnect cycles. Subsequent connects read the
+	// existing key; only the very first connection writes it.
+	lastActivity, exists := getStreamLastActivity(ctx, workflowID)
+	if !exists {
+		setStreamLastActivity(ctx, workflowID)
+	}
+	lastPresenceAt := time.Time{} // zero → sends presence on first iteration
+
 	for {
 		if time.Since(connStart) > streamSelfCloseAfter {
 			return
 		}
 
-		pollCount++
-		if pollCount%streamPresenceInterval == 1 {
+		// Presence: send every ~10 seconds regardless of poll speed.
+		// Using wall-clock interval instead of pollCount so it stays consistent
+		// even when the poll interval changes (adaptive polling).
+		if time.Since(lastPresenceAt) >= 10*time.Second {
+			lastPresenceAt = time.Now()
+
 			var presence StreamPresenceState
 			presenceCache, err := GetCache(ctx, presenceKey)
 			if err == nil {
@@ -558,7 +698,9 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			stalledSeq = -1
 			stalledCount = 0
 
-			// Skip ops from this user — they already applied them locally.
+			// Skip own-user ops (already applied locally). Don't reset
+			// lastActivity — the frontend's since-seq doesn't advance past
+			// skipped ops, so this fires on stale replays every reconnect.
 			if len(user.Id) > 0 && op.UserID == user.Id {
 				lastSentSeq = seq
 				continue
@@ -577,10 +719,13 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 			lastSentSeq = seq
+			lastActivity = time.Now()
+			setStreamLastActivity(ctx, workflowID)
 			conn.Flush()
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		pollInterval := streamPollInterval(lastActivity)
+		time.Sleep(pollInterval)
 	}
 }
 
@@ -634,30 +779,29 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 	}
 
 	ctx := GetContext(request)
-	workflow, err := GetWorkflow(ctx, fileId)
-	if err != nil {
+	workflowAuth, ok := getStreamWorkflowAuth(ctx, fileId)
+	if !ok {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow."}`))
 		return
 	}
 
-	if user.Id != workflow.Owner {
-		if workflow.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
+	if user.Id != workflowAuth.Owner {
+		if workflowAuth.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
 			// org member — allowed
 		} else if project.Environment == "cloud" && user.Verified && user.Active && user.SupportAccess && strings.HasSuffix(user.Username, "@shuffler.io") {
 			// support admin — allowed
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (stream history)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (stream history)", user.Username, workflowAuth.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "You do not have permission to view this workflow's stream history"}`))
 			return
 		}
 	}
 
-	org, err := GetOrg(ctx, workflow.OrgId)
-	if err != nil || !org.SyncFeatures.Multiplayer.Active {
-		log.Printf("[AUDIT] Multiplayer not active for org %s (stream history)", workflow.OrgId)
+	if !workflowAuth.MultiplayerActive {
+		log.Printf("[AUDIT] Multiplayer not active for org %s (stream history)", workflowAuth.OrgId)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
 		return
@@ -665,7 +809,8 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 
 	// Reassemble the recent operation history (bounded to the last streamMaxCatchup ops)
 	// from the individual op keys.
-	currentSeq := currentStreamSeq(ctx, workflow.ID)
+	workflowID := workflowAuth.ID
+	currentSeq := currentStreamSeq(ctx, workflowID)
 	operations := []StreamWorkflowOperation{}
 	if currentSeq > 0 {
 		start := currentSeq - streamMaxCatchup + 1
@@ -673,7 +818,7 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 			start = 1
 		}
 		for seq := start; seq <= currentSeq; seq++ {
-			if op, ok := getStreamOp(ctx, workflow.ID, seq); ok {
+			if op, ok := getStreamOp(ctx, workflowID, seq); ok {
 				operations = append(operations, op)
 			}
 		}

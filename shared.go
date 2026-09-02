@@ -74,10 +74,12 @@ import (
 	"github.com/frikky/kin-openapi/openapi3"
 
 	"github.com/google/go-github/v28/github"
+	firebase "firebase.google.com/go/v4"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
 
 	"github.com/Masterminds/semver"
+	"firebase.google.com/go/v4/messaging"
 	"github.com/klauspost/compress/gzhttp"
 	dockerclient "github.com/docker/docker/client"
 )
@@ -100,6 +102,43 @@ func GetProject() ShuffleStorage {
 // context handling
 func GetContext(request *http.Request) context.Context {
 	return context.Background()
+}
+
+func AllowedDomain(referer string) bool { 
+	domains := []string{
+		"shuffler.io",
+		"singul.io",
+		"shuffle.security",
+		"tanuki.to",
+
+		// Local testing
+		"localhost",
+		"127.0.0.1",
+
+		// Additional testers. Disabled due to possible phishing.
+		// "lovable.app",
+		//"lovableproject.com",
+	}
+
+	parsedURL, err := url.Parse(referer)
+	if err != nil || parsedURL.Host == "" {
+		log.Printf("[WARNING] Invalid referer URL: %s", referer)
+		return false
+	}
+
+	// Extract hostname (remove port if present)
+	host := parsedURL.Host
+	if idx := strings.Index(host, ":"); idx != -1 {
+		host = host[:idx]
+	}
+
+	for _, domain := range domains { 
+		if strings.HasSuffix(host, domain) { 
+			return true
+		}
+	}
+
+	return false
 }
 
 func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
@@ -128,31 +167,32 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 
 			// Related projects (maybe)
 			"https://*.singul.io",
-			"https://singul.io",
+			"https://singul.io", 
 			"https://*.shuffle.security",
-			"https://shuffle.security",
+			"https://shuffle.security", // Shuffle Security
+			"https://tanuki.to", 		// For browser automation
 
 			// Local testing
 			"http://localhost:3002",
 			"http://localhost:3000",
 
-			// Shuffle support
+			// Shuffle security 
 			"https://cases.shuffler.io",
 			"https://security.shuffler.io",
 			"https://id-preview--83c56bc8-506d-4dc5-a245-6b57e03ff019.lovable.app",
+			"https://83c56bc8-506d-4dc5-a245-6b57e03ff019.lovableproject.com",
 
 			// tbd
 			"https://preview--shuffle-cases.lovable.app",
 			"https://9f29a11a-6489-4898-8044-ed7b8f848ef9.lovableproject.com",
 			"https://id-preview--9f29a11a-6489-4898-8044-ed7b8f848ef9.lovable.app",
 
-			// Support project
+			// Support project - testing.
 			"https://support.shuffler.io",
 			"https://compliance.shuffler.io",
 			"https://2538a36b-5c1c-4954-8700-ee5d6c6b9f91.lovableproject.com",
 
 			"https://shuffle-support.lovable.app",
-			"https://shuffle-support.lovable.app/",
 			"https://05364669-00ea-43be-ae8f-8e333ccc870c.lovableproject.com",
 			"https://preview--shuffle-support.lovable.app",
 		}
@@ -3695,7 +3735,8 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			newApikey = newApikey[0:248]
 		}
 
-		cache, err := GetCache(ctx, newApikey+org_id)
+		apiCacheKey := fmt.Sprintf("%s%s", newApikey, org_id)
+		cache, err := GetCache(ctx, apiCacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &user)
@@ -3730,12 +3771,28 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 					log.Printf("[DEBUG] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
 				}
 			}
+		}
 
-			return User{}, err
+		// Fallback with session token if the API key doesn't exist
+		// This is to make everything work on Mobile apps and is done quite 
+		// a lot for app development auth. Also allows us to use App login 
+		// to onprem Shuffle instance
+		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
+			userdata, err = GetSessionNew(ctx, apikeyCheck[1])
+			if err != nil { 
+				log.Printf("[WARNING] Session token '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
+			} else {
+				if debug { 
+					log.Printf("[DEBUG] Session token '%s' exists. URL: %#v", apikeyCheck[1], request.URL.String())
+				}
+				userdata.SessionLogin = true 
+			}
+		} else {
+			userdata.SessionLogin = false
+			userdata.ApiKey = newApikey
 		}
 
 		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
-			//log.Printf("[WARNING] Apikey %s doesn't exist or the user doesn't have an ID/Username", apikey)
 			return User{}, errors.New("Couldn't find the user")
 		}
 
@@ -3770,16 +3827,13 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			userdata.ActiveOrg.Image = org.Image
 		}
 
-		userdata.SessionLogin = false
-		userdata.ApiKey = newApikey
-
 		b, err := json.Marshal(userdata)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling: %s", err)
 			return User{}, err
 		}
 
-		err = SetCache(ctx, newApikey+org_id, b, 30)
+		err = SetCache(ctx, apiCacheKey,  b, 5)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
 		}
@@ -6007,6 +6061,114 @@ func HandleGetHooks(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+// ValidateFCMToken checks if a token is valid and belongs to this Firebase project.
+func ValidateFCMToken(ctx context.Context, client *messaging.Client, token string) (bool, error) {
+	if token == "" {
+		return false, errors.New("token cannot be empty")
+	}
+	// Construct a dummy message with DryRun = true
+	msg := &messaging.Message{
+		Token: token,
+		Data: map[string]string{
+			"validation_check": "true",
+		},
+	}
+	// SendDryRun validates the token with Google without delivering a notification
+	_, err := client.SendDryRun(ctx, msg)
+	if err != nil {
+		if messaging.IsInvalidArgument(err) {
+			log.Printf("[WARNING] Invalid FCM token format: %s", token)
+			return false, errors.New("invalid token format")
+		}
+
+		if messaging.IsUnregistered(err) {
+			log.Printf("[WARNING] FCM token is expired or app was uninstalled: %s", token)
+			return false, errors.New("token is unregistered or expired")
+		}
+
+		if messaging.IsSenderIDMismatch(err) {
+			log.Printf("[WARNING] Token belongs to a different Firebase project: %s", token)
+			return false, errors.New("token sender ID mismatch")
+		}
+
+		log.Printf("[ERROR] Failed to validate token with Firebase: %v", err)
+		return false, err
+	}
+	// Token is authentic and ready to receive messages
+	return true, nil
+}
+
+func GetFCMClient(ctx context.Context) (*messaging.Client, error) {
+	// Passing nil config tells Firebase to use Google Application Default Credentials (ADC)
+	app, err := firebase.NewApp(ctx, nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed to initialize Firebase App with ADC: %v", err)
+		return nil, err
+	}
+	client, err := app.Messaging(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get Firebase Messaging client: %v", err)
+		return nil, err
+	}
+	return client, nil
+}
+
+func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, error) { 
+	if project.Environment != "cloud" {
+		log.Printf("[ERROR] Device upsert attempted in non-cloud environment")
+		return user, errors.New("Device upsert is only allowed in cloud environment (for now). Cloud Sync required")
+	}
+
+	if len(device.ID) == 0 { 
+		log.Printf("[ERROR] No ID in device upsert")
+		return user, errors.New("No device ID provided")
+	}
+
+	if len(device.Token) == 0 { 
+		log.Printf("[ERROR] No token in device upsert for %s", device.ID)
+		return user, errors.New("No device token provided")
+	}
+
+	fcmClient, err := GetFCMClient(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get FCM client: %v", err)
+		return user, err
+	}
+
+	// Validate token with Google Firebase Dry Run
+	isValid, err := ValidateFCMToken(ctx, fcmClient, device.Token)
+	if err != nil {
+		log.Printf("[ERROR] Failed to validate FCM token: %v", err)
+		return user, err
+	}
+
+	if !isValid {
+		return user, errors.New("Invalid device token provided")
+	}
+
+
+	device.EditedAt = time.Now().Unix()
+
+	foundIndex := -1
+	for deviceIndex, curDevices := range user.Devices {
+		if curDevices.ID != device.ID {
+			continue
+		}
+
+		foundIndex = deviceIndex
+		break
+	}
+
+	if foundIndex >= 0 {
+		device.CreatedAt = user.Devices[foundIndex].CreatedAt
+		user.Devices[foundIndex] = device
+	} else {
+		user.Devices = append(user.Devices, device)
+	}
+
+	return user, nil 
+}
+
 func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -6061,6 +6223,8 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		CreatorSocial      string          `json:"creator_social"`
 		SpecializedApps    []MinimizedApps `json:"specialized_apps"`
 		Theme              string          `json:"theme"`
+
+		Device Device `json:"device" datastore:"device"` 
 	}
 
 	ctx := GetContext(request)
@@ -6227,6 +6391,17 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	if len(t.CompanyRole) > 0 {
 		foundUser.PersonalInfo.Role = t.CompanyRole
+	}
+
+	if len(t.Device.ID) > 0 { 
+		retUser, err := handleDeviceUpsert(ctx, *foundUser, t.Device)
+		if err != nil {
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		}
+
+		foundUser = &retUser
 	}
 
 	if project.Environment == "cloud" {
@@ -12716,6 +12891,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 				DeleteCache(ctx, user.ApiKey+oldOrgId)
 			}
 
+			DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, user.ActiveOrg.Id))
+
 			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 
@@ -12729,6 +12906,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			if len(user.ApiKey) > 0 {
 				DeleteCache(ctx, user.ApiKey+oldOrgId)
 			}
+
+			DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, user.ActiveOrg.Id))
 
 			return
 		}
@@ -13016,7 +13195,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	newCookie.Name = "__session"
 	http.SetCookie(resp, newCookie)
 
-	// Cleanup cache for the user
+	// Cleanup cache for the user. All of this is just in case
+	// as there is a lot of cross-region + onprem stuff happening
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
@@ -13029,6 +13209,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, user.ApiKey+user.ActiveOrg.Id)
 	DeleteCache(ctx, user.ApiKey+oldOrgId)
 	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, user.ActiveOrg.Id))
 
 	log.Printf("[INFO] User %s (%s) successfully changed org to '%s' (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
@@ -15398,7 +15579,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	app, err := GetApp(ctx, fileId, User{}, false)
-	if err != nil {
+	if err != nil || app.ID == "" {
 		log.Printf("[WARNING] Error getting app %s (app config): %s", fileId, err)
 
 		if project.Environment == "cloud" {
@@ -15420,6 +15601,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	/*
 	// FIXME: Should we redirect here?
 	if app.Public {
 		if project.Environment == "cloud" {
@@ -15432,8 +15614,8 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
-
 	}
+	*/
 
 	app.ReferenceUrl = ""
 	data, err := json.Marshal(app)
@@ -15768,24 +15950,6 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Admin access required"}`))
 		return
-	}
-
-	orgIdHeader := request.Header.Get("Org-Id")
-	if len(orgIdHeader) == 0 {
-		orgIdHeader = request.URL.Query().Get("org_id")
-		if len(orgIdHeader) == 0 {
-			orgIdHeader = request.Header.Get("OrgId")
-		}
-	}
-
-	if len(orgIdHeader) > 0 {
-		_, orgErr := GetOrg(ctx, orgIdHeader)
-		if orgErr != nil {
-			log.Printf("[ERROR] Org-Id '%s' from header does not exist in provision request by user %s: %s", orgIdHeader, user.Username, orgErr)
-			resp.WriteHeader(400)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Org-Id '%s' does not exist. Verify the org ID and try again."}`, orgIdHeader)))
-			return
-		}
 	}
 
 	// check if user is in a partner org
@@ -16357,7 +16521,15 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[INFO] OpenID login for %s", org.Id)
 				redirectKey = "SSO_REDIRECT"
 
-				baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata, "signin")
+				mode := "signin"
+				userdata.InitSSOInfos()
+				existingSSOInfo, hasExistingSSO := userdata.GetSSOInfo(org.Id)
+				if !hasExistingSSO || existingSSOInfo.Sub == "" {
+					log.Printf("[INFO] User %s has no SSO identity bound for org %s yet - using first-time connect flow instead of signin", userdata.Username, org.Id)
+					mode = ""
+				}
+
+				baseSSOUrl, err = GetOpenIdUrl(request, *org, userdata, mode)
 				if err != nil {
 					log.Printf("[ERROR] Failed getting OpenID URL for org %s: %s", org.Id, err)
 				}
@@ -16771,6 +16943,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			http.SetCookie(resp, newCookie)
 
 			newCookie.Name = "__session"
+			newCookie.Domain = ".tanuki.to"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
 			newCookie.Domain = ".shuffler.io"
 			http.SetCookie(resp, newCookie)
 		}
@@ -16840,6 +17016,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 			newCookie.Name = "__session"
 			newCookie.Domain = ".shuffle.security"
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			newCookie.Domain = ".tanuki.to"
 			http.SetCookie(resp, newCookie)
 		}
 
@@ -17903,7 +18083,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	}
 
 	actionResultCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
-	go SetCache(context.Background(), actionResultCacheId, marshalledResult, 35)
+	_ = SetCache(context.Background(), actionResultCacheId, marshalledResult, 35)
 
 	fullUrl := fmt.Sprintf("%s/api/v1/streams", baseUrl)
 	client := &http.Client{}
@@ -18078,6 +18258,11 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed unmarshalling agent result: %s. Data: %s", workflowExecution.ExecutionId, err, actionResult.Result)
 		return &workflowExecution, false, err
+	}
+
+	if mappedResult.Status == "ABORTED" || (mappedResult.Status == "FINISHED" && workflowExecution.Status != "EXECUTING") {
+		log.Printf("[INFO][%s] Agent is already in status '%s'. Skipping late stream callback for decision %s", workflowExecution.ExecutionId, mappedResult.Status, decisionId)
+		return &workflowExecution, false, nil
 	}
 
 	// In test mode, if the placeholder has no decisions, we need to add the incoming decision
@@ -18295,7 +18480,15 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			originalAction = actionResult.Action
 		}
 
-		// If the execution is already FINISHED but a continuation was injected (user asked  the agent to do more on top of what it already did), we need to reset the status back to EXECUTING so that HandleAiAgentExecutionStart doesn't exit with "Agent run already finished". We also persist this to cache so the guard in
+		lockKey := fmt.Sprintf("agent_llm_lock_%s_%s", workflowExecution.ExecutionId, originalAction.ID)
+		if _, err := GetCache(ctx, lockKey); err == nil {
+			log.Printf("[INFO][%s] LLM re-entry lock held in cache, skipping duplicate call for node %s", workflowExecution.ExecutionId, originalAction.ID)
+			return &workflowExecution, false, nil
+		}
+		_ = SetCache(ctx, lockKey, []byte("1"), 2)
+		defer DeleteCache(ctx, lockKey)
+
+		// If the execution is already FINISHED but a continuation was injected (user asked the agent to do more on top of what it already did), we need to reset the status back to EXECUTING so that HandleAiAgentExecutionStart doesn't exit with "Agent run already finished".
 		if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
 			log.Printf("[INFO][%s] Agent continuation: resetting execution status from '%s' to 'EXECUTING' for continuation", workflowExecution.ExecutionId, workflowExecution.Status)
 			workflowExecution.Status = "EXECUTING"
@@ -18306,16 +18499,16 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			if marshalledResult, marshalErr := json.Marshal(mappedResult); marshalErr == nil {
 				workflowExecution.Results[foundActionResultIndex].Result = string(marshalledResult)
 
-				// push to the action result cache so GetWorkflowExecution inside HandleAiAgentExecutionStart picks up the fresh copy.
+				// push to the action result cache synchronously so the next step picks up the fresh copy.
 				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
-				go SetCache(ctx, actionCacheId, marshalledResult, 600)
+				SetCache(ctx, actionCacheId, marshalledResult, 600)
 
 				// Persist intermediate agent state to DB to prevent information loss on restarts
 				executionCacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
 				if marshalledExec, execMarshalErr := json.Marshal(workflowExecution); execMarshalErr == nil {
 					SetCache(ctx, executionCacheKey, marshalledExec, 600)
 				}
-				go SetWorkflowExecution(ctx, workflowExecution, true)
+				SetWorkflowExecution(ctx, workflowExecution, true)
 
 			} else {
 				log.Printf("[WARNING][%s] Failed to marshal updated mappedResult before HandleAiAgentExecutionStart: %s", workflowExecution.ExecutionId, marshalErr)
@@ -22366,7 +22559,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		if time.Now().Unix()-startTime > int64(maxSeconds) {
 
 			returnBody.Success = true
-			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the GET /api/v1/executions/{executionId}?authorization={auth} API to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
+			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the GET /api/v1/executions/%s?authorization=%s API to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
 
 			break
 		}
@@ -22688,7 +22881,16 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 
 	//log.Printf("Docpath: %s", docPath)
 
-	httpClient := &http.Client{}
+	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
+
+	var httpClient *http.Client
+	if len(token) > 0 {
+		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+		httpClient = oauth2.NewClient(ctx, ts)
+	} else {
+		httpClient = http.DefaultClient
+	}
+
 	req, err := http.NewRequest(
 		"GET",
 		docPath,
@@ -22716,6 +22918,12 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if newresp.StatusCode != 200 {
+		resp.WriteHeader(newresp.StatusCode)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to fetch doc from Github"}`)))
+		return
+	}
+
 	commitOptions := &github.CommitsListOptions{
 		Path: fmt.Sprintf("%s/%s.md", path, location[4]),
 	}
@@ -22725,11 +22933,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		parsedLink = realPath
 	}
 
-	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
-
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	tc := oauth2.NewClient(ctx, ts)
-	client := github.NewClient(tc)
+	client := github.NewClient(httpClient)
 	githubResp := GithubResp{
 		Name:         location[4],
 		Contributors: []GithubAuthor{},
@@ -22833,17 +23037,29 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 
 	token := os.Getenv("GITHUB_DOCS_READ_TOKEN")
 
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	tc := oauth2.NewClient(ctx, ts)
-	client := github.NewClient(tc)
+	var client *github.Client
+	if len(token) > 0 {
+		ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
+		tc := oauth2.NewClient(ctx, ts)
+		client = github.NewClient(tc)
+	} else {
+		client = github.NewClient(nil)
+	}
+
 	owner := "shuffle"
 	repo := "shuffle-docs"
 
-	_, item1, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
+	_, item1, githubApiResp, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting docs list: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error listing directory"}`)))
+		return
+	}
+
+	if githubApiResp != nil && githubApiResp.StatusCode != 200 {
+		resp.WriteHeader(githubApiResp.StatusCode)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to fetch doc list from Github"}`)))
 		return
 	}
 
@@ -23382,8 +23598,8 @@ func handleOpenIdCloud(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	clientId := org.SSOConfig.OpenIdClientId
-	tokenUrl := org.SSOConfig.OpenIdToken
+	clientId := strings.TrimSpace(org.SSOConfig.OpenIdClientId)
+	tokenUrl := strings.TrimSpace(org.SSOConfig.OpenIdToken)
 	if len(tokenUrl) == 0 {
 		log.Printf("[ERROR] No token URL specified for OpenID. OrgID: %s", foundOrg)
 		resp.WriteHeader(401)
@@ -37509,7 +37725,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		return nil
 
-	case "delete_node":
+	case "delete_node", "remove_node":
 		// Node is already removed. Emit node:remove first, then edge:remove for
 		// every branch the function auto-pruned (captured in prunedBranchIDs before apply).
 		result := []StreamWorkflowOperation{{
@@ -37595,12 +37811,27 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 		}
 		return nil
 
-	case "delete_branch":
+	case "delete_branch", "remove_branch":
 		return []StreamWorkflowOperation{{
 			Item: "edge",
 			Type: "remove",
 			ID:   realID,
 		}}
+
+	case "edit_branch":
+		// Branch is already updated by opEditBranch. Emit edge:configure with the full branch.
+		for _, branch := range wf.Branches {
+			if branch.ID == realID {
+				dataBytes, _ := json.Marshal(branch)
+				return []StreamWorkflowOperation{{
+					Item: "edge",
+					Type: "configure",
+					ID:   branch.ID,
+					Data: dataBytes,
+				}}
+			}
+		}
+		return nil
 
 	case "add_condition", "edit_condition", "delete_condition":
 		// The branch already has its updated conditions applied.
@@ -37638,7 +37869,7 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 	}
 }
 
-var streamHTTPClient = &http.Client{Timeout: 2 * time.Second}
+var streamHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 func sendStreamOperations(ctx context.Context, request *http.Request, streamURL string, streamOps []StreamWorkflowOperation) error {
 	opBytes, err := json.Marshal(streamOps)
@@ -37682,10 +37913,19 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 	case "add_node":
 		return opAddNodeWithMapping(ctx, user, wf, op, tempIDMap)
 	case "edit_node":
+		if realID, exists := tempIDMap[op.ID]; exists {
+			op.ID = realID
+		}
 		return opEditNode(wf, op)
 	case "move_node":
+		if realID, exists := tempIDMap[op.ID]; exists {
+			op.ID = realID
+		}
 		return opMoveNode(wf, op)
 	case "delete_node", "remove_node":
+		if realID, exists := tempIDMap[op.ID]; exists {
+			op.ID = realID
+		}
 		return opDeleteNode(wf, op)
 
 	// ====== BRANCH OPERATIONS ======
@@ -38007,7 +38247,6 @@ func opEditNode(wf *Workflow, op *WorkflowOperation) error {
 						break
 					}
 				}
-				// If parameter not found, add it (allows agent to add new params)
 				if !found {
 					wf.Actions[actidx].Parameters = append(wf.Actions[actidx].Parameters, WorkflowAppActionParameter{
 						ID:    generateNodeID(),
@@ -38033,11 +38272,19 @@ func opEditNode(wf *Workflow, op *WorkflowOperation) error {
 
 		if len(updates.Parameters) > 0 {
 			for _, updateParam := range updates.Parameters {
+				found := false
 				for i := range wf.Triggers[trigidx].Parameters {
 					if strings.EqualFold(wf.Triggers[trigidx].Parameters[i].Name, updateParam.Name) {
 						wf.Triggers[trigidx].Parameters[i].Value = updateParam.Value
+						found = true
 						break
 					}
+				}
+				if !found {
+					wf.Triggers[trigidx].Parameters = append(wf.Triggers[trigidx].Parameters, WorkflowAppActionParameter{
+						Name:  updateParam.Name,
+						Value: updateParam.Value,
+					})
 				}
 			}
 		}

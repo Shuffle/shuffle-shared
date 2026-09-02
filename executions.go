@@ -158,7 +158,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					result.Status = "SUCCESS"
 					innerresult.Status = "SUCCESS"
 					workflowExecution.Results[resultIndex].Status = "SUCCESS"
-					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 					break
 				}
 
@@ -181,6 +180,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					finishedDecisions := []string{}
 					failedFound := false
 					finishDecisionFound := false
+					timeoutTriggered := false
 					for decisionIndex, decision := range mappedOutput.Decisions {
 						if decision.Action == "finish" {
 							finishDecisionFound = true
@@ -223,6 +223,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 									SetCache(ctx, timeoutFlagKey, []byte("1"), 60) // 60 min TTL — long enough to outlive any recovery cycle
 
 									decisionsUpdated = true
+									timeoutTriggered = true
 									mappedOutput.Decisions[decisionIndex].RunDetails.Status = "FAILURE"
 									mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = time.Now().UnixMilli()
 									mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse += "\n[ERROR] Decision marked as FAILURE due to 5 minute timeout."
@@ -336,11 +337,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							mappedOutput.CompletedAt = time.Now().UnixMilli()
 
 							workflowExecution.Results[resultIndex].Status = "SUCCESS"
-
-							go func() {
-								time.Sleep(1 * time.Second)
-								go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
-							}()
 						} else {
 							mostRecentCompletion := int64(0)
 							for _, dec := range mappedOutput.Decisions {
@@ -353,7 +349,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 								}
 							}
 							timeSinceCompletionMs := time.Now().UnixMilli() - mostRecentCompletion
-							if timeSinceCompletionMs < 60000 {
+							if timeSinceCompletionMs < 60000 && !timeoutTriggered {
 								if debug {
 									log.Printf("[DEBUG][%s] Skipping fixexecution_timeout_recovery: last decision completed %d ms ago (waiting for LLM response from primary stream handler).", workflowExecution.ExecutionId, timeSinceCompletionMs)
 								}
@@ -395,7 +391,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						}
 
 						workflowExecution.Results[resultIndex].Status = "SUCCESS"
-						go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 					}
 				}
 
