@@ -74,10 +74,12 @@ import (
 	"github.com/frikky/kin-openapi/openapi3"
 
 	"github.com/google/go-github/v28/github"
+	firebase "firebase.google.com/go/v4"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
 
 	"github.com/Masterminds/semver"
+	"firebase.google.com/go/v4/messaging"
 	"github.com/klauspost/compress/gzhttp"
 	dockerclient "github.com/docker/docker/client"
 )
@@ -3772,8 +3774,23 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, err
 		}
 
+		// Fallback with session token if the API key doesn't exist
+		// This is to make everything work on Mobile apps and is done quite 
+		// a lot for app development auth. Also allows us to use App login 
+		// to onprem Shuffle instance
 		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
-			//log.Printf("[WARNING] Apikey %s doesn't exist or the user doesn't have an ID/Username", apikey)
+			userdata, err = GetSessionNew(ctx, apikeyCheck[1])
+			if err != nil { 
+				log.Printf("[WARNING] Session token '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
+			} else {
+				userdata.SessionLogin = true 
+			}
+		} else {
+			userdata.SessionLogin = false
+			userdata.ApiKey = newApikey
+		}
+
+		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
 			return User{}, errors.New("Couldn't find the user")
 		}
 
@@ -3807,9 +3824,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			userdata.ActiveOrg.Name = org.Name
 			userdata.ActiveOrg.Image = org.Image
 		}
-
-		userdata.SessionLogin = false
-		userdata.ApiKey = newApikey
 
 		b, err := json.Marshal(userdata)
 		if err != nil {
@@ -6045,16 +6059,91 @@ func HandleGetHooks(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
-func handleDeviceUpsert(user User, device Device) (User, error) { 
+// ValidateFCMToken checks if a token is valid and belongs to this Firebase project.
+func ValidateFCMToken(ctx context.Context, client *messaging.Client, token string) (bool, error) {
+	if token == "" {
+		return false, errors.New("token cannot be empty")
+	}
+	// Construct a dummy message with DryRun = true
+	msg := &messaging.Message{
+		Token: token,
+		Data: map[string]string{
+			"validation_check": "true",
+		},
+	}
+	// SendDryRun validates the token with Google without delivering a notification
+	_, err := client.SendDryRun(ctx, msg)
+	if err != nil {
+		if messaging.IsInvalidArgument(err) {
+			log.Printf("[WARNING] Invalid FCM token format: %s", token)
+			return false, errors.New("invalid token format")
+		}
+
+		if messaging.IsUnregistered(err) {
+			log.Printf("[WARNING] FCM token is expired or app was uninstalled: %s", token)
+			return false, errors.New("token is unregistered or expired")
+		}
+
+		if messaging.IsSenderIDMismatch(err) {
+			log.Printf("[WARNING] Token belongs to a different Firebase project: %s", token)
+			return false, errors.New("token sender ID mismatch")
+		}
+
+		log.Printf("[ERROR] Failed to validate token with Firebase: %v", err)
+		return false, err
+	}
+	// Token is authentic and ready to receive messages
+	return true, nil
+}
+
+func GetFCMClient(ctx context.Context) (*messaging.Client, error) {
+	// Passing nil config tells Firebase to use Google Application Default Credentials (ADC)
+	app, err := firebase.NewApp(ctx, nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed to initialize Firebase App with ADC: %v", err)
+		return nil, err
+	}
+	client, err := app.Messaging(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get Firebase Messaging client: %v", err)
+		return nil, err
+	}
+	return client, nil
+}
+
+func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, error) { 
+	if project.Environment != "cloud" {
+		log.Printf("[ERROR] Device upsert attempted in non-cloud environment")
+		return user, errors.New("Device upsert is only allowed in cloud environment (for now). Cloud Sync required")
+	}
+
 	if len(device.ID) == 0 { 
-		log.Printf("No ID in device upsert")
+		log.Printf("[ERROR] No ID in device upsert")
 		return user, errors.New("No device ID provided")
 	}
 
 	if len(device.Token) == 0 { 
-		log.Printf("No token in device upsert for %s", device.ID)
+		log.Printf("[ERROR] No token in device upsert for %s", device.ID)
 		return user, errors.New("No device token provided")
 	}
+
+	fcmClient, err := GetFCMClient(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get FCM client: %v", err)
+		return user, err
+	}
+
+	// Validate token with Google Firebase Dry Run
+	isValid, err := ValidateFCMToken(ctx, fcmClient, device.Token)
+	if err != nil {
+		log.Printf("[ERROR] Failed to validate FCM token: %v", err)
+		return user, err
+	}
+
+	if !isValid {
+		return user, errors.New("Invalid device token provided")
+	}
+
 
 	device.EditedAt = time.Now().Unix()
 
@@ -6303,7 +6392,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(t.Device.ID) > 0 { 
-		retUser, err := handleDeviceUpsert(*foundUser, t.Device)
+		retUser, err := handleDeviceUpsert(ctx, *foundUser, t.Device)
 		if err != nil {
 			resp.WriteHeader(400)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
