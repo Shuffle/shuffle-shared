@@ -11110,7 +11110,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	// Forcing stream, as there really is no downside to it.
 	// Also allows us to realtime stream with *.shuffler.io/api/v1/chat/completions
 	chatCompletion.Stream = true
-	sleepTimer := time.Duration(1)
+	sleepTimer := time.Duration(5)
 
 	// In case of non-streaming Resp input
 	totalTokens := 0

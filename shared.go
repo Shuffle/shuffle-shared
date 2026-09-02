@@ -3735,7 +3735,8 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			newApikey = newApikey[0:248]
 		}
 
-		cache, err := GetCache(ctx, newApikey+org_id)
+		apiCacheKey := fmt.Sprintf("%s%s", newApikey, org_id)
+		cache, err := GetCache(ctx, apiCacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &user)
@@ -3770,8 +3771,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 					log.Printf("[DEBUG] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
 				}
 			}
-
-			return User{}, err
 		}
 
 		// Fallback with session token if the API key doesn't exist
@@ -3783,6 +3782,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			if err != nil { 
 				log.Printf("[WARNING] Session token '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
 			} else {
+				if debug { 
+					log.Printf("[DEBUG] Session token '%s' exists. URL: %#v", apikeyCheck[1], request.URL.String())
+				}
 				userdata.SessionLogin = true 
 			}
 		} else {
@@ -3831,7 +3833,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, err
 		}
 
-		err = SetCache(ctx, newApikey+org_id, b, 30)
+		err = SetCache(ctx, apiCacheKey,  b, 5)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
 		}
@@ -12868,6 +12870,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 				DeleteCache(ctx, user.ApiKey+oldOrgId)
 			}
 
+			DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, user.ActiveOrg.Id))
+
 			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 
@@ -12881,6 +12885,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			if len(user.ApiKey) > 0 {
 				DeleteCache(ctx, user.ApiKey+oldOrgId)
 			}
+
+			DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, user.ActiveOrg.Id))
 
 			return
 		}
@@ -13168,7 +13174,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	newCookie.Name = "__session"
 	http.SetCookie(resp, newCookie)
 
-	// Cleanup cache for the user
+	// Cleanup cache for the user. All of this is just in case
+	// as there is a lot of cross-region + onprem stuff happening
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
@@ -13181,6 +13188,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, user.ApiKey+user.ActiveOrg.Id)
 	DeleteCache(ctx, user.ApiKey+oldOrgId)
 	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, user.ActiveOrg.Id))
 
 	log.Printf("[INFO] User %s (%s) successfully changed org to '%s' (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
