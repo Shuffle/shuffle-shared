@@ -7317,6 +7317,56 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		}
 	}
 
+	if agentOutput.ExecutionId == "" {
+		agentOutput.ExecutionId = execution.ExecutionId
+	}
+	if agentOutput.NodeId == "" {
+		agentOutput.NodeId = startNode.ID
+	}
+	if agentOutput.StartedAt == 0 {
+		if execution.StartedAt > 0 {
+			agentOutput.StartedAt = execution.StartedAt
+			const maxSecondsTimestamp int64 = 10_000_000_000
+			if agentOutput.StartedAt < maxSecondsTimestamp {
+				agentOutput.StartedAt *= 1000
+			}
+		} else {
+			agentOutput.StartedAt = time.Now().UnixMilli()
+		}
+	}
+	if agentOutput.Input == "" {
+		for _, param := range startNode.Parameters {
+			if param.Name == "input" || param.Name == "prompt" {
+				agentOutput.Input = param.Value
+				agentOutput.OriginalInput = param.Value
+				break
+			}
+		}
+		if agentOutput.Input == "" && len(execution.ExecutionArgument) > 0 {
+			agentOutput.Input = execution.ExecutionArgument
+			agentOutput.OriginalInput = execution.ExecutionArgument
+		}
+	}
+	if agentOutput.Memory == "" {
+		for _, param := range startNode.Parameters {
+			if param.Name == "memory" {
+				agentOutput.Memory = param.Value
+				break
+			}
+		}
+		if agentOutput.Memory == "" {
+			agentOutput.Memory = "shuffle_db"
+		}
+	}
+	if agentOutput.Template == "" {
+		for _, param := range startNode.Parameters {
+			if param.Name == "template" {
+				agentOutput.Template = param.Value
+				break
+			}
+		}
+	}
+
 	agentOutput.Status = "ABORTED"
 	agentOutput.Error = reason
 	agentOutput.CompletedAt = time.Now().UnixMilli()
@@ -8019,19 +8069,13 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	log.Printf("[INFO][%s] AI Agent: HandleAiAgentExecutionStart invoked by caller: '%s' (createNextActions=%t, node=%s, status=%s)", execution.ExecutionId, callerName, createNextActions, startNode.ID, execution.Status)
 
 	ctx := context.Background()
+	var err error
 	aiStarttime := time.Now().UnixMilli()
 
-	replacedExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)
-	if err == nil && len(replacedExecution.Results) > 0 && (execution.Status == "EXECUTING" || execution.Status == "WAITING") {
-		origStatus := execution.Status
-		origCompleted := execution.CompletedAt
-		origResults := execution.Results
-		execution = *replacedExecution
-		if origStatus == "EXECUTING" && (execution.Status == "FINISHED" || execution.Status == "SUCCESS") {
-			log.Printf("[INFO][%s] Preserving EXECUTING status for Agent Continuation over DB %s status", execution.ExecutionId, execution.Status)
-			execution.Status = origStatus
-			execution.CompletedAt = origCompleted
-			execution.Results = origResults
+	// Only fetch from DB if the passed execution has no results somehow
+	if len(execution.Results) == 0 {
+		if replacedExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && replacedExecution != nil && len(replacedExecution.Results) > 0 {
+			execution = *replacedExecution
 		}
 	}
 
@@ -8545,8 +8589,20 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				break
 			}
 
-			oldAgentOutput = mappedResult
+			if len(mappedResult.Decisions) == 0 {
+				actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
+				if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil && cachedData != nil {
+					if cachedBytes, ok := cachedData.([]uint8); ok {
+						var cachedOut AgentOutput
+						if err := json.Unmarshal(cachedBytes, &cachedOut); err == nil && len(cachedOut.Decisions) > 0 {
+							mappedResult = cachedOut
+							log.Printf("[INFO][%s] AI Agent: Fetched %d decisions from action cache fallback", execution.ExecutionId, len(mappedResult.Decisions))
+						}
+					}
+				}
+			}
 
+			oldAgentOutput = mappedResult
 			// Hard cap: This handles two failure modes: When the cache write or read fails or somehow the DB state is out of sync with the cache.
 			loopCacheKey := fmt.Sprintf("agent_loop_cap_%s_%s", execution.ExecutionId, startNode.ID)
 			cacheCount := 0
@@ -9944,16 +10000,12 @@ data_filter:
 				}
 			}
 
-			// Validate if NOT FINISHED/ABORTED
-			tmpExecution, _ := GetWorkflowExecution(ctx, execution.ExecutionId)
-
-			if debug {
-				log.Printf("[DEBUG][%s] Got %d NEW decision(s). Status: %s", execution.ExecutionId, len(mappedDecisions), tmpExecution.Status)
-			}
-
-			if tmpExecution.Status == "FINISHED" || tmpExecution.Status == "ABORTED" {
-				log.Printf("[INFO][%s] Already finished. Stopping agent continuation.", execution.ExecutionId)
-				return startNode, errors.New("Agent Workflow run already finished") 
+			// Validate if user actively aborted the workflow while LLM query was in flight
+			if tmpExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && tmpExecution != nil {
+				if tmpExecution.Status == "ABORTED" {
+					log.Printf("[INFO][%s] Workflow was aborted by user while LLM query was in flight. Stopping agent.", execution.ExecutionId)
+					return startNode, errors.New("Agent Workflow run was aborted") 
+				}
 			}
 
 			// Verbose error handling optimisations
@@ -9974,12 +10026,14 @@ data_filter:
 					additions += 1
 				}
 
-				b := make([]byte, 6)
-				_, err := rand.Read(b)
-				if err == nil {
-					mappedDecision.RunDetails.Id = base64.RawURLEncoding.EncodeToString(b)
-				} else {
-					log.Printf("[ERROR][%s] AI Agent: Failed generating random string for decision index %s-%d (2)", execution.ExecutionId, mappedDecision.Tool, mappedDecision.I)
+				if len(mappedDecision.RunDetails.Id) == 0 {
+					b := make([]byte, 6)
+					_, err := rand.Read(b)
+					if err == nil {
+						mappedDecision.RunDetails.Id = base64.RawURLEncoding.EncodeToString(b)
+					} else {
+						log.Printf("[ERROR][%s] AI Agent: Failed generating random string for decision index %s-%d (2)", execution.ExecutionId, mappedDecision.Tool, mappedDecision.I)
+					}
 				}
 
 				agentOutput.Decisions = append(agentOutput.Decisions, mappedDecision)
@@ -10094,8 +10148,8 @@ data_filter:
 				continue
 			}
 
-			// Startnumber huh... Hmm
-			if decision.I != lastFinishedIndex {
+			// finish and ask actions are always processed
+			if decision.Action != "finish" && decision.Category != "finish" && decision.Action != "ask" && decision.Action != "question" && decision.I != lastFinishedIndex {
 				continue
 			}
 
@@ -10324,48 +10378,33 @@ data_filter:
 			log.Printf("[ERROR] AI Agent: Failed setting cache for action result %s: %s", actionCacheId, err)
 		}
 
-		// Always update all execution results in DB regardless of action type,
-		// so tools never lose their decisions.
-		if len(execution.Results) > 0 {
-			for resultIndex, result := range execution.Results {
-				if result.Action.ID != startNode.ID {
-					continue
-				}
-
-				execution.Results[resultIndex] = resultMapping
-			}
-
-			SetWorkflowExecution(ctx, execution, true)
-		}
-
-		//log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s status=%s duration=%ds decisions=%d", execution.ExecutionId, agentOutput.Status, time.Now().Unix()-agentOutput.StartedAt, len(agentOutput.Decisions))
-
-		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status != "ABORTED" && execution.Status != "FAILURE" {
-
-			foundResult := false
-			for resultIndex, result := range execution.Results {
-				if result.Action.ID != startNode.ID {
-					continue
-				}
-
-				execution.Results[resultIndex].Status = "SUCCESS"
-				execution.Results[resultIndex].CompletedAt = agentOutput.CompletedAt
-				log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for agent action %s", execution.ExecutionId, startNode.ID)
-				go sendAgentActionSelfRequest("SUCCESS", execution, execution.Results[resultIndex])
-				foundResult = true
+		// Always update execution results in DB regardless of whether Results was initially empty
+		foundResultIndex := -1
+		for resultIndex, result := range execution.Results {
+			if result.Action.ID == startNode.ID {
+				foundResultIndex = resultIndex
 				break
 			}
+		}
 
-			if !foundResult {
-				duration := int64(0)
-				if agentOutput.StartedAt > 0 && agentOutput.CompletedAt > 0 {
-					duration = (agentOutput.CompletedAt - agentOutput.StartedAt) / 1000
-				} else if agentOutput.StartedAt > 0 {
-					duration = (time.Now().UnixMilli() - agentOutput.StartedAt) / 1000
-				}
+		if foundResultIndex >= 0 {
+			execution.Results[foundResultIndex] = resultMapping
+		} else {
+			execution.Results = append(execution.Results, resultMapping)
+			foundResultIndex = len(execution.Results) - 1
+		}
 
-				log.Printf("[INFO] AI_AGENT_FINISH: execution_id=%s org=%s status=FINISHED duration=%ds tool_calls=%d llm_calls=%d prompt_tokens=%d completion_tokens=%d total_tokens=%d", execution.ExecutionId, execution.Workflow.OrgId, duration, len(agentOutput.Decisions), agentOutput.LLMCallCount, agentOutput.PromptTokens, agentOutput.CompletionTokens, agentOutput.TotalTokens)
-			}
+		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status != "ABORTED" && execution.Status != "FAILURE" {
+			execution.Status = "FINISHED"
+			execution.CompletedAt = agentOutput.CompletedAt
+			execution.Results[foundResultIndex].Status = "SUCCESS"
+			execution.Results[foundResultIndex].CompletedAt = agentOutput.CompletedAt
+			SetWorkflowExecution(ctx, execution, true)
+
+			log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for agent action %s", execution.ExecutionId, startNode.ID)
+			go sendAgentActionSelfRequest("SUCCESS", execution, execution.Results[foundResultIndex])
+		} else {
+			SetWorkflowExecution(ctx, execution, true)
 		}
 
 	} else {
@@ -10411,7 +10450,7 @@ data_filter:
 		*/
 	}
 
-	if createNextActions {
+	if createNextActions || agentOutput.Status == "FINISHED" {
 		return startNode, nil
 	}
 
@@ -11111,6 +11150,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	// Also allows us to realtime stream with *.shuffler.io/api/v1/chat/completions
 	chatCompletion.Stream = true
 	sleepTimer := time.Duration(5)
+	chatCompletion.StreamOptions = &openai.StreamOptions{
+		IncludeUsage: true,
+	}
 
 	// In case of non-streaming Resp input
 	totalTokens := 0
