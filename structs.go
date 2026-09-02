@@ -171,6 +171,11 @@ type RetStruct struct {
 	Licensed         bool                  `json:"licensed"`
 	CloudSyncUrl     string                `json:"cloud_sync_url,omitempty"`
 	AppRunsHardLimit int64                 `json:"app_runs_hard_limit"`
+	WorkflowBackup   bool                  `json:"workflow_backup"`
+	AppBackup        bool                  `json:"app_backup"`
+
+	WorkflowBackupUpdated int64 `json:"workflow_backup_updated"`
+	AppBackupUpdated      int64 `json:"app_backup_updated"`
 }
 
 type AppMini struct {
@@ -1417,6 +1422,10 @@ type SyncConfig struct {
 
 	WorkflowBackup bool `json:"workflow_backup" datastore:"workflow_backup"`
 	AppBackup      bool `json:"app_backup" datastore:"app_backup"`
+
+	WorkflowBackupUpdated int64 `json:"workflow_backup_updated" datastore:"workflow_backup_updated"`
+	AppBackupUpdated      int64 `json:"app_backup_updated" datastore:"app_backup_updated"`
+}
 }
 
 // RemoteWorkflowInfo holds metadata for a workflow found in a remote git repo.
@@ -4682,6 +4691,11 @@ type BackupJob struct {
 	Stats     ExecutionInfo `json:"stats"`
 	Workflows []Workflow    `json:"workflows"`
 	Apps      []WorkflowApp `json:"apps"`
+
+	WorkflowBackup        bool  `json:"workflow_backup"`
+	AppBackup             bool  `json:"app_backup"`
+	WorkflowBackupUpdated int64 `json:"workflow_backup_updated"`
+	AppBackupUpdated      int64 `json:"app_backup_updated"`
 }
 
 type WorkflowSearch struct {
