@@ -3938,6 +3938,8 @@ type SettingsReturn struct {
 	Verified bool   `json:"verified"`
 	Apikey   string `json:"apikey"`
 	Image    string `json:"image"`
+
+	Devices []Device `json:"devices"`
 }
 
 type ExtraButton struct {

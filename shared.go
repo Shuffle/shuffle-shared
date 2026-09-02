@@ -10243,12 +10243,21 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Makes sure cache doesn't screw us
+	user, err := GetUser(GetContext(request), userInfo.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get user in settings: %s", err)
+		userInfo.Devices = user.Devices
+	}
+
 	newObject := SettingsReturn{
 		Success:  true,
 		Username: userInfo.Username,
 		Verified: userInfo.Verified,
 		Apikey:   userInfo.ApiKey,
 		Image:    userInfo.PublicProfile.GithubAvatar,
+
+		Devices: userInfo.Devices,
 	}
 
 	newjson, err := json.Marshal(newObject)

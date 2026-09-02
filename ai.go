@@ -50,7 +50,7 @@ var standalone bool
 // var model = "gpt-5-mini"
 // var model = "gpt-5.4-nano"
 // var model = "gpt-5.2-codex"
-var model = "google/gemini-3.7-flash"
+var model = "google/gemini-3.8-flash"
 
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID")
@@ -9154,16 +9154,7 @@ data_filter:
 	}
 
 	// Set model based on environment
-	aiModel := "gpt-5.4-mini-2026-03-17"
-	newAiModel := os.Getenv("AI_MODEL")
-	if newAiModel == "" {
-		newAiModel = os.Getenv("OPENAI_MODEL")
-	}
-
-	if len(newAiModel) > 0 {
-		aiModel = newAiModel
-	}
-
+	aiModel := model
 	primaryMessages := []openai.ChatCompletionMessage{
 		{
 			Role:    openai.ChatMessageRoleSystem,
@@ -9966,6 +9957,10 @@ data_filter:
 		agentOutput.StartedAt = time.Now().UnixMilli()
 		agentOutput.CompletedAt = 0
 
+		if len(openaiOutput.Model) > 0 { 
+			completionRequest.Model = openaiOutput.Model
+		}
+
 		agentOutput.LLMRequests = []openai.ChatCompletionRequest{
 			completionRequest,
 		}
@@ -10049,6 +10044,10 @@ data_filter:
 				}
 
 				if !found {
+					if len(openaiOutput.Model) > 0 { 
+						completionRequest.Model = openaiOutput.Model
+					}
+
 					agentOutput.LLMResponses = append(agentOutput.LLMResponses, openaiOutput)
 
 					agentOutput.LLMRequests = append(agentOutput.LLMRequests, completionRequest)
@@ -15542,7 +15541,7 @@ func ValidateURLandModel(aiRequestUrl string, currentModel string) (string, stri
 		}
 	} else if strings.Contains(aiRequestUrl, "googleapis.com") {
 		if currentModel == "" {
-			currentModel = "gemini-3.7-flash"
+			currentModel = "gemini-3.8-flash"
 		}
 	} else if strings.Contains(aiRequestUrl, "api.mistral.ai") {
 		aiRequestUrl = "https://api.mistral.ai/v1"
