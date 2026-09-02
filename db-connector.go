@@ -130,7 +130,7 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 		}
 
 		stat.Date = stat.Date.UTC()
-		statdate := stat.Date.Format("2006-12-30")
+		statdate := stat.Date.Format("2006-01-02")
 		if !ArrayContains(allDates, statdate) {
 			newDaily = append(newDaily, stat)
 			allDates = append(allDates, statdate)
@@ -170,19 +170,20 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 					return putErr
 				}
 
-				if len(stats.DailyStatistics) > 60 {
-					sort.Slice(stats.DailyStatistics, func(a, b int) bool {
-						return stats.DailyStatistics[a].Date.Before(stats.DailyStatistics[b].Date)
-					})
-					stats.DailyStatistics = stats.DailyStatistics[len(stats.DailyStatistics)-60:]
+				if archiveErr := archiveOldOnpremStatsToGCSBucket(ctx, id, &stats); archiveErr != nil {
+					log.Printf("[ERROR] SetOrgStatistics: GCS onprem archive failed for org %s: %s – cannot trim onprem stats without backup, returning original error", id, archiveErr)
+					return putErr
 				}
+
+				stats.DailyStatistics = keepStatsWithinDays(stats.DailyStatistics, 60)
+				stats.OnpremStats = keepStatsWithinDays(stats.OnpremStats, 60)
 
 				if _, retryErr := project.Dbclient.Put(ctx, key, &stats); retryErr != nil {
 					log.Printf("[ERROR] SetOrgStatistics: retry put failed for org %s: %s", id, retryErr)
 					return retryErr
 				}
 
-				log.Printf("[INFO] SetOrgStatistics: saved trimmed stats (last 60 days) for org %s", id)
+				log.Printf("[INFO] SetOrgStatistics: saved trimmed stats (last 60 days each for daily_statistics and onprem_stats) for org %s", id)
 			} else {
 				return putErr
 			}
@@ -778,41 +779,38 @@ func getWorkflowExecutionByAliasSearch(ctx context.Context, aliasName, id string
 // bucket so they are not lost when the Datastore entity grows too large.
 //
 // Bucket : shuffle_org_files
-// Object : org_statistics/{orgId}/stats.json
-func archiveOldStatsToGCSBucket(ctx context.Context, orgId string, stats *ExecutionInfo) error {
+// Object : objectPath (caller-provided, distinct per stat kind)
+func archiveStatOverflowToGCS(ctx context.Context, orgId, objectPath, lockKey string, entries []DailyStatistics) error {
 	if project.Environment != "cloud" {
 		return nil
 	}
 
 	if len(orgId) == 0 {
-		return errors.New("archiveOldStatsToGCSBucket: orgId must not be empty")
+		return errors.New("archiveStatOverflowToGCS: orgId must not be empty")
 	}
 
-	// Skip if a concurrent archive is already running for this org.
-	archiveCacheKey := fmt.Sprintf("gcs_archive_%s", orgId)
-	if cacheVal, cacheErr := GetCache(ctx, archiveCacheKey); cacheErr == nil {
-		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: skipping org %s – archive in progress (key=%s val=%v)", orgId, archiveCacheKey, cacheVal)
+	if cacheVal, cacheErr := GetCache(ctx, lockKey); cacheErr == nil {
+		log.Printf("[DEBUG] archiveStatOverflowToGCS: skipping org %s – archive recently succeeded (key=%s val=%v)", orgId, lockKey, cacheVal)
 		return nil
 	} else {
-		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: proceeding for org %s (key=%s not set)", orgId, archiveCacheKey)
+		log.Printf("[DEBUG] archiveStatOverflowToGCS: proceeding for org %s (key=%s not set)", orgId, lockKey)
 	}
-	_ = SetCache(ctx, archiveCacheKey, []byte("1"), 5)
 
 	cutoff := time.Now().UTC().AddDate(0, 0, -60)
 	overflowStats := []DailyStatistics{}
-	for _, d := range stats.DailyStatistics {
+	for _, d := range entries {
 		if d.Date.UTC().Before(cutoff) {
 			overflowStats = append(overflowStats, d)
 		}
 	}
 
 	if len(overflowStats) == 0 {
-		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: no entries older than 60 days for org %s", orgId)
+		log.Printf("[DEBUG] archiveStatOverflowToGCS: no entries older than 60 days for org %s (%s)", orgId, objectPath)
+		_ = SetCache(ctx, lockKey, []byte("1"), 5)
 		return nil
 	}
 
-	bucketPath := fmt.Sprintf("org_statistics/%s/stats.json", orgId)
-	obj := project.StorageClient.Bucket(orgFileBucket).Object(bucketPath)
+	obj := project.StorageClient.Bucket(orgFileBucket).Object(objectPath)
 
 	// Read existing GCS file to merge without losing older entries.
 	existingStats := []DailyStatistics{}
@@ -822,7 +820,7 @@ func archiveOldStatsToGCSBucket(ctx context.Context, orgId string, stats *Execut
 		reader.Close()
 		if readErr == nil && len(existingBytes) > 0 {
 			if unmarshalErr := json.Unmarshal(existingBytes, &existingStats); unmarshalErr != nil {
-				log.Printf("[WARNING] archiveOldStatsToGCSBucket: could not parse existing GCS stats for org %s (will overwrite): %s", orgId, unmarshalErr)
+				log.Printf("[WARNING] archiveStatOverflowToGCS: could not parse existing GCS stats for org %s (will overwrite): %s", orgId, unmarshalErr)
 				existingStats = []DailyStatistics{}
 			}
 		}
@@ -851,21 +849,50 @@ func archiveOldStatsToGCSBucket(ctx context.Context, orgId string, stats *Execut
 
 	mergedBytes, err := json.Marshal(merged)
 	if err != nil {
-		return fmt.Errorf("archiveOldStatsToGCSBucket: failed to marshal overflow stats for org %s: %w", orgId, err)
+		return fmt.Errorf("archiveStatOverflowToGCS: failed to marshal overflow stats for org %s: %w", orgId, err)
 	}
 
 	gcsWriter := obj.NewWriter(ctx)
 	if _, writeErr := gcsWriter.Write(mergedBytes); writeErr != nil {
 		_ = gcsWriter.Close()
-		return fmt.Errorf("archiveOldStatsToGCSBucket: failed to write to GCS for org %s: %w", orgId, writeErr)
+		return fmt.Errorf("archiveStatOverflowToGCS: failed to write to GCS for org %s: %w", orgId, writeErr)
 	}
 	if closeErr := gcsWriter.Close(); closeErr != nil {
-		return fmt.Errorf("archiveOldStatsToGCSBucket: failed to close GCS writer for org %s: %w", orgId, closeErr)
+		return fmt.Errorf("archiveStatOverflowToGCS: failed to close GCS writer for org %s: %w", orgId, closeErr)
 	}
 
-	log.Printf("[INFO] archiveOldStatsToGCSBucket: archived %d entries (>60 days old) to %s/%s for org %s",
-		len(overflowStats), orgFileBucket, bucketPath, orgId)
+	// Only lock out repeat attempts once the write is confirmed - see comment above.
+	_ = SetCache(ctx, lockKey, []byte("1"), 5)
+
+	log.Printf("[INFO] archiveStatOverflowToGCS: archived %d entries (>60 days old) to %s/%s for org %s",
+		len(overflowStats), orgFileBucket, objectPath, orgId)
 	return nil
+}
+
+func archiveOldStatsToGCSBucket(ctx context.Context, orgId string, stats *ExecutionInfo) error {
+	bucketPath := fmt.Sprintf("org_statistics/%s/stats.json", orgId)
+	lockKey := fmt.Sprintf("gcs_archive_%s", orgId)
+	return archiveStatOverflowToGCS(ctx, orgId, bucketPath, lockKey, stats.DailyStatistics)
+}
+
+func archiveOldOnpremStatsToGCSBucket(ctx context.Context, orgId string, stats *ExecutionInfo) error {
+	bucketPath := fmt.Sprintf("org_statistics/%s/onprem_stats.json", orgId)
+	lockKey := fmt.Sprintf("gcs_archive_onprem_%s", orgId)
+	return archiveStatOverflowToGCS(ctx, orgId, bucketPath, lockKey, stats.OnpremStats)
+}
+
+func keepStatsWithinDays(entries []DailyStatistics, days int) []DailyStatistics {
+	cutoff := time.Now().UTC().AddDate(0, 0, -days)
+	kept := make([]DailyStatistics, 0, len(entries))
+	for _, d := range entries {
+		if !d.Date.UTC().Before(cutoff) {
+			kept = append(kept, d)
+		}
+	}
+	sort.Slice(kept, func(i, j int) bool {
+		return kept[i].Date.Before(kept[j].Date)
+	})
+	return kept
 }
 
 func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...int) error {
@@ -3215,6 +3242,98 @@ func getWorkflowByAliasSearch(ctx context.Context, aliasName, id string) (*Workf
 
 	found := wrapped.Hits.Hits[0].Source
 	return &found, nil
+}
+
+const (
+	dailyStatisticsJSONProp = "daily_statistics_json"
+	onpremStatsJSONProp     = "onprem_stats_json"
+)
+
+func (e *ExecutionInfo) Save() ([]datastore.Property, error) {
+	dailyStats := e.DailyStatistics
+	onpremStats := e.OnpremStats
+
+	e.DailyStatistics = nil
+	e.OnpremStats = nil
+	props, err := datastore.SaveStruct(e)
+	e.DailyStatistics = dailyStats
+	e.OnpremStats = onpremStats
+	if err != nil {
+		return nil, err
+	}
+
+	dailyData, err := json.Marshal(dailyStats)
+	if err != nil {
+		return nil, fmt.Errorf("failed marshalling daily statistics: %s", err)
+	}
+
+	onpremData, err := json.Marshal(onpremStats)
+	if err != nil {
+		return nil, fmt.Errorf("failed marshalling onprem statistics: %s", err)
+	}
+
+	props = append(props,
+		datastore.Property{Name: dailyStatisticsJSONProp, Value: string(dailyData), NoIndex: true},
+		datastore.Property{Name: onpremStatsJSONProp, Value: string(onpremData), NoIndex: true},
+	)
+
+	return props, nil
+}
+
+// Load implements datastore.PropertyLoadSaver for ExecutionInfo.
+func (e *ExecutionInfo) Load(props []datastore.Property) error {
+	rest := make([]datastore.Property, 0, len(props))
+
+	var dailyData, onpremData string
+	haveDailyJSON := false
+	haveOnpremJSON := false
+
+	for _, p := range props {
+		switch p.Name {
+		case dailyStatisticsJSONProp:
+			if s, ok := p.Value.(string); ok {
+				dailyData = s
+				haveDailyJSON = true
+			}
+		case onpremStatsJSONProp:
+			if s, ok := p.Value.(string); ok {
+				onpremData = s
+				haveOnpremJSON = true
+			}
+		default:
+			rest = append(rest, p)
+		}
+	}
+
+	loadErr := datastore.LoadStruct(e, rest)
+
+	corrupted := false
+
+	if haveDailyJSON {
+		var parsed []DailyStatistics
+		if jsonErr := json.Unmarshal([]byte(dailyData), &parsed); jsonErr == nil {
+			e.DailyStatistics = parsed
+		} else {
+			log.Printf("[ERROR] Failed unmarshalling %s for org %s stats: %s", dailyStatisticsJSONProp, e.OrgId, jsonErr)
+			corrupted = true
+		}
+	}
+
+	if haveOnpremJSON {
+		var parsed []DailyStatistics
+		if jsonErr := json.Unmarshal([]byte(onpremData), &parsed); jsonErr == nil {
+			e.OnpremStats = parsed
+		} else {
+			log.Printf("[ERROR] Failed unmarshalling %s for org %s stats: %s", onpremStatsJSONProp, e.OrgId, jsonErr)
+			corrupted = true
+		}
+	}
+
+	if corrupted {
+		return fmt.Errorf("[ERROR] Execution info stats unparseable for org %s: daily_statistics/onprem_stats JSON doesn't match the current struct - refusing to load so nothing downstream saves this as empty history", e.OrgId)
+	}
+
+	return loadErr
 }
 
 func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error) {
