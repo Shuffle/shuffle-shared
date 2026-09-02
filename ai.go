@@ -7866,9 +7866,9 @@ INCORRECT (do NOT do this): { "key": "body", "value": { "operations": "Update th
 
 Supported Step-by-Step Operations
 
-A workflow has two types of nodes: Actions and Triggers. If you need a trigger, use either Webhook or Schedule. There is no rigid rule that triggers must always exist — only use a trigger if the workflow solution genuinely needs it.
+A workflow has two types of nodes: Actions and Triggers. If you need a trigger, use Webhook, Schedule, User Input, or Subflow. There is no rigid rule that triggers must always exist — only use a trigger if the workflow solution genuinely needs it.
 
-Format: Webhook Trigger
+Format: Webhook Trigger (Incoming HTTP requests)
 {
 "op": "add_node",
 "node_type": "trigger",
@@ -7881,7 +7881,7 @@ Format: Webhook Trigger
 }
 }
 
-Format: Schedule Trigger
+Format: Schedule Trigger (Time / cron interval triggers)
 {
 "op": "add_node",
 "node_type": "trigger",
@@ -7891,6 +7891,53 @@ Format: Schedule Trigger
   "label": "<unique_node_name>",
   "parameters": [
     { "name": "cron", "value": "*/15 * * * *" }
+  ],
+  "x": 100,
+  "y": 100
+}
+}
+
+Format: User Input Trigger (Human-in-the-loop approval / decision checkpoint that pauses execution awaiting manual user approval)
+{
+"op": "add_node",
+"node_type": "trigger",
+"temp_id": "<your_temp_id>",
+"data": {
+  "app_name": "User Input",
+  "label": "<unique_node_name>",
+  "parameters": [
+    { "name": "alertinfo", "value": "## Approve Action?\n\nDetails: $exec" },
+    { "name": "type", "value": "email" },
+    { "name": "email", "value": "admin@example.com" },
+    { "name": "options", "value": "boolean" },
+    { "name": "subflow", "value": "" },
+    { "name": "subflow_failure", "value": "" }
+  ],
+  "x": 100,
+  "y": 100
+}
+}
+Note on User Input parameters:
+- "alertinfo": The prompt/markdown shown to the human.
+- "type": Delivery method: "email", "sms", "subflow", or combinations like "subflow,email".
+- "email": Target email for email notifications.
+- "sms": Target phone number for SMS notifications.
+- "subflow": Optional workflow UUID to trigger for approval handling.
+- "subflow_failure": Optional workflow UUID to trigger if the human clicks Decline.
+- "options": Response type (typically "boolean").
+
+Format: Subflow Trigger (Triggered when this workflow is called as a subflow from another workflow)
+{
+"op": "add_node",
+"node_type": "trigger",
+"temp_id": "<your_temp_id>",
+"data": {
+  "app_name": "Shuffle Workflow",
+  "label": "<unique_node_name>",
+  "parameters": [
+    { "name": "workflow", value: "<the workflow_id>"},
+    { "name": "argument", "value": "$exec" },
+    { "name": "check_result", "value": "true" }
   ],
   "x": 100,
   "y": 100
