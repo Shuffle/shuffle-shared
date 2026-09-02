@@ -13725,6 +13725,28 @@ func BuildBaseSubscription(ctx context.Context, org *Org, monthlyExecLimit int64
 	}
 }
 
+func (s *SyncConfig) MergeSyncConfigBackup(peerWorkflowBackup, peerAppBackup bool, peerWorkflowBackupUpdated, peerAppBackupUpdated int64) bool {
+	changed := false
+
+	if peerWorkflowBackupUpdated > s.WorkflowBackupUpdated {
+		if s.WorkflowBackup != peerWorkflowBackup {
+			s.WorkflowBackup = peerWorkflowBackup
+			changed = true
+		}
+		s.WorkflowBackupUpdated = peerWorkflowBackupUpdated
+	}
+
+	if peerAppBackupUpdated > s.AppBackupUpdated {
+		if s.AppBackup != peerAppBackup {
+			s.AppBackup = peerAppBackup
+			changed = true
+		}
+		s.AppBackupUpdated = peerAppBackupUpdated
+	}
+
+	return changed
+}
+
 func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -13784,6 +13806,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		SubscriptionIndex string              `json:"subscription_index" datastore:"subscription_index"`
 
 		SyncFeatures    SyncFeatures `json:"sync_features" datastore:"sync_features"`
+		SyncConfig      SyncConfig   `json:"sync_config" datastore:"sync_config"`
 		Billing         Billing      `json:"billing" datastore:"billing"`
 		Branding        OrgBranding  `json:"branding" datastore:"branding"`
 		EditingBranding bool         `json:"editing_branding" datastore:"editing_branding"`
@@ -13864,6 +13887,30 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] User %s doesn't have edit rights to %s", user.Id, org.Id)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if tmpData.Editing == "sync_config" {
+		now := time.Now().Unix()
+		if tmpData.SyncConfig.WorkflowBackup != org.SyncConfig.WorkflowBackup {
+			org.SyncConfig.WorkflowBackup = tmpData.SyncConfig.WorkflowBackup
+			org.SyncConfig.WorkflowBackupUpdated = now
+		}
+		if tmpData.SyncConfig.AppBackup != org.SyncConfig.AppBackup {
+			org.SyncConfig.AppBackup = tmpData.SyncConfig.AppBackup
+			org.SyncConfig.AppBackupUpdated = now
+		}
+
+		err = SetOrg(ctx, *org, org.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed to update org %s sync config: %s", org.Id, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true}`))
 		return
 	}
 
