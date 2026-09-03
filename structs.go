@@ -3938,6 +3938,8 @@ type SettingsReturn struct {
 	Verified bool   `json:"verified"`
 	Apikey   string `json:"apikey"`
 	Image    string `json:"image"`
+
+	Devices []Device `json:"devices"`
 }
 
 type ExtraButton struct {
@@ -5157,11 +5159,6 @@ type StreamWorkflowOperation struct {
 	Fields    []Valuereplace  `json:"fields,omitempty"`   // for "configure" ops
 	Sequence  int64           `json:"sequence"`           // monotonic ordering per workflow
 	Timestamp int64           `json:"timestamp"`          // unix ms
-}
-
-type StreamWorkflowState struct {
-	Operations []StreamWorkflowOperation `json:"operations"`
-	LastSeq    int64                     `json:"last_seq"`
 }
 
 type StreamPresenceEntry struct {

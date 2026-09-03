@@ -140,6 +140,124 @@ func streamPresenceKeyFor(id string) string {
 	return fmt.Sprintf("%s_presence", id)
 }
 
+// streamAgentUserID is the name the AI agent signs in under while it's building a workflow.
+const streamAgentUserID = "agent"
+
+var streamPresenceMu sync.Mutex
+
+// decodePresence reads the participant list out of its stored JSON form.
+func decodePresence(data []byte) []StreamPresenceEntry {
+	var state StreamPresenceState
+	if len(data) > 0 {
+		json.Unmarshal(data, &state)
+	}
+	return state.Users
+}
+
+// encodePresence turns a participant list back into the stored JSON form.
+func encodePresence(users []StreamPresenceEntry) []byte {
+	data, _ := json.Marshal(StreamPresenceState{Users: users})
+	return data
+}
+
+// prunePresence returns only the participants seen within the stale threshold.
+func prunePresence(users []StreamPresenceEntry, now int64) []StreamPresenceEntry {
+	active := []StreamPresenceEntry{}
+	for _, entry := range users {
+		msSinceSeen := now - entry.LastSeen
+		if msSinceSeen <= streamPresenceStaleMs {
+			active = append(active, entry)
+		}
+	}
+	return active
+}
+
+// addParticipant drops stale entries, then adds userID to the list — or just refreshes their
+// LastSeen if they're already on it — and returns the updated list.
+func addParticipant(users []StreamPresenceEntry, userID, username string, now int64) []StreamPresenceEntry {
+	active := prunePresence(users, now)
+
+	// Already on the list: just bump their timestamp (and name) and we're done.
+	for i := range active {
+		if active[i].UserID == userID {
+			active[i].LastSeen = now
+			if len(username) > 0 {
+				active[i].Username = username
+			}
+			return active
+		}
+	}
+
+	// New here: add them to the list.
+	return append(active, StreamPresenceEntry{
+		UserID:   userID,
+		Username: username,
+		LastSeen: now,
+		Color:    presenceColor(userID),
+	})
+}
+
+// readPresence returns the current live participants without changing anything.
+func readPresence(ctx context.Context, workflowID string) []StreamPresenceEntry {
+	value, err := GetCache(ctx, streamPresenceKeyFor(workflowID))
+	if err != nil {
+		return []StreamPresenceEntry{}
+	}
+	raw, ok := value.([]uint8)
+	if !ok {
+		return []StreamPresenceEntry{}
+	}
+	return prunePresence(decodePresence(raw), time.Now().UnixMilli())
+}
+
+// savePresenceParticipant records that userID is viewing the workflow — adding or refreshing
+// their entry — and returns the resulting live participant list. It writes safely so two people
+// signing in at the same instant can't overwrite each other.
+func savePresenceParticipant(ctx context.Context, workflowID, userID, username string) []StreamPresenceEntry {
+	key := streamPresenceKeyFor(workflowID)
+	ttlSeconds := streamPresenceTTL * 60
+
+	// Single-server setup: no shared cache, so a lock around read-change-write is enough.
+	if len(memcached) == 0 {
+		streamPresenceMu.Lock()
+		defer streamPresenceMu.Unlock()
+
+		users := addParticipant(readPresence(ctx, workflowID), userID, username, time.Now().UnixMilli())
+		SetCache(ctx, key, encodePresence(users), streamPresenceTTL)
+		return users
+	}
+
+	// Shared cache: read the list, change it, and save it back only if nobody else changed it
+	// in the meantime. If someone did, read their fresh copy and try again (up to 5 times).
+	for attempt := 0; attempt < 5; attempt++ {
+		item, err := mc.Get(key)
+		now := time.Now().UnixMilli()
+
+		// Nothing stored yet: try to create it. If someone beats us to it, loop and update instead.
+		if err == gomemcache.ErrCacheMiss || item == nil {
+			users := addParticipant(nil, userID, username, now)
+			if mc.Add(&gomemcache.Item{Key: key, Value: encodePresence(users), Expiration: ttlSeconds}) == nil {
+				return users
+			}
+			continue
+		}
+		if err != nil {
+			break // cache trouble — fall through to a best-effort read
+		}
+
+		// Something is stored: update it and save only if it hasn't changed underneath us.
+		users := addParticipant(decodePresence(item.Value), userID, username, now)
+		item.Value = encodePresence(users)
+		item.Expiration = ttlSeconds
+		if mc.CompareAndSwap(item) == nil {
+			return users
+		}
+		// Someone else saved first — loop and retry against their version.
+	}
+
+	return readPresence(ctx, workflowID)
+}
+
 func streamAuthCtxKey(id string) string {
 	return fmt.Sprintf("%s_stream_authctx", id)
 }
@@ -539,6 +657,27 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	workflowID := workflowAuth.ID
 
+	// Lightweight presence poll: a solo client hits this instead of holding a long-poll open.
+	// Refresh its own presence entry, return the live set, and close — no streaming goroutine.
+	if request.URL.Query().Get("presence_only") == "1" {
+		var users []StreamPresenceEntry
+		if len(user.Id) > 0 {
+			users = savePresenceParticipant(ctx, workflowID, user.Id, user.Username)
+		} else {
+			users = readPresence(ctx, workflowID)
+		}
+		resp.Header().Set("Content-Type", "application/json")
+		responseBytes, _ := json.Marshal(map[string]interface{}{
+			"success": true,
+			"count":   len(users),
+			"users":   users,
+			"seq":     currentStreamSeq(ctx, workflowID),
+		})
+		resp.WriteHeader(200)
+		resp.Write(responseBytes)
+		return
+	}
+
 	resp.Header().Set("Connection", "Keep-Alive")
 	resp.Header().Set("X-Content-Type-Options", "nosniff")
 
@@ -558,7 +697,6 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		sinceSeq, _ = strconv.ParseInt(sinceStr, 10, 64)
 	}
 
-	presenceKey := streamPresenceKeyFor(workflowID)
 	var lastSentSeq int64 = sinceSeq
 
 	// On first connect (since=0), replay unsaved ops so late joiners see the
@@ -616,46 +754,11 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		if time.Since(lastPresenceAt) >= 10*time.Second {
 			lastPresenceAt = time.Now()
 
-			var presence StreamPresenceState
-			presenceCache, err := GetCache(ctx, presenceKey)
-			if err == nil {
-				presenceData, ok := presenceCache.([]uint8)
-				if !ok {
-					log.Printf("[WARNING] Unexpected cache type for presence %s", presenceKey)
-				} else if err := json.Unmarshal(presenceData, &presence); err != nil {
-					log.Printf("[WARNING] Failed to unmarshal presence for %s: %s", workflowID, err)
-				}
-			}
-
-			now := time.Now().UnixMilli()
-			updated := false
-			activeUsers := []StreamPresenceEntry{}
-			for _, entry := range presence.Users {
-				if now-entry.LastSeen > streamPresenceStaleMs {
-					continue
-				}
-				if entry.UserID == user.Id {
-					entry.LastSeen = now
-					if len(user.Username) > 0 {
-						entry.Username = user.Username
-					}
-					updated = true
-				}
-				activeUsers = append(activeUsers, entry)
-			}
-			if !updated && len(user.Id) > 0 {
-				activeUsers = append(activeUsers, StreamPresenceEntry{
-					UserID:   user.Id,
-					Username: user.Username,
-					LastSeen: now,
-					Color:    presenceColor(user.Id),
-				})
-			}
-			presence.Users = activeUsers
-
-			presenceBytes, _ := json.Marshal(presence)
-			if err := SetCache(ctx, presenceKey, presenceBytes, streamPresenceTTL); err != nil {
-				log.Printf("[WARNING] Failed setting presence cache for %s: %s", workflowID, err)
+			var users []StreamPresenceEntry
+			if len(user.Id) > 0 {
+				users = savePresenceParticipant(ctx, workflowID, user.Id, user.Username)
+			} else {
+				users = readPresence(ctx, workflowID)
 			}
 
 			// Send presence to client
@@ -663,10 +766,9 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 				Item  string                `json:"item"`
 				Users []StreamPresenceEntry `json:"users"`
 			}
-			presenceOpBytes, _ := json.Marshal(presenceOp{Item: "presence", Users: presence.Users})
-			_, err = fmt.Fprintf(resp, "%s\n", string(presenceOpBytes))
-			if err != nil {
-				if strings.Contains(err.Error(), "broken pipe") {
+			presenceOpBytes, _ := json.Marshal(presenceOp{Item: "presence", Users: users})
+			if _, writeErr := fmt.Fprintf(resp, "%s\n", string(presenceOpBytes)); writeErr != nil {
+				if strings.Contains(writeErr.Error(), "broken pipe") {
 					return
 				}
 			}
