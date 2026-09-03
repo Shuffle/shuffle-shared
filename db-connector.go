@@ -2957,6 +2957,10 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, workflow)
 			if err == nil && workflow.ID != "" {
+				if err := restoreWorkflowParameters(workflow); err != nil {
+					return workflow, err
+				}
+
 				validationData, err := GetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID))
 				if err == nil {
 					cacheData := []byte(validationData.([]uint8))
@@ -3080,6 +3084,10 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				return &Workflow{}, err
 			}
 		}
+	}
+
+	if err := restoreWorkflowParameters(workflow); err != nil {
+		return workflow, err
 	}
 
 	validationData, err := GetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID))
@@ -8643,6 +8651,11 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflows)
 			if err == nil {
+				for index := range workflows {
+					if err := restoreWorkflowParameters(&workflows[index]); err != nil {
+						return workflows, err
+					}
+				}
 
 				sort.Slice(workflows, func(i, j int) bool {
 					return workflows[i].Edited > workflows[j].Edited
@@ -8819,6 +8832,12 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 		}
 	}
 
+	for index := range workflows {
+		if err := restoreWorkflowParameters(&workflows[index]); err != nil {
+			return workflows, err
+		}
+	}
+
 	return workflows, nil
 }
 
@@ -8901,6 +8920,11 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 	hasher.Write([]byte(workflowHashString))
 	workflowHash := hex.EncodeToString(hasher.Sum(nil))
 	workflow.RevisionId = workflowHash
+	if project.DbType == "opensearch" {
+		if err := offloadWorkflowParameters(&workflow); err != nil {
+			return err
+		}
+	}
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflow)
@@ -8911,53 +8935,7 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, workflow.RevisionId, data)
 		if err != nil {
-			if strings.Contains(err.Error(), "immense term") {
-				retried := false
-				indexWorkflow := workflow
-
-				for actionIndex, action := range indexWorkflow.Actions {
-					for paramIndex, param := range action.Parameters {
-						if len(param.Value) > 32500 {
-							log.Printf("[DEBUG][%s] Trimming workflow revision parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
-							indexWorkflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
-							retried = true
-						}
-					}
-
-					for paramIndex, param := range action.InvalidParameters {
-						if len(param.Value) > 32500 {
-							log.Printf("[DEBUG][%s] Trimming workflow revision invalid parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
-							indexWorkflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
-							retried = true
-						}
-					}
-				}
-
-				for triggerIndex, trigger := range indexWorkflow.Triggers {
-					for paramIndex, param := range trigger.Parameters {
-						if len(param.Value) > 32500 {
-							log.Printf("[DEBUG][%s] Trimming workflow revision trigger parameter %s in trigger %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, trigger.Label, len(param.Value))
-							indexWorkflow.Triggers[triggerIndex].Parameters[paramIndex].Value = "Size too large. Removed."
-							retried = true
-						}
-					}
-				}
-
-				if retried {
-					indexData, marshalErr := json.Marshal(indexWorkflow)
-					if marshalErr != nil {
-						log.Printf("[WARNING] Failed marshalling trimmed workflow revision for ES retry: %s", marshalErr)
-						return marshalErr
-					}
-
-					log.Printf("[DEBUG][%s] Retrying OpenSearch workflow revision save after trimming oversized parameter values", workflow.ID)
-					err = indexEs(ctx, nameKey, workflow.RevisionId, indexData)
-				}
-			}
-
-			if err != nil {
-				return err
-			}
+			return err
 		}
 	} else {
 		key := datastore.NameKey(nameKey, workflow.RevisionId, nil)
@@ -9149,6 +9127,11 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	workflow = FixWorkflowPosition(ctx, workflow)
 	trimOversizedWorkflowImages(&workflow)
+	if project.DbType == "opensearch" {
+		if err := offloadWorkflowParameters(&workflow); err != nil {
+			return err
+		}
+	}
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflow)
@@ -9160,53 +9143,11 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
-			if strings.Contains(err.Error(), "immense term") {
-				retried := false
-				indexWorkflow := workflow
+			return err
+		}
 
-				for actionIndex, action := range indexWorkflow.Actions {
-					for paramIndex, param := range action.Parameters {
-						if len(param.Value) > 32500 {
-							log.Printf("[DEBUG][%s] Trimming workflow parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
-							indexWorkflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
-							retried = true
-						}
-					}
-
-					for paramIndex, param := range action.InvalidParameters {
-						if len(param.Value) > 32500 {
-							log.Printf("[DEBUG][%s] Trimming workflow invalid parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
-							indexWorkflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
-							retried = true
-						}
-					}
-				}
-
-				for triggerIndex, trigger := range indexWorkflow.Triggers {
-					for paramIndex, param := range trigger.Parameters {
-						if len(param.Value) > 32500 {
-							log.Printf("[DEBUG][%s] Trimming workflow trigger parameter %s in trigger %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, trigger.Label, len(param.Value))
-							indexWorkflow.Triggers[triggerIndex].Parameters[paramIndex].Value = "Size too large. Removed."
-							retried = true
-						}
-					}
-				}
-
-				if retried {
-					indexData, marshalErr := json.Marshal(indexWorkflow)
-					if marshalErr != nil {
-						log.Printf("[WARNING] Failed marshalling trimmed workflow for ES retry: %s", marshalErr)
-						return marshalErr
-					}
-
-					log.Printf("[DEBUG][%s] Retrying OpenSearch workflow save after trimming oversized parameter values", workflow.ID)
-					err = indexEs(ctx, nameKey, id, indexData)
-				}
-			}
-
-			if err != nil {
-				return err
-			}
+		if err := restoreWorkflowParameters(&workflow); err != nil {
+			return err
 		}
 	} else {
 		//log.Printf("\n\n[INFO] Adding workflow with ID %s\n\n", id)
@@ -9290,6 +9231,101 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 				}
 			}
 		}
+	}
+
+	return nil
+}
+
+const largeWorkflowParameterMarker = "workflow_parameter"
+
+type workflowParameterReference struct {
+	Success bool   `json:"success"`
+	Reason  string `json:"reason"`
+	Size    int    `json:"size"`
+	Extra   string `json:"extra"`
+	ID      string `json:"id"`
+}
+
+func workflowParameterValues(workflow *Workflow) []*string {
+	values := []*string{}
+	for actionIndex := range workflow.Actions {
+		for parameterIndex := range workflow.Actions[actionIndex].Parameters {
+			values = append(values, &workflow.Actions[actionIndex].Parameters[parameterIndex].Value)
+		}
+		for parameterIndex := range workflow.Actions[actionIndex].InvalidParameters {
+			values = append(values, &workflow.Actions[actionIndex].InvalidParameters[parameterIndex].Value)
+		}
+	}
+	for triggerIndex := range workflow.Triggers {
+		for parameterIndex := range workflow.Triggers[triggerIndex].Parameters {
+			values = append(values, &workflow.Triggers[triggerIndex].Parameters[parameterIndex].Value)
+		}
+	}
+
+	return values
+}
+
+func offloadWorkflowParameters(workflow *Workflow) error {
+	basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
+	if basepath == "" {
+		basepath = "files"
+	}
+	directory := fmt.Sprintf("%s/large_workflows", basepath)
+
+	for _, value := range workflowParameterValues(workflow) {
+		if len(*value) <= 32500 {
+			continue
+		}
+
+		// @yashsinghcodes: content-addressed files are retained; add reference-aware cleanup if storage growth becomes material.
+		sum := sha256.Sum256([]byte(workflow.OrgId + "\x00" + *value))
+		id := hex.EncodeToString(sum[:])
+		if err := os.MkdirAll(directory, 0755); err != nil {
+			return fmt.Errorf("create large workflow parameter directory: %w", err)
+		}
+		if err := os.WriteFile(fmt.Sprintf("%s/%s", directory, id), []byte(*value), 0644); err != nil {
+			return fmt.Errorf("write large workflow parameter: %w", err)
+		}
+
+		replacement, err := json.Marshal(workflowParameterReference{
+			Reason: "Workflow parameter too large for OpenSearch; stored in file.",
+			Size:   len(*value),
+			Extra:  largeWorkflowParameterMarker,
+			ID:     id,
+		})
+		if err != nil {
+			return err
+		}
+		*value = string(replacement)
+	}
+
+	return nil
+}
+
+func restoreWorkflowParameters(workflow *Workflow) error {
+	basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
+	if basepath == "" {
+		basepath = "files"
+	}
+
+	for _, value := range workflowParameterValues(workflow) {
+		reference := workflowParameterReference{}
+		if json.Unmarshal([]byte(*value), &reference) != nil || reference.Extra != largeWorkflowParameterMarker {
+			continue
+		}
+		if decoded, err := hex.DecodeString(reference.ID); err != nil || len(decoded) != sha256.Size {
+			return errors.New("invalid large workflow parameter file id")
+		}
+
+		data, err := os.ReadFile(fmt.Sprintf("%s/large_workflows/%s", basepath, reference.ID))
+		if err != nil {
+			return fmt.Errorf("read large workflow parameter: %w", err)
+		}
+		sum := sha256.Sum256([]byte(workflow.OrgId + "\x00" + string(data)))
+		if hex.EncodeToString(sum[:]) != reference.ID {
+			return errors.New("large workflow parameter file checksum mismatch")
+		}
+		*value = string(data)
 	}
 
 	return nil
