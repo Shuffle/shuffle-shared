@@ -7809,6 +7809,11 @@ When choosing one or more hostnames, NEVER guess which host. When available, ALW
 func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
 	targetWorkflowId := execution.ExecutionArgument
 
+
+	if len(targetWorkflowId) > 0 {
+		savePresenceParticipant(ctx, targetWorkflowId, streamAgentUserID, "Agent")
+	}
+
 	user := User{
 		ActiveOrg: OrgMini{Id: execution.ExecutionOrg},
 	}
