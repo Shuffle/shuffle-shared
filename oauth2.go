@@ -2217,14 +2217,28 @@ func HandleOAuthAuthorizationServer(resp http.ResponseWriter, request *http.Requ
 	}
 
 	frontendURL = strings.TrimSuffix(frontendURL, "/")
+
+	oauthPrefix := os.Getenv("SHUFFLE_OAUTH_API_PREFIX")
+	if oauthPrefix == "" {
+		oauthPrefix = "/api/v1"
+	} else if oauthPrefix == "none" || oauthPrefix == "/" {
+		oauthPrefix = ""
+	} else {
+		oauthPrefix = strings.TrimSuffix(oauthPrefix, "/")
+		if !strings.HasPrefix(oauthPrefix, "/") && len(oauthPrefix) > 0 {
+			oauthPrefix = "/" + oauthPrefix
+		}
+	}
+
 	metadata := map[string]interface{}{
 		"issuer":                                baseURL,
 		"authorization_endpoint":                fmt.Sprintf("%s/oauth2/authorize", frontendURL),
-		"token_endpoint":                        fmt.Sprintf("%s/oauth2/token", baseURL),
-		"registration_endpoint":                 fmt.Sprintf("%s/oauth2/register", baseURL),
+		"token_endpoint":                        fmt.Sprintf("%s%s/oauth2/token", baseURL, oauthPrefix),
+		"registration_endpoint":                 fmt.Sprintf("%s%s/oauth2/register", baseURL, oauthPrefix),
+		"revocation_endpoint":                   fmt.Sprintf("%s%s/oauth2/revoke", baseURL, oauthPrefix),
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code"},
-		"token_endpoint_auth_methods_supported": []string{"none", "client_secret_post"},
+		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post", "none"},
 		"code_challenge_methods_supported":      []string{"S256"},
 		"authorization_response_iss_parameter_supported": true,
 		"scopes_supported":                      []string{"workflow:edit"},
@@ -2368,6 +2382,12 @@ func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
 		client.UserId = userId
 	}
 
+	clientSecret := ""
+	if regReq.TokenEndpointAuthMethod == "client_secret_post" || regReq.TokenEndpointAuthMethod == "client_secret_basic" {
+		clientSecret = fmt.Sprintf("shf_secret_%s", strings.ReplaceAll(uuid.NewV4().String(), "-", ""))
+		client.ClientSecret = clientSecret
+	}
+
 	err = SetOAuthClient(ctx, client)
 	if err != nil {
 		log.Printf("[ERROR] Failed to save OAuth client %s: %v", clientID, err)
@@ -2378,6 +2398,7 @@ func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
 
 	regResp := OAuthClientRegistrationResponse{
 		ClientID:                clientID,
+		ClientSecret:            clientSecret,
 		ClientName:              regReq.ClientName,
 		RedirectUris:            regReq.RedirectUris,
 		GrantTypes:              regReq.GrantTypes,
@@ -3365,17 +3386,17 @@ func IsAppAllowedForOAuth(allowedApps []string, app WorkflowApp) bool {
 //   - authorization_code: Exchanges a temporary authorization code + PKCE code_verifier for an access_token.
 //   - refresh_token: Rotates an existing refresh token for a fresh access_token.
 func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
+	if debug {
+		log.Printf("[DEBUG] HandleOAuthToken: incoming %s %s from %s (contentType: '%s', AuthHeaderLen: %d)",
+			request.Method, request.URL.Path, request.RemoteAddr, request.Header.Get("Content-Type"), len(request.Header.Get("Authorization")))
+	}
+
 	cors := HandleCors(resp, request)
 	if cors {
 		if debug {
 			log.Printf("[DEBUG] HandleOAuthToken: handled CORS preflight for %s %s", request.Method, request.URL.Path)
 		}
 		return
-	}
-
-	if debug {
-		log.Printf("[DEBUG] HandleOAuthToken: incoming %s %s from %s (contentType: '%s')",
-			request.Method, request.URL.Path, request.RemoteAddr, request.Header.Get("Content-Type"))
 	}
 
 	// Rate limiting: Protect against automated brute-forcing or DoS
