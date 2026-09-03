@@ -18587,7 +18587,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						oldAgentOutput := AgentOutput{}
 						foundError := fmt.Sprintf("LLM received call failed from app: ")
 						if len(quickUnmarshal.Reason) > 0 { 
-							foundError += fmt.Sprintf(quickUnmarshal.Reason)
+							foundError += fmt.Sprintf("%s", quickUnmarshal.Reason)
 						}
 
 						// Tries to map it in from the openai request 
@@ -18826,7 +18826,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 								agentOutput := AgentOutput{} 
 								err = json.Unmarshal([]byte(result.Result), &agentOutput)
 								if err != nil || len(agentOutput.Decisions) == 0 { 
-									log.Printf("[ERROR][%s] Failed to unmarshal agent output for delayed decision update: %s. Decisions: %d", workflowExecution.ExecutionId, err, agentOutput.Decisions) 
+									log.Printf("[ERROR][%s] Failed to unmarshal agent output for delayed decision update: %s. Decisions: %d", workflowExecution.ExecutionId, err, len(agentOutput.Decisions) )
 								}
 
 								for decisionIndex, decision := range agentOutput.Decisions {

@@ -643,7 +643,7 @@ for raw_version in versions:
     if not version:
         continue
     if not ecosystem:
-        errors.append("No ecosystem mapping for os=%r" % raw_os)
+        errors.append("No ecosystem mapping for os=%s" % raw_os)
         break
 
     body = {"package": {"name": name, "ecosystem": ecosystem}, "version": version}
@@ -713,7 +713,7 @@ result = {
     "store_errors": store_errors,
 }
 print(json.dumps(result, indent=2))
-`, "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%d", "%s", "%s", "%s", "%s", "%s")					
+`, "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%d", "%s", "%s", "%s", "%s", "%s")					
 }
 
 // Should workflows be written as YAML and be text-editable?

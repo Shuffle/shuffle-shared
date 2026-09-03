@@ -3106,6 +3106,53 @@ type OAuthAuthCodeWrapper struct {
 	Source      OAuthAuthCode `json:"_source"`
 }
 
+// OAuthScopeInfo represents metadata for an OAuth scope to render user-friendly consent prompts.
+type OAuthScopeInfo struct {
+	Scope       string `json:"scope"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Category    string `json:"category,omitempty"`
+}
+
+// OAuthUserInfo provides lightweight user identity details for the consent window.
+type OAuthUserInfo struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Name     string `json:"name,omitempty"`
+}
+
+// OAuthConsentInfoResponse is returned by GET /api/v1/oauth2/authorize to render the consent UI.
+type OAuthConsentInfoResponse struct {
+	ClientID      string           `json:"client_id"`
+	ClientName    string           `json:"client_name"`
+	Scopes        []OAuthScopeInfo `json:"scopes"`
+	User          OAuthUserInfo    `json:"user"`
+	AvailableOrgs []OrgMini        `json:"available_orgs"`
+	SelectedOrgId string           `json:"selected_org_id"`
+	RedirectURI   string           `json:"redirect_uri"`
+	State         string           `json:"state"`
+}
+
+// OAuthAuthorizeRequest represents the decision sent by the consent UI or client to POST /oauth2/authorize.
+type OAuthAuthorizeRequest struct {
+	ClientID            string `json:"client_id"`
+	RedirectURI         string `json:"redirect_uri"`
+	ResponseType        string `json:"response_type"`
+	Scope               string `json:"scope"`
+	State               string `json:"state"`
+	CodeChallenge       string `json:"code_challenge"`
+	CodeChallengeMethod string `json:"code_challenge_method"`
+	OrgId               string `json:"org_id"`
+	Approved            bool   `json:"approved"`
+}
+
+// OAuthAuthorizeResponse is returned after consent is granted/denied.
+type OAuthAuthorizeResponse struct {
+	RedirectURL string `json:"redirect_url"`
+	Code        string `json:"code,omitempty"`
+	State       string `json:"state,omitempty"`
+}
+
 
 type DisabledHookWrapper struct {
 	Index       string        `json:"_index"`

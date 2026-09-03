@@ -17,7 +17,7 @@ import (
 	"regexp"
 	"strconv"
 
-	//"net/url"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -2386,5 +2386,505 @@ func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
 	resp.Header().Set("Cache-Control", "no-store")
 	resp.WriteHeader(http.StatusCreated)
 	resp.Write(parsedResp)
+}
+
+// =============================================================================
+// OAuth 2.0 / 2.1 Scope Registry & Extensible Consent Handlers
+// =============================================================================
+
+// GetSupportedOAuthScopes returns all globally known OAuth scopes supported by Shuffle.
+// Extensible design: to support new features (e.g. app management, alerts, audit logs),
+// simply add new scope entries here.
+func GetSupportedOAuthScopes() map[string]OAuthScopeInfo {
+	return map[string]OAuthScopeInfo{
+		"workflow:edit": {
+			Scope:       "workflow:edit",
+			Name:        "Edit Workflows",
+			Description: "Create, view, and modify workflows in your organization.",
+			Category:    "Workflows",
+		},
+		"workflow:run": {
+			Scope:       "workflow:run",
+			Name:        "Run Workflows",
+			Description: "Execute workflows and inspect execution results.",
+			Category:    "Workflows",
+		},
+		"workflow:read": {
+			Scope:       "workflow:read",
+			Name:        "Read Workflows",
+			Description: "View existing workflows and configurations.",
+			Category:    "Workflows",
+		},
+	}
+}
+
+// ParseOAuthScopes converts a space-separated scope string into structured scope metadata.
+// Edgecase: Unknown or custom scopes requested by clients fall back to a generic description
+// rather than failing, ensuring future compatibility without breaking existing clients.
+func ParseOAuthScopes(scopeStr string) []OAuthScopeInfo {
+	supported := GetSupportedOAuthScopes()
+	scopes := []OAuthScopeInfo{}
+	parts := strings.Fields(strings.TrimSpace(scopeStr))
+	if len(parts) == 0 {
+		// Default to workflow:edit if none specified
+		parts = []string{"workflow:edit"}
+	}
+
+	for _, part := range parts {
+		if info, ok := supported[part]; ok {
+			scopes = append(scopes, info)
+		} else {
+			// Edgecase: Graceful fallback for dynamically defined or custom scopes
+			scopes = append(scopes, OAuthScopeInfo{
+				Scope:       part,
+				Name:        part,
+				Description: fmt.Sprintf("Access permission for %s", part),
+				Category:    "Custom",
+			})
+		}
+	}
+	return scopes
+}
+
+// getOAuthUser attempts to authenticate the user from either:
+// 1. Authorization: Bearer <token/apikey>
+// 2. Cookie session: session_token, __session, or shuffle_session
+// Returns the authenticated User or an error if unauthenticated.
+func getOAuthUser(resp http.ResponseWriter, request *http.Request) (User, error) {
+	ctx := GetContext(request)
+
+	// 1. Try standard Shuffle API authentication (Bearer token / API key)
+	if authHeader := request.Header.Get("Authorization"); len(authHeader) > 0 {
+		user, err := HandleApiAuthentication(resp, request)
+		if err == nil && len(user.Id) > 0 {
+			return user, nil
+		}
+	}
+
+	// 2. Fall back to cookie-based session tokens used by the Shuffle web frontend
+	cookieNames := []string{"session_token", "__session", "shuffle_session"}
+	for _, name := range cookieNames {
+		cookie, cErr := request.Cookie(name)
+		if cErr == nil && len(strings.TrimSpace(cookie.Value)) > 0 {
+			sessionUser, sErr := GetSessionNew(ctx, strings.TrimSpace(cookie.Value))
+			if sErr == nil && len(sessionUser.Id) > 0 {
+				return sessionUser, nil
+			}
+		}
+	}
+
+	return User{}, errors.New("User is not authenticated")
+}
+
+// HandleOAuthAuthorize handles the OAuth 2.0 / 2.1 authorization and consent endpoint.
+//
+// Routes:
+//   GET  /oauth2/authorize         - Browser navigation or API consent metadata
+//   POST /oauth2/authorize         - Process user consent decision (approve/deny)
+//   GET  /api/v1/oauth2/authorize  - Frontend API to fetch consent UI details
+//   POST /api/v1/oauth2/authorize  - Frontend API to submit consent decision
+//
+// Edgecases handled & documented:
+//   - Rate limiting: Prevents credential stuffing / overload on authorization endpoint
+//   - CORS handling: Required for frontend SPA interactions
+//   - Method check: Only GET, POST, and OPTIONS are allowed
+//   - Client ID: Validates client existence in Datastore / OpenSearch
+//   - Open Redirector Protection: Validates redirect_uri strictly matches pre-registered URIs
+//   - Response Type: Must be 'code' (OAuth 2.1 forbids implicit 'token' flow)
+//   - PKCE Mandatory: RFC 7636 code_challenge is enforced; code_challenge_method must be S256 or plain
+//   - CSRF State: Preserved and echoed back in all response redirects
+//   - Auth check: Detects logged-in session (cookie/Bearer); returns login redirect or 401
+//   - Inactive user: Accounts that are disabled are blocked with 403 Forbidden
+//   - Multi-org selection: Ensures user belongs to requested organization before code issuance
+//   - Consent denial: If user clicks Cancel, redirects to client with error=access_denied
+//   - Expiry window: Auth codes are set to expire in 10 minutes
+//   - Single use: Handled upon token exchange
+func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Rate limiting: Protect against automated consent brute-forcing or DoS
+	if err := ValidateRequestOverload(resp, request, 30); err != nil {
+		resp.Header().Set("Content-Type", "application/json")
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(`{"error": "slow_down", "error_description": "Too many requests"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	// Dynamically determine frontend URL where the authorization UI lives
+	frontendURL := os.Getenv("SHUFFLE_FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = os.Getenv("FRONTEND_URL")
+	}
+	if frontendURL == "" {
+		frontendURL = "https://shuffle.security"
+	}
+	frontendURL = strings.TrimSuffix(frontendURL, "/")
+
+	// =========================================================================
+	// GET REQUEST: Render Consent Info or Redirect Browser to Frontend UI
+	// =========================================================================
+	if request.Method == "GET" {
+		clientID := strings.TrimSpace(request.URL.Query().Get("client_id"))
+		redirectURI := strings.TrimSpace(request.URL.Query().Get("redirect_uri"))
+		responseType := strings.TrimSpace(request.URL.Query().Get("response_type"))
+		scope := strings.TrimSpace(request.URL.Query().Get("scope"))
+		state := strings.TrimSpace(request.URL.Query().Get("state"))
+		codeChallenge := strings.TrimSpace(request.URL.Query().Get("code_challenge"))
+		codeChallengeMethod := strings.TrimSpace(request.URL.Query().Get("code_challenge_method"))
+
+		// Edgecase 1: Missing client_id
+		if clientID == "" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "client_id query parameter is required"}`))
+			return
+		}
+
+		// Edgecase 2: Unknown or invalid client_id
+		client, err := GetOAuthClient(ctx, clientID)
+		if err != nil || client == nil || client.ClientID == "" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_client", "error_description": "Unknown or invalid client_id"}`))
+			return
+		}
+
+		// Edgecase 3: Missing redirect_uri
+		if redirectURI == "" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "redirect_uri query parameter is required"}`))
+			return
+		}
+
+		// Edgecase 4: Redirect URI mismatch (Open Redirector Protection)
+		// SECURITY: Never redirect to an unregistered redirect_uri if validation fails!
+		uriMatched := false
+		for _, regURI := range client.RedirectUris {
+			if regURI == redirectURI {
+				uriMatched = true
+				break
+			}
+		}
+		if !uriMatched {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "redirect_uri does not match any registered redirect_uris for this client"}`))
+			return
+		}
+
+		// Edgecase 5: Invalid response_type (OAuth 2.1 requires 'code', disallows implicit 'token')
+		if responseType != "" && responseType != "code" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "unsupported_response_type", "error_description": "Only response_type=code is supported"}`))
+			return
+		}
+
+		// Edgecase 6: PKCE validation (RFC 7636 / OAuth 2.1 requires code_challenge)
+		if codeChallenge == "" {
+			log.Printf("[WARNING] OAuth authorize request missing PKCE code_challenge from client %s", clientID)
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "code_challenge is required (RFC 7636 PKCE)"}`))
+			return
+		}
+		if codeChallengeMethod != "" && codeChallengeMethod != "S256" && codeChallengeMethod != "plain" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "code_challenge_method must be S256 or plain"}`))
+			return
+		}
+
+		// Edgecase 7: Check User Authentication Status
+		user, userErr := getOAuthUser(resp, request)
+		isAPIRequest := strings.Contains(request.URL.Path, "/api/v1/") ||
+			strings.Contains(request.Header.Get("Accept"), "application/json") ||
+			request.URL.Query().Get("format") == "json"
+
+		if userErr != nil || len(user.Id) == 0 {
+			// User is NOT logged in
+			if isAPIRequest {
+				// Frontend API call: Return 401 with login prompt URL
+				resp.Header().Set("Content-Type", "application/json")
+				resp.WriteHeader(http.StatusUnauthorized)
+				loginURL := fmt.Sprintf("%s/login?redirect=%s", frontendURL, url.QueryEscape(request.URL.String()))
+				resp.Write([]byte(fmt.Sprintf(`{"error": "unauthorized", "login_url": "%s"}`, loginURL)))
+				return
+			}
+
+			// Direct browser GET: Redirect user to the frontend login page with return redirect
+			targetLogin := fmt.Sprintf("%s/login?redirect=%s", frontendURL, url.QueryEscape(request.URL.String()))
+			http.Redirect(resp, request, targetLogin, http.StatusFound)
+			return
+		}
+
+		// Edgecase 8: User account is inactive / suspended
+		if !user.Active {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusForbidden)
+			resp.Write([]byte(`{"error": "access_denied", "error_description": "User account is inactive"}`))
+			return
+		}
+
+		// If user IS authenticated:
+		// If this is the frontend API calling to fetch consent details:
+		if isAPIRequest {
+			// Build available organizations list for the user
+			availableOrgs := []OrgMini{}
+			for _, orgId := range user.Orgs {
+				orgData, oErr := GetOrg(ctx, orgId)
+				if oErr == nil && orgData != nil && orgData.Id != "" {
+					availableOrgs = append(availableOrgs, OrgMini{
+						Id:   orgData.Id,
+						Name: orgData.Name,
+					})
+				} else {
+					availableOrgs = append(availableOrgs, OrgMini{
+						Id:   orgId,
+						Name: orgId,
+					})
+				}
+			}
+
+			selectedOrg := user.ActiveOrg.Id
+			if selectedOrg == "" && len(user.Orgs) > 0 {
+				selectedOrg = user.Orgs[0]
+			}
+
+			clientName := client.ClientName
+			if clientName == "" {
+				clientName = client.ClientID
+			}
+
+			consentResponse := OAuthConsentInfoResponse{
+				ClientID:      client.ClientID,
+				ClientName:    clientName,
+				Scopes:        ParseOAuthScopes(scope),
+				User:          OAuthUserInfo{ID: user.Id, Username: user.Username},
+				AvailableOrgs: availableOrgs,
+				SelectedOrgId: selectedOrg,
+				RedirectURI:   redirectURI,
+				State:         state,
+			}
+
+			data, mErr := json.Marshal(consentResponse)
+			if mErr != nil {
+				resp.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusOK)
+			resp.Write(data)
+			return
+		}
+
+		// Direct browser navigation to backend /oauth2/authorize:
+		// Redirect to frontend consent page preserving all query parameters
+		consentRedirect := fmt.Sprintf("%s/oauth2/authorize?%s", frontendURL, request.URL.RawQuery)
+		http.Redirect(resp, request, consentRedirect, http.StatusFound)
+		return
+	}
+
+	// =========================================================================
+	// POST REQUEST: User Submits Consent Decision (Approve / Deny)
+	// =========================================================================
+	if request.Method == "POST" {
+		// Authenticate user
+		user, userErr := getOAuthUser(resp, request)
+		if userErr != nil || len(user.Id) == 0 {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusUnauthorized)
+			resp.Write([]byte(`{"error": "unauthorized", "error_description": "User session is invalid or expired"}`))
+			return
+		}
+
+		// Parse request body (supports JSON or Form-encoded)
+		var authReq OAuthAuthorizeRequest
+		contentType := request.Header.Get("Content-Type")
+
+		if strings.Contains(contentType, "application/json") {
+			body, rErr := ioutil.ReadAll(request.Body)
+			if rErr != nil {
+				resp.Header().Set("Content-Type", "application/json")
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(`{"error": "invalid_request", "error_description": "Failed to read body"}`))
+				return
+			}
+			if err := json.Unmarshal(body, &authReq); err != nil {
+				resp.Header().Set("Content-Type", "application/json")
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(`{"error": "invalid_request", "error_description": "Invalid JSON format"}`))
+				return
+			}
+		} else {
+			// Form-encoded fallback
+			request.ParseForm()
+			authReq.ClientID = strings.TrimSpace(request.FormValue("client_id"))
+			authReq.RedirectURI = strings.TrimSpace(request.FormValue("redirect_uri"))
+			authReq.ResponseType = strings.TrimSpace(request.FormValue("response_type"))
+			authReq.Scope = strings.TrimSpace(request.FormValue("scope"))
+			authReq.State = strings.TrimSpace(request.FormValue("state"))
+			authReq.CodeChallenge = strings.TrimSpace(request.FormValue("code_challenge"))
+			authReq.CodeChallengeMethod = strings.TrimSpace(request.FormValue("code_challenge_method"))
+			authReq.OrgId = strings.TrimSpace(request.FormValue("org_id"))
+			authReq.Approved = request.FormValue("approved") == "true" || request.FormValue("approved") == "1"
+		}
+
+		// Edgecase 9: Validate Client existence
+		client, err := GetOAuthClient(ctx, authReq.ClientID)
+		if err != nil || client == nil || client.ClientID == "" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_client", "error_description": "Client does not exist"}`))
+			return
+		}
+
+		// Edgecase 10: Validate Redirect URI matches registered list
+		uriMatched := false
+		for _, regURI := range client.RedirectUris {
+			if regURI == authReq.RedirectURI {
+				uriMatched = true
+				break
+			}
+		}
+		if !uriMatched {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "redirect_uri is not registered for this client"}`))
+			return
+		}
+
+		// Edgecase 11: Validate PKCE
+		if authReq.CodeChallenge == "" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "code_challenge is required"}`))
+			return
+		}
+		if authReq.CodeChallengeMethod == "" {
+			authReq.CodeChallengeMethod = "S256"
+		}
+
+		// Helper to format redirect response based on client request type
+		returnRedirect := func(targetURL string) {
+			if strings.Contains(contentType, "application/json") || request.URL.Query().Get("format") == "json" {
+				resp.Header().Set("Content-Type", "application/json")
+				resp.WriteHeader(http.StatusOK)
+				respData, _ := json.Marshal(OAuthAuthorizeResponse{
+					RedirectURL: targetURL,
+					State:       authReq.State,
+				})
+				resp.Write(respData)
+			} else {
+				http.Redirect(resp, request, targetURL, http.StatusFound)
+			}
+		}
+
+		// Edgecase 12: User Denied Consent
+		if !authReq.Approved {
+			sep := "?"
+			if strings.Contains(authReq.RedirectURI, "?") {
+				sep = "&"
+			}
+			deniedURL := fmt.Sprintf("%s%serror=access_denied&error_description=%s&state=%s",
+				authReq.RedirectURI, sep, url.QueryEscape("User denied access"), url.QueryEscape(authReq.State))
+			returnRedirect(deniedURL)
+			return
+		}
+
+		// Edgecase 13: Resolve & Verify Org Membership
+		selectedOrgId := strings.TrimSpace(authReq.OrgId)
+		if selectedOrgId != "" {
+			// Verify user actually belongs to this org
+			userBelongs := false
+			for _, o := range user.Orgs {
+				if o == selectedOrgId {
+					userBelongs = true
+					break
+				}
+			}
+			if !userBelongs && !user.SupportAccess {
+				resp.Header().Set("Content-Type", "application/json")
+				resp.WriteHeader(http.StatusForbidden)
+				resp.Write([]byte(`{"error": "unauthorized_client", "error_description": "User is not authorized for the requested organization"}`))
+				return
+			}
+		} else {
+			// Default to user's active org
+			selectedOrgId = user.ActiveOrg.Id
+			if selectedOrgId == "" && len(user.Orgs) > 0 {
+				selectedOrgId = user.Orgs[0]
+			}
+		}
+
+		// Edgecase 14: User has no valid organization
+		if selectedOrgId == "" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "User must belong to at least one organization"}`))
+			return
+		}
+
+		// Edgecase 15: Scope defaults
+		if authReq.Scope == "" {
+			authReq.Scope = "workflow:edit"
+		}
+
+		// Generate cryptographically secure authorization code
+		codeStr := fmt.Sprintf("shuffle_code_%s", strings.ReplaceAll(uuid.NewV4().String(), "-", ""))
+
+		// Edgecase 16: Code lifetime window
+		// Standard RFC recommends short-lived authorization codes (maximum 10 minutes)
+		expiresAt := time.Now().Add(10 * time.Minute)
+
+		authCode := OAuthAuthCode{
+			ID:                  codeStr,
+			Code:                codeStr,
+			ClientID:            client.ClientID,
+			RedirectURI:         authReq.RedirectURI,
+			CodeChallenge:       authReq.CodeChallenge,
+			CodeChallengeMethod: authReq.CodeChallengeMethod,
+			Scope:               authReq.Scope,
+			OrgId:               selectedOrgId,
+			UserId:              user.Id,
+			ExpiresAt:           expiresAt,
+			Used:                false,
+			CreatedAt:           time.Now().Unix(),
+		}
+
+		// Store code in Datastore / OpenSearch
+		if err := SetOAuthAuthCode(ctx, authCode); err != nil {
+			log.Printf("[ERROR] Failed to persist OAuth authorization code: %v", err)
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"error": "server_error", "error_description": "Failed to generate authorization code"}`))
+			return
+		}
+
+		// Edgecase 17: Query parameter concatenation
+		sep := "?"
+		if strings.Contains(authReq.RedirectURI, "?") {
+			sep = "&"
+		}
+		targetRedirect := fmt.Sprintf("%s%scode=%s&state=%s",
+			authReq.RedirectURI, sep, url.QueryEscape(codeStr), url.QueryEscape(authReq.State))
+
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthAuthorize: issued code for client %s, user %s, org %s -> %s",
+				client.ClientID, user.Id, selectedOrgId, targetRedirect)
+		}
+
+		returnRedirect(targetRedirect)
+		return
+	}
+
+	resp.WriteHeader(http.StatusMethodNotAllowed)
+	resp.Write([]byte(`{"error": "invalid_request", "error_description": "Method not allowed"}`))
 }
 
