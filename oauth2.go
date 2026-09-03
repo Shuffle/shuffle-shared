@@ -2270,6 +2270,13 @@ func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if err := ValidateRequestOverload(resp, request, 30); err != nil {
+		resp.Header().Set("Content-Type", "application/json")
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(`{"error": "slow_down", "error_description": "Too many requests"}`))
+		return
+	}
+
 	if request.Method != "POST" {
 		resp.WriteHeader(http.StatusMethodNotAllowed)
 		resp.Write([]byte(`{"error": "invalid_request", "error_description": "Only POST is allowed"}`))
@@ -2315,32 +2322,44 @@ func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
 
 	now := time.Now().Unix()
 
-	// =========================================================================
-	// TODO: DATABASE PERSISTENCE
-	// Store the registered client in the Datastore / database so it can be
-	// verified during the /oauth2/authorize and /oauth2/token stages.
-	//
-	// Example entity schema:
-	// type OAuthClient struct {
-	//     ClientID                string   `json:"client_id" datastore:"client_id"`
-	//     ClientSecret            string   `json:"client_secret" datastore:"client_secret"` // empty for public PKCE clients
-	//     ClientName              string   `json:"client_name" datastore:"client_name"`
-	//     RedirectUris            []string `json:"redirect_uris" datastore:"redirect_uris"`
-	//     GrantTypes              []string `json:"grant_types" datastore:"grant_types"`
-	//     ResponseTypes           []string `json:"response_types" datastore:"response_types"`
-	//     TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method" datastore:"token_endpoint_auth_method"`
-	//     CreatedAt               int64    `json:"created_at" datastore:"created_at"`
-	//     IsDynamic               bool     `json:"is_dynamic" datastore:"is_dynamic"`
-	// }
-	//
-	// ctx := GetContext(request)
-	// err := SaveOAuthClient(ctx, client)
-	// if err != nil {
-	//     log.Printf("[ERROR] Failed to save OAuth client: %v", err)
-	//     resp.WriteHeader(http.StatusInternalServerError)
-	//     return
-	// }
-	// =========================================================================
+	ctx := GetContext(request)
+	client := OAuthClient{
+		ID:                      clientID,
+		ClientID:                clientID,
+		ClientName:              regReq.ClientName,
+		RedirectUris:            regReq.RedirectUris,
+		GrantTypes:              regReq.GrantTypes,
+		ResponseTypes:           regReq.ResponseTypes,
+		TokenEndpointAuthMethod: regReq.TokenEndpointAuthMethod,
+		Scope:                   regReq.Scope,
+		CreatedAt:               now,
+		IsDynamic:               true,
+	}
+
+	// Capture OrgId and UserId if passed in request header or query
+	if orgId := request.Header.Get("Org-Id"); len(orgId) > 0 {
+		client.OrgId = orgId
+	} else if orgId := request.Header.Get("Org_Id"); len(orgId) > 0 {
+		client.OrgId = orgId
+	} else if orgId := request.URL.Query().Get("org_id"); len(orgId) > 0 {
+		client.OrgId = orgId
+	}
+
+	if userId := request.Header.Get("User-Id"); len(userId) > 0 {
+		client.UserId = userId
+	} else if userId := request.Header.Get("User_Id"); len(userId) > 0 {
+		client.UserId = userId
+	} else if userId := request.URL.Query().Get("user_id"); len(userId) > 0 {
+		client.UserId = userId
+	}
+
+	err = SetOAuthClient(ctx, client)
+	if err != nil {
+		log.Printf("[ERROR] Failed to save OAuth client %s: %v", clientID, err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"error": "server_error", "error_description": "Failed to persist client registration"}`))
+		return
+	}
 
 	regResp := OAuthClientRegistrationResponse{
 		ClientID:                clientID,

@@ -104,6 +104,8 @@ func GetOpensearchBaseIndexes() []string {
 		"workflow",
 		"workflow_revisions",
 		"datastore_category",
+		"oauth_clients",
+		"oauth_tokens",
 	}
 }
 
@@ -19314,4 +19316,365 @@ func SetVulnerability(ctx context.Context, vuln OSVVulnerability) error {
 	}
 
 	return nil
+}
+
+func SetOAuthClient(ctx context.Context, client OAuthClient) error {
+	nameKey := "oauth_clients"
+	if len(client.ClientID) == 0 {
+		return errors.New("client ID cannot be empty")
+	}
+
+	if client.ID == "" {
+		client.ID = client.ClientID
+	}
+
+	if client.CreatedAt == 0 {
+		client.CreatedAt = time.Now().Unix()
+	}
+
+	data, err := json.Marshal(client)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling OAuth client %s: %s", client.ClientID, err)
+		return err
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, client.ClientID, data)
+		if err != nil {
+			log.Printf("[ERROR] Failed indexing OAuth client in OpenSearch: %s", err)
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, client.ClientID, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &client); err != nil {
+			log.Printf("[ERROR] Failed adding OAuth client %s to Datastore: %s", client.ClientID, err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, client.ClientID)
+		err = SetCache(ctx, cacheKey, data, 300)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for OAuth client %s: %s", client.ClientID, err)
+		}
+	}
+
+	return nil
+}
+
+// GetOAuthClient retrieves an OAuthClient by clientID from cache, OpenSearch, or Datastore.
+func GetOAuthClient(ctx context.Context, id string) (*OAuthClient, error) {
+	nameKey := "oauth_clients"
+	id = strings.TrimSpace(id)
+	if len(id) == 0 {
+		return nil, errors.New("client ID cannot be empty")
+	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			var client OAuthClient
+			if err := json.Unmarshal([]byte(cache.([]uint8)), &client); err == nil && len(client.ClientID) > 0 {
+				return &client, nil
+			}
+		}
+	}
+
+	client := &OAuthClient{}
+	if project.DbType == "opensearch" {
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: id,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return nil, errors.New("OAuth client doesn't exist")
+			}
+			log.Printf("[WARNING] Error fetching OAuth client %s from OpenSearch: %s", id, err)
+			return nil, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return nil, errors.New("OAuth client doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		wrapped := OAuthClientWrapper{}
+		if err := json.Unmarshal(respBody, &wrapped); err != nil {
+			return nil, err
+		}
+
+		client = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if err := project.Dbclient.Get(ctx, key, client); err != nil {
+			if err == datastore.ErrNoSuchEntity {
+				return nil, errors.New("OAuth client doesn't exist")
+			}
+			log.Printf("[ERROR] Error getting OAuth client %s from Datastore: %s", id, err)
+			return nil, err
+		}
+	}
+
+	if len(client.ClientID) == 0 {
+		return nil, errors.New("OAuth client not found")
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(client)
+		if err == nil {
+			_ = SetCache(ctx, cacheKey, data, 300)
+		}
+	}
+
+	return client, nil
+}
+
+// DeleteOAuthClient removes an OAuthClient from storage and cache.
+func DeleteOAuthClient(ctx context.Context, id string) error {
+	return DeleteKey(ctx, "oauth_clients", id)
+}
+
+// SetOAuthToken persists an OAuthToken in OpenSearch (onprem) or Datastore (cloud).
+func SetOAuthToken(ctx context.Context, token OAuthToken) error {
+	nameKey := "oauth_tokens"
+	if len(token.AccessToken) == 0 {
+		return errors.New("access token cannot be empty")
+	}
+	if token.ID == "" {
+		token.ID = token.AccessToken
+	}
+	if token.CreatedAt == 0 {
+		token.CreatedAt = time.Now().Unix()
+	}
+
+	data, err := json.Marshal(token)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling OAuth token: %s", err)
+		return err
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, token.AccessToken, data)
+		if err != nil {
+			log.Printf("[ERROR] Failed indexing OAuth token in OpenSearch: %s", err)
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, token.AccessToken, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &token); err != nil {
+			log.Printf("[ERROR] Failed adding OAuth token to Datastore: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, token.AccessToken)
+		err = SetCache(ctx, cacheKey, data, 300)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for OAuth token: %s", err)
+		}
+	}
+
+	return nil
+}
+
+// GetOAuthToken retrieves an OAuthToken by accessToken from cache, OpenSearch, or Datastore.
+// Validates token existence and expiry.
+func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error) {
+	nameKey := "oauth_tokens"
+	accessToken = strings.TrimSpace(accessToken)
+	if len(accessToken) == 0 {
+		return nil, errors.New("access token cannot be empty")
+	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, accessToken)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			var token OAuthToken
+			if err := json.Unmarshal([]byte(cache.([]uint8)), &token); err == nil && len(token.AccessToken) > 0 {
+				if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
+					return nil, errors.New("OAuth token has expired")
+				}
+				return &token, nil
+			}
+		}
+	}
+
+	token := &OAuthToken{}
+	if project.DbType == "opensearch" {
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: accessToken,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return nil, errors.New("OAuth token doesn't exist")
+			}
+			log.Printf("[WARNING] Error getting OAuth token from OpenSearch: %s", err)
+			return nil, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return nil, errors.New("OAuth token doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		wrapped := OAuthTokenWrapper{}
+		if err := json.Unmarshal(respBody, &wrapped); err != nil {
+			return nil, err
+		}
+
+		token = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, accessToken, nil)
+		if err := project.Dbclient.Get(ctx, key, token); err != nil {
+			if err == datastore.ErrNoSuchEntity {
+				return nil, errors.New("OAuth token doesn't exist")
+			}
+			log.Printf("[ERROR] Error getting OAuth token from Datastore: %s", err)
+			return nil, err
+		}
+	}
+
+	if len(token.AccessToken) == 0 {
+		return nil, errors.New("OAuth token not found")
+	}
+
+	if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
+		return nil, errors.New("OAuth token has expired")
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(token)
+		if err == nil {
+			_ = SetCache(ctx, cacheKey, data, 300)
+		}
+	}
+
+	return token, nil
+}
+
+// DeleteOAuthToken removes an OAuthToken from storage and cache.
+func DeleteOAuthToken(ctx context.Context, accessToken string) error {
+	return DeleteKey(ctx, "oauth_tokens", accessToken)
+}
+
+// SetOAuthAuthCode persists a temporary authorization code in OpenSearch (onprem) or Datastore (cloud).
+func SetOAuthAuthCode(ctx context.Context, code OAuthAuthCode) error {
+	nameKey := "oauth_codes"
+	if len(code.Code) == 0 {
+		return errors.New("authorization code cannot be empty")
+	}
+	if code.ID == "" {
+		code.ID = code.Code
+	}
+	if code.CreatedAt == 0 {
+		code.CreatedAt = time.Now().Unix()
+	}
+
+	data, err := json.Marshal(code)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling OAuth authorization code: %s", err)
+		return err
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, code.Code, data)
+		if err != nil {
+			log.Printf("[ERROR] Failed indexing OAuth authorization code in OpenSearch: %s", err)
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, code.Code, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &code); err != nil {
+			log.Printf("[ERROR] Failed adding OAuth authorization code to Datastore: %s", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+// GetOAuthAuthCode retrieves and validates an OAuthAuthCode by code string.
+func GetOAuthAuthCode(ctx context.Context, codeStr string) (*OAuthAuthCode, error) {
+	nameKey := "oauth_codes"
+	codeStr = strings.TrimSpace(codeStr)
+	if len(codeStr) == 0 {
+		return nil, errors.New("authorization code cannot be empty")
+	}
+
+	code := &OAuthAuthCode{}
+	if project.DbType == "opensearch" {
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: codeStr,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return nil, errors.New("OAuth code doesn't exist")
+			}
+			return nil, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return nil, errors.New("OAuth code doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		wrapped := OAuthAuthCodeWrapper{}
+		if err := json.Unmarshal(respBody, &wrapped); err != nil {
+			return nil, err
+		}
+
+		code = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, codeStr, nil)
+		if err := project.Dbclient.Get(ctx, key, code); err != nil {
+			if err == datastore.ErrNoSuchEntity {
+				return nil, errors.New("OAuth code doesn't exist")
+			}
+			return nil, err
+		}
+	}
+
+	if len(code.Code) == 0 {
+		return nil, errors.New("OAuth code not found")
+	}
+
+	if code.Used {
+		return nil, errors.New("OAuth authorization code has already been used")
+	}
+
+	if !code.ExpiresAt.IsZero() && time.Now().After(code.ExpiresAt) {
+		return nil, errors.New("OAuth authorization code has expired")
+	}
+
+	return code, nil
+}
+
+// DeleteOAuthAuthCode removes an OAuth authorization code after it has been exchanged.
+func DeleteOAuthAuthCode(ctx context.Context, codeStr string) error {
+	return DeleteKey(ctx, "oauth_codes", codeStr)
 }

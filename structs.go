@@ -3028,6 +3028,85 @@ type FileWrapper struct {
 	Source      File   `json:"_source"`
 }
 
+type OAuthClient struct {
+	ID                      string   `json:"id" datastore:"id"`
+	ClientID                string   `json:"client_id" datastore:"client_id"`
+	ClientSecret            string   `json:"client_secret,omitempty" datastore:"client_secret,noindex"`
+	ClientName              string   `json:"client_name" datastore:"client_name"`
+	RedirectUris            []string `json:"redirect_uris" datastore:"redirect_uris"`
+	GrantTypes              []string `json:"grant_types" datastore:"grant_types"`
+	ResponseTypes           []string `json:"response_types" datastore:"response_types"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method" datastore:"token_endpoint_auth_method"`
+	Scope                   string   `json:"scope,omitempty" datastore:"scope"`
+	OrgId                   string   `json:"org_id,omitempty" datastore:"org_id"`
+	UserId                  string   `json:"user_id,omitempty" datastore:"user_id"`
+	CreatedAt               int64    `json:"created_at" datastore:"created_at"`
+	IsDynamic               bool     `json:"is_dynamic" datastore:"is_dynamic"`
+}
+
+type OAuthClientWrapper struct {
+	Index       string      `json:"_index"`
+	Type        string      `json:"_type"`
+	ID          string      `json:"_id"`
+	Version     int         `json:"_version"`
+	SeqNo       int         `json:"_seq_no"`
+	PrimaryTerm int         `json:"_primary_term"`
+	Found       bool        `json:"found"`
+	Source      OAuthClient `json:"_source"`
+}
+
+type OAuthToken struct {
+	ID           string    `json:"id" datastore:"id"`
+	AccessToken  string    `json:"access_token" datastore:"access_token"`
+	RefreshToken string    `json:"refresh_token,omitempty" datastore:"refresh_token"`
+	TokenType    string    `json:"token_type" datastore:"token_type"`
+	Scope        string    `json:"scope" datastore:"scope"`
+	ExpiresIn    int64     `json:"expires_in" datastore:"expires_in"`
+	ExpiresAt    time.Time `json:"expires_at" datastore:"expires_at"`
+	ClientID     string    `json:"client_id" datastore:"client_id"`
+	OrgId        string    `json:"org_id" datastore:"org_id"`
+	UserId       string    `json:"user_id" datastore:"user_id"`
+	CreatedAt    int64     `json:"created_at" datastore:"created_at"`
+}
+
+type OAuthTokenWrapper struct {
+	Index       string     `json:"_index"`
+	Type        string     `json:"_type"`
+	ID          string     `json:"_id"`
+	Version     int        `json:"_version"`
+	SeqNo       int        `json:"_seq_no"`
+	PrimaryTerm int        `json:"_primary_term"`
+	Found       bool       `json:"found"`
+	Source      OAuthToken `json:"_source"`
+}
+
+type OAuthAuthCode struct {
+	ID                  string    `json:"id" datastore:"id"`
+	Code                string    `json:"code" datastore:"code"`
+	ClientID            string    `json:"client_id" datastore:"client_id"`
+	RedirectURI         string    `json:"redirect_uri" datastore:"redirect_uri"`
+	CodeChallenge       string    `json:"code_challenge" datastore:"code_challenge"`
+	CodeChallengeMethod string    `json:"code_challenge_method" datastore:"code_challenge_method"`
+	Scope               string    `json:"scope" datastore:"scope"`
+	OrgId               string    `json:"org_id" datastore:"org_id"`
+	UserId              string    `json:"user_id" datastore:"user_id"`
+	ExpiresAt           time.Time `json:"expires_at" datastore:"expires_at"`
+	Used                bool      `json:"used" datastore:"used"`
+	CreatedAt           int64     `json:"created_at" datastore:"created_at"`
+}
+
+type OAuthAuthCodeWrapper struct {
+	Index       string        `json:"_index"`
+	Type        string        `json:"_type"`
+	ID          string        `json:"_id"`
+	Version     int           `json:"_version"`
+	SeqNo       int           `json:"_seq_no"`
+	PrimaryTerm int           `json:"_primary_term"`
+	Found       bool          `json:"found"`
+	Source      OAuthAuthCode `json:"_source"`
+}
+
+
 type DisabledHookWrapper struct {
 	Index       string        `json:"_index"`
 	Type        string        `json:"_type"`
