@@ -3735,6 +3735,49 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			newApikey = newApikey[0:248]
 		}
 
+		// OAuth 2.0 / MCP Bearer Token Handling
+		if strings.HasPrefix(apikeyCheck[1], "shfl_") {
+			oauthTok, oErr := GetOAuthToken(ctx, apikeyCheck[1])
+			if oErr != nil || oauthTok == nil || oauthTok.AccessToken == "" {
+				return User{}, errors.New("Invalid or expired OAuth token")
+			}
+
+			// Validate endpoint access based on URL, HTTP method, scopes, allowed apps, and org boundaries
+			if valErr := ValidateOAuthTokenAccess(ctx, oauthTok, request); valErr != nil {
+				log.Printf("[WARNING] OAuth token access denied for %s %s: %s", request.Method, request.URL.Path, valErr)
+				return User{}, valErr
+			}
+
+			userObj, uErr := GetUser(ctx, oauthTok.UserId)
+			if uErr != nil || userObj == nil || (len(userObj.Id) == 0 && len(userObj.Username) == 0) {
+				return User{}, errors.New("User associated with OAuth token not found")
+			}
+
+			userdata := *userObj
+			userdata.SessionLogin = false
+			userdata.ApiKey = newApikey
+			userdata.AllowedApps = oauthTok.AllowedApps
+			userdata.OAuthScope = oauthTok.Scope
+			if oauthTok.OrgId != "" {
+				userdata.ActiveOrg.Id = oauthTok.OrgId
+				if orgData, orgErr := GetOrg(ctx, oauthTok.OrgId); orgErr == nil && orgData != nil {
+					userdata.ActiveOrg.Name = orgData.Name
+					userdata.ActiveOrg.Image = orgData.Image
+				}
+			}
+
+			if debug {
+				log.Printf("[DEBUG] Authenticated via OAuth MCP Token for user %s, org %s on %s %s", userdata.Id, userdata.ActiveOrg.Id, request.Method, request.URL.Path)
+			}
+
+			// Increment API usage
+			if userdata.Username != "scheduler@shuffler.io" {
+				go IncrementCache(ctx, userdata.ActiveOrg.Id, "api_usage")
+			}
+
+			return userdata, nil
+		}
+
 		apiCacheKey := fmt.Sprintf("%s%s", newApikey, org_id)
 		cache, err := GetCache(ctx, apiCacheKey)
 		if err == nil {
@@ -3762,29 +3805,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		}
 
 		var userdata User
-		if strings.HasPrefix(apikeyCheck[1], "shfl_") {
-			oauthTok, oErr := GetOAuthToken(ctx, apikeyCheck[1])
-			if oErr == nil && oauthTok != nil && oauthTok.AccessToken != "" {
-				userObj, uErr := GetUser(ctx, oauthTok.UserId)
-				if uErr == nil && userObj != nil && (len(userObj.Id) > 0 || len(userObj.Username) > 0) {
-					userdata = *userObj
-					userdata.SessionLogin = false
-					userdata.ApiKey = newApikey
-					userdata.AllowedApps = oauthTok.AllowedApps
-					userdata.OAuthScope = oauthTok.Scope
-					if oauthTok.OrgId != "" {
-						userdata.ActiveOrg.Id = oauthTok.OrgId
-						if orgData, orgErr := GetOrg(ctx, oauthTok.OrgId); orgErr == nil && orgData != nil {
-							userdata.ActiveOrg.Name = orgData.Name
-							userdata.ActiveOrg.Image = orgData.Image
-						}
-					}
-					if debug {
-						log.Printf("[DEBUG] Authenticated via OAuth MCP Token for user %s, org %s", userdata.Id, userdata.ActiveOrg.Id)
-					}
-				}
-			}
-		}
 
 		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
 			// Make specific check for just service user?
@@ -3824,6 +3844,11 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
 			oauthTok, oErr := GetOAuthToken(ctx, apikeyCheck[1])
 			if oErr == nil && oauthTok != nil && oauthTok.AccessToken != "" {
+				if valErr := ValidateOAuthTokenAccess(ctx, oauthTok, request); valErr != nil {
+					log.Printf("[WARNING] OAuth token access denied for %s %s: %s", request.Method, request.URL.Path, valErr)
+					return User{}, valErr
+				}
+
 				userObj, uErr := GetUser(ctx, oauthTok.UserId)
 				if uErr == nil && userObj != nil && (len(userObj.Id) > 0 || len(userObj.Username) > 0) {
 					userdata = *userObj
@@ -3839,7 +3864,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 						}
 					}
 					if debug {
-						log.Printf("[DEBUG] Authenticated via OAuth MCP Token for user %s, org %s", userdata.Id, userdata.ActiveOrg.Id)
+						log.Printf("[DEBUG] Authenticated via OAuth MCP Token for user %s, org %s on %s %s", userdata.Id, userdata.ActiveOrg.Id, request.Method, request.URL.Path)
 					}
 				}
 			}

@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	uuid "github.com/satori/go.uuid"
@@ -2498,8 +2499,46 @@ func getOAuthUser(resp http.ResponseWriter, request *http.Request) (User, error)
 //   - Inactive user: Accounts that are disabled are blocked with 403 Forbidden
 //   - Multi-org selection: Ensures user belongs to requested organization before code issuance
 //   - Consent denial: If user clicks Cancel, redirects to client with error=access_denied
-//   - Expiry window: Auth codes are set to expire in 10 minutes
-//   - Single use: Handled upon token exchange
+// isUserOrgAdmin checks if the user is an administrator of the specified organization.
+// An admin is someone with:
+// 1. user.Role == "admin" or user.Role == "global_admin"
+// 2. user.SupportAccess == true
+// 3. Listed in org.Users with Role == "admin"
+// 4. Listed in parent org (org.CreatorOrg) with Role == "admin"
+func isUserOrgAdmin(ctx context.Context, user User, orgId string) bool {
+	if (user.ActiveOrg.Id == orgId && user.Role == "admin") || user.SupportAccess {
+		return true
+	}
+
+	if orgId == "" {
+		return false
+	}
+
+	org, err := GetOrg(ctx, orgId)
+	if err != nil || org == nil {
+		return false
+	}
+
+	for _, orgUser := range org.Users {
+		if (orgUser.Id == user.Id || (len(user.Username) > 0 && orgUser.Username == user.Username)) && orgUser.Role == "admin" {
+			return true
+		}
+	}
+
+	if org.CreatorOrg != "" && org.CreatorOrg != orgId {
+		parentOrg, pErr := GetOrg(ctx, org.CreatorOrg)
+		if pErr == nil && parentOrg != nil {
+			for _, orgUser := range parentOrg.Users {
+				if (orgUser.Id == user.Id || (len(user.Username) > 0 && orgUser.Username == user.Username)) && orgUser.Role == "admin" {
+					return true
+				}
+			}
+		}
+	}
+
+	return false
+}
+
 func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -2636,26 +2675,30 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 		// If user IS authenticated:
 		// If this is the frontend API calling to fetch consent details:
 		if isAPIRequest {
-			// Build available organizations list for the user
+			// Build available organizations list for the user (only orgs where user is admin)
 			availableOrgs := []OrgMini{}
 			for _, orgId := range user.Orgs {
-				orgData, oErr := GetOrg(ctx, orgId)
-				if oErr == nil && orgData != nil && orgData.Id != "" {
-					availableOrgs = append(availableOrgs, OrgMini{
-						Id:   orgData.Id,
-						Name: orgData.Name,
-					})
-				} else {
-					availableOrgs = append(availableOrgs, OrgMini{
-						Id:   orgId,
-						Name: orgId,
-					})
+				if isUserOrgAdmin(ctx, user, orgId) {
+					orgData, oErr := GetOrg(ctx, orgId)
+					if oErr == nil && orgData != nil && orgData.Id != "" {
+						availableOrgs = append(availableOrgs, OrgMini{
+							Id:   orgData.Id,
+							Name: orgData.Name,
+						})
+					} else {
+						availableOrgs = append(availableOrgs, OrgMini{
+							Id:   orgId,
+							Name: orgId,
+						})
+					}
 				}
 			}
 
-			selectedOrg := user.ActiveOrg.Id
-			if selectedOrg == "" && len(user.Orgs) > 0 {
-				selectedOrg = user.Orgs[0]
+			selectedOrg := ""
+			if isUserOrgAdmin(ctx, user, user.ActiveOrg.Id) {
+				selectedOrg = user.ActiveOrg.Id
+			} else if len(availableOrgs) > 0 {
+				selectedOrg = availableOrgs[0].Id
 			}
 
 			clientName := client.ClientName
@@ -2829,6 +2872,14 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_request", "error_description": "User must belong to at least one organization"}`))
+			return
+		}
+
+		// Edgecase 18: Organization Admin Privilege Verification
+		if !isUserOrgAdmin(ctx, user, selectedOrgId) {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusForbidden)
+			resp.Write([]byte(`{"error": "access_denied", "error_description": "Only organization administrators can authorize OAuth integrations for this organization"}`))
 			return
 		}
 
@@ -3158,7 +3209,7 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
 
 		oauthToken := OAuthToken{
-			ID:           accessToken,
+			ID:           fmt.Sprintf("mcp_conn_%s", strings.ReplaceAll(uuid.NewV4().String(), "-", "")),
 			AccessToken:  accessToken,
 			RefreshToken: refreshToken,
 			TokenType:    "Bearer",
@@ -3199,7 +3250,11 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if debug {
-			log.Printf("[DEBUG] HandleOAuthToken: issued token %s for user %s, org %s", accessToken, authCode.UserId, authCode.OrgId)
+			masked := accessToken
+			if len(masked) > 12 {
+				masked = masked[:12] + "..."
+			}
+			log.Printf("[DEBUG] HandleOAuthToken: issued token %s for user %s, org %s", masked, authCode.UserId, authCode.OrgId)
 		}
 
 		resp.Header().Set("Content-Type", "application/json;charset=UTF-8")
@@ -3275,8 +3330,13 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		expiresIn := int64(30 * 24 * 3600) // 30 days
 		expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
 
+		connID := oldToken.ID
+		if connID == "" {
+			connID = fmt.Sprintf("mcp_conn_%s", strings.ReplaceAll(uuid.NewV4().String(), "-", ""))
+		}
+
 		newToken := OAuthToken{
-			ID:           newAccessToken,
+			ID:           connID,
 			AccessToken:  newAccessToken,
 			RefreshToken: newRefreshToken,
 			TokenType:    "Bearer",
@@ -3317,7 +3377,11 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if debug {
-			log.Printf("[DEBUG] HandleOAuthToken: refreshed token %s for user %s, org %s", newAccessToken, oldToken.UserId, oldToken.OrgId)
+			masked := newAccessToken
+			if len(masked) > 12 {
+				masked = masked[:12] + "..."
+			}
+			log.Printf("[DEBUG] HandleOAuthToken: refreshed token %s for user %s, org %s", masked, oldToken.UserId, oldToken.OrgId)
 		}
 
 		resp.Header().Set("Content-Type", "application/json;charset=UTF-8")
@@ -3415,6 +3479,20 @@ func HandleOAuthRevoke(resp http.ResponseWriter, request *http.Request) {
 	if err != nil || token == nil || token.AccessToken == "" {
 		// 2. Fall back to search as a RefreshToken
 		token, err = GetOAuthTokenByRefreshToken(ctx, revokeReq.Token)
+	}
+	if err != nil || token == nil || token.AccessToken == "" {
+		// 3. Fall back to search by Connection ID (mcp_conn_...)
+		if currentUser, uErr := getOAuthUser(resp, request); uErr == nil && currentUser.ActiveOrg.Id != "" {
+			if orgTokens, tErr := GetOAuthTokensByOrg(ctx, currentUser.ActiveOrg.Id); tErr == nil {
+				for _, ot := range orgTokens {
+					if ot.ID == revokeReq.Token {
+						tokCopy := ot
+						token = &tokCopy
+						break
+					}
+				}
+			}
+		}
 	}
 
 	// RFC 7009 Section 2.2:
@@ -3537,8 +3615,13 @@ func HandleListOAuthTokens(resp http.ResponseWriter, request *http.Request) {
 			clientName = client.ClientName
 		}
 
+		connID := tok.ID
+		if connID == "" {
+			connID = maskedToken
+		}
+
 		tokenViews = append(tokenViews, OAuthTokenView{
-			ID:          tok.AccessToken,
+			ID:          connID,
 			ClientID:    tok.ClientID,
 			ClientName:  clientName,
 			TokenType:   tok.TokenType,
@@ -3562,4 +3645,467 @@ func HandleListOAuthTokens(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(respData)
 }
+
+// =============================================================================
+// Extensible OAuth 2.0 / MCP Endpoint Authorization Engine
+// =============================================================================
+
+// OAuthEndpointRule defines the authorization criteria for an HTTP endpoint
+// when accessed using an OAuth 2.0 / MCP access token.
+type OAuthEndpointRule struct {
+	Name           string                                                                    `json:"name"`            // Descriptive name of the rule (e.g. "Workflows: Edit")
+	PathPrefix     string                                                                    `json:"path_prefix"`     // Base path prefix (e.g. "/api/v1/workflows")
+	PathRegex      *regexp.Regexp                                                            `json:"-"`               // Optional regex for finer route matching
+	Methods        []string                                                                  `json:"methods"`         // Allowed HTTP methods (e.g. ["GET", "POST"]); empty means all methods
+	RequiredScopes []string                                                                  `json:"required_scopes"` // Token must possess at least one of these scopes
+	CheckAppAccess bool                                                                      `json:"check_app_access"` // If true, extracts app ID and enforces token.AllowedApps
+	AppExtractor   func(request *http.Request) string                                        `json:"-"`               // Optional custom app extractor function
+	Blocked        bool                                                                      `json:"blocked"`          // If true, endpoint is blocked for OAuth tokens (e.g. admin/billing)
+	CustomCheck    func(ctx context.Context, token *OAuthToken, request *http.Request) error `json:"-"`               // Optional custom validator
+	Description    string                                                                    `json:"description"`
+}
+
+var (
+	oauthRulesLock     sync.RWMutex
+	oauthEndpointRules []OAuthEndpointRule
+	defaultRulesInit   sync.Once
+)
+
+// RegisterOAuthEndpointRule registers a new endpoint authorization rule for OAuth tokens.
+// Custom rules registered here are evaluated before default rules.
+func RegisterOAuthEndpointRule(rule OAuthEndpointRule) {
+	initDefaultOAuthRules()
+	oauthRulesLock.Lock()
+	defer oauthRulesLock.Unlock()
+	oauthEndpointRules = append([]OAuthEndpointRule{rule}, oauthEndpointRules...)
+}
+
+// GetOAuthEndpointRules returns a snapshot of all currently active endpoint rules.
+func GetOAuthEndpointRules() []OAuthEndpointRule {
+	initDefaultOAuthRules()
+	oauthRulesLock.RLock()
+	defer oauthRulesLock.RUnlock()
+	rulesCopy := make([]OAuthEndpointRule, len(oauthEndpointRules))
+	copy(rulesCopy, oauthEndpointRules)
+	return rulesCopy
+}
+
+// HasOAuthScope checks if tokenScope contains at least one of requiredScopes,
+// or has superuser scopes ("*" or "admin").
+func HasOAuthScope(tokenScope string, requiredScopes ...string) bool {
+	if len(requiredScopes) == 0 {
+		return true
+	}
+	parts := strings.Fields(strings.ToLower(tokenScope))
+	for _, p := range parts {
+		if p == "*" || p == "admin" || p == "all" {
+			return true
+		}
+		for _, req := range requiredScopes {
+			if strings.EqualFold(p, req) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ExtractAppFromRequest extracts the targeted app identifier from an HTTP request
+// by inspecting query parameters and REST path segments.
+func ExtractAppFromRequest(request *http.Request) string {
+	if request == nil || request.URL == nil {
+		return ""
+	}
+
+	// 1. Query parameters
+	if app := request.URL.Query().Get("app_name"); app != "" {
+		return strings.ToLower(strings.TrimSpace(app))
+	}
+	if app := request.URL.Query().Get("app"); app != "" {
+		return strings.ToLower(strings.TrimSpace(app))
+	}
+	if app := request.URL.Query().Get("app_id"); app != "" {
+		return strings.ToLower(strings.TrimSpace(app))
+	}
+
+	// 2. REST path segments: /api/v1/apps/{app_id}/...
+	parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+	for i, part := range parts {
+		if part == "apps" && i+1 < len(parts) {
+			candidate := parts[i+1]
+			if candidate != "categories" && candidate != "search" {
+				return strings.ToLower(strings.TrimSpace(candidate))
+			}
+		}
+	}
+
+	return ""
+}
+
+// IsAppNameAllowedForOAuth checks whether an app name or ID is permitted under allowedApps.
+func IsAppNameAllowedForOAuth(allowedApps []string, appIdentifier string) bool {
+	return IsAppAllowedForOAuth(allowedApps, WorkflowApp{
+		ID:   appIdentifier,
+		Name: appIdentifier,
+	})
+}
+
+// initDefaultOAuthRules populates the default rule engine for Shuffle API endpoints.
+func initDefaultOAuthRules() {
+	defaultRulesInit.Do(func() {
+		oauthEndpointRules = []OAuthEndpointRule{
+			// 1. Blocked administrative & destructive endpoints
+			{
+				Name:        "Blocked: Admin Panel",
+				PathPrefix:  "/api/v1/admin",
+				Blocked:     true,
+				Description: "Internal administration endpoints cannot be accessed via OAuth tokens",
+			},
+			{
+				Name:        "Blocked: Billing",
+				PathPrefix:  "/api/v1/billing",
+				Blocked:     true,
+				Description: "Billing endpoints cannot be accessed via OAuth tokens",
+			},
+			{
+				Name:        "Blocked: Cloud Sync Settings",
+				PathPrefix:  "/api/v1/cloud_sync",
+				Blocked:     true,
+				Description: "Cloud sync configuration cannot be modified via OAuth tokens",
+			},
+			{
+				Name:        "Blocked: Org User Management",
+				PathRegex:   regexp.MustCompile(`^/api/v1/orgs/[^/]+/users(?:/.*)?$`),
+				Blocked:     true,
+				Description: "User membership within an organization cannot be altered via OAuth tokens",
+			},
+			{
+				Name:        "Blocked: Org Deletion",
+				PathRegex:   regexp.MustCompile(`^/api/v1/orgs/[^/]+/delete$`),
+				Blocked:     true,
+				Description: "Organizations cannot be deleted via OAuth tokens",
+			},
+
+			// 2. Safe self-identification, discovery & health endpoints (always permitted for valid tokens)
+			{
+				Name:        "Safe: MCP Entrypoints",
+				PathPrefix:  "/api/v1/mcp",
+				Description: "MCP protocol handling",
+			},
+			{
+				Name:        "Safe: MCP Root",
+				PathPrefix:  "/mcp",
+				Description: "MCP protocol handling",
+			},
+			{
+				Name:        "Safe: API Health",
+				PathPrefix:  "/api/v1/health",
+				Description: "Healthcheck inspection",
+			},
+			{
+				Name:        "Safe: API Info",
+				PathPrefix:  "/api/v1/info",
+				Description: "API metadata and environment information",
+			},
+			{
+				Name:        "Safe: Validate Token/Session",
+				PathPrefix:  "/api/v1/validate",
+				Description: "Token verification endpoint",
+			},
+			{
+				Name:        "Safe: Current User Profile",
+				PathPrefix:  "/api/v1/users/me",
+				Description: "User identity introspection",
+			},
+			{
+				Name:        "Safe: User Profile",
+				PathPrefix:  "/api/v1/profile",
+				Description: "User identity introspection",
+			},
+			{
+				Name:        "Safe: Well Known Discovery",
+				PathPrefix:  "/.well-known",
+				Description: "OAuth and MCP metadata discovery",
+			},
+
+			// 3. Apps Execution & Actions
+			{
+				Name:           "Apps: Run Action",
+				PathRegex:      regexp.MustCompile(`^/api/v1/apps/[^/]+/run$`),
+				Methods:        []string{"POST"},
+				RequiredScopes: []string{"apps:run", "workflow:run", "workflow:edit"},
+				CheckAppAccess: true,
+				Description:    "Execute actions inside a specific app",
+			},
+			{
+				Name:           "Apps: Categories Run",
+				PathPrefix:     "/api/v1/apps/categories/run",
+				Methods:        []string{"POST"},
+				RequiredScopes: []string{"apps:run", "workflow:run", "workflow:edit"},
+				CheckAppAccess: true,
+				Description:    "Execute app actions via categorized routing",
+			},
+			{
+				Name:           "Apps: Categories Run Legacy",
+				PathPrefix:     "/api/v1/categories/run",
+				Methods:        []string{"POST"},
+				RequiredScopes: []string{"apps:run", "workflow:run", "workflow:edit"},
+				CheckAppAccess: true,
+				Description:    "Execute app actions via category runner",
+			},
+
+			// 4. Apps Read / Discovery
+			{
+				Name:           "Apps: Read & List",
+				PathPrefix:     "/api/v1/apps",
+				Methods:        []string{"GET"},
+				RequiredScopes: []string{"apps:read", "workflow:read", "workflow:edit", "workflow:run"},
+				CheckAppAccess: true,
+				Description:    "List and inspect available apps",
+			},
+
+			// 5. Workflows Execution / Run
+			{
+				Name:           "Workflows: Run Workflow",
+				PathRegex:      regexp.MustCompile(`^/api/v1/workflows/[^/]+/(?:run|execute)$`),
+				Methods:        []string{"POST"},
+				RequiredScopes: []string{"workflow:run", "workflow:edit"},
+				Description:    "Trigger execution of a specific workflow",
+			},
+			{
+				Name:           "Workflows: General Run Endpoint",
+				PathPrefix:     "/api/v1/run",
+				Methods:        []string{"POST"},
+				RequiredScopes: []string{"workflow:run", "workflow:edit"},
+				Description:    "Direct workflow run endpoint",
+			},
+
+			// 6. Workflows Modification (Create / Edit / Delete)
+			{
+				Name:           "Workflows: Modify",
+				PathPrefix:     "/api/v1/workflows",
+				Methods:        []string{"POST", "PUT", "DELETE", "PATCH"},
+				RequiredScopes: []string{"workflow:edit"},
+				Description:    "Create, update, or delete workflows",
+			},
+
+			// 7. Workflows Read
+			{
+				Name:           "Workflows: Read",
+				PathPrefix:     "/api/v1/workflows",
+				Methods:        []string{"GET"},
+				RequiredScopes: []string{"workflow:read", "workflow:edit", "workflow:run"},
+				Description:    "View workflow definitions and layouts",
+			},
+
+			// 8. Executions & Streams
+			{
+				Name:           "Executions: Read & Manage",
+				PathPrefix:     "/api/v1/executions",
+				RequiredScopes: []string{"workflow:run", "workflow:read", "workflow:edit"},
+				Description:    "Inspect workflow executions and execution history",
+			},
+			{
+				Name:           "Streams: Read & Manage",
+				PathPrefix:     "/api/v1/streams",
+				RequiredScopes: []string{"workflow:run", "workflow:read", "workflow:edit"},
+				Description:    "Inspect streaming execution logs",
+			},
+
+			// 9. Files
+			{
+				Name:           "Files: Read",
+				PathPrefix:     "/api/v1/files",
+				Methods:        []string{"GET"},
+				RequiredScopes: []string{"files:read", "workflow:read", "workflow:edit", "workflow:run"},
+				Description:    "Download or view files",
+			},
+			{
+				Name:           "Files: Write",
+				PathPrefix:     "/api/v1/files",
+				Methods:        []string{"POST", "PUT", "DELETE"},
+				RequiredScopes: []string{"files:write", "workflow:edit"},
+				Description:    "Upload or edit files",
+			},
+
+			// 10. Organization Read-Only Info
+			{
+				Name:           "Orgs: Read Info",
+				PathRegex:      regexp.MustCompile(`^/api/v1/orgs/[^/]+$`),
+				Methods:        []string{"GET"},
+				RequiredScopes: []string{"workflow:read", "workflow:edit", "workflow:run"},
+				Description:    "Read organization details",
+			},
+		}
+	})
+}
+
+// ValidateOAuthTokenAccess validates that the provided OAuth token is permitted to access
+// the target endpoint represented by request. It performs:
+//  1. Token expiration check
+//  2. Organization boundary enforcement (query param, Org-Id header, and REST path)
+//  3. Extensible URL path & HTTP method matching
+//  4. Scope validation against required scopes (including app-level scopes)
+//  5. AllowedApps validation if the endpoint interacts with an app
+//  6. Execution of any custom rule validator callbacks
+func ValidateOAuthTokenAccess(ctx context.Context, token *OAuthToken, request *http.Request) error {
+	if token == nil || token.AccessToken == "" {
+		return errors.New("invalid_token: missing OAuth token")
+	}
+
+	// 1. Expiration validation
+	if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
+		return errors.New("token_expired: OAuth token has expired")
+	}
+
+	if request == nil || request.URL == nil {
+		return nil
+	}
+
+	rawPath := request.URL.Path
+	method := strings.ToUpper(request.Method)
+
+	// 2. Organization Boundary Enforcement
+	if token.OrgId != "" {
+		reqOrg := request.Header.Get("Org-Id")
+		if reqOrg == "" {
+			reqOrg = request.Header.Get("OrgId")
+		}
+		if reqOrg == "" {
+			reqOrg = request.URL.Query().Get("org_id")
+		}
+		if reqOrg == "" {
+			parts := strings.Split(strings.Trim(rawPath, "/"), "/")
+			for i, part := range parts {
+				if part == "orgs" && i+1 < len(parts) {
+					reqOrg = parts[i+1]
+					break
+				}
+			}
+		}
+
+		if reqOrg != "" && reqOrg != token.OrgId {
+			return fmt.Errorf("org_mismatch: OAuth token is bound to organization %s, cannot access organization %s", token.OrgId, reqOrg)
+		}
+	}
+
+	// 3. Match against extensible endpoint rules
+	initDefaultOAuthRules()
+	oauthRulesLock.RLock()
+	rules := oauthEndpointRules
+	oauthRulesLock.RUnlock()
+
+	var matchedRule *OAuthEndpointRule
+	for i := range rules {
+		rule := &rules[i]
+
+		// Check HTTP Method
+		if len(rule.Methods) > 0 {
+			methodMatches := false
+			for _, m := range rule.Methods {
+				if strings.EqualFold(m, method) {
+					methodMatches = true
+					break
+				}
+			}
+			if !methodMatches {
+				continue
+			}
+		}
+
+		// Check Path regex
+		if rule.PathRegex != nil {
+			if rule.PathRegex.MatchString(rawPath) {
+				matchedRule = rule
+				break
+			}
+			continue
+		}
+
+		// Check Path prefix
+		if rule.PathPrefix != "" {
+			if strings.HasPrefix(rawPath, rule.PathPrefix) {
+				matchedRule = rule
+				break
+			}
+			continue
+		}
+	}
+
+	// Target app extraction for app-specific checking
+	targetApp := ExtractAppFromRequest(request)
+
+	if matchedRule != nil {
+		// A. Blocked endpoints
+		if matchedRule.Blocked {
+			if !HasOAuthScope(token.Scope, "admin", "*") {
+				return fmt.Errorf("forbidden_endpoint: endpoint %s cannot be accessed via OAuth token", rawPath)
+			}
+		}
+
+		// B. Required scopes check
+		if len(matchedRule.RequiredScopes) > 0 {
+			hasScope := HasOAuthScope(token.Scope, matchedRule.RequiredScopes...)
+			if !hasScope && targetApp != "" {
+				// App-specific scope allowance (e.g. scope "app:jira" or "jira:run")
+				if HasOAuthScope(token.Scope, "app:"+targetApp, targetApp+":run", targetApp+":read") {
+					hasScope = true
+				}
+			}
+			if !hasScope && len(token.AllowedApps) > 0 && targetApp != "" && IsAppNameAllowedForOAuth(token.AllowedApps, targetApp) {
+				// Token is specifically scoped to this app in AllowedApps
+				hasScope = true
+			}
+
+			if !hasScope {
+				return fmt.Errorf("insufficient_scope: endpoint requires one of [%s], but token only has scopes: %s",
+					strings.Join(matchedRule.RequiredScopes, ", "), token.Scope)
+			}
+		}
+
+		// C. App Access check
+		if matchedRule.CheckAppAccess {
+			if matchedRule.AppExtractor != nil {
+				targetApp = matchedRule.AppExtractor(request)
+			}
+			if targetApp != "" && len(token.AllowedApps) > 0 {
+				if !IsAppNameAllowedForOAuth(token.AllowedApps, targetApp) {
+					return fmt.Errorf("unauthorized_app: access to app '%s' is not permitted by this OAuth token's allowed_apps", targetApp)
+				}
+			}
+		}
+
+		// D. Custom validator callback
+		if matchedRule.CustomCheck != nil {
+			if err := matchedRule.CustomCheck(ctx, token, request); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+
+	// 4. Fallback for unmapped / extended endpoints:
+	// Read-only operations allowed with read/edit scopes; modifying operations require edit/run scopes.
+	switch method {
+	case "GET", "HEAD", "OPTIONS":
+		if !HasOAuthScope(token.Scope, "workflow:read", "workflow:edit", "workflow:run", "*", "admin") {
+			return fmt.Errorf("insufficient_scope: access to %s requires 'workflow:read' or 'workflow:edit' scope", rawPath)
+		}
+	default:
+		if !HasOAuthScope(token.Scope, "workflow:edit", "workflow:run", "*", "admin") {
+			return fmt.Errorf("insufficient_scope: modifying endpoint %s requires 'workflow:edit' scope", rawPath)
+		}
+	}
+
+	// Verify app if targetApp detected in fallback
+	if targetApp != "" && len(token.AllowedApps) > 0 {
+		if !IsAppNameAllowedForOAuth(token.AllowedApps, targetApp) {
+			return fmt.Errorf("unauthorized_app: access to app '%s' is not permitted by this OAuth token's allowed_apps", targetApp)
+		}
+	}
+
+	return nil
+}
+
 
