@@ -5336,11 +5336,6 @@ type StreamWorkflowOperation struct {
 	Timestamp int64           `json:"timestamp"`          // unix ms
 }
 
-type StreamWorkflowState struct {
-	Operations []StreamWorkflowOperation `json:"operations"`
-	LastSeq    int64                     `json:"last_seq"`
-}
-
 type StreamPresenceEntry struct {
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
