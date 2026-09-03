@@ -3725,7 +3725,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, errors.New("Invalid format for apikey")
 		}
 
-		if len(apikeyCheck[1]) < 36 {
+		if len(apikeyCheck[1]) < 36 && !strings.HasPrefix(apikeyCheck[1], "shfl_") {
 			return User{}, errors.New("Apikey must be at least 36 characters long (UUID)")
 		}
 
@@ -3761,14 +3761,41 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			//log.Printf("[WARNING] Error getting authentication cache for %s: %v", newApikey, err)
 		}
 
-		// Make specific check for just service user?
-		// Get the user based on APIkey here
-		userdata, err := GetApikey(ctx, apikeyCheck[1])
-		if err != nil {
-			// Due to execution auth
-			if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") {
-				if debug { 
-					log.Printf("[DEBUG] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
+		var userdata User
+		if strings.HasPrefix(apikeyCheck[1], "shfl_") {
+			oauthTok, oErr := GetOAuthToken(ctx, apikeyCheck[1])
+			if oErr == nil && oauthTok != nil && oauthTok.AccessToken != "" {
+				userObj, uErr := GetUser(ctx, oauthTok.UserId)
+				if uErr == nil && userObj != nil && (len(userObj.Id) > 0 || len(userObj.Username) > 0) {
+					userdata = *userObj
+					userdata.SessionLogin = false
+					userdata.ApiKey = newApikey
+					userdata.AllowedApps = oauthTok.AllowedApps
+					userdata.OAuthScope = oauthTok.Scope
+					if oauthTok.OrgId != "" {
+						userdata.ActiveOrg.Id = oauthTok.OrgId
+						if orgData, orgErr := GetOrg(ctx, oauthTok.OrgId); orgErr == nil && orgData != nil {
+							userdata.ActiveOrg.Name = orgData.Name
+							userdata.ActiveOrg.Image = orgData.Image
+						}
+					}
+					if debug {
+						log.Printf("[DEBUG] Authenticated via OAuth MCP Token for user %s, org %s", userdata.Id, userdata.ActiveOrg.Id)
+					}
+				}
+			}
+		}
+
+		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
+			// Make specific check for just service user?
+			// Get the user based on APIkey here
+			userdata, err = GetApikey(ctx, apikeyCheck[1])
+			if err != nil {
+				// Due to execution auth
+				if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") {
+					if debug { 
+						log.Printf("[DEBUG] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
+					}
 				}
 			}
 		}
@@ -3787,9 +3814,34 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				}
 				userdata.SessionLogin = true 
 			}
-		} else {
+		} else if !strings.HasPrefix(apikeyCheck[1], "shfl_") {
 			userdata.SessionLogin = false
 			userdata.ApiKey = newApikey
+		}
+
+		// Fallback with OAuth 2.0 / MCP access token (e.g. ChatGPT / MCP client connections)
+		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
+			oauthTok, oErr := GetOAuthToken(ctx, apikeyCheck[1])
+			if oErr == nil && oauthTok != nil && oauthTok.AccessToken != "" {
+				userObj, uErr := GetUser(ctx, oauthTok.UserId)
+				if uErr == nil && userObj != nil && (len(userObj.Id) > 0 || len(userObj.Username) > 0) {
+					userdata = *userObj
+					userdata.SessionLogin = false
+					userdata.ApiKey = newApikey
+					userdata.AllowedApps = oauthTok.AllowedApps
+					userdata.OAuthScope = oauthTok.Scope
+					if oauthTok.OrgId != "" {
+						userdata.ActiveOrg.Id = oauthTok.OrgId
+						if orgData, orgErr := GetOrg(ctx, oauthTok.OrgId); orgErr == nil && orgData != nil {
+							userdata.ActiveOrg.Name = orgData.Name
+							userdata.ActiveOrg.Image = orgData.Image
+						}
+					}
+					if debug {
+						log.Printf("[DEBUG] Authenticated via OAuth MCP Token for user %s, org %s", userdata.Id, userdata.ActiveOrg.Id)
+					}
+				}
+			}
 		}
 
 		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {

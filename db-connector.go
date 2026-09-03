@@ -3915,7 +3915,18 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		curOrg = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
-		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
+				getErr = err
+			}
+		}()
+		if err := getErr; err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
@@ -4785,11 +4796,22 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 
 		//log.Printf("[DEBUG] Deleted %s (%s)", strings.ToLower(entity), value)
 	} else {
-		key1 := datastore.NameKey(entity, value, nil)
-		err := project.Dbclient.Delete(ctx, key1)
-		if err != nil {
-			log.Printf("[WARNING] Error deleting %s from %s: %s", value, entity, err)
-			return err
+		var deleteErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					deleteErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key1 := datastore.NameKey(entity, value, nil)
+			err := project.Dbclient.Delete(ctx, key1)
+			if err != nil {
+				log.Printf("[WARNING] Error deleting %s from %s: %s", value, entity, err)
+				deleteErr = err
+			}
+		}()
+		if deleteErr != nil && !project.CacheDb {
+			return deleteErr
 		}
 	}
 
@@ -15253,6 +15275,10 @@ func checkImportPath() bool {
 		return false
 	}
 
+	if info.Main.Path == AllowedImportPath() || info.Main.Path == "command-line-arguments" || strings.Contains(info.Main.Path, "shuffle-shared") {
+		return true
+	}
+
 	for _, dep := range info.Deps {
 		if strings.Contains(dep.Path, "shuffle-shared") && dep.Path != AllowedImportPath() {
 			return false
@@ -15264,7 +15290,6 @@ func checkImportPath() bool {
 	}
 
 	return false
-
 }
 
 type customTransport struct {
@@ -19345,10 +19370,21 @@ func SetOAuthClient(ctx context.Context, client OAuthClient) error {
 			return err
 		}
 	} else {
-		key := datastore.NameKey(nameKey, client.ClientID, nil)
-		if _, err := project.Dbclient.Put(ctx, key, &client); err != nil {
-			log.Printf("[ERROR] Failed adding OAuth client %s to Datastore: %s", client.ClientID, err)
-			return err
+		var putErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					putErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key := datastore.NameKey(nameKey, client.ClientID, nil)
+			if _, err := project.Dbclient.Put(ctx, key, &client); err != nil {
+				log.Printf("[ERROR] Failed adding OAuth client %s to Datastore: %s", client.ClientID, err)
+				putErr = err
+			}
+		}()
+		if putErr != nil && !project.CacheDb {
+			return putErr
 		}
 	}
 
@@ -19414,13 +19450,26 @@ func GetOAuthClient(ctx context.Context, id string) (*OAuthClient, error) {
 
 		client = &wrapped.Source
 	} else {
-		key := datastore.NameKey(nameKey, id, nil)
-		if err := project.Dbclient.Get(ctx, key, client); err != nil {
-			if err == datastore.ErrNoSuchEntity {
-				return nil, errors.New("OAuth client doesn't exist")
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key := datastore.NameKey(nameKey, id, nil)
+			if err := project.Dbclient.Get(ctx, key, client); err != nil {
+				if err == datastore.ErrNoSuchEntity {
+					getErr = errors.New("OAuth client doesn't exist")
+				} else {
+					log.Printf("[ERROR] Error getting OAuth client %s from Datastore: %s", id, err)
+					getErr = err
+				}
 			}
-			log.Printf("[ERROR] Error getting OAuth client %s from Datastore: %s", id, err)
-			return nil, err
+		}()
+
+		if getErr != nil {
+			return nil, getErr
 		}
 	}
 
@@ -19469,10 +19518,21 @@ func SetOAuthToken(ctx context.Context, token OAuthToken) error {
 			return err
 		}
 	} else {
-		key := datastore.NameKey(nameKey, token.AccessToken, nil)
-		if _, err := project.Dbclient.Put(ctx, key, &token); err != nil {
-			log.Printf("[ERROR] Failed adding OAuth token to Datastore: %s", err)
-			return err
+		var putErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					putErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key := datastore.NameKey(nameKey, token.AccessToken, nil)
+			if _, err := project.Dbclient.Put(ctx, key, &token); err != nil {
+				log.Printf("[ERROR] Failed adding OAuth token to Datastore: %s", err)
+				putErr = err
+			}
+		}()
+		if putErr != nil && !project.CacheDb {
+			return putErr
 		}
 	}
 
@@ -19481,6 +19541,11 @@ func SetOAuthToken(ctx context.Context, token OAuthToken) error {
 		err = SetCache(ctx, cacheKey, data, 300)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for OAuth token: %s", err)
+		}
+
+		if len(token.RefreshToken) > 0 {
+			refreshCacheKey := fmt.Sprintf("oauth_refresh_%s", token.RefreshToken)
+			_ = SetCache(ctx, refreshCacheKey, []byte(token.AccessToken), int32(token.ExpiresIn))
 		}
 	}
 
@@ -19542,13 +19607,25 @@ func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error)
 
 		token = &wrapped.Source
 	} else {
-		key := datastore.NameKey(nameKey, accessToken, nil)
-		if err := project.Dbclient.Get(ctx, key, token); err != nil {
-			if err == datastore.ErrNoSuchEntity {
-				return nil, errors.New("OAuth token doesn't exist")
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key := datastore.NameKey(nameKey, accessToken, nil)
+			if err := project.Dbclient.Get(ctx, key, token); err != nil {
+				if err == datastore.ErrNoSuchEntity {
+					getErr = errors.New("OAuth token doesn't exist")
+				} else {
+					log.Printf("[ERROR] Error getting OAuth token from Datastore: %s", err)
+					getErr = err
+				}
 			}
-			log.Printf("[ERROR] Error getting OAuth token from Datastore: %s", err)
-			return nil, err
+		}()
+		if getErr != nil {
+			return nil, getErr
 		}
 	}
 
@@ -19570,9 +19647,235 @@ func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error)
 	return token, nil
 }
 
+// GetOAuthTokenByRefreshToken retrieves an OAuthToken using its refresh token.
+func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAuthToken, error) {
+	nameKey := "oauth_tokens"
+	refreshToken = strings.TrimSpace(refreshToken)
+	if len(refreshToken) == 0 {
+		return nil, errors.New("refresh token cannot be empty")
+	}
+
+	if project.CacheDb {
+		refreshCacheKey := fmt.Sprintf("oauth_refresh_%s", refreshToken)
+		cache, err := GetCache(ctx, refreshCacheKey)
+		if err == nil {
+			accessToken := string(cache.([]uint8))
+			if len(accessToken) > 0 {
+				token, err := GetOAuthToken(ctx, accessToken)
+				if err == nil && token != nil {
+					return token, nil
+				}
+			}
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"refresh_token": refreshToken,
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			return nil, err
+		}
+
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    &buf,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			return nil, errors.New("OAuth token not found by refresh token")
+		}
+
+		var searchResp struct {
+			Hits struct {
+				Hits []OAuthTokenWrapper `json:"hits"`
+			} `json:"hits"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&searchResp); err != nil {
+			return nil, err
+		}
+
+		if len(searchResp.Hits.Hits) > 0 {
+			token := searchResp.Hits.Hits[0].Source
+			if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
+				return nil, errors.New("OAuth token has expired")
+			}
+			return &token, nil
+		}
+	} else {
+		var tokens []OAuthToken
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			q := datastore.NewQuery(nameKey).Filter("refresh_token =", refreshToken).Limit(1)
+			if _, err := project.Dbclient.GetAll(ctx, q, &tokens); err == nil && len(tokens) > 0 {
+				token := tokens[0]
+				if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
+					getErr = errors.New("OAuth token has expired")
+				}
+			} else if err != nil {
+				getErr = err
+			}
+		}()
+		if getErr != nil {
+			return nil, getErr
+		}
+		if len(tokens) > 0 {
+			return &tokens[0], nil
+		}
+	}
+
+	return nil, errors.New("OAuth token not found by refresh token")
+}
+
 // DeleteOAuthToken removes an OAuthToken from storage and cache.
 func DeleteOAuthToken(ctx context.Context, accessToken string) error {
+	token, err := GetOAuthToken(ctx, accessToken)
+	if err == nil && token != nil && len(token.RefreshToken) > 0 {
+		_ = DeleteKey(ctx, "oauth_refresh", token.RefreshToken)
+	}
 	return DeleteKey(ctx, "oauth_tokens", accessToken)
+}
+
+// GetOAuthTokensByOrg retrieves all active OAuth tokens issued under a specific organization.
+func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error) {
+	nameKey := "oauth_tokens"
+	orgId = strings.TrimSpace(orgId)
+	if len(orgId) == 0 {
+		return nil, errors.New("orgId cannot be empty")
+	}
+
+	tokens := []OAuthToken{}
+	if project.DbType == "opensearch" {
+		query := map[string]interface{}{
+			"query": map[string]interface{}{
+				"term": map[string]interface{}{
+					"org_id.keyword": orgId,
+				},
+			},
+			"size": 100,
+		}
+		queryBytes, _ := json.Marshal(query)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    bytes.NewReader(queryBytes),
+		})
+		if err != nil {
+			return nil, err
+		}
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+
+		var searchResp struct {
+			Hits struct {
+				Hits []OAuthTokenWrapper `json:"hits"`
+			} `json:"hits"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&searchResp); err == nil {
+			for _, hit := range searchResp.Hits.Hits {
+				if hit.Source.ExpiresAt.IsZero() || time.Now().Before(hit.Source.ExpiresAt) {
+					tokens = append(tokens, hit.Source)
+				}
+			}
+		}
+	} else {
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(100)
+			if _, err := project.Dbclient.GetAll(ctx, q, &tokens); err != nil {
+				getErr = err
+			}
+		}()
+		if getErr != nil && !project.CacheDb {
+			return nil, getErr
+		}
+	}
+
+	return tokens, nil
+}
+
+// GetOAuthTokensByUser retrieves all active OAuth tokens issued to a specific user.
+func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, error) {
+	nameKey := "oauth_tokens"
+	userId = strings.TrimSpace(userId)
+	if len(userId) == 0 {
+		return nil, errors.New("userId cannot be empty")
+	}
+
+	tokens := []OAuthToken{}
+	if project.DbType == "opensearch" {
+		query := map[string]interface{}{
+			"query": map[string]interface{}{
+				"term": map[string]interface{}{
+					"user_id.keyword": userId,
+				},
+			},
+			"size": 100,
+		}
+		queryBytes, _ := json.Marshal(query)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    bytes.NewReader(queryBytes),
+		})
+		if err != nil {
+			return nil, err
+		}
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+
+		var searchResp struct {
+			Hits struct {
+				Hits []OAuthTokenWrapper `json:"hits"`
+			} `json:"hits"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&searchResp); err == nil {
+			for _, hit := range searchResp.Hits.Hits {
+				if hit.Source.ExpiresAt.IsZero() || time.Now().Before(hit.Source.ExpiresAt) {
+					tokens = append(tokens, hit.Source)
+				}
+			}
+		}
+	} else {
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(100)
+			if _, err := project.Dbclient.GetAll(ctx, q, &tokens); err != nil {
+				getErr = err
+			}
+		}()
+		if getErr != nil && !project.CacheDb {
+			return nil, getErr
+		}
+	}
+
+	return tokens, nil
 }
 
 // SetOAuthAuthCode persists a temporary authorization code in OpenSearch (onprem) or Datastore (cloud).
@@ -19601,11 +19904,27 @@ func SetOAuthAuthCode(ctx context.Context, code OAuthAuthCode) error {
 			return err
 		}
 	} else {
-		key := datastore.NameKey(nameKey, code.Code, nil)
-		if _, err := project.Dbclient.Put(ctx, key, &code); err != nil {
-			log.Printf("[ERROR] Failed adding OAuth authorization code to Datastore: %s", err)
-			return err
+		var putErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					putErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key := datastore.NameKey(nameKey, code.Code, nil)
+			if _, err := project.Dbclient.Put(ctx, key, &code); err != nil {
+				log.Printf("[ERROR] Failed adding OAuth authorization code to Datastore: %s", err)
+				putErr = err
+			}
+		}()
+		if putErr != nil && !project.CacheDb {
+			return putErr
 		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, code.Code)
+		_ = SetCache(ctx, cacheKey, data, 600)
 	}
 
 	return nil
@@ -19617,6 +19936,23 @@ func GetOAuthAuthCode(ctx context.Context, codeStr string) (*OAuthAuthCode, erro
 	codeStr = strings.TrimSpace(codeStr)
 	if len(codeStr) == 0 {
 		return nil, errors.New("authorization code cannot be empty")
+	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, codeStr)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			var code OAuthAuthCode
+			if err := json.Unmarshal([]byte(cache.([]uint8)), &code); err == nil && len(code.Code) > 0 {
+				if code.Used {
+					return nil, errors.New("OAuth authorization code has already been used")
+				}
+				if !code.ExpiresAt.IsZero() && time.Now().After(code.ExpiresAt) {
+					return nil, errors.New("OAuth authorization code has expired")
+				}
+				return &code, nil
+			}
+		}
 	}
 
 	code := &OAuthAuthCode{}
@@ -19650,12 +19986,24 @@ func GetOAuthAuthCode(ctx context.Context, codeStr string) (*OAuthAuthCode, erro
 
 		code = &wrapped.Source
 	} else {
-		key := datastore.NameKey(nameKey, codeStr, nil)
-		if err := project.Dbclient.Get(ctx, key, code); err != nil {
-			if err == datastore.ErrNoSuchEntity {
-				return nil, errors.New("OAuth code doesn't exist")
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key := datastore.NameKey(nameKey, codeStr, nil)
+			if err := project.Dbclient.Get(ctx, key, code); err != nil {
+				if err == datastore.ErrNoSuchEntity {
+					getErr = errors.New("OAuth code doesn't exist")
+				} else {
+					getErr = err
+				}
 			}
-			return nil, err
+		}()
+		if getErr != nil {
+			return nil, getErr
 		}
 	}
 
@@ -19669,6 +20017,13 @@ func GetOAuthAuthCode(ctx context.Context, codeStr string) (*OAuthAuthCode, erro
 
 	if !code.ExpiresAt.IsZero() && time.Now().After(code.ExpiresAt) {
 		return nil, errors.New("OAuth authorization code has expired")
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(code)
+		if err == nil {
+			_ = SetCache(ctx, cacheKey, data, 600)
+		}
 	}
 
 	return code, nil

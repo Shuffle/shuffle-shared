@@ -586,7 +586,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 // replace a specific part of a workflow :thinking:
 
 func getVulnerabilityCorrelationScript(orgId string) string {
-	return fmt.Sprintf(`import json
+	return `import json
 import time
 import requests
 
@@ -713,7 +713,7 @@ result = {
     "store_errors": store_errors,
 }
 print(json.dumps(result, indent=2))
-`, "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%d", "%s", "%s", "%s", "%s", "%s")					
+`
 }
 
 // Should workflows be written as YAML and be text-editable?

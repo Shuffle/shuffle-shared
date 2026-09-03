@@ -787,6 +787,8 @@ type User struct {
 	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
 
 	ProvisionedByOrg string `datastore:"provisioned_by_org" json:"provisioned_by_org"`
+	AllowedApps      []string `json:"allowed_apps,omitempty" datastore:"allowed_apps,omitempty"`
+	OAuthScope       string   `json:"oauth_scope,omitempty" datastore:"oauth_scope,omitempty"`
 }
 
 type SSOInfo struct {
@@ -3061,6 +3063,7 @@ type OAuthToken struct {
 	RefreshToken string    `json:"refresh_token,omitempty" datastore:"refresh_token"`
 	TokenType    string    `json:"token_type" datastore:"token_type"`
 	Scope        string    `json:"scope" datastore:"scope"`
+	AllowedApps  []string  `json:"allowed_apps,omitempty" datastore:"allowed_apps,omitempty"`
 	ExpiresIn    int64     `json:"expires_in" datastore:"expires_in"`
 	ExpiresAt    time.Time `json:"expires_at" datastore:"expires_at"`
 	ClientID     string    `json:"client_id" datastore:"client_id"`
@@ -3088,6 +3091,7 @@ type OAuthAuthCode struct {
 	CodeChallenge       string    `json:"code_challenge" datastore:"code_challenge"`
 	CodeChallengeMethod string    `json:"code_challenge_method" datastore:"code_challenge_method"`
 	Scope               string    `json:"scope" datastore:"scope"`
+	AllowedApps         []string  `json:"allowed_apps,omitempty" datastore:"allowed_apps,omitempty"`
 	OrgId               string    `json:"org_id" datastore:"org_id"`
 	UserId              string    `json:"user_id" datastore:"user_id"`
 	ExpiresAt           time.Time `json:"expires_at" datastore:"expires_at"`
@@ -3135,15 +3139,16 @@ type OAuthConsentInfoResponse struct {
 
 // OAuthAuthorizeRequest represents the decision sent by the consent UI or client to POST /oauth2/authorize.
 type OAuthAuthorizeRequest struct {
-	ClientID            string `json:"client_id"`
-	RedirectURI         string `json:"redirect_uri"`
-	ResponseType        string `json:"response_type"`
-	Scope               string `json:"scope"`
-	State               string `json:"state"`
-	CodeChallenge       string `json:"code_challenge"`
-	CodeChallengeMethod string `json:"code_challenge_method"`
-	OrgId               string `json:"org_id"`
-	Approved            bool   `json:"approved"`
+	ClientID            string   `json:"client_id"`
+	RedirectURI         string   `json:"redirect_uri"`
+	ResponseType        string   `json:"response_type"`
+	Scope               string   `json:"scope"`
+	AllowedApps         []string `json:"allowed_apps,omitempty"`
+	State               string   `json:"state"`
+	CodeChallenge       string   `json:"code_challenge"`
+	CodeChallengeMethod string   `json:"code_challenge_method"`
+	OrgId               string   `json:"org_id"`
+	Approved            bool     `json:"approved"`
 }
 
 // OAuthAuthorizeResponse is returned after consent is granted/denied.
@@ -3151,6 +3156,50 @@ type OAuthAuthorizeResponse struct {
 	RedirectURL string `json:"redirect_url"`
 	Code        string `json:"code,omitempty"`
 	State       string `json:"state,omitempty"`
+}
+
+// OAuthTokenRequest represents incoming parameters to POST /oauth2/token
+type OAuthTokenRequest struct {
+	GrantType    string `json:"grant_type"`
+	Code         string `json:"code"`
+	RedirectURI  string `json:"redirect_uri"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret,omitempty"`
+	CodeVerifier string `json:"code_verifier"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+}
+
+// OAuthTokenResponse represents the RFC 6749 standard JSON response for POST /oauth2/token
+type OAuthTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+}
+
+// OAuthRevokeRequest represents the RFC 7009 token revocation request
+type OAuthRevokeRequest struct {
+	Token         string `json:"token"`
+	TokenTypeHint string `json:"token_type_hint,omitempty"`
+	ClientID      string `json:"client_id,omitempty"`
+	ClientSecret  string `json:"client_secret,omitempty"`
+}
+
+// OAuthTokenView represents a safe view of an active OAuth token for the frontend UI
+type OAuthTokenView struct {
+	ID          string    `json:"id"`
+	ClientID    string    `json:"client_id"`
+	ClientName  string    `json:"client_name,omitempty"`
+	TokenType   string    `json:"token_type"`
+	Scope       string    `json:"scope"`
+	AllowedApps []string  `json:"allowed_apps,omitempty"`
+	OrgId       string    `json:"org_id"`
+	UserId      string    `json:"user_id"`
+	CreatedAt   int64     `json:"created_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	TokenMasked string    `json:"token_masked"`
 }
 
 

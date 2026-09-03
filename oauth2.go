@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -2831,9 +2832,14 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		// Edgecase 15: Scope defaults
+		// Edgecase 15: Scope defaults and AllowedApps extraction
 		if authReq.Scope == "" {
 			authReq.Scope = "workflow:edit"
+		}
+
+		allowedApps := authReq.AllowedApps
+		if len(allowedApps) == 0 {
+			allowedApps = parseAllowedAppsFromScope(authReq.Scope)
 		}
 
 		// Generate cryptographically secure authorization code
@@ -2851,6 +2857,7 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			CodeChallenge:       authReq.CodeChallenge,
 			CodeChallengeMethod: authReq.CodeChallengeMethod,
 			Scope:               authReq.Scope,
+			AllowedApps:         allowedApps,
 			OrgId:               selectedOrgId,
 			UserId:              user.Id,
 			ExpiresAt:           expiresAt,
@@ -2886,5 +2893,409 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(http.StatusMethodNotAllowed)
 	resp.Write([]byte(`{"error": "invalid_request", "error_description": "Method not allowed"}`))
+}
+
+// verifyPKCE validates an RFC 7636 PKCE code_verifier against a code_challenge using the specified method (S256 or plain).
+func verifyPKCE(codeVerifier, codeChallenge, method string) bool {
+	codeVerifier = strings.TrimSpace(codeVerifier)
+	codeChallenge = strings.TrimSpace(codeChallenge)
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method == "" {
+		method = "S256"
+	}
+
+	if codeVerifier == "" || codeChallenge == "" {
+		return false
+	}
+
+	if method == "PLAIN" {
+		return subtle.ConstantTimeCompare([]byte(codeVerifier), []byte(codeChallenge)) == 1
+	}
+
+	if method == "S256" {
+		h := sha256.New()
+		h.Write([]byte(codeVerifier))
+		computedChallenge := base64URLEncode(h.Sum(nil))
+		return subtle.ConstantTimeCompare([]byte(computedChallenge), []byte(codeChallenge)) == 1
+	}
+
+	return false
+}
+
+// parseAllowedAppsFromScope extracts app names or IDs from OAuth scope strings.
+// Supports: "app:jira app:slack", "apps:jira,slack", "jira,slack".
+func parseAllowedAppsFromScope(scopeStr string) []string {
+	apps := []string{}
+	parts := strings.Fields(strings.TrimSpace(scopeStr))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "app:") {
+			app := strings.TrimPrefix(part, "app:")
+			if len(app) > 0 && !ArrayContains(apps, app) {
+				apps = append(apps, app)
+			}
+		} else if strings.HasPrefix(part, "apps:") {
+			subParts := strings.Split(strings.TrimPrefix(part, "apps:"), ",")
+			for _, sp := range subParts {
+				sp = strings.TrimSpace(sp)
+				if len(sp) > 0 && !ArrayContains(apps, sp) {
+					apps = append(apps, sp)
+				}
+			}
+		}
+	}
+	return apps
+}
+
+// IsAppAllowedForOAuth checks if a given app is permitted under the allowedApps slice.
+// If allowedApps is empty or contains "*", all apps are allowed.
+func IsAppAllowedForOAuth(allowedApps []string, app WorkflowApp) bool {
+	if len(allowedApps) == 0 {
+		return true
+	}
+
+	appName := strings.ToLower(strings.TrimSpace(app.Name))
+	appSlug := strings.ToLower(strings.ReplaceAll(appName, " ", "_"))
+	appId := strings.ToLower(strings.TrimSpace(app.ID))
+
+	for _, allowed := range allowedApps {
+		allowed = strings.ToLower(strings.TrimSpace(allowed))
+		if allowed == "*" || allowed == "all" || allowed == "mcp" {
+			return true
+		}
+		if allowed == appId || allowed == appName || allowed == appSlug {
+			return true
+		}
+		cleanAllowed := strings.TrimPrefix(allowed, "app:")
+		if cleanAllowed == appId || cleanAllowed == appName || cleanAllowed == appSlug {
+			return true
+		}
+	}
+
+	return false
+}
+
+// HandleOAuthToken handles the OAuth 2.0 / 2.1 token issuance and refresh endpoint.
+//
+// Routes:
+//   POST /oauth2/token
+//   POST /api/v1/oauth2/token
+//
+// Grant Types Supported:
+//   - authorization_code: Exchanges a temporary authorization code + PKCE code_verifier for an access_token.
+//   - refresh_token: Rotates an existing refresh token for a fresh access_token.
+func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Rate limiting: Protect against automated brute-forcing or DoS
+	if err := ValidateRequestOverload(resp, request, 30); err != nil {
+		resp.Header().Set("Content-Type", "application/json")
+		resp.Header().Set("Cache-Control", "no-store")
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(`{"error": "slow_down", "error_description": "Too many requests"}`))
+		return
+	}
+
+	if request.Method != "POST" {
+		resp.Header().Set("Content-Type", "application/json")
+		resp.Header().Set("Cache-Control", "no-store")
+		resp.WriteHeader(http.StatusMethodNotAllowed)
+		resp.Write([]byte(`{"error": "invalid_request", "error_description": "Only POST method is allowed"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	// Parse parameters from JSON or Form-URL-Encoded body
+	var tokenReq OAuthTokenRequest
+	contentType := request.Header.Get("Content-Type")
+
+	if strings.Contains(contentType, "application/json") {
+		body, rErr := ioutil.ReadAll(request.Body)
+		if rErr != nil {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "Failed to read request body"}`))
+			return
+		}
+		if err := json.Unmarshal(body, &tokenReq); err != nil {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "Invalid JSON payload"}`))
+			return
+		}
+	} else {
+		if err := request.ParseForm(); err != nil {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "Failed to parse form data"}`))
+			return
+		}
+		tokenReq.GrantType = strings.TrimSpace(request.FormValue("grant_type"))
+		tokenReq.Code = strings.TrimSpace(request.FormValue("code"))
+		tokenReq.RedirectURI = strings.TrimSpace(request.FormValue("redirect_uri"))
+		tokenReq.ClientID = strings.TrimSpace(request.FormValue("client_id"))
+		tokenReq.ClientSecret = strings.TrimSpace(request.FormValue("client_secret"))
+		tokenReq.CodeVerifier = strings.TrimSpace(request.FormValue("code_verifier"))
+		tokenReq.RefreshToken = strings.TrimSpace(request.FormValue("refresh_token"))
+		tokenReq.Scope = strings.TrimSpace(request.FormValue("scope"))
+	}
+
+	// Support HTTP Basic Authentication for Client Credentials
+	basicUser, basicPass, hasBasic := request.BasicAuth()
+	if hasBasic && tokenReq.ClientID == "" {
+		tokenReq.ClientID = strings.TrimSpace(basicUser)
+		tokenReq.ClientSecret = strings.TrimSpace(basicPass)
+	}
+
+	switch tokenReq.GrantType {
+	case "authorization_code":
+		// Edgecase 1: Missing code
+		if tokenReq.Code == "" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "code parameter is required"}`))
+			return
+		}
+
+		// Edgecase 2: Missing redirect_uri
+		if tokenReq.RedirectURI == "" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "redirect_uri parameter is required"}`))
+			return
+		}
+
+		// Retrieve and validate Authorization Code
+		authCode, err := GetOAuthAuthCode(ctx, tokenReq.Code)
+		if err != nil || authCode == nil || authCode.Code == "" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_grant", "error_description": "Authorization code is invalid or not found"}`))
+			return
+		}
+
+		// Edgecase 3: Single-Use Protection (Replay Prevention)
+		if authCode.Used {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_grant", "error_description": "Authorization code has already been used"}`))
+			return
+		}
+
+		// Edgecase 4: Expiration Check
+		if !authCode.ExpiresAt.IsZero() && time.Now().After(authCode.ExpiresAt) {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_grant", "error_description": "Authorization code has expired"}`))
+			return
+		}
+
+		// Edgecase 5: Client ID Mismatch
+		if tokenReq.ClientID != "" && authCode.ClientID != "" && tokenReq.ClientID != authCode.ClientID {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_client", "error_description": "client_id does not match authorization code"}`))
+			return
+		}
+
+		// Edgecase 6: Redirect URI Mismatch
+		if tokenReq.RedirectURI != "" && authCode.RedirectURI != "" && tokenReq.RedirectURI != authCode.RedirectURI {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_grant", "error_description": "redirect_uri does not match original authorization request"}`))
+			return
+		}
+
+		// Edgecase 7: PKCE Verification
+		if authCode.CodeChallenge != "" {
+			if tokenReq.CodeVerifier == "" {
+				resp.Header().Set("Content-Type", "application/json")
+				resp.Header().Set("Cache-Control", "no-store")
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(`{"error": "invalid_request", "error_description": "code_verifier is required for PKCE validation"}`))
+				return
+			}
+
+			if !verifyPKCE(tokenReq.CodeVerifier, authCode.CodeChallenge, authCode.CodeChallengeMethod) {
+				resp.Header().Set("Content-Type", "application/json")
+				resp.Header().Set("Cache-Control", "no-store")
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(`{"error": "invalid_grant", "error_description": "PKCE verification failed: invalid code_verifier"}`))
+				return
+			}
+		}
+
+		// Delete code to guarantee single-use
+		_ = DeleteOAuthAuthCode(ctx, authCode.Code)
+
+		// Generate Access Token and Refresh Token
+		accessToken := fmt.Sprintf("shfl_mcp_%s", strings.ReplaceAll(uuid.NewV4().String(), "-", ""))
+		refreshToken := fmt.Sprintf("shfl_mcp_refresh_%s", strings.ReplaceAll(uuid.NewV4().String(), "-", ""))
+		expiresIn := int64(30 * 24 * 3600) // 30 days
+		expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
+
+		oauthToken := OAuthToken{
+			ID:           accessToken,
+			AccessToken:  accessToken,
+			RefreshToken: refreshToken,
+			TokenType:    "Bearer",
+			Scope:        authCode.Scope,
+			AllowedApps:  authCode.AllowedApps,
+			ExpiresIn:    expiresIn,
+			ExpiresAt:    expiresAt,
+			ClientID:     authCode.ClientID,
+			OrgId:        authCode.OrgId,
+			UserId:       authCode.UserId,
+			CreatedAt:    time.Now().Unix(),
+		}
+
+		if err := SetOAuthToken(ctx, oauthToken); err != nil {
+			log.Printf("[ERROR] Failed to persist OAuth token: %v", err)
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"error": "server_error", "error_description": "Failed to persist OAuth token"}`))
+			return
+		}
+
+		tokenResp := OAuthTokenResponse{
+			AccessToken:  accessToken,
+			TokenType:    "Bearer",
+			ExpiresIn:    expiresIn,
+			RefreshToken: refreshToken,
+			Scope:        authCode.Scope,
+		}
+
+		respData, err := json.Marshal(tokenResp)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal token response: %v", err)
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken: issued token %s for user %s, org %s", accessToken, authCode.UserId, authCode.OrgId)
+		}
+
+		resp.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		resp.Header().Set("Cache-Control", "no-store")
+		resp.Header().Set("Pragma", "no-cache")
+		resp.WriteHeader(http.StatusOK)
+		resp.Write(respData)
+		return
+
+	case "refresh_token":
+		// Edgecase 8: Missing refresh_token
+		if tokenReq.RefreshToken == "" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "refresh_token parameter is required"}`))
+			return
+		}
+
+		// Retrieve existing token by refresh token
+		oldToken, err := GetOAuthTokenByRefreshToken(ctx, tokenReq.RefreshToken)
+		if err != nil || oldToken == nil || oldToken.AccessToken == "" {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_grant", "error_description": "Invalid or expired refresh token"}`))
+			return
+		}
+
+		// Edgecase 9: Client ID mismatch on refresh
+		if tokenReq.ClientID != "" && oldToken.ClientID != "" && tokenReq.ClientID != oldToken.ClientID {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_client", "error_description": "client_id does not match refresh token"}`))
+			return
+		}
+
+		// Invalidate old access token
+		_ = DeleteOAuthToken(ctx, oldToken.AccessToken)
+
+		// Rotate token: Issue new access token and refresh token
+		newAccessToken := fmt.Sprintf("shfl_mcp_%s", strings.ReplaceAll(uuid.NewV4().String(), "-", ""))
+		newRefreshToken := fmt.Sprintf("shfl_mcp_refresh_%s", strings.ReplaceAll(uuid.NewV4().String(), "-", ""))
+		expiresIn := int64(30 * 24 * 3600) // 30 days
+		expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
+
+		newToken := OAuthToken{
+			ID:           newAccessToken,
+			AccessToken:  newAccessToken,
+			RefreshToken: newRefreshToken,
+			TokenType:    "Bearer",
+			Scope:        oldToken.Scope,
+			AllowedApps:  oldToken.AllowedApps,
+			ExpiresIn:    expiresIn,
+			ExpiresAt:    expiresAt,
+			ClientID:     oldToken.ClientID,
+			OrgId:        oldToken.OrgId,
+			UserId:       oldToken.UserId,
+			CreatedAt:    time.Now().Unix(),
+		}
+
+		if err := SetOAuthToken(ctx, newToken); err != nil {
+			log.Printf("[ERROR] Failed to persist refreshed OAuth token: %v", err)
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"error": "server_error", "error_description": "Failed to persist refreshed OAuth token"}`))
+			return
+		}
+
+		tokenResp := OAuthTokenResponse{
+			AccessToken:  newAccessToken,
+			TokenType:    "Bearer",
+			ExpiresIn:    expiresIn,
+			RefreshToken: newRefreshToken,
+			Scope:        oldToken.Scope,
+		}
+
+		respData, err := json.Marshal(tokenResp)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal refresh token response: %v", err)
+			resp.Header().Set("Content-Type", "application/json")
+			resp.Header().Set("Cache-Control", "no-store")
+			resp.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken: refreshed token %s for user %s, org %s", newAccessToken, oldToken.UserId, oldToken.OrgId)
+		}
+
+		resp.Header().Set("Content-Type", "application/json;charset=UTF-8")
+		resp.Header().Set("Cache-Control", "no-store")
+		resp.Header().Set("Pragma", "no-cache")
+		resp.WriteHeader(http.StatusOK)
+		resp.Write(respData)
+		return
+
+	default:
+		resp.Header().Set("Content-Type", "application/json")
+		resp.Header().Set("Cache-Control", "no-store")
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"error": "unsupported_grant_type", "error_description": "grant_type must be authorization_code or refresh_token"}`))
+		return
+	}
 }
 
