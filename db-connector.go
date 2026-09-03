@@ -19446,10 +19446,19 @@ func GetOAuthClient(ctx context.Context, id string) (*OAuthClient, error) {
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			var client OAuthClient
-			if err := json.Unmarshal([]byte(cache.([]uint8)), &client); err == nil && len(client.ClientID) > 0 {
-				return &client, nil
+		if err == nil && cache != nil {
+			var rawBytes []byte
+			switch v := cache.(type) {
+			case []byte:
+				rawBytes = v
+			case string:
+				rawBytes = []byte(v)
+			}
+			if len(rawBytes) > 0 {
+				var client OAuthClient
+				if err := json.Unmarshal(rawBytes, &client); err == nil && len(client.ClientID) > 0 {
+					return &client, nil
+				}
 			}
 		}
 	}
@@ -19558,6 +19567,7 @@ func SetOAuthToken(ctx context.Context, token OAuthToken) error {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
+					log.Printf("[ERROR] SetOAuthToken: Datastore client panic recovered: %v", r)
 					putErr = errors.New("datastore client not initialized")
 				}
 			}()
@@ -19600,13 +19610,22 @@ func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error)
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, accessToken)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			var token OAuthToken
-			if err := json.Unmarshal([]byte(cache.([]uint8)), &token); err == nil && len(token.AccessToken) > 0 {
-				if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
-					return nil, errors.New("OAuth token has expired")
+		if err == nil && cache != nil {
+			var rawBytes []byte
+			switch v := cache.(type) {
+			case []byte:
+				rawBytes = v
+			case string:
+				rawBytes = []byte(v)
+			}
+			if len(rawBytes) > 0 {
+				var token OAuthToken
+				if err := json.Unmarshal(rawBytes, &token); err == nil && len(token.AccessToken) > 0 {
+					if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
+						return nil, errors.New("OAuth token has expired")
+					}
+					return &token, nil
 				}
-				return &token, nil
 			}
 		}
 	}
@@ -19647,6 +19666,7 @@ func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error)
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
+					log.Printf("[ERROR] GetOAuthToken: Datastore client panic recovered: %v", r)
 					getErr = errors.New("datastore client not initialized")
 				}
 			}()
@@ -19694,8 +19714,14 @@ func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAu
 	if project.CacheDb {
 		refreshCacheKey := fmt.Sprintf("oauth_refresh_%s", refreshToken)
 		cache, err := GetCache(ctx, refreshCacheKey)
-		if err == nil {
-			accessToken := string(cache.([]uint8))
+		if err == nil && cache != nil {
+			var accessToken string
+			switch v := cache.(type) {
+			case []byte:
+				accessToken = string(v)
+			case string:
+				accessToken = v
+			}
 			if len(accessToken) > 0 {
 				token, err := GetOAuthToken(ctx, accessToken)
 				if err == nil && token != nil {
@@ -19757,17 +19783,20 @@ func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAu
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
+					log.Printf("[ERROR] GetOAuthTokenByRefreshToken: Datastore client panic recovered: %v", r)
 					getErr = errors.New("datastore client not initialized")
 				}
 			}()
 			q := datastore.NewQuery(nameKey).Filter("refresh_token =", refreshToken).Limit(1)
-			if _, err := project.Dbclient.GetAll(ctx, q, &tokens); err == nil && len(tokens) > 0 {
+			if _, err := project.Dbclient.GetAll(ctx, q, &tokens); err != nil {
+				log.Printf("[ERROR] Error getting OAuth token by refresh token from Datastore: %s", err)
+				getErr = err
+			}
+			if getErr == nil && len(tokens) > 0 {
 				token := tokens[0]
 				if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
 					getErr = errors.New("OAuth token has expired")
 				}
-			} else if err != nil {
-				getErr = err
 			}
 		}()
 		if getErr != nil {
@@ -19927,6 +19956,9 @@ func SetOAuthAuthCode(ctx context.Context, code OAuthAuthCode) error {
 		code.CreatedAt = time.Now().Unix()
 	}
 
+	log.Printf("[DEBUG] SetOAuthAuthCode: persisting auth code '%s' for client '%s' (org: '%s', user: '%s', DbType='%s', CacheDb=%v)",
+		code.Code, code.ClientID, code.OrgId, code.UserId, project.DbType, project.CacheDb)
+
 	data, err := json.Marshal(code)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshalling OAuth authorization code: %s", err)
@@ -19939,11 +19971,13 @@ func SetOAuthAuthCode(ctx context.Context, code OAuthAuthCode) error {
 			log.Printf("[ERROR] Failed indexing OAuth authorization code in OpenSearch: %s", err)
 			return err
 		}
+		log.Printf("[DEBUG] SetOAuthAuthCode: successfully indexed auth code '%s' in OpenSearch", code.Code)
 	} else {
 		var putErr error
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
+					log.Printf("[ERROR] SetOAuthAuthCode: Datastore client panic recovered: %v", r)
 					putErr = errors.New("datastore client not initialized")
 				}
 			}()
@@ -19951,16 +19985,26 @@ func SetOAuthAuthCode(ctx context.Context, code OAuthAuthCode) error {
 			if _, err := project.Dbclient.Put(ctx, key, &code); err != nil {
 				log.Printf("[ERROR] Failed adding OAuth authorization code to Datastore: %s", err)
 				putErr = err
+			} else {
+				log.Printf("[DEBUG] SetOAuthAuthCode: successfully persisted auth code '%s' in Datastore", code.Code)
 			}
 		}()
-		if putErr != nil && !project.CacheDb {
-			return putErr
+		if putErr != nil {
+			log.Printf("[ERROR] SetOAuthAuthCode: Datastore Put failed for code '%s': %v (CacheDb=%v)", code.Code, putErr, project.CacheDb)
+			if !project.CacheDb {
+				return putErr
+			}
 		}
 	}
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, code.Code)
-		_ = SetCache(ctx, cacheKey, data, 600)
+		cErr := SetCache(ctx, cacheKey, data, 600)
+		if cErr != nil {
+			log.Printf("[WARNING] SetOAuthAuthCode: failed caching auth code '%s': %v", code.Code, cErr)
+		} else {
+			log.Printf("[DEBUG] SetOAuthAuthCode: successfully cached auth code '%s' (key: '%s')", code.Code, cacheKey)
+		}
 	}
 
 	return nil
@@ -19977,22 +20021,38 @@ func GetOAuthAuthCode(ctx context.Context, codeStr string) (*OAuthAuthCode, erro
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, codeStr)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			var code OAuthAuthCode
-			if err := json.Unmarshal([]byte(cache.([]uint8)), &code); err == nil && len(code.Code) > 0 {
-				if code.Used {
-					return nil, errors.New("OAuth authorization code has already been used")
-				}
-				if !code.ExpiresAt.IsZero() && time.Now().After(code.ExpiresAt) {
-					return nil, errors.New("OAuth authorization code has expired")
-				}
-				return &code, nil
+		if err == nil && cache != nil {
+			var rawBytes []byte
+			switch v := cache.(type) {
+			case []byte:
+				rawBytes = v
+			case string:
+				rawBytes = []byte(v)
 			}
+
+			if len(rawBytes) > 0 {
+				var code OAuthAuthCode
+				if err := json.Unmarshal(rawBytes, &code); err == nil && len(code.Code) > 0 {
+					log.Printf("[DEBUG] GetOAuthAuthCode: cache HIT for key '%s'", cacheKey)
+					if code.Used {
+						return nil, errors.New("OAuth authorization code has already been used")
+					}
+					if !code.ExpiresAt.IsZero() && time.Now().After(code.ExpiresAt) {
+						return nil, errors.New("OAuth authorization code has expired")
+					}
+					return &code, nil
+				} else {
+					log.Printf("[DEBUG] GetOAuthAuthCode: cache unmarshal failed for key '%s': %v", cacheKey, err)
+				}
+			}
+		} else {
+			log.Printf("[DEBUG] GetOAuthAuthCode: cache MISS for key '%s' (err: %v)", cacheKey, err)
 		}
 	}
 
 	code := &OAuthAuthCode{}
 	if project.DbType == "opensearch" {
+		log.Printf("[DEBUG] GetOAuthAuthCode: looking up '%s' in OpenSearch", codeStr)
 		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
 			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
 			DocumentID: codeStr,
@@ -20022,20 +20082,26 @@ func GetOAuthAuthCode(ctx context.Context, codeStr string) (*OAuthAuthCode, erro
 
 		code = &wrapped.Source
 	} else {
+		log.Printf("[DEBUG] GetOAuthAuthCode: looking up '%s' in Datastore", codeStr)
 		var getErr error
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
+					log.Printf("[ERROR] GetOAuthAuthCode: Datastore client panic recovered: %v", r)
 					getErr = errors.New("datastore client not initialized")
 				}
 			}()
 			key := datastore.NameKey(nameKey, codeStr, nil)
 			if err := project.Dbclient.Get(ctx, key, code); err != nil {
 				if err == datastore.ErrNoSuchEntity {
+					log.Printf("[DEBUG] GetOAuthAuthCode: code '%s' not found in Datastore (ErrNoSuchEntity)", codeStr)
 					getErr = errors.New("OAuth code doesn't exist")
 				} else {
+					log.Printf("[ERROR] GetOAuthAuthCode: Datastore Get error for code '%s': %v", codeStr, err)
 					getErr = err
 				}
+			} else {
+				log.Printf("[DEBUG] GetOAuthAuthCode: successfully retrieved code '%s' from Datastore", codeStr)
 			}
 		}()
 		if getErr != nil {
