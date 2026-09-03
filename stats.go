@@ -432,6 +432,8 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 			return d.AgentExecutionsSuccessful
 		case "agent_executions_failed":
 			return d.AgentExecutionsFailed
+		case "llm_tokens":
+			return d.LLMTokens
 		case "agent_tokens":
 			return d.AgentTokens
 		case "agent_input_tokens":
@@ -1795,6 +1797,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyAgentExecutionsSuccessful = 0
 		executionInfo.MonthlyAgentExecutionsFailed = 0
 		executionInfo.MonthlyAgentMaxLoopsHit = 0
+		executionInfo.MonthlyLLMTokens = 0
 		executionInfo.MonthlyAgentTokens = 0
 		executionInfo.MonthlyAgentInputTokens = 0
 		executionInfo.MonthlyAgentOutputTokens = 0
@@ -2051,6 +2054,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalChildOrgAgentMaxLoopsHit += int64(increment)
 		orgStatistics.MonthlyChildOrgAgentMaxLoopsHit += int64(increment)
 		orgStatistics.DailyChildOrgAgentMaxLoopsHit += int64(increment)
+	} else if dataType == "llm_tokens" {
+		orgStatistics.TotalLLMTokens += int64(increment)
+		orgStatistics.MonthlyLLMTokens += int64(increment)
+		orgStatistics.DailyLLMTokens += int64(increment)
 	} else if dataType == "agent_tokens" {
 		orgStatistics.TotalAgentTokens += int64(increment)
 		orgStatistics.MonthlyAgentTokens += int64(increment)
@@ -2087,6 +2094,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalChildOrgAgentExecutionsFailed += int64(increment)
 		orgStatistics.MonthlyChildOrgAgentExecutionsFailed += int64(increment)
 		orgStatistics.DailyChildOrgAgentExecutionsFailed += int64(increment)
+	} else if dataType == "child_org_llm_tokens" {
+		orgStatistics.TotalChildOrgLLMTokens += int64(increment)
+		orgStatistics.MonthlyChildOrgLLMTokens += int64(increment)
+		orgStatistics.DailyChildOrgLLMTokens += int64(increment)
 	} else if dataType == "child_org_agent_tokens" {
 		orgStatistics.TotalChildOrgAgentTokens += int64(increment)
 		orgStatistics.MonthlyChildOrgAgentTokens += int64(increment)
@@ -2255,7 +2266,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			AppRunsPercentage := float64(totalAppExecutions) / float64(org.SyncFeatures.AppExecutions.Limit) * 100
 			appRunsUsagePercentageStr := fmt.Sprintf("%d%% of your app runs limit", int64(AppRunsPercentage))
 			Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your tenant %s", appRunsUsagePercentageStr, org.Name)
-			aiTokensUsage := orgStatistics.MonthlyAgentTokens + orgStatistics.MonthlyChildOrgAgentTokens
+			aiTokensUsage := orgStatistics.MonthlyLLMTokens + orgStatistics.MonthlyChildOrgLLMTokens
 			aiTokensUsagePercentage := float64(aiTokensUsage) / float64(org.SyncFeatures.AgentTokens.Limit) * 100
 
 			aiTokensLimit := org.SyncFeatures.AgentTokens.Limit
@@ -2263,16 +2274,16 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				aiTokensLimit = 10000000
 			}
 			substitutions := map[string]interface{}{
-				"app_runs_usage":             totalAppExecutions,
-				"app_runs_limit":             org.SyncFeatures.AppExecutions.Limit,
-				"subject_string":             appRunsUsagePercentageStr,
-				"ai_tokens_usage":            aiTokensUsage,
-				"ai_tokens_limit":            aiTokensLimit,
-				"org_name":                   org.Name,
-				"org_id":                     org.Id,
-				"admin_email":                org.Name,
-				"app_runs_usage_percentage":  int64(AppRunsPercentage),
-				"ai_tokens_usage_percentage": int64(aiTokensUsagePercentage),
+				"app_runs_usage": totalAppExecutions,
+				"app_runs_limit": org.SyncFeatures.AppExecutions.Limit,
+				"subject_string": appRunsUsagePercentageStr,
+				//"ai_tokens_usage":           orgStatistics.MonthlyAgentTokens,
+				"ai_tokens_usage":           aiTokensUsage,
+				"ai_tokens_limit":           org.SyncFeatures.AgentTokens.Limit,
+				"org_name":                  org.Name,
+				"org_id":                    org.Id,
+				"admin_email":               org.Name,
+				"app_runs_usage_percentage": int64(aiTokensUsagePercentage),
 			}
 
 			err = sendMailSendgridV2(
@@ -2463,7 +2474,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 					"app_runs_usage":            totalAppExecutions,
 					"app_runs_limit":            validationOrg.SyncFeatures.AppExecutions.Limit,
 					"subject_string":            appRunsUsagePercentageStr,
-					"ai_tokens_usage":           validationOrgStatistics.MonthlyAgentTokens,
+					"ai_tokens_usage":           validationOrgStatistics.MonthlyLLMTokens,
 					"ai_tokens_limit":           validationOrg.SyncFeatures.AgentTokens.Limit,
 					"org_name":                  validationOrg.Name,
 					"org_id":                    validationOrg.Id,
@@ -2505,7 +2516,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 						"app_runs_usage":            totalAppExecutions,
 						"app_runs_limit":            validationOrg.SyncFeatures.AppExecutions.Limit,
 						"subject_string":            appRunsUsagePercentageStr,
-						"ai_tokens_usage":           validationOrgStatistics.MonthlyAgentTokens,
+						"ai_tokens_usage":           validationOrgStatistics.MonthlyLLMTokens,
 						"ai_tokens_limit":           validationOrg.SyncFeatures.AgentTokens.Limit,
 						"org_name":                  validationOrg.Name,
 						"org_id":                    validationOrg.Id,
