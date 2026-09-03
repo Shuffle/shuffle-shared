@@ -2878,6 +2878,8 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 
 		// Parse request body (supports JSON or Form-encoded)
 		var authReq OAuthAuthorizeRequest
+		var rawMap map[string]interface{}
+		isApproved := true // Default to true: calling POST /authorize is an affirmative authorization action!
 
 		if strings.Contains(contentType, "application/json") {
 			body, rErr := ioutil.ReadAll(request.Body)
@@ -2890,14 +2892,80 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 				resp.Write([]byte(`{"error": "invalid_request", "error_description": "Failed to read body"}`))
 				return
 			}
-			if err := json.Unmarshal(body, &authReq); err != nil {
-				if debug {
-					log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - JSON unmarshal error: %v, rawBody: %s", err, string(body))
+
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize POST rawBody: %s", string(body))
+			}
+
+			if len(body) > 0 {
+				if err := json.Unmarshal(body, &authReq); err != nil {
+					if debug {
+						log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - JSON unmarshal error: %v, rawBody: %s", err, string(body))
+					}
+					resp.Header().Set("Content-Type", "application/json")
+					resp.WriteHeader(http.StatusBadRequest)
+					resp.Write([]byte(`{"error": "invalid_request", "error_description": "Invalid JSON format"}`))
+					return
 				}
-				resp.Header().Set("Content-Type", "application/json")
-				resp.WriteHeader(http.StatusBadRequest)
-				resp.Write([]byte(`{"error": "invalid_request", "error_description": "Invalid JSON format"}`))
-				return
+				_ = json.Unmarshal(body, &rawMap)
+			}
+
+			// Check for explicit denial or approval in JSON payload
+			if rawMap != nil {
+				if val, exists := rawMap["approved"]; exists {
+					switch v := val.(type) {
+					case bool:
+						isApproved = v
+					case string:
+						vLower := strings.ToLower(strings.TrimSpace(v))
+						if vLower == "false" || vLower == "0" || vLower == "deny" || vLower == "reject" {
+							isApproved = false
+						} else if vLower == "true" || vLower == "1" || vLower == "approve" || vLower == "authorize" {
+							isApproved = true
+						}
+					}
+				}
+
+				// Explicit denial signals
+				if val, exists := rawMap["deny"]; exists {
+					if v, ok := val.(bool); ok && v {
+						isApproved = false
+					} else if s, ok := val.(string); ok && (strings.ToLower(s) == "true" || s == "1") {
+						isApproved = false
+					}
+				}
+				if val, exists := rawMap["denied"]; exists {
+					if v, ok := val.(bool); ok && v {
+						isApproved = false
+					} else if s, ok := val.(string); ok && (strings.ToLower(s) == "true" || s == "1") {
+						isApproved = false
+					}
+				}
+				if val, exists := rawMap["reject"]; exists {
+					if v, ok := val.(bool); ok && v {
+						isApproved = false
+					} else if s, ok := val.(string); ok && (strings.ToLower(s) == "true" || s == "1") {
+						isApproved = false
+					}
+				}
+				if val, exists := rawMap["action"]; exists {
+					if s, ok := val.(string); ok {
+						sLower := strings.ToLower(strings.TrimSpace(s))
+						if sLower == "deny" || sLower == "cancel" || sLower == "reject" || sLower == "decline" {
+							isApproved = false
+						} else if sLower == "approve" || sLower == "authorize" || sLower == "allow" || sLower == "accept" {
+							isApproved = true
+						}
+					}
+				}
+				if val, exists := rawMap["status"]; exists {
+					if s, ok := val.(string); ok {
+						sLower := strings.ToLower(strings.TrimSpace(s))
+						if sLower == "deny" || sLower == "denied" || sLower == "cancel" || sLower == "cancelled" || sLower == "rejected" {
+							isApproved = false
+						}
+					}
+				}
 			}
 		} else {
 			// Form-encoded fallback
@@ -2918,8 +2986,55 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			authReq.CodeChallenge = strings.TrimSpace(request.FormValue("code_challenge"))
 			authReq.CodeChallengeMethod = strings.TrimSpace(request.FormValue("code_challenge_method"))
 			authReq.OrgId = strings.TrimSpace(request.FormValue("org_id"))
-			authReq.Approved = request.FormValue("approved") == "true" || request.FormValue("approved") == "1"
+
+			action := strings.ToLower(strings.TrimSpace(request.FormValue("action")))
+			if action == "deny" || action == "cancel" || action == "reject" || action == "decline" {
+				isApproved = false
+			}
+			if request.FormValue("deny") == "true" || request.FormValue("deny") == "1" || request.FormValue("denied") == "true" {
+				isApproved = false
+			}
+			if request.FormValue("approved") == "false" || request.FormValue("approved") == "0" {
+				isApproved = false
+			}
+			if action == "approve" || action == "authorize" || action == "allow" || request.FormValue("approved") == "true" || request.FormValue("approved") == "1" {
+				isApproved = true
+			}
 		}
+
+		// Fallback to query params if omitted in POST body
+		if authReq.ClientID == "" {
+			authReq.ClientID = strings.TrimSpace(request.URL.Query().Get("client_id"))
+		}
+		if authReq.RedirectURI == "" {
+			authReq.RedirectURI = strings.TrimSpace(request.URL.Query().Get("redirect_uri"))
+		}
+		if authReq.ResponseType == "" {
+			authReq.ResponseType = strings.TrimSpace(request.URL.Query().Get("response_type"))
+		}
+		if authReq.Scope == "" {
+			authReq.Scope = strings.TrimSpace(request.URL.Query().Get("scope"))
+		}
+		if authReq.State == "" {
+			authReq.State = strings.TrimSpace(request.URL.Query().Get("state"))
+		}
+		if authReq.CodeChallenge == "" {
+			authReq.CodeChallenge = strings.TrimSpace(request.URL.Query().Get("code_challenge"))
+		}
+		if authReq.CodeChallengeMethod == "" {
+			authReq.CodeChallengeMethod = strings.TrimSpace(request.URL.Query().Get("code_challenge_method"))
+		}
+		if authReq.OrgId == "" {
+			authReq.OrgId = strings.TrimSpace(request.URL.Query().Get("org_id"))
+		}
+
+		// Also check query parameter fallback for denial (?action=deny, ?deny=true)
+		qAction := strings.ToLower(strings.TrimSpace(request.URL.Query().Get("action")))
+		if qAction == "deny" || qAction == "cancel" || qAction == "reject" || request.URL.Query().Get("deny") == "true" || request.URL.Query().Get("approved") == "false" {
+			isApproved = false
+		}
+
+		authReq.Approved = isApproved
 
 		if debug {
 			log.Printf("[DEBUG] HandleOAuthAuthorize POST params: client_id='%s', redirect_uri='%s', approved=%v, org_id='%s', scope='%s', state='%s', code_challenge_len=%d, code_challenge_method='%s'",
