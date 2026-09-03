@@ -17104,7 +17104,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[AUDIT] Login successful for user %s (%s) with IP: %s, session: %s", userdata.Username, userdata.Id, ip, userdata.Session)
+	log.Printf("[AUDIT] Login successful for user %s (%s) with IP: %s", userdata.Username, userdata.Id, ip)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(loginData))
