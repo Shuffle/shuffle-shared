@@ -37860,6 +37860,12 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 var streamHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 func sendStreamOperations(ctx context.Context, request *http.Request, streamURL string, streamOps []StreamWorkflowOperation) error {
+	// Stamp all operations as coming from the "agent" system user
+	for i := range streamOps {
+		streamOps[i].UserID = streamAgentUserID
+		streamOps[i].Username = "Agent"
+	}
+
 	opBytes, err := json.Marshal(streamOps)
 	if err != nil {
 		return fmt.Errorf("failed to marshal stream operations: %w", err)
@@ -37872,6 +37878,7 @@ func sendStreamOperations(ctx context.Context, request *http.Request, streamURL 
 
 	req.Header.Set("Content-Type", "application/json")
 
+	// Forward Authorization for auth/access control, but operations are pre-stamped as "agent"
 	if authHeader := request.Header.Get("Authorization"); authHeader != "" {
 		req.Header.Set("Authorization", authHeader)
 	}
