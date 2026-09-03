@@ -3819,7 +3819,8 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			userdata.ApiKey = newApikey
 		}
 
-		// Fallback with OAuth 2.0 / MCP access token (e.g. ChatGPT / MCP client connections)
+		// Fallback with OAuth 2.0 / MCP access token (e.g. ChatGPT / Claude 
+		// MCP client connections)
 		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
 			oauthTok, oErr := GetOAuthToken(ctx, apikeyCheck[1])
 			if oErr == nil && oauthTok != nil && oauthTok.AccessToken != "" {

@@ -3103,12 +3103,21 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Edgecase 5: Client ID Mismatch
-		if tokenReq.ClientID != "" && authCode.ClientID != "" && tokenReq.ClientID != authCode.ClientID {
-			resp.Header().Set("Content-Type", "application/json")
-			resp.Header().Set("Cache-Control", "no-store")
-			resp.WriteHeader(http.StatusBadRequest)
-			resp.Write([]byte(`{"error": "invalid_client", "error_description": "client_id does not match authorization code"}`))
-			return
+		if authCode.ClientID != "" {
+			if tokenReq.ClientID == "" {
+				resp.Header().Set("Content-Type", "application/json")
+				resp.Header().Set("Cache-Control", "no-store")
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(`{"error": "invalid_client", "error_description": "client_id is required"}`))
+				return
+			}
+			if tokenReq.ClientID != authCode.ClientID {
+				resp.Header().Set("Content-Type", "application/json")
+				resp.Header().Set("Cache-Control", "no-store")
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(`{"error": "invalid_client", "error_description": "client_id does not match authorization code"}`))
+				return
+			}
 		}
 
 		// Edgecase 6: Redirect URI Mismatch
@@ -3229,6 +3238,34 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		// Edgecase 10: Validate Scope Downscoping (RFC 6749 Section 6)
+		effectiveScope := oldToken.Scope
+		effectiveAllowedApps := oldToken.AllowedApps
+
+		if tokenReq.Scope != "" && tokenReq.Scope != oldToken.Scope {
+			requestedApps := parseAllowedAppsFromScope(tokenReq.Scope)
+			if len(requestedApps) > 0 {
+				for _, app := range requestedApps {
+					allowed := false
+					for _, oldApp := range oldToken.AllowedApps {
+						if oldApp == "*" || oldApp == "all" || strings.EqualFold(oldApp, app) {
+							allowed = true
+							break
+						}
+					}
+					if !allowed {
+						resp.Header().Set("Content-Type", "application/json")
+						resp.Header().Set("Cache-Control", "no-store")
+						resp.WriteHeader(http.StatusBadRequest)
+						resp.Write([]byte(`{"error": "invalid_scope", "error_description": "Requested scope contains permissions not granted in original authorization"}`))
+						return
+					}
+				}
+				effectiveScope = tokenReq.Scope
+				effectiveAllowedApps = requestedApps
+			}
+		}
+
 		// Invalidate old access token
 		_ = DeleteOAuthToken(ctx, oldToken.AccessToken)
 
@@ -3243,8 +3280,8 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			AccessToken:  newAccessToken,
 			RefreshToken: newRefreshToken,
 			TokenType:    "Bearer",
-			Scope:        oldToken.Scope,
-			AllowedApps:  oldToken.AllowedApps,
+			Scope:        effectiveScope,
+			AllowedApps:  effectiveAllowedApps,
 			ExpiresIn:    expiresIn,
 			ExpiresAt:    expiresAt,
 			ClientID:     oldToken.ClientID,
@@ -3267,7 +3304,7 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			TokenType:    "Bearer",
 			ExpiresIn:    expiresIn,
 			RefreshToken: newRefreshToken,
-			Scope:        oldToken.Scope,
+			Scope:        effectiveScope,
 		}
 
 		respData, err := json.Marshal(tokenResp)
@@ -3297,5 +3334,232 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"error": "unsupported_grant_type", "error_description": "grant_type must be authorization_code or refresh_token"}`))
 		return
 	}
+}
+
+// HandleOAuthRevoke implements RFC 7009 OAuth 2.0 Token Revocation.
+//
+// Routes:
+//   POST /oauth2/revoke
+//   POST /api/v1/oauth2/revoke
+//
+// Parameters (JSON or application/x-www-form-urlencoded):
+//   - token: The token to revoke (access token or refresh token)
+//   - token_type_hint: "access_token" or "refresh_token" (optional)
+//   - client_id / client_secret: Optional client credentials
+//
+// Also supports Shuffle frontend user revocation when called by an authenticated user.
+func HandleOAuthRevoke(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if err := ValidateRequestOverload(resp, request, 30); err != nil {
+		resp.Header().Set("Content-Type", "application/json")
+		resp.Header().Set("Cache-Control", "no-store")
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(`{"error": "slow_down", "error_description": "Too many requests"}`))
+		return
+	}
+
+	if request.Method != "POST" {
+		resp.Header().Set("Content-Type", "application/json")
+		resp.Header().Set("Cache-Control", "no-store")
+		resp.WriteHeader(http.StatusMethodNotAllowed)
+		resp.Write([]byte(`{"error": "invalid_request", "error_description": "Only POST is allowed"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	var revokeReq OAuthRevokeRequest
+	contentType := request.Header.Get("Content-Type")
+
+	if strings.Contains(contentType, "application/json") {
+		body, rErr := ioutil.ReadAll(request.Body)
+		if rErr != nil {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "Failed to read body"}`))
+			return
+		}
+		if err := json.Unmarshal(body, &revokeReq); err != nil {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "Invalid JSON format"}`))
+			return
+		}
+	} else {
+		request.ParseForm()
+		revokeReq.Token = strings.TrimSpace(request.FormValue("token"))
+		revokeReq.TokenTypeHint = strings.TrimSpace(request.FormValue("token_type_hint"))
+		revokeReq.ClientID = strings.TrimSpace(request.FormValue("client_id"))
+		revokeReq.ClientSecret = strings.TrimSpace(request.FormValue("client_secret"))
+	}
+
+	basicUser, basicPass, hasBasic := request.BasicAuth()
+	if hasBasic && revokeReq.ClientID == "" {
+		revokeReq.ClientID = strings.TrimSpace(basicUser)
+		revokeReq.ClientSecret = strings.TrimSpace(basicPass)
+	}
+
+	if revokeReq.Token == "" {
+		resp.Header().Set("Content-Type", "application/json")
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"error": "invalid_request", "error_description": "token parameter is required"}`))
+		return
+	}
+
+	// 1. First, check if the token can be found as an AccessToken
+	token, err := GetOAuthToken(ctx, revokeReq.Token)
+	if err != nil || token == nil || token.AccessToken == "" {
+		// 2. Fall back to search as a RefreshToken
+		token, err = GetOAuthTokenByRefreshToken(ctx, revokeReq.Token)
+	}
+
+	// RFC 7009 Section 2.2:
+	// "The authorization server responds with HTTP status code 200 if the token has been revoked successfully
+	// or if the client submitted an invalid token."
+	if token != nil && token.AccessToken != "" {
+		// If client_id was passed, verify match
+		if revokeReq.ClientID != "" && token.ClientID != "" && revokeReq.ClientID != token.ClientID {
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_client", "error_description": "client_id does not match token"}`))
+			return
+		}
+
+		// Check user session if calling from frontend UI
+		currentUser, userErr := getOAuthUser(resp, request)
+		if userErr == nil && len(currentUser.Id) > 0 {
+			// Verify user belongs to the token's Org or has support access
+			userAllowed := false
+			if currentUser.ActiveOrg.Id == token.OrgId || currentUser.Id == token.UserId || currentUser.SupportAccess {
+				userAllowed = true
+			} else {
+				for _, org := range currentUser.Orgs {
+					if org == token.OrgId {
+						userAllowed = true
+						break
+					}
+				}
+			}
+			if !userAllowed {
+				resp.Header().Set("Content-Type", "application/json")
+				resp.WriteHeader(http.StatusForbidden)
+				resp.Write([]byte(`{"error": "forbidden", "error_description": "Not authorized to revoke this token"}`))
+				return
+			}
+		}
+
+		// Invalidate access token and refresh token
+		_ = DeleteOAuthToken(ctx, token.AccessToken)
+		if len(token.RefreshToken) > 0 {
+			_ = DeleteKey(ctx, "oauth_refresh", token.RefreshToken)
+		}
+
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthRevoke: revoked token for client %s, user %s, org %s", token.ClientID, token.UserId, token.OrgId)
+		}
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.Header().Set("Cache-Control", "no-store")
+	resp.WriteHeader(http.StatusOK)
+	resp.Write([]byte(`{"status": "success", "revoked": true}`))
+}
+
+// HandleListOAuthTokens allows authenticated users / admins to list active OAuth tokens for their active organization.
+//
+// Route:
+//   GET /api/v1/oauth2/tokens
+func HandleListOAuthTokens(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if request.Method != "GET" {
+		resp.Header().Set("Content-Type", "application/json")
+		resp.WriteHeader(http.StatusMethodNotAllowed)
+		resp.Write([]byte(`{"error": "invalid_request", "error_description": "Only GET is allowed"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	user, userErr := getOAuthUser(resp, request)
+	if userErr != nil || len(user.Id) == 0 {
+		resp.Header().Set("Content-Type", "application/json")
+		resp.WriteHeader(http.StatusUnauthorized)
+		resp.Write([]byte(`{"error": "unauthorized", "error_description": "Authentication required"}`))
+		return
+	}
+
+	orgId := user.ActiveOrg.Id
+	if reqOrg := request.URL.Query().Get("org_id"); reqOrg != "" {
+		for _, o := range user.Orgs {
+			if o == reqOrg {
+				orgId = reqOrg
+				break
+			}
+		}
+		if user.SupportAccess {
+			orgId = reqOrg
+		}
+	}
+
+	if orgId == "" {
+		resp.Header().Set("Content-Type", "application/json")
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"error": "invalid_request", "error_description": "No active organization"}`))
+		return
+	}
+
+	tokens, err := GetOAuthTokensByOrg(ctx, orgId)
+	if err != nil {
+		log.Printf("[ERROR] Failed to list OAuth tokens for org %s: %v", orgId, err)
+		resp.Header().Set("Content-Type", "application/json")
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"error": "server_error", "error_description": "Failed to list OAuth tokens"}`))
+		return
+	}
+
+	tokenViews := []OAuthTokenView{}
+	for _, tok := range tokens {
+		maskedToken := tok.AccessToken
+		if len(maskedToken) > 12 {
+			maskedToken = maskedToken[:12] + "..."
+		}
+
+		clientName := tok.ClientID
+		if client, cErr := GetOAuthClient(ctx, tok.ClientID); cErr == nil && client != nil && client.ClientName != "" {
+			clientName = client.ClientName
+		}
+
+		tokenViews = append(tokenViews, OAuthTokenView{
+			ID:          tok.AccessToken,
+			ClientID:    tok.ClientID,
+			ClientName:  clientName,
+			TokenType:   tok.TokenType,
+			Scope:       tok.Scope,
+			AllowedApps: tok.AllowedApps,
+			OrgId:       tok.OrgId,
+			UserId:      tok.UserId,
+			CreatedAt:   tok.CreatedAt,
+			ExpiresAt:   tok.ExpiresAt,
+			TokenMasked: maskedToken,
+		})
+	}
+
+	respData, err := json.Marshal(tokenViews)
+	if err != nil {
+		resp.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(http.StatusOK)
+	resp.Write(respData)
 }
 
