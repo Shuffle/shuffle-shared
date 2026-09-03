@@ -2287,14 +2287,24 @@ func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthRegister: failed to read body: %v", err)
+		}
 		resp.WriteHeader(http.StatusBadRequest)
 		resp.Write([]byte(`{"error": "invalid_request", "error_description": "Failed to read body"}`))
 		return
 	}
 
+	if debug {
+		log.Printf("[DEBUG] HandleOAuthRegister: incoming %s %s from %s (body len: %d)", request.Method, request.URL.Path, request.RemoteAddr, len(body))
+	}
+
 	var regReq OAuthClientRegistrationRequest
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &regReq); err != nil {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthRegister: failed to parse JSON: %v (raw: %s)", err, string(body))
+			}
 			log.Printf("[WARNING] Failed to parse OAuth client registration request: %s", err)
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_request", "error_description": "Invalid JSON format"}`))
@@ -2303,6 +2313,9 @@ func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(regReq.RedirectUris) == 0 {
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthRegister: rejected - no redirect_uris provided in registration request")
+		}
 		resp.WriteHeader(http.StatusBadRequest)
 		resp.Write([]byte(`{"error": "invalid_redirect_uri", "error_description": "At least one redirect_uri is required"}`))
 		return
@@ -2381,7 +2394,8 @@ func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if debug {
-		log.Printf("[DEBUG] HandleOAuthRegister registered client: %s (%s)", clientID, regReq.ClientName)
+		log.Printf("[DEBUG] HandleOAuthRegister: successfully registered client '%s' (name: '%s', redirect_uris: %v, grant_types: %v, auth_method: '%s')",
+			clientID, regReq.ClientName, regReq.RedirectUris, regReq.GrantTypes, regReq.TokenEndpointAuthMethod)
 	}
 
 	resp.Header().Set("Content-Type", "application/json;charset=UTF-8")
@@ -2459,7 +2473,13 @@ func getOAuthUser(resp http.ResponseWriter, request *http.Request) (User, error)
 	if authHeader := request.Header.Get("Authorization"); len(authHeader) > 0 {
 		user, err := HandleApiAuthentication(resp, request)
 		if err == nil && len(user.Id) > 0 {
+			if debug {
+				log.Printf("[DEBUG] getOAuthUser: authenticated via Authorization header for user '%s' (id: '%s')", user.Username, user.Id)
+			}
 			return user, nil
+		}
+		if debug {
+			log.Printf("[DEBUG] getOAuthUser: Authorization header present but HandleApiAuthentication failed: %v", err)
 		}
 	}
 
@@ -2470,11 +2490,20 @@ func getOAuthUser(resp http.ResponseWriter, request *http.Request) (User, error)
 		if cErr == nil && len(strings.TrimSpace(cookie.Value)) > 0 {
 			sessionUser, sErr := GetSessionNew(ctx, strings.TrimSpace(cookie.Value))
 			if sErr == nil && len(sessionUser.Id) > 0 {
+				if debug {
+					log.Printf("[DEBUG] getOAuthUser: authenticated via cookie '%s' for user '%s' (id: '%s')", name, sessionUser.Username, sessionUser.Id)
+				}
 				return sessionUser, nil
+			}
+			if debug {
+				log.Printf("[DEBUG] getOAuthUser: cookie '%s' present but GetSessionNew failed: %v", name, sErr)
 			}
 		}
 	}
 
+	if debug {
+		log.Printf("[DEBUG] getOAuthUser: unauthenticated - no valid Authorization header or session cookie found")
+	}
 	return User{}, errors.New("User is not authenticated")
 }
 
@@ -2542,11 +2571,22 @@ func isUserOrgAdmin(ctx context.Context, user User, orgId string) bool {
 func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthAuthorize: handled CORS preflight for %s %s", request.Method, request.URL.Path)
+		}
 		return
+	}
+
+	if debug {
+		log.Printf("[DEBUG] HandleOAuthAuthorize: incoming %s %s (remote: %s, rawQuery: %s, contentType: %s)",
+			request.Method, request.URL.Path, request.RemoteAddr, request.URL.RawQuery, request.Header.Get("Content-Type"))
 	}
 
 	// Rate limiting: Protect against automated consent brute-forcing or DoS
 	if err := ValidateRequestOverload(resp, request, 30); err != nil {
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthAuthorize: rate limited: %v", err)
+		}
 		resp.Header().Set("Content-Type", "application/json")
 		resp.WriteHeader(http.StatusTooManyRequests)
 		resp.Write([]byte(`{"error": "slow_down", "error_description": "Too many requests"}`))
@@ -2565,6 +2605,19 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 	}
 	frontendURL = strings.TrimSuffix(frontendURL, "/")
 
+	// Calculate base issuer URL for RFC 9207 iss parameter
+	scheme := "https"
+	if proto := request.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	} else if request.TLS == nil && strings.HasPrefix(request.Host, "localhost") {
+		scheme = "http"
+	}
+	host := request.Host
+	if forwardedHost := request.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
+		host = forwardedHost
+	}
+	baseURL := fmt.Sprintf("%s://%s", scheme, host)
+
 	// =========================================================================
 	// GET REQUEST: Render Consent Info or Redirect Browser to Frontend UI
 	// =========================================================================
@@ -2577,8 +2630,16 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 		codeChallenge := strings.TrimSpace(request.URL.Query().Get("code_challenge"))
 		codeChallengeMethod := strings.TrimSpace(request.URL.Query().Get("code_challenge_method"))
 
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthAuthorize GET params: client_id='%s', redirect_uri='%s', response_type='%s', scope='%s', state='%s', code_challenge_len=%d, code_challenge_method='%s'",
+				clientID, redirectURI, responseType, scope, state, len(codeChallenge), codeChallengeMethod)
+		}
+
 		// Edgecase 1: Missing client_id
 		if clientID == "" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: rejected - client_id query parameter is required")
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_request", "error_description": "client_id query parameter is required"}`))
@@ -2588,14 +2649,25 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 		// Edgecase 2: Unknown or invalid client_id
 		client, err := GetOAuthClient(ctx, clientID)
 		if err != nil || client == nil || client.ClientID == "" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: rejected - client_id '%s' not found or error: %v", clientID, err)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_client", "error_description": "Unknown or invalid client_id"}`))
 			return
 		}
 
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthAuthorize GET: found client '%s' (name: '%s', registered redirect_uris: %v)",
+				client.ClientID, client.ClientName, client.RedirectUris)
+		}
+
 		// Edgecase 3: Missing redirect_uri
 		if redirectURI == "" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: rejected - redirect_uri query parameter is required for client '%s'", clientID)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_request", "error_description": "redirect_uri query parameter is required"}`))
@@ -2612,6 +2684,10 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 		if !uriMatched {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: rejected - redirect_uri '%s' does not match registered URIs %v for client '%s'",
+					redirectURI, client.RedirectUris, clientID)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_request", "error_description": "redirect_uri does not match any registered redirect_uris for this client"}`))
@@ -2620,6 +2696,9 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 
 		// Edgecase 5: Invalid response_type (OAuth 2.1 requires 'code', disallows implicit 'token')
 		if responseType != "" && responseType != "code" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: rejected - unsupported response_type '%s' (only 'code' supported)", responseType)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "unsupported_response_type", "error_description": "Only response_type=code is supported"}`))
@@ -2629,12 +2708,18 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 		// Edgecase 6: PKCE validation (RFC 7636 / OAuth 2.1 requires code_challenge)
 		if codeChallenge == "" {
 			log.Printf("[WARNING] OAuth authorize request missing PKCE code_challenge from client %s", clientID)
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: rejected - code_challenge is required (RFC 7636 PKCE)")
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_request", "error_description": "code_challenge is required (RFC 7636 PKCE)"}`))
 			return
 		}
 		if codeChallengeMethod != "" && codeChallengeMethod != "S256" && codeChallengeMethod != "plain" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: rejected - invalid code_challenge_method '%s'", codeChallengeMethod)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_request", "error_description": "code_challenge_method must be S256 or plain"}`))
@@ -2648,28 +2733,45 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			request.URL.Query().Get("format") == "json"
 
 		if userErr != nil || len(user.Id) == 0 {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: user is unauthenticated (userErr: %v, isAPIRequest: %v)", userErr, isAPIRequest)
+			}
 			// User is NOT logged in
 			if isAPIRequest {
 				// Frontend API call: Return 401 with login prompt URL
 				resp.Header().Set("Content-Type", "application/json")
 				resp.WriteHeader(http.StatusUnauthorized)
 				loginURL := fmt.Sprintf("%s/login?redirect=%s", frontendURL, url.QueryEscape(request.URL.String()))
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthAuthorize GET: returning 401 with login_url: %s", loginURL)
+				}
 				resp.Write([]byte(fmt.Sprintf(`{"error": "unauthorized", "login_url": "%s"}`, loginURL)))
 				return
 			}
 
 			// Direct browser GET: Redirect user to the frontend login page with return redirect
 			targetLogin := fmt.Sprintf("%s/login?redirect=%s", frontendURL, url.QueryEscape(request.URL.String()))
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: redirecting unauthenticated browser 302 to '%s'", targetLogin)
+			}
 			http.Redirect(resp, request, targetLogin, http.StatusFound)
 			return
 		}
 
 		// Edgecase 8: User account is inactive / suspended
 		if !user.Active {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: rejected - user '%s' account is inactive", user.Id)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusForbidden)
 			resp.Write([]byte(`{"error": "access_denied", "error_description": "User account is inactive"}`))
 			return
+		}
+
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthAuthorize GET: user '%s' (%s) authenticated, activeOrg: '%s', user.Orgs: %v",
+				user.Username, user.Id, user.ActiveOrg.Id, user.Orgs)
 		}
 
 		// If user IS authenticated:
@@ -2678,7 +2780,11 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			// Build available organizations list for the user (only orgs where user is admin)
 			availableOrgs := []OrgMini{}
 			for _, orgId := range user.Orgs {
-				if isUserOrgAdmin(ctx, user, orgId) {
+				isAdmin := isUserOrgAdmin(ctx, user, orgId)
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthAuthorize GET: checking isUserOrgAdmin for user %s, org %s -> %v", user.Id, orgId, isAdmin)
+				}
+				if isAdmin {
 					orgData, oErr := GetOrg(ctx, orgId)
 					if oErr == nil && orgData != nil && orgData.Id != "" {
 						availableOrgs = append(availableOrgs, OrgMini{
@@ -2719,8 +2825,13 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 
 			data, mErr := json.Marshal(consentResponse)
 			if mErr != nil {
+				log.Printf("[ERROR] HandleOAuthAuthorize GET: marshal consentResponse failed: %v", mErr)
 				resp.WriteHeader(http.StatusInternalServerError)
 				return
+			}
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: returning 200 OK consent metadata for user %s (selectedOrg: %s, availableOrgs: %d): %s",
+					user.Id, selectedOrg, len(availableOrgs), string(data))
 			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusOK)
@@ -2731,6 +2842,9 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 		// Direct browser navigation to backend /oauth2/authorize:
 		// Redirect to frontend consent page preserving all query parameters
 		consentRedirect := fmt.Sprintf("%s/oauth2/authorize?%s", frontendURL, request.URL.RawQuery)
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthAuthorize GET: browser redirecting 302 to frontend consent UI: %s", consentRedirect)
+		}
 		http.Redirect(resp, request, consentRedirect, http.StatusFound)
 		return
 	}
@@ -2739,28 +2853,47 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 	// POST REQUEST: User Submits Consent Decision (Approve / Deny)
 	// =========================================================================
 	if request.Method == "POST" {
+		contentType := request.Header.Get("Content-Type")
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthAuthorize POST: incoming consent decision from %s, content-type: '%s'",
+				request.RemoteAddr, contentType)
+		}
+
 		// Authenticate user
 		user, userErr := getOAuthUser(resp, request)
 		if userErr != nil || len(user.Id) == 0 {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - unauthenticated user: %v", userErr)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusUnauthorized)
 			resp.Write([]byte(`{"error": "unauthorized", "error_description": "User session is invalid or expired"}`))
 			return
 		}
 
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthAuthorize POST: user authenticated: %s (id: %s, role: %s, activeOrg: %s)",
+				user.Username, user.Id, user.Role, user.ActiveOrg.Id)
+		}
+
 		// Parse request body (supports JSON or Form-encoded)
 		var authReq OAuthAuthorizeRequest
-		contentType := request.Header.Get("Content-Type")
 
 		if strings.Contains(contentType, "application/json") {
 			body, rErr := ioutil.ReadAll(request.Body)
 			if rErr != nil {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - failed to read body: %v", rErr)
+				}
 				resp.Header().Set("Content-Type", "application/json")
 				resp.WriteHeader(http.StatusBadRequest)
 				resp.Write([]byte(`{"error": "invalid_request", "error_description": "Failed to read body"}`))
 				return
 			}
 			if err := json.Unmarshal(body, &authReq); err != nil {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - JSON unmarshal error: %v, rawBody: %s", err, string(body))
+				}
 				resp.Header().Set("Content-Type", "application/json")
 				resp.WriteHeader(http.StatusBadRequest)
 				resp.Write([]byte(`{"error": "invalid_request", "error_description": "Invalid JSON format"}`))
@@ -2768,7 +2901,15 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			}
 		} else {
 			// Form-encoded fallback
-			request.ParseForm()
+			if err := request.ParseForm(); err != nil {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - failed to parse form: %v", err)
+				}
+				resp.Header().Set("Content-Type", "application/json")
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(`{"error": "invalid_request", "error_description": "Failed to parse form"}`))
+				return
+			}
 			authReq.ClientID = strings.TrimSpace(request.FormValue("client_id"))
 			authReq.RedirectURI = strings.TrimSpace(request.FormValue("redirect_uri"))
 			authReq.ResponseType = strings.TrimSpace(request.FormValue("response_type"))
@@ -2780,9 +2921,17 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			authReq.Approved = request.FormValue("approved") == "true" || request.FormValue("approved") == "1"
 		}
 
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthAuthorize POST params: client_id='%s', redirect_uri='%s', approved=%v, org_id='%s', scope='%s', state='%s', code_challenge_len=%d, code_challenge_method='%s'",
+				authReq.ClientID, authReq.RedirectURI, authReq.Approved, authReq.OrgId, authReq.Scope, authReq.State, len(authReq.CodeChallenge), authReq.CodeChallengeMethod)
+		}
+
 		// Edgecase 9: Validate Client existence
 		client, err := GetOAuthClient(ctx, authReq.ClientID)
 		if err != nil || client == nil || client.ClientID == "" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - client_id '%s' not found or error: %v", authReq.ClientID, err)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_client", "error_description": "Client does not exist"}`))
@@ -2798,6 +2947,10 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 		if !uriMatched {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - redirect_uri '%s' does not match registered URIs %v for client '%s'",
+					authReq.RedirectURI, client.RedirectUris, client.ClientID)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_request", "error_description": "redirect_uri is not registered for this client"}`))
@@ -2806,6 +2959,9 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 
 		// Edgecase 11: Validate PKCE
 		if authReq.CodeChallenge == "" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - missing code_challenge")
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_request", "error_description": "code_challenge is required"}`))
@@ -2818,6 +2974,9 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 		// Helper to format redirect response based on client request type
 		returnRedirect := func(targetURL string) {
 			if strings.Contains(contentType, "application/json") || request.URL.Query().Get("format") == "json" {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthAuthorize POST: returning 200 OK JSON with redirect_url: '%s'", targetURL)
+				}
 				resp.Header().Set("Content-Type", "application/json")
 				resp.WriteHeader(http.StatusOK)
 				respData, _ := json.Marshal(OAuthAuthorizeResponse{
@@ -2826,18 +2985,41 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 				})
 				resp.Write(respData)
 			} else {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthAuthorize POST: redirecting 302 Found to '%s'", targetURL)
+				}
 				http.Redirect(resp, request, targetURL, http.StatusFound)
 			}
 		}
 
 		// Edgecase 12: User Denied Consent
 		if !authReq.Approved {
-			sep := "?"
-			if strings.Contains(authReq.RedirectURI, "?") {
-				sep = "&"
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize POST: user '%s' denied consent for client '%s'", user.Id, client.ClientID)
 			}
-			deniedURL := fmt.Sprintf("%s%serror=access_denied&error_description=%s&state=%s",
-				authReq.RedirectURI, sep, url.QueryEscape("User denied access"), url.QueryEscape(authReq.State))
+			redirectURL, pErr := url.Parse(authReq.RedirectURI)
+			deniedURL := ""
+			if pErr == nil {
+				q := redirectURL.Query()
+				q.Set("error", "access_denied")
+				q.Set("error_description", "User denied access")
+				if authReq.State != "" {
+					q.Set("state", authReq.State)
+				}
+				q.Set("iss", baseURL)
+				redirectURL.RawQuery = q.Encode()
+				deniedURL = redirectURL.String()
+			} else {
+				sep := "?"
+				if strings.Contains(authReq.RedirectURI, "?") {
+					sep = "&"
+				}
+				deniedURL = fmt.Sprintf("%s%serror=access_denied&error_description=%s&iss=%s",
+					authReq.RedirectURI, sep, url.QueryEscape("User denied access"), url.QueryEscape(baseURL))
+				if authReq.State != "" {
+					deniedURL += fmt.Sprintf("&state=%s", url.QueryEscape(authReq.State))
+				}
+			}
 			returnRedirect(deniedURL)
 			return
 		}
@@ -2854,6 +3036,10 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 			if !userBelongs && !user.SupportAccess {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - user '%s' does not belong to requested org '%s' (user.Orgs: %v)",
+						user.Id, selectedOrgId, user.Orgs)
+				}
 				resp.Header().Set("Content-Type", "application/json")
 				resp.WriteHeader(http.StatusForbidden)
 				resp.Write([]byte(`{"error": "unauthorized_client", "error_description": "User is not authorized for the requested organization"}`))
@@ -2869,6 +3055,9 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 
 		// Edgecase 14: User has no valid organization
 		if selectedOrgId == "" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - user '%s' has no valid org", user.Id)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_request", "error_description": "User must belong to at least one organization"}`))
@@ -2876,7 +3065,14 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Edgecase 18: Organization Admin Privilege Verification
-		if !isUserOrgAdmin(ctx, user, selectedOrgId) {
+		isAdmin := isUserOrgAdmin(ctx, user, selectedOrgId)
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthAuthorize POST: isUserOrgAdmin check for user '%s' in org '%s' -> %v", user.Id, selectedOrgId, isAdmin)
+		}
+		if !isAdmin {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - user '%s' is not an admin of org '%s'", user.Id, selectedOrgId)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusForbidden)
 			resp.Write([]byte(`{"error": "access_denied", "error_description": "Only organization administrators can authorize OAuth integrations for this organization"}`))
@@ -2918,30 +3114,48 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 
 		// Store code in Datastore / OpenSearch
 		if err := SetOAuthAuthCode(ctx, authCode); err != nil {
-			log.Printf("[ERROR] Failed to persist OAuth authorization code: %v", err)
+			log.Printf("[ERROR] HandleOAuthAuthorize POST: Failed to persist OAuth authorization code: %v", err)
 			resp.Header().Set("Content-Type", "application/json")
 			resp.WriteHeader(http.StatusInternalServerError)
 			resp.Write([]byte(`{"error": "server_error", "error_description": "Failed to generate authorization code"}`))
 			return
 		}
 
-		// Edgecase 17: Query parameter concatenation
-		sep := "?"
-		if strings.Contains(authReq.RedirectURI, "?") {
-			sep = "&"
+		// Edgecase 17: Query parameter concatenation with RFC 9207 iss
+		targetRedirect := ""
+		redirectURL, pErr := url.Parse(authReq.RedirectURI)
+		if pErr == nil {
+			q := redirectURL.Query()
+			q.Set("code", codeStr)
+			if authReq.State != "" {
+				q.Set("state", authReq.State)
+			}
+			q.Set("iss", baseURL)
+			redirectURL.RawQuery = q.Encode()
+			targetRedirect = redirectURL.String()
+		} else {
+			sep := "?"
+			if strings.Contains(authReq.RedirectURI, "?") {
+				sep = "&"
+			}
+			targetRedirect = fmt.Sprintf("%s%scode=%s&iss=%s", authReq.RedirectURI, sep, url.QueryEscape(codeStr), url.QueryEscape(baseURL))
+			if authReq.State != "" {
+				targetRedirect += fmt.Sprintf("&state=%s", url.QueryEscape(authReq.State))
+			}
 		}
-		targetRedirect := fmt.Sprintf("%s%scode=%s&state=%s",
-			authReq.RedirectURI, sep, url.QueryEscape(codeStr), url.QueryEscape(authReq.State))
 
 		if debug {
-			log.Printf("[DEBUG] HandleOAuthAuthorize: issued code for client %s, user %s, org %s -> %s",
-				client.ClientID, user.Id, selectedOrgId, targetRedirect)
+			log.Printf("[DEBUG] HandleOAuthAuthorize POST: successfully issued code '%s' for client '%s', user '%s', org '%s', allowedApps=%v -> redirecting to: %s",
+				codeStr, client.ClientID, user.Id, selectedOrgId, allowedApps, targetRedirect)
 		}
 
 		returnRedirect(targetRedirect)
 		return
 	}
 
+	if debug {
+		log.Printf("[DEBUG] HandleOAuthAuthorize: unsupported method '%s'", request.Method)
+	}
 	resp.WriteHeader(http.StatusMethodNotAllowed)
 	resp.Write([]byte(`{"error": "invalid_request", "error_description": "Method not allowed"}`))
 }
@@ -3038,11 +3252,22 @@ func IsAppAllowedForOAuth(allowedApps []string, app WorkflowApp) bool {
 func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken: handled CORS preflight for %s %s", request.Method, request.URL.Path)
+		}
 		return
+	}
+
+	if debug {
+		log.Printf("[DEBUG] HandleOAuthToken: incoming %s %s from %s (contentType: '%s')",
+			request.Method, request.URL.Path, request.RemoteAddr, request.Header.Get("Content-Type"))
 	}
 
 	// Rate limiting: Protect against automated brute-forcing or DoS
 	if err := ValidateRequestOverload(resp, request, 30); err != nil {
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken: rate limited: %v", err)
+		}
 		resp.Header().Set("Content-Type", "application/json")
 		resp.Header().Set("Cache-Control", "no-store")
 		resp.WriteHeader(http.StatusTooManyRequests)
@@ -3051,6 +3276,9 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if request.Method != "POST" {
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken: rejected - invalid method '%s' (only POST allowed)", request.Method)
+		}
 		resp.Header().Set("Content-Type", "application/json")
 		resp.Header().Set("Cache-Control", "no-store")
 		resp.WriteHeader(http.StatusMethodNotAllowed)
@@ -3067,6 +3295,9 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 	if strings.Contains(contentType, "application/json") {
 		body, rErr := ioutil.ReadAll(request.Body)
 		if rErr != nil {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken: rejected - failed to read request body: %v", rErr)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusBadRequest)
@@ -3074,6 +3305,9 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 		if err := json.Unmarshal(body, &tokenReq); err != nil {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken: rejected - JSON unmarshal error: %v, rawBody: %s", err, string(body))
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusBadRequest)
@@ -3082,6 +3316,9 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		}
 	} else {
 		if err := request.ParseForm(); err != nil {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken: rejected - failed to parse form data: %v", err)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusBadRequest)
@@ -3103,12 +3340,23 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 	if hasBasic && tokenReq.ClientID == "" {
 		tokenReq.ClientID = strings.TrimSpace(basicUser)
 		tokenReq.ClientSecret = strings.TrimSpace(basicPass)
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken: extracted client_id '%s' from HTTP Basic Auth", tokenReq.ClientID)
+		}
+	}
+
+	if debug {
+		log.Printf("[DEBUG] HandleOAuthToken parsed: grant_type='%s', client_id='%s', redirect_uri='%s', code='%s', code_verifier_len=%d, refresh_token_len=%d, scope='%s'",
+			tokenReq.GrantType, tokenReq.ClientID, tokenReq.RedirectURI, tokenReq.Code, len(tokenReq.CodeVerifier), len(tokenReq.RefreshToken), tokenReq.Scope)
 	}
 
 	switch tokenReq.GrantType {
 	case "authorization_code":
 		// Edgecase 1: Missing code
 		if tokenReq.Code == "" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: rejected - missing 'code' parameter")
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusBadRequest)
@@ -3118,6 +3366,9 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 
 		// Edgecase 2: Missing redirect_uri
 		if tokenReq.RedirectURI == "" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: rejected - missing 'redirect_uri' parameter for code '%s'", tokenReq.Code)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusBadRequest)
@@ -3126,8 +3377,14 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Retrieve and validate Authorization Code
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: looking up auth code '%s' in datastore", tokenReq.Code)
+		}
 		authCode, err := GetOAuthAuthCode(ctx, tokenReq.Code)
 		if err != nil || authCode == nil || authCode.Code == "" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: rejected - auth code '%s' not found or error: %v", tokenReq.Code, err)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusBadRequest)
@@ -3135,8 +3392,16 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: retrieved authCode: code='%s', client_id='%s', redirect_uri='%s', used=%v, expiresAt=%v, user='%s', org='%s', challenge_len=%d, challenge_method='%s'",
+				authCode.Code, authCode.ClientID, authCode.RedirectURI, authCode.Used, authCode.ExpiresAt, authCode.UserId, authCode.OrgId, len(authCode.CodeChallenge), authCode.CodeChallengeMethod)
+		}
+
 		// Edgecase 3: Single-Use Protection (Replay Prevention)
 		if authCode.Used {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: rejected - auth code '%s' was already used", authCode.Code)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusBadRequest)
@@ -3146,6 +3411,10 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 
 		// Edgecase 4: Expiration Check
 		if !authCode.ExpiresAt.IsZero() && time.Now().After(authCode.ExpiresAt) {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: rejected - auth code '%s' expired at %v (current time %v)",
+					authCode.Code, authCode.ExpiresAt, time.Now())
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusBadRequest)
@@ -3156,6 +3425,9 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		// Edgecase 5: Client ID Mismatch
 		if authCode.ClientID != "" {
 			if tokenReq.ClientID == "" {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: rejected - client_id is required but was empty in request (authCode client_id='%s')", authCode.ClientID)
+				}
 				resp.Header().Set("Content-Type", "application/json")
 				resp.Header().Set("Cache-Control", "no-store")
 				resp.WriteHeader(http.StatusBadRequest)
@@ -3163,6 +3435,10 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 			if tokenReq.ClientID != authCode.ClientID {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: rejected - client_id mismatch: request has '%s', authCode requires '%s'",
+						tokenReq.ClientID, authCode.ClientID)
+				}
 				resp.Header().Set("Content-Type", "application/json")
 				resp.Header().Set("Cache-Control", "no-store")
 				resp.WriteHeader(http.StatusBadRequest)
@@ -3173,6 +3449,10 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 
 		// Edgecase 6: Redirect URI Mismatch
 		if tokenReq.RedirectURI != "" && authCode.RedirectURI != "" && tokenReq.RedirectURI != authCode.RedirectURI {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: rejected - redirect_uri mismatch: tokenReq.RedirectURI='%s' vs authCode.RedirectURI='%s'",
+					tokenReq.RedirectURI, authCode.RedirectURI)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusBadRequest)
@@ -3183,6 +3463,9 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		// Edgecase 7: PKCE Verification
 		if authCode.CodeChallenge != "" {
 			if tokenReq.CodeVerifier == "" {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: rejected - code_verifier is required for PKCE validation")
+				}
 				resp.Header().Set("Content-Type", "application/json")
 				resp.Header().Set("Cache-Control", "no-store")
 				resp.WriteHeader(http.StatusBadRequest)
@@ -3190,16 +3473,27 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-			if !verifyPKCE(tokenReq.CodeVerifier, authCode.CodeChallenge, authCode.CodeChallengeMethod) {
+			pkcePassed := verifyPKCE(tokenReq.CodeVerifier, authCode.CodeChallenge, authCode.CodeChallengeMethod)
+			if !pkcePassed {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: rejected - PKCE verification failed for code_verifier (len: %d) against challenge '%s' (method: '%s')",
+						len(tokenReq.CodeVerifier), authCode.CodeChallenge, authCode.CodeChallengeMethod)
+				}
 				resp.Header().Set("Content-Type", "application/json")
 				resp.Header().Set("Cache-Control", "no-store")
 				resp.WriteHeader(http.StatusBadRequest)
 				resp.Write([]byte(`{"error": "invalid_grant", "error_description": "PKCE verification failed: invalid code_verifier"}`))
 				return
 			}
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: PKCE verification passed (method: '%s')", authCode.CodeChallengeMethod)
+			}
 		}
 
 		// Delete code to guarantee single-use
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: deleting used auth code '%s'", authCode.Code)
+		}
 		_ = DeleteOAuthAuthCode(ctx, authCode.Code)
 
 		// Generate Access Token and Refresh Token
@@ -3224,7 +3518,7 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if err := SetOAuthToken(ctx, oauthToken); err != nil {
-			log.Printf("[ERROR] Failed to persist OAuth token: %v", err)
+			log.Printf("[ERROR] HandleOAuthToken [authorization_code]: Failed to persist OAuth token: %v", err)
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusInternalServerError)
@@ -3242,7 +3536,7 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 
 		respData, err := json.Marshal(tokenResp)
 		if err != nil {
-			log.Printf("[ERROR] Failed to marshal token response: %v", err)
+			log.Printf("[ERROR] HandleOAuthToken [authorization_code]: Failed to marshal token response: %v", err)
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusInternalServerError)
@@ -3254,7 +3548,8 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			if len(masked) > 12 {
 				masked = masked[:12] + "..."
 			}
-			log.Printf("[DEBUG] HandleOAuthToken: issued token %s for user %s, org %s", masked, authCode.UserId, authCode.OrgId)
+			log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: SUCCESS issued token %s (connID: %s) for user %s, org %s, scopes: '%s', allowedApps: %v, expiresIn: %d",
+				masked, oauthToken.ID, authCode.UserId, authCode.OrgId, authCode.Scope, authCode.AllowedApps, expiresIn)
 		}
 
 		resp.Header().Set("Content-Type", "application/json;charset=UTF-8")
@@ -3267,6 +3562,9 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 	case "refresh_token":
 		// Edgecase 8: Missing refresh_token
 		if tokenReq.RefreshToken == "" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: rejected - missing refresh_token")
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusBadRequest)
@@ -3275,8 +3573,14 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Retrieve existing token by refresh token
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: looking up refresh_token (len: %d)", len(tokenReq.RefreshToken))
+		}
 		oldToken, err := GetOAuthTokenByRefreshToken(ctx, tokenReq.RefreshToken)
 		if err != nil || oldToken == nil || oldToken.AccessToken == "" {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: rejected - refresh token not found or error: %v", err)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusBadRequest)
@@ -3284,8 +3588,17 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: found old token (ID: %s, user: %s, org: %s, client: %s, expiresAt: %v)",
+				oldToken.ID, oldToken.UserId, oldToken.OrgId, oldToken.ClientID, oldToken.ExpiresAt)
+		}
+
 		// Edgecase 9: Client ID mismatch on refresh
 		if tokenReq.ClientID != "" && oldToken.ClientID != "" && tokenReq.ClientID != oldToken.ClientID {
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: rejected - client_id mismatch: request has '%s', token has '%s'",
+					tokenReq.ClientID, oldToken.ClientID)
+			}
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusBadRequest)
@@ -3309,6 +3622,10 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 						}
 					}
 					if !allowed {
+						if debug {
+							log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: rejected - requested app '%s' not permitted by original granted apps %v",
+								app, oldToken.AllowedApps)
+						}
 						resp.Header().Set("Content-Type", "application/json")
 						resp.Header().Set("Cache-Control", "no-store")
 						resp.WriteHeader(http.StatusBadRequest)
@@ -3322,6 +3639,9 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Invalidate old access token
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: deleting old access token")
+		}
 		_ = DeleteOAuthToken(ctx, oldToken.AccessToken)
 
 		// Rotate token: Issue new access token and refresh token
@@ -3351,7 +3671,7 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if err := SetOAuthToken(ctx, newToken); err != nil {
-			log.Printf("[ERROR] Failed to persist refreshed OAuth token: %v", err)
+			log.Printf("[ERROR] HandleOAuthToken [refresh_token]: Failed to persist refreshed OAuth token: %v", err)
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusInternalServerError)
@@ -3369,7 +3689,7 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 
 		respData, err := json.Marshal(tokenResp)
 		if err != nil {
-			log.Printf("[ERROR] Failed to marshal refresh token response: %v", err)
+			log.Printf("[ERROR] HandleOAuthToken [refresh_token]: Failed to marshal refresh token response: %v", err)
 			resp.Header().Set("Content-Type", "application/json")
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusInternalServerError)
@@ -3381,7 +3701,8 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			if len(masked) > 12 {
 				masked = masked[:12] + "..."
 			}
-			log.Printf("[DEBUG] HandleOAuthToken: refreshed token %s for user %s, org %s", masked, oldToken.UserId, oldToken.OrgId)
+			log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: SUCCESS refreshed token %s (connID: %s) for user %s, org %s, scopes: '%s'",
+				masked, newToken.ID, oldToken.UserId, oldToken.OrgId, effectiveScope)
 		}
 
 		resp.Header().Set("Content-Type", "application/json;charset=UTF-8")
@@ -3392,6 +3713,9 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		return
 
 	default:
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken: rejected - unsupported grant_type '%s'", tokenReq.GrantType)
+		}
 		resp.Header().Set("Content-Type", "application/json")
 		resp.Header().Set("Cache-Control", "no-store")
 		resp.WriteHeader(http.StatusBadRequest)
