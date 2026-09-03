@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	uuid "github.com/satori/go.uuid"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/go-querystring/query"
 	"golang.org/x/oauth2"
@@ -2122,3 +2123,249 @@ func GetGeminiCredentials(ctx context.Context) (string, string, string) {
 	parsedUrl := fmt.Sprintf("https://aiplatform.googleapis.com/v1/projects/%s/locations/%s/endpoints/openapi", projectID, location)
 	return tok.AccessToken, parsedUrl, foundModel
 }
+
+// Handles requests to OAuth-protected resources. Point being to find if 
+// oauth2 is available for what you are trying. First goal is MCP focus 
+func HandleOAuthProtectedResource(resp http.ResponseWriter, request *http.Request) {
+    cors := HandleCors(resp, request)
+    if cors {
+        return
+    }
+
+    scheme := "https"
+    if proto := request.Header.Get("X-Forwarded-Proto"); proto != "" {
+        scheme = proto
+    } else if request.TLS == nil && strings.HasPrefix(request.Host, "localhost") {
+        scheme = "http"
+    }
+
+    host := request.Host
+    if forwardedHost := request.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
+        host = forwardedHost
+    }
+
+    baseURL := fmt.Sprintf("%s://%s", scheme, host)
+
+    prefix := "/.well-known/oauth-protected-resource"
+    subPath := strings.TrimPrefix(request.URL.Path, prefix)
+    subPath = strings.TrimPrefix(subPath, "/")
+
+    resourceURL := baseURL
+    if len(subPath) > 0 {
+        resourceURL = fmt.Sprintf("%s/%s", baseURL, subPath)
+    } else {
+        // Fallback default or read from ?resource= query parameter if provided
+        if target := request.URL.Query().Get("resource"); target != "" {
+            resourceURL = target
+        }
+    }
+
+	// For now
+	scopesSupported := []string{"workflow:edit"}
+    metadata := map[string]interface{}{
+        "resource":              resourceURL,
+    	"scopes_supported":      scopesSupported,
+        "authorization_servers": []string{baseURL},
+        "bearer_methods_supported": []string{"header"},
+    }
+
+	parsedMeta, err := json.Marshal(metadata)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal metadata: %v", err)
+	}
+
+	if debug { 
+		log.Printf("[DEBUG] HandleOAuthProtectedResource: %s %s. Resp: %s", request.Method, request.URL.Path, string(parsedMeta))
+	}
+
+    resp.Header().Set("Content-Type", "application/json")
+    resp.WriteHeader(http.StatusOK)
+	resp.Write(parsedMeta)
+}
+
+// Attempts to figure out the base URL of the Shuffle instance based on the request headers and environment variables.
+func HandleOAuthAuthorizationServer(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	scheme := "https"
+	if proto := request.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	} else if request.TLS == nil && strings.HasPrefix(request.Host, "localhost") {
+		scheme = "http"
+	}
+
+	host := request.Host
+	if forwardedHost := request.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
+		host = forwardedHost
+	}
+
+	baseURL := fmt.Sprintf("%s://%s", scheme, host)
+
+	// Dynamic frontend URL where authorization UI lives
+	frontendURL := os.Getenv("SHUFFLE_FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = os.Getenv("FRONTEND_URL")
+	}
+
+	if frontendURL == "" {
+		frontendURL = "https://shuffle.security"
+	}
+
+	frontendURL = strings.TrimSuffix(frontendURL, "/")
+	metadata := map[string]interface{}{
+		"issuer":                                baseURL,
+		"authorization_endpoint":                fmt.Sprintf("%s/oauth2/authorize", frontendURL),
+		"token_endpoint":                        fmt.Sprintf("%s/oauth2/token", baseURL),
+		"registration_endpoint":                 fmt.Sprintf("%s/oauth2/register", baseURL),
+		"response_types_supported":              []string{"code"},
+		"grant_types_supported":                 []string{"authorization_code"},
+		"token_endpoint_auth_methods_supported": []string{"none", "client_secret_post"},
+		"code_challenge_methods_supported":      []string{"S256"},
+		"authorization_response_iss_parameter_supported": true,
+		"scopes_supported":                      []string{"workflow:edit"},
+	}
+
+	parsedMeta, err := json.Marshal(metadata)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal auth server metadata: %v", err)
+	}
+
+	if debug {
+		log.Printf("[DEBUG] HandleOAuthAuthorizationServer: %s %s. Resp: %s", request.Method, request.URL.Path, string(parsedMeta))
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(http.StatusOK)
+	resp.Write(parsedMeta)
+}
+
+type OAuthClientRegistrationRequest struct {
+	ClientName              string   `json:"client_name"`
+	RedirectUris            []string `json:"redirect_uris"`
+	GrantTypes              []string `json:"grant_types"`
+	ResponseTypes           []string `json:"response_types"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
+	Scope                   string   `json:"scope"`
+}
+
+type OAuthClientRegistrationResponse struct {
+	ClientID                string   `json:"client_id"`
+	ClientSecret            string   `json:"client_secret,omitempty"`
+	ClientName              string   `json:"client_name,omitempty"`
+	RedirectUris            []string `json:"redirect_uris"`
+	GrantTypes              []string `json:"grant_types,omitempty"`
+	ResponseTypes           []string `json:"response_types,omitempty"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method,omitempty"`
+	ClientIDIssuedAt        int64    `json:"client_id_issued_at,omitempty"`
+}
+
+// HandleOAuthRegister implements OAuth 2.0 Dynamic Client Registration (RFC 7591).
+// ChatGPT and other dynamic MCP clients call this endpoint to automatically register a client_id.
+func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if request.Method != "POST" {
+		resp.WriteHeader(http.StatusMethodNotAllowed)
+		resp.Write([]byte(`{"error": "invalid_request", "error_description": "Only POST is allowed"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"error": "invalid_request", "error_description": "Failed to read body"}`))
+		return
+	}
+
+	var regReq OAuthClientRegistrationRequest
+	if len(body) > 0 {
+		if err := json.Unmarshal(body, &regReq); err != nil {
+			log.Printf("[WARNING] Failed to parse OAuth client registration request: %s", err)
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"error": "invalid_request", "error_description": "Invalid JSON format"}`))
+			return
+		}
+	}
+
+	if len(regReq.RedirectUris) == 0 {
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"error": "invalid_redirect_uri", "error_description": "At least one redirect_uri is required"}`))
+		return
+	}
+
+	// Generate a unique client_id for this registration
+	clientID := fmt.Sprintf("shuffle_client_%s", uuid.NewV4().String())
+
+	// Default grant types and response types if omitted
+	if len(regReq.GrantTypes) == 0 {
+		regReq.GrantTypes = []string{"authorization_code"}
+	}
+	if len(regReq.ResponseTypes) == 0 {
+		regReq.ResponseTypes = []string{"code"}
+	}
+	if len(regReq.TokenEndpointAuthMethod) == 0 {
+		regReq.TokenEndpointAuthMethod = "none"
+	}
+
+	now := time.Now().Unix()
+
+	// =========================================================================
+	// TODO: DATABASE PERSISTENCE
+	// Store the registered client in the Datastore / database so it can be
+	// verified during the /oauth2/authorize and /oauth2/token stages.
+	//
+	// Example entity schema:
+	// type OAuthClient struct {
+	//     ClientID                string   `json:"client_id" datastore:"client_id"`
+	//     ClientSecret            string   `json:"client_secret" datastore:"client_secret"` // empty for public PKCE clients
+	//     ClientName              string   `json:"client_name" datastore:"client_name"`
+	//     RedirectUris            []string `json:"redirect_uris" datastore:"redirect_uris"`
+	//     GrantTypes              []string `json:"grant_types" datastore:"grant_types"`
+	//     ResponseTypes           []string `json:"response_types" datastore:"response_types"`
+	//     TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method" datastore:"token_endpoint_auth_method"`
+	//     CreatedAt               int64    `json:"created_at" datastore:"created_at"`
+	//     IsDynamic               bool     `json:"is_dynamic" datastore:"is_dynamic"`
+	// }
+	//
+	// ctx := GetContext(request)
+	// err := SaveOAuthClient(ctx, client)
+	// if err != nil {
+	//     log.Printf("[ERROR] Failed to save OAuth client: %v", err)
+	//     resp.WriteHeader(http.StatusInternalServerError)
+	//     return
+	// }
+	// =========================================================================
+
+	regResp := OAuthClientRegistrationResponse{
+		ClientID:                clientID,
+		ClientName:              regReq.ClientName,
+		RedirectUris:            regReq.RedirectUris,
+		GrantTypes:              regReq.GrantTypes,
+		ResponseTypes:           regReq.ResponseTypes,
+		TokenEndpointAuthMethod: regReq.TokenEndpointAuthMethod,
+		ClientIDIssuedAt:        now,
+	}
+
+	parsedResp, err := json.Marshal(regResp)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal client registration response: %v", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if debug {
+		log.Printf("[DEBUG] HandleOAuthRegister registered client: %s (%s)", clientID, regReq.ClientName)
+	}
+
+	resp.Header().Set("Content-Type", "application/json;charset=UTF-8")
+	resp.Header().Set("Cache-Control", "no-store")
+	resp.WriteHeader(http.StatusCreated)
+	resp.Write(parsedResp)
+}
+
