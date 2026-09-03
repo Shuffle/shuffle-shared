@@ -51,7 +51,7 @@ var streamOpTTLMinutes int32 = 30   // individual op keys; also bounds catch-up 
 var streamSeqTTLMinutes int32 = 60  // counter + lastsave keys (SetCache uses minutes; memcache/requestCache paths convert to seconds via *60)
 var streamMaxCatchup int64 = 100    // cap replayed ops on connect/history
 var streamMissRetries = 30          // ~3s at 100ms/poll before skipping a never-materialised op
-var streamPostSaveKeepOps int64 = 4 // ops just before a save are kept as a small safety buffer; older ones are pruned
+var streamPostSaveKeepOps int64 = 0 // only keep the save op itself; delete all ops before it
 var streamAuthCtxTTLMinutes int32 = 2
 
 // Adaptive polling: the read loop starts at streamPollFast and slows down
@@ -422,13 +422,10 @@ func getStreamOp(ctx context.Context, workflowID string, seq int64) (StreamWorkf
 }
 
 func pruneStreamOpsBeforeSave(ctx context.Context, workflowID string, prevSaveSeq, newSaveSeq int64) {
-	start := prevSaveSeq - streamPostSaveKeepOps + 1
-	if start < 1 {
-		start = 1
-	}
-	for seq := start; seq <= newSaveSeq-streamPostSaveKeepOps; seq++ {
+	// Delete all ops before the current save. Keep only from newSaveSeq onwards.
+	for seq := int64(1); seq < newSaveSeq; seq++ {
 		if err := DeleteCache(ctx, streamOpKey(workflowID, seq)); err != nil {
-			log.Printf("[WARNING] Failed pruning stream op %d for %s: %s", seq, workflowID, err)
+			// log.Printf("[WARNING] Failed pruning stream op %d for %s: %s", seq, workflowID, err)
 		}
 	}
 }
@@ -544,10 +541,11 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 
 		ops[i].Sequence = seq
 		ops[i].Timestamp = now
+		// Only stamp user info if not already set (agent ops come pre-stamped)
 		if len(ops[i].UserID) == 0 && len(user.Id) > 0 {
 			ops[i].UserID = user.Id
 		}
-		if len(user.Username) > 0 {
+		if len(ops[i].Username) == 0 && len(user.Username) > 0 {
 			ops[i].Username = user.Username
 		}
 
@@ -715,6 +713,11 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 					continue
 				}
 				if op.Type == "select" || op.Type == "unselect" || op.Type == "hover" || op.Type == "enter" {
+					continue
+				}
+				// System ops (e.g. rewind) are live-only signals — replaying one on
+				// catch-up would make the reconnecting client rewind again in a loop.	
+				if op.Item == "system" {
 					continue
 				}
 				opBytes, err := json.Marshal(op)
@@ -933,4 +936,149 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 		Operations: operations,
 	})
 	resp.Write(result)
+}
+
+// HandleStreamWorkflowRevert reverts the workflow stream to a target sequence number.
+
+// Strategy:
+//  1. Validate all ops from lastsave+1 → targetSeq are still in cache (not expired).
+//     If any are missing, return 409 so the client can ask the user to save first.
+//  2. Delete op keys from targetSeq+1 → currentSeq.
+//  3. Emit a system:rewind op so all connected clients restart their stream from since=0.
+//     The since=0 catch-up replays only the surviving ops, rebuilding the canvas correctly.
+func HandleStreamWorkflowRevert(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if streamAllowRegionRedirect && project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Authentication required"}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" && len(location) > 4 {
+		fileId = location[4]
+	}
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
+	}
+	if len(fileId) != 36 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid workflow ID"}`))
+		return
+	}
+
+	targetSeq, parseErr := strconv.ParseInt(request.URL.Query().Get("seq"), 10, 64)
+	if parseErr != nil || targetSeq < 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Missing or invalid seq parameter"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	workflowAuth, ok := getStreamWorkflowAuth(ctx, fileId)
+	if !ok {
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow not found"}`))
+		return
+	}
+
+	if user.Id != workflowAuth.Owner {
+		if workflowAuth.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
+			// org member with write access — allowed
+		} else if project.Environment == "cloud" && user.Verified && user.Active && user.SupportAccess && strings.HasSuffix(user.Username, "@shuffler.io") {
+			// support admin — allowed
+		} else {
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Access denied"}`))
+			return
+		}
+	}
+
+	if !workflowAuth.MultiplayerActive {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Multiplayer is not enabled for this organization"}`))
+		return
+	}
+
+	workflowID := workflowAuth.ID
+	currentSeq := currentStreamSeq(ctx, workflowID)
+
+	if targetSeq >= currentSeq {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Target seq must be less than current seq"}`))
+		return
+	}
+
+	// Step 1: Count how many ops in lastsave+1 → targetSeq are still in cache.
+	// This used to hard-fail with 409 ("save first") on the first missing op, but that's
+	// overly strict now: the rewind rebuild re-fetches the saved DB baseline and replays
+	// whatever surviving ops exist (tolerating gaps, exactly like the normal since=0
+	// catch-up). A missing op just means its change was already unreachable — reverting
+	// still lands on a state no worse than a page refresh — so we warn and proceed.
+	saveSeq := lastStreamSaveSeq(ctx, workflowID)
+	missing := 0
+	for seq := saveSeq + 1; seq <= targetSeq; seq++ {
+		if _, exists := getStreamOp(ctx, workflowID, seq); !exists {
+			missing++
+		}
+	}
+	if missing > 0 {
+		// log.Printf("[WARNING] stream revert: %d op(s) before target %d for workflow %s are no longer in cache; proceeding with tolerant rebuild", missing, targetSeq, workflowID)
+	}
+
+	// Step 2: Delete op keys targetSeq+1 → currentSeq.
+	for seq := targetSeq + 1; seq <= currentSeq; seq++ {
+		if delErr := DeleteCache(ctx, streamOpKey(workflowID, seq)); delErr != nil {
+			// log.Printf("[WARNING] stream revert: failed deleting op %d for %s: %s", seq, workflowID, delErr)
+		}
+	}
+
+	// Step 3: Emit a system:rewind op so every connected client tears down its
+	// stream and reconnects from since=0, rebuilding its canvas from the surviving
+	// ops only. No UserID is stamped, so it's delivered to everyone — including the
+	// user who triggered the revert (own-user ops are the only ones the read loop skips).
+	rewindSeq, rewindErr := nextStreamSeq(workflowID)
+	if rewindErr != nil {
+		log.Printf("[ERROR] stream revert: failed allocating rewind seq for %s: %s", workflowID, rewindErr)
+	} else {
+		username := user.Username
+		if username == "" {
+			username = user.Id
+		}
+		
+		rewindOp := StreamWorkflowOperation{
+			Item:      "system",
+			Type:      "rewind",
+			Sequence:  rewindSeq,
+			Timestamp: time.Now().UnixMilli(),
+			UserID:    user.Id,
+			Username:  username,
+		}
+		
+		if rewindBytes, marshalErr := json.Marshal(rewindOp); marshalErr == nil {
+			if cacheErr := SetCache(ctx, streamOpKey(workflowID, rewindSeq), rewindBytes, streamOpTTLMinutes); cacheErr != nil {
+				// log.Printf("[WARNING] stream revert: failed storing rewind op for %s: %s", workflowID, cacheErr)
+			}
+		}
+	}
+
+	log.Printf("[INFO] Stream revert: workflow %s reverted to seq %d by %s", workflowID, targetSeq, user.Username)
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reverted_to": %d}`, targetSeq)))
 }

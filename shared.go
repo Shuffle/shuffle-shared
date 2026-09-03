@@ -37348,6 +37348,94 @@ func enrichTriggerFromApp(minTrig *MinimalTrigger, environment string) (Trigger,
 			},
 		}, nil
 
+	case "user input", "userinput", "user_input", "user-input":
+		userInputImage := GetTriggerData("user-input")
+
+		userInputParams := []WorkflowAppActionParameter{
+			{Name: "alertinfo", Value: "## Stop or continue?\n\nDetails: $exec"},
+			{Name: "options", Value: "boolean"},
+			{Name: "type", Value: "email"},
+			{Name: "email", Value: "test@test.com"},
+			{Name: "sms", Value: "0000000"},
+			{Name: "subflow", Value: ""},
+			{Name: "subflow_failure", Value: ""},
+		}
+
+		for i, defParam := range userInputParams {
+			for _, agentParam := range minTrig.Parameters {
+				if strings.EqualFold(defParam.Name, agentParam.Name) {
+					userInputParams[i].Value = agentParam.Value
+					break
+				}
+			}
+		}
+
+		label := minTrig.Label
+		if len(label) == 0 {
+			label = "User Input"
+		}
+
+		return Trigger{
+			AppName:     "User Input",
+			AppVersion:  "1.0.0",
+			Name:        "User Input",
+			Label:       label,
+			TriggerType: "USERINPUT",
+			ID:          generateNodeID(),
+			Description: "Wait for user input trigger",
+			LargeImage:  userInputImage,
+			Environment: environment,
+			Status:      "uninitialized",
+			Parameters:  userInputParams,
+			Position: Position{
+				X: float64(minTrig.X),
+				Y: float64(minTrig.Y),
+			},
+		}, nil
+
+	case "subflow", "shuffle workflow", "shuffle_workflow", "shuffle-workflow":
+		subflowImage := GetTriggerData("subflow")
+
+		subflowParams := []WorkflowAppActionParameter{
+			{Name: "workflow", Value: ""},
+			{Name: "argument", Value: "$exec"},
+			{Name: "user_apikey", Value: ""},
+			{Name: "startnode", Value: ""},
+			{Name: "check_result", Value: "true"},
+		}
+
+		for i, defParam := range subflowParams {
+			for _, agentParam := range minTrig.Parameters {
+				if strings.EqualFold(defParam.Name, agentParam.Name) {
+					subflowParams[i].Value = agentParam.Value
+					break
+				}
+			}
+		}
+
+		label := minTrig.Label
+		if len(label) == 0 {
+			label = "Subflow"
+		}
+
+		return Trigger{
+			AppName:     "Shuffle Workflow",
+			AppVersion:  "1.0.0",
+			Name:        "Shuffle Workflow",
+			Label:       label,
+			TriggerType: "SUBFLOW",
+			ID:          generateNodeID(),
+			Description: "Subflow trigger to run workflow from other workflows",
+			LargeImage:  subflowImage,
+			Environment: environment,
+			Status:      "uninitialized",
+			Parameters:  subflowParams,
+			Position: Position{
+				X: float64(minTrig.X),
+				Y: float64(minTrig.Y),
+			},
+		}, nil
+
 	default:
 		return Trigger{}, fmt.Errorf("unsupported trigger type: %s", minTrig.AppName)
 	}
@@ -37938,6 +38026,12 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 var streamHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 func sendStreamOperations(ctx context.Context, request *http.Request, streamURL string, streamOps []StreamWorkflowOperation) error {
+	// Stamp all operations as coming from the "agent" system user
+	for i := range streamOps {
+		streamOps[i].UserID = streamAgentUserID
+		streamOps[i].Username = "Agent"
+	}
+
 	opBytes, err := json.Marshal(streamOps)
 	if err != nil {
 		return fmt.Errorf("failed to marshal stream operations: %w", err)
@@ -37950,6 +38044,7 @@ func sendStreamOperations(ctx context.Context, request *http.Request, streamURL 
 
 	req.Header.Set("Content-Type", "application/json")
 
+	// Forward Authorization for auth/access control, but operations are pre-stamped as "agent"
 	if authHeader := request.Header.Get("Authorization"); authHeader != "" {
 		req.Header.Set("Authorization", authHeader)
 	}
