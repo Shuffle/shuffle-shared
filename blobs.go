@@ -2027,18 +2027,28 @@ func GetPublicDetections() []DetectionResponse {
 }
 
 func GetBaseDockerfile() []byte {
-	appSdkImage := "frikky/shuffle:app_sdk"
+	appSdkImage := os.Getenv("SHUFFLE_APP_SDK_IMAGE")
+	if appSdkImage == "" {
+		appSdkImage = "frikky/shuffle:app_sdk"
 
-	registry := os.Getenv("SHUFFLE_BASE_IMAGE_REGISTRY")
-	name := os.Getenv("SHUFFLE_BASE_IMAGE_NAME")
-	if name != "" {
-		if registry != "" {
-			appSdkImage = fmt.Sprintf("%s/%s:app_sdk", registry, name)
-		} else {
-			appSdkImage = fmt.Sprintf("%s:app_sdk", name)
+		registry := os.Getenv("SHUFFLE_BASE_IMAGE_REGISTRY")
+		name := os.Getenv("SHUFFLE_BASE_IMAGE_NAME")
+		if name != "" {
+			if registry != "" {
+				appSdkImage = fmt.Sprintf("%s/%s:app_sdk", registry, name)
+			} else {
+				appSdkImage = fmt.Sprintf("%s:app_sdk", name)
+			}
+		} else if registry != "" {
+			appSdkImage = fmt.Sprintf("%s/frikky/shuffle:app_sdk", registry)
 		}
-	} else if registry != "" {
-		appSdkImage = fmt.Sprintf("%s/frikky/shuffle:app_sdk", registry)
+	}
+
+	if os.Getenv("SHUFFLE_APP_BUILD_AIRGAPPED") == "true" {
+		return []byte(fmt.Sprintf(`FROM %s
+COPY src /app
+WORKDIR /app
+CMD ["python", "app.py", "--log-level", "DEBUG"]`, appSdkImage))
 	}
 
 	return []byte(fmt.Sprintf(`FROM %s as base`, appSdkImage) + `
