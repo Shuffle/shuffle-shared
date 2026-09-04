@@ -15584,7 +15584,7 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 			return "", "", ""
 		}
 
-		baseUrl := "https://shuffler.io"
+		baseUrl := "https://uk.shuffler.io"
 		if len(org.SyncConfig.URL) > 0 && (strings.HasPrefix(org.SyncConfig.URL, "https://") || strings.HasPrefix(org.SyncConfig.URL, "http://")) {
 			baseUrl = strings.TrimSuffix(org.SyncConfig.URL, "/")
 		}
