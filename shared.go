@@ -3754,7 +3754,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, errors.New("Invalid format for apikey")
 		}
 
-		if len(apikeyCheck[1]) < 36 {
+		if len(apikeyCheck[1]) < 36 && !strings.HasPrefix(apikeyCheck[1], "shfl_") {
 			return User{}, errors.New("Apikey must be at least 36 characters long (UUID)")
 		}
 
@@ -3762,6 +3762,49 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		newApikey := apikeyCheck[1]
 		if len(newApikey) > 249 {
 			newApikey = newApikey[0:248]
+		}
+
+		// OAuth 2.0 / MCP Bearer Token Handling
+		if strings.HasPrefix(apikeyCheck[1], "shfl_") {
+			oauthTok, oErr := GetOAuthToken(ctx, apikeyCheck[1])
+			if oErr != nil || oauthTok == nil || oauthTok.AccessToken == "" {
+				return User{}, errors.New("Invalid or expired OAuth token")
+			}
+
+			// Validate endpoint access based on URL, HTTP method, scopes, allowed apps, and org boundaries
+			if valErr := ValidateOAuthTokenAccess(ctx, oauthTok, request); valErr != nil {
+				log.Printf("[WARNING] OAuth token access denied for %s %s: %s", request.Method, request.URL.Path, valErr)
+				return User{}, valErr
+			}
+
+			userObj, uErr := GetUser(ctx, oauthTok.UserId)
+			if uErr != nil || userObj == nil || (len(userObj.Id) == 0 && len(userObj.Username) == 0) {
+				return User{}, errors.New("User associated with OAuth token not found")
+			}
+
+			userdata := *userObj
+			userdata.SessionLogin = false
+			userdata.ApiKey = newApikey
+			userdata.AllowedApps = oauthTok.AllowedApps
+			userdata.OAuthScope = oauthTok.Scope
+			if oauthTok.OrgId != "" {
+				userdata.ActiveOrg.Id = oauthTok.OrgId
+				if orgData, orgErr := GetOrg(ctx, oauthTok.OrgId); orgErr == nil && orgData != nil {
+					userdata.ActiveOrg.Name = orgData.Name
+					userdata.ActiveOrg.Image = orgData.Image
+				}
+			}
+
+			if debug {
+				log.Printf("[DEBUG] Authenticated via OAuth MCP Token for user %s, org %s on %s %s", userdata.Id, userdata.ActiveOrg.Id, request.Method, request.URL.Path)
+			}
+
+			// Increment API usage
+			if userdata.Username != "scheduler@shuffler.io" {
+				go IncrementCache(ctx, userdata.ActiveOrg.Id, "api_usage")
+			}
+
+			return userdata, nil
 		}
 
 		apiCacheKey := fmt.Sprintf("%s%s", newApikey, org_id)
@@ -3790,14 +3833,18 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			//log.Printf("[WARNING] Error getting authentication cache for %s: %v", newApikey, err)
 		}
 
-		// Make specific check for just service user?
-		// Get the user based on APIkey here
-		userdata, err := GetApikey(ctx, apikeyCheck[1])
-		if err != nil {
-			// Due to execution auth
-			if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") {
-				if debug { 
-					log.Printf("[DEBUG] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
+		var userdata User
+
+		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
+			// Make specific check for just service user?
+			// Get the user based on APIkey here
+			userdata, err = GetApikey(ctx, apikeyCheck[1])
+			if err != nil {
+				// Due to execution auth
+				if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") {
+					if debug { 
+						log.Printf("[DEBUG] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
+					}
 				}
 			}
 		}
@@ -3816,9 +3863,40 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				}
 				userdata.SessionLogin = true 
 			}
-		} else {
+		} else if !strings.HasPrefix(apikeyCheck[1], "shfl_") {
 			userdata.SessionLogin = false
 			userdata.ApiKey = newApikey
+		}
+
+		// Fallback with OAuth 2.0 / MCP access token (e.g. ChatGPT / Claude 
+		// MCP client connections)
+		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
+			oauthTok, oErr := GetOAuthToken(ctx, apikeyCheck[1])
+			if oErr == nil && oauthTok != nil && oauthTok.AccessToken != "" {
+				if valErr := ValidateOAuthTokenAccess(ctx, oauthTok, request); valErr != nil {
+					log.Printf("[WARNING] OAuth token access denied for %s %s: %s", request.Method, request.URL.Path, valErr)
+					return User{}, valErr
+				}
+
+				userObj, uErr := GetUser(ctx, oauthTok.UserId)
+				if uErr == nil && userObj != nil && (len(userObj.Id) > 0 || len(userObj.Username) > 0) {
+					userdata = *userObj
+					userdata.SessionLogin = false
+					userdata.ApiKey = newApikey
+					userdata.AllowedApps = oauthTok.AllowedApps
+					userdata.OAuthScope = oauthTok.Scope
+					if oauthTok.OrgId != "" {
+						userdata.ActiveOrg.Id = oauthTok.OrgId
+						if orgData, orgErr := GetOrg(ctx, oauthTok.OrgId); orgErr == nil && orgData != nil {
+							userdata.ActiveOrg.Name = orgData.Name
+							userdata.ActiveOrg.Image = orgData.Image
+						}
+					}
+					if debug {
+						log.Printf("[DEBUG] Authenticated via OAuth MCP Token for user %s, org %s on %s %s", userdata.Id, userdata.ActiveOrg.Id, request.Method, request.URL.Path)
+					}
+				}
+			}
 		}
 
 		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
@@ -17592,7 +17670,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[AUDIT] Login successful for user %s (%s) with IP: %s, session: %s", userdata.Username, userdata.Id, ip, userdata.Session)
+	log.Printf("[AUDIT] Login successful for user %s (%s) with IP: %s", userdata.Username, userdata.Id, ip)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(loginData))
@@ -19153,7 +19231,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						oldAgentOutput := AgentOutput{}
 						foundError := fmt.Sprintf("LLM received call failed from app: ")
 						if len(quickUnmarshal.Reason) > 0 { 
-							foundError += fmt.Sprintf(quickUnmarshal.Reason)
+							foundError += fmt.Sprintf("%s", quickUnmarshal.Reason)
 						}
 
 						// Tries to map it in from the openai request 
@@ -19392,7 +19470,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 								agentOutput := AgentOutput{} 
 								err = json.Unmarshal([]byte(result.Result), &agentOutput)
 								if err != nil || len(agentOutput.Decisions) == 0 { 
-									log.Printf("[ERROR][%s] Failed to unmarshal agent output for delayed decision update: %s. Decisions: %d", workflowExecution.ExecutionId, err, agentOutput.Decisions) 
+									log.Printf("[ERROR][%s] Failed to unmarshal agent output for delayed decision update: %s. Decisions: %d", workflowExecution.ExecutionId, err, len(agentOutput.Decisions) )
 								}
 
 								for decisionIndex, decision := range agentOutput.Decisions {
@@ -37905,6 +37983,94 @@ func enrichTriggerFromApp(minTrig *MinimalTrigger, environment string) (Trigger,
 			},
 		}, nil
 
+	case "user input", "userinput", "user_input", "user-input":
+		userInputImage := GetTriggerData("user-input")
+
+		userInputParams := []WorkflowAppActionParameter{
+			{Name: "alertinfo", Value: "## Stop or continue?\n\nDetails: $exec"},
+			{Name: "options", Value: "boolean"},
+			{Name: "type", Value: "email"},
+			{Name: "email", Value: "test@test.com"},
+			{Name: "sms", Value: "0000000"},
+			{Name: "subflow", Value: ""},
+			{Name: "subflow_failure", Value: ""},
+		}
+
+		for i, defParam := range userInputParams {
+			for _, agentParam := range minTrig.Parameters {
+				if strings.EqualFold(defParam.Name, agentParam.Name) {
+					userInputParams[i].Value = agentParam.Value
+					break
+				}
+			}
+		}
+
+		label := minTrig.Label
+		if len(label) == 0 {
+			label = "User Input"
+		}
+
+		return Trigger{
+			AppName:     "User Input",
+			AppVersion:  "1.0.0",
+			Name:        "User Input",
+			Label:       label,
+			TriggerType: "USERINPUT",
+			ID:          generateNodeID(),
+			Description: "Wait for user input trigger",
+			LargeImage:  userInputImage,
+			Environment: environment,
+			Status:      "uninitialized",
+			Parameters:  userInputParams,
+			Position: Position{
+				X: float64(minTrig.X),
+				Y: float64(minTrig.Y),
+			},
+		}, nil
+
+	case "subflow", "shuffle workflow", "shuffle_workflow", "shuffle-workflow":
+		subflowImage := GetTriggerData("subflow")
+
+		subflowParams := []WorkflowAppActionParameter{
+			{Name: "workflow", Value: ""},
+			{Name: "argument", Value: "$exec"},
+			{Name: "user_apikey", Value: ""},
+			{Name: "startnode", Value: ""},
+			{Name: "check_result", Value: "true"},
+		}
+
+		for i, defParam := range subflowParams {
+			for _, agentParam := range minTrig.Parameters {
+				if strings.EqualFold(defParam.Name, agentParam.Name) {
+					subflowParams[i].Value = agentParam.Value
+					break
+				}
+			}
+		}
+
+		label := minTrig.Label
+		if len(label) == 0 {
+			label = "Subflow"
+		}
+
+		return Trigger{
+			AppName:     "Shuffle Workflow",
+			AppVersion:  "1.0.0",
+			Name:        "Shuffle Workflow",
+			Label:       label,
+			TriggerType: "SUBFLOW",
+			ID:          generateNodeID(),
+			Description: "Subflow trigger to run workflow from other workflows",
+			LargeImage:  subflowImage,
+			Environment: environment,
+			Status:      "uninitialized",
+			Parameters:  subflowParams,
+			Position: Position{
+				X: float64(minTrig.X),
+				Y: float64(minTrig.Y),
+			},
+		}, nil
+
 	default:
 		return Trigger{}, fmt.Errorf("unsupported trigger type: %s", minTrig.AppName)
 	}
@@ -38495,6 +38661,12 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 var streamHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 func sendStreamOperations(ctx context.Context, request *http.Request, streamURL string, streamOps []StreamWorkflowOperation) error {
+	// Stamp all operations as coming from the "agent" system user
+	for i := range streamOps {
+		streamOps[i].UserID = streamAgentUserID
+		streamOps[i].Username = "Agent"
+	}
+
 	opBytes, err := json.Marshal(streamOps)
 	if err != nil {
 		return fmt.Errorf("failed to marshal stream operations: %w", err)
@@ -38507,6 +38679,7 @@ func sendStreamOperations(ctx context.Context, request *http.Request, streamURL 
 
 	req.Header.Set("Content-Type", "application/json")
 
+	// Forward Authorization for auth/access control, but operations are pre-stamped as "agent"
 	if authHeader := request.Header.Get("Authorization"); authHeader != "" {
 		req.Header.Set("Authorization", authHeader)
 	}

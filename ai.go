@@ -7818,6 +7818,11 @@ When choosing one or more hostnames, NEVER guess which host. When available, ALW
 func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
 	targetWorkflowId := execution.ExecutionArgument
 
+
+	if len(targetWorkflowId) > 0 {
+		savePresenceParticipant(ctx, targetWorkflowId, streamAgentUserID, "Agent")
+	}
+
 	user := User{
 		ActiveOrg: OrgMini{Id: execution.ExecutionOrg},
 	}
@@ -7875,9 +7880,9 @@ INCORRECT (do NOT do this): { "key": "body", "value": { "operations": "Update th
 
 Supported Step-by-Step Operations
 
-A workflow has two types of nodes: Actions and Triggers. If you need a trigger, use either Webhook or Schedule. There is no rigid rule that triggers must always exist — only use a trigger if the workflow solution genuinely needs it.
+A workflow has two types of nodes: Actions and Triggers. If you need a trigger, use Webhook, Schedule, User Input, or Subflow. There is no rigid rule that triggers must always exist — only use a trigger if the workflow solution genuinely needs it.
 
-Format: Webhook Trigger
+Format: Webhook Trigger (Incoming HTTP requests)
 {
 "op": "add_node",
 "node_type": "trigger",
@@ -7890,7 +7895,7 @@ Format: Webhook Trigger
 }
 }
 
-Format: Schedule Trigger
+Format: Schedule Trigger (Time / cron interval triggers)
 {
 "op": "add_node",
 "node_type": "trigger",
@@ -7900,6 +7905,53 @@ Format: Schedule Trigger
   "label": "<unique_node_name>",
   "parameters": [
     { "name": "cron", "value": "*/15 * * * *" }
+  ],
+  "x": 100,
+  "y": 100
+}
+}
+
+Format: User Input Trigger (Human-in-the-loop approval / decision checkpoint that pauses execution awaiting manual user approval)
+{
+"op": "add_node",
+"node_type": "trigger",
+"temp_id": "<your_temp_id>",
+"data": {
+  "app_name": "User Input",
+  "label": "<unique_node_name>",
+  "parameters": [
+    { "name": "alertinfo", "value": "## Approve Action?\n\nDetails: $exec" },
+    { "name": "type", "value": "email" },
+    { "name": "email", "value": "admin@example.com" },
+    { "name": "options", "value": "boolean" },
+    { "name": "subflow", "value": "" },
+    { "name": "subflow_failure", "value": "" }
+  ],
+  "x": 100,
+  "y": 100
+}
+}
+Note on User Input parameters:
+- "alertinfo": The prompt/markdown shown to the human.
+- "type": Delivery method: "email", "sms", "subflow", or combinations like "subflow,email".
+- "email": Target email for email notifications.
+- "sms": Target phone number for SMS notifications.
+- "subflow": Optional workflow UUID to trigger for approval handling.
+- "subflow_failure": Optional workflow UUID to trigger if the human clicks Decline.
+- "options": Response type (typically "boolean").
+
+Format: Subflow Trigger (Triggered when this workflow is called as a subflow from another workflow)
+{
+"op": "add_node",
+"node_type": "trigger",
+"temp_id": "<your_temp_id>",
+"data": {
+  "app_name": "Shuffle Workflow",
+  "label": "<unique_node_name>",
+  "parameters": [
+    { "name": "workflow", value: "<the workflow_id>"},
+    { "name": "argument", "value": "$exec" },
+    { "name": "check_result", "value": "true" }
   ],
   "x": 100,
   "y": 100
@@ -9459,6 +9511,15 @@ data_filter:
 
 		if err != nil {
 			log.Printf("[ERROR][%s] AI Agent: Failed running AI query for action %s: %s", execution.ExecutionId, startNode.ID, err)
+			if strings.Contains(err.Error(), "429") {
+				rateLimitKey := fmt.Sprintf("openai_rate_limit_log_%s", execution.Workflow.OrgId)
+				if _, cacheErr := GetCache(ctx, rateLimitKey); cacheErr != nil {
+					log.Printf("[ERROR][%s] AI_OPENAI_RATE_LIMIT: org=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, err.Error())
+					_ = SetCache(ctx, rateLimitKey, []byte("1"), 30)
+				}
+
+				return abortAgentExecution(ctx, execution, startNode, "llm_rate_limit", "AI provider rate limit or credit quota exceeded. Please check your billing or API keys.")
+			}
 			return abortAgentExecution(ctx, execution, startNode, "run_ai_query_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 		}
 
@@ -11156,7 +11217,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				}
 
 				flusher.Flush()
-				return "", nil
+				return "", lastError
 			}
 
 			log.Printf("[ERROR] Failed to in runActionAI after 5 tries for openapi info: %s", lastError)
