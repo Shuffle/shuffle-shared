@@ -78,6 +78,108 @@ var (
 // streamSeqMu guards the in-process counter path (single-instance deployments without memcache).
 var streamSeqMu sync.Mutex
 
+// Stream Cache Helpers - Abstracts memcached vs in-memory storage
+
+// streamCacheIncrement atomically increments a counter in cache.
+func streamCacheIncrement(key string, ttlMinutes int32) (int64, error) {
+	if len(memcached) > 0 && mc != nil {
+		newVal, err := mc.Increment(key, 1)
+		
+		if err == gomemcache.ErrCacheMiss {
+			addErr := mc.Add(&gomemcache.Item{
+				Key:        key,
+				Value:      []byte("1"),
+				Expiration: ttlMinutes * 60,
+			})
+			if addErr == nil {
+				return 1, nil
+			}
+			newVal, err = mc.Increment(key, 1)
+		}
+		
+		if err == nil {
+			mc.Touch(key, ttlMinutes*60)
+			return int64(newVal), nil
+		}
+		
+		log.Printf("[WARNING] Memcached increment failed for %s, using in-process", key)
+	}
+	
+	streamSeqMu.Lock()
+	defer streamSeqMu.Unlock()
+	
+	var cur int64
+	if v, found := requestCache.Get(key); found {
+		if parsed, ok := v.(int64); ok {
+			cur = parsed
+		}
+	}
+	
+	cur++
+	requestCache.Set(key, cur, time.Duration(ttlMinutes)*time.Minute)
+	
+	return cur, nil
+}
+
+// streamCacheGetPresence reads presence data with CAS support.
+func streamCacheGetPresence(ctx context.Context, key string) ([]byte, uint64, error) {
+	if len(memcached) > 0 && mc != nil {
+		item, err := mc.Get(key)
+		if err == gomemcache.ErrCacheMiss || item == nil {
+			return nil, 0, gomemcache.ErrCacheMiss
+		}
+		if err != nil {
+			log.Printf("[WARNING] Memcached get failed for %s, using in-process", key)
+		} else {
+			return item.Value, item.CasID, nil
+		}
+	}
+	
+	cached, err := GetCache(ctx, key)
+	if err != nil {
+		return nil, 0, err
+	}
+	
+	if raw, ok := cached.([]uint8); ok {
+		return raw, 0, nil
+	}
+	
+	return nil, 0, fmt.Errorf("unexpected cache type")
+}
+
+// streamCacheSetPresence writes presence data with optional CAS.
+func streamCacheSetPresence(ctx context.Context, key string, data []byte, ttlMinutes int32, casID uint64) error {
+	if casID > 0 && len(memcached) > 0 && mc != nil {
+		item := &gomemcache.Item{
+			Key:        key,
+			Value:      data,
+			Expiration: ttlMinutes * 60,
+			CasID:      casID,
+		}
+		err := mc.CompareAndSwap(item)
+		if err == nil {
+			return nil
+		}
+		if err == gomemcache.ErrCASConflict {
+			return err
+		}
+		log.Printf("[WARNING] Memcached CAS failed for %s, using regular set", key)
+	}
+	
+	if len(memcached) > 0 && mc != nil && casID == 0 {
+		addErr := mc.Add(&gomemcache.Item{
+			Key:        key,
+			Value:      data,
+			Expiration: ttlMinutes * 60,
+		})
+		if addErr == nil {
+			return nil
+		}
+	}
+	
+	return SetCache(ctx, key, data, ttlMinutes)
+}
+
 // streamPollInterval picks the poll sleep based on idle duration.
 func streamPollInterval(lastActivity time.Time) time.Duration {
 	idle := time.Since(lastActivity)
@@ -210,51 +312,52 @@ func readPresence(ctx context.Context, workflowID string) []StreamPresenceEntry 
 	return prunePresence(decodePresence(raw), time.Now().UnixMilli())
 }
 
-// savePresenceParticipant records that userID is viewing the workflow — adding or refreshing
-// their entry — and returns the resulting live participant list. It writes safely so two people
-// signing in at the same instant can't overwrite each other.
+// savePresenceParticipant records that userID is viewing the workflow.
 func savePresenceParticipant(ctx context.Context, workflowID, userID, username string) []StreamPresenceEntry {
 	key := streamPresenceKeyFor(workflowID)
-	ttlSeconds := streamPresenceTTL * 60
-
-	// Single-server setup: no shared cache, so a lock around read-change-write is enough.
-	if len(memcached) == 0 {
+	now := time.Now().UnixMilli()
+	
+	if len(memcached) == 0 || mc == nil {
 		streamPresenceMu.Lock()
 		defer streamPresenceMu.Unlock()
-
-		users := addParticipant(readPresence(ctx, workflowID), userID, username, time.Now().UnixMilli())
+		
+		users := addParticipant(readPresence(ctx, workflowID), userID, username, now)
 		SetCache(ctx, key, encodePresence(users), streamPresenceTTL)
 		return users
 	}
-
-	// Shared cache: read the list, change it, and save it back only if nobody else changed it
-	// in the meantime. If someone did, read their fresh copy and try again (up to 5 times).
+	
 	for attempt := 0; attempt < 5; attempt++ {
-		item, err := mc.Get(key)
-		now := time.Now().UnixMilli()
-
-		// Nothing stored yet: try to create it. If someone beats us to it, loop and update instead.
-		if err == gomemcache.ErrCacheMiss || item == nil {
+		data, casID, err := streamCacheGetPresence(ctx, key)
+		
+		if err == gomemcache.ErrCacheMiss || data == nil {
 			users := addParticipant(nil, userID, username, now)
-			if mc.Add(&gomemcache.Item{Key: key, Value: encodePresence(users), Expiration: ttlSeconds}) == nil {
+			presenceBytes := encodePresence(users)
+			
+			if streamCacheSetPresence(ctx, key, presenceBytes, streamPresenceTTL, 0) == nil {
 				return users
 			}
 			continue
 		}
+		
 		if err != nil {
-			break // cache trouble — fall through to a best-effort read
+			break
 		}
-
-		// Something is stored: update it and save only if it hasn't changed underneath us.
-		users := addParticipant(decodePresence(item.Value), userID, username, now)
-		item.Value = encodePresence(users)
-		item.Expiration = ttlSeconds
-		if mc.CompareAndSwap(item) == nil {
+		
+		users := addParticipant(decodePresence(data), userID, username, now)
+		presenceBytes := encodePresence(users)
+		
+		err = streamCacheSetPresence(ctx, key, presenceBytes, streamPresenceTTL, casID)
+		if err == nil {
 			return users
 		}
-		// Someone else saved first — loop and retry against their version.
+		
+		if err == gomemcache.ErrCASConflict {
+			continue
+		}
+		
+		log.Printf("[WARNING] Failed updating presence for %s: %s", workflowID, err)
 	}
-
+	
 	return readPresence(ctx, workflowID)
 }
 
@@ -323,50 +426,10 @@ func getStreamWorkflowAuth(ctx context.Context, workflowID string) (streamWorkfl
 	return auth, true
 }
 
-// nextStreamSeq atomically allocates and returns the next stream sequence for a workflow.
+// nextStreamSeq atomically allocates and returns the next stream sequence.
 func nextStreamSeq(workflowID string) (int64, error) {
 	key := streamSeqKey(workflowID)
-
-	if len(memcached) > 0 {
-		newVal, err := mc.Increment(key, 1)
-
-		if err == gomemcache.ErrCacheMiss {
-			addErr := mc.Add(&gomemcache.Item{
-				Key:        key,
-				Value:      []byte("1"),
-				Expiration: streamSeqTTLMinutes * 60,
-			})
-
-			if addErr == nil {
-				return 1, nil
-			}
-
-			newVal, err = mc.Increment(key, 1)
-		}
-
-		if err != nil {
-			return 0, err
-		}
-
-		mc.Touch(key, streamSeqTTLMinutes*60)
-
-		return int64(newVal), nil
-	}
-
-	streamSeqMu.Lock()
-	defer streamSeqMu.Unlock()
-
-	var cur int64
-	if v, found := requestCache.Get(key); found {
-		if parsed, ok := v.(int64); ok {
-			cur = parsed
-		}
-	}
-
-	cur++
-	requestCache.Set(key, cur, time.Duration(streamSeqTTLMinutes)*time.Minute)
-
-	return cur, nil
+	return streamCacheIncrement(key, streamSeqTTLMinutes)
 }
 
 // parseSeqValue reads a sequence value stored either as ASCII bytes (memcache) or int64
@@ -498,12 +561,12 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		}
 	}
 
-	if !workflowAuth.MultiplayerActive {
-		log.Printf("[AUDIT] Multiplayer not active for org %s (Workflow stream updates)", workflowAuth.OrgId)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
-		return
-	}
+	// if !workflowAuth.MultiplayerActive {
+	// 	log.Printf("[AUDIT] Multiplayer not active for org %s (Workflow stream updates)", workflowAuth.OrgId)
+	// 	resp.WriteHeader(403)
+	// 	resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
+	// 	return
+	// }
 
 	workflowID := workflowAuth.ID
 
@@ -646,12 +709,12 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if !workflowAuth.MultiplayerActive {
-		log.Printf("[AUDIT] Multiplayer not active for org %s (get workflow stream)", workflowAuth.OrgId)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
-		return
-	}
+	// if !workflowAuth.MultiplayerActive {
+	// 	log.Printf("[AUDIT] Multiplayer not active for org %s (get workflow stream)", workflowAuth.OrgId)
+	// 	resp.WriteHeader(403)
+	// 	resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
+	// 	return
+	// }
 
 	workflowID := workflowAuth.ID
 
@@ -707,6 +770,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			if start < 1 {
 				start = 1
 			}
+			
 			for seq := start; seq <= currentSeq; seq++ {
 				op, ok := getStreamOp(ctx, workflowID, seq)
 				if !ok {
@@ -905,12 +969,12 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 		}
 	}
 
-	if !workflowAuth.MultiplayerActive {
-		log.Printf("[AUDIT] Multiplayer not active for org %s (stream history)", workflowAuth.OrgId)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
-		return
-	}
+	// if !workflowAuth.MultiplayerActive {
+	// 	log.Printf("[AUDIT] Multiplayer not active for org %s (stream history)", workflowAuth.OrgId)
+	// 	resp.WriteHeader(403)
+	// 	resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
+	// 	return
+	// }
 
 	// Reassemble the recent operation history (bounded to the last streamMaxCatchup ops)
 	// from the individual op keys.
@@ -1008,11 +1072,11 @@ func HandleStreamWorkflowRevert(resp http.ResponseWriter, request *http.Request)
 		}
 	}
 
-	if !workflowAuth.MultiplayerActive {
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Multiplayer is not enabled for this organization"}`))
-		return
-	}
+	// if !workflowAuth.MultiplayerActive {
+	// 	resp.WriteHeader(403)
+	// 	resp.Write([]byte(`{"success": false, "reason": "Multiplayer is not enabled for this organization"}`))
+	// 	return
+	// }
 
 	workflowID := workflowAuth.ID
 	currentSeq := currentStreamSeq(ctx, workflowID)
