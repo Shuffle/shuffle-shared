@@ -740,11 +740,18 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		startTriggerId = uuid.NewV4().String()
 	}
 
-	actionEnv := "Cloud"
-	triggerEnv := "Cloud"
 	ctx := context.Background()
-	if project.Environment != "cloud" {
-		triggerEnv = "onprem"
+
+	actionEnv := ""
+	triggerEnv := "Cloud"
+	for _, action := range workflow.Actions { 
+		if len(action.Environment) > 0 { 
+			actionEnv = action.Environment
+		}
+	}
+
+	if len(actionEnv) == 0 {
+		actionEnv = "Cloud"
 
 		envs, err := GetEnvironments(ctx, orgId)
 		if err == nil {
@@ -755,7 +762,11 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				}
 			}
 		} else {
-			actionEnv = "Shuffle"
+			if project.Environment == "cloud" { 
+				actionEnv = "Cloud"
+			} else {
+				actionEnv = "Shuffle"
+			}
 		}
 	}
 
