@@ -1097,7 +1097,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[WARNING] HandleGetStatistics: failed unmarshalling cached multi-region-stats, will refetch: %s", jsonErr)
 				}
 			} else {
-				multiRegionUrl := fmt.Sprintf("https://shuffler.io/api/v1/orgs/%s/multi-region-stats", orgId)
+				multiRegionUrl := fmt.Sprintf("https://uk.shuffler.io/api/v1/orgs/%s/multi-region-stats", orgId)
 				multiReq, multiErr := http.NewRequest("GET", multiRegionUrl, nil)
 				if multiErr != nil {
 					log.Printf("[WARNING] HandleGetStatistics: failed building multi-region-stats request: %s", multiErr)
