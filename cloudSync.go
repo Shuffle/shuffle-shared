@@ -918,30 +918,96 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		}
 	}
 
-	// Fix Me: Add daily stats update script to append daily stats immdediately after day change and reset monthly stats on month change
-	lastMonthlyReset := validationOrgStats.LastMonthlyResetMonth
-	currentMonth := time.Now().UTC().Month()
-	if int(lastMonthlyReset) != int(currentMonth) {
+	statsLenBefore := len(validationOrgStats.DailyStatistics)
 		validationOrgStats = handleDailyCacheUpdate(validationOrgStats)
-
+	if len(validationOrgStats.DailyStatistics) != statsLenBefore {
 		err = SetOrgStatistics(ctx, *validationOrgStats, validationOrg.Id)
 		if err != nil {
-			log.Printf("[ERROR] Failed setting org statistics for monthly reset for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
+			log.Printf("[ERROR] Failed setting org statistics after daily rollover for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
 		}
 	}
 
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
-	if validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
-		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d) - Only Shuffle Support can control this metric.", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
+	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == false && validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
+		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
+	}
+
+		now := time.Now().Unix()
+		isExpiredAnnualPlan := false
+	planStartDate := int64(0)
+
+		for _, sub := range validationOrg.Subscriptions {
+			if sub.Active {
+				subName := strings.ToLower(sub.Name)
+			if (strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") || strings.Contains(subName, "scale")) && !strings.Contains(subName, "trial") {
+					planStartDate = sub.Startdate
+				if sub.Active && sub.Enddate > 0 && sub.Enddate < now {
+						isExpiredAnnualPlan = true
+					}
+					break
+				}
+			}
+		}
+
+		if isExpiredAnnualPlan {
+			orgAdmin := User{}
+			for _, user := range validationOrg.Users {
+				if strings.ToLower(user.Role) == "admin" {
+					if len(user.ApiKey) > 0 && !strings.Contains(user.Username, "shuffler") {
+						orgAdmin = user
+						break
+					} else {
+						fullUser, err := GetUser(ctx, user.Id)
+						if err == nil && len(fullUser.ApiKey) > 0 && !strings.Contains(fullUser.Username, "shuffler") {
+							orgAdmin = *fullUser
+							break
+						}
+					}
+				}
+			}
+
+			if len(orgAdmin.ApiKey) > 0 {
+				log.Printf("[AUDIT] Sending license expired request with user %s for org %s", orgAdmin.Username, validationOrg.Id)
+				go SendLicenseExpiredRequest(validationOrg.Id, orgAdmin.ApiKey)
+		}
+			}
+
+	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == true && validationOrg.LeadInfo.Customer {
+
+		if planStartDate > 0 {
+			var annualAppRuns int64
+			for _, stat := range validationOrgStats.DailyStatistics {
+				if stat.Date.Unix() >= planStartDate {
+					annualAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+				}
+			}
+
+			// Set annual app runs limit as 200% of the monthly app runs limit to allow overage
+			annualAppRunsLimit := validationOrg.SyncFeatures.AppExecutions.Limit * 12
+			if validationOrg.Billing.InternalAppRunsHardLimit > 0 && validationOrg.Billing.InternalAppRunsHardLimit <= validationOrg.SyncFeatures.AppExecutions.Limit {
+				annualAppRunsLimit = validationOrg.Billing.InternalAppRunsHardLimit
+			} else {
+				annualAppRunsLimit *= 2
+			}
+
+			if annualAppRuns > annualAppRunsLimit {
+				return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the annual app runs limit (%d/%d)", validationOrg.Name, validationOrg.Id, annualAppRuns, annualAppRunsLimit))
+			}
+
+			return validationOrg, nil
+		}
 	}
 
 	// Allows partners and POV users to run workflows without limits
-	if validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.ChannelPartner || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.ServicePartner {
+	if validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.ChannelPartner || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.ServicePartner {
 		return validationOrg, nil
 	}
 
-	// If enterprise customer or pov then don't block them
-	if (validationOrg.LeadInfo.Customer || validationOrg.LeadInfo.POV) && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+	if validationOrg.LeadInfo.Customer && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+		extendedLimit := validationOrg.SyncFeatures.AppExecutions.Limit * 10
+		if totalAppExecutions >= extendedLimit {
+			return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, extendedLimit))
+		}
 		return validationOrg, nil
 	}
 

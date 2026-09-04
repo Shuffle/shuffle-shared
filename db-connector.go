@@ -7,7 +7,7 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/hex"
-	
+
 	"encoding/json"
 
 	"errors"
@@ -22,11 +22,11 @@ import (
 	"crypto/sha256"
 	"math"
 	"math/rand"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-	"regexp"
 
 	runtimeDebug "runtime/debug"
 
@@ -132,7 +132,7 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 		}
 
 		stat.Date = stat.Date.UTC()
-		statdate := stat.Date.Format("2006-12-30")
+		statdate := stat.Date.Format("2006-01-02")
 		if !ArrayContains(allDates, statdate) {
 			newDaily = append(newDaily, stat)
 			allDates = append(allDates, statdate)
@@ -383,7 +383,6 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 		}
 	}
 
-
 	// Splitting into multiple cache items
 	//if project.Environment == "cloud" || len(memcached) > 0 {
 	if len(memcached) > 0 {
@@ -585,8 +584,6 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 
 	return nil
 }
-
-
 
 func GetEsConfig(defaultCreds bool) *opensearchapi.Client {
 	esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
@@ -912,6 +909,86 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
 			if len(managerOrg.Id) == 36 {
 				IncrementCache(ctx, managerOrg.Id, "childorg_workflow_executions", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_agent_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_input_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_agent_input_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_output_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_agent_output_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "send_sms") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_send_sms", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "send_mail") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_send_mail", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_cached_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_agent_cached_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_executions") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_executions", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_executions_successful") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_executions_successful", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_executions_failed") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_executions_failed", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_max_loops_hit") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_max_loops_hit", int(dbDumpInterval))
 			}
 		}
 	}
@@ -1534,11 +1611,11 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		obj := bucket.Object(fullParsedPath)
 		fileReader, err := obj.NewReader(ctx)
 		if err != nil {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Failed reading file '%s' from bucket %s: %s. Will try with alternative solution.", fullParsedPath, bucketName, err)
 			}
 
-			// Cache sip for the minute 
+			// Cache sip for the minute
 			SetCache(ctx, cacheKey, []byte{}, 1)
 
 			if projectName != "shuffler" {
@@ -1548,7 +1625,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 				fileReader, err = obj.NewReader(ctx)
 				if err != nil {
 					//log.Printf("[ERROR] Failed reading file '%s' again from bucket %s: %s", fullParsedPath, bucketName, err)
-		
+
 					return "", err
 				}
 			} else {
@@ -2452,11 +2529,11 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 			if err == nil {
 
 				timenow := time.Now().Unix()
-				if env.SensorGroup { 
+				if env.SensorGroup {
 					for sensorIndex, _ := range env.SensorHosts {
 						sensor := env.SensorHosts[sensorIndex]
-							
-						env.SensorHosts[sensorIndex].Active = false 
+
+						env.SensorHosts[sensorIndex].Active = false
 						if sensor.Checkin > 0 && timenow-sensor.Checkin < 300 {
 							env.SensorHosts[sensorIndex].Active = true
 						}
@@ -2593,11 +2670,11 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 	}
 
 	timenow := time.Now().Unix()
-	if env.SensorGroup { 
+	if env.SensorGroup {
 		for sensorIndex, _ := range env.SensorHosts {
 			sensor := env.SensorHosts[sensorIndex]
-				
-			env.SensorHosts[sensorIndex].Active = false 
+
+			env.SensorHosts[sensorIndex].Active = false
 			if sensor.Checkin > 0 && timenow-sensor.Checkin < 300 {
 				env.SensorHosts[sensorIndex].Active = true
 			}
@@ -3616,7 +3693,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				_, err = it.Next(&innerWorkflow)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						if debug { 
+						if debug {
 							//log.Printf("[DEBUG] Workflow load iterator issue: %s", err)
 						}
 
@@ -3630,7 +3707,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Public {
-					//if debug { 
+					//if debug {
 					//	log.Printf("[DEBUG] Skipping public workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
 					//}
 
@@ -3638,7 +3715,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Hidden {
-					//if debug { 
+					//if debug {
 					//	log.Printf("[DEBUG] Skipping HIDDEN workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
 					//}
 
@@ -3662,7 +3739,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 			}
 
-			// Fallback for when the iterator fails due to a datastore issue 
+			// Fallback for when the iterator fails due to a datastore issue
 			// (e.g. "cannot load field" error) and similar
 			if err != iterator.Done {
 				log.Printf("[WARNING] Failed fetching workflow results for org %s: %v", user.ActiveOrg.Id, err)
@@ -3703,7 +3780,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 	})
 
 	if len(workflows) > maxAmount {
-		if debug { 
+		if debug {
 			log.Printf("[WARNING] Found %d workflows for user %s (%s) in org %s, but limiting to %d", len(workflows), user.Username, user.Id, user.ActiveOrg.Id, maxAmount)
 		}
 
@@ -3841,6 +3918,60 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 	return curOrg, nil
 }
 
+var defaultAlertThresholdPercentages = []int{50, 75, 90, 100}
+
+func isOnpremAlertEligible(org *Org) bool {
+	if !org.CloudSyncActive {
+		return false
+	}
+
+	return org.LeadInfo.EnterpriseLicenseOnprem ||
+		org.LeadInfo.BusinessLicenseOnprem ||
+		org.LeadInfo.ScaleLicenseOnpremCustomer
+}
+
+func mergeDefaultAlertThresholds(thresholds []AlertThreshold, limit int64) []AlertThreshold {
+	existingPercentages := map[int]bool{}
+	for _, threshold := range thresholds {
+		existingPercentages[threshold.Percentage] = true
+	}
+
+	for _, percentage := range defaultAlertThresholdPercentages {
+		if !existingPercentages[percentage] {
+			thresholds = append(thresholds, AlertThreshold{
+				Percentage: percentage,
+				Count:      int(float64(percentage) / 100 * float64(limit)),
+			})
+		}
+	}
+
+	return thresholds
+}
+
+func addDefaultAlertThresholds(org *Org) bool {
+	changed := false
+
+	if !org.Billing.DefaultAlertsApplied {
+		limit := org.SyncFeatures.AppExecutions.Limit
+		if limit > 0 {
+			org.Billing.AlertThreshold = mergeDefaultAlertThresholds(org.Billing.AlertThreshold, limit)
+			org.Billing.DefaultAlertsApplied = true
+			changed = true
+		}
+	}
+
+	if !org.Billing.DefaultOnpremAlertsApplied {
+		onpremLimit := org.SyncFeatures.OnpremAppExecutions.Limit
+		if onpremLimit > 0 && isOnpremAlertEligible(org) {
+			org.Billing.OnpremAlertThreshold = mergeDefaultAlertThresholds(org.Billing.OnpremAlertThreshold, onpremLimit)
+			org.Billing.DefaultOnpremAlertsApplied = true
+			changed = true
+		}
+	}
+
+	return changed
+}
+
 // ListBooks returns a list of books, ordered by title.
 // Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {
@@ -3877,6 +4008,14 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				if curOrg.Id == "" {
 					return curOrg, errors.New("Org doesn't exist")
 				} else {
+					billingBackup := curOrg.Billing
+					if addDefaultAlertThresholds(curOrg) {
+						err := SetOrg(ctx, *curOrg, curOrg.Id)
+						if err != nil {
+							log.Printf("[ERROR] Failed persisting default alert thresholds for org %s: %s", curOrg.Id, err)
+							curOrg.Billing = billingBackup
+						}
+					}
 					return curOrg, nil
 				}
 			}
@@ -4040,6 +4179,14 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	curOrg.Priorities = newPriorities
+	billingBackup := curOrg.Billing
+	if addDefaultAlertThresholds(curOrg) {
+		err := SetOrg(ctx, *curOrg, curOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed persisting default alert thresholds for org %s: %s", curOrg.Id, err)
+			curOrg.Billing = billingBackup
+		}
+	}
 	if project.CacheDb {
 		neworg, err := json.Marshal(curOrg)
 		if err != nil {
@@ -6487,11 +6634,11 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 
 				timenow := time.Now().Unix()
 				for envIndex, env := range environments {
-					if env.SensorGroup { 
+					if env.SensorGroup {
 						for sensorIndex, _ := range env.SensorHosts {
 							sensor := env.SensorHosts[sensorIndex]
-								
-							environments[envIndex].SensorHosts[sensorIndex].Active = false 
+
+							environments[envIndex].SensorHosts[sensorIndex].Active = false
 							if sensor.Checkin > 0 && timenow-sensor.Checkin < 300 {
 								environments[envIndex].SensorHosts[sensorIndex].Active = true
 							}
@@ -6670,11 +6817,11 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 	timenow := time.Now().Unix()
 	for envIndex, env := range environments {
 
-		if env.SensorGroup { 
+		if env.SensorGroup {
 			for sensorIndex, _ := range env.SensorHosts {
 				sensor := env.SensorHosts[sensorIndex]
-					
-				environments[envIndex].SensorHosts[sensorIndex].Active = false 
+
+				environments[envIndex].SensorHosts[sensorIndex].Active = false
 				if sensor.Checkin > 0 && timenow-sensor.Checkin < 300 {
 					environments[envIndex].SensorHosts[sensorIndex].Active = true
 				}
@@ -8136,11 +8283,16 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 
 	if project.Environment != "cloud" && len(inputEnv) > 0 && len(executions) > 0 {
 		env := inputEnv[0]
-
 		orgId := env.OrgId
-		org, err := GetOrg(ctx, orgId)
+
+		org, err := GetFirstOrg(ctx)
 		if err != nil {
-			log.Printf("[ERROR] Failed getting org %s for queue: %s", orgId, err)
+			log.Printf("[ERROR] Failed getting parent org directly for queue: %s", err)
+			return ExecutionRequestWrapper{
+				Data: executions,
+			}, nil
+		}
+		if len(org.Id) == 0 {
 			return ExecutionRequestWrapper{
 				Data: executions,
 			}, nil
@@ -8171,15 +8323,78 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 
 		license := checkNoInternet()
 		if license.Valid {
-			limit = limit * 2
+			if license.AppRunsGrouping {
+				limit = limit * 12
+				if licenseOrg.Billing.InternalAppRunsHardLimit > 0 && licenseOrg.Billing.InternalAppRunsHardLimit <= licenseOrg.SyncFeatures.AppExecutions.Limit {
+					limit = licenseOrg.Billing.InternalAppRunsHardLimit
+				}
+
+				var planStartDate int64
+				for _, sub := range licenseOrg.Subscriptions {
+					if sub.Active {
+						subName := strings.ToLower(sub.Name)
+						if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") {
+							planStartDate = sub.Startdate
+							break
+						}
+					}
+				}
+
+				var annualAppRuns int64
+				if planStartDate > 0 {
+					for _, stat := range stats.DailyStatistics {
+						if stat.Date.Unix() >= planStartDate {
+							annualAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+						}
+					}
+				}
+				totalAppExecutions = annualAppRuns
+			} else {
+				limit = limit * 2
+			}
+
+		} else if licenseOrg.CloudSync && licenseOrg.SyncFeatures.AnnualAppRunsGrouping.Active {
+			limit = limit * 12 * 2
+
+			if licenseOrg.Billing.InternalAppRunsHardLimit > 0 && licenseOrg.Billing.InternalAppRunsHardLimit <= licenseOrg.SyncFeatures.AppExecutions.Limit {
+				limit = licenseOrg.Billing.InternalAppRunsHardLimit
+			}
+
+			var planStartDate int64
+			for _, sub := range licenseOrg.Subscriptions {
+				if sub.Active {
+					subName := strings.ToLower(sub.Name)
+					if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") || strings.Contains(subName, "scale") {
+						planStartDate = sub.Startdate
+						break
+					}
+				}
+			}
+
+			var annualAppRuns int64
+			if planStartDate > 0 {
+				for _, stat := range stats.DailyStatistics {
+					if stat.Date.Unix() >= planStartDate {
+						annualAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+					}
+				}
+			}
+			totalAppExecutions = annualAppRuns
+		} else if licenseOrg.CloudSync && licenseOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+			limit = limit * 10
+
+			if licenseOrg.Billing.InternalAppRunsHardLimit > 0 {
+				limit = licenseOrg.Billing.InternalAppRunsHardLimit
+			}
+
 		}
 
-		shouldSkipRateLimit := false
-		if licenseOrg.CloudSync && !license.Valid && licenseOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
-			shouldSkipRateLimit = true
+		if debug {
+			log.Printf("[INFO] total app executions in the queue is: %v", totalAppExecutions)
+			log.Printf("[INFO] app runs limit in the queue is: %v", limit)
 		}
 
-		if !shouldSkipRateLimit && totalAppExecutions > limit {
+		if totalAppExecutions > limit {
 			cacheKey := fmt.Sprintf("org-%s-last-queue-send", orgId)
 			currentTime := time.Now().Unix()
 			lastSendCache, err := GetCache(ctx, cacheKey)
@@ -8209,7 +8424,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 			} else {
 
 				if len(executions) > 1 {
-					log.Printf("[INFO] Rate limiting (3): Org %s exceeded the 25K app run quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalAppExecutions)
+					log.Printf("[INFO] Rate limiting (3): Org %s exceeded the %v app run montly quota (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, limit, len(executions), totalAppExecutions)
 					executions = executions[0:1]
 				}
 
@@ -10185,7 +10400,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	}
 
 	if debug {
-		log.Printf("[DEBUG] API key cache miss; looking up user") 
+		log.Printf("[DEBUG] API key cache miss; looking up user")
 	}
 
 	if project.DbType == "opensearch" {
@@ -10921,7 +11136,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			"size": 1000,
 			"sort": map[string]interface{}{
 				"updated_at": map[string]interface{}{
-					"order": "desc",
+					"order":         "desc",
 					"unmapped_type": "long",
 				},
 			},
@@ -13874,7 +14089,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 							oldDoc := config.Value
 							newDoc := cacheData.Value
 
-							if debug { 
+							if debug {
 								log.Printf("\n\nOLD: %s\n\nNEW: %s\n\n", oldDoc, newDoc)
 							}
 
@@ -13899,9 +14114,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						break
 					}
 
-					// This NEVER triggers. RLS just returns the merged JSON 
-					// and we trust it. If we don't trust it, we can set 
-					// ruleValid to false above. 
+					// This NEVER triggers. RLS just returns the merged JSON
+					// and we trust it. If we don't trust it, we can set
+					// ruleValid to false above.
 					if !ruleValid {
 						// Break out
 						if debug {
@@ -13910,8 +14125,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 						keyUpdated = false
 
-						cacheData.Existed = true 
-						cacheData.Changed = keyUpdated 
+						cacheData.Existed = true
+						cacheData.Changed = keyUpdated
 						datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
 						cacheKeys <- cacheData
 						return
@@ -14256,7 +14471,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	}
 
 	if len(newArray) > 0 {
-		if debug { 
+		if debug {
 			log.Printf("[INFO] SetDatastoreKeyBulk: Successfully set %d key(s) in category %s for org %s", len(newArray), mainCategory, orgId)
 		}
 	}
@@ -15357,9 +15572,12 @@ func checkNoInternet() OnpremLicense {
 			Active: false,
 			Limit:  25000,
 		},
-		Timeout:  "",
-		Branding: false,
+		Timeout:         "",
+		Branding:        false,
+		StartDate:       "",
+		AppRunsGrouping: false,
 	}
+
 	licenseKey := os.Getenv("SHUFFLE_LICENSE")
 	if len(licenseKey) == 0 {
 		return license
@@ -15415,6 +15633,24 @@ func checkNoInternet() OnpremLicense {
 
 	brandingHash := sha256.Sum256([]byte(branding))
 	encodedBranding := hex.EncodeToString(brandingHash[:])
+
+	startDate := ""
+	if len(licenseParts) > 5 {
+		startDate = licenseParts[5]
+	}
+
+	startDateHash := sha256.Sum256([]byte(startDate))
+	encodedStartDate := hex.EncodeToString(startDateHash[:])
+
+	// check if annual appruns grouping available
+	appRunsGrouping := ""
+	if len(licenseParts) > 6 {
+		appRunsGrouping = licenseParts[6]
+	}
+
+	appRunsGroupingHash := sha256.Sum256([]byte(appRunsGrouping))
+	encodedAppRunsGrouping := hex.EncodeToString(appRunsGroupingHash[:])
+
 	// Returns a map[sha256]timeout string
 	onpremKeys := GetOnpremKeys()
 	if timeout, ok := onpremKeys[encodedString]; ok {
@@ -15473,6 +15709,19 @@ func checkNoInternet() OnpremLicense {
 					} else {
 						license.AppRuns.Active = false
 					}
+				}
+
+				if len(startDate) > 0 && len(encodedStartDate) > 0 {
+					if startDate, ok := onpremKeys[encodedStartDate]; ok {
+						license.StartDate = startDate
+					}
+				}
+
+				if len(appRunsGrouping) > 0 && len(encodedAppRunsGrouping) > 0 {
+					appRuns := GetAppRunsGrouping(encodedAppRunsGrouping)
+					license.AppRunsGrouping = appRuns
+				} else {
+					license.AppRunsGrouping = false
 				}
 
 				return license
@@ -16368,37 +16617,37 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		if parentOrgDepth >= 3 {
 			log.Printf("[ERROR] Reached maximum parent org lookup depth (%d) for org %s. Skipping parent org cache lookup to prevent infinite recursion.", parentOrgDepth, orgId)
 		} else {
-		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
-		if err != nil {
+			parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+			if err != nil {
 				if debug {
 					log.Printf("[DEBUG] Could not find parent org %s for org %s (possibly in different region): %s", foundOrg.CreatorOrg, orgId, err)
 				}
-		} else {
+			} else {
 				parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, "", max, inputcursor, cleanupDepth, parentOrgDepth+1)
-			if err != nil {
+				if err != nil {
 					if debug {
 						log.Printf("[DEBUG] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
 					}
-			} else {
-				if debug {
-					//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
-				}
-
-				for _, parentCache := range parentOrgCache {
-					/*
-						if debug && len(parentCache.SuborgDistribution) > 0 {
-							log.Printf("[DEBUG] Parent org %s keys: %#v", parentOrg.Id, parentCache.SuborgDistribution)
-						}
-					*/
-
-					if !ArrayContains(parentCache.SuborgDistribution, orgId) {
-						continue
+				} else {
+					if debug {
+						//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
 					}
 
-					// Clean up just in case
-					parentCache.PublicAuthorization = ""
-					parentCache.SuborgDistribution = []string{orgId}
-					cacheKeys = append(cacheKeys, parentCache)
+					for _, parentCache := range parentOrgCache {
+						/*
+							if debug && len(parentCache.SuborgDistribution) > 0 {
+								log.Printf("[DEBUG] Parent org %s keys: %#v", parentOrg.Id, parentCache.SuborgDistribution)
+							}
+						*/
+
+						if !ArrayContains(parentCache.SuborgDistribution, orgId) {
+							continue
+						}
+
+						// Clean up just in case
+						parentCache.PublicAuthorization = ""
+						parentCache.SuborgDistribution = []string{orgId}
+						cacheKeys = append(cacheKeys, parentCache)
 					}
 				}
 			}
