@@ -2368,7 +2368,7 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 
 			marshalledFormattedBody, err := json.Marshal(formattedBodyStruct)
 			if err != nil {
-				log.Printf("[ERROR] Failed in marshalling data in 'run_workflow' datastore automation for workflow %s")
+				log.Printf("[ERROR] Failed in marshalling data in 'run_workflow' datastore automation for workflow %s", cacheData.WorkflowId)
 			} else {
 				marshalledBody = marshalledFormattedBody
 			}
