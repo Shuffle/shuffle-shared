@@ -467,14 +467,12 @@ func getStreamWorkflowAuth(ctx context.Context, workflowID string) (streamWorkfl
 	}
 	auth.MultiplayerActive = org.SyncFeatures.Multiplayer.Active
 
-	// Cache only when multiplayer is on, so turning it on is picked up on the next request.
-	if auth.MultiplayerActive {
-		authBytes, marshalErr := json.Marshal(auth)
-		if marshalErr == nil {
-			setErr := SetCache(ctx, key, authBytes, streamAuthCtxTTLMinutes)
-			if setErr != nil {
-				log.Printf("[WARNING] Failed caching stream auth context for %s: %s", workflowID, setErr)
-			}
+
+	authBytes, marshalErr := json.Marshal(auth)
+	if marshalErr == nil {
+		setErr := SetCache(ctx, key, authBytes, streamAuthCtxTTLMinutes)
+		if setErr != nil {
+			log.Printf("[WARNING] Failed caching stream auth context for %s: %s", workflowID, setErr)
 		}
 	}
 
