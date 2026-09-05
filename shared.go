@@ -17903,7 +17903,10 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	}
 	actionResult.CompletedAt = timenow
 
-	baseUrl := fmt.Sprintf("https://shuffler.io")
+	baseUrl := "http://localhost:5001"
+	if project.Environment == "cloud" {
+		baseUrl = "https://shuffler.io"
+	}
 	if len(os.Getenv("BASE_URL")) > 0 {
 		baseUrl = os.Getenv("BASE_URL")
 	}
@@ -18699,7 +18702,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 										log.Printf("[ERROR][%s] Failed to marshal updated decision for delayed decision update: %s", workflowExecution.ExecutionId, err)
 									}
 
-									baseUrl := "https://shuffler.io"
+									baseUrl := "http://localhost:5001"
+									if project.Environment == "cloud" {
+										baseUrl = "https://shuffler.io"
+									}
 									if os.Getenv("BASE_URL") != "" {
 										baseUrl = os.Getenv("BASE_URL")
 									}
@@ -21751,20 +21757,24 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 	action.Generated = app.Generated
 
 	if len(action.Environment) == 0 {
-		if project.Environment == "cloud" {
-			action.Environment = "cloud"
+		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting environments for org in single action %s: %s", user.ActiveOrg.Id, err)
 		} else {
-			environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
-			if err != nil {
-				log.Printf("[ERROR] Failed getting environments for org in single action %s: %s", user.ActiveOrg.Id, err)
-			}
-
 			for _, env := range environments {
-				if env.Default {
+				if env.Default && !env.Archived {
 					//log.Printf("[INFO] Setting default environment for single action: %s", env.Name)
 					action.Environment = env.Name
 					break
 				}
+			}
+		}
+
+		if len(action.Environment) == 0 {
+			if project.Environment == "cloud" {
+				action.Environment = "cloud"
+			} else {
+				action.Environment = "Shuffle"
 			}
 		}
 	}
@@ -35948,15 +35958,15 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 		log.Printf("[DEBUG] Getting prioritised app actions for '%s'", inputApp)
 	}
 
-	if strings.Contains(inputApp, ":") || len(inputApp) == 32 {
+	if strings.Contains(inputApp, ":") || len(inputApp) == 32 || len(inputApp) == 36 {
 		appnamesplit := strings.Split(inputApp, ":")
 		appId = appnamesplit[0]
-		if len(appId) != 32 {
+		if len(appId) != 32 && len(appId) != 36 {
 			appId = ""
 		}
 	}
 
-	if len(appId) == 32 {
+	if len(appId) == 32 || len(appId) == 36 {
 		foundApp, err = GetApp(ctx, appId, User{}, false)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting app %s for prioritised actions: %s", appId, err)
@@ -35965,7 +35975,23 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 	}
 
 	if foundApp.ID == "" && len(appName) > 0 {
-		log.Printf("[ERROR] Should find app + actions based on name (not implemented): %#v", appName)
+		lookupName := appName
+		if strings.Contains(lookupName, ":") {
+			parts := strings.Split(lookupName, ":")
+			lookupName = parts[len(parts)-1]
+		}
+		allApps, appErr := GetPrioritizedApps(ctx, User{})
+		if appErr == nil {
+			for _, app := range allApps {
+				if strings.EqualFold(app.Name, lookupName) || strings.EqualFold(app.ID, lookupName) || strings.EqualFold(strings.ReplaceAll(app.Name, " ", "_"), lookupName) {
+					foundApp = &app
+					break
+				}
+			}
+		}
+		if foundApp.ID == "" {
+			log.Printf("[ERROR] Should find app + actions based on name (not implemented): %#v", appName)
+		}
 	}
 
 	for _, action := range foundApp.Actions {
