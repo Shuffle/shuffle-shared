@@ -21490,6 +21490,10 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				}
 			}
 
+			if project.Environment != "cloud" && (strings.ToLower(action.Environment) == "cloud" || len(action.Environment) == 0) {
+				action.Environment = "Shuffle"
+			}
+
 			exec := WorkflowExecution{
 				Workflow: Workflow{
 					ID: workflowId,
@@ -21497,10 +21501,11 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 						action,
 					},
 
-					OrgId:     user.ActiveOrg.Id,
-					Owner:     user.Username,
-					UpdatedBy: user.Username,
-					Start:     action.ID,
+					OrgId:                user.ActiveOrg.Id,
+					Owner:                user.Username,
+					UpdatedBy:            user.Username,
+					Start:                action.ID,
+					ExecutionEnvironment: action.Environment,
 				},
 				Type:          "AGENT",
 				Start:         action.ID,
