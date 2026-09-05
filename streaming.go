@@ -52,7 +52,7 @@ var streamSeqTTLMinutes int32 = 60  // counter + lastsave keys (SetCache uses mi
 var streamMaxCatchup int64 = 100    // cap replayed ops on connect/history
 var streamMissRetries = 30          // ~3s at 100ms/poll before skipping a never-materialised op
 var streamPostSaveKeepOps int64 = 0 // only keep the save op itself; delete all ops before it
-var streamAuthCtxTTLMinutes int32 = 2
+var streamAuthCtxTTLMinutes int32 = 5 // raised from 2 min — reduces Datastore reads on reconnect
 
 // Adaptive polling: the read loop starts at streamPollFast and slows down
 // when no ops arrive, reducing idle memcache reads by ~97%. Any forwarded op
@@ -109,7 +109,10 @@ func (n *streamNotifier) subscribe(workflowID string) (streamReaderSignal, func(
 		signals := n.readers[workflowID]
 		for i, s := range signals {
 			if s == signal {
-				n.readers[workflowID] = append(signals[:i], signals[i+1:]...)
+				// Swap with last element and shrink — O(1), order doesn't matter
+				last := len(signals) - 1
+				signals[i] = signals[last]
+				n.readers[workflowID] = signals[:last]
 				break
 			}
 		}
@@ -122,10 +125,14 @@ func (n *streamNotifier) subscribe(workflowID string) (streamReaderSignal, func(
 
 // publish wakes every reader subscribed to the workflow. Never blocks.
 func (n *streamNotifier) publish(workflowID string) {
+	// Snapshot under RLock so subscribe/unsubscribe isn't blocked
+	// for the full iteration of potentially 200 channels.
 	n.mu.RLock()
-	defer n.mu.RUnlock()
+	signals := make([]streamReaderSignal, len(n.readers[workflowID]))
+	copy(signals, n.readers[workflowID])
+	n.mu.RUnlock()
 
-	for _, signal := range n.readers[workflowID] {
+	for _, signal := range signals {
 		select {
 		case signal <- struct{}{}:
 		default: // reader already has a pending wake
@@ -269,8 +276,14 @@ func getStreamLastActivity(ctx context.Context, workflowID string) (time.Time, b
 }
 
 // setStreamLastActivity persists time.Now() as the last-activity timestamp.
-// TTL matches the seq counter (60 min) so it expires with the stream.
+// Debounced: skips the write if the key was updated within the last minute,
+// since the value is only used to seed the adaptive poll tier and doesn't
+// need sub-minute precision. Avoids flooding cache with writes during active workflows.
 func setStreamLastActivity(ctx context.Context, workflowID string) {
+	last, ok := getStreamLastActivity(ctx, workflowID)
+	if ok && time.Since(last) < 1*time.Minute {
+		return
+	}
 	ms := time.Now().UnixMilli()
 	if err := SetCache(ctx, streamLastActivityKey(workflowID), []byte(strconv.FormatInt(ms, 10)), streamSeqTTLMinutes); err != nil {
 		log.Printf("[WARNING] Failed setting stream last-activity for %s: %s", workflowID, err)
@@ -447,7 +460,7 @@ func getStreamWorkflowAuth(ctx context.Context, workflowID string) (streamWorkfl
 	}
 
 	// Cache miss: read the workflow. A missing workflow means "not found".
-	workflow, err := GetWorkflow(ctx, workflowID)
+	workflow, err := GetWorkflow(ctx, workflowID, true)
 	if err != nil {
 		return streamWorkflowAuth{}, false
 	}
@@ -538,8 +551,15 @@ func getStreamOp(ctx context.Context, workflowID string, seq int64) (StreamWorkf
 }
 
 func pruneStreamOpsBeforeSave(ctx context.Context, workflowID string, prevSaveSeq, newSaveSeq int64) {
-	// Delete all ops before the current save. Keep only from newSaveSeq onwards.
-	for seq := int64(1); seq < newSaveSeq; seq++ {
+	// Delete ops from prevSaveSeq+1 up to (but not including) newSaveSeq.
+	// Starting from prevSaveSeq+1 avoids re-deleting keys that were already
+	// pruned by the previous save — without this, every save scans from seq=1
+	// and fires O(currentSeq) DeleteCache calls, most of which are wasted.
+	start := prevSaveSeq + 1
+	if start < 1 {
+		start = 1
+	}
+	for seq := start; seq < newSaveSeq; seq++ {
 		if err := DeleteCache(ctx, streamOpKey(workflowID, seq)); err != nil {
 			// log.Printf("[WARNING] Failed pruning stream op %d for %s: %s", seq, workflowID, err)
 		}
@@ -703,7 +723,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 			if err := SetCache(ctx, streamLastSaveKey(workflowID), []byte(strconv.FormatInt(seq, 10)), streamSeqTTLMinutes); err != nil {
 				log.Printf("[WARNING] Failed setting stream lastsave key for %s: %s", workflowID, err)
 			}
-			go pruneStreamOpsBeforeSave(ctx, workflowID, prevSaveSeq, seq)
+			go pruneStreamOpsBeforeSave(context.Background(), workflowID, prevSaveSeq, seq)
 		}
 
 		lastSeq = seq
@@ -900,6 +920,12 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	wakeSignal, unsubscribe := streamNotify.subscribe(workflowID)
 	defer unsubscribe()
 
+	// Reuse a single timer instead of allocating time.After on every loop iteration.
+	// time.After leaks a timer goroutine until it fires — at 200 connections × every 10s
+	// that's 20 timer allocations/second. Reset this timer at the top of each iteration.
+	presenceTimer := time.NewTimer(0)
+	defer presenceTimer.Stop()
+
 	for {
 		if time.Since(connStart) > streamSelfCloseAfter {
 			return
@@ -999,11 +1025,20 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		select {
 		case <-wakeSignal:
 			// a writer stored an op
-		case <-time.After(wait):
+		case <-presenceTimer.C:
 			// presence heartbeat due
 		case <-request.Context().Done():
 			return // client disconnected
 		}
+
+		// Reset timer for next iteration.
+		if !presenceTimer.Stop() {
+			select {
+			case <-presenceTimer.C:
+			default:
+			}
+		}
+		presenceTimer.Reset(wait)
 	}
 }
 
