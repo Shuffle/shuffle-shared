@@ -35292,11 +35292,22 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		return exec
 	}
 
-	workflow, err := GetWorkflow(ctx, exec.Workflow.ID, true)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting workflow '%s': %s (exec status)", exec.Workflow.ID, err)
-		//workflow = &exec.Workflow
-		//return exec
+	var workflow *Workflow
+	if exec.Workflow.ID == exec.ExecutionId && len(exec.Workflow.Actions) > 0 {
+		workflow = &exec.Workflow
+	} else {
+		workflow, err = GetWorkflow(ctx, exec.Workflow.ID, true)
+		if err != nil {
+			if len(exec.Workflow.Actions) > 0 {
+				workflow = &exec.Workflow
+			} else {
+				log.Printf("[WARNING] Failed getting workflow '%s': %s (exec status)", exec.Workflow.ID, err)
+				workflow = &exec.Workflow
+			}
+		}
+	}
+	if workflow == nil {
+		workflow = &exec.Workflow
 	}
 
 	// Make sure it only handles/keeps the relevant actions
