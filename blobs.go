@@ -1968,8 +1968,9 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
 
-	} else if parsedActiontype == "assign_&_escalate" {
+	} else if parsedActiontype == "assign_&_escalate" || parsedActiontype == "schedules_&_phone_notifications" || parsedActiontype == "schedules_notifications" || parsedActiontype == "phone_notifications" {
 		relevantPeopleId := uuid.NewV4().String()
+		connectToPersonId := uuid.NewV4().String()
 		prepareAgentRun := uuid.NewV4().String()
 		aiAgentRun := uuid.NewV4().String()
 		addAgentResponse := uuid.NewV4().String()
@@ -1980,11 +1981,11 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 		defaultWorkflow := Workflow{
 			Name:        actionType,
-			Description: "Assigns and escalates based on the /admin/users page's schedule.",
+			Description: "Assigns and escalates based on team schedules and notifies responders on mobile.",
 			OrgId:       orgId,
 			Start:       startActionId,
 			UsecaseIds:  []string{},
-			Tags:        []string{"schedule", "assign", "automatic"},
+			Tags:        []string{"schedule", "assign", "automatic", "escalate", "phone", "notifications", "mobile", "paging"},
 			Actions: []Action{
 				Action{
 					Name:        "get_datastore_value",
@@ -2133,8 +2134,31 @@ $exec`,
 						},
 					},
 				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          connectToPersonId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Connect_to_responder",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "code",
+							Multiline: true,
+							Required:  true,
+							Value:     getConnectToResponderCode(),
+						},
+					},
+				},
 			},
 			Branches: []Branch{
+				Branch{
+					SourceID:      relevantPeopleId,
+					DestinationID: connectToPersonId,
+					ID:            uuid.NewV4().String(),
+					Conditions:    []Condition{},
+				},
 				Branch{
 					SourceID:      startActionId,
 					DestinationID: relevantPeopleId,
@@ -2287,7 +2311,7 @@ $exec`,
 			OrgId:       orgId,
 			Start:       getRoutingRulesId,
 			UsecaseIds:  []string{},
-			Tags:        []string{"routing", "incident", "automatic"},
+			Tags:        []string{"routing", "incident", "automatic", "incident routing", "incident routing rules", "incident_routing_rules", "incident_routing"},
 			Triggers: []Trigger{
 				Trigger{
 					ID:          startTriggerId,
@@ -4544,277 +4568,11 @@ func GetUsecaseData() string {
     ]
   },
   {
-    "name": "Agents & Response Actions",
-    "description": "Automate containment, notifications, and remediation.",
-    "color": "#EF4444",
-    "phase": "response",
-    "step": 2,
-    "list": [
-      {
-        "name": "IOC feeds",
-        "type": "Threat Intel",
-        "destination": "Network",
-        "running": true,
-        "disabled": true,
-        "id": "threat_intel_network_1",
-        "source_id": "threat_intel",
-        "target_id": "network",
-        "tags": [
-          "Intel",
-          "Response",
-          "Prevention"
-        ],
-        "description": "Threat intel feeds pushed to network devices include IPs, domains, URLs, and ASNs for perimeter blocking, as well as MITRE ATT&CK techniques used to inform detection rule tuning on IDS/IPS and NDR sensors. Network controls act at layer 3–7, so indicator types must be network-observable.",
-        "agentic_description": "An agent curates and validates IOC feeds before pushing, deduplicates against existing block rules, removes expired indicators, and maps active techniques to IDS/IPS signatures — ensuring network policy stays accurate without manual review.",
-        "automation_label": "Enable Threat feeds",
-        "automation_category": "cases",
-        "automation_area": "threat_intel"
-      },
-      {
-        "name": "IOC feeds",
-        "type": "Threat Intel",
-        "destination": "EDR",
-        "running": true,
-        "disabled": true,
-        "id": "threat_intel_edr_1",
-        "source_id": "threat_intel",
-        "target_id": "edr",
-        "tags": [
-          "Intel",
-          "Response",
-          "Prevention",
-          "Detection"
-        ],
-        "description": "Endpoint-targeted IOC feeds include file hashes (MD5/SHA256), process names, registry keys, certificate thumbprints, and parent-child process trees for behavioral blocking. MITRE ATT&CK technique mappings inform custom detection rules. Unlike network devices, EDR can act on host-observable artifacts invisible to the perimeter.",
-        "agentic_description": "An agent validates hash and behavioral indicator accuracy against multiple intel sources, maps techniques to EDR rule coverage gaps, prioritizes by threat severity, and generates a blocking report with rollback instructions.",
-        "automation_label": "Enable Threat feeds",
-        "automation_category": "cases",
-        "automation_area": "threat_intel"
-      },
-      {
-        "name": "Notifications",
-        "type": "Cases",
-        "destination": "Communication",
-        "running": false,
-        "disabled": false,
-        "id": "case_management_communication_1",
-        "source_id": "case_management",
-        "target_id": "communication",
-        "tags": [
-          "Response",
-          "Alert"
-        ],
-        "description": "Automated notifications keep stakeholders informed of incident status, escalations, and required actions — critical for SLA compliance and coordination.",
-        "agentic_description": "An agent drafts context-aware incident summaries, determines the right audience and channel for each update, and adapts tone (technical vs. executive) based on the recipient.",
-        "automation_label": "Notifications",
-        "automation_category": "cases",
-        "automation_area": "notifications"
-      },
-      {
-        "name": "Disable accounts",
-        "type": "Cases",
-        "destination": "IAM",
-        "running": false,
-        "disabled": true,
-        "id": "case_management_iam_1",
-        "source_id": "case_management",
-        "target_id": "iam",
-        "tags": [
-          "Response",
-          "Containment"
-        ],
-        "description": "When a compromised account is identified, automated disablement through IAM stops the attacker from maintaining access while the investigation continues.",
-        "agentic_description": "An agent validates the compromise signal, checks the user's business criticality, executes targeted disablement or session revocation, and documents the action with rollback steps in the case.",
-        "automation_area": "response"
-      },
-      {
-        "name": "Containment",
-        "type": "Cases",
-        "destination": "EDR",
-        "running": false,
-        "disabled": true,
-        "id": "case_management_edr_1",
-        "source_id": "case_management",
-        "target_id": "edr",
-        "tags": [
-          "Response",
-          "Containment"
-        ],
-        "description": "Network isolation or process killing on compromised endpoints contains the threat, preventing lateral movement while preserving forensic evidence.",
-        "agentic_description": "An agent determines the right containment scope (process, network, host), triggers isolation, collects forensic artifacts autonomously, and creates a detailed timeline for the investigation.",
-        "automation_area": "response"
-      },
-      {
-        "name": "Cloud response",
-        "type": "Cases",
-        "destination": "Cloud",
-        "running": false,
-        "disabled": true,
-        "id": "case_management_cloud_1",
-        "source_id": "case_management",
-        "target_id": "cloud",
-        "tags": [
-          "Response",
-          "Containment"
-        ],
-        "description": "Automated response actions in cloud environments — revoking keys, isolating instances, modifying security groups — contain threats before they spread across cloud infrastructure.",
-        "agentic_description": "An agent validates cloud response actions against blast radius, executes targeted remediation (revoke key, modify SG, snapshot + terminate instance), and logs all changes with rollback instructions.",
-        "automation_area": "response"
-      },
-      {
-        "name": "Block rules",
-        "type": "Cases",
-        "destination": "Network",
-        "running": false,
-        "disabled": true,
-        "id": "case_management_network_1",
-        "source_id": "case_management",
-        "target_id": "network",
-        "tags": [
-          "Response",
-          "Prevention",
-          "Containment"
-        ],
-        "description": "Pushing firewall block rules from cases to network devices enables immediate perimeter-level containment of malicious IPs, domains, and traffic patterns.",
-        "agentic_description": "An agent validates block rule candidates against allowlists and business-critical services, pushes rules to the right network segments, and auto-expires them with case closure.",
-        "automation_area": "response"
-      },
-      {
-        "name": "Quarantine",
-        "type": "Cases",
-        "destination": "Email",
-        "running": false,
-        "disabled": true,
-        "id": "case_management_email_1",
-        "source_id": "case_management",
-        "target_id": "email",
-        "tags": [
-          "Response",
-          "Containment"
-        ],
-        "description": "Quarantining or purging malicious emails from mailboxes during an active investigation prevents additional users from falling victim to the same campaign.",
-        "agentic_description": "An agent searches all mailboxes for campaign variants, bulk-quarantines matching emails, notifies impacted users with safe-messaging guidance, and reports scope to the case.",
-        "automation_area": "response"
-      },
-      {
-        "name": "Forward Tickets",
-        "type": "Cases",
-        "destination": "Cases",
-        "running": false,
-        "disabled": false,
-        "id": "case_management_cases_forward_1",
-        "source_id": "case_management",
-        "target_id": "case_management",
-        "tags": [
-          "Response",
-          "Sync"
-        ],
-        "description": "Forward incident updates, status changes, and resolution notes to external ticketing systems, keeping all platforms in sync and ensuring stakeholders on other tools stay informed.",
-        "agentic_description": "An agent detects significant case updates (status changes, new findings, escalations) and pushes structured updates to connected ticketing systems, mapping fields and priorities to each platform's schema.",
-        "automation_label": "Forward Tickets",
-        "automation_category": "cases",
-        "automation_area": "forward_updates"
-      },
-      {
-        "name": "Assign & Escalate",
-        "type": "Cases",
-        "destination": "Cases",
-        "running": false,
-        "disabled": false,
-        "id": "case_management_assign_escalate_1",
-        "source_id": "case_management",
-        "target_id": "case_management",
-        "tags": [
-          "Response",
-          "Assignment",
-          "Escalation"
-        ],
-        "description": "Automatically assign incoming incidents to the right analyst based on on-call schedules, workload, and expertise. Escalate unacknowledged or aging incidents to the next tier to ensure SLA compliance.",
-        "agentic_description": "An agent evaluates incoming incidents against team schedules, analyst skill sets, and current workload, assigns ownership, and monitors for SLA breaches to trigger automatic escalation to the next responder or management.",
-        "automation_label": "Assign & Escalate",
-        "automation_category": "cases",
-        "automation_area": "assign_escalate"
-      },
-      {
-        "name": "Vulnerability Response",
-        "type": "Assets",
-        "destination": "Cases",
-        "running": false,
-        "disabled": false,
-        "id": "asset_management_case_management_vuln_response_1",
-        "source_id": "asset_management",
-        "target_id": "case_management",
-        "tags": [
-          "Response",
-          "Vulnerability",
-          "Remediation"
-        ],
-        "description": "Automatically open remediation tasks, patch tickets, or compensating-control workflows for vulnerabilities discovered during incident investigation — closing the loop between detection and fix.",
-        "agentic_description": "An agent triages each confirmed exploitable CVE on an affected host, opens a remediation ticket with owner and SLA, applies a compensating control where possible, and tracks the fix back to the originating incident.",
-        "automation_area": "response",
-        "custom_action": {
-          "label": "Configure Vulnerabilities",
-          "href": "/vulnerabilities",
-          "description": "Open the vulnerability inventory to wire up remediation workflows."
-        }
-      },
-      {
-        "name": "Add Host-Monitors",
-        "type": "Cases",
-        "destination": "Assets",
-        "running": false,
-        "disabled": false,
-        "id": "case_management_asset_management_monitors_1",
-        "source_id": "case_management",
-        "target_id": "asset_management",
-        "tags": [
-          "Response",
-          "Monitoring",
-          "Endpoint"
-        ],
-        "description": "Deploy host monitors to endpoints for real-time telemetry collection, compliance checks, and on-demand response action execution. Monitors enable direct interaction with hosts during investigations and continuous visibility into endpoint state.",
-        "agentic_description": "An agent identifies hosts missing monitor coverage, generates the appropriate deployment command for each platform, tracks rollout status, and verifies telemetry is flowing back into the platform after install.",
-        "automation_label": "Add Monitors",
-        "automation_category": "cases",
-        "automation_area": "response",
-        "custom_action": {
-          "label": "Add Monitor",
-          "href": "/monitors?add_host=true",
-          "description": "Open the monitor deployment dialog to register a new host."
-        }
-      },
-      {
-        "name": "AI Incident Handling",
-        "type": "Cases",
-        "destination": "Cases",
-        "running": false,
-        "disabled": false,
-        "id": "case_management_agent_ai_incident_handling_1",
-        "source_id": "case_management",
-        "target_id": "case_management",
-        "tags": [
-          "Response",
-          "AI",
-          "Agent",
-          "Triage"
-        ],
-        "description": "Hand off new incidents to an AI Agent that triages, enriches, and resolves them end-to-end — assigning owners, gathering observables, executing safe response actions, and escalating only the cases that need a human.",
-        "agentic_description": "An AI Agent picks up every new incident, builds full context from connected tools, decides the next-best action (assign, enrich, contain, close), executes the safe ones automatically, and queues high-impact actions for analyst approval.",
-        "automation_area": "response",
-        "custom_action": {
-          "label": "Configure AI Agents",
-          "href": "/agents",
-          "description": "Open the Agents page to enable AI incident handling and choose which tools the agent may use."
-        }
-      }
-    ]
-  },
-  {
     "name": "Context & Correlation",
     "description": "Enrich alerts with intelligence, assets, and identity data.",
     "color": "#1AC4E6",
     "phase": "correlation",
-    "step": 3,
+    "step": 2,
     "list": [
       {
         "name": "Telemetry",
@@ -5004,11 +4762,294 @@ func GetUsecaseData() string {
         "agentic_description": "An agent evaluates each new incident against your routing rules, decides which sub-organization should own it, and either suggests or executes the move with full audit trail.",
         "automation_area": "correlation",
         "automation_label": "Incident Routing Rules",
+        "automation_category": "cases"
+      }
+    ]
+  },
+  {
+    "name": "Agents & Response Actions",
+    "description": "Automate containment, notifications, and remediation.",
+    "color": "#EF4444",
+    "phase": "response",
+    "step": 3,
+    "list": [
+      {
+        "name": "IOC feeds",
+        "type": "Threat Intel",
+        "destination": "Network",
+        "running": true,
+        "disabled": true,
+        "id": "threat_intel_network_1",
+        "source_id": "threat_intel",
+        "target_id": "network",
+        "tags": [
+          "Intel",
+          "Response",
+          "Prevention"
+        ],
+        "description": "Threat intel feeds pushed to network devices include IPs, domains, URLs, and ASNs for perimeter blocking, as well as MITRE ATT&CK techniques used to inform detection rule tuning on IDS/IPS and NDR sensors. Network controls act at layer 3–7, so indicator types must be network-observable.",
+        "agentic_description": "An agent curates and validates IOC feeds before pushing, deduplicates against existing block rules, removes expired indicators, and maps active techniques to IDS/IPS signatures — ensuring network policy stays accurate without manual review.",
+        "automation_label": "Enable Threat feeds",
         "automation_category": "cases",
+        "automation_area": "threat_intel"
+      },
+      {
+        "name": "IOC feeds",
+        "type": "Threat Intel",
+        "destination": "EDR",
+        "running": true,
+        "disabled": true,
+        "id": "threat_intel_edr_1",
+        "source_id": "threat_intel",
+        "target_id": "edr",
+        "tags": [
+          "Intel",
+          "Response",
+          "Prevention",
+          "Detection"
+        ],
+        "description": "Endpoint-targeted IOC feeds include file hashes (MD5/SHA256), process names, registry keys, certificate thumbprints, and parent-child process trees for behavioral blocking. MITRE ATT&CK technique mappings inform custom detection rules. Unlike network devices, EDR can act on host-observable artifacts invisible to the perimeter.",
+        "agentic_description": "An agent validates hash and behavioral indicator accuracy against multiple intel sources, maps techniques to EDR rule coverage gaps, prioritizes by threat severity, and generates a blocking report with rollback instructions.",
+        "automation_label": "Enable Threat feeds",
+        "automation_category": "cases",
+        "automation_area": "threat_intel"
+      },
+      {
+        "name": "Notifications",
+        "type": "Cases",
+        "destination": "Communication",
+        "running": false,
+        "disabled": false,
+        "id": "case_management_communication_1",
+        "source_id": "case_management",
+        "target_id": "communication",
+        "tags": [
+          "Response",
+          "Alert"
+        ],
+        "description": "Automated notifications keep stakeholders informed of incident status, escalations, and required actions — critical for SLA compliance and coordination.",
+        "agentic_description": "An agent drafts context-aware incident summaries, determines the right audience and channel for each update, and adapts tone (technical vs. executive) based on the recipient.",
+        "automation_label": "Notifications",
+        "automation_category": "cases",
+        "automation_area": "notifications"
+      },
+      {
+        "name": "Disable accounts",
+        "type": "Cases",
+        "destination": "IAM",
+        "running": false,
+        "disabled": true,
+        "id": "case_management_iam_1",
+        "source_id": "case_management",
+        "target_id": "iam",
+        "tags": [
+          "Response",
+          "Containment"
+        ],
+        "description": "When a compromised account is identified, automated disablement through IAM stops the attacker from maintaining access while the investigation continues.",
+        "agentic_description": "An agent validates the compromise signal, checks the user's business criticality, executes targeted disablement or session revocation, and documents the action with rollback steps in the case.",
+        "automation_area": "response"
+      },
+      {
+        "name": "Containment",
+        "type": "Cases",
+        "destination": "EDR",
+        "running": false,
+        "disabled": true,
+        "id": "case_management_edr_1",
+        "source_id": "case_management",
+        "target_id": "edr",
+        "tags": [
+          "Response",
+          "Containment"
+        ],
+        "description": "Network isolation or process killing on compromised endpoints contains the threat, preventing lateral movement while preserving forensic evidence.",
+        "agentic_description": "An agent determines the right containment scope (process, network, host), triggers isolation, collects forensic artifacts autonomously, and creates a detailed timeline for the investigation.",
+        "automation_area": "response"
+      },
+      {
+        "name": "Cloud response",
+        "type": "Cases",
+        "destination": "Cloud",
+        "running": false,
+        "disabled": true,
+        "id": "case_management_cloud_1",
+        "source_id": "case_management",
+        "target_id": "cloud",
+        "tags": [
+          "Response",
+          "Containment"
+        ],
+        "description": "Automated response actions in cloud environments — revoking keys, isolating instances, modifying security groups — contain threats before they spread across cloud infrastructure.",
+        "agentic_description": "An agent validates cloud response actions against blast radius, executes targeted remediation (revoke key, modify SG, snapshot + terminate instance), and logs all changes with rollback instructions.",
+        "automation_area": "response"
+      },
+      {
+        "name": "Block rules",
+        "type": "Cases",
+        "destination": "Network",
+        "running": false,
+        "disabled": true,
+        "id": "case_management_network_1",
+        "source_id": "case_management",
+        "target_id": "network",
+        "tags": [
+          "Response",
+          "Prevention",
+          "Containment"
+        ],
+        "description": "Pushing firewall block rules from cases to network devices enables immediate perimeter-level containment of malicious IPs, domains, and traffic patterns.",
+        "agentic_description": "An agent validates block rule candidates against allowlists and business-critical services, pushes rules to the right network segments, and auto-expires them with case closure.",
+        "automation_area": "response"
+      },
+      {
+        "name": "Quarantine",
+        "type": "Cases",
+        "destination": "Email",
+        "running": false,
+        "disabled": true,
+        "id": "case_management_email_1",
+        "source_id": "case_management",
+        "target_id": "email",
+        "tags": [
+          "Response",
+          "Containment"
+        ],
+        "description": "Quarantining or purging malicious emails from mailboxes during an active investigation prevents additional users from falling victim to the same campaign.",
+        "agentic_description": "An agent searches all mailboxes for campaign variants, bulk-quarantines matching emails, notifies impacted users with safe-messaging guidance, and reports scope to the case.",
+        "automation_area": "response"
+      },
+      {
+        "name": "Forward Tickets",
+        "type": "Cases",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "case_management_cases_forward_1",
+        "source_id": "case_management",
+        "target_id": "case_management",
+        "tags": [
+          "Response",
+          "Sync"
+        ],
+        "description": "Forward incident updates, status changes, and resolution notes to external ticketing systems, keeping all platforms in sync and ensuring stakeholders on other tools stay informed.",
+        "agentic_description": "An agent detects significant case updates (status changes, new findings, escalations) and pushes structured updates to connected ticketing systems, mapping fields and priorities to each platform's schema.",
+        "automation_label": "Forward Tickets",
+        "automation_category": "cases",
+        "automation_area": "forward_updates"
+      },
+      {
+        "name": "Assign & Escalate",
+        "type": "Cases",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "case_management_assign_escalate_1",
+        "source_id": "case_management",
+        "target_id": "case_management",
+        "tags": [
+          "Response",
+          "Assignment",
+          "Escalation"
+        ],
+        "description": "Automatically assign incoming incidents to the right analyst based on on-call schedules, workload, and expertise. Escalate unacknowledged or aging incidents to the next tier to ensure SLA compliance.",
+        "agentic_description": "An agent evaluates incoming incidents against team schedules, analyst skill sets, and current workload, assigns ownership, and monitors for SLA breaches to trigger automatic escalation to the next responder or management.",
+        "automation_label": "Assign & Escalate",
+        "automation_category": "cases",
+        "automation_area": "assign_escalate"
+      },
+      {
+        "name": "Schedules & Phone Notifications",
+        "type": "Cases",
+        "destination": "Communication",
+        "running": false,
+        "disabled": false,
+        "id": "case_management_schedules_notifications_1",
+        "source_id": "case_management",
+        "target_id": "communication",
+        "tags": [
+          "Response",
+          "On-Call",
+          "Mobile",
+          "Escalation",
+          "Paging"
+        ],
+        "description": "Trigger phone notifications and emergency paging via the Shuffle Mobile App based on on-call team schedules, with automatic escalations across response tiers.",
+        "agentic_description": "An agent monitors incoming critical incidents, determines the active on-call responder for the current shift, dispatches mobile app phone notifications and siren paging, and automatically escalates to higher tiers if unacknowledged.",
+        "automation_label": "Schedules & Phone Notifications",
+        "automation_category": "cases",
+        "automation_area": "schedules_notifications"
+      },
+      {
+        "name": "Vulnerability Response",
+        "type": "Assets",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "asset_management_case_management_vuln_response_1",
+        "source_id": "asset_management",
+        "target_id": "case_management",
+        "tags": [
+          "Response",
+          "Vulnerability",
+          "Remediation"
+        ],
+        "description": "Automatically open remediation tasks, patch tickets, or compensating-control workflows for vulnerabilities discovered during incident investigation — closing the loop between detection and fix.",
+        "agentic_description": "An agent triages each confirmed exploitable CVE on an affected host, opens a remediation ticket with owner and SLA, applies a compensating control where possible, and tracks the fix back to the originating incident.",
+        "automation_area": "response",
         "custom_action": {
-          "label": "Configure Routing",
-          "href": "/preferences?tab=routing",
-          "description": "Open Organization Preferences to manage incident routing rules."
+          "label": "Configure Vulnerabilities",
+          "href": "/vulnerabilities",
+          "description": "Open the vulnerability inventory to wire up remediation workflows."
+        }
+      },
+      {
+        "name": "Add Host-Monitors",
+        "type": "Cases",
+        "destination": "Assets",
+        "running": false,
+        "disabled": false,
+        "id": "case_management_asset_management_monitors_1",
+        "source_id": "case_management",
+        "target_id": "asset_management",
+        "tags": [
+          "Response",
+          "Monitoring",
+          "Endpoint"
+        ],
+        "description": "Deploy host monitors to endpoints for real-time telemetry collection, compliance checks, and on-demand response action execution. Monitors enable direct interaction with hosts during investigations and continuous visibility into endpoint state.",
+        "agentic_description": "An agent identifies hosts missing monitor coverage, generates the appropriate deployment command for each platform, tracks rollout status, and verifies telemetry is flowing back into the platform after install.",
+        "automation_label": "Add Monitors",
+        "automation_category": "cases",
+        "automation_area": "response",
+        "custom_action": {
+          "label": "Add Monitor",
+          "href": "/monitors?add_host=true",
+          "description": "Open the monitor deployment dialog to register a new host."
+        }
+      },
+      {
+        "name": "AI Incident Handling",
+        "type": "Cases",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "case_management_agent_ai_incident_handling_1",
+        "source_id": "case_management",
+        "target_id": "case_management",
+        "tags": [
+          "Response",
+          "AI",
+          "Agent",
+          "Triage"
+        ],
+        "description": "Hand off new incidents to an AI Agent that triages, enriches, and resolves them end-to-end — assigning owners, gathering observables, executing safe response actions, and escalating only the cases that need a human.",
+        "agentic_description": "An AI Agent picks up every new incident, builds full context from connected tools, decides the next-best action (assign, enrich, contain, close), executes the safe ones automatically, and queues high-impact actions for analyst approval.",
+        "automation_area": "response",
+        "custom_action": {
+          "label": "Configure AI Agents",
+          "href": "/agents",
+          "description": "Open the Agents page to enable AI incident handling and choose which tools the agent may use."
         }
       }
     ]
@@ -5441,6 +5482,114 @@ else:
         "comment": prepared_response,
         "reason": "No datastore key to persist to",
     }))`
+}
+
+func getConnectToResponderCode() string {
+	return `import json
+import os
+import urllib.request
+import urllib.error
+
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+cur_exec = safe_parse_json(r"""$exec""", {})
+if not isinstance(cur_exec, dict):
+    cur_exec = {}
+
+relevant_people = safe_parse_json(r"""$find_relevant_people""", {})
+if not isinstance(relevant_people, dict):
+    relevant_people = {}
+
+assignee = relevant_people.get("assign") or ""
+all_available = relevant_people.get("all_available") or []
+
+incident = cur_exec.get("incident") or cur_exec.get("data") or cur_exec
+incident_id = str(incident.get("id") or cur_exec.get("execution_id") or "incident-auto")
+incident_title = str(incident.get("title") or incident.get("name") or "On-call Incident Escalation")
+severity = str(incident.get("severity") or "critical").lower()
+
+target_user = None
+for u in all_available:
+    if isinstance(u, dict) and (u.get("userName") == assignee or u.get("email") == assignee):
+        target_user = u
+        break
+
+if not target_user and all_available and isinstance(all_available[0], dict):
+    target_user = all_available[0]
+
+target_name = (target_user.get("userName") if target_user else "") or assignee or "On-Call Responder"
+target_email = target_user.get("email", "") if target_user else ""
+tier_level = target_user.get("level", "tier1") if target_user else "tier1"
+
+tier_num = 1
+if "2" in str(tier_level):
+    tier_num = 2
+elif "3" in str(tier_level):
+    tier_num = 3
+elif "manager" in str(tier_level).lower():
+    tier_num = 4
+
+pager_payload = {
+    "type": "critical" if severity in ["critical", "high"] else "general",
+    "incident_id": incident_id,
+    "title": f"[{severity.upper()}] {incident_title}",
+    "body": f"Urgent incident assigned to {target_name}. Escalation tier: {tier_level}.",
+    "source": "Shuffle Security Mobile Pager",
+    "severity": severity,
+    "tier": tier_num,
+    "auto_escalate_seconds": 60,
+    "target_user": target_name,
+    "target_email": target_email,
+}
+
+base_url = os.environ.get("BASE_URL") or os.environ.get("SHUFFLE_BACKEND_URL") or "http://shuffle-backend:5001"
+auth_header = os.environ.get("AUTHORIZATION") or os.environ.get("SHUFFLE_API_KEY") or ""
+
+dispatched = False
+dispatch_error = None
+
+try:
+    req = urllib.request.Request(
+        f"{base_url}/api/v1/functions/pager",
+        data=json.dumps(pager_payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {auth_header}" if auth_header and not auth_header.startswith("Bearer ") else auth_header,
+        },
+        method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=5) as response:
+        if response.status in [200, 201, 204]:
+            dispatched = True
+except Exception as e:
+    dispatch_error = str(e)
+
+print(json.dumps({
+    "success": True,
+    "connected_person": target_name,
+    "email": target_email,
+    "tier": tier_level,
+    "pager_dispatched": dispatched,
+    "dispatch_error": dispatch_error,
+    "payload": pager_payload,
+}))`
 }
 
 func getIncidentRoutingScript() string {
