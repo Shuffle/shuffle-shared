@@ -2318,7 +2318,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		} else {
 			toolLower := strings.ToLower(decision.Tool)
 			for _, app := range allApps {
-				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != strings.ReplaceAll(toolLower, "_", "") {
 					continue
 				} 
 
@@ -2355,7 +2355,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		if err == nil {
 			toolLower := strings.ToLower(decision.Tool)
 			for _, app := range foundApps {
-				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != strings.ReplaceAll(toolLower, "_", "") {
 					continue
 				} 
 
@@ -3073,7 +3073,10 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	//     2. Send the result through AI again to check if it changes (?). Should there be a verdict here?
 	//     3: Start the next steps of decisions after updates
 
-	baseUrl := "https://shuffler.io"
+	baseUrl := "http://localhost:5001"
+	if project.Environment == "cloud" {
+		baseUrl = "https://shuffler.io"
+	}
 	if os.Getenv("BASE_URL") != "" {
 		baseUrl = os.Getenv("BASE_URL")
 	}
