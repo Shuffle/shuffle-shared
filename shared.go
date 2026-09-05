@@ -35887,13 +35887,34 @@ func startSchedule(trigger Trigger, authorization string, workflow Workflow) err
 		}
 	}
 
+	// Resolve start node for this schedule: prefer branch from trigger, fallback to workflow.Start
+	scheduleStart := workflow.Start
+	for _, branch := range workflow.Branches {
+		if branch.SourceID == trigger.ID && len(branch.DestinationID) > 0 {
+			scheduleStart = branch.DestinationID
+			break
+		}
+	}
+
+	schedEnv := trigger.Environment
+	if len(schedEnv) == 0 {
+		schedEnv = workflow.ExecutionEnvironment
+	}
+	if len(schedEnv) == 0 {
+		if project.Environment == "cloud" {
+			schedEnv = "cloud"
+		} else {
+			schedEnv = "Shuffle"
+		}
+	}
+
 	scheduleRequest := Schedule{
 		Name:              "Schedule",
 		Frequency:         foundFrequency,
 		ExecutionArgument: "Automatically configured by Shuffle",
-		Environment:       trigger.Environment,
+		Environment:       schedEnv,
 		Id:                trigger.ID,
-		Start:             workflow.Start,
+		Start:             scheduleStart,
 	}
 
 	parsedBody, err := json.Marshal(scheduleRequest)
@@ -35975,23 +35996,7 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 	}
 
 	if foundApp.ID == "" && len(appName) > 0 {
-		lookupName := appName
-		if strings.Contains(lookupName, ":") {
-			parts := strings.Split(lookupName, ":")
-			lookupName = parts[len(parts)-1]
-		}
-		allApps, appErr := GetPrioritizedApps(ctx, User{})
-		if appErr == nil {
-			for _, app := range allApps {
-				if strings.EqualFold(app.Name, lookupName) || strings.EqualFold(app.ID, lookupName) || strings.EqualFold(strings.ReplaceAll(app.Name, " ", "_"), lookupName) {
-					foundApp = &app
-					break
-				}
-			}
-		}
-		if foundApp.ID == "" {
-			log.Printf("[ERROR] Should find app + actions based on name (not implemented): %#v", appName)
-		}
+		log.Printf("[ERROR] Should find app + actions based on name (not implemented): %#v", appName)
 	}
 
 	for _, action := range foundApp.Actions {
@@ -37357,8 +37362,16 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		// For delete_node: capture which branch IDs are connected to this node BEFORE apply, because opDeleteNode silently prunes them from wf.Branches. We'll stream an edge:remove for each one auto-cleaned.
 		var prunedBranchIDs []string
 		if operation.Op == "delete_node" || operation.Op == "remove_node" {
+			targetID := operation.ID
+			if realID, ok := tempIDMap[targetID]; ok {
+				targetID = realID
+			} else if len(targetID) == 0 && len(operation.TempID) > 0 {
+				if realID, ok := tempIDMap[operation.TempID]; ok {
+					targetID = realID
+				}
+			}
 			for _, branch := range workflow.Branches {
-				if branch.SourceID == operation.ID || branch.DestinationID == operation.ID {
+				if branch.SourceID == targetID || branch.DestinationID == targetID {
 					prunedBranchIDs = append(prunedBranchIDs, branch.ID)
 				}
 			}
@@ -37367,9 +37380,17 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		// Track triggers being added/deleted so we can start/stop them AFTER
 		// the full workflow is constructed (start node + branches all resolved).
 		var triggerToStop *Trigger
-		if (operation.Op == "delete_node" || operation.Op == "remove_node") && operation.NodeType == "trigger" {
+		if operation.Op == "delete_node" || operation.Op == "remove_node" {
+			targetID := operation.ID
+			if realID, ok := tempIDMap[targetID]; ok {
+				targetID = realID
+			} else if len(targetID) == 0 && len(operation.TempID) > 0 {
+				if realID, ok := tempIDMap[operation.TempID]; ok {
+					targetID = realID
+				}
+			}
 			for _, existingTrigger := range workflow.Triggers {
-				if existingTrigger.ID == operation.ID {
+				if existingTrigger.ID == targetID {
 					copy := existingTrigger
 					triggerToStop = &copy
 					break
@@ -37414,87 +37435,14 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		// Don't fail the request, cache is best-effort
 	}
 
-	// Fire trigger start/stop goroutines NOW — workflow is fully constructed
-	// with all nodes, branches and start node resolved.
-	if len(addedTriggers) > 0 || len(deletedTriggers) > 0 {
-		go func(triggersToStart []Trigger, triggersToStop []Trigger, finalWorkflow Workflow, currentUser User) {
-			for _, trigger := range triggersToStart {
-				// Resolve start node: prefer a branch from this trigger, else use workflow start.
-				startNode := finalWorkflow.Start
-				for _, branch := range finalWorkflow.Branches {
-					if branch.SourceID == trigger.ID {
-						startNode = branch.DestinationID
-						break
-					}
-				}
-				if len(startNode) == 0 {
-					log.Printf("[INFO] Auto-start skipped for trigger %s: no start node in fully-constructed workflow", trigger.ID)
-					continue
-				}
-
-				switch strings.ToUpper(trigger.TriggerType) {
-				case "WEBHOOK":
-					auth := ""
-					customResponse := ""
-					version := "v1"
-					versionTimeout := 15
-					for _, param := range trigger.Parameters {
-						switch param.Name {
-						case "auth_headers":
-							auth = param.Value
-						case "custom_response_body":
-							customResponse = param.Value
-						case "await_response":
-							version = param.Value
-						case "version_timeout":
-							if parsedTimeout, convErr := strconv.Atoi(param.Value); convErr == nil {
-								versionTimeout = parsedTimeout
-							}
-						}
-					}
-					if startErr := startWebhookTrigger(context.Background(), finalWorkflow.ID, trigger.ID, trigger.Label, startNode, trigger.Environment, auth, customResponse, version, versionTimeout, currentUser, currentUser.ActiveOrg.Id); startErr != nil {
-						log.Printf("[WARNING] Auto-start webhook trigger %s failed: %s", trigger.ID, startErr)
-					} else {
-						log.Printf("[INFO] Auto-started webhook trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
-					}
-				case "SCHEDULE":
-					if startErr := startSchedule(trigger, currentUser.ApiKey, finalWorkflow); startErr != nil {
-						log.Printf("[WARNING] Auto-start schedule trigger %s failed: %s", trigger.ID, startErr)
-					} else {
-						log.Printf("[INFO] Auto-started schedule trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
-					}
-				}
-			}
-
-			for _, trigger := range triggersToStop {
-				switch strings.ToUpper(trigger.TriggerType) {
-				case "WEBHOOK":
-					hook, err := GetHook(context.Background(), trigger.ID)
-					if err != nil {
-						log.Printf("[WARNING] Auto-stop webhook: could not find hook %s: %s", trigger.ID, err)
-						continue
-					}
-					hook.Status = "stopped"
-					hook.Running = false
-					if setErr := SetHook(context.Background(), *hook); setErr != nil {
-						log.Printf("[WARNING] Auto-stop webhook: failed updating hook %s status: %s", trigger.ID, setErr)
-					}
-					log.Printf("[INFO] Auto-stopped webhook trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
-				case "SCHEDULE":
-					if stopErr := deleteScheduleGeneral(context.Background(), trigger.ID); stopErr != nil {
-						log.Printf("[WARNING] Auto-stop schedule trigger %s failed: %s", trigger.ID, stopErr)
-					} else {
-						log.Printf("[INFO] Auto-stopped schedule trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
-					}
-				}
-			}
-		}(addedTriggers, deletedTriggers, *workflow, user)
-	}
-
 	if shouldSaveDB {
 		env := workflow.ExecutionEnvironment
 		if len(env) == 0 {
-			env = "Shuffle"
+			if project.Environment == "cloud" {
+				env = "cloud"
+			} else {
+				env = "Shuffle"
+			}
 		}
 		for i := range workflow.Actions {
 			if len(workflow.Actions[i].Environment) == 0 {
@@ -37562,6 +37510,104 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		// Invalidate the ops cache now that DB is the real source.
 		if delErr := DeleteCache(ctx, cacheKey); delErr != nil {
 			log.Printf("[WARNING] Failed to delete ops cache after DB save for workflow %s: %s", workflowID, delErr)
+		}
+
+		// Fire trigger start/stop goroutines AFTER workflow is successfully saved to DB.
+		// Start any newly added triggers or uninitialized triggers, and stop deleted triggers.
+		var triggersToActivate []Trigger
+		triggersToActivate = append(triggersToActivate, addedTriggers...)
+		for _, trig := range workflow.Triggers {
+			if trig.Status == "uninitialized" {
+				alreadyInList := false
+				for _, existing := range triggersToActivate {
+					if existing.ID == trig.ID {
+						alreadyInList = true
+						break
+					}
+				}
+				if !alreadyInList {
+					triggersToActivate = append(triggersToActivate, trig)
+				}
+			}
+		}
+
+		if len(triggersToActivate) > 0 || len(deletedTriggers) > 0 {
+			go func(triggersToStart []Trigger, triggersToStop []Trigger, finalWorkflow Workflow, currentUser User) {
+				for _, trigger := range triggersToStart {
+					// Resolve start node: prefer a branch from this trigger, else use workflow start.
+					startNode := finalWorkflow.Start
+					for _, branch := range finalWorkflow.Branches {
+						if branch.SourceID == trigger.ID {
+							startNode = branch.DestinationID
+							break
+						}
+					}
+					if len(startNode) == 0 {
+						log.Printf("[INFO] Auto-start skipped for trigger %s: no start node in fully-constructed workflow", trigger.ID)
+						continue
+					}
+
+					switch strings.ToUpper(trigger.TriggerType) {
+					case "WEBHOOK":
+						auth := ""
+						customResponse := ""
+						version := "v1"
+						versionTimeout := 15
+						for _, param := range trigger.Parameters {
+							switch param.Name {
+							case "auth_headers":
+								auth = param.Value
+							case "custom_response_body":
+								customResponse = param.Value
+							case "await_response":
+								version = param.Value
+							case "version_timeout":
+								if parsedTimeout, convErr := strconv.Atoi(param.Value); convErr == nil {
+									versionTimeout = parsedTimeout
+								}
+							}
+						}
+						if startErr := startWebhookTrigger(context.Background(), finalWorkflow.ID, trigger.ID, trigger.Label, startNode, trigger.Environment, auth, customResponse, version, versionTimeout, currentUser, currentUser.ActiveOrg.Id); startErr != nil {
+							log.Printf("[WARNING] Auto-start webhook trigger %s failed: %s", trigger.ID, startErr)
+						} else {
+							log.Printf("[INFO] Auto-started webhook trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
+						}
+					case "SCHEDULE":
+						authToken := currentUser.ApiKey
+						if len(authToken) == 0 {
+							authToken = currentUser.Session
+						}
+						if startErr := startSchedule(trigger, authToken, finalWorkflow); startErr != nil {
+							log.Printf("[WARNING] Auto-start schedule trigger %s failed: %s", trigger.ID, startErr)
+						} else {
+							log.Printf("[INFO] Auto-started schedule trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
+						}
+					}
+				}
+
+				for _, trigger := range triggersToStop {
+					switch strings.ToUpper(trigger.TriggerType) {
+					case "WEBHOOK":
+						hook, err := GetHook(context.Background(), trigger.ID)
+						if err != nil {
+							log.Printf("[WARNING] Auto-stop webhook: could not find hook %s: %s", trigger.ID, err)
+							continue
+						}
+						hook.Status = "stopped"
+						hook.Running = false
+						if setErr := SetHook(context.Background(), *hook); setErr != nil {
+							log.Printf("[WARNING] Auto-stop webhook: failed updating hook %s status: %s", trigger.ID, setErr)
+						}
+						log.Printf("[INFO] Auto-stopped webhook trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
+					case "SCHEDULE":
+						if stopErr := deleteScheduleGeneral(context.Background(), trigger.ID); stopErr != nil {
+							log.Printf("[WARNING] Auto-stop schedule trigger %s failed: %s", trigger.ID, stopErr)
+						} else {
+							log.Printf("[INFO] Auto-stopped schedule trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
+						}
+					}
+				}
+			}(triggersToActivate, deletedTriggers, *workflow, user)
 		}
 	}
 
@@ -37865,16 +37911,28 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 	case "edit_node":
 		if realID, exists := tempIDMap[op.ID]; exists {
 			op.ID = realID
+		} else if len(op.ID) == 0 && len(op.TempID) > 0 {
+			if realID, exists := tempIDMap[op.TempID]; exists {
+				op.ID = realID
+			}
 		}
 		return opEditNode(wf, op)
 	case "move_node":
 		if realID, exists := tempIDMap[op.ID]; exists {
 			op.ID = realID
+		} else if len(op.ID) == 0 && len(op.TempID) > 0 {
+			if realID, exists := tempIDMap[op.TempID]; exists {
+				op.ID = realID
+			}
 		}
 		return opMoveNode(wf, op)
 	case "delete_node", "remove_node":
 		if realID, exists := tempIDMap[op.ID]; exists {
 			op.ID = realID
+		} else if len(op.ID) == 0 && len(op.TempID) > 0 {
+			if realID, exists := tempIDMap[op.TempID]; exists {
+				op.ID = realID
+			}
 		}
 		return opDeleteNode(wf, op)
 
@@ -37908,7 +37966,23 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 		newStart := op.ID
 		if realID, exists := tempIDMap[op.ID]; exists {
 			newStart = realID
+		} else if len(op.ID) == 0 && len(op.TempID) > 0 {
+			if realID, exists := tempIDMap[op.TempID]; exists {
+				newStart = realID
+			}
 		}
+
+		if len(newStart) == 0 {
+			return fmt.Errorf("start node ID cannot be empty")
+		}
+
+		// Validate that the target node actually exists in actions or triggers
+		actIdx := findActionIndexByID(wf, newStart)
+		trigIdx := findTriggerIndexByID(wf, newStart)
+		if actIdx == -1 && trigIdx == -1 {
+			return fmt.Errorf("cannot set start node: node %s not found in workflow", newStart)
+		}
+
 		wf.Start = newStart
 
 		for i := range wf.Actions {
@@ -37987,6 +38061,14 @@ func opAddNodeWithMapping(ctx context.Context, user User, wf *Workflow, op *Work
 		}
 	}
 
+	// Resolve temp_ids in insert_before and insert_after if provided
+	if realID, exists := tempIDMap[op.InsertBefore]; exists {
+		op.InsertBefore = realID
+	}
+	if realID, exists := tempIDMap[op.InsertAfter]; exists {
+		op.InsertAfter = realID
+	}
+
 	err := opAddNode(ctx, user, wf, op)
 	if err != nil {
 		return err
@@ -38007,6 +38089,15 @@ func opAddNodeWithMapping(ctx context.Context, user User, wf *Workflow, op *Work
 }
 
 func opAddNode(ctx context.Context, user User, wf *Workflow, op *WorkflowOperation) error {
+	env := wf.ExecutionEnvironment
+	if len(env) == 0 {
+		if project.Environment == "cloud" {
+			env = "cloud"
+		} else {
+			env = "Shuffle"
+		}
+	}
+
 	switch op.NodeType {
 	case "action":
 		var minAct MinimalAction
@@ -38023,7 +38114,7 @@ func opAddNode(ctx context.Context, user User, wf *Workflow, op *WorkflowOperati
 			return fmt.Errorf("failed to find app %s: %w", minAct.AppID, err)
 		}
 
-		newAction, err := enrichActionFromApp(ctx, &minAct, realApp, wf.ExecutingOrg.Id)
+		newAction, err := enrichActionFromApp(ctx, &minAct, realApp, env)
 		if err != nil {
 			return fmt.Errorf("failed to enrich action: %w", err)
 		}
@@ -38121,7 +38212,7 @@ func opAddNode(ctx context.Context, user User, wf *Workflow, op *WorkflowOperati
 		}
 
 		// 1. ENRICH: Create full Trigger with real structure
-		newTrigger, err := enrichTriggerFromApp(&minTrig, wf.ExecutingOrg.Id)
+		newTrigger, err := enrichTriggerFromApp(&minTrig, env)
 		if err != nil {
 			return fmt.Errorf("failed to enrich trigger: %w", err)
 		}
@@ -38271,54 +38362,71 @@ func opMoveNode(wf *Workflow, op *WorkflowOperation) error {
 }
 
 func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
-	switch op.NodeType {
-	case "action":
-		idx := findActionIndexByID(wf, op.ID)
-		if idx == -1 {
-			// Already gone, idempotent no-op (e.g. cascade from a prior delete)
-			if debug {
-				log.Printf("[DEBUG] delete_node(action): action %s not found, already removed - skipping", op.ID)
-			}
-			return nil
-		}
+	nodeType := strings.ToLower(strings.TrimSpace(op.NodeType))
 
-		// Remove action
-		wf.Actions = append(wf.Actions[:idx], wf.Actions[idx+1:]...)
-
-		// Remove branches connected to this node
-		var newBranches []Branch
-		for _, branch := range wf.Branches {
-			if branch.SourceID != op.ID && branch.DestinationID != op.ID {
-				newBranches = append(newBranches, branch)
-			}
-		}
-		wf.Branches = newBranches
-
-	case "trigger":
-		idx := findTriggerIndexByID(wf, op.ID)
-		if idx == -1 {
-			// Already gone, idempotent no-op
-			if debug {
-				log.Printf("[DEBUG] delete_node(trigger): trigger %s not found, already removed - skipping", op.ID)
-			}
-			return nil
-		}
-
-		wf.Triggers = append(wf.Triggers[:idx], wf.Triggers[idx+1:]...)
-
-		// Remove branches connected to this trigger (both source and destination)
-		var newBranches []Branch
-		for _, branch := range wf.Branches {
-			if branch.SourceID != op.ID && branch.DestinationID != op.ID {
-				newBranches = append(newBranches, branch)
-			}
-		}
-		wf.Branches = newBranches
-
-	default:
-		return fmt.Errorf("unknown node_type: %s", op.NodeType)
+	if nodeType == "action" {
+		return deleteActionFromWorkflow(wf, op.ID)
+	} else if nodeType == "trigger" {
+		return deleteTriggerFromWorkflow(wf, op.ID)
 	}
 
+	// Auto-detect by searching Actions and Triggers when node_type is omitted
+	if idx := findActionIndexByID(wf, op.ID); idx != -1 {
+		return deleteActionFromWorkflow(wf, op.ID)
+	}
+	if idx := findTriggerIndexByID(wf, op.ID); idx != -1 {
+		return deleteTriggerFromWorkflow(wf, op.ID)
+	}
+
+	// Already gone, idempotent no-op (e.g. cascade from a prior delete)
+	if debug {
+		log.Printf("[DEBUG] delete_node: node %s not found in actions or triggers - skipping", op.ID)
+	}
+	return nil
+}
+
+func deleteActionFromWorkflow(wf *Workflow, id string) error {
+	idx := findActionIndexByID(wf, id)
+	if idx == -1 {
+		if debug {
+			log.Printf("[DEBUG] delete_node(action): action %s not found, already removed - skipping", id)
+		}
+		return nil
+	}
+
+	// Remove action
+	wf.Actions = append(wf.Actions[:idx], wf.Actions[idx+1:]...)
+
+	// Remove branches connected to this node
+	var newBranches []Branch
+	for _, branch := range wf.Branches {
+		if branch.SourceID != id && branch.DestinationID != id {
+			newBranches = append(newBranches, branch)
+		}
+	}
+	wf.Branches = newBranches
+	return nil
+}
+
+func deleteTriggerFromWorkflow(wf *Workflow, id string) error {
+	idx := findTriggerIndexByID(wf, id)
+	if idx == -1 {
+		if debug {
+			log.Printf("[DEBUG] delete_node(trigger): trigger %s not found, already removed - skipping", id)
+		}
+		return nil
+	}
+
+	wf.Triggers = append(wf.Triggers[:idx], wf.Triggers[idx+1:]...)
+
+	// Remove branches connected to this trigger (both source and destination)
+	var newBranches []Branch
+	for _, branch := range wf.Branches {
+		if branch.SourceID != id && branch.DestinationID != id {
+			newBranches = append(newBranches, branch)
+		}
+	}
+	wf.Branches = newBranches
 	return nil
 }
 
@@ -38328,6 +38436,11 @@ func opAddBranchWithMapping(wf *Workflow, op *WorkflowOperation, tempIDMap map[s
 		SourceID      string `json:"source_id"`
 		DestinationID string `json:"destination_id"`
 		Label         string `json:"label"`
+		Conditions    []struct {
+			Source      string `json:"source"`
+			Condition   string `json:"condition"`
+			Destination string `json:"destination"`
+		} `json:"conditions"`
 	}
 
 	if err := json.Unmarshal(op.Data, &branchData); err != nil {
@@ -38475,6 +38588,12 @@ func opDeleteBranch(wf *Workflow, op *WorkflowOperation) error {
 
 
 func opAddCondition(wf *Workflow, op *WorkflowOperation) error {
+	branchIdx := findBranchIndexByID(wf, op.BranchID)
+	if branchIdx == -1 {
+		return fmt.Errorf("branch %s not found", op.BranchID)
+	}
+
+	// 1. Try unmarshaling as {"conditions": [...]} (array of conditions)
 	var condData struct {
 		Conditions []struct {
 			Source      string `json:"source"`
@@ -38483,21 +38602,27 @@ func opAddCondition(wf *Workflow, op *WorkflowOperation) error {
 		} `json:"conditions"`
 	}
 
-	if err := json.Unmarshal(op.Data, &condData); err != nil {
-		return fmt.Errorf("invalid condition data: %w", err)
+	if err := json.Unmarshal(op.Data, &condData); err == nil && len(condData.Conditions) > 0 {
+		for _, c := range condData.Conditions {
+			newCond := createCondition(c.Source, c.Condition, c.Destination)
+			wf.Branches[branchIdx].Conditions = append(wf.Branches[branchIdx].Conditions, newCond)
+		}
+		return nil
 	}
 
-	branchIdx := findBranchIndexByID(wf, op.BranchID)
-	if branchIdx == -1 {
-		return fmt.Errorf("branch %s not found", op.BranchID)
+	// 2. Self-correct fallback: Try unmarshaling as a single condition object {"source": "...", "condition": "...", "destination": "..."}
+	var singleCond struct {
+		Source      string `json:"source"`
+		Condition   string `json:"condition"`
+		Destination string `json:"destination"`
 	}
-
-	for _, c := range condData.Conditions {
-		newCond := createCondition(c.Source, c.Condition, c.Destination)
+	if err := json.Unmarshal(op.Data, &singleCond); err == nil && (len(singleCond.Source) > 0 || len(singleCond.Condition) > 0 || len(singleCond.Destination) > 0) {
+		newCond := createCondition(singleCond.Source, singleCond.Condition, singleCond.Destination)
 		wf.Branches[branchIdx].Conditions = append(wf.Branches[branchIdx].Conditions, newCond)
+		return nil
 	}
 
-	return nil
+	return fmt.Errorf("invalid condition data: could not parse condition array or single condition from payload")
 }
 
 func opEditCondition(wf *Workflow, op *WorkflowOperation) error {
