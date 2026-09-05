@@ -5694,6 +5694,7 @@ type HostDetails struct {
 	Paths     []string `json:"paths,omitempty" datastore:"path,noindex"`
 	Version   string   `json:"version,omitempty" datastore:"version,noindex"`
 	UpdatedAt int64    `json:"updated_at,omitempty" datastore:"updated_at"`
+	User      string   `json:"user,omitempty" datastore:"user,omitempty"`
 }
 
 type Software struct {

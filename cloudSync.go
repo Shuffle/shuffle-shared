@@ -3513,9 +3513,10 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 			software.OS = sensorDetails.OS
 			software.Hostnames = []HostDetails{
 				HostDetails{
-					Hostname: sensorDetails.Hostname,
-					Version: software.Version,
+					Hostname:  sensorDetails.Hostname,
+					Version:   software.Version,
 					UpdatedAt: time.Now().Unix(),
+					User:      sensorDetails.User,
 				},
 			}
 			if len(software.Version) > 0 {
@@ -3532,18 +3533,22 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 				if err == nil { 
 					hostExists := false
 					versionExists := false
-					for _, foundHost := range unmarshalledSoftware.Hostnames {
+					for foundHostIndex, foundHost := range unmarshalledSoftware.Hostnames {
 						if foundHost.Hostname == sensorDetails.Hostname && foundHost.Version == software.Version {
 							hostExists = true
+							if len(foundHost.User) == 0 && len(sensorDetails.User) > 0 {
+								unmarshalledSoftware.Hostnames[foundHostIndex].User = sensorDetails.User
+							}
 							break
 						}
 					}
 
 					if !hostExists {
 						unmarshalledSoftware.Hostnames = append(unmarshalledSoftware.Hostnames, HostDetails{
-							Hostname: sensorDetails.Hostname,
-							Version: software.Version,
+							Hostname:  sensorDetails.Hostname,
+							Version:   software.Version,
 							UpdatedAt: time.Now().Unix(),
+							User:      sensorDetails.User,
 						})
 					}
 
@@ -3650,10 +3655,11 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 				software.OS = curPackage.Type
 				software.Hostnames = []HostDetails{
 					HostDetails{
-						Hostname: sensorDetails.Hostname,
-						Version: software.Version,
+						Hostname:  sensorDetails.Hostname,
+						Version:   software.Version,
 						UpdatedAt: time.Now().Unix(),
-						Paths: []string{curPackage.Path},
+						Paths:     []string{curPackage.Path},
+						User:      sensorDetails.User,
 					},
 				}
 
@@ -3674,6 +3680,9 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 						for foundHostIndex, foundHost := range unmarshalledSoftware.Hostnames {
 							if foundHost.Hostname == sensorDetails.Hostname && foundHost.Version == software.Version {
 								unmarshalledSoftware.Hostnames[foundHostIndex].UpdatedAt = time.Now().Unix()
+								if len(foundHost.User) == 0 && len(sensorDetails.User) > 0 {
+									unmarshalledSoftware.Hostnames[foundHostIndex].User = sensorDetails.User
+								}
 
 								found := false
 								for _, path := range unmarshalledSoftware.Hostnames[foundHostIndex].Paths {
@@ -3694,10 +3703,11 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 
 						if !hostPathExists {
 							unmarshalledSoftware.Hostnames = append(unmarshalledSoftware.Hostnames, HostDetails{
-								Hostname: sensorDetails.Hostname,
-								Version: software.Version,
+								Hostname:  sensorDetails.Hostname,
+								Version:   software.Version,
 								UpdatedAt: time.Now().Unix(),
-								Paths: []string{curPackage.Path},
+								Paths:     []string{curPackage.Path},
+								User:      sensorDetails.User,
 							})
 						}
 
