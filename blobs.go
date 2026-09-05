@@ -887,6 +887,7 @@ if not is_incident:
             if not hname:
                 continue
             hver = h.get("version") or (valid_versions[0] if valid_versions else None)
+            huser = h.get("user") or ""
             if is_version_affected(hver, v):
                 affected_hosts_global.add(hname)
                 hpaths = h.get("paths") or []
@@ -903,10 +904,13 @@ if not is_incident:
                         "version": hver,
                         "last_seen": now_iso,
                     })
-                vuln_hosts.append({
+                host_entry = {
                     "hostname": hname,
                     "paths": paths_arr,
-                })
+                }
+                if huser:
+                    host_entry["user"] = huser
+                vuln_hosts.append(host_entry)
 
         existing_rec = None
         try:
@@ -941,6 +945,8 @@ if not is_incident:
                 hn = vh["hostname"]
                 if hn in hmap:
                     existing_entry = hmap[hn]
+                    if vh.get("user") and not existing_entry.get("user"):
+                        existing_entry["user"] = vh["user"]
                     epaths = existing_entry.setdefault("paths", [])
                     known_paths = {p.get("path") for p in epaths if isinstance(p, dict) and p.get("path")}
                     for np in vh.get("paths", []):
@@ -958,12 +964,56 @@ if not is_incident:
         else:
             merged["hosts"] = vuln_hosts
 
+        # Aggregate affected users on the vulnerability record
+        affected_users = set()
+        for hitem in merged.get("hosts", []):
+            if isinstance(hitem, dict) and hitem.get("user"):
+                affected_users.add(hitem["user"])
+        if affected_users:
+            merged["users"] = sorted(list(affected_users))
+
         try:
             if "self" in locals() or "self" in globals():
                 self.set_key(vid, json.dumps(merged), category=DATASTORE_VULNS)
             stored.append(vid)
         except Exception as e:
             errors.append("Failed storing %s: %s" % (vid, e))
+
+    # Update the package / software datastore record with correlated vulnerability summary
+    try:
+        if ("self" in locals() or "self" in globals()) and item_key and not item_key.startswith("$"):
+            save_cat = item_cat if item_cat and not item_cat.startswith("$") else DATASTORE_PACKAGES
+            raw_pkg = self.get_key(item_key, category=save_cat)
+            pkg_obj = {}
+            if raw_pkg:
+                if isinstance(raw_pkg, dict) and "value" in raw_pkg:
+                    raw_pkg = raw_pkg["value"]
+                if isinstance(raw_pkg, str):
+                    try:
+                        pkg_obj = json.loads(raw_pkg)
+                    except Exception:
+                        pass
+                elif isinstance(raw_pkg, dict):
+                    pkg_obj = raw_pkg
+
+            if isinstance(pkg_obj, dict) and pkg_obj:
+                cve_list = [v.get("id") for v in deduped_vulns if isinstance(v, dict) and v.get("id")]
+                pkg_obj["cves"] = cve_list
+                pkg_obj["vulnerability_count"] = len(cve_list)
+                pkg_obj["vulnerabilities"] = [
+                    {
+                        "id": v.get("id"),
+                        "summary": v.get("summary") or v.get("details") or "",
+                        "severity": v.get("database_specific", {}).get("severity") or "unknown",
+                    }
+                    for v in deduped_vulns[:20]
+                    if isinstance(v, dict) and v.get("id")
+                ]
+                pkg_obj["status"] = "vulnerable" if cve_list else "clean"
+                pkg_obj["last_vuln_check"] = now_iso
+                self.set_key(item_key, json.dumps(pkg_obj), category=save_cat)
+    except Exception as e:
+        errors.append("Failed updating package/software %s: %s" % (item_key, e))
 
     status = "vulnerable" if deduped_vulns else "not_vulnerable"
     if rate_limited or errors:
@@ -1014,6 +1064,26 @@ else:
         device = raw_ocsf.get("device") or {}
         if isinstance(device, dict) and device.get("hostname"):
             hosts_in_incident.add(device["hostname"])
+
+    # Check datastore for known CVEs on packages and software mentioned in the incident
+    for pkg in packages_in_incident:
+        try:
+            if "self" in locals() or "self" in globals():
+                pdata = self.get_key(pkg, category=DATASTORE_PACKAGES) or self.get_key(pkg, category=DATASTORE_SOFTWARE)
+                if pdata:
+                    if isinstance(pdata, dict) and "value" in pdata:
+                        pdata = pdata["value"]
+                    if isinstance(pdata, str):
+                        try:
+                            pdata = json.loads(pdata)
+                        except Exception:
+                            pass
+                    if isinstance(pdata, dict):
+                        for cve_id in pdata.get("cves", []):
+                            if cve_id and isinstance(cve_id, str):
+                                cves_in_incident.add(cve_id)
+        except Exception:
+            pass
 
     correlated_vulns = []
     for cve in cves_in_incident:
@@ -3526,44 +3596,60 @@ func getVulnerabilityComparison() string {
 func getIocParsingScript() string {
 	return `import json
 import re
-import threading 
+import os
+import requests
+import threading
 
-input_data = '''$exec'''
-if len(input_data) < 4:
-  print({
-    "success": False,
-    "reason": "No input data"
-  })
-  exit()
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
 
-try:
-  all_items = json.loads(r'''$ioc_listing''')
-except Exception as e:
-  print(json.dumps({
-    "success": False,
-    "reason": "Bad input data from threat feed listing. Are the ioc patterns correct?"
-  }))
-  exit()
+input_raw = r"""$exec"""
+input_data = ""
+if not input_raw.startswith("$") and len(input_raw) > 0:
+    input_data = input_raw
+else:
+    print(json.dumps({
+        "success": False,
+        "reason": "No input data"
+    }))
+    exit()
+
+all_items = safe_parse_json(r"""$ioc_listing""", [])
+if isinstance(all_items, dict) and "data" in all_items:
+    all_items = all_items["data"]
+if not isinstance(all_items, list):
+    all_items = []
+
+if not all_items:
+    print(json.dumps({
+        "success": False,
+        "reason": "Bad input data from threat feed listing. Are the ioc patterns correct?"
+    }))
+    exit()
 
 def sanitize_regex(pattern):
-    """
-    Clean up a regex pattern to find matches anywhere in text.
-    
-    Removes anchors (^, $) that force start/end matching.
-    Returns the core pattern for use with findall/finditer.
-    """
-
     pattern = str(pattern)
-    # Remove leading ^ (start anchor)
-    if pattern.startswith('^'):
+    if pattern.startswith("^"):
         pattern = pattern[1:]
-    
-    # Remove trailing $ (end anchor)
-    if pattern.endswith('$'):
+    if pattern.endswith("$"):
         pattern = pattern[:-1]
-    
     return pattern
-
 
 def findall_with_limit(pattern, text, max_matches=None, timeout_seconds=5):
     results = []
@@ -3583,384 +3669,389 @@ def findall_with_limit(pattern, text, max_matches=None, timeout_seconds=5):
     thread.join(timeout=timeout_seconds)
     
     if thread.is_alive():
-        # Thread still running — timeout occurred
-        return results  # or raise TimeoutError
+        return results
     
     if exception[0]:
         return results
 
     return results
 
-# These are the regex items from the datastore
 found_items = []
 found_types = {}
 for ioc_object in all_items:
-  try:
-    ioc_object = json.loads(ioc_object)
-  except:
-    pass
-  
-  try:
-    if "enabled" not in ioc_object or not ioc_object["enabled"]:
-      continue
-  except:
-    continue
-  
-  if "regex" not in ioc_object:
-    continue
-  
-  cleaned_regex = sanitize_regex(ioc_object["regex"])
-  matches = findall_with_limit(cleaned_regex, input_data, max_matches=100, timeout_seconds=2)
-  if not matches:
-    continue
-  
-  found = []
-  for match in matches:
-    if match in found:
-      continue
-
-    if "shuffler.io" in match:
-      continue
-
-    # Check if we match ip while in domain. Very basic check.
-    if ioc_object["name"] == "domain" and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", match):
-      continue
+    if isinstance(ioc_object, str):
+        ioc_object = safe_parse_json(ioc_object, {})
+    if not isinstance(ioc_object, dict):
+        continue
     
-    found.append(match)
-    found_items.append({
-      "value": match,
-      "type": ioc_object["name"],
-    })
-	    
-    if ioc_object["name"] not in found_types:
-      found_types[ioc_object["name"]] = 1
-    else:
-      found_types[ioc_object["name"]] += 1
+    if not ioc_object.get("enabled"):
+        continue
+    
+    raw_regex = ioc_object.get("regex")
+    if not raw_regex:
+        continue
+    
+    ioc_name = ioc_object.get("name") or "unknown"
+    cleaned_regex = sanitize_regex(raw_regex)
+    matches = findall_with_limit(cleaned_regex, input_data, max_matches=100, timeout_seconds=2)
+    if not matches:
+        continue
+    
+    found = []
+    for match in matches:
+        if match in found:
+            continue
+        if "shuffler.io" in match:
+            continue
+        if ioc_name == "domain" and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", match):
+            continue
+        
+        found.append(match)
+        found_items.append({
+            "value": match,
+            "type": ioc_name,
+        })
+        
+        found_types[ioc_name] = found_types.get(ioc_name, 0) + 1
+
+target_key = r"""$exec.shuffle_datastore.key"""
+target_cat = r"""$exec.shuffle_datastore.category"""
+target_org = r"""$exec.shuffle_datastore.org_id"""
+
+if target_key.startswith("$"):
+    target_key = ""
+if target_cat.startswith("$"):
+    target_cat = ""
+if target_org.startswith("$"):
+    target_org = ""
 
 full_body = [{
-  "key": "$exec.shuffle_datastore.key",
-  "category": "$exec.shuffle_datastore.category",
-  "org_id": "$exec.shuffle_datastore.org_id",
-  "enrichments": found_items,
-}]   
+    "key": target_key,
+    "category": target_cat,
+    "org_id": target_org,
+    "enrichments": found_items,
+}]
 
-upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
-parsed_headers = {}
-if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
-  parsed_headers["Authorization"] = f"Bearer {os.environ.get('SHUFFLE_AUTHORIZATION', '')}"
+upload_url = ""
+if hasattr(self, "base_url") and self.base_url:
+    upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
 else:
-  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+    upload_url = "https://shuffler.io/api/v2/datastore?bulk=true"
+
+parsed_headers = {}
+auth_token = os.environ.get("SHUFFLE_AUTHORIZATION", "")
+if auth_token:
+    parsed_headers["Authorization"] = f"Bearer {auth_token}"
+elif hasattr(self, "authorization") and hasattr(self, "current_execution_id"):
+    upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}"
 
 try:
-  ret = requests.post(upload_url, json=full_body, headers=parsed_headers)
-  if ret.status_code == 200:
-    print(json.dumps({
-      "success": True, 
-      "reason": "Uploaded '$exec.shuffle_datastore.key' in '$exec.shuffle_datastore.category' with %d indicators" % (len(found_items)),
-	  "types": found_types,
-    }))
-  else:
-    print(json.dumps({
-      "success": False,
-      "reason": f"Failed request with status %d and body %s" % (ret.status_code, ret.text)
-    }))
+    ret = requests.post(upload_url, json=full_body, headers=parsed_headers, timeout=15)
+    if ret.status_code == 200:
+        print(json.dumps({
+            "success": True, 
+            "reason": "Uploaded indicators to datastore with %d indicators" % (len(found_items)),
+            "types": found_types,
+            "count": len(found_items),
+        }))
+    else:
+        print(json.dumps({
+            "success": False,
+            "reason": "Failed request with status %d: %s" % (ret.status_code, ret.text[:200]),
+            "count": len(found_items),
+        }))
 except Exception as e:
-  print(json.dumps({
-    "success": False,
-    "reason": f"Failed request: {e}"
-  }))`
+    print(json.dumps({
+        "success": False,
+        "reason": "Failed request: %s" % e,
+        "count": len(found_items),
+    }))`
 }
 
 // For scheduled runs to ingest data
 func getIocIngestionScript(orgId string) string {
-	timestampFormat := "%Y-%m-%d %H:%M:%S"
-	timestampFormat2 := "%Y-%m-%dT%H:%M:%SZ"
-
-	return fmt.Sprintf(`import os
+	return `import os
 import re
 import json
 import uuid
 import time
 import requests
 
-try:
-  all_urls = json.loads(r'''$threat_feed_listing''')
-except Exception as e:
-  print({
-    "success": False,
-    "reason": "Bad data from threat feed listing"
-  })
-  exit()
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+all_urls = safe_parse_json(r'''$threat_feed_listing''', [])
+if isinstance(all_urls, dict) and "data" in all_urls:
+    all_urls = all_urls["data"]
+if not isinstance(all_urls, list):
+    all_urls = []
 
 if len(all_urls) == 0:
-  print({
-    "success": False,
-    "reason": "No threat feeds configured"
-  })
-  exit()
+    print(json.dumps({
+        "success": False,
+        "reason": "No threat feeds configured"
+    }))
+    exit()
 
 input_data = []
 for key in all_urls:
-  try:
-    key = json.loads(key)
-  except:
-    pass
+    if isinstance(key, str):
+        key = safe_parse_json(key, {})
+    if not isinstance(key, dict):
+        continue
 
-  if key["enabled"] != True:
-    continue
+    if not key.get("enabled"):
+        continue
 
-  parsed_headers = {}
+    parsed_headers = {}
+    raw_headers = key.get("headers") or ""
+    if isinstance(raw_headers, str) and len(raw_headers) > 0:
+        headers_list = raw_headers.split(";")
+        for header in headers_list:
+            if "=" in header:
+                header_parts = header.split("=", 1)
+                parsed_headers[header_parts[0].strip()] = header_parts[1].strip()
+            else:
+                parsed_headers[header.strip()] = ""
 
-  if "headers" in key and len(key["headers"]) > 0:
-    # Split with = and newlines
-    headers = headers.split(";")
-    for header in headers:
-      if "=" in header:
-        header_parts = header.split("=")
-        parsed_headers[header_parts[0].strip()] = header_parts[1].strip()
-      else:
-        parsed_headers[header.strip()] = ""
+    feed_url = key.get("url")
+    if not feed_url:
+        continue
 
-  try:
-    resp = requests.get(key["url"], headers=parsed_headers, verify=False, timeout=3)
-    content = {
-      "status": resp.status_code,
-      "body": resp.text,
-      "url": key["url"],
-    }
+    try:
+        resp = requests.get(feed_url, headers=parsed_headers, verify=False, timeout=15)
+        content = {
+            "status": resp.status_code,
+            "body": resp.text,
+            "url": feed_url,
+        }
+        if "type" in key:
+            content["type"] = key["type"]
+        input_data.append(content)
+    except Exception:
+        pass
 
-    if "type" in key:
-      content["type"] = key["type"]
+ioc_regexes = safe_parse_json(r'''$ioc_listing''', [])
+if isinstance(ioc_regexes, dict) and "data" in ioc_regexes:
+    ioc_regexes = ioc_regexes["data"]
+if not isinstance(ioc_regexes, list):
+    ioc_regexes = []
 
-    input_data.append(content)
-
-  except Exception as e:
-    pass
-	
-try:
-  ioc_regexes = json.loads(r'''$ioc_listing''')
-except Exception as e:
-  print(json.dumps({
-    "success": False,
-    "reason": "Bad input data from ioc listing. Are the ioc patterns correct?"
-  }))
-  exit()
+if not ioc_regexes:
+    print(json.dumps({
+        "success": False,
+        "reason": "Bad input data from ioc listing. Are the ioc patterns correct?"
+    }))
+    exit()
 
 def sanitize_regex(pattern):
-  """
-  Clean up a regex pattern to find matches anywhere in text.
-  
-  Removes anchors (^, $) that force start/end matching.
-  Returns the core pattern for use with findall/finditer.
-  """
-
-  pattern = str(pattern)
-
-  # Remove leading ^ (start anchor)
-  if pattern.startswith('^'):
-  	pattern = pattern[1:]
-  
-  # Remove trailing $ (end anchor)
-  if pattern.endswith('$'):
-  	pattern = pattern[:-1]
-  
-  return pattern
+    pattern = str(pattern)
+    if pattern.startswith("^"):
+        pattern = pattern[1:]
+    if pattern.endswith("$"):
+        pattern = pattern[:-1]
+    return pattern
 
 regexsearch = {}
-found_items = []
 for ioc_object in ioc_regexes:
-  try:
-    ioc_object = json.loads(ioc_object)
-  except:
-    pass
-  
-  try:
-    if "enabled" not in ioc_object or not ioc_object["enabled"]:
-      continue
-  except:
-    continue
-  
-  if "regex" not in ioc_object:
-    continue
+    if isinstance(ioc_object, str):
+        ioc_object = safe_parse_json(ioc_object, {})
+    if not isinstance(ioc_object, dict):
+        continue
+    
+    if not ioc_object.get("enabled"):
+        continue
+    
+    raw_regex = ioc_object.get("regex")
+    if not raw_regex:
+        continue
 
-  regexsearch[ioc_object["name"]] = sanitize_regex(ioc_object["regex"])
+    ioc_name = ioc_object.get("name") or "unknown"
+    regexsearch[ioc_name] = sanitize_regex(raw_regex)
 
 if not regexsearch:
-  print(json.dumps({
-	"success": False,
-	"reason": "No valid regexes found in ioc listing. Are the ioc patterns correct?"
-  }))
-  exit()
+    print(json.dumps({
+        "success": False,
+        "reason": "No valid regexes found in ioc listing. Are the ioc patterns correct?"
+    }))
+    exit()
 
 all_items = {}
-
 if not isinstance(input_data, list):
-  input_data = [input_data]
+    input_data = [input_data]
 
-
-## Assuming
 max_items = 1000
 threat_timeout = 90 # days
+
 for content in input_data:
-  iocs = content["body"]
+    iocs = content.get("body") or ""
+    if not iocs:
+        continue
 
-  found_type = ""
-  if "type" in content and len(content["type"]) > 0:
-    found_type = content["type"].lower()
-    found = False
-    for key, value in regexsearch.items():
-      if key == found_type:
-        found = True
-        break
-
-    if not found:
-      continue
-
-  if not found_type:
-    searchspace = iocs[0:1000]
-    for key, value in regexsearch.items():
-      value = sanitize_regex(value)
-      match = re.search(value, searchspace)
-      if match:
-        found_type = key
-        break
-
-  if len(found_type) == 0:
-    continue
-
-  appended_items = []
-  discovered_split_index = -1
-  datestamp_index = -1
-
-  cnt = 0
-  for line in iocs.split("\n"):
-    if len(line) < 3:
-      continue
-
-    if line.startswith("#"):
-      continue
-
-    if cnt > max_items:
-      continue
-
-    # Remove ANYTHING after # on the line
-    line = line.split("#")[0].strip()
-
-    linesplit = line.split(",")
-    if discovered_split_index >= 0:
-      if datestamp_index >= 0:
-        # Check if the timestamp is more than 90 days ago (threat_timeout)
-        try:
-          timestamp = time.strptime(linesplit[datestamp_index], "%s")
-          current_time = time.time()
-          if (current_time - time.mktime(timestamp)) / (24 * 3600) > threat_timeout:
+    found_type = ""
+    if "type" in content and len(content["type"]) > 0:
+        ctype = content["type"].lower()
+        for k in regexsearch.keys():
+            if k == ctype:
+                found_type = k
+                break
+        if not found_type:
             continue
-        except ValueError:
-          continue
 
-      appended_items.append(linesplit[discovered_split_index])
+    if not found_type:
+        searchspace = iocs[0:1000]
+        for key, value in regexsearch.items():
+            match = re.search(value, searchspace)
+            if match:
+                found_type = key
+                break
 
-    else:
-      # Discovering pattern
-      cnt += 1
-      linesplit = line.split(",")
-      if len(linesplit) == 1:
-        discovered_split_index = 0
-      else:
-        itemcnt = 0
+    if len(found_type) == 0:
+        continue
 
-        for item in linesplit:
-          # Check if item is a timestamp
-          import time
-          try:
-            time.strptime(item, "%s")
-            datestamp_index = itemcnt
+    appended_items = []
+    discovered_split_index = -1
+    datestamp_index = -1
 
-            # Check if the timestamp is more than 90 days ago. If so, break and continue
-          except ValueError:
-            pass
+    cnt = 0
+    for line in iocs.split("\n"):
+        if len(line) < 3:
+            continue
 
-          match = re.search(regexsearch[found_type], item)
-          if match:
-            discovered_split_index = itemcnt
-            break
+        if line.startswith("#"):
+            continue
 
-          itemcnt += 1
+        if cnt > max_items:
+            continue
+
+        line = line.split("#")[0].strip()
+        linesplit = line.split(",")
 
         if discovered_split_index >= 0:
-          appended_items.append(linesplit[discovered_split_index])
+            if datestamp_index >= 0 and datestamp_index < len(linesplit):
+                try:
+                    timestamp = time.strptime(linesplit[datestamp_index], "%Y-%m-%d %H:%M:%S")
+                    current_time = time.time()
+                    if (current_time - time.mktime(timestamp)) / (24 * 3600) > threat_timeout:
+                        continue
+                except ValueError:
+                    pass
 
-  # Parsing STIX
-  for item in appended_items:
-    key = item.strip()
+            if discovered_split_index < len(linesplit):
+                appended_items.append(linesplit[discovered_split_index])
 
-    if key in all_items:
-      if content["url"] not in all_items[found_type][key]["urls"]:
-        all_items[found_type][key] = all_items[found_type][key]["urls"].append(content["url"])
-    else:
+        else:
+            cnt += 1
+            if len(linesplit) == 1:
+                discovered_split_index = 0
+            else:
+                itemcnt = 0
+                for item in linesplit:
+                    try:
+                        time.strptime(item, "%Y-%m-%d %H:%M:%S")
+                        datestamp_index = itemcnt
+                    except ValueError:
+                        pass
 
-      # Silly workaround to ensure we got a good UUID
-      # But keeping it deterministic for now
-      static_namespace = "c59d2471-df00-48ae-bc18-dd76e84a60df"
-      stix_id = f"indicator--{uuid.uuid5(uuid.UUID(static_namespace), key)}"
+                    match = re.search(regexsearch[found_type], item)
+                    if match:
+                        discovered_split_index = itemcnt
+                        break
 
-      stix_pattern = ""
-      if found_type == "md5":
-        stix_pattern = f"[file:hashes.MD5 = '{key}']" 
-      elif found_type == "sha1":
-        stix_pattern = f"[file:hashes.SHA1 = '{key}']" 
-      elif found_type == "sha256":
-        stix_pattern = f"[file:hashes.SHA256 = '{key}']" 
-      elif found_type == "ip" or found_type == "ipv4":
-        stix_pattern = f"[ipv4-addr:value = '{key}']" 
-      elif found_type == "ipv6": 
-        stix_pattern = f"[ipv6-addr:value = '{key}']" 
-      elif found_type == "domain":
-        stix_pattern = f"[domain-name:value = '{key}']" 
-      else:
-        stix_pattern = f"[{found_type}:value = '{key}']"
+                    itemcnt += 1
 
-      if not found_type in all_items:
-        all_items[found_type] = {}
+                if discovered_split_index >= 0 and discovered_split_index < len(linesplit):
+                    appended_items.append(linesplit[discovered_split_index])
 
-      all_items[found_type][key] = {
-        "type": "indicator",
-        "spec_version": "2.1",
-        "id": stix_id,
-        "pattern": stix_pattern,
-        "pattern_type": "stix",
+    for item in appended_items:
+        key = item.strip()
+        if not key:
+            continue
 
-        "created": time.strftime("%s", time.gmtime()),
-        "modified": time.strftime("%s", time.gmtime()),
+        if found_type in all_items and key in all_items[found_type]:
+            if content.get("url") and content["url"] not in all_items[found_type][key].get("urls", []):
+                all_items[found_type][key].setdefault("urls", []).append(content["url"])
+        else:
+            static_namespace = "c59d2471-df00-48ae-bc18-dd76e84a60df"
+            stix_id = f"indicator--{uuid.uuid5(uuid.UUID(static_namespace), key)}"
 
-		"x_raw_pattern": key,
-        "urls": [content["url"]],
-      }
+            stix_pattern = ""
+            if found_type == "md5":
+                stix_pattern = f"[file:hashes.MD5 = '{key}']" 
+            elif found_type == "sha1":
+                stix_pattern = f"[file:hashes.SHA1 = '{key}']" 
+            elif found_type == "sha256":
+                stix_pattern = f"[file:hashes.SHA256 = '{key}']" 
+            elif found_type in ("ip", "ipv4"):
+                stix_pattern = f"[ipv4-addr:value = '{key}']" 
+            elif found_type == "ipv6": 
+                stix_pattern = f"[ipv6-addr:value = '{key}']" 
+            elif found_type == "domain":
+                stix_pattern = f"[domain-name:value = '{key}']" 
+            else:
+                stix_pattern = f"[{found_type}:value = '{key}']"
 
+            if found_type not in all_items:
+                all_items[found_type] = {}
 
-upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
-parsed_headers = {}
-if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
-  parsed_headers["Authorization"] = f"Bearer {os.environ.get('SHUFFLE_AUTHORIZATION', '')}"
+            all_items[found_type][key] = {
+                "type": "indicator",
+                "spec_version": "2.1",
+                "id": stix_id,
+                "pattern": stix_pattern,
+                "pattern_type": "stix",
+                "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "modified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "x_raw_pattern": key,
+                "urls": [content["url"]],
+            }
+
+upload_url = ""
+if hasattr(self, "base_url") and self.base_url:
+    upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
 else:
-  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+    upload_url = "https://shuffler.io/api/v2/datastore?bulk=true"
+
+parsed_headers = {}
+auth_token = os.environ.get("SHUFFLE_AUTHORIZATION", "")
+if auth_token:
+    parsed_headers["Authorization"] = f"Bearer {auth_token}"
+elif hasattr(self, "authorization") and hasattr(self, "current_execution_id"):
+    upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}"
 
 uploaded = {
-	"sources": len(input_data),
+    "sources": len(input_data),
 }
 for k, v in all_items.items():
     new_list = []
-
     cnt = 0
     for subkey, subval in v.items():
         subval["external_references"] = []
-        for url in subval["urls"]:
+        for url in subval.get("urls", []):
             subval["external_references"].append({
                 "source_name": "threatfeed",
                 "url": url,
             })
 
-        del subval["urls"]
+        if "urls" in subval:
+            del subval["urls"]
+
         new_list.append({
             "key": subkey,
             "category": f"ioc_{k}", 
@@ -3972,14 +4063,15 @@ for k, v in all_items.items():
             break
 
     if len(new_list) > 0:
-        ret = requests.post(upload_url, json=new_list, headers=parsed_headers)
-		#print(ret.text)
-        #print(ret.status_code)
+        try:
+            requests.post(upload_url, json=new_list, headers=parsed_headers, timeout=15)
+        except Exception:
+            pass
 
     uploaded["uploaded_" + k] = len(new_list)
 
 print(json.dumps(uploaded))
-	`, timestampFormat, timestampFormat, timestampFormat2, timestampFormat2)
+`
 }
 
 func GetHealthAppConfig() string {
@@ -4930,65 +5022,125 @@ import random
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-cur_exec = json.loads(r"""$exec""")
-users = json.loads(r"""$get_assignment_schedules.value.userSchedules""")
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+cur_exec = safe_parse_json(r"""$exec""", {})
+if not isinstance(cur_exec, dict):
+    cur_exec = {}
+
+raw_schedules = safe_parse_json(r"""$get_assignment_schedules.value.userSchedules""", [])
+if not raw_schedules:
+    raw_wrapper = safe_parse_json(r"""$get_assignment_schedules""", {})
+    if isinstance(raw_wrapper, dict):
+        raw_schedules = raw_wrapper.get("value", {})
+        if isinstance(raw_schedules, dict):
+            raw_schedules = raw_schedules.get("userSchedules", [])
+
+if not isinstance(raw_schedules, list):
+    raw_schedules = []
+
+users = raw_schedules
 
 def is_user_active(user, now_utc):
+    if not isinstance(user, dict):
+        return False
     if not user.get("enabled"):
         return False
 
     for sched in user.get("schedules", []):
-        tz = ZoneInfo(sched["timezone"])
-        now_local = now_utc.astimezone(tz)
-
-        # Date check
-        start_date = datetime.fromisoformat(sched["startDate"]).date()
-        end_date = datetime.fromisoformat(sched["endDate"]).date()
-        if not (start_date <= now_local.date() <= end_date):
+        if not isinstance(sched, dict):
             continue
+        try:
+            tz_str = sched.get("timezone") or "UTC"
+            try:
+                tz = ZoneInfo(tz_str)
+            except Exception:
+                tz = ZoneInfo("UTC")
 
-        # Day of week check (Python: Monday=0 → convert to 1–7)
-        weekday = now_local.isoweekday()
-        if weekday not in sched["daysOfWeek"]:
+            now_local = now_utc.astimezone(tz)
+
+            start_date_str = sched.get("startDate")
+            end_date_str = sched.get("endDate")
+            if start_date_str and end_date_str:
+                start_date = datetime.fromisoformat(str(start_date_str)).date()
+                end_date = datetime.fromisoformat(str(end_date_str)).date()
+                if not (start_date <= now_local.date() <= end_date):
+                    continue
+
+            days = sched.get("daysOfWeek")
+            if days:
+                weekday = now_local.isoweekday()
+                if weekday not in days and str(weekday) not in days:
+                    continue
+
+            start_time_str = sched.get("startTime")
+            end_time_str = sched.get("endTime")
+            if start_time_str and end_time_str:
+                start_time = time.fromisoformat(str(start_time_str))
+                end_time = time.fromisoformat(str(end_time_str))
+                if not (start_time <= now_local.time() <= end_time):
+                    continue
+
+            return True
+        except Exception:
             continue
-
-        # Time check
-        start_time = time.fromisoformat(sched["startTime"])
-        end_time = time.fromisoformat(sched["endTime"])
-        if not (start_time <= now_local.time() <= end_time):
-            continue
-
-        return True
 
     return False
 
-
 def main():
-    now_utc = datetime.now(tz=ZoneInfo("UTC"))
+    try:
+        now_utc = datetime.now(tz=ZoneInfo("UTC"))
+    except Exception:
+        now_utc = datetime.utcnow()
 
     active_users = []
     usernames = []
     for user in users:
+        if isinstance(user, str):
+            user = safe_parse_json(user, {})
+        if not isinstance(user, dict):
+            continue
+
         if is_user_active(user, now_utc):
+            uname = user.get("userName") or user.get("name") or user.get("email") or ""
+            uemail = user.get("userEmail") or user.get("email") or ""
+            ulevel = user.get("escalationLevel") or user.get("level") or "analyst"
+
             active_users.append({
-                "userName": user["userName"],
-                "email": user["userEmail"],
-                "level": user["escalationLevel"]
+                "userName": uname,
+                "email": uemail,
+                "level": ulevel
             })
             
-            if user["userName"] not in usernames and not user["escalationLevel"] == "manager":
-              usernames.append(user["userName"])
+            if uname and uname not in usernames and ulevel != "manager":
+                usernames.append(uname)
     
     assignee = ""
-    if len(usernames) > 0 and "assignee" not in cur_exec or cur_exec["assignee"] == "":
-      # Chose from usernames
-      assignee = random.choice(usernames)
+    if len(usernames) > 0 and not cur_exec.get("assignee"):
+        assignee = random.choice(usernames)
 
     print(json.dumps({
-      "assign": assignee,
-      "all_available": active_users,
+        "assign": assignee,
+        "all_available": active_users,
     }))
-        
+
 main()
 `
 }
@@ -4996,185 +5148,299 @@ main()
 func handleRelevantPeopleAgentPrepareCode() string {
 	return `import json
 
-# Make sure we are always up to date, even if the workflow is a bit late.
-cur_exec = self.get_key("$exec.shuffle_datastore.key", category="$exec.shuffle_datastore.category")
-if cur_exec["success"] and cur_exec["value"]:
-  cur_exec = cur_exec["value"]
-else:
-  print(json.dumps({
-    "success": False,
-    "reason": "Failed to find the incident"
-  }))
-  exit()
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
 
-activities = []
-if "activity" in cur_exec:
-  activities = cur_exec["activity"]
+raw_key = r"""$exec.shuffle_datastore.key"""
+raw_cat = r"""$exec.shuffle_datastore.category"""
+item_key = raw_key if not raw_key.startswith("$") else ""
+item_cat = raw_cat if not raw_cat.startswith("$") else ""
+
+cur_exec = safe_parse_json(r"""$exec""", {})
+if not isinstance(cur_exec, dict):
+    cur_exec = {}
+
+if item_key and item_cat:
+    try:
+        db_res = self.get_key(item_key, category=item_cat)
+        if isinstance(db_res, dict):
+            val = db_res.get("value")
+            if isinstance(val, str):
+                val = safe_parse_json(val, {})
+            if isinstance(val, dict) and val:
+                cur_exec = val
+        elif isinstance(db_res, str):
+            val = safe_parse_json(db_res, {})
+            if isinstance(val, dict) and val:
+                cur_exec = val
+    except Exception:
+        pass
+
+if not cur_exec:
+    print(json.dumps({
+        "success": False,
+        "reason": "Failed to find the incident"
+    }))
+    exit()
+
+activities = cur_exec.get("activity")
+if not isinstance(activities, list):
+    activities = []
 
 agent_name = ""
 ai_agent_activities = []
 activities_changed = False
+
+exec_id = getattr(self, "current_execution_id", "")
+
 for activityIndex in range(len(activities)):
-  activity = activities[activityIndex]
-  if "ai_handled" not in activity or activity["ai_handled"] == False:
-    activity["ai_handled"] = True
-    activity["execution_id"] = self.current_execution_id
+    activity = activities[activityIndex]
+    if not isinstance(activity, dict):
+        continue
 
-    activities_changed = True
-    activities[activityIndex] = activity
-  else:
-    continue
+    if not activity.get("ai_handled"):
+        activity["ai_handled"] = True
+        if exec_id:
+            activity["execution_id"] = exec_id
+        activities_changed = True
+        activities[activityIndex] = activity
+    else:
+        continue
 
-  if "content" not in activity or ("@aiagent" not in activity["content"].lower()):
-    continue
+    content = str(activity.get("content") or "")
+    if "@aiagent" not in content.lower():
+        continue
 
-  agent_name = "default"
-  ai_agent_activities.append(activity)
-
-db_updated = False
+    agent_name = "default"
+    ai_agent_activities.append(activity)
 
 assignee = ""
-assignee_outer = json.loads(r"""$find_relevant_people""")
-if "message" in assignee_outer:
-  if "assign" in assignee_outer["message"]:
-    assignee = assignee_outer["message"]["assign"]
+assignee_outer = safe_parse_json(r"""$find_relevant_people""", {})
+if isinstance(assignee_outer, dict):
+    msg = assignee_outer.get("message")
+    if isinstance(msg, dict):
+        assignee = str(msg.get("assign") or "")
+    elif "assign" in assignee_outer:
+        assignee = str(assignee_outer.get("assign") or "")
 
-if activities_changed or len(assignee) > 0:
-  # Update datastore
-  #db_updated = True
-  #cur_exec["activity"] = activities
-  #cur_exec = json.dumps(cur_exec)
-  parsed_activity = {}
-  if activities_changed:
-    parsed_activity["activity"] = activities
+db_updated = False
+if activities_changed or (len(assignee) > 0 and "@" in assignee):
+    if activities_changed:
+        cur_exec["activity"] = activities
+    if len(assignee) > 0 and "@" in assignee:
+        cur_exec["assignee"] = assignee
 
-  if len(assignee) > 0 and "@" in assignee:
-    parsed_activity["assignee"] = assignee
+    if item_key and item_cat:
+        try:
+            ret = self.set_key(item_key, json.dumps(cur_exec), category=item_cat)
+            if (isinstance(ret, dict) and ret.get("success")) or ret is True:
+                db_updated = True
+        except Exception:
+            pass
 
-  ret = self.set_key("$exec.shuffle_datastore.key", json.dumps(parsed_activity), category="$exec.shuffle_datastore.category")
-  if ret["success"]:
-    db_updated = True
-    
 available_apps = ""
-assigned_apps = json.loads(r"""$get_assigned_apps""")
-if "success" in assigned_apps and assigned_apps["success"] == True and "value" in assigned_apps and len(str(assigned_apps["value"])) > 0:
-  try:
-    assigned_apps["value"] = json.loads(assigned_apps["value"])
-  except:
-    pass
-  
-  for agent_config in assigned_apps["value"]:
-    if agent_config["agent"] != agent_name:
-      continue
-    
-    for tool in agent_config["tools"]:
-      available_apps += tool["name"]+","
-      
-    if len(available_apps) > 0:
-      available_apps = available_apps[:-1] 
+assigned_apps = safe_parse_json(r"""$get_assigned_apps""", {})
+app_items = []
+if isinstance(assigned_apps, dict):
+    val = assigned_apps.get("value")
+    if isinstance(val, str):
+        val = safe_parse_json(val, [])
+    if isinstance(val, list):
+        app_items = val
+    elif isinstance(assigned_apps.get("data"), list):
+        app_items = assigned_apps["data"]
+elif isinstance(assigned_apps, list):
+    app_items = assigned_apps
 
-# Print the details of the key after it's been updated
-# To get the value, use self.get_key(key)["value"]
-if len(ai_agent_activities) > 0:
-  print(json.dumps({
+for agent_config in app_items:
+    if not isinstance(agent_config, dict):
+        continue
+    if agent_config.get("agent") != agent_name:
+        continue
+    
+    tools = agent_config.get("tools") or []
+    for tool in tools:
+        if isinstance(tool, dict) and tool.get("name"):
+            available_apps += tool["name"] + ","
+
+if len(available_apps) > 0 and available_apps.endswith(","):
+    available_apps = available_apps[:-1]
+
+first_agent_activity = ai_agent_activities[0] if len(ai_agent_activities) > 0 else {"content": "", "id": "", "user": ""}
+
+print(json.dumps({
     "assignee": assignee,
     "updated": db_updated,
-    "agent": ai_agent_activities[0],
+    "agent": first_agent_activity,
     "assigned_apps": available_apps,
-  }))
-else:
-  print(json.dumps({
-    "updated": db_updated,
-    "agent": "",
-  }))`
+}))`
 }
 
 func handleRelevantPeopleAgentResponseCode() string {
 	return `import json
 import time
 
-# Make sure we are always up to date, even if the workflow is a bit late.
-cur_exec = self.get_key("$exec.shuffle_datastore.key", category="$exec.shuffle_datastore.category")
-if cur_exec["success"] and cur_exec["value"]:
-  cur_exec = cur_exec["value"]
-  
-  if "finding_uid" in cur_exec and len(cur_exec["finding_uid"]) > 0:
-    pass
-  else:
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+raw_key = r"""$exec.shuffle_datastore.key"""
+raw_cat = r"""$exec.shuffle_datastore.category"""
+item_key = raw_key if not raw_key.startswith("$") else ""
+item_cat = raw_cat if not raw_cat.startswith("$") else ""
+
+cur_exec = safe_parse_json(r"""$exec""", {})
+if not isinstance(cur_exec, dict):
+    cur_exec = {}
+
+if item_key and item_cat:
+    try:
+        db_res = self.get_key(item_key, category=item_cat)
+        if isinstance(db_res, dict):
+            val = db_res.get("value")
+            if isinstance(val, str):
+                val = safe_parse_json(val, {})
+            if isinstance(val, dict) and val:
+                cur_exec = val
+        elif isinstance(db_res, str):
+            val = safe_parse_json(db_res, {})
+            if isinstance(val, dict) and val:
+                cur_exec = val
+    except Exception:
+        pass
+
+if not cur_exec:
     print(json.dumps({
-      "success": False,
-      "reason": "No finding_uid in the incident. Not updating."
+        "success": False,
+        "reason": "Failed to find the incident"
     }))
     exit()
-    
-else:
-  print(json.dumps({
-    "success": False,
-    "reason": "Failed to find the incident"
-  }))
-  exit()
-  
 
-respond_to = json.loads(r"""$handle_ai_agent_run""")
-if respond_to["message"]["updated"] == False or len(respond_to["message"]["agent"]) == 0:
-  print(json.dumps({
-    "success": False,
-    "reason": "No comment to respond to"
-  }))
-  exit()
+finding_uid = cur_exec.get("finding_uid") or cur_exec.get("id") or item_key
+if not finding_uid:
+    print(json.dumps({
+        "success": False,
+        "reason": "No finding_uid in the incident. Not updating."
+    }))
+    exit()
 
-currentuser = "@AIAgent"
-activities = cur_exec["activity"]
-agent_response = """$run_questions.output"""
+respond_to = safe_parse_json(r"""$handle_ai_agent_run""", {})
+msg = respond_to.get("message") if isinstance(respond_to, dict) else {}
+if not isinstance(msg, dict):
+    msg = respond_to if isinstance(respond_to, dict) else {}
+
+agent_act = msg.get("agent") or {}
+if not isinstance(agent_act, dict) or not agent_act.get("content"):
+    print(json.dumps({
+        "success": False,
+        "reason": "No comment to respond to"
+    }))
+    exit()
+
+activities = cur_exec.get("activity")
+if not isinstance(activities, list):
+    activities = []
+
+agent_response = r"""$run_questions.output"""
+if agent_response.startswith("$"):
+    agent_response = ""
+
 timenow = int(time.time())
+exec_id = getattr(self, "current_execution_id", "")
 
 prepared_response = {
-  "ai_handled": True,
-  "attachments":[],
-  "content": agent_response,
-  "details":{},
-  "id":"comment-%d" % timenow,
-  "replyToId": respond_to["message"]["agent"]["id"], 
-  "replyToLabel": respond_to["message"]["agent"]["user"],
-  "timestamp": timenow,
-  "type":"comment",
-  "user":"@AIAgent",
-  "is_agent": True,
-  "execution_id": self.current_execution_id,
+    "ai_handled": True,
+    "attachments": [],
+    "content": agent_response,
+    "details": {},
+    "id": "comment-%d" % timenow,
+    "replyToId": agent_act.get("id", ""), 
+    "replyToLabel": agent_act.get("user", ""),
+    "timestamp": timenow,
+    "type": "comment",
+    "user": "@AIAgent",
+    "is_agent": True,
+    "execution_id": exec_id,
 }
 
-# In case we want to update an old one. New is better tho.
-for item in activities:  
-  if "replyToId" not in item:
-    continue
-  
-  if item["user"] == currentuser:
-    continue
-  
-  if "replyToId" == respond_to["message"]["agent"]["id"]:
-    if item["content"] == agent_response:
-      print(json.dumps({
-        "success": True,
-        "reason": "Already answered with this message"
-      }))
-      exit()
+currentuser = "@aiagent"
+for item in activities:
+    if not isinstance(item, dict):
+        continue
+    if not item.get("replyToId"):
+        continue
+    if str(item.get("user", "")).lower() == currentuser:
+        continue
+    if item.get("replyToId") == agent_act.get("id"):
+        if item.get("content") == agent_response:
+            print(json.dumps({
+                "success": True,
+                "reason": "Already answered with this message"
+            }))
+            exit()
 
-# Update datastore 
 activities.append(prepared_response)
-ret = self.set_key("$exec.shuffle_datastore.key", json.dumps({"activity": activities}), category="$exec.shuffle_datastore.category")
+cur_exec["activity"] = activities
 
-if ret["success"]:
-  print(json.dumps({
-    "success": True,
-    "updated": True,
-    "comment": prepared_response,
-  }))
+if item_key and item_cat:
+    try:
+        ret = self.set_key(item_key, json.dumps(cur_exec), category=item_cat)
+        if (isinstance(ret, dict) and ret.get("success")) or ret is True:
+            print(json.dumps({
+                "success": True,
+                "updated": True,
+                "comment": prepared_response,
+            }))
+        else:
+            print(json.dumps({
+                "success": False,
+                "updated": False,
+                "reason": "Failed to update the activity in the db",
+            }))
+    except Exception as e:
+        print(json.dumps({
+            "success": False,
+            "updated": False,
+            "reason": f"Exception updating activity: {e}",
+        }))
 else:
-  print(json.dumps({
-    "success": False,
-    "updated": False,
-    "reason": "Failed to update the activity in the db",
-  }))`
+    print(json.dumps({
+        "success": True,
+        "updated": False,
+        "comment": prepared_response,
+        "reason": "No datastore key to persist to",
+    }))`
 }
 
 func getIncidentRoutingScript() string {
