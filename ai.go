@@ -8183,6 +8183,22 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	}
 
 	// Validate On-Prem Configuration immediately
+	if project.Environment == "onprem" {
+		if os.Getenv("AI_MODEL") == "" && os.Getenv("OPENAI_MODEL") == "" {
+			cloudSyncConfigured := false
+			if len(execution.Workflow.OrgId) > 0 {
+				if org, orgErr := GetOrg(ctx, execution.Workflow.OrgId); orgErr == nil && len(org.SyncConfig.Apikey) > 0 {
+					cloudSyncConfigured = true
+				}
+			}
+
+			if !cloudSyncConfigured {
+				log.Printf("[ERROR] AI Configuration Error: AI_MODEL or OPENAI_MODEL environment variable must be set for On-Premise AI Agent execution. Alternatively, set up Cloud Sync to use the Shuffle AI Agent model without any additional configuration: %v", err)
+
+				return abortAgentExecution(ctx, execution, startNode, "missing_onprem_ai_config", err.Error())
+			}
+		}
+	}
 
 	systemMessage := "" // Handled further down now
 	userMessage := ""
@@ -10961,7 +10977,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	defaultCreds := false
-	if project.Environment == "cloud" {
+
+	if len(apiKey) == 0 && project.Environment == "cloud" {
 		foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
 		if len(foundApikey) > 0 {
 			defaultCreds = true
@@ -15374,11 +15391,6 @@ func balanceJSONLikeString(s string) string {
 
 // Wrapper for RunAiQuery() using Shuffle Credentials
 func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
 	ctx := GetContext(request)
 	user, usererr := HandleApiAuthentication(resp, request)
 	if usererr != nil || user.Id == "" || user.ActiveOrg.Id == "" {
@@ -15542,12 +15554,23 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 		}
 	}
 
-	// Handles failover IF we can't find other auth
-	if project.Environment != "cloud" && (apiKey == "" || aiRequestUrl == "") {
-		log.Printf("[INFO] No custom LLM-credentials found for org %s. Falling back to default shuffler.io AI endpoint IF cloud sync is enabled.", orgId)
+	// Handles failover IF we can't find other auth.
+	// Only applies to on-prem deployments - cloud never needs to fail over to itself.
+	if project.Environment == "onprem" && (apiKey == "" || aiRequestUrl == "") {
+		if apiKey == "" {
+			envApiKey := os.Getenv("AI_API_KEY")
+			if len(envApiKey) == 0 {
+				envApiKey = os.Getenv("OPENAI_API_KEY")
+			}
 
-		// type SyncConfig struct {
-		baseUrl := "https://shuffler.io"
+			if len(envApiKey) > 0 {
+				log.Printf("[INFO] No custom LLM-credentials found for org %s, but AI_API_KEY/OPENAI_API_KEY is set in the environment. Skipping Cloud Sync fallback.", orgId)
+				return apiKey, aiRequestUrl, foundModel
+			}
+		}
+
+		log.Printf("[INFO] No custom LLM-credentials found for org %s. Falling back to Cloud Sync AI endpoint IF cloud sync is enabled.", orgId)
+
 		org, err := GetOrg(ctx, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed to get org by ID %s: %s", orgId, err)
@@ -15561,9 +15584,24 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 			return "", "", ""
 		}
 
-		// In case it's stored from cloudsync
-		if strings.Contains(org.SyncConfig.URL, "shuffler.io") && strings.HasPrefix(org.SyncConfig.URL, "https://") {
-			baseUrl = org.SyncConfig.URL
+		baseUrl := "https://uk.shuffler.io"
+		if len(org.SyncConfig.URL) > 0 && (strings.HasPrefix(org.SyncConfig.URL, "https://") || strings.HasPrefix(org.SyncConfig.URL, "http://")) {
+			baseUrl = strings.TrimSuffix(org.SyncConfig.URL, "/")
+		}
+
+		regionUrlCacheKey := fmt.Sprintf("org_cloudsync_region_url_%s", orgId)
+		if cached, cacheErr := GetCache(ctx, regionUrlCacheKey); cacheErr == nil {
+			cachedUrl := ""
+			switch typed := cached.(type) {
+			case []byte:
+				cachedUrl = string(typed)
+			case string:
+				cachedUrl = typed
+			}
+
+			if len(cachedUrl) > 0 && (strings.HasPrefix(cachedUrl, "https://") || strings.HasPrefix(cachedUrl, "http://")) {
+				baseUrl = strings.TrimSuffix(cachedUrl, "/")
+			}
 		}
 
 		aiRequestUrl = fmt.Sprintf("%s/api/v1", baseUrl)
