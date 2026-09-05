@@ -78,6 +78,61 @@ var (
 // streamSeqMu guards the in-process counter path (single-instance deployments without memcache).
 var streamSeqMu sync.Mutex
 
+// streamReaderSignal wakes a single blocked reader. Buffered to 1 so a pending
+// wake is never lost and repeated wakes coalesce into one.
+type streamReaderSignal chan struct{}
+
+// streamNotifier wakes blocked readers when a writer stores an op, replacing the
+// busy-poll. In-process only (single instance): writer and readers share a process.
+type streamNotifier struct {
+	mu      sync.RWMutex
+	readers map[string][]streamReaderSignal // workflowID -> subscribed reader signals
+}
+
+var streamNotify = &streamNotifier{
+	readers: make(map[string][]streamReaderSignal),
+}
+
+// subscribe returns a wake channel for the workflow and an unsubscribe func the
+// caller MUST defer.
+func (n *streamNotifier) subscribe(workflowID string) (streamReaderSignal, func()) {
+	signal := make(streamReaderSignal, 1)
+
+	n.mu.Lock()
+	n.readers[workflowID] = append(n.readers[workflowID], signal)
+	n.mu.Unlock()
+
+	unsubscribe := func() {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+
+		signals := n.readers[workflowID]
+		for i, s := range signals {
+			if s == signal {
+				n.readers[workflowID] = append(signals[:i], signals[i+1:]...)
+				break
+			}
+		}
+		if len(n.readers[workflowID]) == 0 {
+			delete(n.readers, workflowID)
+		}
+	}
+	return signal, unsubscribe
+}
+
+// publish wakes every reader subscribed to the workflow. Never blocks.
+func (n *streamNotifier) publish(workflowID string) {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
+	for _, signal := range n.readers[workflowID] {
+		select {
+		case signal <- struct{}{}:
+		default: // reader already has a pending wake
+		}
+	}
+}
+
 // Stream Cache Helpers - Abstracts memcached vs in-memory storage
 
 // streamCacheIncrement atomically increments a counter in cache.
@@ -570,8 +625,18 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 
 	workflowID := workflowAuth.ID
 
+	// Limit request body size to prevent memory exhaustion
+	const maxBodySize = 10 * 1024 * 1024 // 10MB limit
+	request.Body = http.MaxBytesReader(resp, request.Body, maxBodySize)
+	
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
+		if err.Error() == "http: request body too large" {
+			log.Printf("[WARNING] Request body too large for workflow %s", workflowID)
+			resp.WriteHeader(413)
+			resp.Write([]byte(`{"success": false, "reason": "Request body too large (max 10MB)"}`))
+			return
+		}
 		log.Printf("[WARNING] Error with body read in workflow stream: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
@@ -589,8 +654,18 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
+	// Limit batch size to prevent memory exhaustion
+	const maxBatchSize = 1000
+	if len(ops) > maxBatchSize {
+		log.Printf("[WARNING] Batch too large for workflow %s: %d ops (max %d)", workflowID, len(ops), maxBatchSize)
+		resp.WriteHeader(413)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Batch too large (max %d operations)"}`, maxBatchSize)))
+		return
+	}
+
 	now := time.Now().UnixMilli()
 	var lastSeq int64
+	var failedSeqs []int64
 	for i := range ops {
 		// Atomic allocation — two writers can never receive the same sequence, so their
 		// ops can never overwrite each other (each lives under its own key).
@@ -614,11 +689,14 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 
 		opBytes, marshalErr := json.Marshal(ops[i])
 		if marshalErr != nil {
-			log.Printf("[WARNING] Failed marshaling stream op for %s: %s", workflowID, marshalErr)
+			log.Printf("[ERROR] Failed marshaling stream op %d for %s: %s", seq, workflowID, marshalErr)
+			failedSeqs = append(failedSeqs, seq)
 			continue
 		}
 		if cacheErr := SetCache(ctx, streamOpKey(workflowID, seq), opBytes, streamOpTTLMinutes); cacheErr != nil {
-			log.Printf("[WARNING] Failed storing stream op %d for %s: %s", seq, workflowID, cacheErr)
+			log.Printf("[ERROR] Failed storing stream op %d for %s: %s", seq, workflowID, cacheErr)
+			failedSeqs = append(failedSeqs, seq)
+			continue
 		}
 
 		// Record the save baseline so late joiners only replay unsaved changes.
@@ -631,6 +709,16 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		}
 
 		lastSeq = seq
+	}
+
+	// Wake readers so they deliver whichever ops did land immediately.
+	streamNotify.publish(workflowID)
+
+	if len(failedSeqs) > 0 {
+		log.Printf("[ERROR] Failed persisting %d/%d stream ops for %s (sequences: %v)", len(failedSeqs), len(ops), workflowID, failedSeqs)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to persist %d of %d stream operations", "sequence": %d, "count": %d}`, len(failedSeqs), len(ops), lastSeq, len(ops)-len(failedSeqs))))
+		return
 	}
 
 	resp.WriteHeader(200)
@@ -804,11 +892,15 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Adaptive polling: seed the activity timestamp on first connect so it
 	// persists across 55s reconnect cycles. Subsequent connects read the
 	// existing key; only the very first connection writes it.
-	lastActivity, exists := getStreamLastActivity(ctx, workflowID)
+	_, exists := getStreamLastActivity(ctx, workflowID)
 	if !exists {
 		setStreamLastActivity(ctx, workflowID)
 	}
 	lastPresenceAt := time.Time{} // zero → sends presence on first iteration
+
+	// Subscribe so writers can wake this reader instead of it busy-polling.
+	wakeSignal, unsubscribe := streamNotify.subscribe(workflowID)
+	defer unsubscribe()
 
 	for {
 		if time.Since(connStart) > streamSelfCloseAfter {
@@ -888,13 +980,32 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 			lastSentSeq = seq
-			lastActivity = time.Now()
 			setStreamLastActivity(ctx, workflowID)
 			conn.Flush()
 		}
 
-		pollInterval := streamPollInterval(lastActivity)
-		time.Sleep(pollInterval)
+		// Wake to send the next presence heartbeat, but never past the self-close window.
+		wait := time.Until(lastPresenceAt.Add(10 * time.Second))
+		if wait <= 0 {
+			wait = 10 * time.Second
+		}
+		if untilSelfClose := time.Until(connStart.Add(streamSelfCloseAfter)); untilSelfClose < wait {
+			if untilSelfClose <= 0 {
+				return
+			}
+			wait = untilSelfClose
+		}
+
+		// Block at ~0 CPU. Any wake re-drains from lastSentSeq, so no op is missed
+		// even if a signal coalesced.
+		select {
+		case <-wakeSignal:
+			// a writer stored an op
+		case <-time.After(wait):
+			// presence heartbeat due
+		case <-request.Context().Done():
+			return // client disconnected
+		}
 	}
 }
 
