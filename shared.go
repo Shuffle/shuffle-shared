@@ -18193,7 +18193,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 			log.Printf("[DEBUG][%s] AI Agent finished. Detected environment: '%s'", workflowExecution.ExecutionId, agentEnvironment)
 
-			if strings.ToLower(agentEnvironment) != "cloud" && agentEnvironment != "" {
+			if fullExecution.Workflow.ID != fullExecution.ExecutionId && strings.ToLower(agentEnvironment) != "cloud" && agentEnvironment != "" {
 				log.Printf("[INFO][%s] AI Agent finished (status: %s). Redeploying workflow to env '%s' with MAX priority",
 					workflowExecution.ExecutionId, status, agentEnvironment)
 
@@ -18205,7 +18205,10 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 					Priority:      11, // I'm assuming 11 is the max priority
 				}
 
-				parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(agentEnvironment, " ", "-"), "_", "-")), fullExecution.ExecutionOrg)
+				parsedEnv := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(agentEnvironment, " ", "-"), "_", "-"))
+				if project.Environment == "cloud" {
+					parsedEnv = fmt.Sprintf("%s_%s", parsedEnv, fullExecution.ExecutionOrg)
+				}
 
 				log.Printf("[INFO][%s] Redeploying workflow to queue: %s with priority %d", fullExecution.ExecutionId, parsedEnv, executionRequest.Priority)
 				// log.Printf("[DEBUG] AI Agent finished - REDEPLOYING workflow to Queue: '%s' (Priority: %d). Original Env: '%s', Org: '%s'", parsedEnv, executionRequest.Priority, agentEnvironment, fullExecution.ExecutionOrg)
