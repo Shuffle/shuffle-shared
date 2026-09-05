@@ -2383,25 +2383,10 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed to parse Agent decision.Delay '%s' as int: %s", execution.ExecutionId, decision.Delay, err)
 	}
 
-	resolvedEnv := execution.Workflow.ExecutionEnvironment
-	if len(resolvedEnv) == 0 {
-		for _, act := range execution.Workflow.Actions {
-			if len(act.Environment) > 0 {
-				resolvedEnv = act.Environment
-				break
-			}
-		}
-	}
-
-	if project.Environment != "cloud" && strings.ToLower(resolvedEnv) == "cloud" {
-		resolvedEnv = ""
-	}
-
 	action := Action{
 		AppID:            resolvedAppId,
 		AppName:          resolvedAppName,
 		Name:             decision.Action, // overwritten below if schema match found
-		Environment:      resolvedEnv,
 		//AuthenticationId: resolvedAuthId,
 		Parameters:       []WorkflowAppActionParameter{},
 

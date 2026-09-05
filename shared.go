@@ -21490,10 +21490,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				}
 			}
 
-			if project.Environment != "cloud" && (strings.ToLower(action.Environment) == "cloud" || len(action.Environment) == 0) {
-				action.Environment = "Shuffle"
-			}
-
 			exec := WorkflowExecution{
 				Workflow: Workflow{
 					ID: workflowId,
@@ -21501,11 +21497,10 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 						action,
 					},
 
-					OrgId:                user.ActiveOrg.Id,
-					Owner:                user.Username,
-					UpdatedBy:            user.Username,
-					Start:                action.ID,
-					ExecutionEnvironment: action.Environment,
+					OrgId:     user.ActiveOrg.Id,
+					Owner:     user.Username,
+					UpdatedBy: user.Username,
+					Start:     action.ID,
 				},
 				Type:          "AGENT",
 				Start:         action.ID,
@@ -21991,25 +21986,21 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 	action.Public = app.Public
 	action.Generated = app.Generated
 
-	if len(action.Environment) == 0 || (project.Environment != "cloud" && strings.ToLower(action.Environment) == "cloud") {
+	if len(action.Environment) == 0 {
 		if project.Environment == "cloud" {
 			action.Environment = "cloud"
 		} else {
 			environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 			if err != nil {
 				log.Printf("[ERROR] Failed getting environments for org in single action %s: %s", user.ActiveOrg.Id, err)
-			} else {
-				for _, env := range environments {
-					if env.Default && !env.Archived {
-						//log.Printf("[INFO] Setting default environment for single action: %s", env.Name)
-						action.Environment = env.Name
-						break
-					}
-				}
 			}
 
-			if len(action.Environment) == 0 {
-				action.Environment = "Shuffle"
+			for _, env := range environments {
+				if env.Default {
+					//log.Printf("[INFO] Setting default environment for single action: %s", env.Name)
+					action.Environment = env.Name
+					break
+				}
 			}
 		}
 	}
