@@ -2393,6 +2393,10 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		}
 	}
 
+	if project.Environment != "cloud" && strings.ToLower(resolvedEnv) == "cloud" {
+		resolvedEnv = ""
+	}
+
 	action := Action{
 		AppID:            resolvedAppId,
 		AppName:          resolvedAppName,

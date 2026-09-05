@@ -21986,24 +21986,24 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 	action.Public = app.Public
 	action.Generated = app.Generated
 
-	if len(action.Environment) == 0 {
-		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
-		if err != nil {
-			log.Printf("[ERROR] Failed getting environments for org in single action %s: %s", user.ActiveOrg.Id, err)
+	if len(action.Environment) == 0 || (project.Environment != "cloud" && strings.ToLower(action.Environment) == "cloud") {
+		if project.Environment == "cloud" {
+			action.Environment = "cloud"
 		} else {
-			for _, env := range environments {
-				if env.Default && !env.Archived {
-					//log.Printf("[INFO] Setting default environment for single action: %s", env.Name)
-					action.Environment = env.Name
-					break
+			environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting environments for org in single action %s: %s", user.ActiveOrg.Id, err)
+			} else {
+				for _, env := range environments {
+					if env.Default && !env.Archived {
+						//log.Printf("[INFO] Setting default environment for single action: %s", env.Name)
+						action.Environment = env.Name
+						break
+					}
 				}
 			}
-		}
 
-		if len(action.Environment) == 0 {
-			if project.Environment == "cloud" {
-				action.Environment = "cloud"
-			} else {
+			if len(action.Environment) == 0 {
 				action.Environment = "Shuffle"
 			}
 		}
