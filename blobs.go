@@ -384,92 +384,94 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 			}
 		}
 	} else if actionType == "vulnerability_correlation" {
-		categoryCheck := "shuffle-security_packages"
-		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
-		if err != nil {
-			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
-				categoryConfig = &DatastoreCategoryUpdate{
-					OrgId:       user.ActiveOrg.Id,
-					Category:    categoryCheck,
-					Automations: []DatastoreAutomation{},
-					Settings:    DatastoreCategorySettings{},
+		categoryChecks := []string{"shuffle-security_packages", "shuffle-security_software"}
+		for _, categoryCheck := range categoryChecks {
+			categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
+			if err != nil {
+				if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
+					categoryConfig = &DatastoreCategoryUpdate{
+						OrgId:       user.ActiveOrg.Id,
+						Category:    categoryCheck,
+						Automations: []DatastoreAutomation{},
+						Settings:    DatastoreCategorySettings{},
+					}
+				} else {
+					return err
 				}
-			} else {
-				return err
 			}
-		}
 
-		datastoreCategoryConfigEdited := false
+			datastoreCategoryConfigEdited := false
 
-		foundRunWorkflow := DatastoreAutomation{
-			Name:        "Run workflow",
-			Description: "Runs one or more workflows with the updated value as runtime argument",
-			Options: []DatastoreAutomationOption{
-				DatastoreAutomationOption{
-					Key:   "workflow_id",
-					Value: workflow.ID,
+			foundRunWorkflow := DatastoreAutomation{
+				Name:        "Run workflow",
+				Description: "Runs one or more workflows with the updated value as runtime argument",
+				Options: []DatastoreAutomationOption{
+					DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					},
 				},
-			},
-			Icon:    "",
-			Enabled: true,
-		}
+				Icon:    "",
+				Enabled: true,
+			}
 
-		automationFound := false
-		if len(categoryConfig.Automations) > 0 {
-			for automationIndex, automation := range categoryConfig.Automations {
-				if strings.ToLower(automation.Name) != "run workflow" {
-					continue
-				}
-
-				automationFound = true
-
-				workflowIdFound := false
-				for optionIndex, option := range automation.Options {
-					if option.Key != "workflow_id" {
+			automationFound := false
+			if len(categoryConfig.Automations) > 0 {
+				for automationIndex, automation := range categoryConfig.Automations {
+					if strings.ToLower(automation.Name) != "run workflow" {
 						continue
 					}
 
-					if debug {
-						log.Printf("[DEBUG] VALUE: %#v", option.Value)
+					automationFound = true
+
+					workflowIdFound := false
+					for optionIndex, option := range automation.Options {
+						if option.Key != "workflow_id" {
+							continue
+						}
+
+						if debug {
+							log.Printf("[DEBUG] VALUE: %#v", option.Value)
+						}
+
+						workflowIdFound = true
+
+						if !strings.Contains(option.Value, workflow.ID) {
+							categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+						}
+
+						break
 					}
 
-					workflowIdFound = true
+					if !workflowIdFound {
+						log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+						automationOption := DatastoreAutomationOption{
+							Key:   "workflow_id",
+							Value: workflow.ID,
+						}
 
-					if !strings.Contains(option.Value, workflow.ID) {
-						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+						categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 					}
 
+					datastoreCategoryConfigEdited = true
+					categoryConfig.Automations[automationIndex].Enabled = true
 					break
 				}
+			}
 
-				if !workflowIdFound {
-					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
-					automationOption := DatastoreAutomationOption{
-						Key:   "workflow_id",
-						Value: workflow.ID,
-					}
-
-					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
-				}
-
+			if !automationFound {
+				categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
 				datastoreCategoryConfigEdited = true
-				categoryConfig.Automations[automationIndex].Enabled = true
-				break
+			}
+
+			if datastoreCategoryConfigEdited {
+				err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+				if err != nil {
+					log.Printf("[ERROR] Failed to update category config for automation enablement (vuln comparison): %s", err)
+				}
 			}
 		}
-
-		if !automationFound {
-			categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
-			datastoreCategoryConfigEdited = true
-		}
-
-		if datastoreCategoryConfigEdited {
-			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
-			if err != nil {
-				log.Printf("[ERROR] Failed to update category config for automation enablement (vuln comparison): %s", err)
-			}
-		}
-	} else if actionType == "assign_&_escalate" {
+	} else if actionType == "assign_&_escalate" || actionType == "incident_routing" || actionType == "incident_routing_rules" {
 		// This makes incident edits the actual trigger
 
 		categoryCheck := "shuffle-security_incidents"
@@ -588,131 +590,491 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 func getVulnerabilityCorrelationScript(orgId string) string {
 	return `import json
 import time
+import re
 import requests
 
-raw = r"""$exec"""
+DATASTORE_VULNS = "shuffle-security_vulnerabilities"
+DATASTORE_PACKAGES = "shuffle-security_packages"
+DATASTORE_SOFTWARE = "shuffle-security_software"
+DATASTORE_INCIDENTS = "shuffle-security_incidents"
 
-exec = json.loads(raw)
-if isinstance(exec, str):
-    exec = json.loads(exec)
-
-name = exec["name"]
-versions = exec.get("versions", [])
-
-DATASTORE_CATEGORY = "shuffle-security_vulnerabilities"
+API_SHUFFLE = "https://shuffler.io/api/v1/vulnerabilities"
+API_OSV = "https://api.osv.dev/v1/query"
 
 ECOSYSTEM_MAP = {
-    "python": "PyPI", "pip": "PyPI", "pypi": "PyPI",
-    "golang": "Go", "go": "Go",
-    "javascript": "npm", "node": "npm", "npm": "npm",
-    "rust": "crates.io", "cargo": "crates.io",
-    "ruby": "RubyGems", "gem": "RubyGems",
-    "java": "Maven", "maven": "Maven",
-    "php": "Packagist", "composer": "Packagist",
-    "dotnet": "NuGet", "nuget": "NuGet",
+    # Python
+    "python": "PyPI", "pip": "PyPI", "pypi": "PyPI", "pipenv": "PyPI", "poetry": "PyPI",
+    # JavaScript / TypeScript
+    "javascript": "npm", "js": "npm", "node": "npm", "nodejs": "npm", "npm": "npm", "yarn": "npm", "pnpm": "npm", "typescript": "npm", "ts": "npm",
+    # Go
+    "golang": "Go", "go": "Go", "gomod": "Go",
+    # Rust
+    "rust": "crates.io", "cargo": "crates.io", "crates": "crates.io",
+    # Ruby
+    "ruby": "RubyGems", "gem": "RubyGems", "rubygems": "RubyGems", "bundler": "RubyGems",
+    # Java
+    "java": "Maven", "maven": "Maven", "gradle": "Maven",
+    # PHP
+    "php": "Packagist", "composer": "Packagist", "packagist": "Packagist",
+    # .NET
+    "dotnet": "NuGet", ".net": "NuGet", "nuget": "NuGet", "c#": "NuGet", "csharp": "NuGet",
+    # Linux distributions
+    "ubuntu": "Ubuntu", "debian": "Debian", "alpine": "Alpine", "centos": "CentOS",
+    "redhat": "Red Hat", "rhel": "Red Hat", "fedora": "Red Hat", "rocky": "Rocky Linux",
+    "almalinux": "AlmaLinux", "alma": "AlmaLinux", "arch": "Arch Linux", "archlinux": "Arch Linux",
+    # Others
+    "conan": "ConanCenter", "pub": "Pub", "hex": "Hex", "cran": "CRAN",
 }
-raw_os = (exec.get("os") or "").strip()
-ecosystem = ECOSYSTEM_MAP.get(raw_os.lower(), raw_os)
 
-def normalize_version(v):
-    if not v:
-        return None
-    v = v.strip()
-    if v.startswith("=="):
-        v = v.lstrip("=")
-    if any(c in v for c in "<>=*~^ "):
-        return None
-    return v
+# -------------------------------------------------------------
+# 1. Safe Variable Resolution
+# -------------------------------------------------------------
+raw_exec = r"""$exec"""
+item_key = r"""$exec.shuffle_datastore.key"""
+item_cat = r"""$exec.shuffle_datastore.category"""
 
-API = "https://shuffler.io/api/v1/vulnerabilities"
-MAX_RETRIES = 4
-RETRY_WAIT = 20
-
-def is_rate_limited(resp, data):
-    if resp.status_code == 429:
-        return True
-    reason = (data.get("reason") or "") if isinstance(data, dict) else ""
-    return isinstance(data, dict) and data.get("success") is False and "too many requests" in reason.lower()
-
-found = []
-errors = []
-rate_limited = False
-
-for raw_version in versions:
-    version = normalize_version(raw_version)
-    if not version:
-        continue
-    if not ecosystem:
-        errors.append("No ecosystem mapping for os=%s" % raw_os)
-        break
-
-    body = {"package": {"name": name, "ecosystem": ecosystem}, "version": version}
-
-    for attempt in range(MAX_RETRIES):
-        try:
-            r = requests.post(API, json=body, timeout=30)
-        except Exception as e:
-            errors.append("Request failed for %s %s: %s" % (name, version, e))
-            break
-        try:
-            data = r.json()
-        except Exception:
-            errors.append("Bad response (%s) for %s %s: %s" % (r.status_code, name, version, r.text[:200]))
-            break
-
-        if is_rate_limited(r, data):
-            rate_limited = True
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(RETRY_WAIT)
-                continue
-            errors.append("RATE LIMITED on %s %s after %s retries" % (name, version, MAX_RETRIES))
-            break
-
-        if isinstance(data, dict) and data.get("success") is False:
-            errors.append("API error for %s %s: %s" % (name, version, data.get("reason")))
-            break
-
-        found.extend(data.get("vulns") or data.get("vulnerabilities") or [])
-        break
-
-seen, deduped = set(), []
-for v in found:
-    vid = v.get("id")
-    if vid and vid not in seen:
-        seen.add(vid)
-        deduped.append(v)
-
-stored = []
-store_errors = []
-for v in deduped:
-    vid = v.get("id")
-    if not vid:
-        continue
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
     try:
-        self.set_key(vid, json.dumps(v), category=DATASTORE_CATEGORY)
-        stored.append(vid)
-    except Exception as e:
-        store_errors.append("Failed storing %s: %s" % (vid, e))
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
 
-if rate_limited or errors or store_errors:
-    status = "unknown"
-elif deduped:
-    status = "vulnerable"
+payload = safe_parse_json(raw_exec, {})
+if not isinstance(payload, dict):
+    payload = {}
+
+# Unwrap nested arguments if passed as execution_argument or data
+if "execution_argument" in payload and isinstance(payload["execution_argument"], (dict, str)):
+    inner = safe_parse_json(payload["execution_argument"], {})
+    if isinstance(inner, dict) and inner:
+        payload = inner
+if "data" in payload and isinstance(payload["data"], (dict, str)):
+    inner = safe_parse_json(payload["data"], {})
+    if isinstance(inner, dict) and inner:
+        payload = inner
+
+# -------------------------------------------------------------
+# 2. Version Helpers & Range Evaluation
+# -------------------------------------------------------------
+def clean_ver(v):
+    if not v:
+        return ""
+    v = str(v).strip()
+    v = re.sub(r"^[=~^><\s]+", "", v)
+    return v.strip()
+
+def parse_ver_parts(v):
+    cleaned = clean_ver(v)
+    parts = re.split(r"[.\-+_]", cleaned)
+    res = []
+    for p in parts:
+        if not p:
+            continue
+        if p.isdigit():
+            res.append((0, int(p)))
+        else:
+            m = re.match(r"^(\d+)(.*)$", p)
+            if m:
+                res.append((0, int(m.group(1))))
+                if m.group(2):
+                    res.append((1, m.group(2).lower()))
+            else:
+                res.append((1, p.lower()))
+    return res
+
+def compare_vers(a, b):
+    pa = parse_ver_parts(a)
+    pb = parse_ver_parts(b)
+    lmax = max(len(pa), len(pb))
+    for i in range(lmax):
+        part_a = pa[i] if i < len(pa) else (0, 0)
+        part_b = pb[i] if i < len(pb) else (0, 0)
+        if part_a != part_b:
+            if part_a[0] != part_b[0]:
+                return -1 if part_a[0] < part_b[0] else 1
+            return -1 if part_a[1] < part_b[1] else 1
+    return 0
+
+def is_version_affected(inst_ver, vuln):
+    if not inst_ver or not isinstance(vuln, dict):
+        return True
+    cl = clean_ver(inst_ver)
+    if not cl:
+        return True
+
+    affected = vuln.get("affected") or []
+    if not isinstance(affected, list) or len(affected) == 0:
+        return True
+
+    matched_any_package = False
+    for a in affected:
+        if not isinstance(a, dict):
+            continue
+        matched_any_package = True
+        # Exact version list check
+        versions = a.get("versions") or []
+        for v in versions:
+            if clean_ver(v) == cl:
+                return True
+
+        # Range check with events
+        ranges = a.get("ranges") or []
+        for r in ranges:
+            events = r.get("events") or []
+            in_range = False
+            for e in events:
+                if not isinstance(e, dict):
+                    continue
+                if "introduced" in e:
+                    intro = str(e["introduced"]).strip()
+                    if intro == "0" or compare_vers(cl, intro) >= 0:
+                        in_range = True
+                if "fixed" in e:
+                    fixed = str(e["fixed"]).strip()
+                    if in_range and compare_vers(cl, fixed) >= 0:
+                        in_range = False
+                if "last_affected" in e:
+                    la = str(e["last_affected"]).strip()
+                    if in_range and compare_vers(cl, la) > 0:
+                        in_range = False
+            if in_range:
+                return True
+
+    return not matched_any_package
+
+# -------------------------------------------------------------
+# 3. Execution Logic
+# -------------------------------------------------------------
+is_incident = bool(
+    "observables" in payload or
+    "finding_uid" in payload or
+    (item_cat and item_cat == DATASTORE_INCIDENTS) or
+    ("rawOCSF" in payload)
+)
+
+errors = []
+stored = []
+now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+if not is_incident:
+    # Package / Software correlation mode
+    pkg_name = payload.get("name") or payload.get("package_name") or payload.get("software_name") or payload.get("package") or ""
+    if not pkg_name and item_key and not item_key.startswith("$"):
+        pkg_name = item_key.split("_")[0]
+
+    raw_os = (payload.get("os") or "").strip().lower()
+    ecosystem = ECOSYSTEM_MAP.get(raw_os, None)
+    if not ecosystem and raw_os:
+        for k, v in ECOSYSTEM_MAP.items():
+            if k in raw_os:
+                ecosystem = v
+                break
+    if not ecosystem and raw_os:
+        ecosystem = payload.get("os")
+
+    raw_versions = payload.get("versions") or []
+    if isinstance(raw_versions, str):
+        raw_versions = [raw_versions]
+    elif not isinstance(raw_versions, list):
+        raw_versions = []
+    if payload.get("version") and payload.get("version") not in raw_versions:
+        raw_versions.append(payload["version"])
+
+    hostnames = payload.get("hostnames") or []
+    if not isinstance(hostnames, list):
+        hostnames = []
+
+    for h in hostnames:
+        if isinstance(h, dict) and h.get("version"):
+            hv = str(h["version"]).strip()
+            if hv and hv not in raw_versions:
+                raw_versions.append(hv)
+
+    valid_versions = []
+    for v in raw_versions:
+        cv = clean_ver(v)
+        if cv and not any(c in cv for c in "<>*~^ ") and cv not in valid_versions:
+            valid_versions.append(cv)
+
+    found_vulns = []
+    rate_limited = False
+
+    if pkg_name:
+        queries = []
+        if valid_versions:
+            for v in valid_versions:
+                q = {"package": {"name": pkg_name}}
+                if ecosystem:
+                    q["package"]["ecosystem"] = ecosystem
+                q["version"] = v
+                queries.append(q)
+        else:
+            q = {"package": {"name": pkg_name}}
+            if ecosystem:
+                q["package"]["ecosystem"] = ecosystem
+            queries.append(q)
+
+        for q in queries:
+            resp_data = None
+            # Attempt 1: Shuffler.io API
+            for attempt in range(3):
+                try:
+                    r = requests.post(API_SHUFFLE, json=q, timeout=20)
+                    if r.status_code == 200:
+                        resp_data = r.json()
+                        break
+                    elif r.status_code == 429:
+                        rate_limited = True
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                except Exception:
+                    pass
+
+            # Attempt 2: Direct OSV.dev fallback
+            if not resp_data or (isinstance(resp_data, dict) and resp_data.get("success") is False):
+                for attempt in range(2):
+                    try:
+                        r = requests.post(API_OSV, json=q, timeout=20)
+                        if r.status_code == 200:
+                            resp_data = r.json()
+                            break
+                        elif r.status_code == 429:
+                            rate_limited = True
+                            time.sleep(2 * (attempt + 1))
+                            continue
+                    except Exception as e:
+                        errors.append("OSV request error for %s: %s" % (pkg_name, e))
+                        break
+
+            if isinstance(resp_data, dict):
+                vulns = resp_data.get("vulns") or resp_data.get("vulnerabilities") or []
+                if isinstance(vulns, list):
+                    found_vulns.extend(vulns)
+
+    seen_ids = set()
+    deduped_vulns = []
+    for v in found_vulns:
+        if isinstance(v, dict):
+            vid = v.get("id")
+            if vid and vid not in seen_ids:
+                seen_ids.add(vid)
+                deduped_vulns.append(v)
+
+    affected_hosts_global = set()
+    for v in deduped_vulns:
+        vid = v.get("id")
+        if not vid:
+            continue
+
+        vuln_hosts = []
+        for h in hostnames:
+            if not isinstance(h, dict):
+                continue
+            hname = h.get("hostname")
+            if not hname:
+                continue
+            hver = h.get("version") or (valid_versions[0] if valid_versions else None)
+            if is_version_affected(hver, v):
+                affected_hosts_global.add(hname)
+                hpaths = h.get("paths") or []
+                paths_arr = []
+                if hpaths:
+                    for p in hpaths:
+                        paths_arr.append({
+                            "path": p,
+                            "version": hver,
+                            "last_seen": now_iso,
+                        })
+                else:
+                    paths_arr.append({
+                        "version": hver,
+                        "last_seen": now_iso,
+                    })
+                vuln_hosts.append({
+                    "hostname": hname,
+                    "paths": paths_arr,
+                })
+
+        existing_rec = None
+        try:
+            if "self" in locals() or "self" in globals():
+                raw_rec = self.get_key(vid, category=DATASTORE_VULNS)
+                if raw_rec:
+                    if isinstance(raw_rec, dict) and "value" in raw_rec:
+                        raw_rec = raw_rec["value"]
+                    if isinstance(raw_rec, str):
+                        try:
+                            existing_rec = json.loads(raw_rec)
+                        except Exception:
+                            pass
+                    elif isinstance(raw_rec, dict):
+                        existing_rec = raw_rec
+        except Exception:
+            pass
+
+        merged = dict(v)
+        if isinstance(existing_rec, dict):
+            for preserve_key in ["status", "resolution", "resolution_note", "resolved_at", "resolved_by", "activity"]:
+                if preserve_key in existing_rec and existing_rec[preserve_key]:
+                    merged[preserve_key] = existing_rec[preserve_key]
+
+            existing_hosts = existing_rec.get("hosts") or []
+            hmap = {}
+            for eh in existing_hosts:
+                if isinstance(eh, dict) and eh.get("hostname"):
+                    hmap[eh["hostname"]] = eh
+
+            for vh in vuln_hosts:
+                hn = vh["hostname"]
+                if hn in hmap:
+                    existing_entry = hmap[hn]
+                    epaths = existing_entry.setdefault("paths", [])
+                    known_paths = {p.get("path") for p in epaths if isinstance(p, dict) and p.get("path")}
+                    for np in vh.get("paths", []):
+                        if np.get("path") not in known_paths:
+                            epaths.append(np)
+                        else:
+                            for ep in epaths:
+                                if ep.get("path") == np.get("path"):
+                                    ep["last_seen"] = now_iso
+                                    if np.get("version"):
+                                        ep["version"] = np.get("version")
+                else:
+                    hmap[hn] = vh
+            merged["hosts"] = list(hmap.values())
+        else:
+            merged["hosts"] = vuln_hosts
+
+        try:
+            if "self" in locals() or "self" in globals():
+                self.set_key(vid, json.dumps(merged), category=DATASTORE_VULNS)
+            stored.append(vid)
+        except Exception as e:
+            errors.append("Failed storing %s: %s" % (vid, e))
+
+    status = "vulnerable" if deduped_vulns else "not_vulnerable"
+    if rate_limited or errors:
+        status = "unknown"
+
+    result = {
+        "success": True,
+        "mode": "package",
+        "name": pkg_name,
+        "ecosystem": ecosystem,
+        "status": status,
+        "vuln_count": len(deduped_vulns),
+        "affected_hosts": list(affected_hosts_global),
+        "stored_count": len(stored),
+        "stored_ids": stored,
+        "rate_limited": rate_limited,
+        "errors": errors,
+    }
+    print(json.dumps(result, indent=2))
+
 else:
-    status = "not_vulnerable"
+    # Incident Correlation mode
+    inc_id = payload.get("finding_uid") or payload.get("id") or item_key or "unknown_incident"
+    observables = payload.get("observables") or []
+    if not isinstance(observables, list):
+        observables = []
 
-result = {
-    "name": name,
-    "ecosystem": ecosystem,
-    "status": status,
-    "vuln_count": len(deduped),
-    "stored_count": len(stored),
-    "stored_ids": stored,
-    "rate_limited": rate_limited,
-    "errors": errors,
-    "store_errors": store_errors,
-}
-print(json.dumps(result, indent=2))
+    hosts_in_incident = set()
+    packages_in_incident = set()
+    cves_in_incident = set()
+
+    for o in observables:
+        if not isinstance(o, dict):
+            continue
+        otype = (o.get("type") or "").strip().lower()
+        oval = (o.get("value") or "").strip()
+        if not oval:
+            continue
+        if otype in ("hostname", "host", "endpoint", "device", "asset"):
+            hosts_in_incident.add(oval)
+        elif otype in ("package", "software", "library"):
+            packages_in_incident.add(oval)
+        elif otype in ("cve", "vulnerability"):
+            cves_in_incident.add(oval)
+
+    raw_ocsf = payload.get("rawOCSF") or {}
+    if isinstance(raw_ocsf, dict):
+        device = raw_ocsf.get("device") or {}
+        if isinstance(device, dict) and device.get("hostname"):
+            hosts_in_incident.add(device["hostname"])
+
+    correlated_vulns = []
+    for cve in cves_in_incident:
+        try:
+            if "self" in locals() or "self" in globals():
+                vdata = self.get_key(cve, category=DATASTORE_VULNS)
+                if vdata:
+                    if isinstance(vdata, dict) and "value" in vdata:
+                        vdata = vdata["value"]
+                    if isinstance(vdata, str):
+                        vdata = json.loads(vdata)
+                    correlated_vulns.append(vdata)
+        except Exception:
+            pass
+
+    if correlated_vulns:
+        custom_attrs = payload.setdefault("metadata", {}).setdefault("extensions", {}).setdefault("custom_attributes", {})
+        existing_corr = custom_attrs.get("correlated_vulnerabilities") or []
+        corr_ids = {c.get("id") for c in existing_corr if isinstance(c, dict)}
+        for cv in correlated_vulns:
+            if cv.get("id") and cv["id"] not in corr_ids:
+                existing_corr.append({
+                    "id": cv["id"],
+                    "summary": cv.get("summary") or cv.get("details") or "",
+                    "severity": cv.get("database_specific", {}).get("severity") or "unknown",
+                    "correlated_at": now_iso,
+                })
+        custom_attrs["correlated_vulnerabilities"] = existing_corr
+
+        activities = payload.setdefault("activity", [])
+        cve_names = ", ".join([cv.get("id", "") for cv in correlated_vulns[:5]])
+        activities.append({
+            "id": "vuln-corr-%s" % int(time.time() * 1000),
+            "type": "comment",
+            "user": "Vulnerability Correlation",
+            "timestamp": int(time.time() * 1000),
+            "content": "Correlated %s vulnerabilities (%s) with incident observables." % (len(correlated_vulns), cve_names),
+            "details": {"source": "vulnerability_correlation", "cves": [cv.get("id") for cv in correlated_vulns]},
+            "ai_handled": True,
+        })
+
+        save_cat = item_cat if item_cat and not item_cat.startswith("$") else DATASTORE_INCIDENTS
+        save_key = item_key if item_key and not item_key.startswith("$") else inc_id
+        try:
+            if "self" in locals() or "self" in globals():
+                self.set_key(save_key, json.dumps(payload), category=save_cat)
+        except Exception as e:
+            errors.append("Failed syncing correlated incident: %s" % e)
+
+    result = {
+        "success": True,
+        "mode": "incident",
+        "incident_id": inc_id,
+        "hosts_checked": list(hosts_in_incident),
+        "packages_checked": list(packages_in_incident),
+        "cves_checked": list(cves_in_incident),
+        "correlated_count": len(correlated_vulns),
+        "status": "correlated" if correlated_vulns else "no_correlation",
+        "errors": errors,
+    }
+    print(json.dumps(result, indent=2))
 `
 }
 
@@ -1424,8 +1786,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow.OrgId = orgId
 
 	} else if parsedActiontype == "vulnerability_correlation" {
-	createCaseId := uuid.NewV4().String()
-		//defaultWorkflow := getVulnerabilityCorrelationWorkflow(actionType, orgId, startActionId, actionEnv, categoryAction)
+		createCaseId := uuid.NewV4().String()
 		defaultWorkflow := Workflow{
 			Name:        actionType,
 			Description: "For each software package + version coming from a host monitor, queries the Shuffle vulnerability API and stores any matching CVEs into the shuffle-security_vulnerabilities datastore category.",
@@ -1433,6 +1794,25 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 			Start:       startActionId,
 			UsecaseIds:  []string{"vulnerabilities"},
 			Tags:        []string{"correlate", "vulnerability", "automatic"},
+			Triggers: []Trigger{
+				Trigger{
+					ID:          startTriggerId,
+					Name:        "Schedule",
+					TriggerType: "SCHEDULE",
+					Label:       "Vulnerability Correlation",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "cron",
+							Value: "*/15 * * * *",
+						},
+						WorkflowAppActionParameter{
+							Name:  "execution_argument",
+							Value: "Automatically configured by Shuffle Security",
+						},
+					},
+				},
+			},
 			Actions: []Action{
 				{
 					Name:        "execute_python",
@@ -1446,8 +1826,8 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 					Sharing:     true,
 					Parameters: []WorkflowAppActionParameter{
 						{
-							Name: "code",
-							Value: getVulnerabilityCorrelationScript(orgId),
+							Name:      "code",
+							Value:     getVulnerabilityCorrelationScript(orgId),
 							Multiline: true,
 							Required:  true,
 						},
@@ -1486,10 +1866,31 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				},
 			},
 			Branches: []Branch{
-				{
+				Branch{
+					SourceID:      startTriggerId,
+					DestinationID: startActionId,
+					ID:            uuid.NewV4().String(),
+				},
+				Branch{
 					SourceID:      startActionId,
 					DestinationID: createCaseId,
 					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "{{ $$verify_package_vulnerability.vuln_count }}",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "larger than",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "0",
+							},
+						},
+					},
 				},
 			},
 		}
@@ -1803,6 +2204,91 @@ $exec`,
 		//prepareAgentRun := uuid.NewV4().String()
 		//aiAgentRun := uuid.NewV4().String()
 		//addAgentResponse := uuid.NewV4().String()
+
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+	} else if parsedActiontype == "incident_routing" || parsedActiontype == "incident_routing_rules" {
+		getRoutingRulesId := startActionId
+		evaluateAndApplyId := uuid.NewV4().String()
+
+		defaultWorkflow := Workflow{
+			Name:        actionType,
+			Description: "Evaluates incidents against routing rules to suggest moves, assignees, severities, or automate containment.",
+			OrgId:       orgId,
+			Start:       getRoutingRulesId,
+			UsecaseIds:  []string{},
+			Tags:        []string{"routing", "incident", "automatic"},
+			Triggers: []Trigger{
+				Trigger{
+					ID:          startTriggerId,
+					Name:        "Schedule",
+					TriggerType: "SCHEDULE",
+					Label:       "Incident Routing Rules",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "cron",
+							Value: "*/10 * * * *",
+						},
+						WorkflowAppActionParameter{
+							Name:  "execution_argument",
+							Value: "Automatically configured by Shuffle Security",
+						},
+					},
+				},
+			},
+			Actions: []Action{
+				Action{
+					Name:        "list_datastore_category",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          getRoutingRulesId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Get_routing_rules",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:     "category",
+							Value:    "shuffle-security_routing",
+							Required: true,
+						},
+						WorkflowAppActionParameter{
+							Name:  "output_type",
+							Value: "values",
+						},
+					},
+				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          evaluateAndApplyId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Evaluate_and_apply_rules",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "code",
+							Multiline: true,
+							Required:  true,
+							Value:     getIncidentRoutingScript(),
+						},
+					},
+				},
+			},
+			Branches: []Branch{
+				Branch{
+					SourceID:      startTriggerId,
+					DestinationID: getRoutingRulesId,
+					ID:            uuid.NewV4().String(),
+				},
+				Branch{
+					SourceID:      getRoutingRulesId,
+					DestinationID: evaluateAndApplyId,
+					ID:            uuid.NewV4().String(),
+				},
+			},
+		}
 
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
@@ -4425,6 +4911,8 @@ func GetUsecaseData() string {
         "description": "Route incoming incidents to the right sub-organization based on tenant, source, severity, observables, or any field in the incident payload. Keeps multi-tenant environments tidy and ensures the right team owns each incident from the start.",
         "agentic_description": "An agent evaluates each new incident against your routing rules, decides which sub-organization should own it, and either suggests or executes the move with full audit trail.",
         "automation_area": "correlation",
+        "automation_label": "Incident Routing Rules",
+        "automation_category": "cases",
         "custom_action": {
           "label": "Configure Routing",
           "href": "/preferences?tab=routing",
@@ -4687,4 +5175,623 @@ else:
     "updated": False,
     "reason": "Failed to update the activity in the db",
   }))`
+}
+
+func getIncidentRoutingScript() string {
+	return `import json
+import re
+import base64
+import binascii
+import time
+
+# ── Evaluator helpers ────────────────────────────────────────────────────────
+
+MAX_STRINGS = 200
+MAX_DEPTH = 8
+MIN_BASE64_LEN = 16
+MAX_BASE64_LEN = 65536
+
+_BASE64_RE = re.compile(r"^[A-Za-z0-9+/_-]+={0,2}$")
+
+
+def _looks_base64ish(s: str) -> bool:
+    if len(s) < MIN_BASE64_LEN or len(s) > MAX_BASE64_LEN:
+        return False
+    if " " in s or "\n" in s or "\t" in s:
+        return False
+    return bool(_BASE64_RE.match(s))
+
+
+def _try_decode_base64(s: str):
+    if not _looks_base64ish(s):
+        return None
+    normalized = s.replace("-", "+").replace("_", "/")
+    pad = (4 - (len(normalized) % 4)) % 4
+    if pad:
+        normalized += "=" * pad
+    try:
+        raw = base64.b64decode(normalized, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    try:
+        decoded = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            decoded = raw.decode("latin-1")
+        except UnicodeDecodeError:
+            return None
+    if decoded == s:
+        return None
+    printable = sum(1 for ch in decoded if ch.isprintable() or ch in "\r\n\t")
+    if not decoded or (printable / len(decoded)) < 0.85:
+        return None
+    return decoded
+
+
+def _collect_all_strings(val, out, depth=0):
+    if depth > MAX_DEPTH or len(out) >= MAX_STRINGS or val is None:
+        return
+    if isinstance(val, str):
+        out.append(val)
+        return
+    if isinstance(val, (int, float, bool)):
+        out.append(str(val))
+        return
+    if isinstance(val, list):
+        for item in val:
+            _collect_all_strings(item, out, depth + 1)
+            if len(out) >= MAX_STRINGS:
+                break
+        return
+    if isinstance(val, dict):
+        for v in val.values():
+            _collect_all_strings(v, out, depth + 1)
+            if len(out) >= MAX_STRINGS:
+                break
+
+
+def _get_deep(obj, path: str):
+    if not path or not isinstance(obj, dict):
+        return None
+    parts = [p for p in path.split(".") if p]
+    cur = obj
+    for p in parts:
+        if isinstance(cur, dict) and p in cur:
+            cur = cur[p]
+        else:
+            return None
+    return cur
+
+
+def _resolve_field(ctx: dict, field: str):
+    if not field or field in ("*", "$whole"):
+        all_strs = []
+        _collect_all_strings(ctx, all_strs)
+        return all_strs
+    if field.startswith("observables."):
+        obs_type = field.split(".", 1)[1].lower()
+        observables = ctx.get("observables") or []
+        vals = []
+        for o in observables:
+            if isinstance(o, dict) and str(o.get("type", "")).lower() == obs_type:
+                v = o.get("value")
+                if v:
+                    vals.append(str(v))
+        return vals
+    if field == "stakeholders.email":
+        stakeholders = ctx.get("stakeholders") or []
+        vals = []
+        for s in stakeholders:
+            if isinstance(s, dict) and s.get("email"):
+                vals.append(str(s["email"]))
+        return vals
+    if field.startswith("rawOCSF."):
+        return _get_deep(ctx.get("rawOCSF") or {}, field[len("rawOCSF.") :])
+    direct = ctx.get(field)
+    if direct is not None:
+        return direct
+    if field in ("message", "description", "desc"):
+        return ctx.get("description") or ctx.get("message")
+    raw_ocsf = ctx.get("rawOCSF")
+    if isinstance(raw_ocsf, dict):
+        ocsf_direct = raw_ocsf.get(field)
+        if ocsf_direct is not None:
+            return ocsf_direct
+    return None
+
+
+def _as_string_array(v):
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v]
+    if isinstance(v, list):
+        out = []
+        for it in v:
+            out.extend(_as_string_array(it))
+        return out
+    if isinstance(v, dict):
+        out = []
+        _collect_all_strings(v, out)
+        return out
+    if isinstance(v, bool):
+        return ["true" if v else "false"]
+    if isinstance(v, float) and v.is_integer():
+        return [str(int(v))]
+    return [str(v)]
+
+
+def _with_base64_decodes(haystacks):
+    seen = set()
+    out = []
+    for s in haystacks:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+        if len(out) >= MAX_STRINGS:
+            break
+        decoded = _try_decode_base64(s.strip())
+        if decoded is not None and decoded not in seen:
+            seen.add(decoded)
+            out.append(decoded)
+    return out
+
+
+def evaluate_condition(ctx: dict, condition: dict) -> bool:
+    field = condition.get("field", "")
+    op = condition.get("op", "")
+    value = condition.get("value")
+
+    raw = _resolve_field(ctx, field)
+    raw_strings = _as_string_array(raw)
+    haystacks = [s.lower() for s in _with_base64_decodes(raw_strings)]
+    needle = (value or "").lower()
+
+    if op == "exists":
+        return len(haystacks) > 0 and any(len(s) > 0 for s in haystacks)
+    if op == "equals":
+        return any(s == needle for s in haystacks)
+    if op == "contains":
+        return len(needle) > 0 and any(needle in s for s in haystacks)
+    if op == "startsWith":
+        return len(needle) > 0 and any(s.startswith(needle) for s in haystacks)
+    if op == "endsWith":
+        return len(needle) > 0 and any(s.endswith(needle) for s in haystacks)
+    if op == "regex":
+        if not value:
+            return False
+        try:
+            re_c = re.compile(value, re.IGNORECASE)
+        except re.error:
+            return False
+        return any(re_c.search(s) is not None for s in haystacks)
+    return False
+
+
+def _is_group(n):
+    return isinstance(n, dict) and n.get("kind") == "group"
+
+
+def _is_leaf(n):
+    return isinstance(n, dict) and n.get("kind") == "condition"
+
+
+def evaluate_tree(node: dict, ctx: dict) -> bool:
+    if _is_leaf(node):
+        return evaluate_condition(
+            ctx,
+            {
+                "field": node.get("field", ""),
+                "op": node.get("op", ""),
+                "value": node.get("value"),
+            },
+        )
+    if not _is_group(node):
+        return False
+    children = node.get("children") or []
+    if not children:
+        return False
+    if node.get("op") == "and":
+        return all(evaluate_tree(c, ctx) for c in children)
+    return any(evaluate_tree(c, ctx) for c in children)
+
+
+def _collect_leaves(node):
+    if _is_leaf(node):
+        return [node]
+    if not _is_group(node):
+        return []
+    out = []
+    for c in node.get("children") or []:
+        out.extend(_collect_leaves(c))
+    return out
+
+
+def _build_groups(rule):
+    conditions = rule.get("conditions") or []
+    has_or_flag = any(c.get("or") for c in conditions)
+    if not has_or_flag:
+        if rule.get("matchMode") == "any":
+            return [list(conditions)]
+        return [[c] for c in conditions]
+    groups = []
+    for c in conditions:
+        if c.get("or") and groups:
+            groups[-1].append(c)
+        else:
+            groups.append([c])
+    return groups
+
+
+def evaluate_routing_rules(ctx: dict, rules) -> list:
+    active = [r for r in rules if isinstance(r, dict) and r.get("enabled", True) is not False]
+    active.sort(key=lambda r: r.get("priority", 100))
+
+    matches = []
+    for rule in active:
+        tree = rule.get("conditionTree")
+        if _is_group(tree):
+            if evaluate_tree(tree, ctx):
+                leaves = _collect_leaves(tree)
+                matched_leaves = [
+                    leaf
+                    for leaf in leaves
+                    if evaluate_condition(
+                        ctx,
+                        {
+                            "field": leaf.get("field", ""),
+                            "op": leaf.get("op", ""),
+                            "value": leaf.get("value"),
+                        },
+                    )
+                ]
+                matches.append({"rule": rule, "matched": matched_leaves})
+            continue
+
+        conds = rule.get("conditions") or []
+        if not conds:
+            continue
+        groups = _build_groups(rule)
+        matched_leaves = []
+        all_passed = True
+        for g in groups:
+            group_matched = [c for c in g if evaluate_condition(ctx, c)]
+            if not group_matched:
+                all_passed = False
+                break
+            matched_leaves.extend(group_matched)
+        if all_passed:
+            matches.append({"rule": rule, "matched": matched_leaves})
+
+    return matches
+
+
+# ── Action application helpers ─────────────────────────────────────────────
+
+def normalize_severity(v):
+    if not v:
+        return None
+    s = str(v).strip().lower()
+    mapping = {
+        "1": "Informational", "info": "Informational", "informational": "Informational",
+        "2": "Low", "low": "Low",
+        "3": "Medium", "medium": "Medium", "med": "Medium",
+        "4": "High", "high": "High",
+        "5": "Critical", "critical": "Critical", "crit": "Critical",
+    }
+    return mapping.get(s, str(v).capitalize())
+
+
+def normalize_status(v):
+    if not v:
+        return None
+    s = str(v).strip().lower()
+    mapping = {
+        "new": "New", "open": "New",
+        "in_progress": "In Progress", "in progress": "In Progress", "investigating": "In Progress",
+        "on_hold": "On Hold", "on hold": "On Hold",
+        "resolved": "Resolved",
+        "closed": "Closed",
+    }
+    return mapping.get(s, str(v).capitalize())
+
+
+def parse_action_value(val):
+    if val is None:
+        return ""
+    if isinstance(val, (int, float, bool, list, dict)):
+        return val
+    s = str(val).strip()
+    if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+    return s
+
+
+def set_deep(d, path, value):
+    parts = [p for p in path.split(".") if p]
+    cur = d
+    for p in parts[:-1]:
+        if p not in cur or not isinstance(cur[p], dict):
+            cur[p] = {}
+        cur = cur[p]
+    if parts:
+        cur[parts[-1]] = value
+
+
+def _parse_input_safely(raw, default=None):
+    if raw is None:
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s or s.startswith("$"):
+            return default
+        try:
+            val = json.loads(s)
+            if isinstance(val, str):
+                try:
+                    val = json.loads(val)
+                except Exception:
+                    pass
+            return val
+        except Exception:
+            return default
+    return default
+
+
+def _extract_rules(raw_rules_input):
+    parsed = _parse_input_safely(raw_rules_input, default=[])
+    if isinstance(parsed, dict):
+        if "values" in parsed and isinstance(parsed["values"], list):
+            parsed = parsed["values"]
+        elif "value" in parsed:
+            val = parsed["value"]
+            if isinstance(val, str):
+                val = _parse_input_safely(val, default=[])
+            if isinstance(val, list):
+                parsed = val
+            elif isinstance(val, dict):
+                parsed = [val]
+        elif "data" in parsed and isinstance(parsed["data"], list):
+            parsed = parsed["data"]
+        else:
+            parsed = [parsed]
+
+    rules = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, str):
+                item = _parse_input_safely(item)
+            if not isinstance(item, dict):
+                continue
+            if "value" in item and len(item) <= 4 and ("key" in item or "id" in item):
+                inner = item["value"]
+                if isinstance(inner, str):
+                    inner = _parse_input_safely(inner)
+                if isinstance(inner, dict):
+                    rules.append(inner)
+                else:
+                    rules.append(item)
+            else:
+                rules.append(item)
+    return rules
+
+
+# ── Execution Entrypoint ───────────────────────────────────────────────────
+
+raw_exec = r"""$exec"""
+cur_exec = _parse_input_safely(raw_exec, default={})
+if isinstance(cur_exec, dict) and "incident" in cur_exec and isinstance(cur_exec["incident"], dict):
+    cur_exec = cur_exec["incident"]
+
+if not isinstance(cur_exec, dict) or not cur_exec:
+    print(json.dumps({
+        "success": False,
+        "reason": "No valid incident data found in $exec",
+    }))
+    exit()
+
+raw_rules_input = r"""$get_routing_rules"""
+rules = _extract_rules(raw_rules_input)
+
+if not rules:
+    print(json.dumps({
+        "success": True,
+        "changed": False,
+        "reason": "No routing rules found in shuffle-security_routing",
+        "incident": cur_exec,
+    }))
+    exit()
+
+ctx = {
+    "title": cur_exec.get("title"),
+    "description": cur_exec.get("description") or cur_exec.get("message"),
+    "source": cur_exec.get("source"),
+    "severity": cur_exec.get("severity"),
+    "status": cur_exec.get("status"),
+    "labels": cur_exec.get("labels") or [],
+    "observables": cur_exec.get("observables") or [],
+    "stakeholders": cur_exec.get("stakeholders") or [],
+    "rawOCSF": cur_exec.get("rawOCSF") or {},
+}
+
+matches = evaluate_routing_rules(ctx, rules)
+
+now_ms = int(time.time() * 1000)
+changed = False
+agent_prompts = []
+prev_status = str(cur_exec.get("status") or "").lower()
+
+for m in matches:
+    rule = m.get("rule") or {}
+    rule_name = rule.get("name", "Routing rule")
+    actions = rule.get("actions") or []
+    for action in actions:
+        atype = action.get("type")
+        if atype == "suggest_move":
+            target_org = action.get("targetOrgId")
+            if target_org:
+                raw_ocsf = cur_exec.setdefault("rawOCSF", {})
+                meta = raw_ocsf.setdefault("metadata", {})
+                ext = meta.setdefault("extensions", {})
+                custom_attrs = ext.setdefault("custom_attributes", {})
+                suggs = custom_attrs.setdefault("routing_suggestions", [])
+                already = any(s.get("ruleId") == rule.get("id") and s.get("status") == "pending" for s in suggs if isinstance(s, dict))
+                if not already:
+                    suggs.append({
+                        "ruleId": rule.get("id", ""),
+                        "ruleName": rule_name,
+                        "targetOrgId": target_org,
+                        "targetOrgName": action.get("targetOrgName", ""),
+                        "reason": action.get("reason", ""),
+                        "suggestedTs": now_ms,
+                        "status": "pending",
+                    })
+                    changed = True
+        elif atype == "set_severity":
+            sev = normalize_severity(action.get("value"))
+            if sev and cur_exec.get("severity") != sev:
+                cur_exec["severity"] = sev
+                changed = True
+        elif atype == "set_status":
+            st = normalize_status(action.get("value"))
+            if st and cur_exec.get("status") != st:
+                cur_exec["status"] = st
+                changed = True
+        elif atype == "set_priority":
+            pri = str(action.get("value") or "").strip()
+            if pri and cur_exec.get("priority") != pri:
+                cur_exec["priority"] = pri
+                raw_ocsf = cur_exec.setdefault("rawOCSF", {})
+                raw_ocsf["priority"] = pri
+                changed = True
+        elif atype == "add_label":
+            lbl = str(action.get("value") or "").strip()
+            cur_labels = cur_exec.setdefault("labels", [])
+            if lbl and lbl not in cur_labels:
+                cur_labels.append(lbl)
+                changed = True
+        elif atype == "assign_to":
+            ass = str(action.get("value") or "").strip()
+            if ass and cur_exec.get("assignee") != ass:
+                cur_exec["assignee"] = ass
+                changed = True
+        elif atype == "add_comment":
+            txt = str(action.get("value") or "").strip()
+            if txt:
+                cur_act = cur_exec.setdefault("activity", [])
+                already = any(it.get("type") == "comment" and it.get("content", "").strip() == txt for it in cur_act if isinstance(it, dict))
+                if not already:
+                    cur_act.append({
+                        "id": f"routing-comment-{now_ms}-{len(cur_act)}",
+                        "type": "comment",
+                        "user": "Incident Routing Rules",
+                        "timestamp": now_ms,
+                        "content": txt,
+                        "details": {"source": "incident_routing_rule", "rule": rule_name},
+                        "attachments": [],
+                        "ai_handled": True,
+                    })
+                    changed = True
+        elif atype == "run_agent":
+            prompt = str(action.get("value") or "").strip()
+            if prompt:
+                cur_act = cur_exec.setdefault("activity", [])
+                content = f"@AIAgent {prompt}"
+                already = any(it.get("type") == "comment" and it.get("content", "").strip().startswith(f"@AIAgent {prompt}") for it in cur_act if isinstance(it, dict))
+                if not already:
+                    cur_act.append({
+                        "id": f"routing-agent-{now_ms}-{len(cur_act)}",
+                        "type": "comment",
+                        "user": "Incident Routing Rules",
+                        "timestamp": now_ms,
+                        "content": content,
+                        "details": {"source": "incident_routing_rule", "rule": rule_name, "run_agent": True},
+                        "attachments": [],
+                        "ai_handled": True,
+                    })
+                    agent_prompts.append(prompt)
+                    changed = True
+        elif atype == "set_field":
+            field = str(action.get("field") or "").strip()
+            if field:
+                val = parse_action_value(action.get("value"))
+                canonical = field[len("rawOCSF."):] if field.startswith("rawOCSF.") else field
+                if canonical == "title":
+                    cur_exec["title"] = str(val)
+                elif canonical in ("description", "desc", "message"):
+                    cur_exec["message"] = str(val)
+                    cur_exec["description"] = str(val)
+                elif canonical == "severity":
+                    s = normalize_severity(val)
+                    if s: cur_exec["severity"] = s
+                elif canonical == "status":
+                    s = normalize_status(val)
+                    if s: cur_exec["status"] = s
+                elif canonical == "assignee":
+                    cur_exec["assignee"] = str(val)
+                elif canonical == "priority":
+                    cur_exec["priority"] = str(val)
+                    cur_exec.setdefault("rawOCSF", {})["priority"] = str(val)
+                elif canonical in ("labels", "types"):
+                    lbl = str(val).strip()
+                    cur_labels = cur_exec.setdefault("labels", [])
+                    if lbl and lbl not in cur_labels:
+                        cur_labels.append(lbl)
+                elif field.startswith("rawOCSF."):
+                    set_deep(cur_exec.setdefault("rawOCSF", {}), field[len("rawOCSF."):], val)
+                else:
+                    cf = cur_exec.setdefault("customFields", {})
+                    clean_k = re.sub(r"^(customFields\.|custom_fields\.)", "", field)
+                    cf[clean_k] = val
+                changed = True
+
+# Auto-resolve audit comment
+resolving = {"resolved", "closed"}
+now_status = str(cur_exec.get("status") or "").lower()
+if prev_status not in resolving and now_status in resolving:
+    status_lbl = "Resolved" if now_status == "resolved" else "Closed"
+    note = f"{status_lbl} automatically by routing rule."
+    cur_act = cur_exec.setdefault("activity", [])
+    cur_act.append({
+        "id": f"routing-autoresolve-{now_ms}-{len(cur_act)}",
+        "type": "comment",
+        "user": "Incident Routing Rules",
+        "timestamp": now_ms,
+        "content": note,
+        "details": {"source": "incident_routing_rule", "auto_resolved": True},
+        "attachments": [],
+        "ai_handled": True,
+    })
+    changed = True
+
+item_key = r"""$exec.shuffle_datastore.key"""
+item_cat = r"""$exec.shuffle_datastore.category"""
+
+if not item_key or item_key.startswith("$"):
+    item_key = cur_exec.get("finding_uid") or cur_exec.get("id") or cur_exec.get("key")
+if not item_cat or item_cat.startswith("$"):
+    item_cat = "shuffle-security_incidents"
+
+db_updated = False
+if changed and item_key:
+    try:
+        if "self" in locals() or "self" in globals():
+            res = self.set_key(item_key, json.dumps(cur_exec), category=item_cat)
+            db_updated = isinstance(res, dict) and res.get("success", False)
+    except Exception:
+        pass
+
+print(json.dumps({
+    "success": True,
+    "changed": changed,
+    "db_updated": db_updated,
+    "matched_rules": [m["rule"].get("name") for m in matches if isinstance(m.get("rule"), dict)],
+    "incident": cur_exec,
+    "agent_prompts": agent_prompts,
+}))`
 }
