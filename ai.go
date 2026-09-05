@@ -8488,9 +8488,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				})
 
 				if len(sortedAppActions) > 0 {
-					// Cuts off the potential md5:appname prefix
+					// Cuts off the potential md5:appname or uuid:appname prefix
 					if len(trimmedActionStr) > 33 && string(trimmedActionStr[32]) == ":" {
 						trimmedActionStr = trimmedActionStr[33:]
+					} else if len(trimmedActionStr) > 37 && string(trimmedActionStr[36]) == ":" {
+						trimmedActionStr = trimmedActionStr[37:]
 					}
 
 					decidedApps = append(decidedApps, trimmedActionStr)

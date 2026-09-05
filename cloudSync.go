@@ -2292,7 +2292,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		} else {
 			toolLower := strings.ToLower(decision.Tool)
 			for _, app := range allApps {
-				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != strings.ReplaceAll(toolLower, "_", "") {
 					continue
 				} 
 
@@ -2329,7 +2329,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		if err == nil {
 			toolLower := strings.ToLower(decision.Tool)
 			for _, app := range foundApps {
-				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != strings.ReplaceAll(toolLower, "_", "") {
 					continue
 				} 
 
@@ -2391,8 +2391,11 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		Parameters:       []WorkflowAppActionParameter{},
 
 		ExecutionDelay: selectedDelay,
-		SourceWorkflow: execution.Workflow.ID,
-		SourceExecution: execution.ExecutionId,
+	}
+	
+	if selectedDelay > 0 {
+		action.SourceWorkflow = execution.Workflow.ID
+		action.SourceExecution = execution.ExecutionId
 	}
 
 	decisionActionLower := strings.ToLower(decision.Action)
@@ -2590,7 +2593,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	_ = debugUrl
 	
-	baseUrl := "https://shuffler.io"
+	baseUrl := "http://localhost:5001"
+	if project.Environment == "cloud" {
+		baseUrl = "https://shuffler.io"
+	}
 	if os.Getenv("BASE_URL") != "" {
 		baseUrl = os.Getenv("BASE_URL")
 	}
@@ -2851,6 +2857,8 @@ func normalizeAgentToolName(tool string) string {
 
 	if len(tool) > 33 && tool[32] == ':' {
 		tool = tool[33:]
+	} else if len(tool) > 37 && tool[36] == ':' {
+		tool = tool[37:]
 	}
 
 	tool = strings.TrimSpace(tool)
@@ -3047,7 +3055,10 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	//     2. Send the result through AI again to check if it changes (?). Should there be a verdict here?
 	//     3: Start the next steps of decisions after updates
 
-	baseUrl := "https://shuffler.io"
+	baseUrl := "http://localhost:5001"
+	if project.Environment == "cloud" {
+		baseUrl = "https://shuffler.io"
+	}
 	if os.Getenv("BASE_URL") != "" {
 		baseUrl = os.Getenv("BASE_URL")
 	}
