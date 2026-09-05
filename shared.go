@@ -22071,9 +22071,19 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			return workflowExecution, errors.New("No source_execution provided")
 		}
 
-		workflow, err := GetWorkflow(ctx, action.SourceWorkflow, true)
+		oldExec, err := GetWorkflowExecution(ctx, action.SourceExecution)
 		if err != nil {
 			return workflowExecution, err
+		}
+
+		workflow, err := GetWorkflow(ctx, action.SourceWorkflow, true)
+		if err != nil {
+			if action.SourceWorkflow == action.SourceExecution || (oldExec != nil && oldExec.Workflow.ID == action.SourceWorkflow) {
+				workflow = &oldExec.Workflow
+				err = nil
+			} else {
+				return workflowExecution, err
+			}
 		}
 
 		if workflow.OrgId != user.ActiveOrg.Id && len(workflow.ID) > 0 {
@@ -22082,11 +22092,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 		// Check if the execution exists
 		workflowExecution.WorkflowId = workflow.ID
-		oldExec, err := GetWorkflowExecution(ctx, action.SourceExecution)
-		if err != nil {
-			return workflowExecution, err
-		}
-
 		if oldExec.Workflow.ID != action.SourceWorkflow {
 			return workflowExecution, errors.New("Previous execution (source_execution) doesn't belong to the workflow. Please try again.")
 		}
