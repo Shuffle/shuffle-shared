@@ -2391,8 +2391,11 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		Parameters:       []WorkflowAppActionParameter{},
 
 		ExecutionDelay: selectedDelay,
-		SourceWorkflow: execution.Workflow.ID,
-		SourceExecution: execution.ExecutionId,
+	}
+	
+	if selectedDelay > 0 {
+		action.SourceWorkflow = execution.Workflow.ID
+		action.SourceExecution = execution.ExecutionId
 	}
 
 	decisionActionLower := strings.ToLower(decision.Action)
