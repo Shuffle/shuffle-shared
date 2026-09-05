@@ -2383,10 +2383,21 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed to parse Agent decision.Delay '%s' as int: %s", execution.ExecutionId, decision.Delay, err)
 	}
 
+	resolvedEnv := execution.Workflow.ExecutionEnvironment
+	if len(resolvedEnv) == 0 {
+		for _, act := range execution.Workflow.Actions {
+			if len(act.Environment) > 0 {
+				resolvedEnv = act.Environment
+				break
+			}
+		}
+	}
+
 	action := Action{
 		AppID:            resolvedAppId,
 		AppName:          resolvedAppName,
 		Name:             decision.Action, // overwritten below if schema match found
+		Environment:      resolvedEnv,
 		//AuthenticationId: resolvedAuthId,
 		Parameters:       []WorkflowAppActionParameter{},
 
@@ -2590,7 +2601,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	_ = debugUrl
 	
-	baseUrl := "https://shuffler.io"
+	baseUrl := "http://localhost:5001"
+	if project.Environment == "cloud" {
+		baseUrl = "https://shuffler.io"
+	}
 	if os.Getenv("BASE_URL") != "" {
 		baseUrl = os.Getenv("BASE_URL")
 	}
@@ -2851,6 +2865,8 @@ func normalizeAgentToolName(tool string) string {
 
 	if len(tool) > 33 && tool[32] == ':' {
 		tool = tool[33:]
+	} else if len(tool) > 37 && tool[36] == ':' {
+		tool = tool[37:]
 	}
 
 	tool = strings.TrimSpace(tool)
