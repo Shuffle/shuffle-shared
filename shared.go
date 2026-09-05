@@ -74,10 +74,12 @@ import (
 	"github.com/frikky/kin-openapi/openapi3"
 
 	"github.com/google/go-github/v28/github"
+	firebase "firebase.google.com/go/v4"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
 
 	"github.com/Masterminds/semver"
+	"firebase.google.com/go/v4/messaging"
 	"github.com/klauspost/compress/gzhttp"
 	dockerclient "github.com/docker/docker/client"
 )
@@ -3723,7 +3725,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, errors.New("Invalid format for apikey")
 		}
 
-		if len(apikeyCheck[1]) < 36 {
+		if len(apikeyCheck[1]) < 36 && !strings.HasPrefix(apikeyCheck[1], "shfl_") {
 			return User{}, errors.New("Apikey must be at least 36 characters long (UUID)")
 		}
 
@@ -3733,7 +3735,51 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			newApikey = newApikey[0:248]
 		}
 
-		cache, err := GetCache(ctx, newApikey+org_id)
+		// OAuth 2.0 / MCP Bearer Token Handling
+		if strings.HasPrefix(apikeyCheck[1], "shfl_") {
+			oauthTok, oErr := GetOAuthToken(ctx, apikeyCheck[1])
+			if oErr != nil || oauthTok == nil || oauthTok.AccessToken == "" {
+				return User{}, errors.New("Invalid or expired OAuth token")
+			}
+
+			// Validate endpoint access based on URL, HTTP method, scopes, allowed apps, and org boundaries
+			if valErr := ValidateOAuthTokenAccess(ctx, oauthTok, request); valErr != nil {
+				log.Printf("[WARNING] OAuth token access denied for %s %s: %s", request.Method, request.URL.Path, valErr)
+				return User{}, valErr
+			}
+
+			userObj, uErr := GetUser(ctx, oauthTok.UserId)
+			if uErr != nil || userObj == nil || (len(userObj.Id) == 0 && len(userObj.Username) == 0) {
+				return User{}, errors.New("User associated with OAuth token not found")
+			}
+
+			userdata := *userObj
+			userdata.SessionLogin = false
+			userdata.ApiKey = newApikey
+			userdata.AllowedApps = oauthTok.AllowedApps
+			userdata.OAuthScope = oauthTok.Scope
+			if oauthTok.OrgId != "" {
+				userdata.ActiveOrg.Id = oauthTok.OrgId
+				if orgData, orgErr := GetOrg(ctx, oauthTok.OrgId); orgErr == nil && orgData != nil {
+					userdata.ActiveOrg.Name = orgData.Name
+					userdata.ActiveOrg.Image = orgData.Image
+				}
+			}
+
+			if debug {
+				log.Printf("[DEBUG] Authenticated via OAuth MCP Token for user %s, org %s on %s %s", userdata.Id, userdata.ActiveOrg.Id, request.Method, request.URL.Path)
+			}
+
+			// Increment API usage
+			if userdata.Username != "scheduler@shuffler.io" {
+				go IncrementCache(ctx, userdata.ActiveOrg.Id, "api_usage")
+			}
+
+			return userdata, nil
+		}
+
+		apiCacheKey := fmt.Sprintf("%s%s", newApikey, org_id)
+		cache, err := GetCache(ctx, apiCacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &user)
@@ -3758,22 +3804,73 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			//log.Printf("[WARNING] Error getting authentication cache for %s: %v", newApikey, err)
 		}
 
-		// Make specific check for just service user?
-		// Get the user based on APIkey here
-		userdata, err := GetApikey(ctx, apikeyCheck[1])
-		if err != nil {
-			// Due to execution auth
-			if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") {
-				if debug { 
-					log.Printf("[DEBUG] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
+		var userdata User
+
+		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
+			// Make specific check for just service user?
+			// Get the user based on APIkey here
+			userdata, err = GetApikey(ctx, apikeyCheck[1])
+			if err != nil {
+				// Due to execution auth
+				if !strings.Contains(request.URL.String(), "authorization=") && !strings.Contains(request.URL.String(), "execution_id=") {
+					if debug { 
+						log.Printf("[DEBUG] Apikey '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
+					}
 				}
 			}
+		}
 
-			return User{}, err
+		// Fallback with session token if the API key doesn't exist
+		// This is to make everything work on Mobile apps and is done quite 
+		// a lot for app development auth. Also allows us to use App login 
+		// to onprem Shuffle instance
+		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
+			userdata, err = GetSessionNew(ctx, apikeyCheck[1])
+			if err != nil { 
+				log.Printf("[WARNING] Session token '%s' doesn't exist. URL: %#v: %s", apikeyCheck[1], request.URL.String(), err)
+			} else {
+				if debug { 
+					log.Printf("[DEBUG] Session token '%s' exists. URL: %#v", apikeyCheck[1], request.URL.String())
+				}
+				userdata.SessionLogin = true 
+			}
+		} else if !strings.HasPrefix(apikeyCheck[1], "shfl_") {
+			userdata.SessionLogin = false
+			userdata.ApiKey = newApikey
+		}
+
+		// Fallback with OAuth 2.0 / MCP access token (e.g. ChatGPT / Claude 
+		// MCP client connections)
+		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
+			oauthTok, oErr := GetOAuthToken(ctx, apikeyCheck[1])
+			if oErr == nil && oauthTok != nil && oauthTok.AccessToken != "" {
+				if valErr := ValidateOAuthTokenAccess(ctx, oauthTok, request); valErr != nil {
+					log.Printf("[WARNING] OAuth token access denied for %s %s: %s", request.Method, request.URL.Path, valErr)
+					return User{}, valErr
+				}
+
+				userObj, uErr := GetUser(ctx, oauthTok.UserId)
+				if uErr == nil && userObj != nil && (len(userObj.Id) > 0 || len(userObj.Username) > 0) {
+					userdata = *userObj
+					userdata.SessionLogin = false
+					userdata.ApiKey = newApikey
+					userdata.AllowedApps = oauthTok.AllowedApps
+					userdata.OAuthScope = oauthTok.Scope
+					if oauthTok.OrgId != "" {
+						userdata.ActiveOrg.Id = oauthTok.OrgId
+						if orgData, orgErr := GetOrg(ctx, oauthTok.OrgId); orgErr == nil && orgData != nil {
+							userdata.ActiveOrg.Name = orgData.Name
+							userdata.ActiveOrg.Image = orgData.Image
+						}
+					}
+					if debug {
+						log.Printf("[DEBUG] Authenticated via OAuth MCP Token for user %s, org %s on %s %s", userdata.Id, userdata.ActiveOrg.Id, request.Method, request.URL.Path)
+					}
+				}
+			}
 		}
 
 		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
-			//log.Printf("[WARNING] Apikey %s doesn't exist or the user doesn't have an ID/Username", apikey)
 			return User{}, errors.New("Couldn't find the user")
 		}
 
@@ -3808,16 +3905,13 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			userdata.ActiveOrg.Image = org.Image
 		}
 
-		userdata.SessionLogin = false
-		userdata.ApiKey = newApikey
-
 		b, err := json.Marshal(userdata)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling: %s", err)
 			return User{}, err
 		}
 
-		err = SetCache(ctx, newApikey+org_id, b, 30)
+		err = SetCache(ctx, apiCacheKey,  b, 5)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
 		}
@@ -6045,6 +6139,114 @@ func HandleGetHooks(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+// ValidateFCMToken checks if a token is valid and belongs to this Firebase project.
+func ValidateFCMToken(ctx context.Context, client *messaging.Client, token string) (bool, error) {
+	if token == "" {
+		return false, errors.New("token cannot be empty")
+	}
+	// Construct a dummy message with DryRun = true
+	msg := &messaging.Message{
+		Token: token,
+		Data: map[string]string{
+			"validation_check": "true",
+		},
+	}
+	// SendDryRun validates the token with Google without delivering a notification
+	_, err := client.SendDryRun(ctx, msg)
+	if err != nil {
+		if messaging.IsInvalidArgument(err) {
+			log.Printf("[WARNING] Invalid FCM token format: %s", token)
+			return false, errors.New("invalid token format")
+		}
+
+		if messaging.IsUnregistered(err) {
+			log.Printf("[WARNING] FCM token is expired or app was uninstalled: %s", token)
+			return false, errors.New("token is unregistered or expired")
+		}
+
+		if messaging.IsSenderIDMismatch(err) {
+			log.Printf("[WARNING] Token belongs to a different Firebase project: %s", token)
+			return false, errors.New("token sender ID mismatch")
+		}
+
+		log.Printf("[ERROR] Failed to validate token with Firebase: %v", err)
+		return false, err
+	}
+	// Token is authentic and ready to receive messages
+	return true, nil
+}
+
+func GetFCMClient(ctx context.Context) (*messaging.Client, error) {
+	// Passing nil config tells Firebase to use Google Application Default Credentials (ADC)
+	app, err := firebase.NewApp(ctx, nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed to initialize Firebase App with ADC: %v", err)
+		return nil, err
+	}
+	client, err := app.Messaging(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get Firebase Messaging client: %v", err)
+		return nil, err
+	}
+	return client, nil
+}
+
+func handleDeviceUpsert(ctx context.Context, user User, device Device) (User, error) { 
+	if project.Environment != "cloud" {
+		log.Printf("[ERROR] Device upsert attempted in non-cloud environment")
+		return user, errors.New("Device upsert is only allowed in cloud environment (for now). Cloud Sync required")
+	}
+
+	if len(device.ID) == 0 { 
+		log.Printf("[ERROR] No ID in device upsert")
+		return user, errors.New("No device ID provided")
+	}
+
+	if len(device.Token) == 0 { 
+		log.Printf("[ERROR] No token in device upsert for %s", device.ID)
+		return user, errors.New("No device token provided")
+	}
+
+	fcmClient, err := GetFCMClient(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get FCM client: %v", err)
+		return user, err
+	}
+
+	// Validate token with Google Firebase Dry Run
+	isValid, err := ValidateFCMToken(ctx, fcmClient, device.Token)
+	if err != nil {
+		log.Printf("[ERROR] Failed to validate FCM token: %v", err)
+		return user, err
+	}
+
+	if !isValid {
+		return user, errors.New("Invalid device token provided")
+	}
+
+
+	device.EditedAt = time.Now().Unix()
+
+	foundIndex := -1
+	for deviceIndex, curDevices := range user.Devices {
+		if curDevices.ID != device.ID {
+			continue
+		}
+
+		foundIndex = deviceIndex
+		break
+	}
+
+	if foundIndex >= 0 {
+		device.CreatedAt = user.Devices[foundIndex].CreatedAt
+		user.Devices[foundIndex] = device
+	} else {
+		user.Devices = append(user.Devices, device)
+	}
+
+	return user, nil 
+}
+
 func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -6099,6 +6301,8 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		CreatorSocial      string          `json:"creator_social"`
 		SpecializedApps    []MinimizedApps `json:"specialized_apps"`
 		Theme              string          `json:"theme"`
+
+		Device Device `json:"device" datastore:"device"` 
 	}
 
 	ctx := GetContext(request)
@@ -6265,6 +6469,17 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	if len(t.CompanyRole) > 0 {
 		foundUser.PersonalInfo.Role = t.CompanyRole
+	}
+
+	if len(t.Device.ID) > 0 { 
+		retUser, err := handleDeviceUpsert(ctx, *foundUser, t.Device)
+		if err != nil {
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		}
+
+		foundUser = &retUser
 	}
 
 	if project.Environment == "cloud" {
@@ -10106,12 +10321,21 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Makes sure cache doesn't screw us
+	user, err := GetUser(GetContext(request), userInfo.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get user in settings: %s", err)
+		userInfo.Devices = user.Devices
+	}
+
 	newObject := SettingsReturn{
 		Success:  true,
 		Username: userInfo.Username,
 		Verified: userInfo.Verified,
 		Apikey:   userInfo.ApiKey,
 		Image:    userInfo.PublicProfile.GithubAvatar,
+
+		Devices: userInfo.Devices,
 	}
 
 	newjson, err := json.Marshal(newObject)
@@ -12733,6 +12957,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 				DeleteCache(ctx, user.ApiKey+oldOrgId)
 			}
 
+			DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, user.ActiveOrg.Id))
+
 			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 
@@ -12746,6 +12972,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			if len(user.ApiKey) > 0 {
 				DeleteCache(ctx, user.ApiKey+oldOrgId)
 			}
+
+			DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, user.ActiveOrg.Id))
 
 			return
 		}
@@ -13033,7 +13261,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	newCookie.Name = "__session"
 	http.SetCookie(resp, newCookie)
 
-	// Cleanup cache for the user
+	// Cleanup cache for the user. All of this is just in case
+	// as there is a lot of cross-region + onprem stuff happening
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
@@ -13046,6 +13275,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, user.ApiKey+user.ActiveOrg.Id)
 	DeleteCache(ctx, user.ApiKey+oldOrgId)
 	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, user.ActiveOrg.Id))
 
 	log.Printf("[INFO] User %s (%s) successfully changed org to '%s' (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
@@ -16874,7 +17104,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[AUDIT] Login successful for user %s (%s) with IP: %s, session: %s", userdata.Username, userdata.Id, ip, userdata.Session)
+	log.Printf("[AUDIT] Login successful for user %s (%s) with IP: %s", userdata.Username, userdata.Id, ip)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(loginData))
@@ -18438,7 +18668,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						oldAgentOutput := AgentOutput{}
 						foundError := fmt.Sprintf("LLM received call failed from app: ")
 						if len(quickUnmarshal.Reason) > 0 { 
-							foundError += fmt.Sprintf(quickUnmarshal.Reason)
+							foundError += fmt.Sprintf("%s", quickUnmarshal.Reason)
 						}
 
 						// Tries to map it in from the openai request 
@@ -18677,7 +18907,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 								agentOutput := AgentOutput{} 
 								err = json.Unmarshal([]byte(result.Result), &agentOutput)
 								if err != nil || len(agentOutput.Decisions) == 0 { 
-									log.Printf("[ERROR][%s] Failed to unmarshal agent output for delayed decision update: %s. Decisions: %d", workflowExecution.ExecutionId, err, agentOutput.Decisions) 
+									log.Printf("[ERROR][%s] Failed to unmarshal agent output for delayed decision update: %s. Decisions: %d", workflowExecution.ExecutionId, err, len(agentOutput.Decisions) )
 								}
 
 								for decisionIndex, decision := range agentOutput.Decisions {
@@ -37879,6 +38109,12 @@ func collectStreamOps(wf *Workflow, op *WorkflowOperation, tempIDMap map[string]
 var streamHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 func sendStreamOperations(ctx context.Context, request *http.Request, streamURL string, streamOps []StreamWorkflowOperation) error {
+	// Stamp all operations as coming from the "agent" system user
+	for i := range streamOps {
+		streamOps[i].UserID = streamAgentUserID
+		streamOps[i].Username = "Agent"
+	}
+
 	opBytes, err := json.Marshal(streamOps)
 	if err != nil {
 		return fmt.Errorf("failed to marshal stream operations: %w", err)
@@ -37891,6 +38127,7 @@ func sendStreamOperations(ctx context.Context, request *http.Request, streamURL 
 
 	req.Header.Set("Content-Type", "application/json")
 
+	// Forward Authorization for auth/access control, but operations are pre-stamped as "agent"
 	if authHeader := request.Header.Get("Authorization"); authHeader != "" {
 		req.Header.Set("Authorization", authHeader)
 	}

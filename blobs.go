@@ -586,7 +586,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 // replace a specific part of a workflow :thinking:
 
 func getVulnerabilityCorrelationScript(orgId string) string {
-	return fmt.Sprintf(`import json
+	return `import json
 import time
 import requests
 
@@ -643,7 +643,7 @@ for raw_version in versions:
     if not version:
         continue
     if not ecosystem:
-        errors.append("No ecosystem mapping for os=%r" % raw_os)
+        errors.append("No ecosystem mapping for os=%s" % raw_os)
         break
 
     body = {"package": {"name": name, "ecosystem": ecosystem}, "version": version}
@@ -713,7 +713,7 @@ result = {
     "store_errors": store_errors,
 }
 print(json.dumps(result, indent=2))
-`, "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%s", "%d", "%s", "%s", "%s", "%s", "%s")					
+`
 }
 
 // Should workflows be written as YAML and be text-editable?
@@ -740,11 +740,18 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		startTriggerId = uuid.NewV4().String()
 	}
 
-	actionEnv := "Cloud"
-	triggerEnv := "Cloud"
 	ctx := context.Background()
-	if project.Environment != "cloud" {
-		triggerEnv = "onprem"
+
+	actionEnv := ""
+	triggerEnv := "Cloud"
+	for _, action := range workflow.Actions { 
+		if len(action.Environment) > 0 { 
+			actionEnv = action.Environment
+		}
+	}
+
+	if len(actionEnv) == 0 {
+		actionEnv = "Cloud"
 
 		envs, err := GetEnvironments(ctx, orgId)
 		if err == nil {
@@ -755,7 +762,11 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				}
 			}
 		} else {
-			actionEnv = "Shuffle"
+			if project.Environment == "cloud" { 
+				actionEnv = "Cloud"
+			} else {
+				actionEnv = "Shuffle"
+			}
 		}
 	}
 
@@ -2016,18 +2027,28 @@ func GetPublicDetections() []DetectionResponse {
 }
 
 func GetBaseDockerfile() []byte {
-	appSdkImage := "frikky/shuffle:app_sdk"
+	appSdkImage := os.Getenv("SHUFFLE_APP_SDK_IMAGE")
+	if appSdkImage == "" {
+		appSdkImage = "frikky/shuffle:app_sdk"
 
-	registry := os.Getenv("SHUFFLE_BASE_IMAGE_REGISTRY")
-	name := os.Getenv("SHUFFLE_BASE_IMAGE_NAME")
-	if name != "" {
-		if registry != "" {
-			appSdkImage = fmt.Sprintf("%s/%s:app_sdk", registry, name)
-		} else {
-			appSdkImage = fmt.Sprintf("%s:app_sdk", name)
+		registry := os.Getenv("SHUFFLE_BASE_IMAGE_REGISTRY")
+		name := os.Getenv("SHUFFLE_BASE_IMAGE_NAME")
+		if name != "" {
+			if registry != "" {
+				appSdkImage = fmt.Sprintf("%s/%s:app_sdk", registry, name)
+			} else {
+				appSdkImage = fmt.Sprintf("%s:app_sdk", name)
+			}
+		} else if registry != "" {
+			appSdkImage = fmt.Sprintf("%s/frikky/shuffle:app_sdk", registry)
 		}
-	} else if registry != "" {
-		appSdkImage = fmt.Sprintf("%s/frikky/shuffle:app_sdk", registry)
+	}
+
+	if os.Getenv("SHUFFLE_APP_BUILD_AIRGAPPED") == "true" {
+		return []byte(fmt.Sprintf(`FROM %s
+COPY src /app
+WORKDIR /app
+CMD ["python", "app.py", "--log-level", "DEBUG"]`, appSdkImage))
 	}
 
 	return []byte(fmt.Sprintf(`FROM %s as base`, appSdkImage) + `
