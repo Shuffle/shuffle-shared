@@ -5347,6 +5347,14 @@ type StreamPresenceState struct {
 	Users []StreamPresenceEntry `json:"users"`
 }
 
+// StreamPresenceResponse is returned by the presence_only endpoint.
+type StreamPresenceResponse struct {
+	Success bool                  `json:"success"`
+	Count   int                   `json:"count"`
+	Users   []StreamPresenceEntry `json:"users"`
+	Seq     int64                 `json:"seq"`
+}
+
 type MockToolCall struct {
 	URL      string                 `json:"url"`
 	Method   string                 `json:"method"`

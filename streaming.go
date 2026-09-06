@@ -33,92 +33,194 @@ func presenceColor(userID string) string {
 	return streamPresenceColors[hash%len(streamPresenceColors)]
 }
 
-var streamPresenceTTL int32 = 5
-var streamPresenceStaleMs int64 = 30000                                           // 30 seconds stale threshold
-var streamAllowRegionRedirect = os.Getenv("SHUFFLE_STREAM_REGION_REDIRECT") == "" // Set SHUFFLE_STREAM_REGION_REDIRECT to any non-empty value to disable region redirects locally; unset in prod so this stays true
-var streamSelfCloseAfter = 55 * time.Second                                       // close cleanly before the platform force-cuts at 60s, always between ops - never mid-write
+var streamPresenceTTL      int32 = 5 	 // 5 Mins
+var streamPresenceStaleMs  int64 = 30000 // 30s — user removed from presence after this idle time
+var streamOpTTLMinutes     int32 = 30
+var streamSeqTTLMinutes    int32 = 60
+var streamAuthCtxTTLMinutes int32 = 5
+var streamMaxCatchup       int64 = 100
+var streamMissRetries            = 30
+var streamSelfCloseAfter         = 55 * time.Second
 
-// Stream storage model (per workflow):
-//	<id>_stream_seq       — monotonic counter, atomically incremented per op (source of sequence numbers) <id> : workflow ID
-//	<id>_stream_op_<seq>  — one operation stored under its own key (O(1) writes, no read-modify-write race)
-//	<id>_stream_lastsave  — sequence of the last "save" op, used as the catch-up baseline
-//	<id>_presence         — presence/heartbeat state (unchanged)
-
-// Writes only allocate a sequence (atomic INCR) and set a single op key, so concurrent
-// writers can never clobber each other. Readers poll the small counter key and only fetch
-// op payloads when it advances.
-var streamOpTTLMinutes int32 = 30   // individual op keys; also bounds catch-up history
-var streamSeqTTLMinutes int32 = 60  // counter + lastsave keys (SetCache uses minutes; memcache/requestCache paths convert to seconds via *60)
-var streamMaxCatchup int64 = 100    // cap replayed ops on connect/history
-var streamMissRetries = 30          // ~3s at 100ms/poll before skipping a never-materialised op
-var streamPostSaveKeepOps int64 = 0 // only keep the save op itself; delete all ops before it
-var streamAuthCtxTTLMinutes int32 = 2
-
-// Adaptive polling: the read loop starts at streamPollFast and slows down
-// when no ops arrive, reducing idle memcache reads by ~97%. Any forwarded op
-// snaps the interval back to streamPollFast immediately.
-//
-// Tier        Idle duration     Poll interval
-// ─────────   ──────────────    ─────────────
-// Fast        0 – 2 min        100 ms
-// Medium      2 – 5 min        500 ms
-// Slow        5 – 15 min       1 s
-// Slowest     15 min+           3 s
-var (
-	streamPollFast    = 100 * time.Millisecond
-	streamPollMedium  = 500 * time.Millisecond
-	streamPollSlow    = 1 * time.Second
-	streamPollSlowest = 3 * time.Second
-
-	streamIdleMedium  = 2 * time.Minute
-	streamIdleSlow    = 5 * time.Minute
-	streamIdleSlowest = 15 * time.Minute
-)
+// Set SHUFFLE_STREAM_REGION_REDIRECT=1 locally to disable region redirects.
+var streamAllowRegionRedirect = os.Getenv("SHUFFLE_STREAM_REGION_REDIRECT") == ""
 
 // streamSeqMu guards the in-process counter path (single-instance deployments without memcache).
 var streamSeqMu sync.Mutex
 
-// streamPollInterval picks the poll sleep based on idle duration.
-func streamPollInterval(lastActivity time.Time) time.Duration {
-	idle := time.Since(lastActivity)
-	switch {
-	case idle < streamIdleMedium:
-		return streamPollFast
-	case idle < streamIdleSlow:
-		return streamPollMedium
-	case idle < streamIdleSlowest:
-		return streamPollSlow
-	default:
-		return streamPollSlowest
+// streamPresenceMu guards the in-process presence path (single-instance deployments without memcache).
+var streamPresenceMu sync.Mutex
+
+// streamReaderSignal is a wake-up ping channel for one reader.
+// Each make() gives a unique memory address, so the channel itself is the reader's ID.
+type streamReaderSignal chan struct{}
+
+// streamNotifier wakes blocked readers when a writer stores an op, replacing the
+// busy-poll. In-process only (single instance): writer and readers share a process.
+type streamNotifier struct {
+	mu      sync.RWMutex
+	readers map[string][]streamReaderSignal // workflowID -> subscribed reader signals
+}
+
+var streamNotify = &streamNotifier{
+	readers: make(map[string][]streamReaderSignal),
+}
+
+// subscribe returns a wake channel for the workflow and an unsubscribe func the
+// caller MUST defer.
+func (n *streamNotifier) subscribe(workflowID string) (streamReaderSignal, func()) {
+	signal := make(streamReaderSignal, 1)
+
+	n.mu.Lock()
+	n.readers[workflowID] = append(n.readers[workflowID], signal)
+	n.mu.Unlock()
+
+	cleanup := func() {
+		n.unsubscribe(workflowID, signal)
+	}
+
+	return signal, cleanup
+}
+
+// unsubscribe removes the given signal from the workflow's reader list.
+func (n *streamNotifier) unsubscribe(workflowID string, signal streamReaderSignal) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	signals := n.readers[workflowID]
+	for i, s := range signals {
+		if s == signal {
+			// Swap with last element and shrink — O(1), order doesn't matter
+			last := len(signals) - 1
+			signals[i] = signals[last]
+			n.readers[workflowID] = signals[:last]
+			break
+		}
+	}
+	if len(n.readers[workflowID]) == 0 {
+		delete(n.readers, workflowID)
 	}
 }
 
-// getStreamLastActivity reads the last-activity unix-ms timestamp from cache.
-// Returns (timestamp, true) on hit, or (time.Now(), false) on miss.
-func getStreamLastActivity(ctx context.Context, workflowID string) (time.Time, bool) {
-	v, err := GetCache(ctx, streamLastActivityKey(workflowID))
+// publish wakes every reader subscribed to the workflow. Never blocks.
+func (n *streamNotifier) publish(workflowID string) {
+	// Snapshot under RLock so subscribe/unsubscribe isn't blocked
+	// for the full iteration of potentially 200 channels.
+	n.mu.RLock()
+	signals := make([]streamReaderSignal, len(n.readers[workflowID]))
+	copy(signals, n.readers[workflowID])
+	n.mu.RUnlock()
+
+	for _, signal := range signals {
+		select {
+		case signal <- struct{}{}:
+		default: // reader already has a pending wake
+		}
+	}
+}
+
+// Stream Cache Helpers - Abstracts memcached vs in-memory storage
+
+// streamCacheIncrement atomically increments a counter in cache.
+func streamCacheIncrement(key string, ttlMinutes int32) (int64, error) {
+	if len(memcached) > 0 && mc != nil {
+		newVal, err := mc.Increment(key, 1)
+		
+		if err == gomemcache.ErrCacheMiss {
+			addErr := mc.Add(&gomemcache.Item{
+				Key:        key,
+				Value:      []byte("1"),
+				Expiration: ttlMinutes * 60,
+			})
+			if addErr == nil {
+				return 1, nil
+			}
+			newVal, err = mc.Increment(key, 1)
+		}
+		
+		if err == nil {
+			mc.Touch(key, ttlMinutes*60)
+			return int64(newVal), nil
+		}
+		
+		log.Printf("[WARNING] Memcached increment failed for %s, using in-process", key)
+	}
+	
+	streamSeqMu.Lock()
+	defer streamSeqMu.Unlock()
+	
+	var cur int64
+	if v, found := requestCache.Get(key); found {
+		if parsed, ok := v.(int64); ok {
+			cur = parsed
+		}
+	}
+	
+	cur++
+	requestCache.Set(key, cur, time.Duration(ttlMinutes)*time.Minute)
+	
+	return cur, nil
+}
+
+// streamCacheGetPresence reads presence data with CAS support.
+func streamCacheGetPresence(ctx context.Context, key string) ([]byte, uint64, error) {
+	if len(memcached) > 0 && mc != nil {
+		item, err := mc.Get(key)
+		if err == gomemcache.ErrCacheMiss || item == nil {
+			return nil, 0, gomemcache.ErrCacheMiss
+		}
+		if err != nil {
+			log.Printf("[WARNING] Memcached get failed for %s, using in-process", key)
+		} else {
+			return item.Value, item.CasID, nil
+		}
+	}
+	
+	cached, err := GetCache(ctx, key)
 	if err != nil {
-		return time.Now(), false
+		return nil, 0, err
 	}
-	raw, ok := v.([]uint8)
-	if !ok {
-		return time.Now(), false
+	
+	if raw, ok := cached.([]uint8); ok {
+		return raw, 0, nil
 	}
-	ms, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
-	if err != nil || ms == 0 {
-		return time.Now(), false
-	}
-	return time.UnixMilli(ms), true
+	
+	return nil, 0, fmt.Errorf("unexpected cache type")
 }
 
-// setStreamLastActivity persists time.Now() as the last-activity timestamp.
-// TTL matches the seq counter (60 min) so it expires with the stream.
-func setStreamLastActivity(ctx context.Context, workflowID string) {
-	ms := time.Now().UnixMilli()
-	if err := SetCache(ctx, streamLastActivityKey(workflowID), []byte(strconv.FormatInt(ms, 10)), streamSeqTTLMinutes); err != nil {
-		log.Printf("[WARNING] Failed setting stream last-activity for %s: %s", workflowID, err)
+// streamCacheSetPresence writes presence data with optional CAS.
+func streamCacheSetPresence(ctx context.Context, key string, data []byte, ttlMinutes int32, casID uint64) error {
+	if casID > 0 && len(memcached) > 0 && mc != nil {
+		item := &gomemcache.Item{
+			Key:        key,
+			Value:      data,
+			Expiration: ttlMinutes * 60,
+			CasID:      casID,
+		}
+		err := mc.CompareAndSwap(item)
+		if err == nil {
+			return nil
+		}
+		if err == gomemcache.ErrCASConflict {
+			return err
+		}
+		log.Printf("[WARNING] Memcached CAS failed for %s, using regular set", key)
 	}
+	
+	if len(memcached) > 0 && mc != nil && casID == 0 {
+		addErr := mc.Add(&gomemcache.Item{
+			Key:        key,
+			Value:      data,
+			Expiration: ttlMinutes * 60,
+		})
+		if addErr == nil {
+			return nil
+		}
+	}
+	
+	return SetCache(ctx, key, data, ttlMinutes)
 }
+
 
 func streamSeqKey(id string) string {
 	return fmt.Sprintf("%s_stream_seq", id)
@@ -132,18 +234,12 @@ func streamOpKey(id string, seq int64) string {
 	return fmt.Sprintf("%s_stream_op_%d", id, seq)
 }
 
-func streamLastActivityKey(id string) string {
-	return fmt.Sprintf("%s_stream_lastactivity", id)
-}
-
 func streamPresenceKeyFor(id string) string {
 	return fmt.Sprintf("%s_presence", id)
 }
 
-// streamAgentUserID is the name the AI agent signs in under while it's building a workflow.
+// streamAgentUserID is reserved for future use — identifies agent-generated ops in presence.
 const streamAgentUserID = "agent"
-
-var streamPresenceMu sync.Mutex
 
 // decodePresence reads the participant list out of its stored JSON form.
 func decodePresence(data []byte) []StreamPresenceEntry {
@@ -210,51 +306,60 @@ func readPresence(ctx context.Context, workflowID string) []StreamPresenceEntry 
 	return prunePresence(decodePresence(raw), time.Now().UnixMilli())
 }
 
-// savePresenceParticipant records that userID is viewing the workflow — adding or refreshing
-// their entry — and returns the resulting live participant list. It writes safely so two people
-// signing in at the same instant can't overwrite each other.
+// savePresenceParticipant marks a user as active on the workflow and returns the updated viewer list.
+// Uses a mutex for in-process cache (no memcache) or CAS for memcache to handle concurrent updates safely.
 func savePresenceParticipant(ctx context.Context, workflowID, userID, username string) []StreamPresenceEntry {
 	key := streamPresenceKeyFor(workflowID)
-	ttlSeconds := streamPresenceTTL * 60
+	now := time.Now().UnixMilli()
 
-	// Single-server setup: no shared cache, so a lock around read-change-write is enough.
-	if len(memcached) == 0 {
+	// No memcache — use a simple mutex since everything is in-process.
+	if len(memcached) == 0 || mc == nil {
 		streamPresenceMu.Lock()
 		defer streamPresenceMu.Unlock()
 
-		users := addParticipant(readPresence(ctx, workflowID), userID, username, time.Now().UnixMilli())
+		users := addParticipant(readPresence(ctx, workflowID), userID, username, now)
 		SetCache(ctx, key, encodePresence(users), streamPresenceTTL)
 		return users
 	}
 
-	// Shared cache: read the list, change it, and save it back only if nobody else changed it
-	// in the meantime. If someone did, read their fresh copy and try again (up to 5 times).
+	// Memcache path — use CAS (Compare-And-Swap) to safely handle multiple
+	// goroutines or instances writing at the same time.
+	// If someone else updated the key between our read and write, we retry.
 	for attempt := 0; attempt < 5; attempt++ {
-		item, err := mc.Get(key)
-		now := time.Now().UnixMilli()
+		data, casID, err := streamCacheGetPresence(ctx, key)
 
-		// Nothing stored yet: try to create it. If someone beats us to it, loop and update instead.
-		if err == gomemcache.ErrCacheMiss || item == nil {
+		if err == gomemcache.ErrCacheMiss || data == nil {
+			// Key doesn't exist yet — first user to open this workflow.
 			users := addParticipant(nil, userID, username, now)
-			if mc.Add(&gomemcache.Item{Key: key, Value: encodePresence(users), Expiration: ttlSeconds}) == nil {
+			if streamCacheSetPresence(ctx, key, encodePresence(users), streamPresenceTTL, 0) == nil {
 				return users
 			}
+			// Another goroutine created the key first — retry and update it.
 			continue
 		}
+
 		if err != nil {
-			break // cache trouble — fall through to a best-effort read
+			break
 		}
 
-		// Something is stored: update it and save only if it hasn't changed underneath us.
-		users := addParticipant(decodePresence(item.Value), userID, username, now)
-		item.Value = encodePresence(users)
-		item.Expiration = ttlSeconds
-		if mc.CompareAndSwap(item) == nil {
+		// Key exists — update it with this user added/refreshed.
+		users := addParticipant(decodePresence(data), userID, username, now)
+		err = streamCacheSetPresence(ctx, key, encodePresence(users), streamPresenceTTL, casID)
+		if err == nil {
 			return users
 		}
-		// Someone else saved first — loop and retry against their version.
+
+		if err == gomemcache.ErrCASConflict {
+			// Someone else wrote between our read and write — retry with fresh data.
+			continue
+		}
+
+		log.Printf("[WARNING] Failed updating presence for %s: %s", workflowID, err)
+		break
 	}
 
+	// All retries failed — return whatever is currently in cache.
+	// This user will be missing this tick but will succeed on the next heartbeat (10s).
 	return readPresence(ctx, workflowID)
 }
 
@@ -289,7 +394,7 @@ func getStreamWorkflowAuth(ctx context.Context, workflowID string) (streamWorkfl
 	}
 
 	// Cache miss: read the workflow. A missing workflow means "not found".
-	workflow, err := GetWorkflow(ctx, workflowID)
+	workflow, err := GetWorkflow(ctx, workflowID, true)
 	if err != nil {
 		return streamWorkflowAuth{}, false
 	}
@@ -301,72 +406,25 @@ func getStreamWorkflowAuth(ctx context.Context, workflowID string) (streamWorkfl
 		Public: workflow.Public,
 	}
 
-	// Read the org to find out whether multiplayer is enabled.
-	org, orgErr := GetOrg(ctx, workflow.OrgId)
-	if orgErr != nil {
-		// Org read failed: treat multiplayer as off and don't cache it.
-		return auth, true
-	}
-	auth.MultiplayerActive = org.SyncFeatures.Multiplayer.Active
+	// Multiplayer is enabled for everyone by default.
+	auth.MultiplayerActive = true
 
-	// Cache only when multiplayer is on, so turning it on is picked up on the next request.
-	if auth.MultiplayerActive {
-		authBytes, marshalErr := json.Marshal(auth)
-		if marshalErr == nil {
-			setErr := SetCache(ctx, key, authBytes, streamAuthCtxTTLMinutes)
-			if setErr != nil {
-				log.Printf("[WARNING] Failed caching stream auth context for %s: %s", workflowID, setErr)
-			}
+
+	authBytes, marshalErr := json.Marshal(auth)
+	if marshalErr == nil {
+		setErr := SetCache(ctx, key, authBytes, streamAuthCtxTTLMinutes)
+		if setErr != nil {
+			log.Printf("[WARNING] Failed caching stream auth context for %s: %s", workflowID, setErr)
 		}
 	}
 
 	return auth, true
 }
 
-// nextStreamSeq atomically allocates and returns the next stream sequence for a workflow.
+// nextStreamSeq atomically allocates and returns the next stream sequence.
 func nextStreamSeq(workflowID string) (int64, error) {
 	key := streamSeqKey(workflowID)
-
-	if len(memcached) > 0 {
-		newVal, err := mc.Increment(key, 1)
-
-		if err == gomemcache.ErrCacheMiss {
-			addErr := mc.Add(&gomemcache.Item{
-				Key:        key,
-				Value:      []byte("1"),
-				Expiration: streamSeqTTLMinutes * 60,
-			})
-
-			if addErr == nil {
-				return 1, nil
-			}
-
-			newVal, err = mc.Increment(key, 1)
-		}
-
-		if err != nil {
-			return 0, err
-		}
-
-		mc.Touch(key, streamSeqTTLMinutes*60)
-
-		return int64(newVal), nil
-	}
-
-	streamSeqMu.Lock()
-	defer streamSeqMu.Unlock()
-
-	var cur int64
-	if v, found := requestCache.Get(key); found {
-		if parsed, ok := v.(int64); ok {
-			cur = parsed
-		}
-	}
-
-	cur++
-	requestCache.Set(key, cur, time.Duration(streamSeqTTLMinutes)*time.Minute)
-
-	return cur, nil
+	return streamCacheIncrement(key, streamSeqTTLMinutes)
 }
 
 // parseSeqValue reads a sequence value stored either as ASCII bytes (memcache) or int64
@@ -422,14 +480,19 @@ func getStreamOp(ctx context.Context, workflowID string, seq int64) (StreamWorkf
 }
 
 func pruneStreamOpsBeforeSave(ctx context.Context, workflowID string, prevSaveSeq, newSaveSeq int64) {
-	// Delete all ops before the current save. Keep only from newSaveSeq onwards.
-	for seq := int64(1); seq < newSaveSeq; seq++ {
+	// Start from prevSaveSeq+1, not 1 — avoids re-deleting already pruned keys.
+	start := prevSaveSeq + 1
+	if start < 1 {
+		start = 1
+	}
+	for seq := start; seq < newSaveSeq; seq++ {
 		if err := DeleteCache(ctx, streamOpKey(workflowID, seq)); err != nil {
-			// log.Printf("[WARNING] Failed pruning stream op %d for %s: %s", seq, workflowID, err)
+			log.Printf("[WARNING] Failed pruning stream op %d for %s: %s", seq, workflowID, err)
 		}
 	}
 }
 
+// Main stream update function :)
 func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -475,6 +538,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	}
 
 	ctx := GetContext(request)
+	// So that we won't have to fetch the workflow and org for each stream update :)
 	workflowAuth, ok := getStreamWorkflowAuth(ctx, fileId)
 	if !ok {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
@@ -507,8 +571,18 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 
 	workflowID := workflowAuth.ID
 
+	// Limit request body size to prevent memory exhaustion
+	const maxBodySize = 10 * 1024 * 1024 // 10MB limit
+	request.Body = http.MaxBytesReader(resp, request.Body, maxBodySize)
+	
 	body, err := io.ReadAll(request.Body)
 	if err != nil {
+		if err.Error() == "http: request body too large" {
+			log.Printf("[WARNING] Request body too large for workflow %s", workflowID)
+			resp.WriteHeader(413)
+			resp.Write([]byte(`{"success": false, "reason": "Request body too large (max 10MB)"}`))
+			return
+		}
 		log.Printf("[WARNING] Error with body read in workflow stream: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
@@ -526,8 +600,18 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
+	// Limit batch size to prevent memory exhaustion
+	const maxBatchSize = 1000
+	if len(ops) > maxBatchSize {
+		log.Printf("[WARNING] Batch too large for workflow %s: %d ops (max %d)", workflowID, len(ops), maxBatchSize)
+		resp.WriteHeader(413)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Batch too large (max %d operations)"}`, maxBatchSize)))
+		return
+	}
+
 	now := time.Now().UnixMilli()
 	var lastSeq int64
+	var failedSeqs []int64
 	for i := range ops {
 		// Atomic allocation — two writers can never receive the same sequence, so their
 		// ops can never overwrite each other (each lives under its own key).
@@ -551,11 +635,14 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 
 		opBytes, marshalErr := json.Marshal(ops[i])
 		if marshalErr != nil {
-			log.Printf("[WARNING] Failed marshaling stream op for %s: %s", workflowID, marshalErr)
+			log.Printf("[ERROR] Failed marshaling stream op %d for %s: %s", seq, workflowID, marshalErr)
+			failedSeqs = append(failedSeqs, seq)
 			continue
 		}
 		if cacheErr := SetCache(ctx, streamOpKey(workflowID, seq), opBytes, streamOpTTLMinutes); cacheErr != nil {
-			log.Printf("[WARNING] Failed storing stream op %d for %s: %s", seq, workflowID, cacheErr)
+			log.Printf("[ERROR] Failed storing stream op %d for %s: %s", seq, workflowID, cacheErr)
+			failedSeqs = append(failedSeqs, seq)
+			continue
 		}
 
 		// Record the save baseline so late joiners only replay unsaved changes.
@@ -564,16 +651,27 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 			if err := SetCache(ctx, streamLastSaveKey(workflowID), []byte(strconv.FormatInt(seq, 10)), streamSeqTTLMinutes); err != nil {
 				log.Printf("[WARNING] Failed setting stream lastsave key for %s: %s", workflowID, err)
 			}
-			go pruneStreamOpsBeforeSave(ctx, workflowID, prevSaveSeq, seq)
+			go pruneStreamOpsBeforeSave(context.Background(), workflowID, prevSaveSeq, seq)
 		}
 
 		lastSeq = seq
+	}
+
+	// Wake readers so they deliver whichever ops did land immediately. -- New thing :)
+	streamNotify.publish(workflowID)
+
+	if len(failedSeqs) > 0 {
+		log.Printf("[ERROR] Failed persisting %d/%d stream ops for %s (sequences: %v)", len(failedSeqs), len(ops), workflowID, failedSeqs)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to persist %d of %d stream operations", "sequence": %d, "count": %d}`, len(failedSeqs), len(ops), lastSeq, len(ops)-len(failedSeqs))))
+		return
 	}
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "sequence": %d, "count": %d}`, lastSeq, len(ops))))
 }
 
+// This is the long poll socket for clients to listen to updates
 func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	connStart := time.Now()
 
@@ -654,10 +752,11 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	workflowID := workflowAuth.ID
+	presenceOnlyPoll := request.URL.Query().Get("presence_only") == "1"
 
 	// Lightweight presence poll: a solo client hits this instead of holding a long-poll open.
 	// Refresh its own presence entry, return the live set, and close — no streaming goroutine.
-	if request.URL.Query().Get("presence_only") == "1" {
+	if presenceOnlyPoll {
 		var users []StreamPresenceEntry
 		if len(user.Id) > 0 {
 			users = savePresenceParticipant(ctx, workflowID, user.Id, user.Username)
@@ -665,11 +764,11 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			users = readPresence(ctx, workflowID)
 		}
 		resp.Header().Set("Content-Type", "application/json")
-		responseBytes, _ := json.Marshal(map[string]interface{}{
-			"success": true,
-			"count":   len(users),
-			"users":   users,
-			"seq":     currentStreamSeq(ctx, workflowID),
+		responseBytes, _ := json.Marshal(StreamPresenceResponse{
+			Success: true,
+			Count:   len(users),
+			Users:   users,
+			Seq:     currentStreamSeq(ctx, workflowID),
 		})
 		resp.WriteHeader(200)
 		resp.Write(responseBytes)
@@ -707,6 +806,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			if start < 1 {
 				start = 1
 			}
+			
 			for seq := start; seq <= currentSeq; seq++ {
 				op, ok := getStreamOp(ctx, workflowID, seq)
 				if !ok {
@@ -732,19 +832,22 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		conn.Flush()
 	}
 
-	// stall tracking: guards against a sequence that was allocated but whose op key never
-	// materialised (writer died mid-request), so a single hole can't wedge the stream.
+	// stall tracking: if a seq was allocated but the op never appeared (writer crashed),
+	// skip it after streamMissRetries so one hole can't wedge the stream indefinitely.
 	var stalledSeq int64 = -1
 	var stalledCount int
 
-	// Adaptive polling: seed the activity timestamp on first connect so it
-	// persists across 55s reconnect cycles. Subsequent connects read the
-	// existing key; only the very first connection writes it.
-	lastActivity, exists := getStreamLastActivity(ctx, workflowID)
-	if !exists {
-		setStreamLastActivity(ctx, workflowID)
-	}
 	lastPresenceAt := time.Time{} // zero → sends presence on first iteration
+
+	// Subscribe so writers can wake this reader instead of it busy-polling.
+	wakeSignal, unsubscribe := streamNotify.subscribe(workflowID)
+	defer unsubscribe()
+
+	// Reuse a single timer instead of allocating time.After on every loop iteration.
+	// time.After leaks a timer goroutine until it fires — at 200 connections × every 10s
+	// that's 20 timer allocations/second. Reset this timer at the top of each iteration.
+	presenceTimer := time.NewTimer(0)
+	defer presenceTimer.Stop()
 
 	for {
 		if time.Since(connStart) > streamSelfCloseAfter {
@@ -824,13 +927,40 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 			lastSentSeq = seq
-			lastActivity = time.Now()
-			setStreamLastActivity(ctx, workflowID)
 			conn.Flush()
 		}
 
-		pollInterval := streamPollInterval(lastActivity)
-		time.Sleep(pollInterval)
+		// Wake to send the next presence heartbeat, but never past the self-close window.
+		wait := time.Until(lastPresenceAt.Add(10 * time.Second))
+		if wait <= 0 {
+			wait = 10 * time.Second
+		}
+		if untilSelfClose := time.Until(connStart.Add(streamSelfCloseAfter)); untilSelfClose < wait {
+			if untilSelfClose <= 0 {
+				return
+			}
+			wait = untilSelfClose
+		}
+
+		// Block at ~0 CPU. Any wake re-drains from lastSentSeq, so no op is missed
+		// even if a signal coalesced.
+		select {
+		case <-wakeSignal:
+			// a writer stored an op
+		case <-presenceTimer.C:
+			// presence heartbeat due
+		case <-request.Context().Done():
+			return // client disconnected
+		}
+
+		// Reset timer for next iteration.
+		if !presenceTimer.Stop() {
+			select {
+			case <-presenceTimer.C:
+			default:
+			}
+		}
+		presenceTimer.Reset(wait)
 	}
 }
 
@@ -1009,6 +1139,7 @@ func HandleStreamWorkflowRevert(resp http.ResponseWriter, request *http.Request)
 	}
 
 	if !workflowAuth.MultiplayerActive {
+		log.Printf("[AUDIT] Multiplayer not active for org %s (stream op revert)", workflowAuth.OrgId)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Multiplayer is not enabled for this organization"}`))
 		return
@@ -1021,23 +1152,6 @@ func HandleStreamWorkflowRevert(resp http.ResponseWriter, request *http.Request)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Target seq must be less than current seq"}`))
 		return
-	}
-
-	// Step 1: Count how many ops in lastsave+1 → targetSeq are still in cache.
-	// This used to hard-fail with 409 ("save first") on the first missing op, but that's
-	// overly strict now: the rewind rebuild re-fetches the saved DB baseline and replays
-	// whatever surviving ops exist (tolerating gaps, exactly like the normal since=0
-	// catch-up). A missing op just means its change was already unreachable — reverting
-	// still lands on a state no worse than a page refresh — so we warn and proceed.
-	saveSeq := lastStreamSaveSeq(ctx, workflowID)
-	missing := 0
-	for seq := saveSeq + 1; seq <= targetSeq; seq++ {
-		if _, exists := getStreamOp(ctx, workflowID, seq); !exists {
-			missing++
-		}
-	}
-	if missing > 0 {
-		// log.Printf("[WARNING] stream revert: %d op(s) before target %d for workflow %s are no longer in cache; proceeding with tolerant rebuild", missing, targetSeq, workflowID)
 	}
 
 	// Step 2: Delete op keys targetSeq+1 → currentSeq.
