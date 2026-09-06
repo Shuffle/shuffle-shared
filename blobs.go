@@ -4566,6 +4566,32 @@ func GetUsecaseData() string {
           "href": "/vulnerabilities",
           "description": "Open the vulnerability inventory to ingest CVEs from your scanners."
         }
+      },
+      {
+        "name": "IOC feeds",
+        "type": "Threat Intel",
+        "destination": "Cases",
+        "running": true,
+        "disabled": false,
+        "id": "threat_intel_ingest_1",
+        "source_id": "threat_intel",
+        "target_id": "case_management",
+        "tags": [
+          "Ingest",
+          "Threat Intel",
+          "Feeds",
+          "IOCs"
+        ],
+        "description": "Ingest indicator of compromise (IOC) feeds from open-source intelligence (OSINT), commercial threat feeds, and ISACs into Shuffle to detect malicious IPs, domains, hashes, and URLs.",
+        "agentic_description": "An agent continuously ingests and deduplicates threat feeds, normalizes indicators, tracks source confidence, and stages them for real-time incident matching.",
+        "automation_label": "Enable Threat feeds",
+        "automation_category": "cases",
+        "automation_area": "threat_intel",
+        "custom_action": {
+          "label": "Threat Feeds",
+          "href": "/incidents/threat-feeds",
+          "description": "IOC feeds and Threat feeds refer to the same thing — manage your configured threat feeds and IOC sources."
+        }
       }
     ]
   },
@@ -4707,26 +4733,6 @@ func GetUsecaseData() string {
         "agentic_description": "An agent tracks excessive permission grants, detects role assumption chains indicating privilege escalation, and triggers automated least-privilege review recommendations in IAM.",
         "automation_area": "correlation",
         "manual_verification": true
-      },
-      {
-        "name": "IOC feeds",
-        "type": "Threat Intel",
-        "destination": "Cloud",
-        "running": true,
-        "disabled": false,
-        "id": "threat_intel_cloud_1",
-        "source_id": "threat_intel",
-        "target_id": "cloud",
-        "tags": [
-          "Intel",
-          "Correlation",
-          "Detection"
-        ],
-        "description": "Pushing IOC feeds to cloud-native security tools (GuardDuty, Sentinel, SCC) enables detection of known-malicious activity within cloud workloads.",
-        "agentic_description": "An agent maps threat intel IOCs to active cloud workloads, identifies which resources are communicating with known-malicious infrastructure, and auto-creates remediation tasks in cloud security tools.",
-        "automation_label": "Enable Threat feeds",
-        "automation_category": "cases",
-        "automation_area": "threat_intel"
       },
       {
         "name": "Resource inventory",
@@ -4987,7 +4993,8 @@ func GetUsecaseData() string {
         "type": "Assets",
         "destination": "Cases",
         "running": false,
-        "disabled": false,
+        "disabled": true,
+        "support_only": true,
         "id": "asset_management_case_management_vuln_response_1",
         "source_id": "asset_management",
         "target_id": "case_management",
