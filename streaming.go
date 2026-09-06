@@ -744,12 +744,12 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// if !workflowAuth.MultiplayerActive {
-	// 	log.Printf("[AUDIT] Multiplayer not active for org %s (get workflow stream)", workflowAuth.OrgId)
-	// 	resp.WriteHeader(403)
-	// 	resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
-	// 	return
-	// }
+	if !workflowAuth.MultiplayerActive {
+		log.Printf("[AUDIT] Multiplayer not active for org %s (get workflow stream)", workflowAuth.OrgId)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
+		return
+	}
 
 	workflowID := workflowAuth.ID
 	presenceOnlyPoll := request.URL.Query().Get("presence_only") == "1"
@@ -1035,12 +1035,12 @@ func HandleStreamWorkflowHistory(resp http.ResponseWriter, request *http.Request
 		}
 	}
 
-	// if !workflowAuth.MultiplayerActive {
-	// 	log.Printf("[AUDIT] Multiplayer not active for org %s (stream history)", workflowAuth.OrgId)
-	// 	resp.WriteHeader(403)
-	// 	resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
-	// 	return
-	// }
+	if !workflowAuth.MultiplayerActive {
+		log.Printf("[AUDIT] Multiplayer not active for org %s (stream history)", workflowAuth.OrgId)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Multiplayer collaboration is not enabled for this organization"}`))
+		return
+	}
 
 	// Reassemble the recent operation history (bounded to the last streamMaxCatchup ops)
 	// from the individual op keys.
@@ -1138,11 +1138,12 @@ func HandleStreamWorkflowRevert(resp http.ResponseWriter, request *http.Request)
 		}
 	}
 
-	// if !workflowAuth.MultiplayerActive {
-	// 	resp.WriteHeader(403)
-	// 	resp.Write([]byte(`{"success": false, "reason": "Multiplayer is not enabled for this organization"}`))
-	// 	return
-	// }
+	if !workflowAuth.MultiplayerActive {
+		log.Printf("[AUDIT] Multiplayer not active for org %s (stream op revert)", workflowAuth.OrgId)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Multiplayer is not enabled for this organization"}`))
+		return
+	}
 
 	workflowID := workflowAuth.ID
 	currentSeq := currentStreamSeq(ctx, workflowID)

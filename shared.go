@@ -1203,6 +1203,12 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			orgChanged = true
 		}
 
+		// Multiplayer (live collaboration) is enabled for everyone by default.
+		if !org.SyncFeatures.Multiplayer.Active {
+			org.SyncFeatures.Multiplayer.Active = true
+			orgChanged = true
+		}
+
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
 		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
