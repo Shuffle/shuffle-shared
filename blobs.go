@@ -4430,7 +4430,7 @@ func GetUsecaseData() string {
     "step": 1,
     "list": [
       {
-        "name": "Phishing",
+        "name": "Email reports",
         "type": "Email",
         "destination": "Cases",
         "running": false,
@@ -4547,7 +4547,7 @@ func GetUsecaseData() string {
         "type": "Assets",
         "destination": "Cases",
         "running": false,
-        "disabled": true,
+        "disabled": false,
         "id": "vulnerability_ingestion_1",
         "source_id": "asset_management",
         "target_id": "case_management",
@@ -4558,6 +4558,8 @@ func GetUsecaseData() string {
         ],
         "description": "Ingest vulnerability findings (CVEs, misconfigurations, missing patches) from your scanners into a unified inventory so they can be correlated with assets and incidents.",
         "agentic_description": "An agent normalizes scanner output across vendors, deduplicates findings per asset, enriches each CVE with exploitability and threat intel, and keeps the vulnerability inventory continuously up to date.",
+        "automation_label": "Ingest Vulnerabilities",
+        "automation_category": "vulnerabilities",
         "automation_area": "automatic_ingestion",
         "custom_action": {
           "label": "Configure Vulnerabilities",
@@ -5004,7 +5006,7 @@ func GetUsecaseData() string {
         }
       },
       {
-        "name": "Add Host-Monitors",
+        "name": "Host Monitoring",
         "type": "Cases",
         "destination": "Assets",
         "running": false,
@@ -5019,11 +5021,11 @@ func GetUsecaseData() string {
         ],
         "description": "Deploy host monitors to endpoints for real-time telemetry collection, compliance checks, and on-demand response action execution. Monitors enable direct interaction with hosts during investigations and continuous visibility into endpoint state.",
         "agentic_description": "An agent identifies hosts missing monitor coverage, generates the appropriate deployment command for each platform, tracks rollout status, and verifies telemetry is flowing back into the platform after install.",
-        "automation_label": "Add Monitors",
+        "automation_label": "Host Monitoring",
         "automation_category": "cases",
         "automation_area": "response",
         "custom_action": {
-          "label": "Add Monitor",
+          "label": "Deploy Host Monitor",
           "href": "/monitors?add_host=true",
           "description": "Open the monitor deployment dialog to register a new host."
         }

@@ -1137,7 +1137,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 			if !found {
 				log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (%s) (get org)", user.Username, user.Id, org.Name, org.Id)
-				resp.WriteHeader(401)
+				resp.WriteHeader(403)
 				resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
 				return
 			}
@@ -1151,9 +1151,11 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		if org.SSOConfig.OpenIdClientId != "" {
 			org.SSOConfig.OpenIdClientId = "CLEANED"
 		}
+
 		if org.SSOConfig.OpenIdClientSecret != "" {
 			org.SSOConfig.OpenIdClientSecret = "CLEANED"
 		}
+
 		org.Subscriptions = []PaymentSubscription{}
 		org.ManagerOrgs = []OrgMini{}
 		org.ChildOrgs = []OrgMini{}
@@ -10528,9 +10530,17 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			item.Orgs = append(item.Orgs, user.ActiveOrg.Id)
 		}
 
+		// Removes tokens 
+		if item.Username != user.Username {
+			for deviceIndex, _ := range item.Devices {
+				item.Devices[deviceIndex].Token = ""
+			}
+		}
+
 		if user.SupportAccess {
 			item.Orgs = foundUser.Orgs
 		}
+
 		newUsers = append(newUsers, item)
 	}
 
