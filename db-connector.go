@@ -924,7 +924,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_input_tokens") {
 		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
 			if len(managerOrg.Id) == 36 {
-				IncrementCache(ctx, managerOrg.Id, "childorg_agent_input_tokens", int(dbDumpInterval))
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_input_tokens", int(dbDumpInterval))
 			}
 		}
 	}
@@ -932,7 +932,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_output_tokens") {
 		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
 			if len(managerOrg.Id) == 36 {
-				IncrementCache(ctx, managerOrg.Id, "childorg_agent_output_tokens", int(dbDumpInterval))
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_output_tokens", int(dbDumpInterval))
 			}
 		}
 	}
@@ -956,7 +956,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_cached_tokens") {
 		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
 			if len(managerOrg.Id) == 36 {
-				IncrementCache(ctx, managerOrg.Id, "childorg_agent_cached_tokens", int(dbDumpInterval))
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_cached_tokens", int(dbDumpInterval))
 			}
 		}
 	}
@@ -989,6 +989,14 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
 			if len(managerOrg.Id) == 36 {
 				IncrementCache(ctx, managerOrg.Id, "child_org_agent_max_loops_hit", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "llm_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_llm_tokens", int(dbDumpInterval))
 			}
 		}
 	}

@@ -662,8 +662,7 @@ func mergeMultiRegionResults(crossRegionResults []MultiRegionStatsEntry, info *E
 	for _, entry := range crossRegionResults {
 		for _, childDay := range entry.DailyStatistics {
 			dateKey := childDay.Date.UTC().Format("2006-01-02")
-			alreadyAppliedCorrection := childDay.AgentInputTokens*250/1_000_000 +
-				childDay.AgentOutputTokens*1500/1_000_000 +
+			alreadyAppliedCorrection := childDay.LLMTokens*300/1_000_000 +
 				childDay.DailySMSUsage*3 +
 				childDay.DailyEmailUsage*2
 			rawChildAppExecutions := childDay.AppExecutions - alreadyAppliedCorrection
@@ -673,25 +672,25 @@ func mergeMultiRegionResults(crossRegionResults []MultiRegionStatsEntry, info *E
 
 			if idx, exists := parentDailyMap[dateKey]; exists {
 				info.DailyStatistics[idx].ChildAppExecutions += rawChildAppExecutions
-				info.DailyStatistics[idx].DailyChildOrgAiUsage += childDay.AIUsage
-				info.DailyStatistics[idx].DailyChildOrgAgentExecutions += childDay.AgentExecutions
-				info.DailyStatistics[idx].DailyChildOrgAgentTokens += childDay.AgentTokens
-				info.DailyStatistics[idx].DailyChildOrgAgentInputTokens += childDay.AgentInputTokens
-				info.DailyStatistics[idx].DailyChildOrgAgentOutputTokens += childDay.AgentOutputTokens
+				info.DailyStatistics[idx].ChildOrgAiUsage += childDay.AIUsage
+				info.DailyStatistics[idx].ChildOrgAgentCachedTokens += childDay.AgentExecutions
+				info.DailyStatistics[idx].ChildOrgAgentTokens += childDay.AgentTokens
+				info.DailyStatistics[idx].ChildOrgAgentInputTokens += childDay.AgentInputTokens
+				info.DailyStatistics[idx].ChildOrgAgentOutputTokens += childDay.AgentOutputTokens
 				info.DailyStatistics[idx].DailyChildOrgSMSUsage += childDay.DailySMSUsage
 				info.DailyStatistics[idx].DailyChildOrgEmailUsage += childDay.DailyEmailUsage
 			} else {
 				// No matching parent day — create a new entry carrying only the child org counters
 				newDay := DailyStatistics{
-					Date:                           childDay.Date,
-					ChildAppExecutions:             rawChildAppExecutions,
-					DailyChildOrgAiUsage:           childDay.AIUsage,
-					DailyChildOrgAgentExecutions:   childDay.AgentExecutions,
-					DailyChildOrgAgentTokens:       childDay.AgentTokens,
-					DailyChildOrgAgentInputTokens:  childDay.AgentInputTokens,
-					DailyChildOrgAgentOutputTokens: childDay.AgentOutputTokens,
-					DailyChildOrgSMSUsage:          childDay.DailySMSUsage,
-					DailyChildOrgEmailUsage:        childDay.DailyEmailUsage,
+					Date:                      childDay.Date,
+					ChildAppExecutions:        rawChildAppExecutions,
+					ChildOrgAiUsage:           childDay.AIUsage,
+					ChildOrgAgentCachedTokens: childDay.AgentExecutions,
+					ChildOrgAgentTokens:       childDay.AgentTokens,
+					ChildOrgAgentInputTokens:  childDay.AgentInputTokens,
+					ChildOrgAgentOutputTokens: childDay.AgentOutputTokens,
+					DailyChildOrgSMSUsage:     childDay.DailySMSUsage,
+					DailyChildOrgEmailUsage:   childDay.DailyEmailUsage,
 				}
 				parentDailyMap[dateKey] = len(info.DailyStatistics)
 				info.DailyStatistics = append(info.DailyStatistics, newDay)
@@ -1178,48 +1177,43 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 // Make sure that we are not calling SetOrgStatistics function after calling this function. This will increase the app runs count in db on every call to this function.
 func GetCorrectedStats(info *ExecutionInfo) *ExecutionInfo {
 
-	// 1 Million Input Tokens = 250 app runs
-	// 1 Million Output Tokens = 1500 app runs
+	// 1 Million LLM Tokens = 300 app runs
 	// 1 SMS = 3 app runs
 	// 1 Email = 2 app runs
 
 	// Loop through the daily statistics and add the app runs from tokens, SMS and email on top of existing counts
 	for i := range info.DailyStatistics {
-		info.DailyStatistics[i].AppExecutions += info.DailyStatistics[i].AgentInputTokens*250/1_000_000 + info.DailyStatistics[i].AgentOutputTokens*1500/1_000_000 + info.DailyStatistics[i].DailySMSUsage*3 + info.DailyStatistics[i].DailyEmailUsage*2
-		info.DailyStatistics[i].ChildAppExecutions += info.DailyStatistics[i].ChildOrgAgentInputTokens*250/1_000_000 + info.DailyStatistics[i].ChildOrgAgentOutputTokens*1500/1_000_000 + info.DailyStatistics[i].DailyChildOrgSMSUsage*3 + info.DailyStatistics[i].DailyChildOrgEmailUsage*2
+		info.DailyStatistics[i].AppExecutions += info.DailyStatistics[i].LLMTokens*300/1_000_000 + info.DailyStatistics[i].DailySMSUsage*3 + info.DailyStatistics[i].DailyEmailUsage*2
+		info.DailyStatistics[i].ChildAppExecutions += info.DailyStatistics[i].ChildOrgLLMTokens*300/1_000_000 + info.DailyStatistics[i].DailyChildOrgSMSUsage*3 + info.DailyStatistics[i].DailyChildOrgEmailUsage*2
 	}
 
-	// Add the monthly app runs from SMS, Email, Input Tokens and Output Tokens on top of existing counts
-	info.MonthlyAppExecutions += info.MonthlySMSUsage*3 + info.MonthlyEmailUsage*2 + info.MonthlyAgentInputTokens*250/1_000_000 + info.MonthlyAgentOutputTokens*1500/1_000_000
-	info.MonthlyChildAppExecutions += info.MonthlyChildOrgSMSUsage*3 + info.MonthlyChildOrgEmailUsage*2 + info.MonthlyChildOrgAgentInputTokens*250/1_000_000 + info.MonthlyChildOrgAgentOutputTokens*1500/1_000_000
+	// Add the monthly app runs from SMS, Email and LLM Tokens on top of existing counts
+	info.MonthlyAppExecutions += info.MonthlySMSUsage*3 + info.MonthlyEmailUsage*2 + info.MonthlyLLMTokens*300/1_000_000
+	info.MonthlyChildAppExecutions += info.MonthlyChildOrgSMSUsage*3 + info.MonthlyChildOrgEmailUsage*2 + info.MonthlyChildOrgLLMTokens*300/1_000_000
 
-	info.DailyAppExecutions += info.DailyAgentInputTokens*250/1_000_000 + info.DailyAgentOutputTokens*1500/1_000_000 + info.DailySMSUsage*3 + info.DailyEmailUsage*2
-	info.DailyChildAppExecutions += info.DailyChildOrgAgentInputTokens*250/1_000_000 + info.DailyChildOrgAgentOutputTokens*1500/1_000_000 + info.DailyChildOrgSMSUsage*3 + info.DailyChildOrgEmailUsage*2
+	info.DailyAppExecutions += info.DailyLLMTokens*300/1_000_000 + info.DailySMSUsage*3 + info.DailyEmailUsage*2
+	info.DailyChildAppExecutions += info.DailyChildOrgLLMTokens*300/1_000_000 + info.DailyChildOrgSMSUsage*3 + info.DailyChildOrgEmailUsage*2
 
-	info.TotalAppExecutions += info.TotalAgentInputTokens*250/1_000_000 + info.TotalAgentOutputTokens*1500/1_000_000 + info.TotalSMSUsage*3 + info.TotalEmailUsage*2
-	info.TotalChildAppExecutions += info.TotalChildOrgAgentInputTokens*250/1_000_000 + info.TotalChildOrgAgentOutputTokens*1500/1_000_000 + info.TotalChildOrgSMSUsage*3 + info.TotalChildOrgEmailUsage*2
+	info.TotalAppExecutions += info.TotalLLMTokens*300/1_000_000 + info.TotalSMSUsage*3 + info.TotalEmailUsage*2
+	info.TotalChildAppExecutions += info.TotalChildOrgLLMTokens*300/1_000_000 + info.TotalChildOrgSMSUsage*3 + info.TotalChildOrgEmailUsage*2
 
 	if len(info.DailyStatistics) > 0 {
-		annualInputTokens := int64(0)
-		annualChildInputTokens := int64(0)
-		annualOutputTokens := int64(0)
-		annualChildOutputTokens := int64(0)
+		annualLLMTokens := int64(0)
+		annualChildOrgLLMTokens := int64(0)
 		annualSMSUsage := int64(0)
 		annualChildSMSUsage := int64(0)
 		annualEmailUsage := int64(0)
 		annualChildEmailUsage := int64(0)
 		for i := range info.DailyStatistics {
-			annualInputTokens += info.DailyStatistics[i].AgentInputTokens
-			annualChildInputTokens += info.DailyStatistics[i].ChildOrgAgentInputTokens
-			annualOutputTokens += info.DailyStatistics[i].AgentOutputTokens
-			annualChildOutputTokens += info.DailyStatistics[i].ChildOrgAgentOutputTokens
+			annualLLMTokens += info.DailyStatistics[i].LLMTokens
 			annualSMSUsage += info.DailyStatistics[i].DailySMSUsage
 			annualChildSMSUsage += info.DailyStatistics[i].DailyChildOrgSMSUsage
 			annualEmailUsage += info.DailyStatistics[i].DailyEmailUsage
 			annualChildEmailUsage += info.DailyStatistics[i].DailyChildOrgEmailUsage
+			annualChildOrgLLMTokens += info.DailyStatistics[i].ChildOrgLLMTokens
 		}
-		info.AnnualAppExecutions += annualInputTokens*250/1_000_000 + annualOutputTokens*1500/1_000_000 + annualSMSUsage*3 + annualEmailUsage*2
-		info.AnnualChildAppExecutions += annualChildInputTokens*250/1_000_000 + annualChildOutputTokens*1500/1_000_000 + annualChildSMSUsage*3 + annualChildEmailUsage*2
+		info.AnnualAppExecutions += annualLLMTokens*300/1_000_000 + annualSMSUsage*3 + annualEmailUsage*2
+		info.AnnualChildAppExecutions += annualChildSMSUsage*3 + annualChildEmailUsage*2 + annualChildOrgLLMTokens*300/1_000_000
 	}
 
 	return info
@@ -1696,6 +1690,8 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.DailyApiUsage = 0
 		executionInfo.DailyAIUsage = 0
 		executionInfo.DailyAgentExecutions = 0
+		executionInfo.DailyLLMTokens = 0
+		executionInfo.DailyChildOrgLLMTokens = 0
 		executionInfo.DailyAgentTokens = 0
 		executionInfo.DailyAgentInputTokens = 0
 		executionInfo.DailyAgentOutputTokens = 0
@@ -1762,6 +1758,8 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.DailyStatistics[lastIdx].DailyChildOrgSMSUsage = executionInfo.DailyChildOrgSMSUsage
 		executionInfo.DailyStatistics[lastIdx].DailyEmailUsage = executionInfo.DailyEmailUsage
 		executionInfo.DailyStatistics[lastIdx].DailyChildOrgEmailUsage = executionInfo.DailyChildOrgEmailUsage
+		executionInfo.DailyStatistics[lastIdx].LLMTokens = executionInfo.DailyLLMTokens
+		executionInfo.DailyStatistics[lastIdx].ChildOrgLLMTokens = executionInfo.DailyChildOrgLLMTokens
 
 		executionInfo.DailyStatistics[lastIdx].AgentExecutionsSuccessful = executionInfo.DailyAgentExecutionsSuccessful
 		executionInfo.DailyStatistics[lastIdx].AgentExecutionsFailed = executionInfo.DailyAgentExecutionsFailed
@@ -1811,7 +1809,6 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		executionInfo.MonthlyChildOrgSMSUsage = 0
 		executionInfo.MonthlyEmailUsage = 0
 		executionInfo.MonthlyChildOrgEmailUsage = 0
-		executionInfo.MonthlyAgentMaxLoopsHit = 0
 		executionInfo.MonthlyChildOrgAgentExecutionsSuccessful = 0
 		executionInfo.MonthlyChildOrgAgentExecutionsFailed = 0
 		executionInfo.MonthlyChildOrgAgentCachedTokens = 0
@@ -2062,18 +2059,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalAgentTokens += int64(increment)
 		orgStatistics.MonthlyAgentTokens += int64(increment)
 		orgStatistics.DailyAgentTokens += int64(increment)
-	} else if dataType == "childorg_agent_tokens" {
-		orgStatistics.TotalChildOrgAgentTokens += int64(increment)
-		orgStatistics.MonthlyChildOrgAgentTokens += int64(increment)
-		orgStatistics.DailyChildOrgAgentTokens += int64(increment)
 	} else if dataType == "agent_input_tokens" {
 		orgStatistics.TotalAgentInputTokens += int64(increment)
 		orgStatistics.MonthlyAgentInputTokens += int64(increment)
 		orgStatistics.DailyAgentInputTokens += int64(increment)
-	} else if dataType == "childorg_agent_input_tokens" {
-		orgStatistics.TotalChildOrgAgentInputTokens += int64(increment)
-		orgStatistics.MonthlyChildOrgAgentInputTokens += int64(increment)
-		orgStatistics.DailyChildOrgAgentInputTokens += int64(increment)
 	} else if dataType == "agent_output_tokens" {
 		orgStatistics.TotalAgentOutputTokens += int64(increment)
 		orgStatistics.MonthlyAgentOutputTokens += int64(increment)
@@ -2126,19 +2115,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		orgStatistics.TotalChildOrgEmailUsage += int64(increment)
 		orgStatistics.MonthlyChildOrgEmailUsage += int64(increment)
 		orgStatistics.DailyChildOrgEmailUsage += int64(increment)
-	} else if dataType == "child_org_agent_executions" {
-		orgStatistics.TotalChildOrgAgentExecutions += int64(increment)
-		orgStatistics.MonthlyChildOrgAgentExecutions += int64(increment)
-		orgStatistics.DailyChildOrgAgentExecutions += int64(increment)
-	} else if dataType == "child_org_agent_executions_successful" {
-		orgStatistics.TotalChildOrgAgentExecutionsSuccessful += int64(increment)
-		orgStatistics.MonthlyChildOrgAgentExecutionsSuccessful += int64(increment)
-		orgStatistics.DailyChildOrgAgentExecutionsSuccessful += int64(increment)
-	} else if dataType == "child_org_agent_executions_failed" {
-		orgStatistics.TotalChildOrgAgentExecutionsFailed += int64(increment)
-		orgStatistics.MonthlyChildOrgAgentExecutionsFailed += int64(increment)
-		orgStatistics.DailyChildOrgAgentExecutionsFailed += int64(increment)
-	} else if dataType == "childorg_agent_cached_tokens" {
+	} else if dataType == "child_org_agent_cached_tokens" {
 		orgStatistics.TotalChildOrgAgentCachedTokens += int64(increment)
 		orgStatistics.MonthlyChildOrgAgentCachedTokens += int64(increment)
 		orgStatistics.DailyChildOrgAgentCachedTokens += int64(increment)

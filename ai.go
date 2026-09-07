@@ -10026,19 +10026,20 @@ data_filter:
 						currentOrgId = billingOrgId
 					}
 
-					go func() {
-						time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
-						IncrementCache(ctx, currentOrgId, "agent_tokens", totalTokens)
-						if inputTokens > 0 {
-							IncrementCache(ctx, currentOrgId, "agent_input_tokens", inputTokens)
-						}
-						if outputTokens > 0 {
-							IncrementCache(ctx, billingOrgId, "agent_output_tokens", outputTokens)
-						}
-						if cachedTokens > 0 {
-							IncrementCache(ctx, billingOrgId, "agent_cached_tokens", cachedTokens)
-						}
-					}()
+					// go func() {
+					// 	time.Sleep(time.Duration(rand.Intn(500)) * time.Millisecond)
+
+					// 	IncrementCache(ctx, currentOrgId, "agent_tokens", totalTokens)
+					// 	if inputTokens > 0 {
+					// 		IncrementCache(ctx, currentOrgId, "agent_input_tokens", inputTokens)
+					// 	}
+					// 	if outputTokens > 0 {
+					// 		IncrementCache(ctx, billingOrgId, "agent_output_tokens", outputTokens)
+					// 	}
+					// 	if cachedTokens > 0 {
+					// 		IncrementCache(ctx, billingOrgId, "agent_cached_tokens", cachedTokens)
+					// 	}
+					// }()
 
 					if cachedTokens > 0 && debug {
 						log.Printf("[DEBUG][%s] PROMPT CACHING HIT! Saved %d tokens on this request.", execution.ExecutionId, cachedTokens)
@@ -11323,6 +11324,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	// In case of non-streaming Resp input
 	totalTokens := 0
+	inputTokens := 0
+	outputTokens := 0
+	cachedTokens := 0
 	var lastError error
 	choicesMap := make(map[int]*openai.ChatCompletionChoice)
 	var fullResp openai.ChatCompletionResponse
@@ -11459,6 +11463,18 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				if response.Usage.TotalTokens > 0 {
 					totalTokens += response.Usage.TotalTokens
 				}
+
+				if response.Usage.PromptTokens > 0 {
+					inputTokens += response.Usage.PromptTokens
+				}
+
+				if response.Usage.CompletionTokens > 0 {
+					outputTokens += response.Usage.CompletionTokens
+				}
+
+				if response.Usage.PromptTokensDetails != nil && response.Usage.PromptTokensDetails.CachedTokens > 0 {
+					cachedTokens += response.Usage.PromptTokensDetails.CachedTokens
+				}
 			}
 
 			if len(response.Choices) > 0 {
@@ -11549,6 +11565,17 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		// Count agent tokens IF it's agent performing the task
 		if info.Caller == "aiAgentRunner" {
 			IncrementCache(ctx, info.OrgID, "agent_tokens", totalTokens)
+			if inputTokens > 0 {
+				IncrementCache(ctx, info.OrgID, "agent_input_tokens", inputTokens)
+			}
+
+			if outputTokens > 0 {
+				IncrementCache(ctx, info.OrgID, "agent_output_tokens", outputTokens)
+			}
+
+			if cachedTokens > 0 {
+				IncrementCache(ctx, info.OrgID, "agent_cached_tokens", cachedTokens)
+			}
 		}
 	}
 
