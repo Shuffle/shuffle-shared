@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"html"
 
-	//	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goccy/go-json"
+	json "github.com/goccy/go-json"
 
 	"github.com/Masterminds/semver"
 	"github.com/frikky/kin-openapi/openapi3"
@@ -1019,6 +1018,27 @@ func GetLiveExecutionStats(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(dataJSON)
 }
 
+func redactCacheHealthResult(raw string) string {
+	if len(raw) == 0 {
+		return raw
+	}
+
+	parsed := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return ""
+	}
+
+	delete(parsed, "updated_by")
+	delete(parsed, "public_authorization")
+
+	redacted, err := json.Marshal(parsed)
+	if err != nil {
+		return ""
+	}
+
+	return string(redacted)
+}
+
 func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1128,6 +1148,10 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 		if len(newHealthChecks) > 0 {
 			healthChecks = newHealthChecks
 		}
+	}
+
+	for i := range healthChecks {
+		healthChecks[i].Datastore.Result = redactCacheHealthResult(healthChecks[i].Datastore.Result)
 	}
 
 	healthChecksData, err := json.MarshalIndent(healthChecks, "", "  ")
@@ -4767,6 +4791,22 @@ func extractAgentOutputFromResults(execution WorkflowExecution) (AgentOutput, bo
 
 	err := json.Unmarshal([]byte(execution.Result), &agentOutput)
 	if err == nil && len(agentOutput.Decisions) > 0 {
+		// when the output field is empty, fall back to extracting it from the last 'finish'
+		// decision's fields array, which is always present in the snapshot.
+		if agentOutput.Output == "" {
+			for i := len(agentOutput.Decisions) - 1; i >= 0; i-- {
+				d := agentOutput.Decisions[i]
+				if d.Action == "finish" {
+					for _, f := range d.Fields {
+						if f.Key == "output" && f.Value != "" {
+							agentOutput.Output = f.Value
+							break
+						}
+					}
+					break
+				}
+			}
+		}
 		return agentOutput, true
 	}
 
@@ -4774,6 +4814,20 @@ func extractAgentOutputFromResults(execution WorkflowExecution) (AgentOutput, bo
 	var inner string
 	if err := json.Unmarshal([]byte(execution.Result), &inner); err == nil {
 		if err := json.Unmarshal([]byte(inner), &agentOutput); err == nil && len(agentOutput.Decisions) > 0 {
+			if agentOutput.Output == "" {
+				for i := len(agentOutput.Decisions) - 1; i >= 0; i-- {
+					d := agentOutput.Decisions[i]
+					if d.Action == "finish" {
+						for _, f := range d.Fields {
+							if f.Key == "output" && f.Value != "" {
+								agentOutput.Output = f.Value
+								break
+							}
+						}
+						break
+					}
+				}
+			}
 			return agentOutput, true
 		}
 	}
@@ -4821,34 +4875,49 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 			// Extract agent-level output (decisions, LLM success) from action results.
 			if agentOutput, found := extractAgentOutputFromResults(execution); found {
 				agentHealth.AgentStatus = agentOutput.Status
-				agentTemp, err := strconv.Atoi(strings.TrimSpace(agentOutput.Output))
-				if err != nil {
-					log.Printf("[ERROR] Agent Health check failed due to atoi conversion failure: %s", err)
-					agentHealth.Error.Run = fmt.Sprintf("Agent Health check failed due to atoi conversion failure: %s", err)
-					agentHealth.LLMCallSuccess = false
+				agentHealth.AgentDecisionCount = len(agentOutput.Decisions)
+				if debug {
+					log.Printf("[DEBUG] Health check for Agent made %d decisions", len(agentOutput.Decisions))
 				}
 
-				realTemp, apiErr := getRealTempC()
-				if apiErr != nil {
-					log.Printf("[ERROR] Agent Health check failed due to weather api call failure: %s", apiErr)
-					agentHealth.Error.Run = fmt.Sprintf("Agent Health check failed due to weather api call failure: %s", apiErr)
-					agentHealth.LLMCallSuccess = false
-				} else {
-					realTempStr := strconv.Itoa(realTemp)
-					agentTempStr := strconv.Itoa(agentTemp)
-					// check if this real tmp value exists in the agentTemp
-					if strings.Contains(agentTempStr, realTempStr) {
-						agentHealth.LLMCallSuccess = true
-						log.Printf("[INFO] Agent Health check - LLM Call was successful. Expected: %d, Got: %d", realTemp, agentTemp)
-					} else {
-						agentHealth.LLMCallSuccess = false
-						log.Printf("[ERROR] Agent Health check - LLM Call was not successful. Expected: %d, Got: %d", realTemp, agentTemp)
-						agentHealth.Error.Run = fmt.Sprintf("Agent Health check - LLM Call was not successful. Expected: %d, Got: %d", realTemp, agentTemp)
+				// Agent output can be anything like "19°C", "19 degrees", "~19", so extract the first
+				// contiguous run of digits before converting.
+				rawOutput := strings.TrimSpace(agentOutput.Output)
+				numStr := ""
+				for _, ch := range rawOutput {
+					if ch >= '0' && ch <= '9' {
+						numStr += string(ch)
+					} else if len(numStr) > 0 {
+						// Stop at first non-digit after we already collected some digits
+						break
 					}
 				}
 
-				agentHealth.AgentDecisionCount = len(agentOutput.Decisions)
-				log.Printf("[DEBUG] Health check for Agent made %d decisions, LLM call successful", len(agentOutput.Decisions))
+				agentTemp, err := strconv.Atoi(numStr)
+				if err != nil {
+					log.Printf("[ERROR] Agent Health check failed due to atoi conversion failure (output=%q): %s", agentOutput.Output, err)
+					agentHealth.Error.Run = fmt.Sprintf("Agent Health check failed due to atoi conversion failure (output=%q): %s", agentOutput.Output, err)
+					agentHealth.LLMCallSuccess = false
+				} else {
+					realTemp, apiErr := getRealTempC()
+					if apiErr != nil {
+						log.Printf("[ERROR] Agent Health check failed due to weather api call failure: %s", apiErr)
+						agentHealth.Error.Run = fmt.Sprintf("Agent Health check failed due to weather api call failure: %s", apiErr)
+						agentHealth.LLMCallSuccess = false
+					} else {
+						realTempStr := strconv.Itoa(realTemp)
+						agentTempStr := strconv.Itoa(agentTemp)
+						// check if the real temp value exists in the agent temp string
+						if strings.Contains(agentTempStr, realTempStr) {
+							agentHealth.LLMCallSuccess = true
+							log.Printf("[INFO] Agent Health check - LLM Call was successful. Expected: %d, Got: %d", realTemp, agentTemp)
+						} else {
+							agentHealth.LLMCallSuccess = false
+							log.Printf("[ERROR] Agent Health check - LLM Call was not successful. Expected: %d, Got: %d", realTemp, agentTemp)
+							agentHealth.Error.Run = fmt.Sprintf("Agent Health check - LLM Call was not successful. Expected: %d, Got: %d", realTemp, agentTemp)
+						}
+					}
+				}
 			}
 		}
 

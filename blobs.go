@@ -22,8 +22,8 @@ import (
 func IsShuffleApp(app WorkflowApp) bool {
 	parsedAppname := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
 
-	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors"}
-	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75"}
+	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors", "shuffle_apps", "shuffle_workflows_builder", "shuffle_incidents", "shuffle_vulnerabilities"}
+	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75", "7db43ccd25261967b095cfbd467a75cc", "de4ef2287bd41b9d5563e39989643ee6", "48793430d21468f9e371ace402efcd8e"} 
 
 	isShuffleApp := false
 	if project.Environment == "cloud" && len(app.ID) > 0 {
@@ -112,6 +112,12 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 				if !workflowIdFound {
 					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+					automationOption := DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					}
+
+					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 				}
 
 				datastoreCategoryConfigEdited = true
@@ -159,7 +165,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 		// 3 year retention
 		if categoryConfig.Settings.Timeout == 0 {
-			categoryConfig.Settings.Timeout = 946080000
+			categoryConfig.Settings.Timeout = 94608000
 			datastoreCategoryConfigEdited = true
 		}
 
@@ -169,8 +175,8 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 			Options: []DatastoreAutomationOption{
 				DatastoreAutomationOption{
 					Key:      "action",
-					Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.   If the incident has RELEVANT tasks that are not finished, modify them if necessary. Change the incident \"severity\" to info/low/medium/high/critical if relevant. When done, ALWAYS make sure the \"status\" is inProgress. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.\n\nWhen done sending the previous update, start tackling the tasks one by one if there are any, and update them in realtime. When starting them, self-assign @AIAgent to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.",
-					Apps: []string{"b82668d868f6dc7ac1dc14caa92c674b"},
+					Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.    Change the incident \"severity\" to info/low/medium/high/critical where relevant. When done, ALWAYS make sure the \"status\" is inProgress or Resolved if it is not already. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.\n\nWhen done sending the previous update, start tackling the tasks one by one. When starting them, self-assign @AIAgent to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.\n\nDo not stop until you are finished with the tasks relevant for you to handle.",
+					Apps: []string{"48793430d21468f9e371ace402efcd8e"},
 					Disabled: false,
 				},
 			},
@@ -377,87 +383,95 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
 			}
 		}
-	} else if actionType == "vulnerability_comparison" {
-		categoryCheck := "shuffle-security_sensors"
-		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
-		if err != nil {
-			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
-				categoryConfig = &DatastoreCategoryUpdate{
-					OrgId:       user.ActiveOrg.Id,
-					Category:    categoryCheck,
-					Automations: []DatastoreAutomation{},
-					Settings:    DatastoreCategorySettings{},
+	} else if actionType == "vulnerability_correlation" {
+		categoryChecks := []string{"shuffle-security_packages", "shuffle-security_software"}
+		for _, categoryCheck := range categoryChecks {
+			categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
+			if err != nil {
+				if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
+					categoryConfig = &DatastoreCategoryUpdate{
+						OrgId:       user.ActiveOrg.Id,
+						Category:    categoryCheck,
+						Automations: []DatastoreAutomation{},
+						Settings:    DatastoreCategorySettings{},
+					}
+				} else {
+					return err
 				}
-			} else {
-				return err
 			}
-		}
 
-		datastoreCategoryConfigEdited := false
+			datastoreCategoryConfigEdited := false
 
-		foundRunWorkflow := DatastoreAutomation{
-			Name:        "Run workflow",
-			Description: "Runs one or more workflows with the updated value as runtime argument",
-			Options: []DatastoreAutomationOption{
-				DatastoreAutomationOption{
-					Key:   "workflow_id",
-					Value: workflow.ID,
+			foundRunWorkflow := DatastoreAutomation{
+				Name:        "Run workflow",
+				Description: "Runs one or more workflows with the updated value as runtime argument",
+				Options: []DatastoreAutomationOption{
+					DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					},
 				},
-			},
-			Icon:    "",
-			Enabled: true,
-		}
+				Icon:    "",
+				Enabled: true,
+			}
 
-		automationFound := false
-		if len(categoryConfig.Automations) > 0 {
-			for automationIndex, automation := range categoryConfig.Automations {
-				if strings.ToLower(automation.Name) != "run workflow" {
-					continue
-				}
-
-				automationFound = true
-
-				workflowIdFound := false
-				for optionIndex, option := range automation.Options {
-					if option.Key != "workflow_id" {
+			automationFound := false
+			if len(categoryConfig.Automations) > 0 {
+				for automationIndex, automation := range categoryConfig.Automations {
+					if strings.ToLower(automation.Name) != "run workflow" {
 						continue
 					}
 
-					if debug {
-						log.Printf("[DEBUG] VALUE: %#v", option.Value)
+					automationFound = true
+
+					workflowIdFound := false
+					for optionIndex, option := range automation.Options {
+						if option.Key != "workflow_id" {
+							continue
+						}
+
+						if debug {
+							log.Printf("[DEBUG] VALUE: %#v", option.Value)
+						}
+
+						workflowIdFound = true
+
+						if !strings.Contains(option.Value, workflow.ID) {
+							categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+						}
+
+						break
 					}
 
-					workflowIdFound = true
+					if !workflowIdFound {
+						log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+						automationOption := DatastoreAutomationOption{
+							Key:   "workflow_id",
+							Value: workflow.ID,
+						}
 
-					if !strings.Contains(option.Value, workflow.ID) {
-						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+						categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 					}
 
+					datastoreCategoryConfigEdited = true
+					categoryConfig.Automations[automationIndex].Enabled = true
 					break
 				}
+			}
 
-				if !workflowIdFound {
-					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
-				}
-
+			if !automationFound {
+				categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
 				datastoreCategoryConfigEdited = true
-				categoryConfig.Automations[automationIndex].Enabled = true
-				break
+			}
+
+			if datastoreCategoryConfigEdited {
+				err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+				if err != nil {
+					log.Printf("[ERROR] Failed to update category config for automation enablement (vuln comparison): %s", err)
+				}
 			}
 		}
-
-		if !automationFound {
-			categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
-			datastoreCategoryConfigEdited = true
-		}
-
-		if datastoreCategoryConfigEdited {
-			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
-			if err != nil {
-				log.Printf("[ERROR] Failed to update category config for automation enablement (vuln comparison): %s", err)
-			}
-		}
-	} else if actionType == "assign_&_escalate" {
+	} else if actionType == "assign_&_escalate" || actionType == "incident_routing" || actionType == "incident_routing_rules" {
 		// This makes incident edits the actual trigger
 
 		categoryCheck := "shuffle-security_incidents"
@@ -520,6 +534,12 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 				if !workflowIdFound {
 					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+					automationOption := DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					}
+
+					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 				}
 
 				datastoreCategoryConfigEdited = true
@@ -567,6 +587,567 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 // That means each algorithm needs to be written as if-statements to
 // replace a specific part of a workflow :thinking:
 
+func getVulnerabilityCorrelationScript(orgId string) string {
+	return `import json
+import time
+import re
+import requests
+
+DATASTORE_VULNS = "shuffle-security_vulnerabilities"
+DATASTORE_PACKAGES = "shuffle-security_packages"
+DATASTORE_SOFTWARE = "shuffle-security_software"
+DATASTORE_INCIDENTS = "shuffle-security_incidents"
+
+API_SHUFFLE = "https://shuffler.io/api/v1/vulnerabilities"
+API_OSV = "https://api.osv.dev/v1/query"
+
+ECOSYSTEM_MAP = {
+    # Python
+    "python": "PyPI", "pip": "PyPI", "pypi": "PyPI", "pipenv": "PyPI", "poetry": "PyPI",
+    # JavaScript / TypeScript
+    "javascript": "npm", "js": "npm", "node": "npm", "nodejs": "npm", "npm": "npm", "yarn": "npm", "pnpm": "npm", "typescript": "npm", "ts": "npm",
+    # Go
+    "golang": "Go", "go": "Go", "gomod": "Go",
+    # Rust
+    "rust": "crates.io", "cargo": "crates.io", "crates": "crates.io",
+    # Ruby
+    "ruby": "RubyGems", "gem": "RubyGems", "rubygems": "RubyGems", "bundler": "RubyGems",
+    # Java
+    "java": "Maven", "maven": "Maven", "gradle": "Maven",
+    # PHP
+    "php": "Packagist", "composer": "Packagist", "packagist": "Packagist",
+    # .NET
+    "dotnet": "NuGet", ".net": "NuGet", "nuget": "NuGet", "c#": "NuGet", "csharp": "NuGet",
+    # Linux distributions
+    "ubuntu": "Ubuntu", "debian": "Debian", "alpine": "Alpine", "centos": "CentOS",
+    "redhat": "Red Hat", "rhel": "Red Hat", "fedora": "Red Hat", "rocky": "Rocky Linux",
+    "almalinux": "AlmaLinux", "alma": "AlmaLinux", "arch": "Arch Linux", "archlinux": "Arch Linux",
+    # Others
+    "conan": "ConanCenter", "pub": "Pub", "hex": "Hex", "cran": "CRAN",
+}
+
+# -------------------------------------------------------------
+# 1. Safe Variable Resolution
+# -------------------------------------------------------------
+raw_exec = r"""$exec"""
+item_key = r"""$exec.shuffle_datastore.key"""
+item_cat = r"""$exec.shuffle_datastore.category"""
+
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+payload = safe_parse_json(raw_exec, {})
+if not isinstance(payload, dict):
+    payload = {}
+
+# Unwrap nested arguments if passed as execution_argument or data
+if "execution_argument" in payload and isinstance(payload["execution_argument"], (dict, str)):
+    inner = safe_parse_json(payload["execution_argument"], {})
+    if isinstance(inner, dict) and inner:
+        payload = inner
+if "data" in payload and isinstance(payload["data"], (dict, str)):
+    inner = safe_parse_json(payload["data"], {})
+    if isinstance(inner, dict) and inner:
+        payload = inner
+
+# -------------------------------------------------------------
+# 2. Version Helpers & Range Evaluation
+# -------------------------------------------------------------
+def clean_ver(v):
+    if not v:
+        return ""
+    v = str(v).strip()
+    v = re.sub(r"^[=~^><\s]+", "", v)
+    return v.strip()
+
+def parse_ver_parts(v):
+    cleaned = clean_ver(v)
+    parts = re.split(r"[.\-+_]", cleaned)
+    res = []
+    for p in parts:
+        if not p:
+            continue
+        if p.isdigit():
+            res.append((0, int(p)))
+        else:
+            m = re.match(r"^(\d+)(.*)$", p)
+            if m:
+                res.append((0, int(m.group(1))))
+                if m.group(2):
+                    res.append((1, m.group(2).lower()))
+            else:
+                res.append((1, p.lower()))
+    return res
+
+def compare_vers(a, b):
+    pa = parse_ver_parts(a)
+    pb = parse_ver_parts(b)
+    lmax = max(len(pa), len(pb))
+    for i in range(lmax):
+        part_a = pa[i] if i < len(pa) else (0, 0)
+        part_b = pb[i] if i < len(pb) else (0, 0)
+        if part_a != part_b:
+            if part_a[0] != part_b[0]:
+                return -1 if part_a[0] < part_b[0] else 1
+            return -1 if part_a[1] < part_b[1] else 1
+    return 0
+
+def is_version_affected(inst_ver, vuln):
+    if not inst_ver or not isinstance(vuln, dict):
+        return True
+    cl = clean_ver(inst_ver)
+    if not cl:
+        return True
+
+    affected = vuln.get("affected") or []
+    if not isinstance(affected, list) or len(affected) == 0:
+        return True
+
+    matched_any_package = False
+    for a in affected:
+        if not isinstance(a, dict):
+            continue
+        matched_any_package = True
+        # Exact version list check
+        versions = a.get("versions") or []
+        for v in versions:
+            if clean_ver(v) == cl:
+                return True
+
+        # Range check with events
+        ranges = a.get("ranges") or []
+        for r in ranges:
+            events = r.get("events") or []
+            in_range = False
+            for e in events:
+                if not isinstance(e, dict):
+                    continue
+                if "introduced" in e:
+                    intro = str(e["introduced"]).strip()
+                    if intro == "0" or compare_vers(cl, intro) >= 0:
+                        in_range = True
+                if "fixed" in e:
+                    fixed = str(e["fixed"]).strip()
+                    if in_range and compare_vers(cl, fixed) >= 0:
+                        in_range = False
+                if "last_affected" in e:
+                    la = str(e["last_affected"]).strip()
+                    if in_range and compare_vers(cl, la) > 0:
+                        in_range = False
+            if in_range:
+                return True
+
+    return not matched_any_package
+
+# -------------------------------------------------------------
+# 3. Execution Logic
+# -------------------------------------------------------------
+is_incident = bool(
+    "observables" in payload or
+    "finding_uid" in payload or
+    (item_cat and item_cat == DATASTORE_INCIDENTS) or
+    ("rawOCSF" in payload)
+)
+
+errors = []
+stored = []
+now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+if not is_incident:
+    # Package / Software correlation mode
+    pkg_name = payload.get("name") or payload.get("package_name") or payload.get("software_name") or payload.get("package") or ""
+    if not pkg_name and item_key and not item_key.startswith("$"):
+        pkg_name = item_key.split("_")[0]
+
+    raw_os = (payload.get("os") or "").strip().lower()
+    ecosystem = ECOSYSTEM_MAP.get(raw_os, None)
+    if not ecosystem and raw_os:
+        for k, v in ECOSYSTEM_MAP.items():
+            if k in raw_os:
+                ecosystem = v
+                break
+    if not ecosystem and raw_os:
+        ecosystem = payload.get("os")
+
+    raw_versions = payload.get("versions") or []
+    if isinstance(raw_versions, str):
+        raw_versions = [raw_versions]
+    elif not isinstance(raw_versions, list):
+        raw_versions = []
+    if payload.get("version") and payload.get("version") not in raw_versions:
+        raw_versions.append(payload["version"])
+
+    hostnames = payload.get("hostnames") or []
+    if not isinstance(hostnames, list):
+        hostnames = []
+
+    for h in hostnames:
+        if isinstance(h, dict) and h.get("version"):
+            hv = str(h["version"]).strip()
+            if hv and hv not in raw_versions:
+                raw_versions.append(hv)
+
+    valid_versions = []
+    for v in raw_versions:
+        cv = clean_ver(v)
+        if cv and not any(c in cv for c in "<>*~^ ") and cv not in valid_versions:
+            valid_versions.append(cv)
+
+    found_vulns = []
+    rate_limited = False
+
+    if pkg_name:
+        queries = []
+        if valid_versions:
+            for v in valid_versions:
+                q = {"package": {"name": pkg_name}}
+                if ecosystem:
+                    q["package"]["ecosystem"] = ecosystem
+                q["version"] = v
+                queries.append(q)
+        else:
+            q = {"package": {"name": pkg_name}}
+            if ecosystem:
+                q["package"]["ecosystem"] = ecosystem
+            queries.append(q)
+
+        for q in queries:
+            resp_data = None
+            # Attempt 1: Shuffler.io API
+            for attempt in range(3):
+                try:
+                    r = requests.post(API_SHUFFLE, json=q, timeout=20)
+                    if r.status_code == 200:
+                        resp_data = r.json()
+                        break
+                    elif r.status_code == 429:
+                        rate_limited = True
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                except Exception:
+                    pass
+
+            # Attempt 2: Direct OSV.dev fallback
+            if not resp_data or (isinstance(resp_data, dict) and resp_data.get("success") is False):
+                for attempt in range(2):
+                    try:
+                        r = requests.post(API_OSV, json=q, timeout=20)
+                        if r.status_code == 200:
+                            resp_data = r.json()
+                            break
+                        elif r.status_code == 429:
+                            rate_limited = True
+                            time.sleep(2 * (attempt + 1))
+                            continue
+                    except Exception as e:
+                        errors.append("OSV request error for %s: %s" % (pkg_name, e))
+                        break
+
+            if isinstance(resp_data, dict):
+                vulns = resp_data.get("vulns") or resp_data.get("vulnerabilities") or []
+                if isinstance(vulns, list):
+                    found_vulns.extend(vulns)
+
+    seen_ids = set()
+    deduped_vulns = []
+    for v in found_vulns:
+        if isinstance(v, dict):
+            vid = v.get("id")
+            if vid and vid not in seen_ids:
+                seen_ids.add(vid)
+                deduped_vulns.append(v)
+
+    affected_hosts_global = set()
+    for v in deduped_vulns:
+        vid = v.get("id")
+        if not vid:
+            continue
+
+        vuln_hosts = []
+        for h in hostnames:
+            if not isinstance(h, dict):
+                continue
+            hname = h.get("hostname")
+            if not hname:
+                continue
+            hver = h.get("version") or (valid_versions[0] if valid_versions else None)
+            huser = h.get("user") or ""
+            if is_version_affected(hver, v):
+                affected_hosts_global.add(hname)
+                hpaths = h.get("paths") or []
+                paths_arr = []
+                if hpaths:
+                    for p in hpaths:
+                        paths_arr.append({
+                            "path": p,
+                            "version": hver,
+                            "last_seen": now_iso,
+                        })
+                else:
+                    paths_arr.append({
+                        "version": hver,
+                        "last_seen": now_iso,
+                    })
+                host_entry = {
+                    "hostname": hname,
+                    "paths": paths_arr,
+                }
+                if huser:
+                    host_entry["user"] = huser
+                vuln_hosts.append(host_entry)
+
+        existing_rec = None
+        try:
+            if "self" in locals() or "self" in globals():
+                raw_rec = self.get_key(vid, category=DATASTORE_VULNS)
+                if raw_rec:
+                    if isinstance(raw_rec, dict) and "value" in raw_rec:
+                        raw_rec = raw_rec["value"]
+                    if isinstance(raw_rec, str):
+                        try:
+                            existing_rec = json.loads(raw_rec)
+                        except Exception:
+                            pass
+                    elif isinstance(raw_rec, dict):
+                        existing_rec = raw_rec
+        except Exception:
+            pass
+
+        merged = dict(v)
+        if isinstance(existing_rec, dict):
+            for preserve_key in ["status", "resolution", "resolution_note", "resolved_at", "resolved_by", "activity"]:
+                if preserve_key in existing_rec and existing_rec[preserve_key]:
+                    merged[preserve_key] = existing_rec[preserve_key]
+
+            existing_hosts = existing_rec.get("hosts") or []
+            hmap = {}
+            for eh in existing_hosts:
+                if isinstance(eh, dict) and eh.get("hostname"):
+                    hmap[eh["hostname"]] = eh
+
+            for vh in vuln_hosts:
+                hn = vh["hostname"]
+                if hn in hmap:
+                    existing_entry = hmap[hn]
+                    if vh.get("user") and not existing_entry.get("user"):
+                        existing_entry["user"] = vh["user"]
+                    epaths = existing_entry.setdefault("paths", [])
+                    known_paths = {p.get("path") for p in epaths if isinstance(p, dict) and p.get("path")}
+                    for np in vh.get("paths", []):
+                        if np.get("path") not in known_paths:
+                            epaths.append(np)
+                        else:
+                            for ep in epaths:
+                                if ep.get("path") == np.get("path"):
+                                    ep["last_seen"] = now_iso
+                                    if np.get("version"):
+                                        ep["version"] = np.get("version")
+                else:
+                    hmap[hn] = vh
+            merged["hosts"] = list(hmap.values())
+        else:
+            merged["hosts"] = vuln_hosts
+
+        # Aggregate affected users on the vulnerability record
+        affected_users = set()
+        for hitem in merged.get("hosts", []):
+            if isinstance(hitem, dict) and hitem.get("user"):
+                affected_users.add(hitem["user"])
+        if affected_users:
+            merged["users"] = sorted(list(affected_users))
+
+        try:
+            if "self" in locals() or "self" in globals():
+                self.set_key(vid, json.dumps(merged), category=DATASTORE_VULNS)
+            stored.append(vid)
+        except Exception as e:
+            errors.append("Failed storing %s: %s" % (vid, e))
+
+    # Update the package / software datastore record with correlated vulnerability summary
+    try:
+        if ("self" in locals() or "self" in globals()) and item_key and not item_key.startswith("$"):
+            save_cat = item_cat if item_cat and not item_cat.startswith("$") else DATASTORE_PACKAGES
+            raw_pkg = self.get_key(item_key, category=save_cat)
+            pkg_obj = {}
+            if raw_pkg:
+                if isinstance(raw_pkg, dict) and "value" in raw_pkg:
+                    raw_pkg = raw_pkg["value"]
+                if isinstance(raw_pkg, str):
+                    try:
+                        pkg_obj = json.loads(raw_pkg)
+                    except Exception:
+                        pass
+                elif isinstance(raw_pkg, dict):
+                    pkg_obj = raw_pkg
+
+            if isinstance(pkg_obj, dict) and pkg_obj:
+                cve_list = [v.get("id") for v in deduped_vulns if isinstance(v, dict) and v.get("id")]
+                pkg_obj["cves"] = cve_list
+                pkg_obj["vulnerability_count"] = len(cve_list)
+                pkg_obj["vulnerabilities"] = [
+                    {
+                        "id": v.get("id"),
+                        "summary": v.get("summary") or v.get("details") or "",
+                        "severity": v.get("database_specific", {}).get("severity") or "unknown",
+                    }
+                    for v in deduped_vulns[:20]
+                    if isinstance(v, dict) and v.get("id")
+                ]
+                pkg_obj["status"] = "vulnerable" if cve_list else "clean"
+                pkg_obj["last_vuln_check"] = now_iso
+                self.set_key(item_key, json.dumps(pkg_obj), category=save_cat)
+    except Exception as e:
+        errors.append("Failed updating package/software %s: %s" % (item_key, e))
+
+    status = "vulnerable" if deduped_vulns else "not_vulnerable"
+    if rate_limited or errors:
+        status = "unknown"
+
+    result = {
+        "success": True,
+        "mode": "package",
+        "name": pkg_name,
+        "ecosystem": ecosystem,
+        "status": status,
+        "vuln_count": len(deduped_vulns),
+        "affected_hosts": list(affected_hosts_global),
+        "stored_count": len(stored),
+        "stored_ids": stored,
+        "rate_limited": rate_limited,
+        "errors": errors,
+    }
+    print(json.dumps(result, indent=2))
+
+else:
+    # Incident Correlation mode
+    inc_id = payload.get("finding_uid") or payload.get("id") or item_key or "unknown_incident"
+    observables = payload.get("observables") or []
+    if not isinstance(observables, list):
+        observables = []
+
+    hosts_in_incident = set()
+    packages_in_incident = set()
+    cves_in_incident = set()
+
+    for o in observables:
+        if not isinstance(o, dict):
+            continue
+        otype = (o.get("type") or "").strip().lower()
+        oval = (o.get("value") or "").strip()
+        if not oval:
+            continue
+        if otype in ("hostname", "host", "endpoint", "device", "asset"):
+            hosts_in_incident.add(oval)
+        elif otype in ("package", "software", "library"):
+            packages_in_incident.add(oval)
+        elif otype in ("cve", "vulnerability"):
+            cves_in_incident.add(oval)
+
+    raw_ocsf = payload.get("rawOCSF") or {}
+    if isinstance(raw_ocsf, dict):
+        device = raw_ocsf.get("device") or {}
+        if isinstance(device, dict) and device.get("hostname"):
+            hosts_in_incident.add(device["hostname"])
+
+    # Check datastore for known CVEs on packages and software mentioned in the incident
+    for pkg in packages_in_incident:
+        try:
+            if "self" in locals() or "self" in globals():
+                pdata = self.get_key(pkg, category=DATASTORE_PACKAGES) or self.get_key(pkg, category=DATASTORE_SOFTWARE)
+                if pdata:
+                    if isinstance(pdata, dict) and "value" in pdata:
+                        pdata = pdata["value"]
+                    if isinstance(pdata, str):
+                        try:
+                            pdata = json.loads(pdata)
+                        except Exception:
+                            pass
+                    if isinstance(pdata, dict):
+                        for cve_id in pdata.get("cves", []):
+                            if cve_id and isinstance(cve_id, str):
+                                cves_in_incident.add(cve_id)
+        except Exception:
+            pass
+
+    correlated_vulns = []
+    for cve in cves_in_incident:
+        try:
+            if "self" in locals() or "self" in globals():
+                vdata = self.get_key(cve, category=DATASTORE_VULNS)
+                if vdata:
+                    if isinstance(vdata, dict) and "value" in vdata:
+                        vdata = vdata["value"]
+                    if isinstance(vdata, str):
+                        vdata = json.loads(vdata)
+                    correlated_vulns.append(vdata)
+        except Exception:
+            pass
+
+    if correlated_vulns:
+        custom_attrs = payload.setdefault("metadata", {}).setdefault("extensions", {}).setdefault("custom_attributes", {})
+        existing_corr = custom_attrs.get("correlated_vulnerabilities") or []
+        corr_ids = {c.get("id") for c in existing_corr if isinstance(c, dict)}
+        for cv in correlated_vulns:
+            if cv.get("id") and cv["id"] not in corr_ids:
+                existing_corr.append({
+                    "id": cv["id"],
+                    "summary": cv.get("summary") or cv.get("details") or "",
+                    "severity": cv.get("database_specific", {}).get("severity") or "unknown",
+                    "correlated_at": now_iso,
+                })
+        custom_attrs["correlated_vulnerabilities"] = existing_corr
+
+        activities = payload.setdefault("activity", [])
+        cve_names = ", ".join([cv.get("id", "") for cv in correlated_vulns[:5]])
+        activities.append({
+            "id": "vuln-corr-%s" % int(time.time() * 1000),
+            "type": "comment",
+            "user": "Vulnerability Correlation",
+            "timestamp": int(time.time() * 1000),
+            "content": "Correlated %s vulnerabilities (%s) with incident observables." % (len(correlated_vulns), cve_names),
+            "details": {"source": "vulnerability_correlation", "cves": [cv.get("id") for cv in correlated_vulns]},
+            "ai_handled": True,
+        })
+
+        save_cat = item_cat if item_cat and not item_cat.startswith("$") else DATASTORE_INCIDENTS
+        save_key = item_key if item_key and not item_key.startswith("$") else inc_id
+        try:
+            if "self" in locals() or "self" in globals():
+                self.set_key(save_key, json.dumps(payload), category=save_cat)
+        except Exception as e:
+            errors.append("Failed syncing correlated incident: %s" % e)
+
+    result = {
+        "success": True,
+        "mode": "incident",
+        "incident_id": inc_id,
+        "hosts_checked": list(hosts_in_incident),
+        "packages_checked": list(packages_in_incident),
+        "cves_checked": list(cves_in_incident),
+        "correlated_count": len(correlated_vulns),
+        "status": "correlated" if correlated_vulns else "no_correlation",
+        "errors": errors,
+    }
+    print(json.dumps(result, indent=2))
+`
+}
+
 // Should workflows be written as YAML and be text-editable?
 func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction CategoryAction) (Workflow, error) {
 	actionType := categoryAction.Label
@@ -591,11 +1172,18 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		startTriggerId = uuid.NewV4().String()
 	}
 
-	actionEnv := "Cloud"
-	triggerEnv := "Cloud"
 	ctx := context.Background()
-	if project.Environment != "cloud" {
-		triggerEnv = "onprem"
+
+	actionEnv := ""
+	triggerEnv := "Cloud"
+	for _, action := range workflow.Actions { 
+		if len(action.Environment) > 0 { 
+			actionEnv = action.Environment
+		}
+	}
+
+	if len(actionEnv) == 0 {
+		actionEnv = "Cloud"
 
 		envs, err := GetEnvironments(ctx, orgId)
 		if err == nil {
@@ -606,7 +1194,11 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				}
 			}
 		} else {
-			actionEnv = "Shuffle"
+			if project.Environment == "cloud" { 
+				actionEnv = "Cloud"
+			} else {
+				actionEnv = "Shuffle"
+			}
 		}
 	}
 
@@ -726,7 +1318,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
-	} else if parsedActiontype == "ingest_tickets" || parsedActiontype == "ingest_assets" || parsedActiontype == "ingest_users" {
+	} else if parsedActiontype == "ingest_tickets" || parsedActiontype == "ingest_assets" || parsedActiontype == "ingest_users" || parsedActiontype == "ingest_vulnerabilities" {
 		actionName := "Cases"
 		currentAction := WorkflowAppActionParameter{
 			Name:  "action",
@@ -757,11 +1349,19 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 				"Search users",
 				"Create user",
 			}
+		} else if parsedActiontype == "ingest_vulnerabilities" {
+			actionName = "Assets"
+			currentAction.Value = "List vulnerabilities"
+			currentAction.Options = []string{
+				"List vulnerabilities",
+				"Get vulnerability",
+				"Create vulnerability",
+			}
 		}
 
 		defaultWorkflow := Workflow{
 			Name:        actionType,
-			Description: "List tickets from different systems and ingest them",
+			Description: fmt.Sprintf("List %s from different systems and ingest them", strings.Split(parsedActiontype, "_")[1]),
 			OrgId:       orgId,
 			Start:       startActionId,
 			UsecaseIds:  []string{"SIEM to ticket"},
@@ -996,6 +1596,75 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		// For now while testing
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
+	} else if parsedActiontype == "vulnerabilities_webhook" {
+		defaultWorkflow := Workflow{
+			Name:        "Vulnerabilities Webhook",
+			Description: "Ingest vulnerabilities through a webhook",
+			OrgId:       orgId,
+			Start:       startActionId,
+			UsecaseIds:  []string{"SIEM to ticket", "SIEM alerts", "EDR alerts"},
+			Tags:        []string{"vulnerabilities", "ingest",},
+			Actions: []Action{
+				Action{
+					Name:        "Translate standard",
+					AppID:       "integration",
+					AppName:     "Singul",
+					LargeImage:  getSingulLogo(),
+					ID:          startActionId,
+					AppVersion:  "1.0.0",
+					Environment: actionEnv,
+					Label:       "Ingest Ticket from Webhook",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "source_data",
+							Value:     "$exec",
+							Multiline: true,
+						},
+						WorkflowAppActionParameter{
+							Name:        "standard",
+							Description: "The standard to use from https://github.com/Shuffle/standards/tree/main",
+							Value:       "vulnerability",
+							Multiline:   false,
+						},
+					},
+				},
+			},
+			Triggers: []Trigger{
+				Trigger{
+					ID:          startTriggerId,
+					Name:        "Webhook",
+					TriggerType: "WEBHOOK",
+					Label:       "Ingest",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "url",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "tmp",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "auth_header",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "custom_response_body",
+							Value: "",
+						},
+						WorkflowAppActionParameter{
+							Name:  "await_response",
+							Value: "",
+						},
+					},
+				},
+			},
+		}
+
+		// For now while testing
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
 
 	} else if parsedActiontype == "threatlist_monitor_webhook" {
 		secondActionId := uuid.NewV4().String()
@@ -1186,30 +1855,110 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
 
-	} else if parsedActiontype == "vulnerability_comparison" {
-		// FIXME: Work in progress during test: /workflows/c584fa73-e399-b395-c62d-a64d8bba67c4
+	} else if parsedActiontype == "vulnerability_correlation" {
+		createCaseId := uuid.NewV4().String()
 		defaultWorkflow := Workflow{
 			Name:        actionType,
-			Description: "Based on available vulnerabilities in the shuffle-security_sensors (and otherwise), checks these realtime against available ones.",
+			Description: "For each software package + version coming from a host monitor, queries the Shuffle vulnerability API and stores any matching CVEs into the shuffle-security_vulnerabilities datastore category.",
 			OrgId:       orgId,
 			Start:       startActionId,
 			UsecaseIds:  []string{"vulnerabilities"},
-			Tags:        []string{"ingest", "correlate", "automatic"},
+			Tags:        []string{"correlate", "vulnerability", "automatic"},
+			Triggers: []Trigger{
+				Trigger{
+					ID:          startTriggerId,
+					Name:        "Schedule",
+					TriggerType: "SCHEDULE",
+					Label:       "Vulnerability Correlation",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "cron",
+							Value: "*/15 * * * *",
+						},
+						WorkflowAppActionParameter{
+							Name:  "execution_argument",
+							Value: "Automatically configured by Shuffle Security",
+						},
+					},
+				},
+			},
 			Actions: []Action{
-				Action{
+				{
 					Name:        "execute_python",
-					AppID:       "Shuffle Tools",
+					AppID:       "3e2bdf9d5069fe3f4746c29d68785a6a",
 					AppName:     "Shuffle Tools",
 					ID:          startActionId,
 					AppVersion:  "1.2.0",
 					Environment: actionEnv,
-					Label:       "Add enrichments to entry",
+					Label:       "verify_package_vulnerability",
+					IsStartNode: true,
+					Sharing:     true,
 					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
+						{
 							Name:      "code",
-							Value:     getVulnerabilityComparison(),
+							Value:     getVulnerabilityCorrelationScript(orgId),
 							Multiline: true,
 							Required:  true,
+						},
+					},
+				},
+				{
+					Name:        "Vulnerability upload",
+					AppID:       "integration",
+					AppName:     "Singul",
+					LargeImage:  getSingulLogo(),
+					ID:          createCaseId,
+					AppVersion:  "1.0.0",
+					Environment: actionEnv,
+					Label:       "Create ticket",
+					Parameters: []WorkflowAppActionParameter{
+						{
+							Name:  "app_name",
+							Value: categoryAction.AppName,
+						},
+						{
+							Name:  "action",
+							Value: "Create vulnerability",
+							Options: []string{
+								"List tickets",
+								"Create ticket",
+								"Close ticket",
+								"Add comment",
+							},
+						},
+						{
+							Name:      "fields",
+							Value:     "data=$verify_package_vulnerability",
+							Multiline: true,
+						},
+					},
+				},
+			},
+			Branches: []Branch{
+				Branch{
+					SourceID:      startTriggerId,
+					DestinationID: startActionId,
+					ID:            uuid.NewV4().String(),
+				},
+				Branch{
+					SourceID:      startActionId,
+					DestinationID: createCaseId,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "{{ $$verify_package_vulnerability.vuln_count }}",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "larger than",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "0",
+							},
 						},
 					},
 				},
@@ -1219,8 +1968,9 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
 
-	} else if parsedActiontype == "assign_&_escalate" {
+	} else if parsedActiontype == "assign_&_escalate" || parsedActiontype == "schedules_&_phone_notifications" || parsedActiontype == "schedules_notifications" || parsedActiontype == "phone_notifications" {
 		relevantPeopleId := uuid.NewV4().String()
+		connectToPersonId := uuid.NewV4().String()
 		prepareAgentRun := uuid.NewV4().String()
 		aiAgentRun := uuid.NewV4().String()
 		addAgentResponse := uuid.NewV4().String()
@@ -1231,11 +1981,11 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 
 		defaultWorkflow := Workflow{
 			Name:        actionType,
-			Description: "Assigns and escalates based on the /admin/users page's schedule.",
+			Description: "Assigns and escalates based on team schedules and notifies responders on mobile.",
 			OrgId:       orgId,
 			Start:       startActionId,
 			UsecaseIds:  []string{},
-			Tags:        []string{"schedule", "assign", "automatic"},
+			Tags:        []string{"schedule", "assign", "automatic", "escalate", "phone", "notifications", "mobile", "paging"},
 			Actions: []Action{
 				Action{
 					Name:        "get_datastore_value",
@@ -1384,8 +2134,31 @@ $exec`,
 						},
 					},
 				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          connectToPersonId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Connect_to_responder",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "code",
+							Multiline: true,
+							Required:  true,
+							Value:     getConnectToResponderCode(),
+						},
+					},
+				},
 			},
 			Branches: []Branch{
+				Branch{
+					SourceID:      relevantPeopleId,
+					DestinationID: connectToPersonId,
+					ID:            uuid.NewV4().String(),
+					Conditions:    []Condition{},
+				},
 				Branch{
 					SourceID:      startActionId,
 					DestinationID: relevantPeopleId,
@@ -1525,6 +2298,91 @@ $exec`,
 		//prepareAgentRun := uuid.NewV4().String()
 		//aiAgentRun := uuid.NewV4().String()
 		//addAgentResponse := uuid.NewV4().String()
+
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+	} else if parsedActiontype == "incident_routing" || parsedActiontype == "incident_routing_rules" {
+		getRoutingRulesId := startActionId
+		evaluateAndApplyId := uuid.NewV4().String()
+
+		defaultWorkflow := Workflow{
+			Name:        actionType,
+			Description: "Evaluates incidents against routing rules to suggest moves, assignees, severities, or automate containment.",
+			OrgId:       orgId,
+			Start:       getRoutingRulesId,
+			UsecaseIds:  []string{},
+			Tags:        []string{"routing", "incident", "automatic", "incident routing", "incident routing rules", "incident_routing_rules", "incident_routing"},
+			Triggers: []Trigger{
+				Trigger{
+					ID:          startTriggerId,
+					Name:        "Schedule",
+					TriggerType: "SCHEDULE",
+					Label:       "Incident Routing Rules",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "cron",
+							Value: "*/10 * * * *",
+						},
+						WorkflowAppActionParameter{
+							Name:  "execution_argument",
+							Value: "Automatically configured by Shuffle Security",
+						},
+					},
+				},
+			},
+			Actions: []Action{
+				Action{
+					Name:        "list_datastore_category",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          getRoutingRulesId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Get_routing_rules",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:     "category",
+							Value:    "shuffle-security_routing",
+							Required: true,
+						},
+						WorkflowAppActionParameter{
+							Name:  "output_type",
+							Value: "values",
+						},
+					},
+				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          evaluateAndApplyId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Evaluate_and_apply_rules",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "code",
+							Multiline: true,
+							Required:  true,
+							Value:     getIncidentRoutingScript(),
+						},
+					},
+				},
+			},
+			Branches: []Branch{
+				Branch{
+					SourceID:      startTriggerId,
+					DestinationID: getRoutingRulesId,
+					ID:            uuid.NewV4().String(),
+				},
+				Branch{
+					SourceID:      getRoutingRulesId,
+					DestinationID: evaluateAndApplyId,
+					ID:            uuid.NewV4().String(),
+				},
+			},
+		}
 
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
@@ -1749,7 +2607,31 @@ func GetPublicDetections() []DetectionResponse {
 }
 
 func GetBaseDockerfile() []byte {
-	return []byte(`FROM frikky/shuffle:app_sdk as base
+	appSdkImage := os.Getenv("SHUFFLE_APP_SDK_IMAGE")
+	if appSdkImage == "" {
+		appSdkImage = "frikky/shuffle:app_sdk"
+
+		registry := os.Getenv("SHUFFLE_BASE_IMAGE_REGISTRY")
+		name := os.Getenv("SHUFFLE_BASE_IMAGE_NAME")
+		if name != "" {
+			if registry != "" {
+				appSdkImage = fmt.Sprintf("%s/%s:app_sdk", registry, name)
+			} else {
+				appSdkImage = fmt.Sprintf("%s:app_sdk", name)
+			}
+		} else if registry != "" {
+			appSdkImage = fmt.Sprintf("%s/frikky/shuffle:app_sdk", registry)
+		}
+	}
+
+	if os.Getenv("SHUFFLE_APP_BUILD_AIRGAPPED") == "true" {
+		return []byte(fmt.Sprintf(`FROM %s
+COPY src /app
+WORKDIR /app
+CMD ["python", "app.py", "--log-level", "DEBUG"]`, appSdkImage))
+	}
+
+	return []byte(fmt.Sprintf(`FROM %s as base`, appSdkImage) + `
 
 # We're going to stage away all of the bloat from the build tools so lets create a builder stage
 FROM base as builder
@@ -1839,6 +2721,12 @@ func GetAppCategories() []AppCategory {
 			Color:        "#FFC107",
 			Icon:         "AI",
 			ActionLabels: []string{"Answer Question", "Run Action", "Run LLM"},
+		},
+		AppCategory{
+			Name:         "Internal",
+			Color:        "#FFC107",
+			Icon:         "other",
+			ActionLabels: []string{"Get Workflow", "List Workflows", "Create Workflow", "Update Workflow", "Delete Workflow", "Run Workflow", "Get Run", "List Runs", "Create Run", "Update Run", "Delete Run"},
 		},
 		AppCategory{
 			Name:         "Other",
@@ -2310,6 +3198,14 @@ func GetBrandingAvailable(key string) bool {
 	return false
 }
 
+func GetAppRunsGrouping(key string) bool {
+	if key == "1e1bf9b426033f9f15e8070e007f9414d11d7fdd6a07402a9290e1a0d7965f8f" {
+		return true
+	}
+
+	return false
+}
+
 func GetOnpremKeys() map[string]string {
 	// key: expiry
 	// Format: DD-MM-YYYY
@@ -2708,9 +3604,13 @@ func GetOnpremKeys() map[string]string {
 func GetTriggerData(triggerType string) string {
 	switch strings.ToLower(triggerType) {
 	case "webhook":
-		return "data:image/png;base64,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"
+		return "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iOCIgZmlsbD0iIzIxQTBCRCIvPgo8cGF0aCBkPSJNMjMuOTYxNyAxOC4wOTk0QzI1LjAwMDQgMTguMDY5NiAyNS42ODE3IDE5LjE3NTIgMjUuMTg4MiAyMC4wODk2TDI1LjE3NDYgMjAuMTE1TDI1LjE5MDIgMjAuMTM5NEwyNy45ODMyIDI0LjY4MDRMMjguMDA0NiAyNC43MTU2TDI4LjA0MzcgMjQuN0MyOC41MzgzIDI0LjUwMDcgMjkuMDY3MSAyNC4zOTgyIDI5LjYwMDMgMjQuMzk4MkMzMS4wODE0IDI0LjM5ODkgMzIuNDQ5OSAyNS4xODkyIDMzLjE5MTIgMjYuNDcxNEMzNC43ODk2IDI5LjIzNzMgMzIuNzk0OCAzMi42OTY1IDI5LjYwMDMgMzIuNjk4QzI5LjM2ODEgMzIuNjk4IDI5LjE1MzkgMzIuNTczOSAyOS4wMzc4IDMyLjM3MjhDMjguNzg3NyAzMS45Mzk1IDI5LjEgMzEuMzk4MiAyOS42MDAzIDMxLjM5ODJDMzEuMjA2NyAzMS4zOTg4IDMyLjQ5NjEgMzAuMDcyMyAzMi40NSAyOC40NjY2QzMyLjM4NjcgMjYuMjczNiAyOS45NzM3IDI0Ljk3MTYgMjguMTA2MiAyNi4xMjI4QzI3LjgwMDggMjYuMzEwOCAyNy40MDAxIDI2LjIxNSAyNy4yMTE3IDI1LjkwOTlIMjcuMjEyNkwyNC4wODE4IDIwLjgyMkwyNC4wNjcxIDIwLjc5ODZIMjQuMDAwN0MyMy41MzIzIDIwLjc5ODYgMjMuMDk3MSAyMC41NTU4IDIyLjg1MTMgMjAuMTU3QzIyLjMwNjIgMTkuMjcyMyAyMi45MjMgMTguMTI5MyAyMy45NjE3IDE4LjA5OTRaTTE1LjA4MDggMjYuMDU3NEMxNS4zODE0IDI1LjY1NzIgMTYuMDAyNiAyNS43MzI4IDE2LjE5OSAyNi4xOTMxQzE2LjI3ODcgMjYuMzgwMSAxNi4yNjU3IDI2LjU5MTkgMTYuMTY3NyAyNi43NjY0TDE2LjEyMDggMjYuODM4NkMxNS43NDkxIDI3LjMzMSAxNS41NDg1IDI3LjkzMTYgMTUuNTUwNSAyOC41NDg2QzE1LjU1MDcgMzAuNzQyMyAxNy45MjYxIDMyLjExMzIgMTkuODI1OSAzMS4wMTY0QzIwLjcwNzUgMzAuNTA3MyAyMS4yNTA2IDI5LjU2NjYgMjEuMjUwNyAyOC41NDg2QzIxLjI1MDcgMjguMTg5NyAyMS41NDE0IDI3Ljg5ODQgMjEuOTAwMSAyNy44OTgySDI4LjQxNzdMMjguNDMyNCAyNy44NzM4QzI4Ljk1MiAyNi45NzM4IDMwLjI1MTYgMjYuOTczOCAzMC43NzEyIDI3Ljg3MzhDMzEuMjkwMyAyOC43NzM3IDMwLjY0MDMgMjkuODk4MiAyOS42MDEzIDI5Ljg5ODJDMjkuMTE5MiAyOS44OTgxIDI4LjY3MzUgMjkuNjQwOSAyOC40MzI0IDI5LjIyMzRMMjguNDE3NyAyOS4xOThIMjIuNDk4OEwyMi40OTE5IDI5LjI0QzIxLjk1OTcgMzIuMzg5NyAxOC4yMTc0IDMzLjc4MjIgMTUuNzU1NiAzMS43NDY4QzE0LjA0ODEgMzAuMzM0NyAxMy43NTA4IDI3LjgyOTYgMTUuMDgwOCAyNi4wNTc0Wk0yMC42NjA5IDE2Ljk5QzIyLjU1NTQgMTQuNDE3OSAyNi41MjQxIDE0Ljg2MTIgMjcuODA0NCAxNy43ODc4QzI3Ljg5NzMgMTguMDAwOCAyNy44NjkxIDE4LjI0NzQgMjcuNzMxMiAxOC40MzQzQzI3LjQzNCAxOC44MzY0IDI2LjgxMzQgMTguNzY2NCAyNi42MTMgMTguMzA4M1YxOC4zMDc0QzI1Ljk0NTQgMTYuNzc5MyAyNC4xMTM0IDE2LjE0ODUgMjIuNjQ2MiAxNi45NDEyQzIwLjcxNjIgMTcuOTg0IDIwLjYzODYgMjAuNzI1NiAyMi41MDY2IDIxLjg3NTdDMjIuODEyIDIyLjA2MzkgMjIuOTA3MyAyMi40NjM3IDIyLjcxOTUgMjIuNzY5M0wxOS41ODk2IDI3Ljg1NjJMMTkuNTc1IDI3Ljg4MDZMMTkuNTg4NiAyNy45MDZDMjAuMDc1IDI4LjgwNTUgMTkuNDIzNiAyOS44OTgzIDE4LjQwMTEgMjkuODk4MkMxNy45MTk2IDI5Ljg5NzggMTcuNDc0MyAyOS42NDEyIDE3LjIzMzIgMjkuMjI0NEMxNi43MTI5IDI4LjMyNDggMTcuMzYxOSAyNy4xOTg4IDE4LjQwMTEgMjcuMTk4SDE4LjQ2NzVMMTguNDgyMiAyNy4xNzQ2TDIxLjI3NjEgMjIuNjM1NUwyMS4yOTg2IDIyLjU5OTRMMjEuMjY2NCAyMi41NzFDMTkuNjQ2MSAyMS4xNTAxIDE5LjM4MjkgMTguNzI1MiAyMC42NjA5IDE2Ljk5WiIgZmlsbD0id2hpdGUiIHN0cm9rZT0iIzIxQTBCRCIgc3Ryb2tlLXdpZHRoPSIwLjEiLz4KPC9zdmc+Cg=="
 	case "schedule":
-		return "data:image/png;base64,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"
+		return "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iOCIgZmlsbD0iI0UzQTQxQiIvPgo8cmVjdCB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDEyIDEyKSIgZmlsbD0iI0UzQTQxQiIvPgo8Y2lyY2xlIGN4PSIyNCIgY3k9IjI0IiByPSI4Ljc1IiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjEuNSIvPgo8cGF0aCBkPSJNMjguNSAyNEgyNC4yNUMyNC4xMTE5IDI0IDI0IDIzLjg4ODEgMjQgMjMuNzVWMjAuNSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgo8L3N2Zz4="
+	case "user-input", "user input", "userinput", "user_input":
+		return "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iOCIgZmlsbD0iIzg2MzZCNCIvPgo8cGF0aCBkPSJNMjEuMjgyMiAxNi43VjE0LjdNMTYuNzgyMiAyMS4ySDE0Ljc4MjJNMTcuOTc5MSAyNC41MDMyTDE2LjU2NDkgMjUuOTE3NE0yNS45OTk3IDE2LjQ4MjRMMjQuNTg1NCAxNy44OTY2TTE2LjU2NDggMTYuNDgyNUwxNy45NzkgMTcuODk2N00yNS4yODk4IDMyLjM1MDRMMjYuNzc3NyAyOC40NTc4QzI2Ljk3OTYgMjcuOTI5NSAyNy40NDggMjcuNTQ5IDI4LjAwNjUgMjcuNDU5N0wzMS42MjY0IDI2Ljg4MDVDMzMuMTkwOSAyNi42MzAyIDMzLjQ1ODUgMjQuNDkxNiAzMi4wMDQgMjMuODYzNEwyMi4zNDUyIDE5LjY5MjdDMjEuMTc1MSAxOS4xODc0IDE5LjkxNzkgMjAuMjAxMyAyMC4xNjQgMjEuNDUxOUwyMi4yNTczIDMyLjA5MDhDMjIuNTY0MyAzMy42NTEgMjQuNzIyMSAzMy44MzU4IDI1LjI4OTggMzIuMzUwNFoiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMS4yNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+Cjwvc3ZnPgo="
+	case "subflow", "shuffle workflow", "shuffle_workflow", "shuffle-workflow":
+		return "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDgiIGhlaWdodD0iNDgiIHZpZXdCb3g9IjAgMCA0OCA0OCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4IiByeD0iOCIgZmlsbD0idXJsKCNwYWludDBfbGluZWFyXzMxN181OTcpIi8+CjxwYXRoIGQ9Ik0xNS45OTk4IDE2LjAwMTVMMTUuOTk5OCAyNS43NDA2TDE5LjIwMDEgMjUuNzQwNkwxOS4yMDAxIDE5LjI0ODVMMzEuOTk5OCAxOS4yNDg1TDMxLjk5OTggMTYuMDAxNUwxNS45OTk4IDE2LjAwMTVaIiBmaWxsPSJ3aGl0ZSIvPgo8cGF0aCBkPSJNMjguNzk5NCAyMi4yNjE3TDI4Ljc5OTQgMjguNzUzOEwxNS45OTk4IDI4Ljc1MzhMMTUuOTk5OCAzMi4wMDA4TDMxLjk5OTggMzIuMDAwOEwzMS45OTk4IDIyLjI2MTdMMjguNzk5NCAyMi4yNjE3WiIgZmlsbD0id2hpdGUiLz4KPHBhdGggZD0iTTI1LjczOSAyMi4yNjE3TDIyLjI2MDcgMjIuMjYxN0wyMi4yNjA3IDI1Ljc0TDI1LjczOSAyNS43NEwyNS43MzkgMjIuMjYxN1oiIGZpbGw9IndoaXRlIi8+CjxkZWZzPgo8bGluZWFyR3JhZGllbnQgaWQ9InBhaW50MF9saW5lYXJfMzE3XzU5NyIgeDE9Ii03LjcwNzc2ZS0wOSIgeTE9IjI3LjA3NjkiIHgyPSI0OC4wMDE0IiB5Mj0iMjYuOTM3NyIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgo8c3RvcCBzdG9wLWNvbG9yPSIjRkY4NDQ0Ii8+CjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI0YyNjQzQiIvPgo8L2xpbmVhckdyYWRpZW50Pgo8L2RlZnM+Cjwvc3ZnPgo="
 	default:
 		return ""
 	}
@@ -2728,44 +3628,60 @@ func getVulnerabilityComparison() string {
 func getIocParsingScript() string {
 	return `import json
 import re
-import threading 
+import os
+import requests
+import threading
 
-input_data = '''$exec'''
-if len(input_data) < 4:
-  print({
-    "success": False,
-    "reason": "No input data"
-  })
-  exit()
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
 
-try:
-  all_items = json.loads(r'''$ioc_listing''')
-except Exception as e:
-  print(json.dumps({
-    "success": False,
-    "reason": "Bad input data from threat feed listing. Are the ioc patterns correct?"
-  }))
-  exit()
+input_raw = r"""$exec"""
+input_data = ""
+if not input_raw.startswith("$") and len(input_raw) > 0:
+    input_data = input_raw
+else:
+    print(json.dumps({
+        "success": False,
+        "reason": "No input data"
+    }))
+    exit()
+
+all_items = safe_parse_json(r"""$ioc_listing""", [])
+if isinstance(all_items, dict) and "data" in all_items:
+    all_items = all_items["data"]
+if not isinstance(all_items, list):
+    all_items = []
+
+if not all_items:
+    print(json.dumps({
+        "success": False,
+        "reason": "Bad input data from threat feed listing. Are the ioc patterns correct?"
+    }))
+    exit()
 
 def sanitize_regex(pattern):
-    """
-    Clean up a regex pattern to find matches anywhere in text.
-    
-    Removes anchors (^, $) that force start/end matching.
-    Returns the core pattern for use with findall/finditer.
-    """
-
     pattern = str(pattern)
-    # Remove leading ^ (start anchor)
-    if pattern.startswith('^'):
+    if pattern.startswith("^"):
         pattern = pattern[1:]
-    
-    # Remove trailing $ (end anchor)
-    if pattern.endswith('$'):
+    if pattern.endswith("$"):
         pattern = pattern[:-1]
-    
     return pattern
-
 
 def findall_with_limit(pattern, text, max_matches=None, timeout_seconds=5):
     results = []
@@ -2785,384 +3701,389 @@ def findall_with_limit(pattern, text, max_matches=None, timeout_seconds=5):
     thread.join(timeout=timeout_seconds)
     
     if thread.is_alive():
-        # Thread still running — timeout occurred
-        return results  # or raise TimeoutError
+        return results
     
     if exception[0]:
         return results
 
     return results
 
-# These are the regex items from the datastore
 found_items = []
 found_types = {}
 for ioc_object in all_items:
-  try:
-    ioc_object = json.loads(ioc_object)
-  except:
-    pass
-  
-  try:
-    if "enabled" not in ioc_object or not ioc_object["enabled"]:
-      continue
-  except:
-    continue
-  
-  if "regex" not in ioc_object:
-    continue
-  
-  cleaned_regex = sanitize_regex(ioc_object["regex"])
-  matches = findall_with_limit(cleaned_regex, input_data, max_matches=100, timeout_seconds=2)
-  if not matches:
-    continue
-  
-  found = []
-  for match in matches:
-    if match in found:
-      continue
-
-    if "shuffler.io" in match:
-      continue
-
-    # Check if we match ip while in domain. Very basic check.
-    if ioc_object["name"] == "domain" and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", match):
-      continue
+    if isinstance(ioc_object, str):
+        ioc_object = safe_parse_json(ioc_object, {})
+    if not isinstance(ioc_object, dict):
+        continue
     
-    found.append(match)
-    found_items.append({
-      "value": match,
-      "type": ioc_object["name"],
-    })
-	    
-    if ioc_object["name"] not in found_types:
-      found_types[ioc_object["name"]] = 1
-    else:
-      found_types[ioc_object["name"]] += 1
+    if not ioc_object.get("enabled"):
+        continue
+    
+    raw_regex = ioc_object.get("regex")
+    if not raw_regex:
+        continue
+    
+    ioc_name = ioc_object.get("name") or "unknown"
+    cleaned_regex = sanitize_regex(raw_regex)
+    matches = findall_with_limit(cleaned_regex, input_data, max_matches=100, timeout_seconds=2)
+    if not matches:
+        continue
+    
+    found = []
+    for match in matches:
+        if match in found:
+            continue
+        if "shuffler.io" in match:
+            continue
+        if ioc_name == "domain" and re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", match):
+            continue
+        
+        found.append(match)
+        found_items.append({
+            "value": match,
+            "type": ioc_name,
+        })
+        
+        found_types[ioc_name] = found_types.get(ioc_name, 0) + 1
+
+target_key = r"""$exec.shuffle_datastore.key"""
+target_cat = r"""$exec.shuffle_datastore.category"""
+target_org = r"""$exec.shuffle_datastore.org_id"""
+
+if target_key.startswith("$"):
+    target_key = ""
+if target_cat.startswith("$"):
+    target_cat = ""
+if target_org.startswith("$"):
+    target_org = ""
 
 full_body = [{
-  "key": "$exec.shuffle_datastore.key",
-  "category": "$exec.shuffle_datastore.category",
-  "org_id": "$exec.shuffle_datastore.org_id",
-  "enrichments": found_items,
-}]   
+    "key": target_key,
+    "category": target_cat,
+    "org_id": target_org,
+    "enrichments": found_items,
+}]
 
-upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
-parsed_headers = {}
-if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
-  parsed_headers["Authorization"] = f"Bearer {os.environ.get('SHUFFLE_AUTHORIZATION', '')}"
+upload_url = ""
+if hasattr(self, "base_url") and self.base_url:
+    upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
 else:
-  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+    upload_url = "https://shuffler.io/api/v2/datastore?bulk=true"
+
+parsed_headers = {}
+auth_token = os.environ.get("SHUFFLE_AUTHORIZATION", "")
+if auth_token:
+    parsed_headers["Authorization"] = f"Bearer {auth_token}"
+elif hasattr(self, "authorization") and hasattr(self, "current_execution_id"):
+    upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}"
 
 try:
-  ret = requests.post(upload_url, json=full_body, headers=parsed_headers)
-  if ret.status_code == 200:
-    print(json.dumps({
-      "success": True, 
-      "reason": "Uploaded '$exec.shuffle_datastore.key' in '$exec.shuffle_datastore.category' with %d indicators" % (len(found_items)),
-	  "types": found_types,
-    }))
-  else:
-    print(json.dumps({
-      "success": False,
-      "reason": f"Failed request with status %d and body %s" % (ret.status_code, ret.text)
-    }))
+    ret = requests.post(upload_url, json=full_body, headers=parsed_headers, timeout=15)
+    if ret.status_code == 200:
+        print(json.dumps({
+            "success": True, 
+            "reason": "Uploaded indicators to datastore with %d indicators" % (len(found_items)),
+            "types": found_types,
+            "count": len(found_items),
+        }))
+    else:
+        print(json.dumps({
+            "success": False,
+            "reason": "Failed request with status %d: %s" % (ret.status_code, ret.text[:200]),
+            "count": len(found_items),
+        }))
 except Exception as e:
-  print(json.dumps({
-    "success": False,
-    "reason": f"Failed request: {e}"
-  }))`
+    print(json.dumps({
+        "success": False,
+        "reason": "Failed request: %s" % e,
+        "count": len(found_items),
+    }))`
 }
 
 // For scheduled runs to ingest data
 func getIocIngestionScript(orgId string) string {
-	timestampFormat := "%Y-%m-%d %H:%M:%S"
-	timestampFormat2 := "%Y-%m-%dT%H:%M:%SZ"
-
-	return fmt.Sprintf(`import os
+	return `import os
 import re
 import json
 import uuid
 import time
 import requests
 
-try:
-  all_urls = json.loads(r'''$threat_feed_listing''')
-except Exception as e:
-  print({
-    "success": False,
-    "reason": "Bad data from threat feed listing"
-  })
-  exit()
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+all_urls = safe_parse_json(r'''$threat_feed_listing''', [])
+if isinstance(all_urls, dict) and "data" in all_urls:
+    all_urls = all_urls["data"]
+if not isinstance(all_urls, list):
+    all_urls = []
 
 if len(all_urls) == 0:
-  print({
-    "success": False,
-    "reason": "No threat feeds configured"
-  })
-  exit()
+    print(json.dumps({
+        "success": False,
+        "reason": "No threat feeds configured"
+    }))
+    exit()
 
 input_data = []
 for key in all_urls:
-  try:
-    key = json.loads(key)
-  except:
-    pass
+    if isinstance(key, str):
+        key = safe_parse_json(key, {})
+    if not isinstance(key, dict):
+        continue
 
-  if key["enabled"] != True:
-    continue
+    if not key.get("enabled"):
+        continue
 
-  parsed_headers = {}
+    parsed_headers = {}
+    raw_headers = key.get("headers") or ""
+    if isinstance(raw_headers, str) and len(raw_headers) > 0:
+        headers_list = raw_headers.split(";")
+        for header in headers_list:
+            if "=" in header:
+                header_parts = header.split("=", 1)
+                parsed_headers[header_parts[0].strip()] = header_parts[1].strip()
+            else:
+                parsed_headers[header.strip()] = ""
 
-  if "headers" in key and len(key["headers"]) > 0:
-    # Split with = and newlines
-    headers = headers.split(";")
-    for header in headers:
-      if "=" in header:
-        header_parts = header.split("=")
-        parsed_headers[header_parts[0].strip()] = header_parts[1].strip()
-      else:
-        parsed_headers[header.strip()] = ""
+    feed_url = key.get("url")
+    if not feed_url:
+        continue
 
-  try:
-    resp = requests.get(key["url"], headers=parsed_headers, verify=False, timeout=3)
-    content = {
-      "status": resp.status_code,
-      "body": resp.text,
-      "url": key["url"],
-    }
+    try:
+        resp = requests.get(feed_url, headers=parsed_headers, verify=False, timeout=15)
+        content = {
+            "status": resp.status_code,
+            "body": resp.text,
+            "url": feed_url,
+        }
+        if "type" in key:
+            content["type"] = key["type"]
+        input_data.append(content)
+    except Exception:
+        pass
 
-    if "type" in key:
-      content["type"] = key["type"]
+ioc_regexes = safe_parse_json(r'''$ioc_listing''', [])
+if isinstance(ioc_regexes, dict) and "data" in ioc_regexes:
+    ioc_regexes = ioc_regexes["data"]
+if not isinstance(ioc_regexes, list):
+    ioc_regexes = []
 
-    input_data.append(content)
-
-  except Exception as e:
-    pass
-	
-try:
-  ioc_regexes = json.loads(r'''$ioc_listing''')
-except Exception as e:
-  print(json.dumps({
-    "success": False,
-    "reason": "Bad input data from ioc listing. Are the ioc patterns correct?"
-  }))
-  exit()
+if not ioc_regexes:
+    print(json.dumps({
+        "success": False,
+        "reason": "Bad input data from ioc listing. Are the ioc patterns correct?"
+    }))
+    exit()
 
 def sanitize_regex(pattern):
-  """
-  Clean up a regex pattern to find matches anywhere in text.
-  
-  Removes anchors (^, $) that force start/end matching.
-  Returns the core pattern for use with findall/finditer.
-  """
-
-  pattern = str(pattern)
-
-  # Remove leading ^ (start anchor)
-  if pattern.startswith('^'):
-  	pattern = pattern[1:]
-  
-  # Remove trailing $ (end anchor)
-  if pattern.endswith('$'):
-  	pattern = pattern[:-1]
-  
-  return pattern
+    pattern = str(pattern)
+    if pattern.startswith("^"):
+        pattern = pattern[1:]
+    if pattern.endswith("$"):
+        pattern = pattern[:-1]
+    return pattern
 
 regexsearch = {}
-found_items = []
 for ioc_object in ioc_regexes:
-  try:
-    ioc_object = json.loads(ioc_object)
-  except:
-    pass
-  
-  try:
-    if "enabled" not in ioc_object or not ioc_object["enabled"]:
-      continue
-  except:
-    continue
-  
-  if "regex" not in ioc_object:
-    continue
+    if isinstance(ioc_object, str):
+        ioc_object = safe_parse_json(ioc_object, {})
+    if not isinstance(ioc_object, dict):
+        continue
+    
+    if not ioc_object.get("enabled"):
+        continue
+    
+    raw_regex = ioc_object.get("regex")
+    if not raw_regex:
+        continue
 
-  regexsearch[ioc_object["name"]] = sanitize_regex(ioc_object["regex"])
+    ioc_name = ioc_object.get("name") or "unknown"
+    regexsearch[ioc_name] = sanitize_regex(raw_regex)
 
 if not regexsearch:
-  print(json.dumps({
-	"success": False,
-	"reason": "No valid regexes found in ioc listing. Are the ioc patterns correct?"
-  }))
-  exit()
+    print(json.dumps({
+        "success": False,
+        "reason": "No valid regexes found in ioc listing. Are the ioc patterns correct?"
+    }))
+    exit()
 
 all_items = {}
-
 if not isinstance(input_data, list):
-  input_data = [input_data]
+    input_data = [input_data]
 
-
-## Assuming
 max_items = 1000
 threat_timeout = 90 # days
+
 for content in input_data:
-  iocs = content["body"]
+    iocs = content.get("body") or ""
+    if not iocs:
+        continue
 
-  found_type = ""
-  if "type" in content and len(content["type"]) > 0:
-    found_type = content["type"].lower()
-    found = False
-    for key, value in regexsearch.items():
-      if key == found_type:
-        found = True
-        break
-
-    if not found:
-      continue
-
-  if not found_type:
-    searchspace = iocs[0:1000]
-    for key, value in regexsearch.items():
-      value = sanitize_regex(value)
-      match = re.search(value, searchspace)
-      if match:
-        found_type = key
-        break
-
-  if len(found_type) == 0:
-    continue
-
-  appended_items = []
-  discovered_split_index = -1
-  datestamp_index = -1
-
-  cnt = 0
-  for line in iocs.split("\n"):
-    if len(line) < 3:
-      continue
-
-    if line.startswith("#"):
-      continue
-
-    if cnt > max_items:
-      continue
-
-    # Remove ANYTHING after # on the line
-    line = line.split("#")[0].strip()
-
-    linesplit = line.split(",")
-    if discovered_split_index >= 0:
-      if datestamp_index >= 0:
-        # Check if the timestamp is more than 90 days ago (threat_timeout)
-        try:
-          timestamp = time.strptime(linesplit[datestamp_index], "%s")
-          current_time = time.time()
-          if (current_time - time.mktime(timestamp)) / (24 * 3600) > threat_timeout:
+    found_type = ""
+    if "type" in content and len(content["type"]) > 0:
+        ctype = content["type"].lower()
+        for k in regexsearch.keys():
+            if k == ctype:
+                found_type = k
+                break
+        if not found_type:
             continue
-        except ValueError:
-          continue
 
-      appended_items.append(linesplit[discovered_split_index])
+    if not found_type:
+        searchspace = iocs[0:1000]
+        for key, value in regexsearch.items():
+            match = re.search(value, searchspace)
+            if match:
+                found_type = key
+                break
 
-    else:
-      # Discovering pattern
-      cnt += 1
-      linesplit = line.split(",")
-      if len(linesplit) == 1:
-        discovered_split_index = 0
-      else:
-        itemcnt = 0
+    if len(found_type) == 0:
+        continue
 
-        for item in linesplit:
-          # Check if item is a timestamp
-          import time
-          try:
-            time.strptime(item, "%s")
-            datestamp_index = itemcnt
+    appended_items = []
+    discovered_split_index = -1
+    datestamp_index = -1
 
-            # Check if the timestamp is more than 90 days ago. If so, break and continue
-          except ValueError:
-            pass
+    cnt = 0
+    for line in iocs.split("\n"):
+        if len(line) < 3:
+            continue
 
-          match = re.search(regexsearch[found_type], item)
-          if match:
-            discovered_split_index = itemcnt
-            break
+        if line.startswith("#"):
+            continue
 
-          itemcnt += 1
+        if cnt > max_items:
+            continue
+
+        line = line.split("#")[0].strip()
+        linesplit = line.split(",")
 
         if discovered_split_index >= 0:
-          appended_items.append(linesplit[discovered_split_index])
+            if datestamp_index >= 0 and datestamp_index < len(linesplit):
+                try:
+                    timestamp = time.strptime(linesplit[datestamp_index], "%Y-%m-%d %H:%M:%S")
+                    current_time = time.time()
+                    if (current_time - time.mktime(timestamp)) / (24 * 3600) > threat_timeout:
+                        continue
+                except ValueError:
+                    pass
 
-  # Parsing STIX
-  for item in appended_items:
-    key = item.strip()
+            if discovered_split_index < len(linesplit):
+                appended_items.append(linesplit[discovered_split_index])
 
-    if key in all_items:
-      if content["url"] not in all_items[found_type][key]["urls"]:
-        all_items[found_type][key] = all_items[found_type][key]["urls"].append(content["url"])
-    else:
+        else:
+            cnt += 1
+            if len(linesplit) == 1:
+                discovered_split_index = 0
+            else:
+                itemcnt = 0
+                for item in linesplit:
+                    try:
+                        time.strptime(item, "%Y-%m-%d %H:%M:%S")
+                        datestamp_index = itemcnt
+                    except ValueError:
+                        pass
 
-      # Silly workaround to ensure we got a good UUID
-      # But keeping it deterministic for now
-      static_namespace = "c59d2471-df00-48ae-bc18-dd76e84a60df"
-      stix_id = f"indicator--{uuid.uuid5(uuid.UUID(static_namespace), key)}"
+                    match = re.search(regexsearch[found_type], item)
+                    if match:
+                        discovered_split_index = itemcnt
+                        break
 
-      stix_pattern = ""
-      if found_type == "md5":
-        stix_pattern = f"[file:hashes.MD5 = '{key}']" 
-      elif found_type == "sha1":
-        stix_pattern = f"[file:hashes.SHA1 = '{key}']" 
-      elif found_type == "sha256":
-        stix_pattern = f"[file:hashes.SHA256 = '{key}']" 
-      elif found_type == "ip" or found_type == "ipv4":
-        stix_pattern = f"[ipv4-addr:value = '{key}']" 
-      elif found_type == "ipv6": 
-        stix_pattern = f"[ipv6-addr:value = '{key}']" 
-      elif found_type == "domain":
-        stix_pattern = f"[domain-name:value = '{key}']" 
-      else:
-        stix_pattern = f"[{found_type}:value = '{key}']"
+                    itemcnt += 1
 
-      if not found_type in all_items:
-        all_items[found_type] = {}
+                if discovered_split_index >= 0 and discovered_split_index < len(linesplit):
+                    appended_items.append(linesplit[discovered_split_index])
 
-      all_items[found_type][key] = {
-        "type": "indicator",
-        "spec_version": "2.1",
-        "id": stix_id,
-        "pattern": stix_pattern,
-        "pattern_type": "stix",
+    for item in appended_items:
+        key = item.strip()
+        if not key:
+            continue
 
-        "created": time.strftime("%s", time.gmtime()),
-        "modified": time.strftime("%s", time.gmtime()),
+        if found_type in all_items and key in all_items[found_type]:
+            if content.get("url") and content["url"] not in all_items[found_type][key].get("urls", []):
+                all_items[found_type][key].setdefault("urls", []).append(content["url"])
+        else:
+            static_namespace = "c59d2471-df00-48ae-bc18-dd76e84a60df"
+            stix_id = f"indicator--{uuid.uuid5(uuid.UUID(static_namespace), key)}"
 
-		"x_raw_pattern": key,
-        "urls": [content["url"]],
-      }
+            stix_pattern = ""
+            if found_type == "md5":
+                stix_pattern = f"[file:hashes.MD5 = '{key}']" 
+            elif found_type == "sha1":
+                stix_pattern = f"[file:hashes.SHA1 = '{key}']" 
+            elif found_type == "sha256":
+                stix_pattern = f"[file:hashes.SHA256 = '{key}']" 
+            elif found_type in ("ip", "ipv4"):
+                stix_pattern = f"[ipv4-addr:value = '{key}']" 
+            elif found_type == "ipv6": 
+                stix_pattern = f"[ipv6-addr:value = '{key}']" 
+            elif found_type == "domain":
+                stix_pattern = f"[domain-name:value = '{key}']" 
+            else:
+                stix_pattern = f"[{found_type}:value = '{key}']"
 
+            if found_type not in all_items:
+                all_items[found_type] = {}
 
-upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
-parsed_headers = {}
-if len(os.environ.get("SHUFFLE_AUTHORIZATION", "")) > 0:
-  parsed_headers["Authorization"] = f"Bearer {os.environ.get('SHUFFLE_AUTHORIZATION', '')}"
+            all_items[found_type][key] = {
+                "type": "indicator",
+                "spec_version": "2.1",
+                "id": stix_id,
+                "pattern": stix_pattern,
+                "pattern_type": "stix",
+                "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "modified": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "x_raw_pattern": key,
+                "urls": [content["url"]],
+            }
+
+upload_url = ""
+if hasattr(self, "base_url") and self.base_url:
+    upload_url = f"{self.base_url}/api/v2/datastore?bulk=true"
 else:
-  upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}" 
+    upload_url = "https://shuffler.io/api/v2/datastore?bulk=true"
+
+parsed_headers = {}
+auth_token = os.environ.get("SHUFFLE_AUTHORIZATION", "")
+if auth_token:
+    parsed_headers["Authorization"] = f"Bearer {auth_token}"
+elif hasattr(self, "authorization") and hasattr(self, "current_execution_id"):
+    upload_url += f"&authorization={self.authorization}&execution_id={self.current_execution_id}"
 
 uploaded = {
-	"sources": len(input_data),
+    "sources": len(input_data),
 }
 for k, v in all_items.items():
     new_list = []
-
     cnt = 0
     for subkey, subval in v.items():
         subval["external_references"] = []
-        for url in subval["urls"]:
+        for url in subval.get("urls", []):
             subval["external_references"].append({
                 "source_name": "threatfeed",
                 "url": url,
             })
 
-        del subval["urls"]
+        if "urls" in subval:
+            del subval["urls"]
+
         new_list.append({
             "key": subkey,
             "category": f"ioc_{k}", 
@@ -3174,14 +4095,15 @@ for k, v in all_items.items():
             break
 
     if len(new_list) > 0:
-        ret = requests.post(upload_url, json=new_list, headers=parsed_headers)
-		#print(ret.text)
-        #print(ret.status_code)
+        try:
+            requests.post(upload_url, json=new_list, headers=parsed_headers, timeout=15)
+        except Exception:
+            pass
 
     uploaded["uploaded_" + k] = len(new_list)
 
 print(json.dumps(uploaded))
-	`, timestampFormat, timestampFormat, timestampFormat2, timestampFormat2)
+`
 }
 
 func GetHealthAppConfig() string {
@@ -3516,6 +4438,25 @@ func GetUsecaseData() string {
     "step": 1,
     "list": [
       {
+        "name": "Email reports",
+        "type": "Email",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "email_case_management_1",
+        "source_id": "email",
+        "target_id": "case_management",
+        "tags": [
+          "Alert",
+          "Logs"
+        ],
+        "description": "User-reported phishing emails create cases for triage. Automating intake with deduplication and auto-enrichment drastically cuts analyst workload.",
+        "agentic_description": "An agent parses reported emails, extracts and enriches all IOCs, determines phishing verdict using threat intel, and auto-closes low-risk reports while escalating confirmed campaigns.",
+        "automation_label": "Ingest Tickets",
+        "automation_category": "cases",
+        "automation_area": "automatic_ingestion"
+      },
+      {
         "name": "SIEM alerts",
         "type": "SIEM",
         "destination": "Cases",
@@ -3550,25 +4491,6 @@ func GetUsecaseData() string {
         ],
         "description": "EDR-generated alerts (malware detections, suspicious process executions, ransomware behavior) are forwarded directly to Case Management to open or update incidents, bypassing the SIEM for faster response on high-confidence endpoint detections.",
         "agentic_description": "An agent evaluates EDR alert confidence, correlates with related endpoint events, determines if it belongs to an existing case, and either updates the case or creates a new one with a pre-filled investigation timeline.",
-        "automation_label": "Ingest Tickets",
-        "automation_category": "cases",
-        "automation_area": "automatic_ingestion"
-      },
-      {
-        "name": "Email reports",
-        "type": "Email",
-        "destination": "Cases",
-        "running": false,
-        "disabled": false,
-        "id": "email_case_management_1",
-        "source_id": "email",
-        "target_id": "case_management",
-        "tags": [
-          "Alert",
-          "Logs"
-        ],
-        "description": "User-reported phishing emails create cases for triage. Automating intake with deduplication and auto-enrichment drastically cuts analyst workload.",
-        "agentic_description": "An agent parses reported emails, extracts and enriches all IOCs, determines phishing verdict using threat intel, and auto-closes low-risk reports while escalating confirmed campaigns.",
         "automation_label": "Ingest Tickets",
         "automation_category": "cases",
         "automation_area": "automatic_ingestion"
@@ -3633,7 +4555,7 @@ func GetUsecaseData() string {
         "type": "Assets",
         "destination": "Cases",
         "running": false,
-        "disabled": true,
+        "disabled": false,
         "id": "vulnerability_ingestion_1",
         "source_id": "asset_management",
         "target_id": "case_management",
@@ -3644,12 +4566,219 @@ func GetUsecaseData() string {
         ],
         "description": "Ingest vulnerability findings (CVEs, misconfigurations, missing patches) from your scanners into a unified inventory so they can be correlated with assets and incidents.",
         "agentic_description": "An agent normalizes scanner output across vendors, deduplicates findings per asset, enriches each CVE with exploitability and threat intel, and keeps the vulnerability inventory continuously up to date.",
+        "automation_label": "Ingest Vulnerabilities",
+        "automation_category": "vulnerabilities",
         "automation_area": "automatic_ingestion",
         "custom_action": {
           "label": "Configure Vulnerabilities",
           "href": "/vulnerabilities",
           "description": "Open the vulnerability inventory to ingest CVEs from your scanners."
         }
+      },
+      {
+        "name": "IOC feeds",
+        "type": "Threat Intel",
+        "destination": "Cases",
+        "running": true,
+        "disabled": false,
+        "id": "threat_intel_ingest_1",
+        "source_id": "threat_intel",
+        "target_id": "case_management",
+        "tags": [
+          "Ingest",
+          "Threat Intel",
+          "Feeds",
+          "IOCs"
+        ],
+        "description": "Ingest indicator of compromise (IOC) feeds from open-source intelligence (OSINT), commercial threat feeds, and ISACs into Shuffle to detect malicious IPs, domains, hashes, and URLs.",
+        "agentic_description": "An agent continuously ingests and deduplicates threat feeds, normalizes indicators, tracks source confidence, and stages them for real-time incident matching.",
+        "automation_label": "Enable Threat feeds",
+        "automation_category": "cases",
+        "automation_area": "threat_intel",
+        "custom_action": {
+          "label": "Threat Feeds",
+          "href": "/incidents/threat-feeds",
+          "description": "IOC feeds and Threat feeds refer to the same thing — manage your configured threat feeds and IOC sources."
+        }
+      }
+    ]
+  },
+  {
+    "name": "Context & Correlation",
+    "description": "Enrich alerts with intelligence, assets, and identity data.",
+    "color": "#1AC4E6",
+    "phase": "correlation",
+    "step": 2,
+    "list": [
+      {
+        "name": "Telemetry",
+        "type": "EDR",
+        "destination": "SIEM",
+        "running": false,
+        "disabled": true,
+        "id": "edr_siem_1",
+        "source_id": "edr",
+        "target_id": "siem",
+        "tags": [
+          "Logs",
+          "Detection",
+          "Correlation"
+        ],
+        "description": "Endpoint telemetry (process trees, file hashes, registry changes) enriches SIEM detections with host-level context, enabling accurate correlation rules.",
+        "agentic_description": "An agent cross-references endpoint telemetry with known attack patterns, surfaces hidden process chains, and annotates SIEM events with host risk scores before they reach an analyst.",
+        "automation_area": "correlation",
+        "manual_verification": true
+      },
+      {
+        "name": "Auth logs",
+        "type": "IAM",
+        "destination": "SIEM",
+        "running": false,
+        "disabled": true,
+        "id": "iam_siem_1",
+        "source_id": "iam",
+        "target_id": "siem",
+        "tags": [
+          "Logs",
+          "Detection",
+          "Correlation"
+        ],
+        "description": "Authentication and authorization logs reveal credential abuse, impossible travel, privilege escalation, and brute-force attempts across the identity layer.",
+        "agentic_description": "An agent detects impossible travel, credential stuffing patterns, and privilege escalation attempts in auth logs, then creates SIEM alerts with user risk context and recommended actions.",
+        "automation_area": "correlation",
+        "manual_verification": true
+      },
+      {
+        "name": "Enrichment",
+        "type": "Threat Intel",
+        "destination": "Cases",
+        "running": true,
+        "disabled": false,
+        "id": "threat_intel_case_management_1",
+        "source_id": "threat_intel",
+        "target_id": "case_management",
+        "tags": [
+          "Intel",
+          "Correlation",
+          "Context"
+        ],
+        "description": "Threat intelligence enriches cases with reputation scores, malware families, threat actor attribution, and related IOCs — giving analysts immediate context.",
+        "agentic_description": "An agent autonomously enriches all observables in a case, maps findings to MITRE ATT&CK, identifies related campaigns, and updates case severity and recommended playbook based on findings.",
+        "automation_label": "Enable Threat feeds",
+        "automation_category": "cases",
+        "automation_area": "threat_intel"
+      },
+      {
+        "name": "Asset context",
+        "type": "Assets",
+        "destination": "Cases",
+        "running": false,
+        "disabled": true,
+        "id": "asset_management_case_management_1",
+        "source_id": "asset_management",
+        "target_id": "case_management",
+        "tags": [
+          "Context",
+          "Correlation"
+        ],
+        "description": "Asset context (owner, criticality, business unit, OS) helps analysts prioritize cases and understand blast radius during an incident.",
+        "agentic_description": "An agent automatically fetches asset owner, business criticality, and known vulnerabilities for every observable in a case, recalculates impact score, and suggests prioritization.",
+        "automation_area": "correlation"
+      },
+      {
+        "name": "Vulnerability Correlation",
+        "type": "Assets",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "asset_management_case_management_vuln_1",
+        "source_id": "asset_management",
+        "target_id": "case_management",
+        "tags": [
+          "Context",
+          "Correlation",
+          "Vulnerability"
+        ],
+        "description": "Correlate known vulnerabilities (CVEs, misconfigurations, missing patches) on affected assets with active incidents — surfacing exploitable weaknesses that elevate risk and guide containment priorities.",
+        "agentic_description": "An agent matches observables and affected hosts in a case against the vulnerability inventory, identifies exploitable CVEs aligned with the attack technique, recalculates incident severity, and recommends remediation or compensating controls.",
+        "automation_label": "Vulnerability Correlation",
+        "automation_category": "cases",
+        "automation_area": "correlation"
+      },
+      {
+        "name": "Phishing IOCs",
+        "type": "Email",
+        "destination": "Threat Intel",
+        "running": false,
+        "disabled": true,
+        "id": "email_threat_intel_1",
+        "source_id": "email",
+        "target_id": "threat_intel",
+        "tags": [
+          "Intel",
+          "Correlation",
+          "Logs"
+        ],
+        "description": "Extracting IOCs from phishing emails (sender domains, URLs, attachments) and feeding them into threat intel platforms helps detect broader campaigns.",
+        "agentic_description": "An agent detonates suspicious attachments and URLs in a sandbox, extracts all IOCs, correlates with known campaigns, and auto-publishes confirmed indicators to the threat intel platform.",
+        "automation_area": "threat_intel"
+      },
+      {
+        "name": "Identity events",
+        "type": "Cloud",
+        "destination": "IAM",
+        "running": false,
+        "disabled": true,
+        "id": "cloud_iam_1",
+        "source_id": "cloud",
+        "target_id": "iam",
+        "tags": [
+          "Logs",
+          "Correlation",
+          "Detection"
+        ],
+        "description": "Cloud identity events (role changes, permission grants, federation configs) feed IAM monitoring to detect privilege escalation in cloud environments.",
+        "agentic_description": "An agent tracks excessive permission grants, detects role assumption chains indicating privilege escalation, and triggers automated least-privilege review recommendations in IAM.",
+        "automation_area": "correlation",
+        "manual_verification": true
+      },
+      {
+        "name": "Resource inventory",
+        "type": "Cloud",
+        "destination": "Assets",
+        "running": false,
+        "disabled": true,
+        "id": "cloud_asset_management_1",
+        "source_id": "cloud",
+        "target_id": "asset_management",
+        "tags": [
+          "Logs",
+          "Context"
+        ],
+        "description": "Auto-syncing cloud resources into the asset inventory ensures the CMDB stays current, preventing blind spots in vulnerability management and incident response.",
+        "agentic_description": "An agent continuously reconciles cloud inventory with the CMDB, flags newly exposed resources, identifies shadow IT, and marks assets with missing security controls for immediate action.",
+        "automation_area": "correlation",
+        "manual_verification": true
+      },
+      {
+        "name": "Incident Routing Rules",
+        "type": "Cases",
+        "destination": "Cases",
+        "running": false,
+        "disabled": false,
+        "id": "case_management_incident_routing_1",
+        "source_id": "case_management",
+        "target_id": "case_management",
+        "tags": [
+          "Context",
+          "Correlation",
+          "Routing"
+        ],
+        "description": "Route incoming incidents to the right sub-organization based on tenant, source, severity, observables, or any field in the incident payload. Keeps multi-tenant environments tidy and ensures the right team owns each incident from the start.",
+        "agentic_description": "An agent evaluates each new incident against your routing rules, decides which sub-organization should own it, and either suggests or executes the move with full audit trail.",
+        "automation_area": "correlation",
+        "automation_label": "Incident Routing Rules",
+        "automation_category": "cases"
       }
     ]
   },
@@ -3658,7 +4787,7 @@ func GetUsecaseData() string {
     "description": "Automate containment, notifications, and remediation.",
     "color": "#EF4444",
     "phase": "response",
-    "step": 2,
+    "step": 3,
     "list": [
       {
         "name": "IOC feeds",
@@ -3846,11 +4975,34 @@ func GetUsecaseData() string {
         "automation_area": "assign_escalate"
       },
       {
+        "name": "Schedules & Phone Notifications",
+        "type": "Cases",
+        "destination": "Communication",
+        "running": false,
+        "disabled": false,
+        "id": "case_management_schedules_notifications_1",
+        "source_id": "case_management",
+        "target_id": "communication",
+        "tags": [
+          "Response",
+          "On-Call",
+          "Mobile",
+          "Escalation",
+          "Paging"
+        ],
+        "description": "Trigger phone notifications and emergency paging via the Shuffle Mobile App based on on-call team schedules, with automatic escalations across response tiers.",
+        "agentic_description": "An agent monitors incoming critical incidents, determines the active on-call responder for the current shift, dispatches mobile app phone notifications and siren paging, and automatically escalates to higher tiers if unacknowledged.",
+        "automation_label": "Schedules & Phone Notifications",
+        "automation_category": "cases",
+        "automation_area": "schedules_notifications"
+      },
+      {
         "name": "Vulnerability Response",
         "type": "Assets",
         "destination": "Cases",
         "running": false,
-        "disabled": false,
+        "disabled": true,
+        "support_only": true,
         "id": "asset_management_case_management_vuln_response_1",
         "source_id": "asset_management",
         "target_id": "case_management",
@@ -3869,7 +5021,7 @@ func GetUsecaseData() string {
         }
       },
       {
-        "name": "Add Host-Monitors",
+        "name": "Host Monitoring",
         "type": "Cases",
         "destination": "Assets",
         "running": false,
@@ -3884,11 +5036,11 @@ func GetUsecaseData() string {
         ],
         "description": "Deploy host monitors to endpoints for real-time telemetry collection, compliance checks, and on-demand response action execution. Monitors enable direct interaction with hosts during investigations and continuous visibility into endpoint state.",
         "agentic_description": "An agent identifies hosts missing monitor coverage, generates the appropriate deployment command for each platform, tracks rollout status, and verifies telemetry is flowing back into the platform after install.",
-        "automation_label": "Add Monitors",
+        "automation_label": "Host Monitoring",
         "automation_category": "cases",
         "automation_area": "response",
         "custom_action": {
-          "label": "Add Monitor",
+          "label": "Deploy Host Monitor",
           "href": "/monitors?add_host=true",
           "description": "Open the monitor deployment dialog to register a new host."
         }
@@ -3918,211 +5070,6 @@ func GetUsecaseData() string {
         }
       }
     ]
-  },
-  {
-    "name": "Context & Correlation",
-    "description": "Enrich alerts with intelligence, assets, and identity data.",
-    "color": "#1AC4E6",
-    "phase": "correlation",
-    "step": 3,
-    "list": [
-      {
-        "name": "Telemetry",
-        "type": "EDR",
-        "destination": "SIEM",
-        "running": false,
-        "disabled": true,
-        "id": "edr_siem_1",
-        "source_id": "edr",
-        "target_id": "siem",
-        "tags": [
-          "Logs",
-          "Detection",
-          "Correlation"
-        ],
-        "description": "Endpoint telemetry (process trees, file hashes, registry changes) enriches SIEM detections with host-level context, enabling accurate correlation rules.",
-        "agentic_description": "An agent cross-references endpoint telemetry with known attack patterns, surfaces hidden process chains, and annotates SIEM events with host risk scores before they reach an analyst.",
-        "automation_area": "correlation",
-        "manual_verification": true
-      },
-      {
-        "name": "Auth logs",
-        "type": "IAM",
-        "destination": "SIEM",
-        "running": false,
-        "disabled": true,
-        "id": "iam_siem_1",
-        "source_id": "iam",
-        "target_id": "siem",
-        "tags": [
-          "Logs",
-          "Detection",
-          "Correlation"
-        ],
-        "description": "Authentication and authorization logs reveal credential abuse, impossible travel, privilege escalation, and brute-force attempts across the identity layer.",
-        "agentic_description": "An agent detects impossible travel, credential stuffing patterns, and privilege escalation attempts in auth logs, then creates SIEM alerts with user risk context and recommended actions.",
-        "automation_area": "correlation",
-        "manual_verification": true
-      },
-      {
-        "name": "Enrichment",
-        "type": "Threat Intel",
-        "destination": "Cases",
-        "running": true,
-        "disabled": false,
-        "id": "threat_intel_case_management_1",
-        "source_id": "threat_intel",
-        "target_id": "case_management",
-        "tags": [
-          "Intel",
-          "Correlation",
-          "Context"
-        ],
-        "description": "Threat intelligence enriches cases with reputation scores, malware families, threat actor attribution, and related IOCs — giving analysts immediate context.",
-        "agentic_description": "An agent autonomously enriches all observables in a case, maps findings to MITRE ATT&CK, identifies related campaigns, and updates case severity and recommended playbook based on findings.",
-        "automation_label": "Enable Threat feeds",
-        "automation_category": "cases",
-        "automation_area": "threat_intel"
-      },
-      {
-        "name": "Asset context",
-        "type": "Assets",
-        "destination": "Cases",
-        "running": false,
-        "disabled": true,
-        "id": "asset_management_case_management_1",
-        "source_id": "asset_management",
-        "target_id": "case_management",
-        "tags": [
-          "Context",
-          "Correlation"
-        ],
-        "description": "Asset context (owner, criticality, business unit, OS) helps analysts prioritize cases and understand blast radius during an incident.",
-        "agentic_description": "An agent automatically fetches asset owner, business criticality, and known vulnerabilities for every observable in a case, recalculates impact score, and suggests prioritization.",
-        "automation_area": "correlation"
-      },
-      {
-        "name": "Vulnerability Correlation",
-        "type": "Assets",
-        "destination": "Cases",
-        "running": false,
-        "disabled": false,
-        "id": "asset_management_case_management_vuln_1",
-        "source_id": "asset_management",
-        "target_id": "case_management",
-        "tags": [
-          "Context",
-          "Correlation",
-          "Vulnerability"
-        ],
-        "description": "Correlate known vulnerabilities (CVEs, misconfigurations, missing patches) on affected assets with active incidents — surfacing exploitable weaknesses that elevate risk and guide containment priorities.",
-        "agentic_description": "An agent matches observables and affected hosts in a case against the vulnerability inventory, identifies exploitable CVEs aligned with the attack technique, recalculates incident severity, and recommends remediation or compensating controls.",
-        "automation_area": "correlation",
-        "custom_action": {
-          "label": "Configure Vulnerabilities",
-          "href": "/vulnerabilities",
-          "description": "Open the vulnerability inventory to ingest CVEs from your scanners."
-        }
-      },
-      {
-        "name": "Phishing IOCs",
-        "type": "Email",
-        "destination": "Threat Intel",
-        "running": false,
-        "disabled": true,
-        "id": "email_threat_intel_1",
-        "source_id": "email",
-        "target_id": "threat_intel",
-        "tags": [
-          "Intel",
-          "Correlation",
-          "Logs"
-        ],
-        "description": "Extracting IOCs from phishing emails (sender domains, URLs, attachments) and feeding them into threat intel platforms helps detect broader campaigns.",
-        "agentic_description": "An agent detonates suspicious attachments and URLs in a sandbox, extracts all IOCs, correlates with known campaigns, and auto-publishes confirmed indicators to the threat intel platform.",
-        "automation_area": "threat_intel"
-      },
-      {
-        "name": "Identity events",
-        "type": "Cloud",
-        "destination": "IAM",
-        "running": false,
-        "disabled": true,
-        "id": "cloud_iam_1",
-        "source_id": "cloud",
-        "target_id": "iam",
-        "tags": [
-          "Logs",
-          "Correlation",
-          "Detection"
-        ],
-        "description": "Cloud identity events (role changes, permission grants, federation configs) feed IAM monitoring to detect privilege escalation in cloud environments.",
-        "agentic_description": "An agent tracks excessive permission grants, detects role assumption chains indicating privilege escalation, and triggers automated least-privilege review recommendations in IAM.",
-        "automation_area": "correlation",
-        "manual_verification": true
-      },
-      {
-        "name": "IOC feeds",
-        "type": "Threat Intel",
-        "destination": "Cloud",
-        "running": true,
-        "disabled": false,
-        "id": "threat_intel_cloud_1",
-        "source_id": "threat_intel",
-        "target_id": "cloud",
-        "tags": [
-          "Intel",
-          "Correlation",
-          "Detection"
-        ],
-        "description": "Pushing IOC feeds to cloud-native security tools (GuardDuty, Sentinel, SCC) enables detection of known-malicious activity within cloud workloads.",
-        "agentic_description": "An agent maps threat intel IOCs to active cloud workloads, identifies which resources are communicating with known-malicious infrastructure, and auto-creates remediation tasks in cloud security tools.",
-        "automation_label": "Enable Threat feeds",
-        "automation_category": "cases",
-        "automation_area": "threat_intel"
-      },
-      {
-        "name": "Resource inventory",
-        "type": "Cloud",
-        "destination": "Assets",
-        "running": false,
-        "disabled": true,
-        "id": "cloud_asset_management_1",
-        "source_id": "cloud",
-        "target_id": "asset_management",
-        "tags": [
-          "Logs",
-          "Context"
-        ],
-        "description": "Auto-syncing cloud resources into the asset inventory ensures the CMDB stays current, preventing blind spots in vulnerability management and incident response.",
-        "agentic_description": "An agent continuously reconciles cloud inventory with the CMDB, flags newly exposed resources, identifies shadow IT, and marks assets with missing security controls for immediate action.",
-        "automation_area": "correlation",
-        "manual_verification": true
-      },
-      {
-        "name": "Incident Routing",
-        "type": "Cases",
-        "destination": "Cases",
-        "running": false,
-        "disabled": false,
-        "id": "case_management_incident_routing_1",
-        "source_id": "case_management",
-        "target_id": "case_management",
-        "tags": [
-          "Context",
-          "Correlation",
-          "Routing"
-        ],
-        "description": "Route incoming incidents to the right sub-organization based on tenant, source, severity, observables, or any field in the incident payload. Keeps multi-tenant environments tidy and ensures the right team owns each incident from the start.",
-        "agentic_description": "An agent evaluates each new incident against your routing rules, decides which sub-organization should own it, and either suggests or executes the move with full audit trail.",
-        "automation_area": "correlation",
-        "custom_action": {
-          "label": "Configure Routing",
-          "href": "/preferences?tab=routing",
-          "description": "Open Organization Preferences to manage incident routing rules."
-        }
-      }
-    ]
   }
 ]`)
 }
@@ -4133,65 +5080,125 @@ import random
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
-cur_exec = json.loads(r"""$exec""")
-users = json.loads(r"""$get_assignment_schedules.value.userSchedules""")
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+cur_exec = safe_parse_json(r"""$exec""", {})
+if not isinstance(cur_exec, dict):
+    cur_exec = {}
+
+raw_schedules = safe_parse_json(r"""$get_assignment_schedules.value.userSchedules""", [])
+if not raw_schedules:
+    raw_wrapper = safe_parse_json(r"""$get_assignment_schedules""", {})
+    if isinstance(raw_wrapper, dict):
+        raw_schedules = raw_wrapper.get("value", {})
+        if isinstance(raw_schedules, dict):
+            raw_schedules = raw_schedules.get("userSchedules", [])
+
+if not isinstance(raw_schedules, list):
+    raw_schedules = []
+
+users = raw_schedules
 
 def is_user_active(user, now_utc):
+    if not isinstance(user, dict):
+        return False
     if not user.get("enabled"):
         return False
 
     for sched in user.get("schedules", []):
-        tz = ZoneInfo(sched["timezone"])
-        now_local = now_utc.astimezone(tz)
-
-        # Date check
-        start_date = datetime.fromisoformat(sched["startDate"]).date()
-        end_date = datetime.fromisoformat(sched["endDate"]).date()
-        if not (start_date <= now_local.date() <= end_date):
+        if not isinstance(sched, dict):
             continue
+        try:
+            tz_str = sched.get("timezone") or "UTC"
+            try:
+                tz = ZoneInfo(tz_str)
+            except Exception:
+                tz = ZoneInfo("UTC")
 
-        # Day of week check (Python: Monday=0 → convert to 1–7)
-        weekday = now_local.isoweekday()
-        if weekday not in sched["daysOfWeek"]:
+            now_local = now_utc.astimezone(tz)
+
+            start_date_str = sched.get("startDate")
+            end_date_str = sched.get("endDate")
+            if start_date_str and end_date_str:
+                start_date = datetime.fromisoformat(str(start_date_str)).date()
+                end_date = datetime.fromisoformat(str(end_date_str)).date()
+                if not (start_date <= now_local.date() <= end_date):
+                    continue
+
+            days = sched.get("daysOfWeek")
+            if days:
+                weekday = now_local.isoweekday()
+                if weekday not in days and str(weekday) not in days:
+                    continue
+
+            start_time_str = sched.get("startTime")
+            end_time_str = sched.get("endTime")
+            if start_time_str and end_time_str:
+                start_time = time.fromisoformat(str(start_time_str))
+                end_time = time.fromisoformat(str(end_time_str))
+                if not (start_time <= now_local.time() <= end_time):
+                    continue
+
+            return True
+        except Exception:
             continue
-
-        # Time check
-        start_time = time.fromisoformat(sched["startTime"])
-        end_time = time.fromisoformat(sched["endTime"])
-        if not (start_time <= now_local.time() <= end_time):
-            continue
-
-        return True
 
     return False
 
-
 def main():
-    now_utc = datetime.now(tz=ZoneInfo("UTC"))
+    try:
+        now_utc = datetime.now(tz=ZoneInfo("UTC"))
+    except Exception:
+        now_utc = datetime.utcnow()
 
     active_users = []
     usernames = []
     for user in users:
+        if isinstance(user, str):
+            user = safe_parse_json(user, {})
+        if not isinstance(user, dict):
+            continue
+
         if is_user_active(user, now_utc):
+            uname = user.get("userName") or user.get("name") or user.get("email") or ""
+            uemail = user.get("userEmail") or user.get("email") or ""
+            ulevel = user.get("escalationLevel") or user.get("level") or "analyst"
+
             active_users.append({
-                "userName": user["userName"],
-                "email": user["userEmail"],
-                "level": user["escalationLevel"]
+                "userName": uname,
+                "email": uemail,
+                "level": ulevel
             })
             
-            if user["userName"] not in usernames and not user["escalationLevel"] == "manager":
-              usernames.append(user["userName"])
+            if uname and uname not in usernames and ulevel != "manager":
+                usernames.append(uname)
     
     assignee = ""
-    if len(usernames) > 0 and "assignee" not in cur_exec or cur_exec["assignee"] == "":
-      # Chose from usernames
-      assignee = random.choice(usernames)
+    if len(usernames) > 0 and not cur_exec.get("assignee"):
+        assignee = random.choice(usernames)
 
     print(json.dumps({
-      "assign": assignee,
-      "all_available": active_users,
+        "assign": assignee,
+        "all_available": active_users,
     }))
-        
+
 main()
 `
 }
@@ -4199,183 +5206,1024 @@ main()
 func handleRelevantPeopleAgentPrepareCode() string {
 	return `import json
 
-# Make sure we are always up to date, even if the workflow is a bit late.
-cur_exec = self.get_key("$exec.shuffle_datastore.key", category="$exec.shuffle_datastore.category")
-if cur_exec["success"] and cur_exec["value"]:
-  cur_exec = cur_exec["value"]
-else:
-  print(json.dumps({
-    "success": False,
-    "reason": "Failed to find the incident"
-  }))
-  exit()
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
 
-activities = []
-if "activity" in cur_exec:
-  activities = cur_exec["activity"]
+raw_key = r"""$exec.shuffle_datastore.key"""
+raw_cat = r"""$exec.shuffle_datastore.category"""
+item_key = raw_key if not raw_key.startswith("$") else ""
+item_cat = raw_cat if not raw_cat.startswith("$") else ""
+
+cur_exec = safe_parse_json(r"""$exec""", {})
+if not isinstance(cur_exec, dict):
+    cur_exec = {}
+
+if item_key and item_cat:
+    try:
+        db_res = self.get_key(item_key, category=item_cat)
+        if isinstance(db_res, dict):
+            val = db_res.get("value")
+            if isinstance(val, str):
+                val = safe_parse_json(val, {})
+            if isinstance(val, dict) and val:
+                cur_exec = val
+        elif isinstance(db_res, str):
+            val = safe_parse_json(db_res, {})
+            if isinstance(val, dict) and val:
+                cur_exec = val
+    except Exception:
+        pass
+
+if not cur_exec:
+    print(json.dumps({
+        "success": False,
+        "reason": "Failed to find the incident"
+    }))
+    exit()
+
+activities = cur_exec.get("activity")
+if not isinstance(activities, list):
+    activities = []
 
 agent_name = ""
 ai_agent_activities = []
 activities_changed = False
+
+exec_id = getattr(self, "current_execution_id", "")
+
 for activityIndex in range(len(activities)):
-  activity = activities[activityIndex]
-  if "ai_handled" not in activity or activity["ai_handled"] == False:
-    activity["ai_handled"] = True
-    activity["execution_id"] = self.current_execution_id
+    activity = activities[activityIndex]
+    if not isinstance(activity, dict):
+        continue
 
-    activities_changed = True
-    activities[activityIndex] = activity
-  else:
-    continue
+    if not activity.get("ai_handled"):
+        activity["ai_handled"] = True
+        if exec_id:
+            activity["execution_id"] = exec_id
+        activities_changed = True
+        activities[activityIndex] = activity
+    else:
+        continue
 
-  if "content" not in activity or ("@aiagent" not in activity["content"].lower()):
-    continue
+    content = str(activity.get("content") or "")
+    if "@aiagent" not in content.lower():
+        continue
 
-  agent_name = "default"
-  ai_agent_activities.append(activity)
-
-db_updated = False
+    agent_name = "default"
+    ai_agent_activities.append(activity)
 
 assignee = ""
-assignee_outer = json.loads(r"""$find_relevant_people""")
-if "message" in assignee_outer:
-  if "assign" in assignee_outer["message"]:
-    assignee = assignee_outer["message"]["assign"]
+assignee_outer = safe_parse_json(r"""$find_relevant_people""", {})
+if isinstance(assignee_outer, dict):
+    msg = assignee_outer.get("message")
+    if isinstance(msg, dict):
+        assignee = str(msg.get("assign") or "")
+    elif "assign" in assignee_outer:
+        assignee = str(assignee_outer.get("assign") or "")
 
-if activities_changed or len(assignee) > 0:
-  # Update datastore
-  #db_updated = True
-  #cur_exec["activity"] = activities
-  #cur_exec = json.dumps(cur_exec)
-  parsed_activity = {}
-  if activities_changed:
-    parsed_activity["activity"] = activities
+db_updated = False
+if activities_changed or (len(assignee) > 0 and "@" in assignee):
+    if activities_changed:
+        cur_exec["activity"] = activities
+    if len(assignee) > 0 and "@" in assignee:
+        cur_exec["assignee"] = assignee
 
-  if len(assignee) > 0 and "@" in assignee:
-    parsed_activity["assignee"] = assignee
+    if item_key and item_cat:
+        try:
+            ret = self.set_key(item_key, json.dumps(cur_exec), category=item_cat)
+            if (isinstance(ret, dict) and ret.get("success")) or ret is True:
+                db_updated = True
+        except Exception:
+            pass
 
-  ret = self.set_key("$exec.shuffle_datastore.key", json.dumps(parsed_activity), category="$exec.shuffle_datastore.category")
-  if ret["success"]:
-    db_updated = True
-    
 available_apps = ""
-assigned_apps = json.loads(r"""$get_assigned_apps""")
-if "success" in assigned_apps and assigned_apps["success"] == True and "value" in assigned_apps and len(str(assigned_apps["value"])) > 0:
-  try:
-    assigned_apps["value"] = json.loads(assigned_apps["value"])
-  except:
-    pass
-  
-  for agent_config in assigned_apps["value"]:
-    if agent_config["agent"] != agent_name:
-      continue
-    
-    for tool in agent_config["tools"]:
-      available_apps += tool["name"]+","
-      
-    if len(available_apps) > 0:
-      available_apps = available_apps[:-1] 
+assigned_apps = safe_parse_json(r"""$get_assigned_apps""", {})
+app_items = []
+if isinstance(assigned_apps, dict):
+    val = assigned_apps.get("value")
+    if isinstance(val, str):
+        val = safe_parse_json(val, [])
+    if isinstance(val, list):
+        app_items = val
+    elif isinstance(assigned_apps.get("data"), list):
+        app_items = assigned_apps["data"]
+elif isinstance(assigned_apps, list):
+    app_items = assigned_apps
 
-# Print the details of the key after it's been updated
-# To get the value, use self.get_key(key)["value"]
-if len(ai_agent_activities) > 0:
-  print(json.dumps({
+for agent_config in app_items:
+    if not isinstance(agent_config, dict):
+        continue
+    if agent_config.get("agent") != agent_name:
+        continue
+    
+    tools = agent_config.get("tools") or []
+    for tool in tools:
+        if isinstance(tool, dict) and tool.get("name"):
+            available_apps += tool["name"] + ","
+
+if len(available_apps) > 0 and available_apps.endswith(","):
+    available_apps = available_apps[:-1]
+
+first_agent_activity = ai_agent_activities[0] if len(ai_agent_activities) > 0 else {"content": "", "id": "", "user": ""}
+
+print(json.dumps({
     "assignee": assignee,
     "updated": db_updated,
-    "agent": ai_agent_activities[0],
+    "agent": first_agent_activity,
     "assigned_apps": available_apps,
-  }))
-else:
-  print(json.dumps({
-    "updated": db_updated,
-    "agent": "",
-  }))`
+}))`
 }
 
 func handleRelevantPeopleAgentResponseCode() string {
 	return `import json
 import time
 
-# Make sure we are always up to date, even if the workflow is a bit late.
-cur_exec = self.get_key("$exec.shuffle_datastore.key", category="$exec.shuffle_datastore.category")
-if cur_exec["success"] and cur_exec["value"]:
-  cur_exec = cur_exec["value"]
-  
-  if "finding_uid" in cur_exec and len(cur_exec["finding_uid"]) > 0:
-    pass
-  else:
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+raw_key = r"""$exec.shuffle_datastore.key"""
+raw_cat = r"""$exec.shuffle_datastore.category"""
+item_key = raw_key if not raw_key.startswith("$") else ""
+item_cat = raw_cat if not raw_cat.startswith("$") else ""
+
+cur_exec = safe_parse_json(r"""$exec""", {})
+if not isinstance(cur_exec, dict):
+    cur_exec = {}
+
+if item_key and item_cat:
+    try:
+        db_res = self.get_key(item_key, category=item_cat)
+        if isinstance(db_res, dict):
+            val = db_res.get("value")
+            if isinstance(val, str):
+                val = safe_parse_json(val, {})
+            if isinstance(val, dict) and val:
+                cur_exec = val
+        elif isinstance(db_res, str):
+            val = safe_parse_json(db_res, {})
+            if isinstance(val, dict) and val:
+                cur_exec = val
+    except Exception:
+        pass
+
+if not cur_exec:
     print(json.dumps({
-      "success": False,
-      "reason": "No finding_uid in the incident. Not updating."
+        "success": False,
+        "reason": "Failed to find the incident"
     }))
     exit()
-    
-else:
-  print(json.dumps({
-    "success": False,
-    "reason": "Failed to find the incident"
-  }))
-  exit()
-  
 
-respond_to = json.loads(r"""$handle_ai_agent_run""")
-if respond_to["message"]["updated"] == False or len(respond_to["message"]["agent"]) == 0:
-  print(json.dumps({
-    "success": False,
-    "reason": "No comment to respond to"
-  }))
-  exit()
+finding_uid = cur_exec.get("finding_uid") or cur_exec.get("id") or item_key
+if not finding_uid:
+    print(json.dumps({
+        "success": False,
+        "reason": "No finding_uid in the incident. Not updating."
+    }))
+    exit()
 
-currentuser = "@AIAgent"
-activities = cur_exec["activity"]
-agent_response = """$run_questions.output"""
+respond_to = safe_parse_json(r"""$handle_ai_agent_run""", {})
+msg = respond_to.get("message") if isinstance(respond_to, dict) else {}
+if not isinstance(msg, dict):
+    msg = respond_to if isinstance(respond_to, dict) else {}
+
+agent_act = msg.get("agent") or {}
+if not isinstance(agent_act, dict) or not agent_act.get("content"):
+    print(json.dumps({
+        "success": False,
+        "reason": "No comment to respond to"
+    }))
+    exit()
+
+activities = cur_exec.get("activity")
+if not isinstance(activities, list):
+    activities = []
+
+agent_response = r"""$run_questions.output"""
+if agent_response.startswith("$"):
+    agent_response = ""
+
 timenow = int(time.time())
+exec_id = getattr(self, "current_execution_id", "")
 
 prepared_response = {
-  "ai_handled": True,
-  "attachments":[],
-  "content": agent_response,
-  "details":{},
-  "id":"comment-%d" % timenow,
-  "replyToId": respond_to["message"]["agent"]["id"], 
-  "replyToLabel": respond_to["message"]["agent"]["user"],
-  "timestamp": timenow,
-  "type":"comment",
-  "user":"@AIAgent",
-  "is_agent": True,
-  "execution_id": self.current_execution_id,
+    "ai_handled": True,
+    "attachments": [],
+    "content": agent_response,
+    "details": {},
+    "id": "comment-%d" % timenow,
+    "replyToId": agent_act.get("id", ""), 
+    "replyToLabel": agent_act.get("user", ""),
+    "timestamp": timenow,
+    "type": "comment",
+    "user": "@AIAgent",
+    "is_agent": True,
+    "execution_id": exec_id,
 }
 
-# In case we want to update an old one. New is better tho.
-for item in activities:  
-  if "replyToId" not in item:
-    continue
-  
-  if item["user"] == currentuser:
-    continue
-  
-  if "replyToId" == respond_to["message"]["agent"]["id"]:
-    if item["content"] == agent_response:
-      print(json.dumps({
-        "success": True,
-        "reason": "Already answered with this message"
-      }))
-      exit()
+currentuser = "@aiagent"
+for item in activities:
+    if not isinstance(item, dict):
+        continue
+    if not item.get("replyToId"):
+        continue
+    if str(item.get("user", "")).lower() == currentuser:
+        continue
+    if item.get("replyToId") == agent_act.get("id"):
+        if item.get("content") == agent_response:
+            print(json.dumps({
+                "success": True,
+                "reason": "Already answered with this message"
+            }))
+            exit()
 
-# Update datastore 
 activities.append(prepared_response)
-ret = self.set_key("$exec.shuffle_datastore.key", json.dumps({"activity": activities}), category="$exec.shuffle_datastore.category")
+cur_exec["activity"] = activities
 
-if ret["success"]:
-  print(json.dumps({
-    "success": True,
-    "updated": True,
-    "comment": prepared_response,
-  }))
+if item_key and item_cat:
+    try:
+        ret = self.set_key(item_key, json.dumps(cur_exec), category=item_cat)
+        if (isinstance(ret, dict) and ret.get("success")) or ret is True:
+            print(json.dumps({
+                "success": True,
+                "updated": True,
+                "comment": prepared_response,
+            }))
+        else:
+            print(json.dumps({
+                "success": False,
+                "updated": False,
+                "reason": "Failed to update the activity in the db",
+            }))
+    except Exception as e:
+        print(json.dumps({
+            "success": False,
+            "updated": False,
+            "reason": f"Exception updating activity: {e}",
+        }))
 else:
-  print(json.dumps({
-    "success": False,
-    "updated": False,
-    "reason": "Failed to update the activity in the db",
-  }))`
+    print(json.dumps({
+        "success": True,
+        "updated": False,
+        "comment": prepared_response,
+        "reason": "No datastore key to persist to",
+    }))`
+}
+
+func getConnectToResponderCode() string {
+	return `import json
+import os
+import urllib.request
+import urllib.error
+
+def safe_parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    s = str(val).strip()
+    if not s or s.startswith("$"):
+        return default
+    try:
+        parsed = json.loads(s)
+        if isinstance(parsed, str) and (parsed.startswith("{") or parsed.startswith("[")):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
+        return default
+
+cur_exec = safe_parse_json(r"""$exec""", {})
+if not isinstance(cur_exec, dict):
+    cur_exec = {}
+
+relevant_people = safe_parse_json(r"""$find_relevant_people""", {})
+if not isinstance(relevant_people, dict):
+    relevant_people = {}
+
+assignee = relevant_people.get("assign") or ""
+all_available = relevant_people.get("all_available") or []
+
+incident = cur_exec.get("incident") or cur_exec.get("data") or cur_exec
+incident_id = str(incident.get("id") or cur_exec.get("execution_id") or "incident-auto")
+incident_title = str(incident.get("title") or incident.get("name") or "On-call Incident Escalation")
+severity = str(incident.get("severity") or "critical").lower()
+
+target_user = None
+for u in all_available:
+    if isinstance(u, dict) and (u.get("userName") == assignee or u.get("email") == assignee):
+        target_user = u
+        break
+
+if not target_user and all_available and isinstance(all_available[0], dict):
+    target_user = all_available[0]
+
+target_name = (target_user.get("userName") if target_user else "") or assignee or "On-Call Responder"
+target_email = target_user.get("email", "") if target_user else ""
+tier_level = target_user.get("level", "tier1") if target_user else "tier1"
+
+tier_num = 1
+if "2" in str(tier_level):
+    tier_num = 2
+elif "3" in str(tier_level):
+    tier_num = 3
+elif "manager" in str(tier_level).lower():
+    tier_num = 4
+
+pager_payload = {
+    "type": "critical" if severity in ["critical", "high"] else "general",
+    "incident_id": incident_id,
+    "title": f"[{severity.upper()}] {incident_title}",
+    "body": f"Urgent incident assigned to {target_name}. Escalation tier: {tier_level}.",
+    "source": "Shuffle Security Mobile Pager",
+    "severity": severity,
+    "tier": tier_num,
+    "auto_escalate_seconds": 60,
+    "target_user": target_name,
+    "target_email": target_email,
+}
+
+base_url = os.environ.get("BASE_URL") or os.environ.get("SHUFFLE_BACKEND_URL") or "http://shuffle-backend:5001"
+auth_header = os.environ.get("AUTHORIZATION") or os.environ.get("SHUFFLE_API_KEY") or ""
+
+dispatched = False
+dispatch_error = None
+
+try:
+    req = urllib.request.Request(
+        f"{base_url}/api/v1/functions/pager",
+        data=json.dumps(pager_payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {auth_header}" if auth_header and not auth_header.startswith("Bearer ") else auth_header,
+        },
+        method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=5) as response:
+        if response.status in [200, 201, 204]:
+            dispatched = True
+except Exception as e:
+    dispatch_error = str(e)
+
+print(json.dumps({
+    "success": True,
+    "connected_person": target_name,
+    "email": target_email,
+    "tier": tier_level,
+    "pager_dispatched": dispatched,
+    "dispatch_error": dispatch_error,
+    "payload": pager_payload,
+}))`
+}
+
+func getIncidentRoutingScript() string {
+	return `import json
+import re
+import base64
+import binascii
+import time
+
+# ── Evaluator helpers ────────────────────────────────────────────────────────
+
+MAX_STRINGS = 200
+MAX_DEPTH = 8
+MIN_BASE64_LEN = 16
+MAX_BASE64_LEN = 65536
+
+_BASE64_RE = re.compile(r"^[A-Za-z0-9+/_-]+={0,2}$")
+
+
+def _looks_base64ish(s: str) -> bool:
+    if len(s) < MIN_BASE64_LEN or len(s) > MAX_BASE64_LEN:
+        return False
+    if " " in s or "\n" in s or "\t" in s:
+        return False
+    return bool(_BASE64_RE.match(s))
+
+
+def _try_decode_base64(s: str):
+    if not _looks_base64ish(s):
+        return None
+    normalized = s.replace("-", "+").replace("_", "/")
+    pad = (4 - (len(normalized) % 4)) % 4
+    if pad:
+        normalized += "=" * pad
+    try:
+        raw = base64.b64decode(normalized, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    try:
+        decoded = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            decoded = raw.decode("latin-1")
+        except UnicodeDecodeError:
+            return None
+    if decoded == s:
+        return None
+    printable = sum(1 for ch in decoded if ch.isprintable() or ch in "\r\n\t")
+    if not decoded or (printable / len(decoded)) < 0.85:
+        return None
+    return decoded
+
+
+def _collect_all_strings(val, out, depth=0):
+    if depth > MAX_DEPTH or len(out) >= MAX_STRINGS or val is None:
+        return
+    if isinstance(val, str):
+        out.append(val)
+        return
+    if isinstance(val, (int, float, bool)):
+        out.append(str(val))
+        return
+    if isinstance(val, list):
+        for item in val:
+            _collect_all_strings(item, out, depth + 1)
+            if len(out) >= MAX_STRINGS:
+                break
+        return
+    if isinstance(val, dict):
+        for v in val.values():
+            _collect_all_strings(v, out, depth + 1)
+            if len(out) >= MAX_STRINGS:
+                break
+
+
+def _get_deep(obj, path: str):
+    if not path or not isinstance(obj, dict):
+        return None
+    parts = [p for p in path.split(".") if p]
+    cur = obj
+    for p in parts:
+        if isinstance(cur, dict) and p in cur:
+            cur = cur[p]
+        else:
+            return None
+    return cur
+
+
+def _resolve_field(ctx: dict, field: str):
+    if not field or field in ("*", "$whole"):
+        all_strs = []
+        _collect_all_strings(ctx, all_strs)
+        return all_strs
+    if field.startswith("observables."):
+        obs_type = field.split(".", 1)[1].lower()
+        observables = ctx.get("observables") or []
+        vals = []
+        for o in observables:
+            if isinstance(o, dict) and str(o.get("type", "")).lower() == obs_type:
+                v = o.get("value")
+                if v:
+                    vals.append(str(v))
+        return vals
+    if field == "stakeholders.email":
+        stakeholders = ctx.get("stakeholders") or []
+        vals = []
+        for s in stakeholders:
+            if isinstance(s, dict) and s.get("email"):
+                vals.append(str(s["email"]))
+        return vals
+    if field.startswith("rawOCSF."):
+        return _get_deep(ctx.get("rawOCSF") or {}, field[len("rawOCSF.") :])
+    direct = ctx.get(field)
+    if direct is not None:
+        return direct
+    if field in ("message", "description", "desc"):
+        return ctx.get("description") or ctx.get("message")
+    raw_ocsf = ctx.get("rawOCSF")
+    if isinstance(raw_ocsf, dict):
+        ocsf_direct = raw_ocsf.get(field)
+        if ocsf_direct is not None:
+            return ocsf_direct
+    return None
+
+
+def _as_string_array(v):
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v]
+    if isinstance(v, list):
+        out = []
+        for it in v:
+            out.extend(_as_string_array(it))
+        return out
+    if isinstance(v, dict):
+        out = []
+        _collect_all_strings(v, out)
+        return out
+    if isinstance(v, bool):
+        return ["true" if v else "false"]
+    if isinstance(v, float) and v.is_integer():
+        return [str(int(v))]
+    return [str(v)]
+
+
+def _with_base64_decodes(haystacks):
+    seen = set()
+    out = []
+    for s in haystacks:
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+        if len(out) >= MAX_STRINGS:
+            break
+        decoded = _try_decode_base64(s.strip())
+        if decoded is not None and decoded not in seen:
+            seen.add(decoded)
+            out.append(decoded)
+    return out
+
+
+def evaluate_condition(ctx: dict, condition: dict) -> bool:
+    field = condition.get("field", "")
+    op = condition.get("op", "")
+    value = condition.get("value")
+
+    raw = _resolve_field(ctx, field)
+    raw_strings = _as_string_array(raw)
+    haystacks = [s.lower() for s in _with_base64_decodes(raw_strings)]
+    needle = (value or "").lower()
+
+    if op == "exists":
+        return len(haystacks) > 0 and any(len(s) > 0 for s in haystacks)
+    if op == "equals":
+        return any(s == needle for s in haystacks)
+    if op == "contains":
+        return len(needle) > 0 and any(needle in s for s in haystacks)
+    if op == "startsWith":
+        return len(needle) > 0 and any(s.startswith(needle) for s in haystacks)
+    if op == "endsWith":
+        return len(needle) > 0 and any(s.endswith(needle) for s in haystacks)
+    if op == "regex":
+        if not value:
+            return False
+        try:
+            re_c = re.compile(value, re.IGNORECASE)
+        except re.error:
+            return False
+        return any(re_c.search(s) is not None for s in haystacks)
+    return False
+
+
+def _is_group(n):
+    return isinstance(n, dict) and n.get("kind") == "group"
+
+
+def _is_leaf(n):
+    return isinstance(n, dict) and n.get("kind") == "condition"
+
+
+def evaluate_tree(node: dict, ctx: dict) -> bool:
+    if _is_leaf(node):
+        return evaluate_condition(
+            ctx,
+            {
+                "field": node.get("field", ""),
+                "op": node.get("op", ""),
+                "value": node.get("value"),
+            },
+        )
+    if not _is_group(node):
+        return False
+    children = node.get("children") or []
+    if not children:
+        return False
+    if node.get("op") == "and":
+        return all(evaluate_tree(c, ctx) for c in children)
+    return any(evaluate_tree(c, ctx) for c in children)
+
+
+def _collect_leaves(node):
+    if _is_leaf(node):
+        return [node]
+    if not _is_group(node):
+        return []
+    out = []
+    for c in node.get("children") or []:
+        out.extend(_collect_leaves(c))
+    return out
+
+
+def _build_groups(rule):
+    conditions = rule.get("conditions") or []
+    has_or_flag = any(c.get("or") for c in conditions)
+    if not has_or_flag:
+        if rule.get("matchMode") == "any":
+            return [list(conditions)]
+        return [[c] for c in conditions]
+    groups = []
+    for c in conditions:
+        if c.get("or") and groups:
+            groups[-1].append(c)
+        else:
+            groups.append([c])
+    return groups
+
+
+def evaluate_routing_rules(ctx: dict, rules) -> list:
+    active = [r for r in rules if isinstance(r, dict) and r.get("enabled", True) is not False]
+    active.sort(key=lambda r: r.get("priority", 100))
+
+    matches = []
+    for rule in active:
+        tree = rule.get("conditionTree")
+        if _is_group(tree):
+            if evaluate_tree(tree, ctx):
+                leaves = _collect_leaves(tree)
+                matched_leaves = [
+                    leaf
+                    for leaf in leaves
+                    if evaluate_condition(
+                        ctx,
+                        {
+                            "field": leaf.get("field", ""),
+                            "op": leaf.get("op", ""),
+                            "value": leaf.get("value"),
+                        },
+                    )
+                ]
+                matches.append({"rule": rule, "matched": matched_leaves})
+            continue
+
+        conds = rule.get("conditions") or []
+        if not conds:
+            continue
+        groups = _build_groups(rule)
+        matched_leaves = []
+        all_passed = True
+        for g in groups:
+            group_matched = [c for c in g if evaluate_condition(ctx, c)]
+            if not group_matched:
+                all_passed = False
+                break
+            matched_leaves.extend(group_matched)
+        if all_passed:
+            matches.append({"rule": rule, "matched": matched_leaves})
+
+    return matches
+
+
+# ── Action application helpers ─────────────────────────────────────────────
+
+def normalize_severity(v):
+    if not v:
+        return None
+    s = str(v).strip().lower()
+    mapping = {
+        "1": "Informational", "info": "Informational", "informational": "Informational",
+        "2": "Low", "low": "Low",
+        "3": "Medium", "medium": "Medium", "med": "Medium",
+        "4": "High", "high": "High",
+        "5": "Critical", "critical": "Critical", "crit": "Critical",
+    }
+    return mapping.get(s, str(v).capitalize())
+
+
+def normalize_status(v):
+    if not v:
+        return None
+    s = str(v).strip().lower()
+    mapping = {
+        "new": "New", "open": "New",
+        "in_progress": "In Progress", "in progress": "In Progress", "investigating": "In Progress",
+        "on_hold": "On Hold", "on hold": "On Hold",
+        "resolved": "Resolved",
+        "closed": "Closed",
+    }
+    return mapping.get(s, str(v).capitalize())
+
+
+def parse_action_value(val):
+    if val is None:
+        return ""
+    if isinstance(val, (int, float, bool, list, dict)):
+        return val
+    s = str(val).strip()
+    if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+    return s
+
+
+def set_deep(d, path, value):
+    parts = [p for p in path.split(".") if p]
+    cur = d
+    for p in parts[:-1]:
+        if p not in cur or not isinstance(cur[p], dict):
+            cur[p] = {}
+        cur = cur[p]
+    if parts:
+        cur[parts[-1]] = value
+
+
+def _parse_input_safely(raw, default=None):
+    if raw is None:
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s or s.startswith("$"):
+            return default
+        try:
+            val = json.loads(s)
+            if isinstance(val, str):
+                try:
+                    val = json.loads(val)
+                except Exception:
+                    pass
+            return val
+        except Exception:
+            return default
+    return default
+
+
+def _extract_rules(raw_rules_input):
+    parsed = _parse_input_safely(raw_rules_input, default=[])
+    if isinstance(parsed, dict):
+        if "values" in parsed and isinstance(parsed["values"], list):
+            parsed = parsed["values"]
+        elif "value" in parsed:
+            val = parsed["value"]
+            if isinstance(val, str):
+                val = _parse_input_safely(val, default=[])
+            if isinstance(val, list):
+                parsed = val
+            elif isinstance(val, dict):
+                parsed = [val]
+        elif "data" in parsed and isinstance(parsed["data"], list):
+            parsed = parsed["data"]
+        else:
+            parsed = [parsed]
+
+    rules = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, str):
+                item = _parse_input_safely(item)
+            if not isinstance(item, dict):
+                continue
+            if "value" in item and len(item) <= 4 and ("key" in item or "id" in item):
+                inner = item["value"]
+                if isinstance(inner, str):
+                    inner = _parse_input_safely(inner)
+                if isinstance(inner, dict):
+                    rules.append(inner)
+                else:
+                    rules.append(item)
+            else:
+                rules.append(item)
+    return rules
+
+
+# ── Execution Entrypoint ───────────────────────────────────────────────────
+
+raw_exec = r"""$exec"""
+cur_exec = _parse_input_safely(raw_exec, default={})
+if isinstance(cur_exec, dict) and "incident" in cur_exec and isinstance(cur_exec["incident"], dict):
+    cur_exec = cur_exec["incident"]
+
+if not isinstance(cur_exec, dict) or not cur_exec:
+    print(json.dumps({
+        "success": False,
+        "reason": "No valid incident data found in $exec",
+    }))
+    exit()
+
+raw_rules_input = r"""$get_routing_rules"""
+rules = _extract_rules(raw_rules_input)
+
+if not rules:
+    print(json.dumps({
+        "success": True,
+        "changed": False,
+        "reason": "No routing rules found in shuffle-security_routing",
+        "incident": cur_exec,
+    }))
+    exit()
+
+ctx = {
+    "title": cur_exec.get("title"),
+    "description": cur_exec.get("description") or cur_exec.get("message"),
+    "source": cur_exec.get("source"),
+    "severity": cur_exec.get("severity"),
+    "status": cur_exec.get("status"),
+    "labels": cur_exec.get("labels") or [],
+    "observables": cur_exec.get("observables") or [],
+    "stakeholders": cur_exec.get("stakeholders") or [],
+    "rawOCSF": cur_exec.get("rawOCSF") or {},
+}
+
+matches = evaluate_routing_rules(ctx, rules)
+
+now_ms = int(time.time() * 1000)
+changed = False
+agent_prompts = []
+prev_status = str(cur_exec.get("status") or "").lower()
+
+for m in matches:
+    rule = m.get("rule") or {}
+    rule_name = rule.get("name", "Routing rule")
+    actions = rule.get("actions") or []
+    for action in actions:
+        atype = action.get("type")
+        if atype == "suggest_move":
+            target_org = action.get("targetOrgId")
+            if target_org:
+                raw_ocsf = cur_exec.setdefault("rawOCSF", {})
+                meta = raw_ocsf.setdefault("metadata", {})
+                ext = meta.setdefault("extensions", {})
+                custom_attrs = ext.setdefault("custom_attributes", {})
+                suggs = custom_attrs.setdefault("routing_suggestions", [])
+                already = any(s.get("ruleId") == rule.get("id") and s.get("status") == "pending" for s in suggs if isinstance(s, dict))
+                if not already:
+                    suggs.append({
+                        "ruleId": rule.get("id", ""),
+                        "ruleName": rule_name,
+                        "targetOrgId": target_org,
+                        "targetOrgName": action.get("targetOrgName", ""),
+                        "reason": action.get("reason", ""),
+                        "suggestedTs": now_ms,
+                        "status": "pending",
+                    })
+                    changed = True
+        elif atype == "set_severity":
+            sev = normalize_severity(action.get("value"))
+            if sev and cur_exec.get("severity") != sev:
+                cur_exec["severity"] = sev
+                changed = True
+        elif atype == "set_status":
+            st = normalize_status(action.get("value"))
+            if st and cur_exec.get("status") != st:
+                cur_exec["status"] = st
+                changed = True
+        elif atype == "set_priority":
+            pri = str(action.get("value") or "").strip()
+            if pri and cur_exec.get("priority") != pri:
+                cur_exec["priority"] = pri
+                raw_ocsf = cur_exec.setdefault("rawOCSF", {})
+                raw_ocsf["priority"] = pri
+                changed = True
+        elif atype == "add_label":
+            lbl = str(action.get("value") or "").strip()
+            cur_labels = cur_exec.setdefault("labels", [])
+            if lbl and lbl not in cur_labels:
+                cur_labels.append(lbl)
+                changed = True
+        elif atype == "assign_to":
+            ass = str(action.get("value") or "").strip()
+            if ass and cur_exec.get("assignee") != ass:
+                cur_exec["assignee"] = ass
+                changed = True
+        elif atype == "add_comment":
+            txt = str(action.get("value") or "").strip()
+            if txt:
+                cur_act = cur_exec.setdefault("activity", [])
+                already = any(it.get("type") == "comment" and it.get("content", "").strip() == txt for it in cur_act if isinstance(it, dict))
+                if not already:
+                    cur_act.append({
+                        "id": f"routing-comment-{now_ms}-{len(cur_act)}",
+                        "type": "comment",
+                        "user": "Incident Routing Rules",
+                        "timestamp": now_ms,
+                        "content": txt,
+                        "details": {"source": "incident_routing_rule", "rule": rule_name},
+                        "attachments": [],
+                        "ai_handled": True,
+                    })
+                    changed = True
+        elif atype == "run_agent":
+            prompt = str(action.get("value") or "").strip()
+            if prompt:
+                cur_act = cur_exec.setdefault("activity", [])
+                content = f"@AIAgent {prompt}"
+                already = any(it.get("type") == "comment" and it.get("content", "").strip().startswith(f"@AIAgent {prompt}") for it in cur_act if isinstance(it, dict))
+                if not already:
+                    cur_act.append({
+                        "id": f"routing-agent-{now_ms}-{len(cur_act)}",
+                        "type": "comment",
+                        "user": "Incident Routing Rules",
+                        "timestamp": now_ms,
+                        "content": content,
+                        "details": {"source": "incident_routing_rule", "rule": rule_name, "run_agent": True},
+                        "attachments": [],
+                        "ai_handled": True,
+                    })
+                    agent_prompts.append(prompt)
+                    changed = True
+        elif atype == "set_field":
+            field = str(action.get("field") or "").strip()
+            if field:
+                val = parse_action_value(action.get("value"))
+                canonical = field[len("rawOCSF."):] if field.startswith("rawOCSF.") else field
+                if canonical == "title":
+                    cur_exec["title"] = str(val)
+                elif canonical in ("description", "desc", "message"):
+                    cur_exec["message"] = str(val)
+                    cur_exec["description"] = str(val)
+                elif canonical == "severity":
+                    s = normalize_severity(val)
+                    if s: cur_exec["severity"] = s
+                elif canonical == "status":
+                    s = normalize_status(val)
+                    if s: cur_exec["status"] = s
+                elif canonical == "assignee":
+                    cur_exec["assignee"] = str(val)
+                elif canonical == "priority":
+                    cur_exec["priority"] = str(val)
+                    cur_exec.setdefault("rawOCSF", {})["priority"] = str(val)
+                elif canonical in ("labels", "types"):
+                    lbl = str(val).strip()
+                    cur_labels = cur_exec.setdefault("labels", [])
+                    if lbl and lbl not in cur_labels:
+                        cur_labels.append(lbl)
+                elif field.startswith("rawOCSF."):
+                    set_deep(cur_exec.setdefault("rawOCSF", {}), field[len("rawOCSF."):], val)
+                else:
+                    cf = cur_exec.setdefault("customFields", {})
+                    clean_k = re.sub(r"^(customFields\.|custom_fields\.)", "", field)
+                    cf[clean_k] = val
+                changed = True
+
+# Auto-resolve audit comment
+resolving = {"resolved", "closed"}
+now_status = str(cur_exec.get("status") or "").lower()
+if prev_status not in resolving and now_status in resolving:
+    status_lbl = "Resolved" if now_status == "resolved" else "Closed"
+    note = f"{status_lbl} automatically by routing rule."
+    cur_act = cur_exec.setdefault("activity", [])
+    cur_act.append({
+        "id": f"routing-autoresolve-{now_ms}-{len(cur_act)}",
+        "type": "comment",
+        "user": "Incident Routing Rules",
+        "timestamp": now_ms,
+        "content": note,
+        "details": {"source": "incident_routing_rule", "auto_resolved": True},
+        "attachments": [],
+        "ai_handled": True,
+    })
+    changed = True
+
+item_key = r"""$exec.shuffle_datastore.key"""
+item_cat = r"""$exec.shuffle_datastore.category"""
+
+if not item_key or item_key.startswith("$"):
+    item_key = cur_exec.get("finding_uid") or cur_exec.get("id") or cur_exec.get("key")
+if not item_cat or item_cat.startswith("$"):
+    item_cat = "shuffle-security_incidents"
+
+db_updated = False
+if changed and item_key:
+    try:
+        if "self" in locals() or "self" in globals():
+            res = self.set_key(item_key, json.dumps(cur_exec), category=item_cat)
+            db_updated = isinstance(res, dict) and res.get("success", False)
+    except Exception:
+        pass
+
+print(json.dumps({
+    "success": True,
+    "changed": changed,
+    "db_updated": db_updated,
+    "matched_rules": [m["rule"].get("name") for m in matches if isinstance(m.get("rule"), dict)],
+    "incident": cur_exec,
+    "agent_prompts": agent_prompts,
+}))`
 }
