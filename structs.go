@@ -164,13 +164,21 @@ type ExecutionRequest struct {
 }
 
 type RetStruct struct {
-	Success         bool                  `json:"success"`
-	SyncFeatures    SyncFeatures          `json:"sync_features"`
-	SessionKey      string                `json:"session_key"`
-	IntervalSeconds int64                 `json:"interval_seconds"`
-	Subscriptions   []PaymentSubscription `json:"subscriptions,omitempty"`
-	Licensed        bool                  `json:"licensed"`
-	CloudSyncUrl    string                `json:"cloud_sync_url,omitempty"`
+	Success          bool                  `json:"success"`
+	SyncFeatures     SyncFeatures          `json:"sync_features"`
+	SessionKey       string                `json:"session_key"`
+	IntervalSeconds  int64                 `json:"interval_seconds"`
+	Subscriptions    []PaymentSubscription `json:"subscriptions,omitempty"`
+	Licensed         bool                  `json:"licensed"`
+	CloudSyncUrl     string                `json:"cloud_sync_url,omitempty"`
+	AppRunsHardLimit int64                 `json:"app_runs_hard_limit"`
+	WorkflowBackup   bool                  `json:"workflow_backup"`
+	AppBackup        bool                  `json:"app_backup"`
+	AiCloudSync      bool                  `json:"ai_cloud_sync"`
+
+	WorkflowBackupUpdated int64 `json:"workflow_backup_updated"`
+	AppBackupUpdated      int64 `json:"app_backup_updated"`
+	AiCloudSyncUpdated    int64 `json:"ai_cloud_sync_updated"`
 }
 
 type AppMini struct {
@@ -398,40 +406,63 @@ type IncrementInCache struct {
 type DailyStatistics struct {
 	Date time.Time `json:"date" datastore:"date"`
 
-	AppExecutions              int64 `json:"app_executions" datastore:"app_executions"`
-	ChildAppExecutions         int64 `json:"child_app_executions" datastore:"child_app_executions"`
-	AppExecutionsFailed        int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
-	SubflowExecutions          int64 `json:"subflow_executions" datastore:"subflow_executions"`
-	WorkflowExecutions         int64 `json:"workflow_executions" datastore:"workflow_executions"`
-	WorkflowExecutionsFinished int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
-	WorkflowExecutionsFailed   int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
-	OrgSyncActions             int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
-	CloudExecutions            int64 `json:"cloud_executions" datastore:"cloud_executions"`
-	OnpremExecutions           int64 `json:"onprem_executions" datastore:"onprem_executions"`
-	AIUsage                    int64 `json:"ai_executions" datastore:"ai_executions"`
-	AgentExecutions            int64 `json:"agent_executions" datastore:"agent_executions"`
-	AgentExecutionsSuccessful  int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
-	AgentExecutionsFailed      int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
-
-	LLMTokens         int64 `json:"llm_tokens" datastore:"llm_tokens"`
-	AgentTokens       int64 `json:"agent_tokens" datastore:"agent_tokens"`
-	AgentInputTokens  int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
-	AgentOutputTokens int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
-	AgentCachedTokens int64 `json:"agent_cached_tokens" datastore:"agent_cached_tokens"`
-
-	ChildOrgAgentExecutions           int64 `json:"child_org_agent_executions" datastore:"child_org_agent_executions"`
-	ChildOrgAgentExecutionsSuccessful int64 `json:"child_org_agent_executions_successful" datastore:"child_org_agent_executions_successful"`
-	ChildOrgAgentExecutionsFailed     int64 `json:"child_org_agent_executions_failed" datastore:"child_org_agent_executions_failed"`
+	AppExecutions                     int64 `json:"app_executions" datastore:"app_executions"`
+	ChildAppExecutions                int64 `json:"child_app_executions" datastore:"child_app_executions"`
+	AppExecutionsFailed               int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
+	SubflowExecutions                 int64 `json:"subflow_executions" datastore:"subflow_executions"`
+	WorkflowExecutions                int64 `json:"workflow_executions" datastore:"workflow_executions"`
+	WorkflowExecutionsFinished        int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
+	WorkflowExecutionsFailed          int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
+	OrgSyncActions                    int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
+	CloudExecutions                   int64 `json:"cloud_executions" datastore:"cloud_executions"`
+	OnpremExecutions                  int64 `json:"onprem_executions" datastore:"onprem_executions"`
+	AIUsage                           int64 `json:"ai_executions" datastore:"ai_executions"`
+	AgentExecutions                   int64 `json:"agent_executions" datastore:"agent_executions"`
+	AgentExecutionsSuccessful         int64 `json:"agent_executions_successful" datastore:"agent_executions_successful"`
+	AgentExecutionsFailed             int64 `json:"agent_executions_failed" datastore:"agent_executions_failed"`
+	AgentTokens                       int64 `json:"agent_tokens" datastore:"agent_tokens"`
+	AgentInputTokens                  int64 `json:"agent_input_tokens" datastore:"agent_input_tokens"`
+	AgentOutputTokens                 int64 `json:"agent_output_tokens" datastore:"agent_output_tokens"`
+	AgentCachedTokens                 int64 `json:"agent_cached_tokens" datastore:"agent_cached_tokens"`
+	LLMTokens                         int64 `json:"llm_tokens" datastore:"llm_tokens"`
 	ChildOrgLLMTokens                 int64 `json:"child_org_llm_tokens" datastore:"child_org_llm_tokens"`
+	DailySMSUsage                     int64 `json:"daily_sms_usage" datastore:"daily_sms_usage"`
+	DailyChildOrgSMSUsage             int64 `json:"daily_child_org_sms_usage" datastore:"daily_child_org_sms_usage"`
+	DailyEmailUsage                   int64 `json:"daily_email_usage" datastore:"daily_email_usage"`
+	DailyChildOrgEmailUsage           int64 `json:"daily_child_org_email_usage" datastore:"daily_child_org_email_usage"`
+	ChildOrgAgentExecutions           int64 `json:"child_org_agent_executions" datastore:"child_org_agent_executions"`
 	ChildOrgAgentTokens               int64 `json:"child_org_agent_tokens" datastore:"child_org_agent_tokens"`
 	ChildOrgAgentInputTokens          int64 `json:"child_org_agent_input_tokens" datastore:"child_org_agent_input_tokens"`
 	ChildOrgAgentOutputTokens         int64 `json:"child_org_agent_output_tokens" datastore:"child_org_agent_output_tokens"`
+	ChildOrgAiUsage                   int64 `json:"child_org_ai_usage" datastore:"child_org_ai_usage"`
+	AgentMaxLoopsHit                  int64 `json:"agent_max_loops_hit" datastore:"agent_max_loops_hit"`
+	ChildOrgAgentMaxLoopsHit          int64 `json:"child_org_agent_max_loops_hit" datastore:"child_org_agent_max_loops_hit"`
+	ChildOrgAgentExecutionsSuccessful int64 `json:"child_org_agent_executions_successful" datastore:"child_org_agent_executions_successful"`
+	ChildOrgAgentExecutionsFailed     int64 `json:"child_org_agent_executions_failed" datastore:"child_org_agent_executions_failed"`
 	ChildOrgAgentCachedTokens         int64 `json:"child_org_agent_cached_tokens" datastore:"child_org_agent_cached_tokens"`
 
 	ApiUsage int64      `json:"api_usage" datastore:"api_usage"`
 	AppUsage []AppUsage `json:"app_usage" datastore:"app_usage"`
 
 	Additions []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
+}
+
+type Tenants struct {
+	Name      string    `json:"name" datastore:"name"`
+	Id        string    `json:"id" datastore:"id"`
+	CreatedAt time.Time `json:"created_at" datastore:"created_at"`
+	DeletedAt time.Time `json:"deleted_at" datastore:"deleted_at"`
+	Status    string    `json:"status" datastore:"status"`
+}
+
+type Locations struct {
+	OrgId     string `json:"org_id"`
+	OrgName   string `json:"org_name"`
+	Name      string `json:"name"`
+	Id        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+	DeletedAt string `json:"deleted_at"`
+	Status    string `json:"status"`
 }
 
 // Used to be related to users, now related to orgs.
@@ -461,21 +492,26 @@ type ExecutionInfo struct {
 	TotalAgentExecutionsSuccessful         int64 `json:"total_agent_executions_successful" datastore:"total_agent_executions_successful"`
 	TotalAgentExecutionsFailed             int64 `json:"total_agent_executions_failed" datastore:"total_agent_executions_failed"`
 	TotalLLMTokens                         int64 `json:"total_llm_tokens" datastore:"total_llm_tokens"`
+	TotalChildOrgLLMTokens                 int64 `json:"total_child_org_llm_tokens" datastore:"total_child_org_llm_tokens"`
 	TotalAgentTokens                       int64 `json:"total_agent_tokens" datastore:"total_agent_tokens"`
 	TotalAgentInputTokens                  int64 `json:"total_agent_input_tokens" datastore:"total_agent_input_tokens"`
 	TotalAgentOutputTokens                 int64 `json:"total_agent_output_tokens" datastore:"total_agent_output_tokens"`
-	TotalAgentCachedTokens                 int64 `json:"total_agent_cached_tokens" datastore:"total_agent_cached_tokens"`
 	TotalAgentMaxLoopsHit                  int64 `json:"total_agent_max_loops_hit" datastore:"total_agent_max_loops_hit"`
-	TotalChildOrgAgentExecutions           int64 `json:"total_child_org_agent_executions" datastore:"total_child_org_agent_executions"`
 	TotalChildOrgAgentExecutionsSuccessful int64 `json:"total_child_org_agent_executions_successful" datastore:"total_child_org_agent_executions_successful"`
 	TotalChildOrgAgentExecutionsFailed     int64 `json:"total_child_org_agent_executions_failed" datastore:"total_child_org_agent_executions_failed"`
-	TotalChildOrgLLMTokens                 int64 `json:"total_child_org_llm_tokens" datastore:"total_child_org_llm_tokens"`
+	TotalChildOrgAgentCachedTokens         int64 `json:"total_child_org_agent_cached_tokens" datastore:"total_child_org_agent_cached_tokens"`
+	TotalChildOrgAgentMaxLoopsHit          int64 `json:"total_child_org_agent_max_loops_hit" datastore:"total_child_org_agent_max_loops_hit"`
+	TotalAgentCachedTokens                 int64 `json:"total_agent_cached_tokens" datastore:"total_agent_cached_tokens"`
+	TotalChildOrgAiUsage                   int64 `json:"total_child_org_ai_usage" datastore:"total_child_org_ai_usage"`
+	TotalChildOrgAgentExecutions           int64 `json:"total_child_org_agent_executions" datastore:"total_child_org_agent_executions"`
 	TotalChildOrgAgentTokens               int64 `json:"total_child_org_agent_tokens" datastore:"total_child_org_agent_tokens"`
 	TotalChildOrgAgentInputTokens          int64 `json:"total_child_org_agent_input_tokens" datastore:"total_child_org_agent_input_tokens"`
 	TotalChildOrgAgentOutputTokens         int64 `json:"total_child_org_agent_output_tokens" datastore:"total_child_org_agent_output_tokens"`
-	TotalChildOrgAgentCachedTokens         int64 `json:"total_child_org_agent_cached_tokens" datastore:"total_child_org_agent_cached_tokens"`
-	TotalChildOrgAgentMaxLoopsHit          int64 `json:"total_child_org_agent_max_loops_hit" datastore:"total_child_org_agent_max_loops_hit"`
 	TotalChildWorkflowExecutions           int64 `json:"total_child_workflow_executions" datastore:"total_child_workflow_executions"`
+	TotalSMSUsage                          int64 `json:"total_sms_usage" datastore:"total_sms_usage"`
+	TotalChildOrgSMSUsage                  int64 `json:"total_child_org_sms_usage" datastore:"total_child_org_sms_usage"`
+	TotalEmailUsage                        int64 `json:"total_email_usage" datastore:"total_email_usage"`
+	TotalChildOrgEmailUsage                int64 `json:"total_child_org_email_usage" datastore:"total_child_org_email_usage"`
 
 	MonthlyApiUsage                          int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
 	MonthlyChildAppExecutions                int64 `json:"monthly_child_app_executions,omitempty" datastore:"monthly_child_app_executions"`
@@ -499,6 +535,7 @@ type ExecutionInfo struct {
 	MonthlyAgentOutputTokens                 int64 `json:"monthly_agent_output_tokens,omitempty" datastore:"monthly_agent_output_tokens"`
 	MonthlyAgentCachedTokens                 int64 `json:"monthly_agent_cached_tokens,omitempty" datastore:"monthly_agent_cached_tokens"`
 	MonthlyAgentMaxLoopsHit                  int64 `json:"monthly_agent_max_loops_hit,omitempty" datastore:"monthly_agent_max_loops_hit"`
+	MonthlyChildOrgAiUsage                   int64 `json:"monthly_child_org_ai_usage,omitempty" datastore:"monthly_child_org_ai_usage"`
 	MonthlyChildOrgAgentExecutions           int64 `json:"monthly_child_org_agent_executions,omitempty" datastore:"monthly_child_org_agent_executions"`
 	MonthlyChildOrgAgentExecutionsSuccessful int64 `json:"monthly_child_org_agent_executions_successful,omitempty" datastore:"monthly_child_org_agent_executions_successful"`
 	MonthlyChildOrgAgentExecutionsFailed     int64 `json:"monthly_child_org_agent_executions_failed,omitempty" datastore:"monthly_child_org_agent_executions_failed"`
@@ -508,6 +545,10 @@ type ExecutionInfo struct {
 	MonthlyChildOrgAgentOutputTokens         int64 `json:"monthly_child_org_agent_output_tokens,omitempty" datastore:"monthly_child_org_agent_output_tokens"`
 	MonthlyChildOrgAgentCachedTokens         int64 `json:"monthly_child_org_agent_cached_tokens,omitempty" datastore:"monthly_child_org_agent_cached_tokens"`
 	MonthlyChildOrgAgentMaxLoopsHit          int64 `json:"monthly_child_org_agent_max_loops_hit,omitempty" datastore:"monthly_child_org_agent_max_loops_hit"`
+	MonthlySMSUsage                          int64 `json:"monthly_sms_usage,omitempty" datastore:"monthly_sms_usage"`
+	MonthlyChildOrgSMSUsage                  int64 `json:"monthly_child_org_sms_usage,omitempty" datastore:"monthly_child_org_sms_usage"`
+	MonthlyEmailUsage                        int64 `json:"monthly_email_usage,omitempty" datastore:"monthly_email_usage"`
+	MonthlyChildOrgEmailUsage                int64 `json:"monthly_child_org_email_usage,omitempty" datastore:"monthly_child_org_email_usage"`
 
 	WeeklyAppExecutions              int64 `json:"weekly_app_executions,omitempty" datastore:"weekly_app_executions"`
 	WeeklyChildAppExecutions         int64 `json:"weekly_child_app_executions,omitempty" datastore:"weekly_child_app_executions"`
@@ -539,10 +580,11 @@ type ExecutionInfo struct {
 	DailyAgentExecutionsFailed             int64 `json:"daily_agent_executions_failed" datastore:"daily_agent_executions_failed"`
 	DailyLLMTokens                         int64 `json:"daily_llm_tokens" datastore:"daily_llm_tokens"`
 	DailyAgentTokens                       int64 `json:"daily_agent_tokens" datastore:"daily_agent_tokens"`
-	DailyAgentInputTokens                  int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
-	DailyAgentOutputTokens                 int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`
 	DailyAgentCachedTokens                 int64 `json:"daily_agent_cached_tokens" datastore:"daily_agent_cached_tokens"`
 	DailyAgentMaxLoopsHit                  int64 `json:"daily_agent_max_loops_hit,omitempty" datastore:"daily_agent_max_loops_hit"`
+	DailyAgentInputTokens                  int64 `json:"daily_agent_input_tokens" datastore:"daily_agent_input_tokens"`
+	DailyAgentOutputTokens                 int64 `json:"daily_agent_output_tokens" datastore:"daily_agent_output_tokens"`
+	DailyChildOrgAiUsage                   int64 `json:"daily_child_org_ai_usage" datastore:"daily_child_org_ai_usage"`
 	DailyChildOrgAgentExecutions           int64 `json:"daily_child_org_agent_executions" datastore:"daily_child_org_agent_executions"`
 	DailyChildOrgAgentExecutionsSuccessful int64 `json:"daily_child_org_agent_executions_successful" datastore:"daily_child_org_agent_executions_successful"`
 	DailyChildOrgAgentExecutionsFailed     int64 `json:"daily_child_org_agent_executions_failed" datastore:"daily_child_org_agent_executions_failed"`
@@ -552,6 +594,10 @@ type ExecutionInfo struct {
 	DailyChildOrgAgentOutputTokens         int64 `json:"daily_child_org_agent_output_tokens" datastore:"daily_child_org_agent_output_tokens"`
 	DailyChildOrgAgentCachedTokens         int64 `json:"daily_child_org_agent_cached_tokens" datastore:"daily_child_org_agent_cached_tokens"`
 	DailyChildOrgAgentMaxLoopsHit          int64 `json:"daily_child_org_agent_max_loops_hit,omitempty" datastore:"daily_child_org_agent_max_loops_hit"`
+	DailySMSUsage                          int64 `json:"daily_sms_usage" datastore:"daily_sms_usage"`
+	DailyChildOrgSMSUsage                  int64 `json:"daily_child_org_sms_usage" datastore:"daily_child_org_sms_usage"`
+	DailyEmailUsage                        int64 `json:"daily_email_usage" datastore:"daily_email_usage"`
+	DailyChildOrgEmailUsage                int64 `json:"daily_child_org_email_usage" datastore:"daily_child_org_email_usage"`
 
 	HourlyAppExecutions              int64 `json:"hourly_app_executions,omitempty" datastore:"hourly_app_executions"`
 	HourlyChildAppExecutions         int64 `json:"hourly_child_app_executions,omitempty" datastore:"hourly_child_app_executions"`
@@ -566,15 +612,27 @@ type ExecutionInfo struct {
 	HourlyOnpremExecutions           int64 `json:"hourly_onprem_executions,omitempty" datastore:"hourly_onprem_executions"`
 	HourlyAIUsage                    int64 `json:"hourly_ai_executions,omitempty" datastore:"hourly_ai_executions"`
 
+	AnnualAppExecutions      int64 `json:"annual_app_executions,omitempty" datastore:"annual_app_executions"`
+	AnnualChildAppExecutions int64 `json:"annual_child_app_executions,omitempty" datastore:"annual_child_app_executions"`
+
 	// These are just here in case we get use of them
 	TotalApiUsage int64 `json:"total_api_usage" datastore:"total_api_usage"`
 	DailyApiUsage int64 `json:"daily_api_usage" datastore:"daily_api_usage"`
+
+	// Store only deleted tenants here. So it doesn't grow out of 1MB datastore limit
+	Tenants   []Tenants   `json:"tenants" datastore:"tenants"`
+	Locations []Locations `json:"locations" datastore:"locations"`
 
 	Additions               []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
 	LastMonthlyResetMonth   int                   `json:"last_monthly_reset_month" datastore:"last_monthly_reset_month"`
 	LastUsageAlertThreshold int64                 `json:"last_usage_alert_threshold" datastore:"last_usage_alert_threshold"`
 	UsageAlerts             []AlertThreshold      `json:"usage_alerts" datastore:"usage_alerts"`
 	MonthlyAIUsageAlertSent bool                  `json:"monthly_ai_usage_alert_sent" datastore:"monthly_ai_usage_alert_sent"`
+}
+
+type MultiRegionStatsEntry struct {
+	OrgId           string            `json:"org_id"`
+	DailyStatistics []DailyStatistics `json:"daily_statistics"`
 }
 
 type AdditionalUseConfig struct {
@@ -724,6 +782,25 @@ type UserGeoInfo struct {
 	} `datastore:"country" json:"country"`
 }
 
+type DeviceNotificationPreferences struct {
+	CriticalPager bool `json:"critical_pager"` // Critical downtime siren alerts
+	AgentRequests bool `json:"agent_requests"` // AI agent human-in-the-loop approvals
+	GeneralAlerts bool `json:"general_alerts"` // General FYI updates & reports
+}
+
+type Device struct {
+	ID          string                        `json:"id"`                    // Unique device identifier
+	Token       string                        `json:"token"`                 // FCM registration token
+	Platform    string                        `json:"platform"`              // "ios", "android", "web", "desktop"
+	DeviceName  string                        `json:"device_name,omitempty"` // e.g., "iPhone 16 Pro", "Chrome macOS"
+	AppVersion  string                        `json:"app_version,omitempty"` // App version
+	Preferences DeviceNotificationPreferences `json:"preferences"`           // Granular notification settings
+
+	CreatedAt  int64 `json:"created_at"`   // Registration timestamp
+	EditedAt   int64 `json:"edited_at"`    // Last updated timestamp
+	LastSeenAt int64 `json:"last_seen_at"` // Last active timestamp
+}
+
 type User struct {
 	Username             string        `datastore:"Username" json:"username"`
 	Password             string        `datastore:"password,noindex" password:"password,omitempty"`
@@ -759,6 +836,7 @@ type User struct {
 	LoginInfo    []LoginInfo  `datastore:"login_info" json:"login_info"`
 	PersonalInfo PersonalInfo `datastore:"personal_info" json:"personal_info"`
 	Regions      []string     `datastore:"regions" json:"regions"`
+	Devices      []Device     `datastore:"devices" json:"devices"` // Handles phones and such for notifications
 
 	UserGeoInfo UserGeoInfo `datastore:"user_geo_info" json:"user_geo_info"`
 
@@ -767,6 +845,8 @@ type User struct {
 	SSOInfos []SSOInfo `datastore:"sso_infos" json:"sso_infos"`
 
 	ProvisionedByOrg string `datastore:"provisioned_by_org" json:"provisioned_by_org"`
+	AllowedApps      []string `json:"allowed_apps,omitempty" datastore:"allowed_apps,omitempty"`
+	OAuthScope       string   `json:"oauth_scope,omitempty" datastore:"oauth_scope,omitempty"`
 }
 
 type SSOInfo struct {
@@ -1058,6 +1138,16 @@ type LeadInfo struct {
 	ChannelPartner      bool `json:"channel_partner,omitempty" datastore:"channel_partner"`
 
 	Creator bool `json:"creator,omitempty" datastore:"creator"`
+
+	ShuffleEnterpriseLicenseOldCustomer bool `json:"shuffle_enterprise_license_old_customer,omitempty" datastore:"shuffle_enterprise_license_old_customer"`
+	ScaleLicenseCloudTrial              bool `json:"scale_license_cloud_trial,omitempty" datastore:"scale_license_cloud_trial"`
+	OpenSourceLicense                   bool `json:"opensource_license,omitempty" datastore:"opensource_license"`
+	ScaleLicenseCloudCustomer           bool `json:"scale_license_cloud_customer,omitempty" datastore:"scale_license_cloud_customer"`
+	ScaleLicenseOnpremCustomer          bool `json:"scale_license_onprem_customer,omitempty" datastore:"scale_license_onprem_customer"`
+	BusinessLicenseCloud                bool `json:"business_license_cloud,omitempty" datastore:"business_license_cloud"`
+	BusinessLicenseOnprem               bool `json:"business_license_onprem,omitempty" datastore:"business_license_onprem"`
+	EnterpriseLicenseCloud              bool `json:"enterprise_license_cloud,omitempty" datastore:"enterprise_license_cloud"`
+	EnterpriseLicenseOnprem             bool `json:"enterprise_license_onprem,omitempty" datastore:"enterprise_license_onprem"`
 }
 
 // Partners Structs
@@ -1128,6 +1218,8 @@ type OnpremLicense struct {
 	AppRuns            OnpremLimits `json:"app_runs" datastore:"app_runs"`
 	Timeout            string       `json:"timeout" datastore:"timeout"`
 	Branding           bool         `json:"branding" datastore:"branding"`
+	AppRunsGrouping    bool         `json:"app_runs_grouping" datastore:"app_runs_grouping"`
+	StartDate          string       `json:"start_date" datastore:"start_date"`
 }
 
 type Org struct {
@@ -1184,11 +1276,14 @@ type Org struct {
 }
 
 type Billing struct {
-	Email                    string           `json:"Email" datastore:"Email"`
-	AppRunsHardLimit         int64            `json:"app_runs_hard_limit" datastore:"app_runs_hard_limit"`
-	AlertThreshold           []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
-	Consultation             Consultation     `json:"Consultation" datastore:"Consultation"`
-	InternalAppRunsHardLimit int64            `json:"internal_app_runs_hard_limit" datastore:"internal_app_runs_hard_limit"`
+	Email                      string           `json:"Email" datastore:"Email"`
+	AppRunsHardLimit           int64            `json:"app_runs_hard_limit" datastore:"app_runs_hard_limit"`
+	AlertThreshold             []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
+	OnpremAlertThreshold       []AlertThreshold `json:"OnpremAlertThreshold" datastore:"OnpremAlertThreshold"`
+	Consultation               Consultation     `json:"Consultation" datastore:"Consultation"`
+	InternalAppRunsHardLimit   int64            `json:"internal_app_runs_hard_limit" datastore:"internal_app_runs_hard_limit"`
+	DefaultAlertsApplied       bool             `json:"default_alerts_applied" datastore:"default_alerts_applied"`
+	DefaultOnpremAlertsApplied bool             `json:"default_onprem_alerts_applied" datastore:"default_onprem_alerts_applied"`
 }
 
 type AlertThreshold struct {
@@ -1354,6 +1449,11 @@ type SyncConfig struct {
 
 	WorkflowBackup bool `json:"workflow_backup" datastore:"workflow_backup"`
 	AppBackup      bool `json:"app_backup" datastore:"app_backup"`
+	AiCloudSync    bool `json:"ai_cloud_sync" datastore:"ai_cloud_sync"`
+
+	WorkflowBackupUpdated int64 `json:"workflow_backup_updated" datastore:"workflow_backup_updated"`
+	AppBackupUpdated      int64 `json:"app_backup_updated" datastore:"app_backup_updated"`
+	AiCloudSyncUpdated    int64 `json:"ai_cloud_sync_updated" datastore:"ai_cloud_sync_updated"`
 }
 
 // RemoteWorkflowInfo holds metadata for a workflow found in a remote git repo.
@@ -1437,34 +1537,34 @@ type MailLevel struct {
 }
 
 type SyncFeatures struct {
-	Editing             bool        `json:"editing" datastore:"editing"`
-	MailSent            []MailLevel `json:"mail_sent" datastore:"mail_sent"`
-	AppExecutions       SyncData    `json:"app_executions" datastore:"app_executions"`
-	OnpremAppExecutions SyncData    `json:"onprem_app_executions" datastore:"onprem_app_executions"`
-	MultiEnv            SyncData    `json:"multi_env" datastore:"multi_env"`
-	MultiTenant         SyncData    `json:"multi_tenant" datastore:"multi_tenant"`
-	MultiRegion         SyncData    `json:"multi_region" datastore:"multi_region"`
-	Webhook             SyncData    `json:"webhook" datastore:"webhook"`
-	Schedules           SyncData    `json:"schedules" datastore:"schedules"`
-	UserInput           SyncData    `json:"user_input" datastore:"user_input"`
-	SendMail            SyncData    `json:"send_mail" datastore:"send_mail"`
-	SendSms             SyncData    `json:"send_sms" datastore:"send_sms"`
-	Updates             SyncData    `json:"updates" datastore:"updates"`
-	EmailTrigger        SyncData    `json:"email_trigger" datastore:"email_trigger"`
-	Notifications       SyncData    `json:"notifications" datastore:"notifications"`
-	Workflows           SyncData    `json:"workflows" datastore:"workflows"`
-	Autocomplete        SyncData    `json:"autocomplete" datastore:"autocomplete"`
-	WorkflowExecutions  SyncData    `json:"workflow_executions" datastore:"workflow_executions"`
-	Authentication      SyncData    `json:"authentication" datastore:"authentication"`
-	Schedule            SyncData    `json:"schedule" datastore:"schedule"`
-	Apps                SyncData    `json:"apps" datastore:"apps"`
-	ShuffleGPT          SyncData    `json:"shuffle_gpt" datastore:"shuffle_gpt"`
-	Branding            SyncData    `json:"branding" datastore:"branding"`
-	AgentExecutions     SyncData    `json:"agent_executions" datastore:"agent_executions"`
-
-	LLMTokens   SyncData `json:"llm_tokens" datastore:"llm_tokens"`
-	AgentTokens SyncData `json:"agent_tokens" datastore:"agent_tokens"`
-	Multiplayer SyncData `json:"multiplayer" datastore:"multiplayer"`
+	Editing               bool        `json:"editing" datastore:"editing"`
+	MailSent              []MailLevel `json:"mail_sent" datastore:"mail_sent"`
+	AppExecutions         SyncData    `json:"app_executions" datastore:"app_executions"`
+	OnpremAppExecutions   SyncData    `json:"onprem_app_executions" datastore:"onprem_app_executions"`
+	AnnualAppRunsGrouping SyncData    `json:"annual_app_runs_grouping" datastore:"annual_app_runs_grouping"`
+	MultiEnv              SyncData    `json:"multi_env" datastore:"multi_env"`
+	MultiTenant           SyncData    `json:"multi_tenant" datastore:"multi_tenant"`
+	MultiRegion           SyncData    `json:"multi_region" datastore:"multi_region"`
+	Webhook               SyncData    `json:"webhook" datastore:"webhook"`
+	Schedules             SyncData    `json:"schedules" datastore:"schedules"`
+	UserInput             SyncData    `json:"user_input" datastore:"user_input"`
+	SendMail              SyncData    `json:"send_mail" datastore:"send_mail"`
+	SendSms               SyncData    `json:"send_sms" datastore:"send_sms"`
+	Updates               SyncData    `json:"updates" datastore:"updates"`
+	EmailTrigger          SyncData    `json:"email_trigger" datastore:"email_trigger"`
+	Notifications         SyncData    `json:"notifications" datastore:"notifications"`
+	Workflows             SyncData    `json:"workflows" datastore:"workflows"`
+	Autocomplete          SyncData    `json:"autocomplete" datastore:"autocomplete"`
+	WorkflowExecutions    SyncData    `json:"workflow_executions" datastore:"workflow_executions"`
+	Authentication        SyncData    `json:"authentication" datastore:"authentication"`
+	Schedule              SyncData    `json:"schedule" datastore:"schedule"`
+	Apps                  SyncData    `json:"apps" datastore:"apps"`
+	ShuffleGPT            SyncData    `json:"shuffle_gpt" datastore:"shuffle_gpt"`
+	Branding              SyncData    `json:"branding" datastore:"branding"`
+	AgentExecutions       SyncData    `json:"agent_executions" datastore:"agent_executions"`
+	AgentTokens           SyncData    `json:"agent_tokens" datastore:"agent_tokens"`
+	Multiplayer           SyncData    `json:"multiplayer" datastore:"multiplayer"`
+	LLMTokens             SyncData    `json:"llm_tokens" datastore:"llm_tokens"`
 }
 
 type SyncData struct {
@@ -3008,6 +3108,179 @@ type FileWrapper struct {
 	Source      File   `json:"_source"`
 }
 
+type OAuthClient struct {
+	ID                      string   `json:"id" datastore:"id"`
+	ClientID                string   `json:"client_id" datastore:"client_id"`
+	ClientSecret            string   `json:"client_secret,omitempty" datastore:"client_secret,noindex"`
+	ClientName              string   `json:"client_name" datastore:"client_name"`
+	RedirectUris            []string `json:"redirect_uris" datastore:"redirect_uris"`
+	GrantTypes              []string `json:"grant_types" datastore:"grant_types"`
+	ResponseTypes           []string `json:"response_types" datastore:"response_types"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method" datastore:"token_endpoint_auth_method"`
+	Scope                   string   `json:"scope,omitempty" datastore:"scope"`
+	OrgId                   string   `json:"org_id,omitempty" datastore:"org_id"`
+	UserId                  string   `json:"user_id,omitempty" datastore:"user_id"`
+	CreatedAt               int64    `json:"created_at" datastore:"created_at"`
+	IsDynamic               bool     `json:"is_dynamic" datastore:"is_dynamic"`
+}
+
+type OAuthClientWrapper struct {
+	Index       string      `json:"_index"`
+	Type        string      `json:"_type"`
+	ID          string      `json:"_id"`
+	Version     int         `json:"_version"`
+	SeqNo       int         `json:"_seq_no"`
+	PrimaryTerm int         `json:"_primary_term"`
+	Found       bool        `json:"found"`
+	Source      OAuthClient `json:"_source"`
+}
+
+type OAuthToken struct {
+	ID           string    `json:"id" datastore:"id"`
+	AccessToken  string    `json:"access_token" datastore:"access_token"`
+	RefreshToken string    `json:"refresh_token,omitempty" datastore:"refresh_token"`
+	TokenType    string    `json:"token_type" datastore:"token_type"`
+	Scope        string    `json:"scope" datastore:"scope"`
+	AllowedApps  []string  `json:"allowed_apps,omitempty" datastore:"allowed_apps,omitempty"`
+	ExpiresIn    int64     `json:"expires_in" datastore:"expires_in"`
+	ExpiresAt    time.Time `json:"expires_at" datastore:"expires_at"`
+	ClientID     string    `json:"client_id" datastore:"client_id"`
+	OrgId        string    `json:"org_id" datastore:"org_id"`
+	UserId       string    `json:"user_id" datastore:"user_id"`
+	CreatedAt    int64     `json:"created_at" datastore:"created_at"`
+}
+
+type OAuthTokenWrapper struct {
+	Index       string     `json:"_index"`
+	Type        string     `json:"_type"`
+	ID          string     `json:"_id"`
+	Version     int        `json:"_version"`
+	SeqNo       int        `json:"_seq_no"`
+	PrimaryTerm int        `json:"_primary_term"`
+	Found       bool       `json:"found"`
+	Source      OAuthToken `json:"_source"`
+}
+
+type OAuthAuthCode struct {
+	ID                  string    `json:"id" datastore:"id"`
+	Code                string    `json:"code" datastore:"code"`
+	ClientID            string    `json:"client_id" datastore:"client_id"`
+	RedirectURI         string    `json:"redirect_uri" datastore:"redirect_uri"`
+	CodeChallenge       string    `json:"code_challenge" datastore:"code_challenge"`
+	CodeChallengeMethod string    `json:"code_challenge_method" datastore:"code_challenge_method"`
+	Scope               string    `json:"scope" datastore:"scope"`
+	AllowedApps         []string  `json:"allowed_apps,omitempty" datastore:"allowed_apps,omitempty"`
+	OrgId               string    `json:"org_id" datastore:"org_id"`
+	UserId              string    `json:"user_id" datastore:"user_id"`
+	ExpiresAt           time.Time `json:"expires_at" datastore:"expires_at"`
+	Used                bool      `json:"used" datastore:"used"`
+	CreatedAt           int64     `json:"created_at" datastore:"created_at"`
+}
+
+type OAuthAuthCodeWrapper struct {
+	Index       string        `json:"_index"`
+	Type        string        `json:"_type"`
+	ID          string        `json:"_id"`
+	Version     int           `json:"_version"`
+	SeqNo       int           `json:"_seq_no"`
+	PrimaryTerm int           `json:"_primary_term"`
+	Found       bool          `json:"found"`
+	Source      OAuthAuthCode `json:"_source"`
+}
+
+// OAuthScopeInfo represents metadata for an OAuth scope to render user-friendly consent prompts.
+type OAuthScopeInfo struct {
+	Scope       string `json:"scope"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Category    string `json:"category,omitempty"`
+}
+
+// OAuthUserInfo provides lightweight user identity details for the consent window.
+type OAuthUserInfo struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Name     string `json:"name,omitempty"`
+}
+
+// OAuthConsentInfoResponse is returned by GET /api/v1/oauth2/authorize to render the consent UI.
+type OAuthConsentInfoResponse struct {
+	ClientID      string           `json:"client_id"`
+	ClientName    string           `json:"client_name"`
+	Scopes        []OAuthScopeInfo `json:"scopes"`
+	User          OAuthUserInfo    `json:"user"`
+	AvailableOrgs []OrgMini        `json:"available_orgs"`
+	SelectedOrgId string           `json:"selected_org_id"`
+	RedirectURI   string           `json:"redirect_uri"`
+	State         string           `json:"state"`
+}
+
+// OAuthAuthorizeRequest represents the decision sent by the consent UI or client to POST /oauth2/authorize.
+type OAuthAuthorizeRequest struct {
+	ClientID            string   `json:"client_id"`
+	RedirectURI         string   `json:"redirect_uri"`
+	ResponseType        string   `json:"response_type"`
+	Scope               string   `json:"scope"`
+	AllowedApps         []string `json:"allowed_apps,omitempty"`
+	State               string   `json:"state"`
+	CodeChallenge       string   `json:"code_challenge"`
+	CodeChallengeMethod string   `json:"code_challenge_method"`
+	OrgId               string   `json:"org_id"`
+	Approved            bool     `json:"approved"`
+}
+
+// OAuthAuthorizeResponse is returned after consent is granted/denied.
+type OAuthAuthorizeResponse struct {
+	RedirectURL string `json:"redirect_url"`
+	Code        string `json:"code,omitempty"`
+	State       string `json:"state,omitempty"`
+}
+
+// OAuthTokenRequest represents incoming parameters to POST /oauth2/token
+type OAuthTokenRequest struct {
+	GrantType    string `json:"grant_type"`
+	Code         string `json:"code"`
+	RedirectURI  string `json:"redirect_uri"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret,omitempty"`
+	CodeVerifier string `json:"code_verifier"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+}
+
+// OAuthTokenResponse represents the RFC 6749 standard JSON response for POST /oauth2/token
+type OAuthTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int64  `json:"expires_in"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+}
+
+// OAuthRevokeRequest represents the RFC 7009 token revocation request
+type OAuthRevokeRequest struct {
+	Token         string `json:"token"`
+	TokenTypeHint string `json:"token_type_hint,omitempty"`
+	ClientID      string `json:"client_id,omitempty"`
+	ClientSecret  string `json:"client_secret,omitempty"`
+}
+
+// OAuthTokenView represents a safe view of an active OAuth token for the frontend UI
+type OAuthTokenView struct {
+	ID          string    `json:"id"`
+	ClientID    string    `json:"client_id"`
+	ClientName  string    `json:"client_name,omitempty"`
+	TokenType   string    `json:"token_type"`
+	Scope       string    `json:"scope"`
+	AllowedApps []string  `json:"allowed_apps,omitempty"`
+	OrgId       string    `json:"org_id"`
+	UserId      string    `json:"user_id"`
+	CreatedAt   int64     `json:"created_at"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	TokenMasked string    `json:"token_masked"`
+}
+
+
 type DisabledHookWrapper struct {
 	Index       string        `json:"_index"`
 	Type        string        `json:"_type"`
@@ -3187,6 +3460,7 @@ type HandleInfo struct {
 	UserGeoInfo         UserGeoInfo `json:"user_geo_info,omitempty"`
 	Theme               string      `json:"theme"`
 	AIEnabled           bool        `json:"ai_enabled"`
+	SSOInfos            []SSOInfo   `json:"sso_infos"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`
@@ -3917,6 +4191,8 @@ type SettingsReturn struct {
 	Verified bool   `json:"verified"`
 	Apikey   string `json:"apikey"`
 	Image    string `json:"image"`
+
+	Devices []Device `json:"devices"`
 }
 
 type ExtraButton struct {
@@ -4625,6 +4901,13 @@ type BackupJob struct {
 	Stats     ExecutionInfo `json:"stats"`
 	Workflows []Workflow    `json:"workflows"`
 	Apps      []WorkflowApp `json:"apps"`
+
+	WorkflowBackup        bool  `json:"workflow_backup"`
+	AppBackup             bool  `json:"app_backup"`
+	AiCloudSync           bool  `json:"ai_cloud_sync"`
+	WorkflowBackupUpdated int64 `json:"workflow_backup_updated"`
+	AppBackupUpdated      int64 `json:"app_backup_updated"`
+	AiCloudSyncUpdated    int64 `json:"ai_cloud_sync_updated"`
 }
 
 type WorkflowSearch struct {
@@ -5138,11 +5421,6 @@ type StreamWorkflowOperation struct {
 	Timestamp int64           `json:"timestamp"`          // unix ms
 }
 
-type StreamWorkflowState struct {
-	Operations []StreamWorkflowOperation `json:"operations"`
-	LastSeq    int64                     `json:"last_seq"`
-}
-
 type StreamPresenceEntry struct {
 	UserID   string `json:"user_id"`
 	Username string `json:"username"`
@@ -5152,6 +5430,14 @@ type StreamPresenceEntry struct {
 
 type StreamPresenceState struct {
 	Users []StreamPresenceEntry `json:"users"`
+}
+
+// StreamPresenceResponse is returned by the presence_only endpoint.
+type StreamPresenceResponse struct {
+	Success bool                  `json:"success"`
+	Count   int                   `json:"count"`
+	Users   []StreamPresenceEntry `json:"users"`
+	Seq     int64                 `json:"seq"`
 }
 
 type MockToolCall struct {
@@ -5501,6 +5787,7 @@ type HostDetails struct {
 	Paths     []string `json:"paths,omitempty" datastore:"path,noindex"`
 	Version   string   `json:"version,omitempty" datastore:"version,noindex"`
 	UpdatedAt int64    `json:"updated_at,omitempty" datastore:"updated_at"`
+	User      string   `json:"user,omitempty" datastore:"user,omitempty"`
 }
 
 type Software struct {
@@ -5856,6 +6143,7 @@ type AgentWorkflowExecutionReturn struct {
 
 type PixelFormat string
 type ElementRole string
+
 const (
 	FormatRGBA PixelFormat = "RGBA"
 	FormatBGRA PixelFormat = "BGRA"
@@ -5901,12 +6189,12 @@ type UIState struct {
 }
 
 type ScreenshotWrapper struct {
-	ScreenSize  DisplaySize `json:"screen_size"`
-	Cursor      Position    `json:"cursor"`
+	ScreenSize DisplaySize `json:"screen_size"`
+	Cursor     Position    `json:"cursor"`
 
-	// Image -> Base64 -> Empty .Image in sensors.go 
-	Image       []byte      `json:"image,omitempty"` // Raw
-	ImageBase64 string      `json:"image_base64,omitempty"` // base64.
+	// Image -> Base64 -> Empty .Image in sensors.go
+	Image       []byte `json:"image,omitempty"`        // Raw
+	ImageBase64 string `json:"image_base64,omitempty"` // base64.
 
 	ElementTree []UIElement `json:"element_tree,omitempty"`
 }
@@ -5914,4 +6202,27 @@ type ScreenshotWrapper struct {
 type Point struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`
+}
+
+// NotificationRequest defines the incoming JSON structure.
+type NotificationRequest struct {
+	Type        string `json:"type"` // "critical", "agent_request", or "general"
+	Title       string `json:"title"`
+	Body        string `json:"body"`
+	Description string `json:"description,omitempty"`
+	Source      string `json:"source,omitempty"`
+	// Device Routing
+	TargetTokens []string `json:"target_tokens"`
+	TargetToken  string   `json:"target_token,omitempty"`
+	// Critical / Pager specific fields
+	IncidentID          string `json:"incident_id,omitempty"`
+	Severity            string `json:"severity,omitempty"`
+	Tier                int    `json:"tier,omitempty"`
+	AutoEscalateSeconds int    `json:"auto_escalate_seconds,omitempty"`
+	// Agent Request specific fields
+	ExecutionID string `json:"execution_id,omitempty"`
+	WorkflowID  string `json:"workflow_id,omitempty"`
+	Action      string `json:"action,omitempty"`
+	// General / FYI specific fields
+	ReferenceURL string `json:"reference_url,omitempty"`
 }

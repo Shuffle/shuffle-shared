@@ -7,7 +7,7 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/hex"
-	
+
 	"encoding/json"
 
 	"errors"
@@ -22,11 +22,11 @@ import (
 	"crypto/sha256"
 	"math"
 	"math/rand"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-	"regexp"
 
 	runtimeDebug "runtime/debug"
 
@@ -104,6 +104,8 @@ func GetOpensearchBaseIndexes() []string {
 		"workflow",
 		"workflow_revisions",
 		"datastore_category",
+		"oauth_clients",
+		"oauth_tokens",
 	}
 }
 
@@ -130,7 +132,7 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 		}
 
 		stat.Date = stat.Date.UTC()
-		statdate := stat.Date.Format("2006-12-30")
+		statdate := stat.Date.Format("2006-01-02")
 		if !ArrayContains(allDates, statdate) {
 			newDaily = append(newDaily, stat)
 			allDates = append(allDates, statdate)
@@ -381,7 +383,6 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 		}
 	}
 
-
 	// Splitting into multiple cache items
 	//if project.Environment == "cloud" || len(memcached) > 0 {
 	if len(memcached) > 0 {
@@ -438,7 +439,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 					if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
 						log.Printf("[ERROR] Failed setting cache for '%s' (1): %s", originalKey, err)
 					}
-					break
+					return err
 				} else {
 					totalAdded += chunkSize
 					currentChunk = nextStep
@@ -485,6 +486,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 					return err
 				} else {
 					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", originalKey, err)
+					return err
 				}
 			}
 		}
@@ -582,8 +584,6 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 
 	return nil
 }
-
-
 
 func GetEsConfig(defaultCreds bool) *opensearchapi.Client {
 	esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
@@ -909,6 +909,94 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
 			if len(managerOrg.Id) == 36 {
 				IncrementCache(ctx, managerOrg.Id, "childorg_workflow_executions", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_agent_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_input_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_input_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_output_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_output_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "send_sms") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_send_sms", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "send_mail") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "childorg_send_mail", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_cached_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_cached_tokens", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_executions") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_executions", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_executions_successful") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_executions_successful", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_executions_failed") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_executions_failed", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "agent_max_loops_hit") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_agent_max_loops_hit", int(dbDumpInterval))
+			}
+		}
+	}
+
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "llm_tokens") {
+		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
+			if len(managerOrg.Id) == 36 {
+				IncrementCache(ctx, managerOrg.Id, "child_org_llm_tokens", int(dbDumpInterval))
 			}
 		}
 	}
@@ -1531,11 +1619,11 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		obj := bucket.Object(fullParsedPath)
 		fileReader, err := obj.NewReader(ctx)
 		if err != nil {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Failed reading file '%s' from bucket %s: %s. Will try with alternative solution.", fullParsedPath, bucketName, err)
 			}
 
-			// Cache sip for the minute 
+			// Cache sip for the minute
 			SetCache(ctx, cacheKey, []byte{}, 1)
 
 			if projectName != "shuffler" {
@@ -1545,7 +1633,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 				fileReader, err = obj.NewReader(ctx)
 				if err != nil {
 					//log.Printf("[ERROR] Failed reading file '%s' again from bucket %s: %s", fullParsedPath, bucketName, err)
-		
+
 					return "", err
 				}
 			} else {
@@ -2449,11 +2537,11 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 			if err == nil {
 
 				timenow := time.Now().Unix()
-				if env.SensorGroup { 
+				if env.SensorGroup {
 					for sensorIndex, _ := range env.SensorHosts {
 						sensor := env.SensorHosts[sensorIndex]
-							
-						env.SensorHosts[sensorIndex].Active = false 
+
+						env.SensorHosts[sensorIndex].Active = false
 						if sensor.Checkin > 0 && timenow-sensor.Checkin < 300 {
 							env.SensorHosts[sensorIndex].Active = true
 						}
@@ -2590,11 +2678,11 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 	}
 
 	timenow := time.Now().Unix()
-	if env.SensorGroup { 
+	if env.SensorGroup {
 		for sensorIndex, _ := range env.SensorHosts {
 			sensor := env.SensorHosts[sensorIndex]
-				
-			env.SensorHosts[sensorIndex].Active = false 
+
+			env.SensorHosts[sensorIndex].Active = false
 			if sensor.Checkin > 0 && timenow-sensor.Checkin < 300 {
 				env.SensorHosts[sensorIndex].Active = true
 			}
@@ -2956,6 +3044,10 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, workflow)
 			if err == nil && workflow.ID != "" {
+				if err := restoreWorkflowParameters(workflow); err != nil {
+					return workflow, err
+				}
+
 				validationData, err := GetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID))
 				if err == nil {
 					cacheData := []byte(validationData.([]uint8))
@@ -3079,6 +3171,10 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				return &Workflow{}, err
 			}
 		}
+	}
+
+	if err := restoreWorkflowParameters(workflow); err != nil {
+		return workflow, err
 	}
 
 	validationData, err := GetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID))
@@ -3605,7 +3701,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				_, err = it.Next(&innerWorkflow)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						if debug { 
+						if debug {
 							//log.Printf("[DEBUG] Workflow load iterator issue: %s", err)
 						}
 
@@ -3619,7 +3715,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Public {
-					//if debug { 
+					//if debug {
 					//	log.Printf("[DEBUG] Skipping public workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
 					//}
 
@@ -3627,7 +3723,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Hidden {
-					//if debug { 
+					//if debug {
 					//	log.Printf("[DEBUG] Skipping HIDDEN workflow %s (%s) for org %s", innerWorkflow.Name, innerWorkflow.ID, user.ActiveOrg.Id)
 					//}
 
@@ -3651,13 +3747,13 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 			}
 
-			// Fallback for when the iterator fails due to a datastore issue 
+			// Fallback for when the iterator fails due to a datastore issue
 			// (e.g. "cannot load field" error) and similar
 			if err != iterator.Done {
 				log.Printf("[WARNING] Failed fetching workflow results for org %s: %v", user.ActiveOrg.Id, err)
 
 				// Check if query contains edited or not 
-				if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition desc") && strings.Contains(fmt.Sprintf("%s", query), "edited") {
+				if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition desc") && strings.Contains(fmt.Sprintf("%#v", query), "edited") {
 					log.Printf("[ERROR] Retrying workflow query without Edited sort due to error: %s", err)
 
 					query = datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
@@ -3692,7 +3788,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 	})
 
 	if len(workflows) > maxAmount {
-		if debug { 
+		if debug {
 			log.Printf("[WARNING] Found %d workflows for user %s (%s) in org %s, but limiting to %d", len(workflows), user.Username, user.Id, user.ActiveOrg.Id, maxAmount)
 		}
 
@@ -3830,6 +3926,60 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 	return curOrg, nil
 }
 
+var defaultAlertThresholdPercentages = []int{50, 75, 90, 100}
+
+func isOnpremAlertEligible(org *Org) bool {
+	if !org.CloudSyncActive {
+		return false
+	}
+
+	return org.LeadInfo.EnterpriseLicenseOnprem ||
+		org.LeadInfo.BusinessLicenseOnprem ||
+		org.LeadInfo.ScaleLicenseOnpremCustomer
+}
+
+func mergeDefaultAlertThresholds(thresholds []AlertThreshold, limit int64) []AlertThreshold {
+	existingPercentages := map[int]bool{}
+	for _, threshold := range thresholds {
+		existingPercentages[threshold.Percentage] = true
+	}
+
+	for _, percentage := range defaultAlertThresholdPercentages {
+		if !existingPercentages[percentage] {
+			thresholds = append(thresholds, AlertThreshold{
+				Percentage: percentage,
+				Count:      int(float64(percentage) / 100 * float64(limit)),
+			})
+		}
+	}
+
+	return thresholds
+}
+
+func addDefaultAlertThresholds(org *Org) bool {
+	changed := false
+
+	if !org.Billing.DefaultAlertsApplied {
+		limit := org.SyncFeatures.AppExecutions.Limit
+		if limit > 0 {
+			org.Billing.AlertThreshold = mergeDefaultAlertThresholds(org.Billing.AlertThreshold, limit)
+			org.Billing.DefaultAlertsApplied = true
+			changed = true
+		}
+	}
+
+	if !org.Billing.DefaultOnpremAlertsApplied {
+		onpremLimit := org.SyncFeatures.OnpremAppExecutions.Limit
+		if onpremLimit > 0 && isOnpremAlertEligible(org) {
+			org.Billing.OnpremAlertThreshold = mergeDefaultAlertThresholds(org.Billing.OnpremAlertThreshold, onpremLimit)
+			org.Billing.DefaultOnpremAlertsApplied = true
+			changed = true
+		}
+	}
+
+	return changed
+}
+
 // ListBooks returns a list of books, ordered by title.
 // Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {
@@ -3912,7 +4062,18 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		curOrg = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
-		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
+				getErr = err
+			}
+		}()
+		if err := getErr; err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
@@ -4782,11 +4943,22 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 
 		//log.Printf("[DEBUG] Deleted %s (%s)", strings.ToLower(entity), value)
 	} else {
-		key1 := datastore.NameKey(entity, value, nil)
-		err := project.Dbclient.Delete(ctx, key1)
-		if err != nil {
-			log.Printf("[WARNING] Error deleting %s from %s: %s", value, entity, err)
-			return err
+		var deleteErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					deleteErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key1 := datastore.NameKey(entity, value, nil)
+			err := project.Dbclient.Delete(ctx, key1)
+			if err != nil {
+				log.Printf("[WARNING] Error deleting %s from %s: %s", value, entity, err)
+				deleteErr = err
+			}
+		}()
+		if deleteErr != nil && !project.CacheDb {
+			return deleteErr
 		}
 	}
 
@@ -6454,11 +6626,11 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 
 				timenow := time.Now().Unix()
 				for envIndex, env := range environments {
-					if env.SensorGroup { 
+					if env.SensorGroup {
 						for sensorIndex, _ := range env.SensorHosts {
 							sensor := env.SensorHosts[sensorIndex]
-								
-							environments[envIndex].SensorHosts[sensorIndex].Active = false 
+
+							environments[envIndex].SensorHosts[sensorIndex].Active = false
 							if sensor.Checkin > 0 && timenow-sensor.Checkin < 300 {
 								environments[envIndex].SensorHosts[sensorIndex].Active = true
 							}
@@ -6637,11 +6809,11 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 	timenow := time.Now().Unix()
 	for envIndex, env := range environments {
 
-		if env.SensorGroup { 
+		if env.SensorGroup {
 			for sensorIndex, _ := range env.SensorHosts {
 				sensor := env.SensorHosts[sensorIndex]
-					
-				environments[envIndex].SensorHosts[sensorIndex].Active = false 
+
+				environments[envIndex].SensorHosts[sensorIndex].Active = false
 				if sensor.Checkin > 0 && timenow-sensor.Checkin < 300 {
 					environments[envIndex].SensorHosts[sensorIndex].Active = true
 				}
@@ -8103,11 +8275,16 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 
 	if project.Environment != "cloud" && len(inputEnv) > 0 && len(executions) > 0 {
 		env := inputEnv[0]
-
 		orgId := env.OrgId
-		org, err := GetOrg(ctx, orgId)
+
+		org, err := GetFirstOrg(ctx)
 		if err != nil {
-			log.Printf("[ERROR] Failed getting org %s for queue: %s", orgId, err)
+			log.Printf("[ERROR] Failed getting parent org directly for queue: %s", err)
+			return ExecutionRequestWrapper{
+				Data: executions,
+			}, nil
+		}
+		if len(org.Id) == 0 {
 			return ExecutionRequestWrapper{
 				Data: executions,
 			}, nil
@@ -8138,15 +8315,78 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 
 		license := checkNoInternet()
 		if license.Valid {
-			limit = limit * 2
+			if license.AppRunsGrouping {
+				limit = limit * 12
+				if licenseOrg.Billing.InternalAppRunsHardLimit > 0 && licenseOrg.Billing.InternalAppRunsHardLimit <= licenseOrg.SyncFeatures.AppExecutions.Limit {
+					limit = licenseOrg.Billing.InternalAppRunsHardLimit
+				}
+
+				var planStartDate int64
+				for _, sub := range licenseOrg.Subscriptions {
+					if sub.Active {
+						subName := strings.ToLower(sub.Name)
+						if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") {
+							planStartDate = sub.Startdate
+							break
+						}
+					}
+				}
+
+				var annualAppRuns int64
+				if planStartDate > 0 {
+					for _, stat := range stats.DailyStatistics {
+						if stat.Date.Unix() >= planStartDate {
+							annualAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+						}
+					}
+				}
+				totalAppExecutions = annualAppRuns
+			} else {
+				limit = limit * 2
+			}
+
+		} else if licenseOrg.CloudSync && licenseOrg.SyncFeatures.AnnualAppRunsGrouping.Active {
+			limit = limit * 12 * 2
+
+			if licenseOrg.Billing.InternalAppRunsHardLimit > 0 && licenseOrg.Billing.InternalAppRunsHardLimit <= licenseOrg.SyncFeatures.AppExecutions.Limit {
+				limit = licenseOrg.Billing.InternalAppRunsHardLimit
+			}
+
+			var planStartDate int64
+			for _, sub := range licenseOrg.Subscriptions {
+				if sub.Active {
+					subName := strings.ToLower(sub.Name)
+					if strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") || strings.Contains(subName, "scale") {
+						planStartDate = sub.Startdate
+						break
+					}
+				}
+			}
+
+			var annualAppRuns int64
+			if planStartDate > 0 {
+				for _, stat := range stats.DailyStatistics {
+					if stat.Date.Unix() >= planStartDate {
+						annualAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+					}
+				}
+			}
+			totalAppExecutions = annualAppRuns
+		} else if licenseOrg.CloudSync && licenseOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+			limit = limit * 10
+
+			if licenseOrg.Billing.InternalAppRunsHardLimit > 0 {
+				limit = licenseOrg.Billing.InternalAppRunsHardLimit
+			}
+
 		}
 
-		shouldSkipRateLimit := false
-		if licenseOrg.CloudSync && !license.Valid && licenseOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
-			shouldSkipRateLimit = true
+		if debug {
+			log.Printf("[INFO] total app executions in the queue is: %v", totalAppExecutions)
+			log.Printf("[INFO] app runs limit in the queue is: %v", limit)
 		}
 
-		if !shouldSkipRateLimit && totalAppExecutions > limit {
+		if totalAppExecutions > limit {
 			cacheKey := fmt.Sprintf("org-%s-last-queue-send", orgId)
 			currentTime := time.Now().Unix()
 			lastSendCache, err := GetCache(ctx, cacheKey)
@@ -8176,7 +8416,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int, inputEnv ...Env
 			} else {
 
 				if len(executions) > 1 {
-					log.Printf("[INFO] Rate limiting (3): Org %s exceeded the 25K app run quota for non-licensed users (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, len(executions), totalAppExecutions)
+					log.Printf("[INFO] Rate limiting (3): Org %s exceeded the %v app run montly quota (current queued: %d, current month usage: %d). To increase scale, upgrade to an Enterprise license.", orgId, limit, len(executions), totalAppExecutions)
 					executions = executions[0:1]
 				}
 
@@ -8642,6 +8882,11 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflows)
 			if err == nil {
+				for index := range workflows {
+					if err := restoreWorkflowParameters(&workflows[index]); err != nil {
+						return workflows, err
+					}
+				}
 
 				sort.Slice(workflows, func(i, j int) bool {
 					return workflows[i].Edited > workflows[j].Edited
@@ -8818,6 +9063,12 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 		}
 	}
 
+	for index := range workflows {
+		if err := restoreWorkflowParameters(&workflows[index]); err != nil {
+			return workflows, err
+		}
+	}
+
 	return workflows, nil
 }
 
@@ -8900,6 +9151,11 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 	hasher.Write([]byte(workflowHashString))
 	workflowHash := hex.EncodeToString(hasher.Sum(nil))
 	workflow.RevisionId = workflowHash
+	if project.DbType == "opensearch" {
+		if err := offloadWorkflowParameters(&workflow); err != nil {
+			return err
+		}
+	}
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflow)
@@ -8910,53 +9166,7 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, workflow.RevisionId, data)
 		if err != nil {
-			if strings.Contains(err.Error(), "immense term") {
-				retried := false
-				indexWorkflow := workflow
-
-				for actionIndex, action := range indexWorkflow.Actions {
-					for paramIndex, param := range action.Parameters {
-						if len(param.Value) > 32500 {
-							log.Printf("[DEBUG][%s] Trimming workflow revision parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
-							indexWorkflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
-							retried = true
-						}
-					}
-
-					for paramIndex, param := range action.InvalidParameters {
-						if len(param.Value) > 32500 {
-							log.Printf("[DEBUG][%s] Trimming workflow revision invalid parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
-							indexWorkflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
-							retried = true
-						}
-					}
-				}
-
-				for triggerIndex, trigger := range indexWorkflow.Triggers {
-					for paramIndex, param := range trigger.Parameters {
-						if len(param.Value) > 32500 {
-							log.Printf("[DEBUG][%s] Trimming workflow revision trigger parameter %s in trigger %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, trigger.Label, len(param.Value))
-							indexWorkflow.Triggers[triggerIndex].Parameters[paramIndex].Value = "Size too large. Removed."
-							retried = true
-						}
-					}
-				}
-
-				if retried {
-					indexData, marshalErr := json.Marshal(indexWorkflow)
-					if marshalErr != nil {
-						log.Printf("[WARNING] Failed marshalling trimmed workflow revision for ES retry: %s", marshalErr)
-						return marshalErr
-					}
-
-					log.Printf("[DEBUG][%s] Retrying OpenSearch workflow revision save after trimming oversized parameter values", workflow.ID)
-					err = indexEs(ctx, nameKey, workflow.RevisionId, indexData)
-				}
-			}
-
-			if err != nil {
-				return err
-			}
+			return err
 		}
 	} else {
 		key := datastore.NameKey(nameKey, workflow.RevisionId, nil)
@@ -9148,6 +9358,11 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	workflow = FixWorkflowPosition(ctx, workflow)
 	trimOversizedWorkflowImages(&workflow)
+	if project.DbType == "opensearch" {
+		if err := offloadWorkflowParameters(&workflow); err != nil {
+			return err
+		}
+	}
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflow)
@@ -9159,53 +9374,11 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
-			if strings.Contains(err.Error(), "immense term") {
-				retried := false
-				indexWorkflow := workflow
+			return err
+		}
 
-				for actionIndex, action := range indexWorkflow.Actions {
-					for paramIndex, param := range action.Parameters {
-						if len(param.Value) > 32500 {
-							log.Printf("[DEBUG][%s] Trimming workflow parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
-							indexWorkflow.Actions[actionIndex].Parameters[paramIndex].Value = "Size too large. Removed."
-							retried = true
-						}
-					}
-
-					for paramIndex, param := range action.InvalidParameters {
-						if len(param.Value) > 32500 {
-							log.Printf("[DEBUG][%s] Trimming workflow invalid parameter %s in action %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, action.Label, len(param.Value))
-							indexWorkflow.Actions[actionIndex].InvalidParameters[paramIndex].Value = "Size too large. Removed."
-							retried = true
-						}
-					}
-				}
-
-				for triggerIndex, trigger := range indexWorkflow.Triggers {
-					for paramIndex, param := range trigger.Parameters {
-						if len(param.Value) > 32500 {
-							log.Printf("[DEBUG][%s] Trimming workflow trigger parameter %s in trigger %s for OpenSearch indexing (size: %d bytes)", workflow.ID, param.Name, trigger.Label, len(param.Value))
-							indexWorkflow.Triggers[triggerIndex].Parameters[paramIndex].Value = "Size too large. Removed."
-							retried = true
-						}
-					}
-				}
-
-				if retried {
-					indexData, marshalErr := json.Marshal(indexWorkflow)
-					if marshalErr != nil {
-						log.Printf("[WARNING] Failed marshalling trimmed workflow for ES retry: %s", marshalErr)
-						return marshalErr
-					}
-
-					log.Printf("[DEBUG][%s] Retrying OpenSearch workflow save after trimming oversized parameter values", workflow.ID)
-					err = indexEs(ctx, nameKey, id, indexData)
-				}
-			}
-
-			if err != nil {
-				return err
-			}
+		if err := restoreWorkflowParameters(&workflow); err != nil {
+			return err
 		}
 	} else {
 		//log.Printf("\n\n[INFO] Adding workflow with ID %s\n\n", id)
@@ -9224,6 +9397,11 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	if len(workflow.ChildWorkflowIds) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
+	}
+
+	// Drop the stream auth cache only when owner/org/public actually changes, not on ordinary saves.
+	if len(foundWorkflow.ID) > 0 && (foundWorkflow.Owner != workflow.Owner || foundWorkflow.OrgId != workflow.OrgId || foundWorkflow.Public != workflow.Public) {
+		DeleteCache(ctx, streamAuthCtxKey(id))
 	}
 
 	if project.CacheDb {
@@ -9284,6 +9462,101 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 				}
 			}
 		}
+	}
+
+	return nil
+}
+
+const largeWorkflowParameterMarker = "workflow_parameter"
+
+type workflowParameterReference struct {
+	Success bool   `json:"success"`
+	Reason  string `json:"reason"`
+	Size    int    `json:"size"`
+	Extra   string `json:"extra"`
+	ID      string `json:"id"`
+}
+
+func workflowParameterValues(workflow *Workflow) []*string {
+	values := []*string{}
+	for actionIndex := range workflow.Actions {
+		for parameterIndex := range workflow.Actions[actionIndex].Parameters {
+			values = append(values, &workflow.Actions[actionIndex].Parameters[parameterIndex].Value)
+		}
+		for parameterIndex := range workflow.Actions[actionIndex].InvalidParameters {
+			values = append(values, &workflow.Actions[actionIndex].InvalidParameters[parameterIndex].Value)
+		}
+	}
+	for triggerIndex := range workflow.Triggers {
+		for parameterIndex := range workflow.Triggers[triggerIndex].Parameters {
+			values = append(values, &workflow.Triggers[triggerIndex].Parameters[parameterIndex].Value)
+		}
+	}
+
+	return values
+}
+
+func offloadWorkflowParameters(workflow *Workflow) error {
+	basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
+	if basepath == "" {
+		basepath = "files"
+	}
+	directory := fmt.Sprintf("%s/large_workflows", basepath)
+
+	for _, value := range workflowParameterValues(workflow) {
+		if len(*value) <= 32500 {
+			continue
+		}
+
+		// @yashsinghcodes: content-addressed files are retained; add reference-aware cleanup if storage growth becomes material.
+		sum := sha256.Sum256([]byte(workflow.OrgId + "\x00" + *value))
+		id := hex.EncodeToString(sum[:])
+		if err := os.MkdirAll(directory, 0755); err != nil {
+			return fmt.Errorf("create large workflow parameter directory: %w", err)
+		}
+		if err := os.WriteFile(fmt.Sprintf("%s/%s", directory, id), []byte(*value), 0644); err != nil {
+			return fmt.Errorf("write large workflow parameter: %w", err)
+		}
+
+		replacement, err := json.Marshal(workflowParameterReference{
+			Reason: "Workflow parameter too large for OpenSearch; stored in file.",
+			Size:   len(*value),
+			Extra:  largeWorkflowParameterMarker,
+			ID:     id,
+		})
+		if err != nil {
+			return err
+		}
+		*value = string(replacement)
+	}
+
+	return nil
+}
+
+func restoreWorkflowParameters(workflow *Workflow) error {
+	basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
+	if basepath == "" {
+		basepath = "files"
+	}
+
+	for _, value := range workflowParameterValues(workflow) {
+		reference := workflowParameterReference{}
+		if json.Unmarshal([]byte(*value), &reference) != nil || reference.Extra != largeWorkflowParameterMarker {
+			continue
+		}
+		if decoded, err := hex.DecodeString(reference.ID); err != nil || len(decoded) != sha256.Size {
+			return errors.New("invalid large workflow parameter file id")
+		}
+
+		data, err := os.ReadFile(fmt.Sprintf("%s/large_workflows/%s", basepath, reference.ID))
+		if err != nil {
+			return fmt.Errorf("read large workflow parameter: %w", err)
+		}
+		sum := sha256.Sum256([]byte(workflow.OrgId + "\x00" + string(data)))
+		if hex.EncodeToString(sum[:]) != reference.ID {
+			return errors.New("large workflow parameter file checksum mismatch")
+		}
+		*value = string(data)
 	}
 
 	return nil
@@ -10119,7 +10392,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	}
 
 	if debug {
-		log.Printf("[DEBUG] API key cache miss; looking up user") 
+		log.Printf("[DEBUG] API key cache miss; looking up user")
 	}
 
 	if project.DbType == "opensearch" {
@@ -10855,7 +11128,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			"size": 1000,
 			"sort": map[string]interface{}{
 				"updated_at": map[string]interface{}{
-					"order": "desc",
+					"order":         "desc",
 					"unmapped_type": "long",
 				},
 			},
@@ -13808,7 +14081,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 							oldDoc := config.Value
 							newDoc := cacheData.Value
 
-							if debug { 
+							if debug {
 								log.Printf("\n\nOLD: %s\n\nNEW: %s\n\n", oldDoc, newDoc)
 							}
 
@@ -13833,9 +14106,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						break
 					}
 
-					// This NEVER triggers. RLS just returns the merged JSON 
-					// and we trust it. If we don't trust it, we can set 
-					// ruleValid to false above. 
+					// This NEVER triggers. RLS just returns the merged JSON
+					// and we trust it. If we don't trust it, we can set
+					// ruleValid to false above.
 					if !ruleValid {
 						// Break out
 						if debug {
@@ -13844,8 +14117,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 
 						keyUpdated = false
 
-						cacheData.Existed = true 
-						cacheData.Changed = keyUpdated 
+						cacheData.Existed = true
+						cacheData.Changed = keyUpdated
 						datastoreKeys <- *datastore.NameKey(nameKey, datastoreId, nil)
 						cacheKeys <- cacheData
 						return
@@ -14190,7 +14463,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 	}
 
 	if len(newArray) > 0 {
-		if debug { 
+		if debug {
 			log.Printf("[INFO] SetDatastoreKeyBulk: Successfully set %d key(s) in category %s for org %s", len(newArray), mainCategory, orgId)
 		}
 	}
@@ -15245,6 +15518,10 @@ func checkImportPath() bool {
 		return false
 	}
 
+	if info.Main.Path == AllowedImportPath() || info.Main.Path == "command-line-arguments" || strings.Contains(info.Main.Path, "shuffle-shared") {
+		return true
+	}
+
 	for _, dep := range info.Deps {
 		if strings.Contains(dep.Path, "shuffle-shared") && dep.Path != AllowedImportPath() {
 			return false
@@ -15256,7 +15533,6 @@ func checkImportPath() bool {
 	}
 
 	return false
-
 }
 
 type customTransport struct {
@@ -15288,9 +15564,12 @@ func checkNoInternet() OnpremLicense {
 			Active: false,
 			Limit:  25000,
 		},
-		Timeout:  "",
-		Branding: false,
+		Timeout:         "",
+		Branding:        false,
+		StartDate:       "",
+		AppRunsGrouping: false,
 	}
+
 	licenseKey := os.Getenv("SHUFFLE_LICENSE")
 	if len(licenseKey) == 0 {
 		return license
@@ -15346,6 +15625,24 @@ func checkNoInternet() OnpremLicense {
 
 	brandingHash := sha256.Sum256([]byte(branding))
 	encodedBranding := hex.EncodeToString(brandingHash[:])
+
+	startDate := ""
+	if len(licenseParts) > 5 {
+		startDate = licenseParts[5]
+	}
+
+	startDateHash := sha256.Sum256([]byte(startDate))
+	encodedStartDate := hex.EncodeToString(startDateHash[:])
+
+	// check if annual appruns grouping available
+	appRunsGrouping := ""
+	if len(licenseParts) > 6 {
+		appRunsGrouping = licenseParts[6]
+	}
+
+	appRunsGroupingHash := sha256.Sum256([]byte(appRunsGrouping))
+	encodedAppRunsGrouping := hex.EncodeToString(appRunsGroupingHash[:])
+
 	// Returns a map[sha256]timeout string
 	onpremKeys := GetOnpremKeys()
 	if timeout, ok := onpremKeys[encodedString]; ok {
@@ -15404,6 +15701,19 @@ func checkNoInternet() OnpremLicense {
 					} else {
 						license.AppRuns.Active = false
 					}
+				}
+
+				if len(startDate) > 0 && len(encodedStartDate) > 0 {
+					if startDate, ok := onpremKeys[encodedStartDate]; ok {
+						license.StartDate = startDate
+					}
+				}
+
+				if len(appRunsGrouping) > 0 && len(encodedAppRunsGrouping) > 0 {
+					appRuns := GetAppRunsGrouping(encodedAppRunsGrouping)
+					license.AppRunsGrouping = appRuns
+				} else {
+					license.AppRunsGrouping = false
 				}
 
 				return license
@@ -16299,37 +16609,37 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		if parentOrgDepth >= 3 {
 			log.Printf("[ERROR] Reached maximum parent org lookup depth (%d) for org %s. Skipping parent org cache lookup to prevent infinite recursion.", parentOrgDepth, orgId)
 		} else {
-		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
-		if err != nil {
+			parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+			if err != nil {
 				if debug {
 					log.Printf("[DEBUG] Could not find parent org %s for org %s (possibly in different region): %s", foundOrg.CreatorOrg, orgId, err)
 				}
-		} else {
+			} else {
 				parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, "", max, inputcursor, cleanupDepth, parentOrgDepth+1)
-			if err != nil {
+				if err != nil {
 					if debug {
 						log.Printf("[DEBUG] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
 					}
-			} else {
-				if debug {
-					//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
-				}
-
-				for _, parentCache := range parentOrgCache {
-					/*
-						if debug && len(parentCache.SuborgDistribution) > 0 {
-							log.Printf("[DEBUG] Parent org %s keys: %#v", parentOrg.Id, parentCache.SuborgDistribution)
-						}
-					*/
-
-					if !ArrayContains(parentCache.SuborgDistribution, orgId) {
-						continue
+				} else {
+					if debug {
+						//log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
 					}
 
-					// Clean up just in case
-					parentCache.PublicAuthorization = ""
-					parentCache.SuborgDistribution = []string{orgId}
-					cacheKeys = append(cacheKeys, parentCache)
+					for _, parentCache := range parentOrgCache {
+						/*
+							if debug && len(parentCache.SuborgDistribution) > 0 {
+								log.Printf("[DEBUG] Parent org %s keys: %#v", parentOrg.Id, parentCache.SuborgDistribution)
+							}
+						*/
+
+						if !ArrayContains(parentCache.SuborgDistribution, orgId) {
+							continue
+						}
+
+						// Clean up just in case
+						parentCache.PublicAuthorization = ""
+						parentCache.SuborgDistribution = []string{orgId}
+						cacheKeys = append(cacheKeys, parentCache)
 					}
 				}
 			}
@@ -19308,4 +19618,761 @@ func SetVulnerability(ctx context.Context, vuln OSVVulnerability) error {
 	}
 
 	return nil
+}
+
+func SetOAuthClient(ctx context.Context, client OAuthClient) error {
+	nameKey := "oauth_clients"
+	if len(client.ClientID) == 0 {
+		return errors.New("client ID cannot be empty")
+	}
+
+	if client.ID == "" {
+		client.ID = client.ClientID
+	}
+
+	if client.CreatedAt == 0 {
+		client.CreatedAt = time.Now().Unix()
+	}
+
+	data, err := json.Marshal(client)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling OAuth client %s: %s", client.ClientID, err)
+		return err
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, client.ClientID, data)
+		if err != nil {
+			log.Printf("[ERROR] Failed indexing OAuth client in OpenSearch: %s", err)
+			return err
+		}
+	} else {
+		var putErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					putErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key := datastore.NameKey(nameKey, client.ClientID, nil)
+			if _, err := project.Dbclient.Put(ctx, key, &client); err != nil {
+				log.Printf("[ERROR] Failed adding OAuth client %s to Datastore: %s", client.ClientID, err)
+				putErr = err
+			}
+		}()
+		if putErr != nil && !project.CacheDb {
+			return putErr
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, client.ClientID)
+		err = SetCache(ctx, cacheKey, data, 300)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for OAuth client %s: %s", client.ClientID, err)
+		}
+	}
+
+	return nil
+}
+
+// GetOAuthClient retrieves an OAuthClient by clientID from cache, OpenSearch, or Datastore.
+func GetOAuthClient(ctx context.Context, id string) (*OAuthClient, error) {
+	nameKey := "oauth_clients"
+	id = strings.TrimSpace(id)
+	if len(id) == 0 {
+		return nil, errors.New("client ID cannot be empty")
+	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil && cache != nil {
+			var rawBytes []byte
+			switch v := cache.(type) {
+			case []byte:
+				rawBytes = v
+			case string:
+				rawBytes = []byte(v)
+			}
+			if len(rawBytes) > 0 {
+				var client OAuthClient
+				if err := json.Unmarshal(rawBytes, &client); err == nil && len(client.ClientID) > 0 {
+					return &client, nil
+				}
+			}
+		}
+	}
+
+	client := &OAuthClient{}
+	if project.DbType == "opensearch" {
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: id,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return nil, errors.New("OAuth client doesn't exist")
+			}
+			log.Printf("[WARNING] Error fetching OAuth client %s from OpenSearch: %s", id, err)
+			return nil, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return nil, errors.New("OAuth client doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		wrapped := OAuthClientWrapper{}
+		if err := json.Unmarshal(respBody, &wrapped); err != nil {
+			return nil, err
+		}
+
+		client = &wrapped.Source
+	} else {
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key := datastore.NameKey(nameKey, id, nil)
+			if err := project.Dbclient.Get(ctx, key, client); err != nil {
+				if err == datastore.ErrNoSuchEntity {
+					getErr = errors.New("OAuth client doesn't exist")
+				} else {
+					log.Printf("[ERROR] Error getting OAuth client %s from Datastore: %s", id, err)
+					getErr = err
+				}
+			}
+		}()
+
+		if getErr != nil {
+			return nil, getErr
+		}
+	}
+
+	if len(client.ClientID) == 0 {
+		return nil, errors.New("OAuth client not found")
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(client)
+		if err == nil {
+			_ = SetCache(ctx, cacheKey, data, 300)
+		}
+	}
+
+	return client, nil
+}
+
+// DeleteOAuthClient removes an OAuthClient from storage and cache.
+func DeleteOAuthClient(ctx context.Context, id string) error {
+	return DeleteKey(ctx, "oauth_clients", id)
+}
+
+// SetOAuthToken persists an OAuthToken in OpenSearch (onprem) or Datastore (cloud).
+func SetOAuthToken(ctx context.Context, token OAuthToken) error {
+	nameKey := "oauth_tokens"
+	if len(token.AccessToken) == 0 {
+		return errors.New("access token cannot be empty")
+	}
+	if token.ID == "" {
+		token.ID = token.AccessToken
+	}
+	if token.CreatedAt == 0 {
+		token.CreatedAt = time.Now().Unix()
+	}
+
+	data, err := json.Marshal(token)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling OAuth token: %s", err)
+		return err
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, token.AccessToken, data)
+		if err != nil {
+			log.Printf("[ERROR] Failed indexing OAuth token in OpenSearch: %s", err)
+			return err
+		}
+	} else {
+		var putErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[ERROR] SetOAuthToken: Datastore client panic recovered: %v", r)
+					putErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key := datastore.NameKey(nameKey, token.AccessToken, nil)
+			if _, err := project.Dbclient.Put(ctx, key, &token); err != nil {
+				log.Printf("[ERROR] Failed adding OAuth token to Datastore: %s", err)
+				putErr = err
+			}
+		}()
+		if putErr != nil && !project.CacheDb {
+			return putErr
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, token.AccessToken)
+		err = SetCache(ctx, cacheKey, data, 300)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for OAuth token: %s", err)
+		}
+
+		if len(token.RefreshToken) > 0 {
+			refreshCacheKey := fmt.Sprintf("oauth_refresh_%s", token.RefreshToken)
+			_ = SetCache(ctx, refreshCacheKey, []byte(token.AccessToken), int32(token.ExpiresIn))
+		}
+	}
+
+	return nil
+}
+
+// GetOAuthToken retrieves an OAuthToken by accessToken from cache, OpenSearch, or Datastore.
+// Validates token existence and expiry.
+func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error) {
+	nameKey := "oauth_tokens"
+	accessToken = strings.TrimSpace(accessToken)
+	if len(accessToken) == 0 {
+		return nil, errors.New("access token cannot be empty")
+	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, accessToken)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil && cache != nil {
+			var rawBytes []byte
+			switch v := cache.(type) {
+			case []byte:
+				rawBytes = v
+			case string:
+				rawBytes = []byte(v)
+			}
+			if len(rawBytes) > 0 {
+				var token OAuthToken
+				if err := json.Unmarshal(rawBytes, &token); err == nil && len(token.AccessToken) > 0 {
+					if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
+						return nil, errors.New("OAuth token has expired")
+					}
+					return &token, nil
+				}
+			}
+		}
+	}
+
+	token := &OAuthToken{}
+	if project.DbType == "opensearch" {
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: accessToken,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return nil, errors.New("OAuth token doesn't exist")
+			}
+			log.Printf("[WARNING] Error getting OAuth token from OpenSearch: %s", err)
+			return nil, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return nil, errors.New("OAuth token doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		wrapped := OAuthTokenWrapper{}
+		if err := json.Unmarshal(respBody, &wrapped); err != nil {
+			return nil, err
+		}
+
+		token = &wrapped.Source
+	} else {
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[ERROR] GetOAuthToken: Datastore client panic recovered: %v", r)
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key := datastore.NameKey(nameKey, accessToken, nil)
+			if err := project.Dbclient.Get(ctx, key, token); err != nil {
+				if err == datastore.ErrNoSuchEntity {
+					getErr = errors.New("OAuth token doesn't exist")
+				} else {
+					log.Printf("[ERROR] Error getting OAuth token from Datastore: %s", err)
+					getErr = err
+				}
+			}
+		}()
+		if getErr != nil {
+			return nil, getErr
+		}
+	}
+
+	if len(token.AccessToken) == 0 {
+		return nil, errors.New("OAuth token not found")
+	}
+
+	if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
+		return nil, errors.New("OAuth token has expired")
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(token)
+		if err == nil {
+			_ = SetCache(ctx, cacheKey, data, 300)
+		}
+	}
+
+	return token, nil
+}
+
+// GetOAuthTokenByRefreshToken retrieves an OAuthToken using its refresh token.
+func GetOAuthTokenByRefreshToken(ctx context.Context, refreshToken string) (*OAuthToken, error) {
+	nameKey := "oauth_tokens"
+	refreshToken = strings.TrimSpace(refreshToken)
+	if len(refreshToken) == 0 {
+		return nil, errors.New("refresh token cannot be empty")
+	}
+
+	if project.CacheDb {
+		refreshCacheKey := fmt.Sprintf("oauth_refresh_%s", refreshToken)
+		cache, err := GetCache(ctx, refreshCacheKey)
+		if err == nil && cache != nil {
+			var accessToken string
+			switch v := cache.(type) {
+			case []byte:
+				accessToken = string(v)
+			case string:
+				accessToken = v
+			}
+			if len(accessToken) > 0 {
+				token, err := GetOAuthToken(ctx, accessToken)
+				if err == nil && token != nil {
+					return token, nil
+				}
+			}
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"refresh_token": refreshToken,
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			return nil, err
+		}
+
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    &buf,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode != 200 {
+			return nil, errors.New("OAuth token not found by refresh token")
+		}
+
+		var searchResp struct {
+			Hits struct {
+				Hits []OAuthTokenWrapper `json:"hits"`
+			} `json:"hits"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&searchResp); err != nil {
+			return nil, err
+		}
+
+		if len(searchResp.Hits.Hits) > 0 {
+			token := searchResp.Hits.Hits[0].Source
+			if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
+				return nil, errors.New("OAuth token has expired")
+			}
+			return &token, nil
+		}
+	} else {
+		var tokens []OAuthToken
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[ERROR] GetOAuthTokenByRefreshToken: Datastore client panic recovered: %v", r)
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			q := datastore.NewQuery(nameKey).Filter("refresh_token =", refreshToken).Limit(1)
+			if _, err := project.Dbclient.GetAll(ctx, q, &tokens); err != nil {
+				log.Printf("[ERROR] Error getting OAuth token by refresh token from Datastore: %s", err)
+				getErr = err
+			}
+			if getErr == nil && len(tokens) > 0 {
+				token := tokens[0]
+				if !token.ExpiresAt.IsZero() && time.Now().After(token.ExpiresAt) {
+					getErr = errors.New("OAuth token has expired")
+				}
+			}
+		}()
+		if getErr != nil {
+			return nil, getErr
+		}
+		if len(tokens) > 0 {
+			return &tokens[0], nil
+		}
+	}
+
+	return nil, errors.New("OAuth token not found by refresh token")
+}
+
+// DeleteOAuthToken removes an OAuthToken from storage and cache.
+func DeleteOAuthToken(ctx context.Context, accessToken string) error {
+	token, err := GetOAuthToken(ctx, accessToken)
+	if err == nil && token != nil && len(token.RefreshToken) > 0 {
+		_ = DeleteKey(ctx, "oauth_refresh", token.RefreshToken)
+	}
+	return DeleteKey(ctx, "oauth_tokens", accessToken)
+}
+
+// GetOAuthTokensByOrg retrieves all active OAuth tokens issued under a specific organization.
+func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error) {
+	nameKey := "oauth_tokens"
+	orgId = strings.TrimSpace(orgId)
+	if len(orgId) == 0 {
+		return nil, errors.New("orgId cannot be empty")
+	}
+
+	tokens := []OAuthToken{}
+	if project.DbType == "opensearch" {
+		query := map[string]interface{}{
+			"query": map[string]interface{}{
+				"term": map[string]interface{}{
+					"org_id.keyword": orgId,
+				},
+			},
+			"size": 100,
+		}
+		queryBytes, _ := json.Marshal(query)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    bytes.NewReader(queryBytes),
+		})
+		if err != nil {
+			return nil, err
+		}
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+
+		var searchResp struct {
+			Hits struct {
+				Hits []OAuthTokenWrapper `json:"hits"`
+			} `json:"hits"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&searchResp); err == nil {
+			for _, hit := range searchResp.Hits.Hits {
+				if hit.Source.ExpiresAt.IsZero() || time.Now().Before(hit.Source.ExpiresAt) {
+					tokens = append(tokens, hit.Source)
+				}
+			}
+		}
+	} else {
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(100)
+			if _, err := project.Dbclient.GetAll(ctx, q, &tokens); err != nil {
+				getErr = err
+			}
+		}()
+		if getErr != nil && !project.CacheDb {
+			return nil, getErr
+		}
+	}
+
+	return tokens, nil
+}
+
+// GetOAuthTokensByUser retrieves all active OAuth tokens issued to a specific user.
+func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, error) {
+	nameKey := "oauth_tokens"
+	userId = strings.TrimSpace(userId)
+	if len(userId) == 0 {
+		return nil, errors.New("userId cannot be empty")
+	}
+
+	tokens := []OAuthToken{}
+	if project.DbType == "opensearch" {
+		query := map[string]interface{}{
+			"query": map[string]interface{}{
+				"term": map[string]interface{}{
+					"user_id.keyword": userId,
+				},
+			},
+			"size": 100,
+		}
+		queryBytes, _ := json.Marshal(query)
+		resp, err := project.Es.Search(ctx, &opensearchapi.SearchReq{
+			Indices: []string{strings.ToLower(GetESIndexPrefix(nameKey))},
+			Body:    bytes.NewReader(queryBytes),
+		})
+		if err != nil {
+			return nil, err
+		}
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+
+		var searchResp struct {
+			Hits struct {
+				Hits []OAuthTokenWrapper `json:"hits"`
+			} `json:"hits"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&searchResp); err == nil {
+			for _, hit := range searchResp.Hits.Hits {
+				if hit.Source.ExpiresAt.IsZero() || time.Now().Before(hit.Source.ExpiresAt) {
+					tokens = append(tokens, hit.Source)
+				}
+			}
+		}
+	} else {
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(100)
+			if _, err := project.Dbclient.GetAll(ctx, q, &tokens); err != nil {
+				getErr = err
+			}
+		}()
+		if getErr != nil && !project.CacheDb {
+			return nil, getErr
+		}
+	}
+
+	return tokens, nil
+}
+
+// SetOAuthAuthCode persists a temporary authorization code in OpenSearch (onprem) or Datastore (cloud).
+func SetOAuthAuthCode(ctx context.Context, code OAuthAuthCode) error {
+	nameKey := "oauth_codes"
+	if len(code.Code) == 0 {
+		return errors.New("authorization code cannot be empty")
+	}
+	if code.ID == "" {
+		code.ID = code.Code
+	}
+	if code.CreatedAt == 0 {
+		code.CreatedAt = time.Now().Unix()
+	}
+
+	log.Printf("[DEBUG] SetOAuthAuthCode: persisting auth code '%s' for client '%s' (org: '%s', user: '%s', DbType='%s', CacheDb=%v)",
+		code.Code, code.ClientID, code.OrgId, code.UserId, project.DbType, project.CacheDb)
+
+	data, err := json.Marshal(code)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling OAuth authorization code: %s", err)
+		return err
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, code.Code, data)
+		if err != nil {
+			log.Printf("[ERROR] Failed indexing OAuth authorization code in OpenSearch: %s", err)
+			return err
+		}
+		log.Printf("[DEBUG] SetOAuthAuthCode: successfully indexed auth code '%s' in OpenSearch", code.Code)
+	} else {
+		var putErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[ERROR] SetOAuthAuthCode: Datastore client panic recovered: %v", r)
+					putErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key := datastore.NameKey(nameKey, code.Code, nil)
+			if _, err := project.Dbclient.Put(ctx, key, &code); err != nil {
+				log.Printf("[ERROR] Failed adding OAuth authorization code to Datastore: %s", err)
+				putErr = err
+			} else {
+				log.Printf("[DEBUG] SetOAuthAuthCode: successfully persisted auth code '%s' in Datastore", code.Code)
+			}
+		}()
+		if putErr != nil {
+			log.Printf("[ERROR] SetOAuthAuthCode: Datastore Put failed for code '%s': %v (CacheDb=%v)", code.Code, putErr, project.CacheDb)
+			if !project.CacheDb {
+				return putErr
+			}
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, code.Code)
+		cErr := SetCache(ctx, cacheKey, data, 600)
+		if cErr != nil {
+			log.Printf("[WARNING] SetOAuthAuthCode: failed caching auth code '%s': %v", code.Code, cErr)
+		} else {
+			log.Printf("[DEBUG] SetOAuthAuthCode: successfully cached auth code '%s' (key: '%s')", code.Code, cacheKey)
+		}
+	}
+
+	return nil
+}
+
+// GetOAuthAuthCode retrieves and validates an OAuthAuthCode by code string.
+func GetOAuthAuthCode(ctx context.Context, codeStr string) (*OAuthAuthCode, error) {
+	nameKey := "oauth_codes"
+	codeStr = strings.TrimSpace(codeStr)
+	if len(codeStr) == 0 {
+		return nil, errors.New("authorization code cannot be empty")
+	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, codeStr)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil && cache != nil {
+			var rawBytes []byte
+			switch v := cache.(type) {
+			case []byte:
+				rawBytes = v
+			case string:
+				rawBytes = []byte(v)
+			}
+
+			if len(rawBytes) > 0 {
+				var code OAuthAuthCode
+				if err := json.Unmarshal(rawBytes, &code); err == nil && len(code.Code) > 0 {
+					log.Printf("[DEBUG] GetOAuthAuthCode: cache HIT for key '%s'", cacheKey)
+					if code.Used {
+						return nil, errors.New("OAuth authorization code has already been used")
+					}
+					if !code.ExpiresAt.IsZero() && time.Now().After(code.ExpiresAt) {
+						return nil, errors.New("OAuth authorization code has expired")
+					}
+					return &code, nil
+				} else {
+					log.Printf("[DEBUG] GetOAuthAuthCode: cache unmarshal failed for key '%s': %v", cacheKey, err)
+				}
+			}
+		} else {
+			log.Printf("[DEBUG] GetOAuthAuthCode: cache MISS for key '%s' (err: %v)", cacheKey, err)
+		}
+	}
+
+	code := &OAuthAuthCode{}
+	if project.DbType == "opensearch" {
+		log.Printf("[DEBUG] GetOAuthAuthCode: looking up '%s' in OpenSearch", codeStr)
+		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
+			DocumentID: codeStr,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return nil, errors.New("OAuth code doesn't exist")
+			}
+			return nil, err
+		}
+
+		res := resp.Inspect().Response
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return nil, errors.New("OAuth code doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		wrapped := OAuthAuthCodeWrapper{}
+		if err := json.Unmarshal(respBody, &wrapped); err != nil {
+			return nil, err
+		}
+
+		code = &wrapped.Source
+	} else {
+		log.Printf("[DEBUG] GetOAuthAuthCode: looking up '%s' in Datastore", codeStr)
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[ERROR] GetOAuthAuthCode: Datastore client panic recovered: %v", r)
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			key := datastore.NameKey(nameKey, codeStr, nil)
+			if err := project.Dbclient.Get(ctx, key, code); err != nil {
+				if err == datastore.ErrNoSuchEntity {
+					log.Printf("[DEBUG] GetOAuthAuthCode: code '%s' not found in Datastore (ErrNoSuchEntity)", codeStr)
+					getErr = errors.New("OAuth code doesn't exist")
+				} else {
+					log.Printf("[ERROR] GetOAuthAuthCode: Datastore Get error for code '%s': %v", codeStr, err)
+					getErr = err
+				}
+			} else {
+				log.Printf("[DEBUG] GetOAuthAuthCode: successfully retrieved code '%s' from Datastore", codeStr)
+			}
+		}()
+		if getErr != nil {
+			return nil, getErr
+		}
+	}
+
+	if len(code.Code) == 0 {
+		return nil, errors.New("OAuth code not found")
+	}
+
+	if code.Used {
+		return nil, errors.New("OAuth authorization code has already been used")
+	}
+
+	if !code.ExpiresAt.IsZero() && time.Now().After(code.ExpiresAt) {
+		return nil, errors.New("OAuth authorization code has expired")
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(code)
+		if err == nil {
+			_ = SetCache(ctx, cacheKey, data, 600)
+		}
+	}
+
+	return code, nil
+}
+
+// DeleteOAuthAuthCode removes an OAuth authorization code after it has been exchanged.
+func DeleteOAuthAuthCode(ctx context.Context, codeStr string) error {
+	return DeleteKey(ctx, "oauth_codes", codeStr)
 }
