@@ -8321,19 +8321,23 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	// Validate On-Prem Configuration immediately
 	if project.Environment == "onprem" {
-		if os.Getenv("AI_MODEL") == "" && os.Getenv("OPENAI_MODEL") == "" {
 			cloudSyncConfigured := false
 			if len(execution.Workflow.OrgId) > 0 {
-				if org, orgErr := GetOrg(ctx, execution.Workflow.OrgId); orgErr == nil && len(org.SyncConfig.Apikey) > 0 {
+			if validationOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId); orgErr == nil {
+				if len(validationOrg.CreatorOrg) > 0 {
+					validationOrg, orgErr = GetOrg(ctx, validationOrg.CreatorOrg)
+				}
+				if orgErr == nil && len(validationOrg.SyncConfig.Apikey) > 0 && validationOrg.CloudSyncActive && validationOrg.SyncConfig.AiCloudSync {
 					cloudSyncConfigured = true
+				}
 				}
 			}
 
 			if !cloudSyncConfigured {
-				log.Printf("[ERROR] AI Configuration Error: AI_MODEL or OPENAI_MODEL environment variable must be set for On-Premise AI Agent execution. Alternatively, set up Cloud Sync to use the Shuffle AI Agent model without any additional configuration: %v", err)
+			onpremAiConfigErr := "AI_MODEL or OPENAI_MODEL environment variable must be set for On-Premise AI Agent execution. Alternatively, enable Cloud Sync and turn on \"Shuffle Cloud AI\" to run AI requests through Shuffle Cloud without any additional configuration"
+			log.Printf("[ERROR] AI Configuration Error: %s", onpremAiConfigErr)
 
-				return abortAgentExecution(ctx, execution, startNode, "missing_onprem_ai_config", err.Error())
-			}
+			return abortAgentExecution(ctx, execution, startNode, "missing_onprem_ai_config", onpremAiConfigErr)
 		}
 	}
 
@@ -9614,14 +9618,39 @@ data_filter:
 
 		orgStats, statsErr := GetOrgStatistics(ctx, billingOrgId)
 		monthlyAppRuns := int64(0)
+		monthlyLLMTokens := int64(0)
 		if statsErr == nil && orgStats != nil {
 			convertedStats := GetCorrectedStats(orgStats)
 			monthlyAppRuns = convertedStats.MonthlyAppExecutions + convertedStats.MonthlyChildAppExecutions
+			monthlyLLMTokens = convertedStats.MonthlyLLMTokens + convertedStats.MonthlyChildOrgLLMTokens
 		}
 
 		appRunLimit := int64(billingOrg.SyncFeatures.AppExecutions.Limit)
 		if project.Environment == "cloud" {
-			if monthlyAppRuns >= appRunLimit {
+			useTokenOverride := false
+			if expiryMonthStr := os.Getenv("AI_CREDIT_END_MONTH"); len(expiryMonthStr) > 0 {
+				if expiryMonth, convErr := strconv.Atoi(expiryMonthStr); convErr == nil && expiryMonth >= 1 && expiryMonth <= 12 {
+					now := time.Now()
+					expiryDate := time.Date(now.Year(), time.Month(expiryMonth), 1, 0, 0, 0, 0, now.Location())
+					if now.Before(expiryDate) {
+						useTokenOverride = true
+					}
+				}
+			}
+
+			if useTokenOverride {
+				geminiTokenLimit := int64(100_000_000)
+				if os.Getenv("AI_CREDITS") > "" {
+					credVal, convErr := strconv.ParseInt(os.Getenv("AI_CREDITS"), 10, 64)
+					if convErr == nil {
+						geminiTokenLimit = credVal
+					}
+				}
+
+				if monthlyLLMTokens >= geminiTokenLimit {
+					return abortAgentExecution(ctx, execution, startNode, "app_limit_exceeded", fmt.Sprintf("AI LLM token limit reached: %d >= %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyLLMTokens, geminiTokenLimit))
+				}
+			} else if monthlyAppRuns >= appRunLimit {
 				return abortAgentExecution(ctx, execution, startNode, "app_limit_exceeded", fmt.Sprintf("AI App limit reached: %d >= %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyAppRuns, appRunLimit))
 			}
 		}
@@ -15523,9 +15552,85 @@ func balanceJSONLikeString(s string) string {
 }
 */
 
+func isOnpremAppExecutionLimitReached(ctx context.Context, orgId string) (bool, string) {
+	if len(orgId) == 0 {
+		return false, ""
+	}
+
+	parentOrg, err := GetOrg(ctx, orgId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org %s for onprem app execution limit check: %s", orgId, err)
+		return false, ""
+	}
+
+	if len(parentOrg.CreatorOrg) > 0 {
+		if creatorOrg, creatorErr := GetOrg(ctx, parentOrg.CreatorOrg); creatorErr == nil {
+			parentOrg = creatorOrg
+		}
+	}
+
+	onpremLimit := parentOrg.SyncFeatures.OnpremAppExecutions.Limit
+	annualGroupingActive := parentOrg.SyncFeatures.AnnualAppRunsGrouping.Active
+	annualLimit := parentOrg.SyncFeatures.OnpremAppExecutions.Limit * 12
+
+	if onpremLimit < 25000 {
+		onpremLimit = 25000
+	}
+
+	orgStats, err := GetOrgStatistics(ctx, parentOrg.Id)
+	if err != nil || orgStats == nil {
+		log.Printf("[WARNING] Failed getting org statistics for org %s for onprem app execution limit check: %s", parentOrg.Id, err)
+		return false, ""
+	}
+
+	orgStats = GetCorrectedStats(orgStats)
+
+	now := time.Now()
+
+	if annualGroupingActive {
+		if annualLimit > 0 {
+			twelveMonthsAgo := now.AddDate(-1, 0, 0)
+
+			annualAppRuns := int64(0)
+			for _, stat := range orgStats.OnpremStats {
+				if stat.Date.After(twelveMonthsAgo) {
+					annualAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+				}
+			}
+
+			if annualAppRuns > annualLimit {
+				return true, fmt.Sprintf("Annual app execution limit reached (%d/%d) for the last 12 months. Upgrade your plan or contact support@shuffler.io to increase your limit.", annualAppRuns, annualLimit)
+			}
+		}
+	} else if onpremLimit > 0 {
+		monthlyAppRuns := int64(0)
+		for _, stat := range orgStats.OnpremStats {
+			if stat.Date.Month() == now.Month() && stat.Date.Year() == now.Year() {
+				monthlyAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+			}
+		}
+
+		if monthlyAppRuns > onpremLimit {
+			return true, fmt.Sprintf("On-premise app execution limit reached (%d/%d) for this month. Upgrade your plan or contact support@shuffler.io to increase your limit.", monthlyAppRuns, onpremLimit)
+		}
+	}
+
+	return false, ""
+}
+
 // Wrapper for RunAiQuery() using Shuffle Credentials
 func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
+
+	err := ValidateRequestOverload(resp, request, 10)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s in AI query forwarding", GetRequestIp(request))
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(`{"success": false, "reason": "Too many requests"}`))
+		return
+	}
+
+	isOnpremSyncRequest := false
 	user, usererr := HandleApiAuthentication(resp, request)
 	if usererr != nil || user.Id == "" || user.ActiveOrg.Id == "" {
 		syncKey, err := HandleCloudSyncAuthentication(resp, request)
@@ -15535,10 +15640,20 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		isOnpremSyncRequest = true
 		user.ActiveOrg.Id = syncKey.OrgId
 		user.Username = ""
 		user.Id = ""
 		user.Role = ""
+	}
+
+	if isOnpremSyncRequest {
+		if blocked, reason := isOnpremAppExecutionLimitReached(ctx, user.ActiveOrg.Id); blocked {
+			log.Printf("[WARNING] Rejecting Shuffle Cloud AI request for org %s: %s", user.ActiveOrg.Id, reason)
+			resp.WriteHeader(429)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": %q}`, reason)))
+			return
+		}
 	}
 
 	if user.Role == "org-reader" {
@@ -15691,24 +15806,21 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 	// Handles failover IF we can't find other auth.
 	// Only applies to on-prem deployments - cloud never needs to fail over to itself.
 	if project.Environment == "onprem" && (apiKey == "" || aiRequestUrl == "") {
-		if apiKey == "" {
-			envApiKey := os.Getenv("AI_API_KEY")
-			if len(envApiKey) == 0 {
-				envApiKey = os.Getenv("OPENAI_API_KEY")
-			}
 
-			if len(envApiKey) > 0 {
-				log.Printf("[INFO] No custom LLM-credentials found for org %s, but AI_API_KEY/OPENAI_API_KEY is set in the environment. Skipping Cloud Sync fallback.", orgId)
-				return apiKey, aiRequestUrl, foundModel
-			}
+		if debug {
+			log.Printf("[DEBUG] No custom LLM-credentials found for org %s. Falling back to Cloud Sync AI endpoint IF cloud sync is enabled.", orgId)
 		}
-
-		log.Printf("[INFO] No custom LLM-credentials found for org %s. Falling back to Cloud Sync AI endpoint IF cloud sync is enabled.", orgId)
 
 		org, err := GetOrg(ctx, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed to get org by ID %s: %s", orgId, err)
 			return apiKey, aiRequestUrl, foundModel
+		}
+		if len(org.CreatorOrg) > 0 {
+			org, err = GetOrg(ctx, org.CreatorOrg)
+			if err == nil && len(org.SyncConfig.Apikey) > 0 {
+				apiKey = org.SyncConfig.Apikey
+			}
 		}
 
 		// Checks if cloud sync is set up

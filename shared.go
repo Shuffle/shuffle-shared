@@ -13867,7 +13867,7 @@ func BuildBaseSubscription(ctx context.Context, org *Org, monthlyExecLimit int64
 	}
 }
 
-func (s *SyncConfig) MergeSyncConfigBackup(peerWorkflowBackup, peerAppBackup bool, peerWorkflowBackupUpdated, peerAppBackupUpdated int64) bool {
+func (s *SyncConfig) MergeSyncConfigBackup(peerWorkflowBackup, peerAppBackup, peerAiCloudSync bool, peerWorkflowBackupUpdated, peerAppBackupUpdated, peerAiCloudSyncUpdated int64) bool {
 	changed := false
 
 	if peerWorkflowBackupUpdated > s.WorkflowBackupUpdated {
@@ -13884,6 +13884,14 @@ func (s *SyncConfig) MergeSyncConfigBackup(peerWorkflowBackup, peerAppBackup boo
 			changed = true
 		}
 		s.AppBackupUpdated = peerAppBackupUpdated
+	}
+
+	if peerAiCloudSyncUpdated > s.AiCloudSyncUpdated {
+		if s.AiCloudSync != peerAiCloudSync {
+			s.AiCloudSync = peerAiCloudSync
+			changed = true
+		}
+		s.AiCloudSyncUpdated = peerAiCloudSyncUpdated
 	}
 
 	return changed
@@ -14041,6 +14049,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		if tmpData.SyncConfig.AppBackup != org.SyncConfig.AppBackup {
 			org.SyncConfig.AppBackup = tmpData.SyncConfig.AppBackup
 			org.SyncConfig.AppBackupUpdated = now
+		}
+		if tmpData.SyncConfig.AiCloudSync != org.SyncConfig.AiCloudSync {
+			org.SyncConfig.AiCloudSync = tmpData.SyncConfig.AiCloudSync
+			org.SyncConfig.AiCloudSyncUpdated = now
 		}
 
 		err = SetOrg(ctx, *org, org.Id)

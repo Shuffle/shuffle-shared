@@ -174,9 +174,11 @@ type RetStruct struct {
 	AppRunsHardLimit int64                 `json:"app_runs_hard_limit"`
 	WorkflowBackup   bool                  `json:"workflow_backup"`
 	AppBackup        bool                  `json:"app_backup"`
+	AiCloudSync      bool                  `json:"ai_cloud_sync"`
 
 	WorkflowBackupUpdated int64 `json:"workflow_backup_updated"`
 	AppBackupUpdated      int64 `json:"app_backup_updated"`
+	AiCloudSyncUpdated    int64 `json:"ai_cloud_sync_updated"`
 }
 
 type AppMini struct {
@@ -1447,9 +1449,11 @@ type SyncConfig struct {
 
 	WorkflowBackup bool `json:"workflow_backup" datastore:"workflow_backup"`
 	AppBackup      bool `json:"app_backup" datastore:"app_backup"`
+	AiCloudSync    bool `json:"ai_cloud_sync" datastore:"ai_cloud_sync"`
 
 	WorkflowBackupUpdated int64 `json:"workflow_backup_updated" datastore:"workflow_backup_updated"`
 	AppBackupUpdated      int64 `json:"app_backup_updated" datastore:"app_backup_updated"`
+	AiCloudSyncUpdated    int64 `json:"ai_cloud_sync_updated" datastore:"ai_cloud_sync_updated"`
 }
 
 // RemoteWorkflowInfo holds metadata for a workflow found in a remote git repo.
@@ -4899,8 +4903,10 @@ type BackupJob struct {
 
 	WorkflowBackup        bool  `json:"workflow_backup"`
 	AppBackup             bool  `json:"app_backup"`
+	AiCloudSync           bool  `json:"ai_cloud_sync"`
 	WorkflowBackupUpdated int64 `json:"workflow_backup_updated"`
 	AppBackupUpdated      int64 `json:"app_backup_updated"`
+	AiCloudSyncUpdated    int64 `json:"ai_cloud_sync_updated"`
 }
 
 type WorkflowSearch struct {
