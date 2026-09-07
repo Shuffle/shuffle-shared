@@ -38189,8 +38189,10 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 
 	// ====== CONDITION OPERATIONS ======
 	case "add_condition", "edit_condition", "delete_condition":
-		if realBranchID, exists := tempIDMap[op.BranchID]; exists {
-			op.BranchID = realBranchID
+		if len(op.BranchID) > 0 {
+			if realBranchID, exists := tempIDMap[op.BranchID]; exists {
+				op.BranchID = realBranchID
+			}
 		}
 
 		switch op.Op {
@@ -38207,10 +38209,11 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 	case "set_start_node":
 		oldStart := wf.Start
 		newStart := op.ID
-		if realID, exists := tempIDMap[op.ID]; exists {
-			newStart = realID
-		} else if len(op.ID) == 0 && len(op.TempID) > 0 {
-			if realID, exists := tempIDMap[op.TempID]; exists {
+		if len(newStart) == 0 && len(op.TempID) > 0 {
+			newStart = op.TempID
+		}
+		if len(newStart) > 0 {
+			if realID, exists := tempIDMap[newStart]; exists {
 				newStart = realID
 			}
 		}
@@ -38243,6 +38246,9 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 }
 
 func findNodePosition(wf *Workflow, nodeID string) (string, int, error) {
+	if len(nodeID) == 0 {
+		return "", -1, fmt.Errorf("node ID cannot be empty")
+	}
 	// Search actions
 	for i, act := range wf.Actions {
 		if act.ID == nodeID {
@@ -38695,11 +38701,15 @@ func opAddBranchWithMapping(wf *Workflow, op *WorkflowOperation, tempIDMap map[s
 	}
 
 	// Resolve temp_ids to real_ids if provided
-	if realID, exists := tempIDMap[branchData.SourceID]; exists {
-		branchData.SourceID = realID
+	if len(branchData.SourceID) > 0 {
+		if realID, exists := tempIDMap[branchData.SourceID]; exists {
+			branchData.SourceID = realID
+		}
 	}
-	if realID, exists := tempIDMap[branchData.DestinationID]; exists {
-		branchData.DestinationID = realID
+	if len(branchData.DestinationID) > 0 {
+		if realID, exists := tempIDMap[branchData.DestinationID]; exists {
+			branchData.DestinationID = realID
+		}
 	}
 
 	// Re-marshal the resolved data back into op.Data for opAddBranch
