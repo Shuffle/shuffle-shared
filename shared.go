@@ -36819,12 +36819,43 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 	}
 
 	if foundApp.ID == "" && len(appName) > 0 {
-		log.Printf("[ERROR] Should find app + actions based on name (not implemented): %#v", appName)
+		cleanName := strings.TrimPrefix(appName, "app:")
+		if strings.Contains(cleanName, ":") {
+			parts := strings.Split(cleanName, ":")
+			cleanName = parts[len(parts)-1]
+		}
+		cleanName = strings.TrimSpace(strings.ToLower(cleanName))
+
+		foundApps, err := FindWorkflowAppByName(ctx, cleanName)
+		if err == nil && len(foundApps) > 0 {
+			foundApp = &foundApps[0]
+		}
+		if foundApp.ID == "" {
+			algoliaApp, err := HandleAlgoliaAppSearch(ctx, cleanName)
+			if err == nil && len(algoliaApp.ObjectID) > 0 {
+				if len(foundApp.Actions) == 0 {
+					discoveredApp, err := GetApp(ctx, algoliaApp.ObjectID, User{}, false)
+					if err == nil && discoveredApp != nil && len(discoveredApp.Actions) > 0 {
+						foundApp = discoveredApp
+					}
+				}
+				if foundApp.ID == "" {
+					foundApp.ID = algoliaApp.ObjectID
+				}
+			}
+		}
 	}
 
 	for _, action := range foundApp.Actions {
 		if action.Name == "custom_action" {
 			continue
+		}
+
+		if action.AppID == "" {
+			action.AppID = foundApp.ID
+		}
+		if action.AppName == "" {
+			action.AppName = foundApp.Name
 		}
 
 		if len(action.CategoryLabel) > 0 {
