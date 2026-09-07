@@ -39615,9 +39615,17 @@ func checkAllowedUrl(rawUrl string) error {
 		return fmt.Errorf("unsupported git host")
 	}
 
-	if ip := net.ParseIP(host); ip != nil {
-		if ipv4 := ip.To4(); ipv4 != nil && (ipv4[0] == 169 || ipv4[0] == 254) {
-			return fmt.Errorf("unsupported git host")
+	ips, err := net.LookupIP(host)
+
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() {
+			return fmt.Errorf("git host resolves to a private or loopback IP")
+		}
+
+		if ipv4 := ip.To4(); ipv4 != nil {
+			if ipv4[0] == 169 || ipv4[0] == 254 {
+				return fmt.Errorf("unsupported git host: resolves to blocked IP")
+			}
 		}
 	}
 
