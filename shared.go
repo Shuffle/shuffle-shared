@@ -37492,7 +37492,7 @@ func checkAllowedUrl(rawUrl string) error {
 		return fmt.Errorf("unsupported git url scheme")
 	}
 
-	if host != "github.com" && host != "gitlab.com" && host != "bitbucket.org" && host != "dev.azure.com" {
+	if host == "google.internal" {
 		return fmt.Errorf("unsupported git host")
 	}
 
