@@ -19101,6 +19101,10 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 		_ = returnAction
 
+		if freshExec, fetchErr := GetWorkflowExecution(ctx, workflowExecution.ExecutionId); fetchErr == nil && freshExec != nil {
+			workflowExecution = *freshExec
+		}
+
 		//go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 		return &workflowExecution, false, nil
 	}
