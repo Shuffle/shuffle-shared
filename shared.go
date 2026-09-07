@@ -1063,6 +1063,13 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Seed default alert thresholds once if not yet applied.
+	if addDefaultAlertThresholds(org) {
+		if setErr := SetOrg(ctx, *org, org.Id); setErr != nil {
+			log.Printf("[WARNING] Failed persisting default alert thresholds for org %s (%s): %s", org.Name, org.Id, setErr)
+		}
+	}
+
 	// clean getOrg invites
 	org.Invites = []string{}
 

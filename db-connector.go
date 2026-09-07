@@ -4016,14 +4016,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				if curOrg.Id == "" {
 					return curOrg, errors.New("Org doesn't exist")
 				} else {
-					billingBackup := curOrg.Billing
-					if addDefaultAlertThresholds(curOrg) {
-						err := SetOrg(ctx, *curOrg, curOrg.Id)
-						if err != nil {
-							log.Printf("[ERROR] Failed persisting default alert thresholds for org %s: %s", curOrg.Id, err)
-							curOrg.Billing = billingBackup
-						}
-					}
 					return curOrg, nil
 				}
 			}
@@ -4187,14 +4179,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	curOrg.Priorities = newPriorities
-	billingBackup := curOrg.Billing
-	if addDefaultAlertThresholds(curOrg) {
-		err := SetOrg(ctx, *curOrg, curOrg.Id)
-		if err != nil {
-			log.Printf("[ERROR] Failed persisting default alert thresholds for org %s: %s", curOrg.Id, err)
-			curOrg.Billing = billingBackup
-		}
-	}
 	if project.CacheDb {
 		neworg, err := json.Marshal(curOrg)
 		if err != nil {
