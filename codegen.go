@@ -4,7 +4,6 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bufio"
-	"crypto/sha1"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -28,9 +27,9 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
+	dockerimage "github.com/docker/docker/api/types/image"
 	docker "github.com/docker/docker/client"
 	"gopkg.in/yaml.v2"
-	uuid "github.com/satori/go.uuid"
 
 	"github.com/frikky/kin-openapi/openapi3"
 	//iocParser "github.com/Shuffle/indicator-parser/go/ioc"
@@ -153,16 +152,33 @@ func FormatAppfile(filedata string) (string, string) {
 }
 
 // Streams the data into a zip to be used for a cloud function
-func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bucketName string) (string, error) {
+func StreamZipdata(ctx context.Context, orgId, identifier, pythoncode, requirements, bucketName string) (string, error) {
 	filename := fmt.Sprintf("generated_cloudfunctions/%s.zip", identifier)
 
 	buf := new(bytes.Buffer)
 	zipWriter := zip.NewWriter(buf)
 
+	// Check if org has backup repo setup
+	if len(orgId) > 0 { 
+		if debug { 
+			log.Printf("[DEBUG] GIT APP UPLOAD OF %s", identifier)
+		}	
+
+		org, err := GetOrg(ctx, orgId)
+		if err != nil { 
+			log.Printf("[ERROR] Failed getting org '%s' in streamzip git upload", orgId)
+		} else {
+			err = UploadGitApp(ctx, identifier, pythoncode, requirements, "", org)
+			if err != nil { 
+				log.Printf("[ERROR] Failed upload to git for app '%s' in org '%s'", identifier, orgId)
+			}
+		}
+	}
+
 	if project.Environment == "cloud" {
 		client, err := storage.NewClient(ctx)
 		if err != nil {
-			log.Printf("Failed to create datastore client: %v", err)
+			log.Printf("Failed to create gcp storage client: %v", err)
 			return filename, err
 		}
 
@@ -3936,7 +3952,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.40"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\ncryptography==44.0.2\nshufflepy==0.2.2\nshuffle-sdk==0.0.41"
 }
 
 // Removes JSON values from the input
@@ -4524,6 +4540,19 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	//log.Printf("[DEBUG] Starting to load zip file for image %s. This is a background process and may take a while.", imageName)
 	//imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar, true)
 	defer dockercli.Close()
+
+	// Snapshot of what exists BEFORE the load, so we can find what the archive
+	// actually added. Private/generated apps are stored keyed by app ID, not by
+	// version, so the loaded image rarely carries the name we asked for.
+	preloadImages := map[string]bool{}
+	if existing, listErr := dockercli.ImageList(context.Background(), dockerimage.ListOptions{All: true}); listErr != nil {
+		log.Printf("[WARNING] Failed listing images before load of %s (continuing): %s", imageName, listErr)
+	} else {
+		for _, item := range existing {
+			preloadImages[item.ID] = true
+		}
+	}
+
 	//imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar)
 	imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar)
 	if err != nil {
@@ -4554,10 +4583,49 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		tag := baseTag[1]
 		//log.Printf("[DEBUG] Creating tag copies of downloaded containers from tag %s", tag)
 
-		// Remapping
 		ctx := context.Background()
-		dockercli.ImageTag(ctx, imageName, fmt.Sprintf("frikky/shuffle:%s", tag))
-		dockercli.ImageTag(ctx, imageName, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
+
+		// Find the image the archive just added. We can't assume it is already
+		// tagged as imageName: private apps are saved with a <name>_<appid> tag,
+		// while the worker looks the image up by <name>_<version>.
+		tagSource := imageName
+		if postload, listErr := dockercli.ImageList(ctx, dockerimage.ListOptions{All: true}); listErr != nil {
+			log.Printf("[WARNING] Failed listing images after load of %s (using requested name): %s", imageName, listErr)
+		} else {
+			for _, item := range postload {
+				if preloadImages[item.ID] {
+					continue
+				}
+
+				// Prefer an existing tag so the retag survives a shared layer ID
+				tagSource = item.ID
+				for _, repoTag := range item.RepoTags {
+					if !strings.Contains(repoTag, "<none>") {
+						tagSource = repoTag
+						break
+					}
+				}
+
+				break
+			}
+		}
+
+		if tagSource != imageName {
+			log.Printf("[DEBUG] Loaded image is '%s', retagging it as '%s'", tagSource, imageName)
+			if tagErr := dockercli.ImageTag(ctx, tagSource, imageName); tagErr != nil {
+				log.Printf("[ERROR] Failed retagging %s as %s: %s", tagSource, imageName, tagErr)
+				return tagErr
+			}
+		}
+
+		// Remapping
+		if tagErr := dockercli.ImageTag(ctx, tagSource, fmt.Sprintf("frikky/shuffle:%s", tag)); tagErr != nil {
+			log.Printf("[WARNING] Failed tagging %s as frikky/shuffle:%s: %s", tagSource, tag, tagErr)
+		}
+
+		if tagErr := dockercli.ImageTag(ctx, tagSource, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag)); tagErr != nil {
+			log.Printf("[WARNING] Failed tagging %s as registry.hub.docker.com/frikky/shuffle:%s: %s", tagSource, tag, tagErr)
+		}
 
 		downloadedImages = append(downloadedImages, fmt.Sprintf("frikky/shuffle:%s", tag))
 		downloadedImages = append(downloadedImages, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
@@ -4648,20 +4716,19 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 func handleDatastoreAutomationRequest(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType string) error {
 	var err error
 
-	// Makes sure we wait 2500ms. This is to avoid infinite loops primarily.
+	// Makes sure we wait 7500ms between runs. This is to avoid infinite loops primarily.
 	// Problem: There's a difference between user updates and automation updates.
 	// Trying without cache.
+	cacheName := fmt.Sprintf("automation_%s_%s_%s", runType, cacheData.Category, cacheData.Key)
+	_, err = GetCache(ctx, cacheName)
+	if err == nil {
+		if debug { 
+			log.Printf("[DEBUG] Found existing '%s' cache for '%s' - skipping execution to prevent duplicates", runType, cacheName)
+		}
 
-	//cacheName := fmt.Sprintf("automation_%s_%s_%s", runType, cacheData.Category, cacheData.Key)
-	//_, err = GetCache(ctx, cacheName)
-	//if err == nil {
-	//	if debug { 
-	//		log.Printf("[DEBUG] Found existing '%s' cache for '%s' - skipping execution to prevent duplicates", runType, cacheName)
-	//	}
-
-	//	return nil
-	//}
-	//SetCache(ctx, cacheName, []byte("1"), 2500, true)
+		return nil
+	}
+	SetCache(ctx, cacheName, []byte("1"), 15000, true)
 
 	if runType == "run_workflow" {
 
@@ -4808,435 +4875,6 @@ func handleDatastoreAutomationRequest(ctx context.Context, marshalledBody []byte
 			log.Printf("[ERROR] Datastore Automation: Webhook request to %s failed with status code %d", parsedUrl, resp.StatusCode)
 			return errors.New(fmt.Sprintf("Webhook request failed with status code %d. Body: %s", resp.StatusCode, body))
 		}
-	}
-
-	return nil
-}
-
-func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, automation DatastoreAutomation) error {
-	if len(cacheData.OrgId) == 0 {
-		return errors.New("CacheKeyData.OrgId is required for handleRunAutomation")
-	}
-
-	if len(cacheData.Category) == 0 {
-		return errors.New("CacheKeyData.Category is required for handleRunAutomation")
-	}
-    
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	parsedName := strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_")
-
-	// These are ran pre-execution
-	if parsedName == "security_rules" {
-		return nil
-	}
-
-	// Unmarshal cacheData.Value to parsedOutput
-	parsedOutput := map[string]interface{}{}
-	if err := json.Unmarshal([]byte(cacheData.Value), &parsedOutput); err != nil {
-		log.Printf("[ERROR] Failed to unmarshal cacheData.Value: %s", err)
-		parsedOutput = map[string]interface{}{}
-		parsedOutput["value"] = cacheData.Value
-	}
-
-	if parsedOutput == nil {
-		parsedOutput = map[string]interface{}{}
-	}
-
-	parsedOutput["shuffle_datastore"] = map[string]interface{}{
-		"action":              "update",
-		"key":                 cacheData.Key,
-		"category":            cacheData.Category,
-		"org_id":              cacheData.OrgId,
-		"timestamp":           cacheData.Edited,
-		"workflow_id":         cacheData.WorkflowId,
-		"suborg_distribution": cacheData.SuborgDistribution,
-		"tags":                cacheData.Tags,
-	}
-
-	marshalledBody, err := json.Marshal(parsedOutput)
-	if err != nil {
-		log.Printf("[ERROR] Failed to marshal parsedOutput. Key %s, Category: %s, org: %s, err: %s", cacheData.Key, cacheData.Category, cacheData.OrgId, err)
-		return err
-	}
-
-	backendUrl := "https://shuffler.io"
-	if len(os.Getenv("BASE_URL")) > 0 {
-		backendUrl = os.Getenv("BASE_URL")
-	}
-
-	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
-		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
-
-	org, err := GetOrg(ctx, cacheData.OrgId)
-	if err != nil {
-		return err
-	}
-
-	foundApikey := ""
-	for _, user := range org.Users {
-		foundUser, err := GetUser(ctx, user.Id)
-		if err != nil {
-			continue
-		}
-
-		if len(foundUser.Role) == 0 || foundUser.Role == "org-reader" {
-			continue
-		}
-
-		if len(foundUser.ApiKey) > 0 {
-			foundApikey = foundUser.ApiKey
-			break
-		}
-	}
-
-	if parsedName == "correlate_categories" {
-		// Correlations don't matter anymore as ngrams are automatic. Cleaned up
-		// november 2025 after adding graphic system to datastore
-
-	} else if parsedName == "run_ai_agent" {
-		if len(automation.Options) == 0 {
-			log.Printf("[ERROR] AI agent: No options provided for run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
-			return errors.New("No options provided for run_ai_agent automation")
-		}
-
-		log.Printf("[DEBUG] AI agent: Handling run_ai_agent automation for key %s in category %s", cacheData.Key, cacheData.Category)
-		if len(foundApikey) == 0 {
-			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
-			return errors.New("No admin user with API key found")
-		}
-
-		// Already handled check
-		for optionKey, option := range automation.Options {
-			// 'remove' icon in the UI does this
-			if option.Disabled {
-				continue
-			}
-
-			if len(option.Value) < 10 {
-				//log.Printf("[DEBUG] Actions info too short: %s - skipping", option.Key)
-				continue
-			}
-
-			agentTagName := fmt.Sprintf("agent-%s", option.Key)
-			if ArrayContains(cacheData.Tags, agentTagName) {
-				continue
-			}
-
-			// Check if previous has finished/timed out
-			// This allows next to run. Default agent cache timeout is 30 seconds~
-			if optionKey > 0 {
-				oldKey := automation.Options[optionKey-1]
-				oldCacheName := fmt.Sprintf("%s_%s_%s_%s", cacheData.Key, cacheData.Category, cacheData.OrgId, oldKey.Key)
-				_, err := GetCache(ctx, oldCacheName)
-				if err == nil {
-					if debug { 
-						log.Printf("[DEBUG] PREV agent cache hit for %s - skipping for now", oldCacheName)
-					}
-
-					continue
-				}
-			}
-
-			// As a fallback in case of slow datastore update
-			// Prevents super quick reruns
-			cacheName := fmt.Sprintf("%s_%s_%s_%s", cacheData.Key, cacheData.Category, cacheData.OrgId, option.Key)
-			_, err := GetCache(ctx, cacheName)
-			if err == nil {
-				//log.Printf("[DEBUG] Cache hit for %s - skipping to avoid re-running agent", cacheName)
-				continue
-			}
-
-			// 30 seconds
-			SetCache(ctx, cacheName, []byte("1"), 60000, true)
-			if !strings.Contains(option.Key, "action") {
-				log.Printf("[WARNING] Agent option key %s does not contain 'action' - skipping to avoid confusion. This may cause the agent to not run if no other options are present.", option.Key)
-				continue
-			}
-
-			requiredApps := []string{"internal_datastore", "shuffle-datastore"}
-			for _, req := range requiredApps {
-
-				if !ArrayContains(option.Apps, req) {
-					option.Apps = append(option.Apps, req)
-				}
-			}
-
-			allowedApps := strings.Join(option.Apps, ",")
-
-			parsedParams := []map[string]string{
-				map[string]string{
-					"name":  "app_name",
-					"value": allowedApps,
-				},
-				map[string]string{
-					"name":  "action",
-					"value": "API",
-				},
-			}
-
-			// option.Value += fmt.Sprintf("\n%s", cacheData.Value)
-			parsedParams = append(parsedParams, map[string]string{
-				"name":  "input",
-				"value": fmt.Sprintf("TASK: %s\n\nKey: %s\nCategory: %s\n\nRAW DATA:\n%s", option.Value, cacheData.Key, cacheData.Category, cacheData.Value),
-			})
-
-			agentUrl := fmt.Sprintf("%s/api/v1/apps/agent_starter/run", backendUrl)
-			agentStartRequest := AgentStartRequest{
-				//ID          string              `json:"id"`
-				Name:        "agent",
-				AppName:     "AI Agent",
-				AppID:       "shuffle_agent",
-				AppVersion:  "1.0.0",
-				Environment: "cloud",
-				Parameters:  parsedParams,
-			}
-
-			newParsedBody, err := json.Marshal(agentStartRequest)
-			if err != nil {
-				log.Printf("[ERROR] Failed to marshal body for ai agent execution: %s", err)
-				return err
-			}
-
-			client := GetExternalClient(agentUrl)
-			req, err := http.NewRequest(
-				"POST",
-				agentUrl,
-				bytes.NewBuffer(newParsedBody),
-			)
-
-			if err != nil {
-				log.Printf("[ERROR] Failed to create request for enrichment workflow execution: %s", err)
-				return err
-			}
-
-			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
-			req.Header.Set("Org-Id", cacheData.OrgId)
-			req.Header.Set("X-Internal-Caller", "handleRunDatastoreAutomation")
-
-			resp, err := client.Do(req)
-			if err != nil {
-				log.Printf("[ERROR] Failed to send enrichment workflow execution request: %s", err)
-				return err
-			}
-
-			// Makes sure we don't re-run the same twice
-			cacheData.Tags = append(cacheData.Tags, agentTagName)
-			err = SetDatastoreKeyMeta(ctx, cacheData)
-			if err != nil {
-				log.Printf("[ERROR] Failed to set cache key after running AI agent: %s", err)
-			}
-
-			defer resp.Body.Close()
-			body, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				log.Printf("[ERROR] Failed to read response body from AI AGENT execution request: %s", err)
-				return err
-			}
-
-			if debug {
-				log.Printf("[DEBUG] RESP FOR RUNNING AI AGENT (%d): %s", resp.StatusCode, string(body))
-			}
-
-			break
-		}
-
-	} else if parsedName == "enrich" {
-		// Prevent recursion
-		cacheKey := fmt.Sprintf("enrich_wait_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
-
-
-		// Validates if the data is the same. Need a proper data diff
-		//md5sum := Md5sum([]byte(cacheData.Value))
-		//log.Printf("VALUE (%s):\n\n%s\n\n", md5sum, cacheData.Value)
-
-		data, err := GetCache(ctx, cacheKey)
-		if err == nil && data != nil {
-			//cacheData := []byte(data.([]uint8))
-			//if string(cacheData) == md5sum {
-			//	return nil
-			//}
-
-			return nil
-		}
-
-		if debug { 
-			log.Printf("[DEBUG] Running enrich automation for key %s in category %s", cacheData.Key, cacheData.Category)
-		}
-
-		//SetCache(ctx, cacheKey, []byte("1"), 1)
-		var timeout int32 = 5000 
-		if project.Environment != "cloud" {
-			timeout = 60000 
-		}
-		SetCache(ctx, cacheKey, []byte("1"), timeout, true)
-		if cacheData.Enrichments != nil && len(cacheData.Enrichments) > 0 {
-		}
-
-		// Send the data into shuffle_tools => parse_ioc?
-		// Or generate a workflow that runs for it? :thinking:
-
-		// Example process:
-		// 1. Ingest IOC (hash/IP/domain/alert) => inject into datastore category
-		// 2. Query reputation + passive DNS + WHOIS + SSL CT.
-		// 3. Run lookup in historic sightings (SIEM, MISP).
-		// 4. If file hash: submit to sandbox + static YARA.
-		// 5. Map results to ATT&CK techniques and assign a risk score.
-		// 6. Push enriched alert to SIEM/EDR/SOAR for automated playbook or analyst triage.
-		// 7. If high confidence, add to blocklists / trigger containment / share via STIX/TAXII or MISP.
-
-		// Getting started:
-		// 1. Check for enrichments key. Stop if it exists.
-		/*
-			types := []iocParser.IndicatorType{
-				iocParser.IPV4,
-				iocParser.URL_LINK,
-				iocParser.Domain,
-				iocParser.Email,
-			}
-			foundIocs := iocParser.Parse(string(marshalledBody), types)
-			log.Printf("RESP: %#v", foundIocs)
-			if len(foundIocs) == 0 {
-				log.Printf("[DEBUG] No IOCs found to enrich.")
-				return nil
-			}
-
-			log.Printf("[DEBUG] Found %d IOCs to enrich.", len(foundIocs))
-			for _, foundIoc := range foundIocs {
-				log.Printf("[DEBUG] Found IOC: %#v", foundIoc)
-			}
-		*/
-
-		if len(foundApikey) == 0 {
-			log.Printf("[ERROR] No admin user with API key found for org %s", cacheData.OrgId)
-			return errors.New("No admin user with API key found")
-		}
-
-		// Uses the same as the API /api/v*/workflows/generate  
-		seedString := fmt.Sprintf("%s_Enable Threat feeds_webhook", cacheData.OrgId)
-
-		hash := sha1.New()
-		hash.Write([]byte(seedString))
-		hashBytes := hash.Sum(nil)
-
-		uuidBytes := make([]byte, 16)
-		copy(uuidBytes, hashBytes)
-		relevantWorkflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
-
-		// FIXME: If workflow doesn't exist - generate it 
-		fullUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", backendUrl, relevantWorkflowId)
-		if debug { 
-			log.Printf("[DEBUG] Running enrich automation workflow %s for key %s in category %s", relevantWorkflowId, cacheData.Key, cacheData.Category)
-		}
-
-		executionRequest := ExecutionRequest{
-			ExecutionArgument: string(marshalledBody),
-			ExecutionSource:   fmt.Sprintf("datastore|%s|%s", cacheData.Category, cacheData.Key),
-		}
-
-		newParsedBody, err := json.Marshal(executionRequest)
-		if err != nil {
-			log.Printf("[ERROR] Failed to marshal body for enrichment workflow execution: %s", err)
-			return err
-		}
-
-		client := GetExternalClient(fullUrl)
-		req, err := http.NewRequest(
-			"POST",
-			fullUrl,
-			bytes.NewBuffer(newParsedBody),
-		)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed to create request for enrichment workflow execution: %s", err)
-			return err
-		}
-
-		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
-		req.Header.Add("Org-Id", cacheData.OrgId)
-
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[ERROR] Failed to send enrichment workflow execution request: %s", err)
-			return err
-		}
-
-		defer resp.Body.Close()
-		body, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed to read response body from enrichment workflow execution request: %s", err)
-			return err
-		}
-
-		if resp.StatusCode != 200 { 
-			log.Printf("[ERROR] Enrichment workflow execution request failed with status code %d. Body: %s", resp.StatusCode, string(body))
-		}
-
-		if debug { 
-			log.Printf("[DEBUG] RESP FOR RUNNING ENRICHMENT (%d): %s", resp.StatusCode, string(body))
-		}
-
-	} else if parsedName == "run_workflow" {
-		if len(automation.Options) == 0 {
-			log.Printf("[ERROR] No options provided for 'run_workflow' automation for key %s in category %s", cacheData.Key, cacheData.Category)
-			return errors.New("No options provided for 'run_workflow' automation")
-		}
-
-		for _, option := range automation.Options {
-			if option.Key != "workflow_id" {
-				continue
-			}
-
-			if len(option.Value) == 0 {
-				continue
-			}
-
-			cacheData.WorkflowId = option.Value
-			workflowIds := strings.Split(option.Value, ",")
-
-
-			formattedBodyStruct := ExecutionRequest{
-				ExecutionSource:   fmt.Sprintf("datastore_%s_%s", cacheData.Category, cacheData.Key),
-				ExecutionArgument: string(marshalledBody),
-			}
-
-			marshalledFormattedBody, err := json.Marshal(formattedBodyStruct)
-			if err != nil {
-				log.Printf("[ERROR] Failed in marshalling data in 'run_workflow' datastore automation for workflow %s")
-			} else {
-				marshalledBody = marshalledFormattedBody
-			}
-
-			handled := []string{}
-			for _, workflowId := range workflowIds {
-				workflowId = strings.TrimSpace(workflowId)
-				if ArrayContains(handled, workflowId) {
-					continue
-				}
-
-				handled = append(handled, workflowId)
-
-				go handleDatastoreAutomationRequest(ctx, marshalledBody, cacheData, automation, fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), "run_workflow")
-			}
-
-			break
-		}
-
-	} else if parsedName == "send_webhook" {
-		if len(automation.Options) == 0 {
-			log.Printf("[ERROR] No options provided for 'run_workflow' automation for key %s in category %s", cacheData.Key, cacheData.Category)
-			return errors.New("No options provided for 'run_workflow' automation")
-		}
-
-		return handleDatastoreAutomationRequest(ctx, marshalledBody, cacheData, automation, "/api/v1/apps/HTTP/run", "webhook")
-
-		// Send the webhook using the HTTP app with a POST request
-
-	} else {
-		return fmt.Errorf("Unknown automation name %s", automation.Name)
 	}
 
 	return nil

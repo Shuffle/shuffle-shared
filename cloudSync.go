@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"sync"
 	"encoding/base64"
+	"regexp"
 
 	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
@@ -917,30 +918,96 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		}
 	}
 
-	// Fix Me: Add daily stats update script to append daily stats immdediately after day change and reset monthly stats on month change
-	lastMonthlyReset := validationOrgStats.LastMonthlyResetMonth
-	currentMonth := time.Now().UTC().Month()
-	if int(lastMonthlyReset) != int(currentMonth) {
+	statsLenBefore := len(validationOrgStats.DailyStatistics)
 		validationOrgStats = handleDailyCacheUpdate(validationOrgStats)
-
+	if len(validationOrgStats.DailyStatistics) != statsLenBefore {
 		err = SetOrgStatistics(ctx, *validationOrgStats, validationOrg.Id)
 		if err != nil {
-			log.Printf("[ERROR] Failed setting org statistics for monthly reset for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
+			log.Printf("[ERROR] Failed setting org statistics after daily rollover for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
 		}
 	}
 
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
-	if validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
-		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d) - Only Shuffle Support can control this metric.", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
+	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == false && validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
+		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
+	}
+
+		now := time.Now().Unix()
+		isExpiredAnnualPlan := false
+	planStartDate := int64(0)
+
+		for _, sub := range validationOrg.Subscriptions {
+			if sub.Active {
+				subName := strings.ToLower(sub.Name)
+			if (strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") || (strings.Contains(subName, "scale") && !strings.Contains(subName, "trial"))) {
+					planStartDate = sub.Startdate
+				if sub.Active && sub.Enddate > 0 && sub.Enddate < now {
+						isExpiredAnnualPlan = true
+					}
+					break
+				}
+			}
+		}
+
+		if isExpiredAnnualPlan {
+			orgAdmin := User{}
+			for _, user := range validationOrg.Users {
+				if strings.ToLower(user.Role) == "admin" {
+					if len(user.ApiKey) > 0 && !strings.Contains(user.Username, "shuffler") {
+						orgAdmin = user
+						break
+					} else {
+						fullUser, err := GetUser(ctx, user.Id)
+						if err == nil && len(fullUser.ApiKey) > 0 && !strings.Contains(fullUser.Username, "shuffler") {
+							orgAdmin = *fullUser
+							break
+						}
+					}
+				}
+			}
+
+			if len(orgAdmin.ApiKey) > 0 {
+				log.Printf("[AUDIT] Sending license expired request with user %s for org %s", orgAdmin.Username, validationOrg.Id)
+				go SendLicenseExpiredRequest(validationOrg.Id, orgAdmin.ApiKey)
+		}
+			}
+
+	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == true && validationOrg.LeadInfo.Customer {
+
+		if planStartDate > 0 {
+			var annualAppRuns int64
+			for _, stat := range validationOrgStats.DailyStatistics {
+				if stat.Date.Unix() >= planStartDate {
+					annualAppRuns += stat.AppExecutions + stat.ChildAppExecutions
+				}
+			}
+
+			// Set annual app runs limit as 200% of the monthly app runs limit to allow overage
+			annualAppRunsLimit := validationOrg.SyncFeatures.AppExecutions.Limit * 12
+			if validationOrg.Billing.InternalAppRunsHardLimit > 0 && validationOrg.Billing.InternalAppRunsHardLimit <= validationOrg.SyncFeatures.AppExecutions.Limit {
+				annualAppRunsLimit = validationOrg.Billing.InternalAppRunsHardLimit
+			} else {
+				annualAppRunsLimit *= 2
+			}
+
+			if annualAppRuns > annualAppRunsLimit {
+				return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the annual app runs limit (%d/%d)", validationOrg.Name, validationOrg.Id, annualAppRuns, annualAppRunsLimit))
+			}
+
+			return validationOrg, nil
+		}
 	}
 
 	// Allows partners and POV users to run workflows without limits
-	if validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.ChannelPartner || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.DistributionPartner || validationOrg.LeadInfo.ServicePartner {
+	if validationOrg.LeadInfo.Internal || validationOrg.LeadInfo.ChannelPartner || validationOrg.LeadInfo.IntegrationPartner || validationOrg.LeadInfo.TechPartner || validationOrg.LeadInfo.ServicePartner {
 		return validationOrg, nil
 	}
 
-	// If enterprise customer or pov then don't block them
-	if (validationOrg.LeadInfo.Customer || validationOrg.LeadInfo.POV) && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+	if validationOrg.LeadInfo.Customer && validationOrg.SyncFeatures.AppExecutions.Limit >= 300000 {
+		extendedLimit := validationOrg.SyncFeatures.AppExecutions.Limit * 10
+		if totalAppExecutions >= extendedLimit {
+			return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded the monthly app executions limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, extendedLimit))
+		}
 		return validationOrg, nil
 	}
 
@@ -1088,6 +1155,267 @@ func CheckCreatorSelfPermission(ctx context.Context, requestUser, creatorUser Us
 }
 
 // Uploads updates for a workflow to a specific file on git
+func UploadGitApp(ctx context.Context, identifier, pythoncode, requirements, dockerfile string, org *Org) error {
+	if len(org.Id) == 0 { 
+		return errors.New("No org id passed")
+	}
+
+	if org.Defaults.TokensEncrypted == true {
+		log.Printf("[DEBUG] Decrypting token for org %s (%s)", org.Name, org.Id)
+
+		parsedKey := fmt.Sprintf("%s_upload_token", org.Id)
+		newValue, err := HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadToken), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting token for org %s (%s): %s", org.Name, org.Id, err)
+		} else {
+			org.Defaults.WorkflowUploadToken = string(newValue)
+		}
+
+		parsedKey = fmt.Sprintf("%s_upload_username", org.Id)
+		newValue, err = HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadUsername), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting username for org %s (%s): %s", org.Name, org.Id, err)
+		} else {
+			org.Defaults.WorkflowUploadUsername = string(newValue)
+		}
+
+		parsedKey = fmt.Sprintf("%s_upload_repo", org.Id)
+		newValue, err = HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadRepo), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting repo for org %s (%s): %s", org.Name, org.Id, err)
+		} else {
+			org.Defaults.WorkflowUploadRepo = string(newValue)
+		}
+
+		parsedKey = fmt.Sprintf("%s_upload_branch", org.Id)
+		newValue, err = HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadBranch), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting branch for org %s (%s): %s", org.Name, org.Id, err)
+		} else {
+			org.Defaults.WorkflowUploadBranch = string(newValue)
+		}
+
+		log.Printf("[DEBUG] Decrypted token for org %s (%s): %s", org.Name, org.Id, newValue)
+	}
+
+	if len(org.Defaults.WorkflowUploadBranch) == 0 {
+		// Default to 'main' for Azure DevOps, 'master' for others
+		if strings.Contains(org.Defaults.WorkflowUploadRepo, "dev.azure.com") {
+			org.Defaults.WorkflowUploadBranch = "main"
+		} else {
+			org.Defaults.WorkflowUploadBranch = "master"
+		}
+	}
+
+	if org.Defaults.WorkflowUploadRepo == "" || org.Defaults.WorkflowUploadToken == "" {
+		if debug { 
+			log.Printf("[DEBUG] Missing Repo/Token during app backup upload for org %s (%s)", org.Name, org.Id)
+		}
+
+		//return errors.New("Missing repo or token")
+		return nil
+	}
+
+	org.Defaults.WorkflowUploadRepo = strings.TrimSpace(org.Defaults.WorkflowUploadRepo)
+
+	workflow := Workflow{}
+
+	commitMessage := fmt.Sprintf("User updated app '%s' with status '%s' at %s", identifier, workflow.Status, time.Now().Format("2006-01-02 15:04:05"))
+	repoURL := org.Defaults.WorkflowUploadRepo
+	repoURL = strings.TrimPrefix(repoURL, "https://")
+	repoURL = strings.TrimPrefix(repoURL, "http://")
+
+	var location string
+	var isAzureDevOps bool
+
+	if strings.Contains(repoURL, "dev.azure.com") {
+		isAzureDevOps = true
+		location = fmt.Sprintf("https://%s", repoURL)
+		log.Printf("[DEBUG] Detected Azure DevOps repository")
+	} else {
+		isAzureDevOps = false
+		// Only append .git if the URL contains github.com
+		if strings.Contains(repoURL, "github.com") && !strings.HasSuffix(repoURL, ".git") {
+			repoURL += ".git"
+		}
+
+		urlEncodedPassword := url.QueryEscape(org.Defaults.WorkflowUploadToken)
+		location = fmt.Sprintf("https://%s:%s@%s", org.Defaults.WorkflowUploadUsername, urlEncodedPassword, repoURL)
+
+	}
+
+
+	maskedRepo := strings.ReplaceAll(location, org.Defaults.WorkflowUploadToken, "****")
+	if urlEncodedPassword := url.QueryEscape(org.Defaults.WorkflowUploadToken); urlEncodedPassword != org.Defaults.WorkflowUploadToken {
+		maskedRepo = strings.ReplaceAll(maskedRepo, urlEncodedPassword, "****")
+	}
+
+	if debug { 
+		log.Printf("[DEBUG] Uploading app %s to repo: %s", identifier, maskedRepo)
+	}
+
+	fs := memfs.New()
+
+	pythonPath := fmt.Sprintf("%s/apps/%s/main.py", org.Id, identifier)
+	requirementsPath := fmt.Sprintf("%s/apps/%s/requirements.txt", org.Id, identifier)
+	dockerfilePath := fmt.Sprintf("%s/apps/%s/Dockerfile", org.Id, identifier)
+	cloneOptions := &git.CloneOptions{
+		URL: location,
+	}
+
+	// For Azure DevOps, add additional auth configuration and capability handling
+	if isAzureDevOps {
+		transport.UnsupportedCapabilities = []capability.Capability{
+			capability.ThinPack,
+		}
+
+		cloneOptions.Auth = &gitHttp.BasicAuth{
+			Username: org.Defaults.WorkflowUploadUsername, // Use the username for Azure DevOps
+			Password: org.Defaults.WorkflowUploadToken,
+		}
+	}
+
+	repo, err := git.Clone(memory.NewStorage(), fs, cloneOptions)
+	if err != nil {
+		errMsg := err.Error()
+		if isAzureDevOps {
+			log.Printf("[ERROR] Azure DevOps clone failed. Check: 1) PAT has Code(R/W) permissions, 2) Branch '%s' exists, 3) Repo URL is correct", org.Defaults.WorkflowUploadBranch)
+		}
+		log.Printf("[ERROR] Error cloning repo '%s': %s", maskedRepo, strings.ReplaceAll(errMsg, org.Defaults.WorkflowUploadToken, "****"))
+		return err
+	}
+
+	w, err := repo.Worktree()
+	if err != nil {
+		log.Printf("[ERROR] Error getting worktree for repo '%s': %s", maskedRepo, err)
+		return err
+	}
+
+	// Write the byte blob to the in-memory file system
+	pythonFile, err := fs.Create(pythonPath)
+	if err != nil {
+		log.Printf("[ERROR] Creating file in repo '%s': %v", maskedRepo, err)
+		return err
+	}
+
+	defer pythonFile.Close()
+	if _, err = io.Copy(pythonFile, bytes.NewReader([]byte(pythoncode))); err != nil {
+		log.Printf("[ERROR] Writing data to file: %v", err)
+		return err
+	}
+
+	if _, err = w.Add(pythonPath); err != nil {
+		log.Printf("[ERROR] Adding file to staging area: %s", err)
+		return err
+	}
+
+	requirementsFile, err := fs.Create(requirementsPath)
+	if err != nil {
+		log.Printf("[ERROR] Creating file in repo '%s': %v", maskedRepo, err)
+		return err
+	}
+
+	defer requirementsFile.Close()
+	if _, err = io.Copy(requirementsFile, bytes.NewReader([]byte(requirements))); err != nil {
+		log.Printf("[ERROR] Writing data to file: %v", err)
+		return err
+	}
+
+	if _, err = w.Add(requirementsPath); err != nil {
+		log.Printf("[ERROR] Adding file to staging area: %s", err)
+		return err
+	}
+
+	if len(dockerfile) <= 0 { 
+		dockerfile = string(GetBaseDockerfile())
+	}
+
+	dockerfileFile, err := fs.Create(dockerfilePath)
+	if err != nil {
+		log.Printf("[ERROR] Creating file in repo '%s': %v", maskedRepo, err)
+		return err
+	}
+
+	defer dockerfileFile.Close()
+	if _, err = io.Copy(dockerfileFile, bytes.NewReader([]byte(dockerfile))); err != nil {
+		log.Printf("[ERROR] Writing data to file: %v", err)
+		return err
+	}
+
+	if _, err = w.Add(dockerfilePath); err != nil {
+		log.Printf("[ERROR] Adding file to staging area: %s", err)
+		return err
+	}
+
+	// Check if there are any changes to commit
+	status, err := w.Status()
+	if err != nil {
+		log.Printf("[ERROR] Getting working tree status: %v", err)
+		return err
+	}
+
+	hasChanges := false
+	for _, fileStatus := range status {
+		if fileStatus.Staging != git.Unmodified {
+			hasChanges = true
+			break
+		}
+	}
+
+	if !hasChanges {
+		log.Printf("[INFO] No changes detected for workflow %s (%s). File content is identical to existing version.", workflow.Name, workflow.ID)
+		return nil
+	}
+
+	authorName := org.Defaults.WorkflowUploadUsername
+	if authorName == "" {
+		if isAzureDevOps {
+			authorName = "App Automation"
+		} else {
+			authorName = "Shuffle User"
+		}
+	}
+
+	_, err = w.Commit(commitMessage, &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  authorName,
+			Email: "",
+			When:  time.Now(),
+		},
+	})
+	if err != nil {
+		log.Printf("[ERROR] Committing changes: %v", err)
+		return err
+	}
+
+	//log.Printf("[DEBUG] Commit Hash: %s", commit)
+
+	// Push the changes to a remote repository (replace URL with your repository URL)
+	// fmt.Sprintf("refs/heads/%s:refs/heads/%s", org.Defaults.WorkflowUploadBranch, org.Defaults.WorkflowUploadBranch)},
+	ref := fmt.Sprintf("refs/heads/%s:refs/heads/%s", org.Defaults.WorkflowUploadBranch, org.Defaults.WorkflowUploadBranch)
+
+	pushOptions := &git.PushOptions{
+		RemoteName: "origin",
+		RefSpecs:   []config.RefSpec{config.RefSpec(ref)},
+	}
+
+	// Set authentication for push operations for both Azure DevOps and GitHub
+	pushOptions.Auth = &gitHttp.BasicAuth{
+		Username: org.Defaults.WorkflowUploadUsername,
+		Password: org.Defaults.WorkflowUploadToken,
+	}
+
+	err = repo.Push(pushOptions)
+	if err != nil {
+		log.Printf("[ERROR] Git push failed for repo '%s': %v", maskedRepo, err)
+		return err
+	}
+
+	log.Printf("[DEBUG] Workflow successfully uploaded to '%s'!", maskedRepo)
+	return nil
+}
+
+// Uploads updates for a workflow to a specific file on git
 func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	if workflow.BackupConfig.UploadRepo != "" || workflow.BackupConfig.UploadBranch != "" || workflow.BackupConfig.UploadUsername != "" || workflow.BackupConfig.UploadToken != "" {
 		//log.Printf("\n\n\n[DEBUG] Using workflow backup config for org %s (%s)\n\n\n", org.Name, org.Id)
@@ -1154,7 +1482,10 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	}
 
 	if org.Defaults.WorkflowUploadRepo == "" || org.Defaults.WorkflowUploadToken == "" {
-		//log.Printf("[DEBUG] Missing Repo/Token during Workflow backup upload for org %s (%s)", org.Name, org.Id)
+		if debug { 
+			log.Printf("[DEBUG] Missing Repo/Token during Workflow backup upload for org %s (%s)", org.Name, org.Id)
+		}
+
 		//return errors.New("Missing repo or token")
 		return nil
 	}
@@ -1215,7 +1546,9 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		}
 	}
 
-	log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, maskedRepo)
+	if debug { 
+		log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, maskedRepo)
+	}
 
 	fs := memfs.New()
 	if len(workflow.Status) == 0 {
@@ -1983,21 +2316,346 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 	}
 }
 
+// runAgentDecisionDirectAppCall bypasses Singul and runs the app directly.
+func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDecision) (rawResult []byte, debugUrl string, appName string, categoryLabels []string, actionName string, err error) {
+	ctx := context.Background()
+	var minUser User
+	org, err := GetOrg(ctx, execution.ExecutionOrg)
+	if err == nil && len(org.Users) > 0 {
+		minUser = org.Users[0] // Grabbing the first user, Is this the right way to do it ?
+	} else {
+		minUser = User{Username: execution.Workflow.Owner}
+	}
+
+	minUser.ActiveOrg = OrgMini{Id: execution.ExecutionOrg}
+	var (
+		resolvedAppId   string
+		resolvedAppName = decision.Tool
+		//resolvedAuthId  string
+		resolvedApp     WorkflowApp
+	)
+
+	//startTime := time.Now()
+	cacheKey := fmt.Sprintf("agent_app_slug_%s_%s", execution.ExecutionOrg, strings.ToLower(decision.Tool))
+
+	if project.CacheDb {
+		if cachedId, cacheErr := GetCache(ctx, cacheKey); cacheErr == nil {
+			resolvedAppId = string(cachedId.([]uint8))
+			if app, appErr := GetApp(ctx, resolvedAppId, minUser, false); appErr == nil {
+				resolvedApp = *app
+				resolvedAppName = app.Name
+				//log.Printf("[DEBUG][%s] DirectAppCall: Fast-resolved tool '%s' via cache -> ID: %s", execution.ExecutionId, decision.Tool, resolvedAppId)
+			} else {
+				resolvedAppId = "" // Cache hit but GetApp failed; fall through to full lookup
+			}
+		}
+	}
+
+	if resolvedAppId == "" {
+		allApps, appsErr := GetPrioritizedApps(ctx, minUser)
+		if appsErr != nil {
+			//log.Printf("[WARNING][%s] DirectAppCall: Failed to list apps for name resolution: %s", execution.ExecutionId, appsErr)
+		} else {
+			toolLower := strings.ToLower(decision.Tool)
+			for _, app := range allApps {
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+					continue
+				} 
+
+				resolvedAppId = app.ID
+				resolvedAppName = app.Name
+				resolvedApp = app
+				//log.Printf("[DEBUG][%s] DirectAppCall: Resolved tool '%s' -> App '%s' (ID: %s)", execution.ExecutionId, decision.Tool, app.Name, app.ID)
+				if project.CacheDb {
+					SetCache(ctx, cacheKey, []byte(app.ID), 3600)
+				}
+				break
+			}
+		}
+	}
+
+	if resolvedAppId == "" && project.Environment == "cloud" {
+		algoliaApp, err := HandleAlgoliaAppSearch(ctx, decision.Tool)
+		if err == nil {
+
+			foundApp, err := GetApp(ctx, resolvedAppId, minUser, false)
+			if err == nil {
+				//log.Printf("[ERROR][%s] DirectAppCall: Failed to get app by ID '%s' from Algolia search result: %s", execution.ExecutionId, resolvedAppId, err)
+			} else {
+				resolvedAppId = algoliaApp.ObjectID
+				resolvedAppName = algoliaApp.Name
+
+				resolvedApp = *foundApp
+			}
+		}
+	}
+
+	if resolvedAppId == "" {
+		foundApps, err := FindWorkflowAppByName(ctx, decision.Tool)
+		if err == nil {
+			toolLower := strings.ToLower(decision.Tool)
+			for _, app := range foundApps {
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+					continue
+				} 
+
+				resolvedAppId = app.ID
+				resolvedAppName = app.Name
+				resolvedApp = app
+				//log.Printf("[DEBUG][%s] DirectAppCall: Resolved tool '%s' -> App '%s' (ID: %s)", execution.ExecutionId, decision.Tool, app.Name, app.ID)
+				if project.CacheDb {
+					SetCache(ctx, cacheKey, []byte(app.ID), 3600)
+				}
+
+				break
+			}
+		}
+	}
+
+	if resolvedAppId == "" {
+		return nil, "", decision.Tool, nil, "", fmt.Errorf("DirectAppCall: could not resolve tool '%s' to any installed app for org '%s'", decision.Tool, execution.ExecutionOrg)
+	}
+
+
+	/*
+	authStart := time.Now()
+	allAuths, authErr := GetAllWorkflowAppAuth(ctx, execution.ExecutionOrg)
+	if authErr != nil {
+		log.Printf("[WARNING][%s] DirectAppCall: Failed to get app auths: %s", execution.ExecutionId, authErr)
+	} else {
+		for _, auth := range allAuths {
+			if auth.App.ID == resolvedAppId || strings.ToLower(auth.App.Name) == strings.ToLower(resolvedAppName) {
+				resolvedAuthId = auth.Id
+				//log.Printf("[DEBUG][%s] DirectAppCall: Found auth '%s' (defined: %v) for app '%s'", execution.ExecutionId, resolvedAuthId, auth.Defined, resolvedAppName)
+				if auth.Defined {
+					break
+				}
+			}
+		}
+	}
+	log.Printf("[DEBUG][%s] DirectAppCall: Auth resolution took %s", execution.ExecutionId, time.Since(authStart))
+	*/
+
+	// strconv for decision.Delay
+	selectedDelay := int64(0)
+	parsedDelay, err := strconv.Atoi(decision.Delay)
+	if err == nil {
+		if parsedDelay < 0 || parsedDelay > 2678400 {
+			parsedDelay = 0
+		} else {
+			selectedDelay = int64(parsedDelay)
+		}
+	} else {
+		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed to parse Agent decision.Delay '%s' as int: %s", execution.ExecutionId, decision.Delay, err)
+	}
+
+	action := Action{
+		AppID:            resolvedAppId,
+		AppName:          resolvedAppName,
+		Name:             decision.Action, // overwritten below if schema match found
+		//AuthenticationId: resolvedAuthId,
+		Parameters:       []WorkflowAppActionParameter{},
+
+		ExecutionDelay: selectedDelay,
+		SourceWorkflow: execution.Workflow.ID,
+		SourceExecution: execution.ExecutionId,
+	}
+
+	decisionActionLower := strings.ToLower(decision.Action)
+	for _, appAction := range resolvedApp.Actions {
+		nameLower := strings.ToLower(appAction.Name)
+		labelLower := strings.ToLower(appAction.Label)
+		labelAsSnake := strings.ReplaceAll(labelLower, " ", "_")
+
+		if nameLower == decisionActionLower || labelLower == decisionActionLower || labelAsSnake == decisionActionLower {
+			//if debug { 
+			//	log.Printf("[DEBUG][%s] DirectAppCall: Matched action '%s' -> schema name '%s'", execution.ExecutionId, decision.Action, appAction.Name)
+			//}
+
+			for _, param := range appAction.Parameters {
+				action.Parameters = append(action.Parameters, param)
+			}
+			// Always use the canonical name from the schema so the backend recognises it
+			action.Name = appAction.Name
+			break
+		}
+	}
+
+	// Overlay values the agent has explicitly provided, matching by parameter name.
+	for _, field := range decision.Fields {
+		val := field.Value
+		if len(field.Answer) > 0 {
+			val = field.Answer
+		}
+
+		matched := false
+		for i, p := range action.Parameters {
+			if strings.ToLower(p.Name) == strings.ToLower(field.Key) {
+				action.Parameters[i].Value = val
+				matched = true
+				break
+			}
+		}
+
+		if !matched {
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  field.Key,
+				Value: val,
+			})
+		}
+	}
+
+
+	// Signal HandleRetValidation to skip the 30-second polling timeout.
+	action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+		Name:  "agent_bypass_validation",
+		Value: "true",
+	})
+
+	if len(decision.RunDetails.Id) > 0 { 
+		action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+			Name:  decisionParameterName,
+			Value: decision.RunDetails.Id,
+		})
+	}
+
+	//if debug { 
+	//	for _, p := range action.Parameters {
+	//		log.Printf("[DEBUG][%s] DirectAppCall: PARAMS: %s = %s", execution.ExecutionId, p.Name, p.Value)
+	//	}
+	//}
+
+	actionBytes, marshalErr := json.Marshal(action)
+	if marshalErr != nil {
+		return nil, "", resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: failed to marshal action: %s", marshalErr)
+	}
+
+
+	baseURL := os.Getenv("BASE_URL")
+	if len(baseURL) == 0 {
+		if v := os.Getenv("SHUFFLE_CLOUDRUN_URL"); len(v) > 0 {
+			baseURL = v
+		} else {
+			port := os.Getenv("PORT")
+			if len(port) == 0 {
+				port = "5001"
+			}
+			baseURL = fmt.Sprintf("http://localhost:%s", port)
+		}
+	}
+
+	//ExecutionDelay: selectedDelay,
+	timeout := time.Duration(30) * time.Second
+
+	// Immediate exits. 3 seconds due to body transfer worst case
+	if selectedDelay > 0 { 
+		timeout = time.Duration(2) * time.Second
+	}
+
+	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=%d&delay=%d&decision_id=%s", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg, (timeout/1000000000)-1, selectedDelay, decision.RunDetails.Id)
+
+	parentNode := ""
+	if len(parentNode) > 0 { 
+		requestUrl += fmt.Sprintf("parent_node=%s", parentNode)
+	}
+
+	// Gives it time to return properly with +2 delay
+	client := GetExternalClientWithTimeout(requestUrl, 0)
+	client.Timeout = timeout + (1 * time.Second)
+
+	//if debug { 
+		//log.Printf("\n\n\n\nRequest timeout: %d", client.Timeout)
+		//log.Printf("REQUEST URL: %#v\n\n\n\n", requestUrl)
+	//}
+
+	req, reqErr := http.NewRequest("POST", requestUrl, bytes.NewBuffer(actionBytes))
+	if reqErr != nil {
+		return nil, "", resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: failed to create request: %s", reqErr)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Org-Id", execution.ExecutionOrg)
+
+	resp, doErr := client.Do(req)
+	//if debug { 
+	//	log.Printf("[DEBUG][%s] DirectAppCall: HTTP call took %s", execution.ExecutionId, time.Since(httpStart))
+	//}
+
+	if doErr != nil {
+		//if debug { 
+		//	log.Printf("[ERROR][%s] DirectAppCall: HTTP call failed: %s", execution.ExecutionId, doErr)
+		//}
+
+		return nil, "", resolvedAppName, nil, action.Name, doErr
+	}
+
+	defer resp.Body.Close()
+	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, "", resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: failed to read response: %s", readErr)
+	}
+
+	//if debug { 
+	//	log.Printf("[DEBUG][%s] DirectAppCall: executeSingleAction returned status %d, body length %d", execution.ExecutionId, resp.StatusCode, len(respBody))
+	//}
+
+	debugUrl = resp.Header.Get("X-Debug-Url")
+	if resp.StatusCode >= 400 {
+		log.Printf("[ERROR][%s] DirectAppCall: executeSingleAction returned HTTP %d: %s", execution.ExecutionId, resp.StatusCode, string(respBody))
+		return nil, debugUrl, resolvedAppName, nil, action.Name, fmt.Errorf("DirectAppCall: executeSingleAction returned HTTP %d", resp.StatusCode)
+	}
+
+	var singleResult SingleResult
+	if jsonErr := json.Unmarshal(respBody, &singleResult); jsonErr == nil && len(singleResult.Result) > 0 {
+		status := "SUCCESS"
+		if !singleResult.Success {
+			status = "FAILURE"
+		}
+
+		if status == "SUCCESS" {
+			var innerResult map[string]interface{}
+			if innerErr := json.Unmarshal([]byte(singleResult.Result), &innerResult); innerErr == nil {
+				if innerSuccess, ok := innerResult["success"].(bool); ok && !innerSuccess {
+					status = "FAILURE"
+				}
+			}
+		}
+
+		//if debug { 
+		//	log.Printf("[DEBUG][%s] DirectAppCall: result length %d, status %s", execution.ExecutionId, len(singleResult.Result), status)
+		//}
+
+		return []byte(singleResult.Result), debugUrl, resolvedAppName, []string{}, action.Name, nil
+	}
+
+	// Fallback: return raw body when the response isn't a well-formed SingleResult
+	return respBody, debugUrl, resolvedAppName, []string{}, action.Name, nil
+}
+
 // This is JUST for Singul actions with AI agents.
 // As AI Agents can have multiple types of runs, this could change every time.
-func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, string, []string, string, error) {
+func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision, executionMode string) ([]byte, string, string, []string, string, error) {
 	debugUrl := ""
-	log.Printf("[INFO][%s] Running agent decision action '%s' with app '%s'. This is ran with Singul.", execution.ExecutionId, decision.Action, decision.Tool)
+	log.Printf("[INFO][%s] Running agent decision action '%s' with app '%s'.", execution.ExecutionId, decision.Action, decision.Tool)
 
 	// Check if running in test mode
 	if os.Getenv("AGENT_TEST_MODE") == "true" {
 		log.Printf("[DEBUG][%s] AGENT_TEST_MODE enabled - using mock tool execution", execution.ExecutionId)
-
-		// Call mock handler
 		body, debugUrl, appName, err := RunAgentDecisionMockHandler(execution, decision)
 		return body, debugUrl, appName, []string{}, "", err
 	}
 
+	skipSingul := executionMode == "direct" || os.Getenv("AGENT_SKIP_SINGUL") != "false"
+	if skipSingul {
+		if debug { 
+			log.Printf("[DEBUG][%s] Calling decision run directly. ExecutionMode=%q EnvOverride=%v", execution.ExecutionId, executionMode, os.Getenv("AGENT_SKIP_SINGUL") == "true")
+		}
+
+		return runAgentDecisionDirectAppCall(execution, decision)
+	}
+
+	_ = debugUrl
+	
 	baseUrl := "https://shuffler.io"
 	if os.Getenv("BASE_URL") != "" {
 		baseUrl = os.Getenv("BASE_URL")
@@ -2220,7 +2878,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		log.Printf("[ERROR][%s] AI Agent: FAILED MAPPING RAW RESP INTERfACE. TYPE: %T\n\n\n", execution.ExecutionId, outputMapped.RawResponse)
 	}
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode >= 300 {
 		if debug { 
 			log.Printf("[ERROR][%s] AI Agent: Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
 		} else {
@@ -2230,7 +2888,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		return body, debugUrl, appname, []string{}, "", errors.New(fmt.Sprintf("Failed running agent decision (2). Status code %d", resp.StatusCode))
 	}
 
-	if outputMapped.Success == false {
+	if resp.StatusCode != 200 && outputMapped.Success == false {
 		return originalBody, debugUrl, appname, []string{}, "", errors.New("Failed running agent decision (3). Success false for Singul action")
 	}
 
@@ -2316,7 +2974,7 @@ func isAgentToolAllowed(agentOutput AgentOutput, decision AgentDecision) (bool, 
 func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput, decision AgentDecision) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[ERROR] AI_AGENT_PANIC: execution_id=%s decision_id=%s panic=%v", execution.ExecutionId, decision.RunDetails.Id, r)
+			log.Printf("[ERROR][%s] AI_AGENT_PANIC: org=%s decision_id=%s panic=%v", execution.ExecutionId,execution.Workflow.OrgId, decision.RunDetails.Id, r)
 
 			// Mark decision as failed so agent doesn't get stuck
 			decision.RunDetails.Status = "FAILURE"
@@ -2354,7 +3012,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 
-	go SetCache(ctx, decisionId, marshalledDecision, 600)
+	SetCache(ctx, decisionId, marshalledDecision, 600)
 
 	if decision.Action == "user_input" || decision.Action == "answer" || decision.Action == "ask" || decision.Action == "question" || decision.Action == "finish" || decision.Category == "standalone" {
 	} else {
@@ -2366,8 +3024,11 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 				log.Printf("[WARNING][%s] AI Agent blocked disallowed tool '%s' for decision %s. Allowed tools: %s", execution.ExecutionId, decision.Tool, decision.RunDetails.Id, strings.Join(allowedTools, ", "))
 			}
 		} else {
-		// Singul handler
-			rawResponse, debugUrl, appname, categoryLabels, actionName, err := RunAgentDecisionSingulActionHandler(execution, decision)
+			// Singul handler
+			if debug { 
+				log.Printf("[DEBUG][%s] Running agent decision %s with action '%s' and tool '%s'", execution.ExecutionId, decision.RunDetails.Id, decision.Action, decision.Tool)
+			}
+			rawResponse, debugUrl, appname, categoryLabels, actionName, runError := RunAgentDecisionSingulActionHandler(execution, decision, agentOutput.ExecutionMode)
 
 			if len(appname) > 0 {
 				decision.Tool = appname
@@ -2378,21 +3039,32 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 			decision.RunDetails.CategoryLabels = categoryLabels
 			decision.RunDetails.ActionName = actionName
 
-			if debug {
-				log.Printf("[DEBUG] RawResp: %s", string(rawResponse))
-			}
+			//if debug {
+			//	log.Printf("[DEBUG] RawResp agent: %s", string(rawResponse))
+			//}
 
-			if err != nil {
+			parsedDelay, delayErr := strconv.Atoi(decision.Delay)
+			if delayErr == nil {
+				if parsedDelay < 0 || parsedDelay > 2678400 {
+					parsedDelay = 0
+				}
+			} 
+
+			// Handles the case where the action is delayed on purpose (scheduled)
+			if parsedDelay > 0 { 
+				decision.RunDetails.Status = "WAITING"
+
+			} else if runError != nil {
 				if debug { 
-					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
+					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision, runError)
 				} else {
-					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision.RunDetails.Id, err)
+					log.Printf("[ERROR][%s] AI Agent: Failed to run agent decision %#v: %s", execution.ExecutionId, decision.RunDetails.Id, runError)
 				}
 
 				decision.RunDetails.Status = "FAILURE"
 
 				if len(decision.RunDetails.RawResponse) == 0 {
-					decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start decision action. Raw Error: %s", err)
+					decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start decision action. Raw Error: %s", runError)
 				}
 			} else {
 				decision.RunDetails.Status = "FINISHED"
@@ -2401,8 +3073,8 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 		// Log individual tool execution result
 		duration := int64(0)
-		if decision.RunDetails.CompletedAt > 0 && decision.RunDetails.StartedAt > 0 {
-			duration = decision.RunDetails.CompletedAt - decision.RunDetails.StartedAt
+		if decision.RunDetails.StartedAt > 0 {
+			duration = (time.Now().UnixMilli() - decision.RunDetails.StartedAt) / 1000
 		}
 
 		log.Printf("[INFO][%s] AI_AGENT_TOOL: org=%s tool=%s action=%s status=%s duration=%ds", execution.ExecutionId, execution.Workflow.OrgId, decision.Tool, decision.Action, decision.RunDetails.Status, duration)
@@ -2433,7 +3105,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[ERROR][%s] AI Agent: Failed marshalling completed decision %s", execution.ExecutionId, decision.RunDetails.Id)
 	}
 
-	go SetCache(ctx, decisionId, marshalledDecision, 600)
+	SetCache(ctx, decisionId, marshalledDecision, 600)
 
 	// 1. Send an /api/v1/streams request? Due to concurrency, I think this is the only way (?)
 	// 2. On the streams API, make sure to:
@@ -2453,7 +3125,9 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	//url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 	url := fmt.Sprintf("%s/api/v1/streams", baseUrl)
 
-	log.Printf("[DEBUG][%s] Sending agent decision response %s with status %s. Node: %s. URL: %s", execution.ExecutionId, decision.RunDetails.Id, decision.RunDetails.Status, agentOutput.NodeId, url)
+	if debug { 
+		log.Printf("[DEBUG][%s] Sending agent decision response %s with status %s. Node: %s. URL: %s", execution.ExecutionId, decision.RunDetails.Id, decision.RunDetails.Status, agentOutput.NodeId, url)
+	}
 
 	//?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 	client := GetExternalClient(url)
@@ -2496,8 +3170,13 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		if streamErr == nil {
 			return
 		}
+
+		if debug { 
+			log.Printf("\n\n\n[DEBUG] ERROR BELOW\n\n\n")
+		}
 		log.Printf("[ERROR][%s] AI Agent: All attempts to POST decision %s to streams failed: %v. Falling back to in-process handler.", execution.ExecutionId, decision.RunDetails.Id, streamErr)
 	}
+
  	// Try the in-process handler to keep the agent moving when the streams API is unavailable.
 	freshExec, err := GetWorkflowExecution(context.Background(), execution.ExecutionId)
 	if err != nil {
@@ -2900,9 +3579,10 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 			software.OS = sensorDetails.OS
 			software.Hostnames = []HostDetails{
 				HostDetails{
-					Hostname: sensorDetails.Hostname,
-					Version: software.Version,
+					Hostname:  sensorDetails.Hostname,
+					Version:   software.Version,
 					UpdatedAt: time.Now().Unix(),
+					User:      sensorDetails.User,
 				},
 			}
 			if len(software.Version) > 0 {
@@ -2919,18 +3599,22 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 				if err == nil { 
 					hostExists := false
 					versionExists := false
-					for _, foundHost := range unmarshalledSoftware.Hostnames {
+					for foundHostIndex, foundHost := range unmarshalledSoftware.Hostnames {
 						if foundHost.Hostname == sensorDetails.Hostname && foundHost.Version == software.Version {
 							hostExists = true
+							if len(foundHost.User) == 0 && len(sensorDetails.User) > 0 {
+								unmarshalledSoftware.Hostnames[foundHostIndex].User = sensorDetails.User
+							}
 							break
 						}
 					}
 
 					if !hostExists {
 						unmarshalledSoftware.Hostnames = append(unmarshalledSoftware.Hostnames, HostDetails{
-							Hostname: sensorDetails.Hostname,
-							Version: software.Version,
+							Hostname:  sensorDetails.Hostname,
+							Version:   software.Version,
 							UpdatedAt: time.Now().Unix(),
+							User:      sensorDetails.User,
 						})
 					}
 
@@ -3037,10 +3721,11 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 				software.OS = curPackage.Type
 				software.Hostnames = []HostDetails{
 					HostDetails{
-						Hostname: sensorDetails.Hostname,
-						Version: software.Version,
+						Hostname:  sensorDetails.Hostname,
+						Version:   software.Version,
 						UpdatedAt: time.Now().Unix(),
-						Paths: []string{curPackage.Path},
+						Paths:     []string{curPackage.Path},
+						User:      sensorDetails.User,
 					},
 				}
 
@@ -3061,6 +3746,9 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 						for foundHostIndex, foundHost := range unmarshalledSoftware.Hostnames {
 							if foundHost.Hostname == sensorDetails.Hostname && foundHost.Version == software.Version {
 								unmarshalledSoftware.Hostnames[foundHostIndex].UpdatedAt = time.Now().Unix()
+								if len(foundHost.User) == 0 && len(sensorDetails.User) > 0 {
+									unmarshalledSoftware.Hostnames[foundHostIndex].User = sensorDetails.User
+								}
 
 								found := false
 								for _, path := range unmarshalledSoftware.Hostnames[foundHostIndex].Paths {
@@ -3081,10 +3769,11 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 
 						if !hostPathExists {
 							unmarshalledSoftware.Hostnames = append(unmarshalledSoftware.Hostnames, HostDetails{
-								Hostname: sensorDetails.Hostname,
-								Version: software.Version,
+								Hostname:  sensorDetails.Hostname,
+								Version:   software.Version,
 								UpdatedAt: time.Now().Unix(),
-								Paths: []string{curPackage.Path},
+								Paths:     []string{curPackage.Path},
+								User:      sensorDetails.User,
 							})
 						}
 
@@ -3311,6 +4000,24 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 	}
 }
 
+var shellUnsafeRe = regexp.MustCompile(`[;<>&|` + "\\$`" + `\\'"(){}\x00-\x1f\x7f<>]`)
+
+func sanitizeShellParam(s string) string {
+	return strings.TrimSpace(shellUnsafeRe.ReplaceAllString(s, ""))
+}
+
+func validateShellURL(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", false
+	}
+	cleaned := u.Scheme + "://" + u.Host + u.Path
+	if shellUnsafeRe.MatchString(cleaned) {
+		return "", false
+	}
+	return cleaned, true
+}
+
 // Download handler for Orborus agent installation script. This is used in the "Assets" page for Orborus, and can be used by customers to easily install Orborus on their hosts. It returns a bash script that can be run on the target host to install Orborus with the correct configuration.
 func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -3353,22 +4060,33 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if v := q.Get("base_url"); v != "" {
-		c.BaseURL = v
+		if cleaned, ok := validateShellURL(v); ok {
+			c.BaseURL = cleaned
+		} else {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, "invalid base_url: must be a valid http or https URL")
+			return
+		}
 	}
 	if v := q.Get("queue"); v != "" {
-		c.Queue = v
+		c.Queue = sanitizeShellParam(v)
 	}
 	if v := q.Get("auth"); v != "" {
-		c.Auth = v
+		c.Auth = sanitizeShellParam(v)
 	}
 	if v := q.Get("org_id"); v != "" {
+		if !isValidUUID(v) {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, "invalid org_id: must be a valid UUID")
+			return
+		}
 		c.OrgID = v
 	}
 	if v := q.Get("response_actions"); v != "" {
-		c.ResponseActions = v
+		c.ResponseActions = sanitizeShellParam(v)
 	}
 	if v := q.Get("log_forwarding"); v != "" {
-		c.LogForwarding = v
+		c.LogForwarding = sanitizeShellParam(v)
 	}
 	if v := q.Get("software_list_enabled"); v != "" {
 		c.SoftwareListEnabled = v == "true"
@@ -3383,9 +4101,8 @@ func GetOrborusDownloadCommand(w http.ResponseWriter, r *http.Request) {
 		c.AsRoot = v != "false"
 	}
 
-	// Check the "AUTH" header for a secret value to allow overriding the config (for security)
 	if authHeader := r.Header.Get("AUTH"); authHeader != "" {
-		c.Auth = authHeader
+		c.Auth = sanitizeShellParam(authHeader)
 	}
 
 	// Quite untested.
