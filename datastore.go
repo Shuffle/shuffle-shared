@@ -69,6 +69,10 @@ func HandleDatastorePostRedirect(resp http.ResponseWriter, request *http.Request
 		key = strings.Split(key, "?")[0]
 	}
 
+	if category == "vulns" || category == "vulnerabilities" || category == "shuffle-security_vulnerabilities" {
+		category = "shuffle-security_vulns"
+	}
+
 	// Try to get the key first to check if it exists (?)
 	ctx := GetContext(request)
 	key, err = url.QueryUnescape(strings.Trim(key, " "))
@@ -87,6 +91,12 @@ func HandleDatastorePostRedirect(resp http.ResponseWriter, request *http.Request
 			keyRet2, err := GetDatastoreKey(ctx, parsedKey, category)
 			if err != nil || len(keyRet2.Value) == 0 {
 				category = originalCategory
+			}
+		} else if category == "shuffle-security_vulns" {
+			// Check legacy category
+			keyRet2, err := GetDatastoreKey(ctx, parsedKey, "shuffle-security_vulnerabilities")
+			if err == nil && len(keyRet2.Value) > 0 {
+				log.Printf("[INFO] Migrating key %s from shuffle-security_vulnerabilities to shuffle-security_vulns", key)
 			}
 		}
 	}
@@ -171,6 +181,10 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 		key = strings.Split(key, "?")[0]
 	}
 
+	if category == "vulns" || category == "vulnerabilities" || category == "shuffle-security_vulnerabilities" {
+		category = "shuffle-security_vulns"
+	}
+
 	newRequest := request.Clone(context.Background())
 	newRequest.URL.Path = "/api/v2/datastore"
 	if len(key) > 0 {
@@ -233,9 +247,13 @@ func HandleDatastoreGetRedirect(resp http.ResponseWriter, request *http.Request)
 		}
 	}
 
-	// Same again with shuffle-security prefix
-	if !strings.HasPrefix(category, "shuffle-security_") {
-		category = "shuffle-security_" + category
+	// Same again with shuffle-security prefix or legacy fallback for vulns
+	if !strings.HasPrefix(category, "shuffle-security_") || category == "shuffle-security_vulns" {
+		if category == "shuffle-security_vulns" {
+			category = "shuffle-security_vulnerabilities"
+		} else {
+			category = "shuffle-security_" + category
+		}
 		newRequest = request.Clone(context.Background())
 		newRequest.URL.Path = "/api/v2/datastore"
 		if len(key) > 0 {
@@ -646,8 +664,18 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	//}
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
+	if tmpData.Category == "vulns" || tmpData.Category == "vulnerabilities" {
+		tmpData.Category = "shuffle-security_vulns"
+	}
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
+	if (err != nil || len(cacheData.Value) == 0) && tmpData.Category == "shuffle-security_vulns" {
+		legacyData, legacyErr := GetDatastoreKey(ctx, cacheId, "shuffle-security_vulnerabilities")
+		if legacyErr == nil && len(legacyData.Value) > 0 {
+			cacheData = legacyData
+			err = nil
+		}
+	}
 	if err != nil {
 		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (get) and cacheId %s", tmpData.Key, tmpData.OrgId, cacheId)
 		// Doing a last resort search, e.g. to handle spaces and the like
@@ -1073,6 +1101,10 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		category = categoryList[0]
 	}
 
+	if category == "vulns" || category == "vulnerabilities" {
+		category = "shuffle-security_vulns"
+	}
+
 	orgQuery, orgOk := request.URL.Query()["org_id"]
 	if orgOk && len(orgQuery) > 0 {
 		orgId = orgQuery[0]
@@ -1165,6 +1197,14 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		keys, newCursor, err = GetAllCacheKeys(ctx, org.Id, category, maxAmount, cursor)
 		if err != nil {
 			isSuccess = false
+		}
+
+		if category == "shuffle-security_vulns" && len(keys) == 0 {
+			legacyKeys, legacyCursor, legacyErr := GetAllCacheKeys(ctx, org.Id, "shuffle-security_vulnerabilities", maxAmount, cursor)
+			if legacyErr == nil && len(legacyKeys) > 0 {
+				keys = legacyKeys
+				newCursor = legacyCursor
+			}
 		}
 	}
 

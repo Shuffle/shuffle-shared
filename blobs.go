@@ -593,7 +593,7 @@ import time
 import re
 import requests
 
-DATASTORE_VULNS = "shuffle-security_vulnerabilities"
+DATASTORE_VULNS = "shuffle-security_vulns"
 DATASTORE_PACKAGES = "shuffle-security_packages"
 DATASTORE_SOFTWARE = "shuffle-security_software"
 DATASTORE_INCIDENTS = "shuffle-security_incidents"
@@ -1859,7 +1859,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId string, categoryAction Ca
 		createCaseId := uuid.NewV4().String()
 		defaultWorkflow := Workflow{
 			Name:        actionType,
-			Description: "For each software package + version coming from a host monitor, queries the Shuffle vulnerability API and stores any matching CVEs into the shuffle-security_vulnerabilities datastore category.",
+			Description: "For each software package + version coming from a host monitor, queries the Shuffle vulnerability API and stores any matching CVEs into the shuffle-security_vulns datastore category.",
 			OrgId:       orgId,
 			Start:       startActionId,
 			UsecaseIds:  []string{"vulnerabilities"},
