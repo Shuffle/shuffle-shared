@@ -14090,71 +14090,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if tmpData.Editing == "license_expired" {
-		// 1. Check if editing org is on mark as customer and opensource if yes than only countinue this checks
-		if org.LeadInfo.Customer {
-			// 2. Check if editing org have subscription active and it is ended if yes than only continue
-			now := time.Now().Unix()
-			hasEndedSubscription := false
-			for _, sub := range org.Subscriptions {
-				subName := strings.ToLower(sub.Name)
-				if (strings.Contains(subName, "enterprise") || strings.Contains(subName, "business")) && sub.Active && sub.Enddate > 0 && sub.Enddate < now {
-					hasEndedSubscription = true
-					break
-				}
-			}
-
-			if hasEndedSubscription {
-				// 3. If both of the above conditions are met than it's orgs onpremappruns limit as 25K, set subscription active as false, tenants limit 3, environmennt limit as 1 and branding as false
-				org.SyncFeatures.OnpremAppExecutions.Limit = 25000
-				org.SyncFeatures.AppExecutions.Limit = 2000
-				org.SyncFeatures.AnnualAppRunsGrouping.Active = false
-				var newSubs []PaymentSubscription
-				hasBaseSubscription := false
-				for i := range org.Subscriptions {
-					subName := strings.ToLower(org.Subscriptions[i].Name)
-					if strings.Contains(subName, "enterprise") || strings.Contains(subName, "business") {
-						org.Subscriptions[i].Active = false
-					}
-					if strings.Contains(subName, "free") || strings.Contains(subName, "open source") {
-						hasBaseSubscription = true
-					}
-					newSubs = append(newSubs, org.Subscriptions[i])
-				}
-
-				if !hasBaseSubscription {
-					newSubs = append(newSubs, BuildBaseSubscription(ctx, org, 2000))
-				}
-				org.Subscriptions = newSubs
-				org.SyncFeatures.MultiTenant.Limit = 3
-				org.SyncFeatures.MultiEnv.Limit = 1
-				org.SyncFeatures.Branding.Active = false
-
-				org.LeadInfo.Customer = false
-				org.LeadInfo.OpenSource = false
-				org.LeadInfo.BusinessLicenseOnprem = false
-				org.LeadInfo.BusinessLicenseCloud = false
-				org.LeadInfo.EnterpriseLicenseCloud = false
-				org.LeadInfo.EnterpriseLicenseOnprem = false
-				org.LeadInfo.ShuffleEnterpriseLicenseOldCustomer = false
-				// 4. Update above information in org and return sucess true and don't continue this furthus
-				err = SetOrg(ctx, *org, org.Id)
-				if err != nil {
-					log.Printf("[ERROR] Failed to update org %s on license expiry: %v", org.Id, err)
-					resp.WriteHeader(500)
-					resp.Write([]byte(`{"success": false}`))
-					return
-				}
-				resp.WriteHeader(200)
-				resp.Write([]byte(`{"success": true}`))
-				return
-			}
-		}
-		resp.WriteHeader(200)
-		resp.Write([]byte(`{"success": true}`))
-		return
-	}
-
 	// Allow editing a specific subscription card from UI except Eula and Reference
 	if tmpData.Editing == "subscription_update" {
 		// Find subscription by ID (SubscriptionIndex now holds the ID string)
@@ -15068,46 +15003,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
 
-}
-
-func SendLicenseExpiredRequest(orgId string, apikey string) {
-	log.Printf("[INFO] Subscription expired for org %s, sending license_expired update", orgId)
-	url := fmt.Sprintf("https://shuffler.io/api/v1/orgs/%s", orgId)
-	payloadData := map[string]string{
-		"editing": "license_expired",
-		"org_id":  orgId,
-	}
-	payload, _ := json.Marshal(payloadData)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(payload))
-	if err != nil {
-		log.Printf("[ERROR] Failed to create request for license_expired: %v", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Org-Id", orgId)
-	if apikey != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apikey))
-	}
-
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-	res, err := client.Do(req)
-	if err != nil {
-		log.Printf("[ERROR] Failed to send license_expired request to edit org %s: %v", orgId, err)
-		return
-	}
-	defer res.Body.Close()
-
-	if res.StatusCode != 200 {
-		log.Printf("[WARNING] license_expired request returned status code %d for org %s", res.StatusCode, orgId)
-	} else {
-		log.Printf("[INFO] Successfully marked license as expired for org %s", orgId)
-	}
 }
 
 func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool, BccAddresses []string) error {
