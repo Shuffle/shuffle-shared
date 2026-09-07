@@ -18325,11 +18325,25 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	mappedResult := AgentOutput{}
 
-	//err := json.Unmarshal([]byte(actionResult.Result), &mappedResult)
 	err := json.Unmarshal([]byte(workflowExecution.Results[foundActionResultIndex].Result), &mappedResult)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed unmarshalling agent result: %s. Data: %s", workflowExecution.ExecutionId, err, actionResult.Result)
-		return &workflowExecution, false, err
+		actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+		recovered := false
+		if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil && cachedData != nil {
+			if cachedBytes, ok := cachedData.([]uint8); ok {
+				if cacheErr := json.Unmarshal(cachedBytes, &mappedResult); cacheErr == nil {
+					log.Printf("[INFO][%s] Recovered agent output from cache %s for action %s", workflowExecution.ExecutionId, actionCacheId, actionResult.Action.ID)
+					workflowExecution.Results[foundActionResultIndex].Result = string(cachedBytes)
+					recovered = true
+					err = nil
+				}
+			}
+		}
+
+		if !recovered {
+			log.Printf("[ERROR][%s] Failed unmarshalling agent result: %s. Data: %s", workflowExecution.ExecutionId, err, actionResult.Result)
+			return &workflowExecution, false, err
+		}
 	}
 
 	if mappedResult.Status == "ABORTED" || (mappedResult.Status == "FINISHED" && workflowExecution.Status != "EXECUTING") {
