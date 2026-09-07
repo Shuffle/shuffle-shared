@@ -10621,8 +10621,11 @@ data_filter:
 		}
 
 		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status != "ABORTED" && execution.Status != "FAILURE" {
-			execution.Status = "FINISHED"
-			execution.CompletedAt = agentOutput.CompletedAt
+			isStandalone := execution.ExecutionId == execution.WorkflowId || execution.ExecutionId == execution.Workflow.ID
+			if isStandalone {
+				execution.Status = "FINISHED"
+				execution.CompletedAt = agentOutput.CompletedAt
+			}
 			execution.Results[foundResultIndex].Status = "SUCCESS"
 			execution.Results[foundResultIndex].CompletedAt = agentOutput.CompletedAt
 			SetWorkflowExecution(ctx, execution, true)
