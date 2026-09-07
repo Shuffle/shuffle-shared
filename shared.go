@@ -37599,12 +37599,11 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		var prunedBranchIDs []string
 		if operation.Op == "delete_node" || operation.Op == "remove_node" {
 			targetID := operation.ID
+			if len(targetID) == 0 && len(operation.TempID) > 0 {
+				targetID = operation.TempID
+			}
 			if realID, ok := tempIDMap[targetID]; ok {
 				targetID = realID
-			} else if len(targetID) == 0 && len(operation.TempID) > 0 {
-				if realID, ok := tempIDMap[operation.TempID]; ok {
-					targetID = realID
-				}
 			}
 			for _, branch := range workflow.Branches {
 				if branch.SourceID == targetID || branch.DestinationID == targetID {
@@ -37618,12 +37617,11 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		var triggerToStop *Trigger
 		if operation.Op == "delete_node" || operation.Op == "remove_node" {
 			targetID := operation.ID
+			if len(targetID) == 0 && len(operation.TempID) > 0 {
+				targetID = operation.TempID
+			}
 			if realID, ok := tempIDMap[targetID]; ok {
 				targetID = realID
-			} else if len(targetID) == 0 && len(operation.TempID) > 0 {
-				if realID, ok := tempIDMap[operation.TempID]; ok {
-					targetID = realID
-				}
 			}
 			for _, existingTrigger := range workflow.Triggers {
 				if existingTrigger.ID == targetID {
