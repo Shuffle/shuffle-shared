@@ -37743,6 +37743,8 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 			return
 		}
 
+		go SetWorkflowRevision(context.Background(), *workflow)
+
 		// Invalidate the ops cache now that DB is the real source.
 		if delErr := DeleteCache(ctx, cacheKey); delErr != nil {
 			log.Printf("[WARNING] Failed to delete ops cache after DB save for workflow %s: %s", workflowID, delErr)
