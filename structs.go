@@ -1564,6 +1564,7 @@ type SyncFeatures struct {
 	AgentExecutions       SyncData    `json:"agent_executions" datastore:"agent_executions"`
 	AgentTokens           SyncData    `json:"agent_tokens" datastore:"agent_tokens"`
 	Multiplayer           SyncData    `json:"multiplayer" datastore:"multiplayer"`
+	LLMTokens             SyncData    `json:"llm_tokens" datastore:"llm_tokens"`
 }
 
 type SyncData struct {
