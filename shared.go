@@ -29188,6 +29188,11 @@ func loadGithubWorkflows(url, username, password, userId, branch, orgId string) 
 
 	log.Printf("Starting load of %s with branch %s", url, branch)
 
+	if err := checkAllowedUrl(url); err != nil {
+		log.Printf("[ERROR] Blocked workflow git clone URL: %s", err)
+		return err
+	}
+
 	cloneOptions := &git.CloneOptions{
 		URL: url,
 	}
@@ -29333,6 +29338,11 @@ func listGithubWorkflowsInfo(url, username, password, branch, orgId string) ([]R
 			}
 			url = baseURL + ".git"
 		}
+	}
+
+	if err := checkAllowedUrl(url); err != nil {
+		log.Printf("[ERROR] Blocked workflow git clone URL: %s", err)
+		return nil, err
 	}
 
 	cloneOptions := &git.CloneOptions{URL: url}
@@ -29535,6 +29545,11 @@ func importSingleRemoteWorkflow(url, username, password, branch, originalWorkflo
 			}
 			url = baseURL + ".git"
 		}
+	}
+
+	if err := checkAllowedUrl(url); err != nil {
+		log.Printf("[ERROR] Blocked workflow git clone URL: %s", err)
+		return err
 	}
 
 	cloneOptions := &git.CloneOptions{URL: url}
@@ -39737,6 +39752,39 @@ func init() {
 	if err != nil {
 		panic(fmt.Sprintf("[ERROR] Failed to initialize gzip middleware: %v", err))
 	}
+}
+
+func checkAllowedUrl(rawUrl string) error {
+	parsedUrl, err := url.Parse(rawUrl)
+	if err != nil {
+		return fmt.Errorf("invalid git url: %s", err)
+	}
+
+	host := strings.ToLower(parsedUrl.Hostname())
+
+	if parsedUrl.Scheme != "https" {
+		return fmt.Errorf("unsupported git url scheme")
+	}
+
+	if host == "google.internal" {
+		return fmt.Errorf("unsupported git host")
+	}
+
+	ips, err := net.LookupIP(host)
+
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() {
+			return fmt.Errorf("git host resolves to a private or loopback IP")
+		}
+
+		if ipv4 := ip.To4(); ipv4 != nil {
+			if ipv4[0] == 169 || ipv4[0] == 254 {
+				return fmt.Errorf("unsupported git host: resolves to blocked IP")
+			}
+		}
+	}
+
+	return nil
 }
 
 func Compress(next http.HandlerFunc) http.HandlerFunc {
