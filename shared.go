@@ -39615,6 +39615,12 @@ func checkAllowedUrl(rawUrl string) error {
 		return fmt.Errorf("unsupported git host")
 	}
 
+	if ip := net.ParseIP(host); ip != nil {
+		if ipv4 := ip.To4(); ipv4 != nil && (ipv4[0] == 169 || ipv4[0] == 254) {
+			return fmt.Errorf("unsupported git host")
+		}
+	}
+
 	return nil
 }
 
