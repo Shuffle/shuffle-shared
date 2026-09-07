@@ -38305,11 +38305,15 @@ func opAddNodeWithMapping(ctx context.Context, user User, wf *Workflow, op *Work
 	}
 
 	// Resolve temp_ids in insert_before and insert_after if provided
-	if realID, exists := tempIDMap[op.InsertBefore]; exists {
-		op.InsertBefore = realID
+	if len(op.InsertBefore) > 0 {
+		if realID, exists := tempIDMap[op.InsertBefore]; exists {
+			op.InsertBefore = realID
+		}
 	}
-	if realID, exists := tempIDMap[op.InsertAfter]; exists {
-		op.InsertAfter = realID
+	if len(op.InsertAfter) > 0 {
+		if realID, exists := tempIDMap[op.InsertAfter]; exists {
+			op.InsertAfter = realID
+		}
 	}
 
 	err := opAddNode(ctx, user, wf, op)
