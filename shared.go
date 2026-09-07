@@ -1063,6 +1063,13 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Seed default alert thresholds once if not yet applied.
+	if addDefaultAlertThresholds(org) {
+		if setErr := SetOrg(ctx, *org, org.Id); setErr != nil {
+			log.Printf("[WARNING] Failed persisting default alert thresholds for org %s (%s): %s", org.Name, org.Id, setErr)
+		}
+	}
+
 	// clean getOrg invites
 	org.Invites = []string{}
 
@@ -1205,6 +1212,12 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			orgChanged = true
 		}
 
+		// Multiplayer (live collaboration) is enabled for everyone by default.
+		if !org.SyncFeatures.Multiplayer.Active {
+			org.SyncFeatures.Multiplayer.Active = true
+			orgChanged = true
+		}
+
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
 		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
@@ -1281,7 +1294,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		if len(org.Subscriptions) == 0 && len(org.CreatorOrg) == 0 {
 			// Only when there is no subscription in the org and it's not a suborg :)
 			// Placeholder subscription that to add at very first time
-			base := BuildBaseSubscription(*org, org.SyncFeatures.AppExecutions.Limit)
+			base := BuildBaseSubscription(ctx, org, org.SyncFeatures.AppExecutions.Limit)
 			org.Subscriptions = append(org.Subscriptions, base)
 
 			if err := SetOrg(ctx, *org, org.Id); err != nil {
@@ -1317,7 +1330,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[INFO] Removed free subscription for org %s (active paid subscription exists)", org.Id)
 			} else if !hasActivePaidSubscription && !hasFreeSubscription {
 				// No active paid subscription and no free plan, add one
-				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(*org, 2000))
+				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(ctx, org, 2000))
 				updateSub = true
 				log.Printf("[INFO] Added free subscription for org %s (no active paid subscriptions found)", org.Id)
 			}
@@ -1481,6 +1494,13 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	if !user.SupportAccess {
 		org.LeadInfo = LeadInfo{}
 	}
+
+	// Sort subscriptions: active first, inactive last
+	sort.Slice(org.Subscriptions, func(i, j int) bool {
+		return org.Subscriptions[i].Active && !org.Subscriptions[j].Active
+	})
+
+	org.CloudSync = org.CloudSyncActive
 
 	newjson, err := json.Marshal(org)
 	if err != nil {
@@ -2928,12 +2948,12 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if project.Environment == "cloud" {
-		//foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
-		//if err != nil {
-		//	resp.WriteHeader(401)
-		//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
-		//	return
-		//}
+		foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
+			return
+		}
 
 		// FIXME: Removed need for syncfeatures to be enabled
 		// September 2022
@@ -2944,6 +2964,28 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Adding multiple environments requires an active hybrid, enterprise or MSSP subscription"}`)))
 		//	return
 		//}
+
+		if len(foundOrg.CreatorOrg) > 0 {
+			foundOrg, err = GetOrg(ctx, foundOrg.CreatorOrg)
+			if err != nil {
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
+				return
+			}
+		}
+
+		envs, err := GetEnvironments(ctx, foundOrg.Id)
+		if err != nil {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environments of organization"}`)))
+			return
+		}
+
+		if int64(len(envs)) > foundOrg.SyncFeatures.MultiEnv.Limit {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have reached the limit of %d environments for your subscription. Upgrade to an enterprise plan or contact support@shuffler.io for more info."}`, foundOrg.SyncFeatures.MultiEnv.Limit)))
+			return
+		}
 	}
 
 	if project.Environment == "onprem" {
@@ -13712,7 +13754,7 @@ func getSignatureSample(org Org) PaymentSubscription {
 	return PaymentSubscription{}
 }
 
-func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription {
+func BuildBaseSubscription(ctx context.Context, org *Org, monthlyExecLimit int64) PaymentSubscription {
 
 	now := int64(time.Now().Unix())
 	log.Printf("[DEBUG] Building base subscription for org %s that has %d monthly exec limit", org.Id, monthlyExecLimit)
@@ -13723,11 +13765,12 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 	amount := "0"
 	parsedEula := GetOnpremPaidEula()
 	eulaSigned := false
+	isStatusChange := false
 
 	if project.Environment == "cloud" {
 		// Cloud licenses
-		if monthlyExecLimit >= 300000 {
-			planName = "Cloud Enterprise License"
+		if monthlyExecLimit > 150000 {
+			planName = "Business License (Cloud)"
 			supportLevel = "Enterprise Support"
 			features = []string{
 				"∞ Days Workflow Backup",
@@ -13742,8 +13785,20 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 				"Custom Contract",
 			}
 			amount = "870" // Just for placeholder
-		} else if monthlyExecLimit >= 12000 {
-			planName = "Cloud Scale License"
+			if (!org.LeadInfo.Customer) {
+				org.LeadInfo.Customer = true
+				org.LeadInfo.ScaleLicenseCloudTrial = false
+				if !org.LeadInfo.BusinessLicenseCloud {
+					org.LeadInfo.BusinessLicenseCloud = true
+				}else if !org.LeadInfo.EnterpriseLicenseCloud {
+					org.LeadInfo.EnterpriseLicenseCloud = true
+				}
+				org.SyncFeatures.MultiTenant.Limit = 1000
+				org.SyncFeatures.MultiEnv.Limit = 250
+				isStatusChange = true
+			}
+		} else if (monthlyExecLimit >= 12000 && monthlyExecLimit < 150000) {
+			planName = "Scale License (Cloud)"
 			supportLevel = "Standard Support"
 			features = []string{
 				"30 Days workflow run history",
@@ -13752,8 +13807,18 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 				"Select Datacenter Region",
 			}
 			amount = fmt.Sprintf("%d", int64(((monthlyExecLimit-2000)/10000)*32)) // Calculate based on app runs: (paid_runs / 10k) * $32
+			if !org.LeadInfo.Customer || !org.LeadInfo.ScaleLicenseCloudCustomer {
+				org.LeadInfo.Customer = true
+				org.LeadInfo.ScaleLicenseCloudCustomer = true
+				org.LeadInfo.ScaleLicenseCloudTrial = false
+				org.LeadInfo.BusinessLicenseCloud = false
+				org.LeadInfo.EnterpriseLicenseCloud = false
+				org.SyncFeatures.MultiTenant.Limit = 3
+				org.SyncFeatures.MultiEnv.Limit = 1
+				isStatusChange = true
+			}
 		} else if monthlyExecLimit >= 2000 && monthlyExecLimit < 12000 {
-			planName = "Free License"
+			planName = "Scale License (Cloud Trial)"
 			supportLevel = "Community Support"
 			features = []string{
 				"All 2500+ Apps",
@@ -13763,6 +13828,16 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 				"5 Users",
 			}
 			amount = "0" // Just for placeholder
+			if org.LeadInfo.Customer || !org.LeadInfo.ScaleLicenseCloudTrial {
+				org.LeadInfo.Customer = false
+				org.LeadInfo.ScaleLicenseCloudTrial = true
+				org.LeadInfo.ScaleLicenseCloudCustomer = false
+				org.LeadInfo.BusinessLicenseCloud = false
+				org.LeadInfo.EnterpriseLicenseCloud = false
+				org.SyncFeatures.MultiTenant.Limit = 3
+				org.SyncFeatures.MultiEnv.Limit = 1
+				isStatusChange = true
+			}
 		}
 	} else {
 		// Open source licenses
@@ -13782,6 +13857,12 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 	firstNextMonth := time.Date(t.Year(), t.Month()+1, 1, 0, 0, 0, 0, time.UTC)
 	endDate := int64(firstNextMonth.Unix())
 
+	if isStatusChange {
+		if err := SetOrg(ctx, *org, org.Id); err != nil {
+			log.Printf("[WARNING] Failed to persist org %s status change in BuildBaseSubscription: %s", org.Id, err)
+		}
+	}
+
 	return PaymentSubscription{
 		Id:               uuid.NewV4().String(),
 		Active:           true,
@@ -13800,6 +13881,36 @@ func BuildBaseSubscription(org Org, monthlyExecLimit int64) PaymentSubscription 
 		EulaSigned:       eulaSigned,
 		Eula:             parsedEula,
 	}
+}
+
+func (s *SyncConfig) MergeSyncConfigBackup(peerWorkflowBackup, peerAppBackup, peerAiCloudSync bool, peerWorkflowBackupUpdated, peerAppBackupUpdated, peerAiCloudSyncUpdated int64) bool {
+	changed := false
+
+	if peerWorkflowBackupUpdated > s.WorkflowBackupUpdated {
+		if s.WorkflowBackup != peerWorkflowBackup {
+			s.WorkflowBackup = peerWorkflowBackup
+			changed = true
+		}
+		s.WorkflowBackupUpdated = peerWorkflowBackupUpdated
+	}
+
+	if peerAppBackupUpdated > s.AppBackupUpdated {
+		if s.AppBackup != peerAppBackup {
+			s.AppBackup = peerAppBackup
+			changed = true
+		}
+		s.AppBackupUpdated = peerAppBackupUpdated
+	}
+
+	if peerAiCloudSyncUpdated > s.AiCloudSyncUpdated {
+		if s.AiCloudSync != peerAiCloudSync {
+			s.AiCloudSync = peerAiCloudSync
+			changed = true
+		}
+		s.AiCloudSyncUpdated = peerAiCloudSyncUpdated
+	}
+
+	return changed
 }
 
 func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
@@ -13861,6 +13972,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		SubscriptionIndex string              `json:"subscription_index" datastore:"subscription_index"`
 
 		SyncFeatures    SyncFeatures `json:"sync_features" datastore:"sync_features"`
+		SyncConfig      SyncConfig   `json:"sync_config" datastore:"sync_config"`
 		Billing         Billing      `json:"billing" datastore:"billing"`
 		Branding        OrgBranding  `json:"branding" datastore:"branding"`
 		EditingBranding bool         `json:"editing_branding" datastore:"editing_branding"`
@@ -13944,9 +14056,102 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if tmpData.Editing == "sync_config" {
+		now := time.Now().Unix()
+		if tmpData.SyncConfig.WorkflowBackup != org.SyncConfig.WorkflowBackup {
+			org.SyncConfig.WorkflowBackup = tmpData.SyncConfig.WorkflowBackup
+			org.SyncConfig.WorkflowBackupUpdated = now
+		}
+		if tmpData.SyncConfig.AppBackup != org.SyncConfig.AppBackup {
+			org.SyncConfig.AppBackup = tmpData.SyncConfig.AppBackup
+			org.SyncConfig.AppBackupUpdated = now
+		}
+		if tmpData.SyncConfig.AiCloudSync != org.SyncConfig.AiCloudSync {
+			org.SyncConfig.AiCloudSync = tmpData.SyncConfig.AiCloudSync
+			org.SyncConfig.AiCloudSyncUpdated = now
+		}
+
+		err = SetOrg(ctx, *org, org.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed to update org %s sync config: %s", org.Id, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true}`))
+		return
+	}
+
 	if tmpData.Editing == "subscription_update" && !user.SupportAccess {
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Support access required"}`))
+		return
+	}
+
+	if tmpData.Editing == "license_expired" {
+		// 1. Check if editing org is on mark as customer and opensource if yes than only countinue this checks
+		if org.LeadInfo.Customer {
+			// 2. Check if editing org have subscription active and it is ended if yes than only continue
+			now := time.Now().Unix()
+			hasEndedSubscription := false
+			for _, sub := range org.Subscriptions {
+				subName := strings.ToLower(sub.Name)
+				if (strings.Contains(subName, "enterprise") || strings.Contains(subName, "business")) && sub.Active && sub.Enddate > 0 && sub.Enddate < now {
+					hasEndedSubscription = true
+					break
+				}
+			}
+
+			if hasEndedSubscription {
+				// 3. If both of the above conditions are met than it's orgs onpremappruns limit as 25K, set subscription active as false, tenants limit 3, environmennt limit as 1 and branding as false
+				org.SyncFeatures.OnpremAppExecutions.Limit = 25000
+				org.SyncFeatures.AppExecutions.Limit = 2000
+				org.SyncFeatures.AnnualAppRunsGrouping.Active = false
+				var newSubs []PaymentSubscription
+				hasBaseSubscription := false
+				for i := range org.Subscriptions {
+					subName := strings.ToLower(org.Subscriptions[i].Name)
+					if strings.Contains(subName, "enterprise") || strings.Contains(subName, "business") {
+						org.Subscriptions[i].Active = false
+					}
+					if strings.Contains(subName, "free") || strings.Contains(subName, "open source") {
+						hasBaseSubscription = true
+					}
+					newSubs = append(newSubs, org.Subscriptions[i])
+				}
+
+				if !hasBaseSubscription {
+					newSubs = append(newSubs, BuildBaseSubscription(ctx, org, 2000))
+				}
+				org.Subscriptions = newSubs
+				org.SyncFeatures.MultiTenant.Limit = 3
+				org.SyncFeatures.MultiEnv.Limit = 1
+				org.SyncFeatures.Branding.Active = false
+
+				org.LeadInfo.Customer = false
+				org.LeadInfo.OpenSource = false
+				org.LeadInfo.BusinessLicenseOnprem = false
+				org.LeadInfo.BusinessLicenseCloud = false
+				org.LeadInfo.EnterpriseLicenseCloud = false
+				org.LeadInfo.EnterpriseLicenseOnprem = false
+				org.LeadInfo.ShuffleEnterpriseLicenseOldCustomer = false
+				// 4. Update above information in org and return sucess true and don't continue this furthus
+				err = SetOrg(ctx, *org, org.Id)
+				if err != nil {
+					log.Printf("[ERROR] Failed to update org %s on license expiry: %v", org.Id, err)
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false}`))
+					return
+				}
+				resp.WriteHeader(200)
+				resp.Write([]byte(`{"success": true}`))
+				return
+			}
+		}
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true}`))
 		return
 	}
 
@@ -14011,7 +14216,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[INFO] Removed free subscription for org %s (active paid subscription exists)", org.Id)
 			} else if !hasActivePaidSubscription && !hasFreeSubscription {
 				// No active paid subscription and no free plan, add one
-				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(*org, 2000))
+				org.Subscriptions = append(org.Subscriptions, BuildBaseSubscription(ctx, org, 2000))
 				log.Printf("[INFO] Added free subscription for org %s (no active paid subscriptions found)", org.Id)
 			}
 		}
@@ -14023,6 +14228,34 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true}`))
+		return
+	}
+
+	if tmpData.Editing == "subscription_delete" && !user.SupportAccess {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Support access required"}`))
+		return
+	}
+
+	if tmpData.Editing == "subscription_delete" {
+		var filtered []PaymentSubscription
+		for _, sub := range org.Subscriptions {
+			if sub.Id != tmpData.SubscriptionIndex {
+				filtered = append(filtered, sub)
+			}
+		}
+		org.Subscriptions = filtered
+
+		if err := SetOrg(ctx, *org, org.Id); err != nil {
+			log.Printf("[WARNING] Failed to delete subscription for org %s: %s", org.Id, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		log.Printf("[AUDIT] Support user %s deleted subscription %s from org %s", user.Username, tmpData.SubscriptionIndex, org.Id)
 		resp.WriteHeader(200)
 		resp.Write([]byte(`{"success": true}`))
 		return
@@ -14087,7 +14320,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 	*/
 
-	// Update Billing email alert threshold
+	// Update Billing email alert threshold (cloud)
 	tmpDataAlert := tmpData.Billing.AlertThreshold
 	orgAlertThreshold := org.Billing.AlertThreshold
 
@@ -14103,12 +14336,64 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
+
+	// Update Billing email alert threshold (onprem) - independent list from cloud above
+	tmpDataOnpremAlert := tmpData.Billing.OnpremAlertThreshold
+	orgOnpremAlertThreshold := org.Billing.OnpremAlertThreshold
+
+	if len(tmpDataOnpremAlert) > 0 {
+		if len(tmpDataOnpremAlert) != len(orgOnpremAlertThreshold) {
+			org.Billing.OnpremAlertThreshold = tmpData.Billing.OnpremAlertThreshold
+		} else {
+			for i := 0; i < len(tmpDataOnpremAlert); i++ {
+				if tmpDataOnpremAlert[i].Percentage != orgOnpremAlertThreshold[i].Percentage || tmpDataOnpremAlert[i].Count != orgOnpremAlertThreshold[i].Count {
+					org.Billing.OnpremAlertThreshold = tmpData.Billing.OnpremAlertThreshold
+					break
+				}
+			}
+		}
+	}
 	if tmpData.Editing == "app_runs_hard_limit" && tmpData.Billing.AppRunsHardLimit != org.Billing.AppRunsHardLimit {
 		org.Billing.AppRunsHardLimit = tmpData.Billing.AppRunsHardLimit
 	}
 
-	if user.SupportAccess && tmpData.Editing == "internal_appruns_hard_limit" && tmpData.Billing.InternalAppRunsHardLimit != org.Billing.InternalAppRunsHardLimit {
+	if tmpData.Editing == "app_runs_grouping" && !org.SyncFeatures.AnnualAppRunsGrouping.Active && !user.SupportAccess {
+		org.SyncFeatures.AnnualAppRunsGrouping.Active = tmpData.SyncFeatures.AnnualAppRunsGrouping.Active
+	}
+
+	if tmpData.Editing == "internal_appruns_hard_limit" && tmpData.Billing.InternalAppRunsHardLimit != org.Billing.InternalAppRunsHardLimit {
+		if !user.SupportAccess {
+			if org.SyncFeatures.AnnualAppRunsGrouping.Active {
+				// Allow 200% app runs hard limit for annual plan
+				maxAllowed := org.SyncFeatures.AppExecutions.Limit * 12 * 2
+				if tmpData.Billing.InternalAppRunsHardLimit > maxAllowed {
+					resp.WriteHeader(400)
+					resp.Write([]byte(`{"success": false, "reason": "Hard limit cannot exceed 200% of the annual limit."}`))
+					return
+				}
+			} else if org.LeadInfo.BusinessLicenseCloud || org.LeadInfo.BusinessLicenseOnprem || org.LeadInfo.EnterpriseLicenseCloud || org.LeadInfo.EnterpriseLicenseOnprem || org.LeadInfo.ShuffleEnterpriseLicenseOldCustomer {
+				// Allow 1000% of monthly plan for enterprise and business plans
+				maxAllowed := org.SyncFeatures.AppExecutions.Limit * 10
+				if tmpData.Billing.InternalAppRunsHardLimit > maxAllowed {
+					resp.WriteHeader(400)
+					resp.Write([]byte(`{"success": false, "reason": "Hard limit cannot exceed 1000% of the monthly limit."}`))
+					return
+				}
+			} else {
+				// Don't allow the hard limit more than the monthly limit for scale plans
+				maxAllowed := org.SyncFeatures.AppExecutions.Limit
+				if tmpData.Billing.InternalAppRunsHardLimit > maxAllowed {
+					resp.WriteHeader(400)
+					resp.Write([]byte(`{"success": false, "reason": "Hard limit cannot exceed 1000% of the monthly limit."}`))
+					return
+				}
+			}
+
+			org.Billing.InternalAppRunsHardLimit = tmpData.Billing.InternalAppRunsHardLimit
+		} else {
+			// Allow any limit for the support users
 		org.Billing.InternalAppRunsHardLimit = tmpData.Billing.InternalAppRunsHardLimit
+		}
 	}
 
 	//Update mfa required value
@@ -14147,8 +14432,33 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	if len(tmpData.LeadInfo) > 0 && user.SupportAccess {
 		//log.Printf("[INFO] Updating lead info for %s to %s", org.Id, tmpData.LeadInfo)
 
-		// Make a new one, as to start with all from false
-		newLeadinfo := LeadInfo{}
+		newLeadinfo := org.LeadInfo
+		newLeadinfo.POV = false
+		newLeadinfo.ShuffleEnterpriseLicenseOldCustomer = false
+		newLeadinfo.ScaleLicenseCloudTrial = false
+		newLeadinfo.ScaleLicenseCloudCustomer = false
+		newLeadinfo.ScaleLicenseOnpremCustomer = false
+		newLeadinfo.BusinessLicenseCloud = false
+		newLeadinfo.BusinessLicenseOnprem = false
+		newLeadinfo.EnterpriseLicenseCloud = false
+		newLeadinfo.EnterpriseLicenseOnprem = false
+		newLeadinfo.IntegrationPartner = false
+		newLeadinfo.ServicePartner = false
+		newLeadinfo.ChannelPartner = false
+		newLeadinfo.TechPartner = false
+		newLeadinfo.Contacted = false
+		newLeadinfo.Lead = false
+		newLeadinfo.DemoDone = false
+		newLeadinfo.Customer = false
+		newLeadinfo.OldCustomer = false
+		newLeadinfo.OldLead = false
+		newLeadinfo.OpenSource = false
+		newLeadinfo.OpenSourceLicense = false
+		newLeadinfo.Internal = false
+		newLeadinfo.Student = false
+		newLeadinfo.Creator = false
+		newLeadinfo.TestingShuffle = false
+		newLeadinfo.DistributionPartner = false
 
 		for _, lead := range tmpData.LeadInfo {
 			if lead == "testing shuffle" || lead == "testing_shuffle" {
@@ -14199,11 +14509,11 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				newLeadinfo.Creator = true
 			}
 
-			if lead == "tech partner" {
+			if lead == "tech partner" || lead == "Technology Partner" {
 				newLeadinfo.TechPartner = true
 			}
 
-			if lead == "integration partner" {
+			if lead == "integration partner" || lead == "Integration Partner" {
 				newLeadinfo.IntegrationPartner = true
 			}
 
@@ -14211,16 +14521,257 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				newLeadinfo.DistributionPartner = true
 			}
 
-			if lead == "service partner" {
+			if lead == "service partner" || lead == "Service Partner" {
 				newLeadinfo.ServicePartner = true
 			}
 
-			if lead == "channel partner" {
+			if lead == "channel partner" || lead == "Channel Partner" {
 				newLeadinfo.ChannelPartner = true
+			}
+
+			if lead == "Contacted" {
+				newLeadinfo.Contacted = true
+			}
+
+			if lead == "Lead" {
+				newLeadinfo.Lead = true
+			}
+
+			if lead == "Demo Done" {
+				newLeadinfo.DemoDone = true
+			}
+
+			if lead == "Customer" {
+				newLeadinfo.Customer = true
+			}
+
+			if lead == "Old Customer" {
+				newLeadinfo.OldCustomer = true
+			}
+
+			if lead == "Old Lead" {
+				newLeadinfo.OldLead = true
+			}
+
+			if lead == "Open Source" {
+				newLeadinfo.OpenSource = true
+			}
+
+			if lead == "Open Source License" {
+				newLeadinfo.OpenSourceLicense = true
+			}
+
+			if lead == "Internal" {
+				newLeadinfo.Internal = true
+			}
+
+			if lead == "Sub Org" {
+				newLeadinfo.SubOrg = true
+			}
+
+			if lead == "Student" {
+				newLeadinfo.Student = true
+			}
+
+			if lead == "Creator" {
+				newLeadinfo.Creator = true
+			}
+
+			if lead == "Testing Shuffle" {
+				newLeadinfo.TestingShuffle = true
+			}
+
+			if lead == "Distribution Partner" {
+				newLeadinfo.DistributionPartner = true
+			}
+
+			if lead == "POC License" {
+				newLeadinfo.POV = true
+			}
+
+			if lead == "Enterprise License (Legacy)" {
+				newLeadinfo.ShuffleEnterpriseLicenseOldCustomer = true
+			}
+
+			if lead == "Scale License Cloud Trial" {
+				newLeadinfo.ScaleLicenseCloudTrial = true
+			}
+
+			if lead == "Scale License Cloud" {
+				newLeadinfo.ScaleLicenseCloudCustomer = true
+			}
+
+			if lead == "Scale License Onprem" {
+				newLeadinfo.ScaleLicenseOnpremCustomer = true
+			}
+
+			if lead == "Business License Cloud" {
+				newLeadinfo.BusinessLicenseCloud = true
+			}
+
+			if lead == "Business License Onprem" {
+				newLeadinfo.BusinessLicenseOnprem = true
+			}
+
+			if lead == "Enterprise License Cloud" {
+				newLeadinfo.EnterpriseLicenseCloud = true
+			}
+
+			if lead == "Enterprise License Onprem" {
+				newLeadinfo.EnterpriseLicenseOnprem = true
 			}
 		}
 
+		if newLeadinfo.ShuffleEnterpriseLicenseOldCustomer ||
+			newLeadinfo.ScaleLicenseCloudCustomer ||
+			newLeadinfo.ScaleLicenseOnpremCustomer ||
+			newLeadinfo.BusinessLicenseCloud ||
+			newLeadinfo.BusinessLicenseOnprem ||
+			newLeadinfo.EnterpriseLicenseCloud ||
+			newLeadinfo.EnterpriseLicenseOnprem {
+			newLeadinfo.Customer = true
+		}
+
+		if newLeadinfo.ScaleLicenseOnpremCustomer || newLeadinfo.BusinessLicenseOnprem || newLeadinfo.EnterpriseLicenseOnprem {
+			newLeadinfo.OpenSource = true
+		}
+
 		org.LeadInfo = newLeadinfo
+
+		if newLeadinfo.EnterpriseLicenseOnprem ||
+			newLeadinfo.BusinessLicenseOnprem {
+
+			org.SyncFeatures.OnpremAppExecutions.Limit = 300000
+			org.SyncFeatures.OnpremAppExecutions.Active = true
+
+			org.SyncFeatures.Branding.Active = false
+
+			org.SyncFeatures.AppExecutions.Limit = 2000
+
+			org.SyncFeatures.MultiEnv.Limit = 250
+			org.SyncFeatures.MultiEnv.Active = true
+
+			org.SyncFeatures.MultiTenant.Active = true
+			org.SyncFeatures.MultiTenant.Limit = 1000
+
+			org.SyncFeatures.SendSms.Active = true
+			org.SyncFeatures.SendMail.Active = true
+
+			log.Printf("[INFO] Set limits to 300000 app runs / 250 envs / 1000 tenants for org %s (enterprise/business)", org.Id)
+		} else if newLeadinfo.ShuffleEnterpriseLicenseOldCustomer {
+			org.SyncFeatures.AppExecutions.Limit = 300000
+			org.SyncFeatures.Branding.Active = false
+
+			org.SyncFeatures.MultiEnv.Limit = 250
+			org.SyncFeatures.MultiEnv.Active = true
+
+			org.SyncFeatures.MultiTenant.Limit = 1000
+			org.SyncFeatures.MultiTenant.Active = true
+
+			org.LeadInfo.ScaleLicenseCloudTrial = false
+
+			org.SyncFeatures.SendSms.Active = true
+			org.SyncFeatures.SendMail.Active = true
+			log.Printf("[INFO] Set limits to 300000 app runs / 250 envs / 1000 tenants for org %s (enterprise/business)", org.Id)
+		} else if newLeadinfo.EnterpriseLicenseCloud ||
+			newLeadinfo.BusinessLicenseCloud {
+
+			org.SyncFeatures.AppExecutions.Limit = 300000
+			org.SyncFeatures.OnpremAppExecutions.Limit = 25000
+
+			org.LeadInfo.ScaleLicenseCloudTrial = false
+
+			org.SyncFeatures.Branding.Active = false
+			org.SyncFeatures.MultiEnv.Active = true
+			org.SyncFeatures.MultiEnv.Limit = 250
+
+			org.SyncFeatures.MultiTenant.Active = true
+			org.SyncFeatures.MultiTenant.Limit = 1000
+
+			org.SyncFeatures.SendSms.Active = true
+			org.SyncFeatures.SendMail.Active = true
+			log.Printf("[INFO] Set limits to 300000 app runs / 250 envs / 1000 tenants for org %s (enterprise/business)", org.Id)
+		} else if newLeadinfo.POV {
+			org.SyncFeatures.AppExecutions.Limit = 10000
+			org.SyncFeatures.Branding.Active = false
+			org.SyncFeatures.MultiEnv.Limit = 1
+			org.SyncFeatures.MultiTenant.Limit = 3
+			log.Printf("[INFO] Set limits to 10000 app runs / 1 env / 3 tenants for org %s (POC license)", org.Id)
+		} else if newLeadinfo.ScaleLicenseCloudTrial {
+			org.SyncFeatures.AppExecutions.Limit = 2000
+			org.SyncFeatures.Branding.Active = false
+			org.SyncFeatures.MultiEnv.Limit = 1
+			org.SyncFeatures.MultiTenant.Limit = 3
+			log.Printf("[INFO] Set limits to 2000 app runs / 1 env / 3 tenants for org %s (Scale free trial)", org.Id)
+		} else if newLeadinfo.OpenSourceLicense {
+			org.SyncFeatures.OnpremAppExecutions.Active = true
+			org.SyncFeatures.OnpremAppExecutions.Limit = 25000
+			org.SyncFeatures.Branding.Active = false
+			org.SyncFeatures.AppExecutions.Limit = 2000
+			org.SyncFeatures.MultiEnv.Limit = 1
+			org.SyncFeatures.MultiTenant.Limit = 3
+			log.Printf("[INFO] Set onprem limits to 25K onprem app runs / 1 env / 3 tenants for org %s (Open Source License)", org.Id)
+		} else if newLeadinfo.IntegrationPartner || newLeadinfo.ServicePartner {
+			org.SyncFeatures.Branding.Active = true
+		} else {
+			org.SyncFeatures.AppExecutions.Limit = 2000
+			org.SyncFeatures.OnpremAppExecutions.Limit = 25000
+			org.SyncFeatures.OnpremAppExecutions.Active = true
+			org.SyncFeatures.MultiEnv.Limit = 1
+			org.SyncFeatures.Branding.Active = false
+			org.SyncFeatures.MultiTenant.Limit = 3
+			log.Printf("[INFO] Reset limits to defaults (2000 app runs / 1 env / 3 tenants) for org %s (no license)", org.Id)
+		}
+
+
+		if newLeadinfo.EnterpriseLicenseCloud ||
+			newLeadinfo.EnterpriseLicenseOnprem ||
+			newLeadinfo.ShuffleEnterpriseLicenseOldCustomer ||
+			newLeadinfo.BusinessLicenseCloud ||
+			newLeadinfo.BusinessLicenseOnprem ||
+			newLeadinfo.ScaleLicenseOnpremCustomer ||
+			newLeadinfo.ScaleLicenseCloudCustomer ||
+			newLeadinfo.POV {
+			newLeadinfo.ScaleLicenseCloudTrial = false
+			org.LeadInfo.ScaleLicenseCloudTrial = false
+		}
+
+		// Update active subscription name to match the new license status
+		subName := ""
+		if newLeadinfo.EnterpriseLicenseCloud {
+			subName = "Enterprise License (Cloud)"
+		} else if newLeadinfo.EnterpriseLicenseOnprem {
+			subName = "Enterprise License (OnPrem)"
+		} else if newLeadinfo.ShuffleEnterpriseLicenseOldCustomer {
+			subName = "Enterprise License (Legacy)"
+		} else if newLeadinfo.BusinessLicenseCloud {
+			subName = "Business License (Cloud)"
+		} else if newLeadinfo.BusinessLicenseOnprem {
+			subName = "Business License (OnPrem)"
+		} else if newLeadinfo.ScaleLicenseOnpremCustomer {
+			subName = "Scale License (OnPrem)"
+		} else if newLeadinfo.ScaleLicenseCloudCustomer {
+			subName = "Scale License (Cloud)"
+		} else if newLeadinfo.ScaleLicenseCloudTrial {
+			subName = "Scale License (Cloud Trial)"
+		} else if newLeadinfo.POV {
+			subName = "POC License (Limited Period)"
+		}
+		if subName != "" {
+			isAnnualPlan := strings.Contains(subName, "Business") || strings.Contains(subName, "Enterprise")
+			for i := range org.Subscriptions {
+				if org.Subscriptions[i].Active {
+					org.Subscriptions[i].Name = subName
+					if isAnnualPlan {
+						if org.Subscriptions[i].Startdate == 0 {
+							org.Subscriptions[i].Startdate = time.Now().Unix()
+						}
+						org.Subscriptions[i].Enddate = org.Subscriptions[i].Startdate + 365*24*60*60
+					}
+				}
+			}
+			log.Printf("[INFO] Updated active subscription name to %s for org %s", subName, org.Id)
+		}
 
 		// Check for ORG_CHANGE_WEBHOOK
 		orgWebhook := os.Getenv("ORG_CHANGE_WEBHOOK")
@@ -14383,7 +14934,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// check if user is editing sync features of suborg from parent org
-	if project.Environment == "cloud" && !user.SupportAccess && tmpData.SyncFeatures.Editing && tmpData.Editing != "app_runs_hard_limit" {
+	if project.Environment == "cloud" && !user.SupportAccess && tmpData.SyncFeatures.Editing && tmpData.Editing != "app_runs_hard_limit" && tmpData.Editing != "app_runs_grouping" {
 		log.Printf("[WARNING] User %s (%s) is trying to edit sync features of suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
 
 		// check whether user org id is suborg of parent org
@@ -14517,6 +15068,46 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
 
+}
+
+func SendLicenseExpiredRequest(orgId string, apikey string) {
+	log.Printf("[INFO] Subscription expired for org %s, sending license_expired update", orgId)
+	url := fmt.Sprintf("https://shuffler.io/api/v1/orgs/%s", orgId)
+	payloadData := map[string]string{
+		"editing": "license_expired",
+		"org_id":  orgId,
+	}
+	payload, _ := json.Marshal(payloadData)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(payload))
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request for license_expired: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Org-Id", orgId)
+	if apikey != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apikey))
+	}
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to send license_expired request to edit org %s: %v", orgId, err)
+		return
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		log.Printf("[WARNING] license_expired request returned status code %d for org %s", res.StatusCode, orgId)
+	} else {
+		log.Printf("[INFO] Successfully marked license as expired for org %s", orgId)
+	}
 }
 
 func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool, BccAddresses []string) error {
@@ -28597,6 +29188,11 @@ func loadGithubWorkflows(url, username, password, userId, branch, orgId string) 
 
 	log.Printf("Starting load of %s with branch %s", url, branch)
 
+	if err := checkAllowedUrl(url); err != nil {
+		log.Printf("[ERROR] Blocked workflow git clone URL: %s", err)
+		return err
+	}
+
 	cloneOptions := &git.CloneOptions{
 		URL: url,
 	}
@@ -28742,6 +29338,11 @@ func listGithubWorkflowsInfo(url, username, password, branch, orgId string) ([]R
 			}
 			url = baseURL + ".git"
 		}
+	}
+
+	if err := checkAllowedUrl(url); err != nil {
+		log.Printf("[ERROR] Blocked workflow git clone URL: %s", err)
+		return nil, err
 	}
 
 	cloneOptions := &git.CloneOptions{URL: url}
@@ -28944,6 +29545,11 @@ func importSingleRemoteWorkflow(url, username, password, branch, originalWorkflo
 			}
 			url = baseURL + ".git"
 		}
+	}
+
+	if err := checkAllowedUrl(url); err != nil {
+		log.Printf("[ERROR] Blocked workflow git clone URL: %s", err)
+		return err
 	}
 
 	cloneOptions := &git.CloneOptions{URL: url}
@@ -33465,6 +34071,26 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	orgStats, err := GetOrgStatistics(ctx, parentOrg.Id)
+	if err == nil && orgStats != nil {
+		newTenant := Tenants{
+			Name:      subOrg.Name,
+			Id:        subOrg.Id,
+			CreatedAt: time.Unix(subOrg.Created, 0),
+			DeletedAt: time.Now(),
+			Status:    "deleted",
+		}
+
+		if orgStats.Tenants == nil {
+			orgStats.Tenants = []Tenants{}
+		}
+		orgStats.Tenants = append(orgStats.Tenants, newTenant)
+		err = SetOrgStatistics(ctx, *orgStats, parentOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting org statistics for org '%s': %s", parentOrg.Id, err)
+		}
+	}
+
 	user.Orgs = newOrgString
 	if user.ActiveOrg.Id == subOrg.Id {
 		// If the user is in the org that was deleted, set active org as parent org
@@ -34168,6 +34794,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.AppExecutions.Active = false
 			org.SyncFeatures.AppExecutions.Limit = 25000
 
+			org.SyncFeatures.AnnualAppRunsGrouping.Active = false
+
 			return org
 		}
 		features := SyncFeatures{}
@@ -34189,6 +34817,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 						org.SyncFeatures.Branding.Active = features.Branding.Active
 
+						org.SyncFeatures.AnnualAppRunsGrouping.Active = features.AnnualAppRunsGrouping.Active
+
 						org.SyncFeatures.AppExecutions.Active = features.OnpremAppExecutions.Active
 						if features.OnpremAppExecutions.Limit < 25000 {
 							org.SyncFeatures.AppExecutions.Limit = 25000
@@ -34205,6 +34835,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 						org.SyncFeatures.Branding.Active = false
 						org.SyncFeatures.AppExecutions.Active = false
 						org.SyncFeatures.AppExecutions.Limit = 25000
+						org.SyncFeatures.AnnualAppRunsGrouping.Active = false
 					}
 				} else {
 					org.Licensed = false
@@ -34217,6 +34848,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 					org.SyncFeatures.Branding.Active = false
 					org.SyncFeatures.AppExecutions.Active = false
 					org.SyncFeatures.AppExecutions.Limit = 25000
+					org.SyncFeatures.AnnualAppRunsGrouping.Active = false
 
 				}
 
@@ -34226,6 +34858,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 				} else {
 					org.SyncFeatures.AppExecutions.Limit = features.OnpremAppExecutions.Limit
 				}
+
+				org.SyncFeatures.AnnualAppRunsGrouping.Active = features.AnnualAppRunsGrouping.Active
 
 				org.SyncFeatures.Webhook.Active = features.Webhook.Active
 				org.SyncFeatures.Webhook.Limit = features.Webhook.Limit
@@ -34286,6 +34920,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 			org.SyncFeatures.Branding.Active = false
 			org.SyncFeatures.AppExecutions.Active = false
+			org.SyncFeatures.AnnualAppRunsGrouping.Active = false
 			org.SyncFeatures.AppExecutions.Limit = 25000
 		}
 
@@ -34309,6 +34944,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 				}
 
 				org.SyncFeatures.Branding.Active = license.Branding
+				org.SyncFeatures.AnnualAppRunsGrouping.Active = license.AppRunsGrouping
 			}
 		}
 
@@ -34323,6 +34959,25 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 				org.Subscriptions = subscriptionsList
 			} else {
 				log.Printf("[ERROR] Failed to parse cached subscriptions for org (%s) in HandleCheckLicense: %v", org.Id, err)
+			}
+		}
+
+		appRunsHardLimitCacheKey := fmt.Sprintf("org_app_runs_hard_limit_%s", org.Id)
+		appRunsHardLimit, err := GetCache(ctx, appRunsHardLimitCacheKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get cache for org (%s) subscriptions in HandleCheckLicense: %v", org.Id, err)
+		} else {
+			if appRunsHardLimit != nil {
+				if data, ok := appRunsHardLimit.([]byte); ok {
+					var limit int64
+					if err := json.Unmarshal(data, &limit); err == nil {
+						org.Billing.InternalAppRunsHardLimit = limit
+					} else if parsedLimit, err := strconv.ParseInt(string(data), 10, 64); err == nil {
+						org.Billing.InternalAppRunsHardLimit = parsedLimit
+					}
+				} else if limit, ok := appRunsHardLimit.(int64); ok {
+					org.Billing.InternalAppRunsHardLimit = limit
+				}
 			}
 		}
 
@@ -34341,6 +34996,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 			org.SyncFeatures.Branding.Active = license.Branding
 			org.SyncFeatures.AppExecutions.Active = license.AppRuns.Active
 			org.SyncFeatures.AppExecutions.Limit = license.AppRuns.Limit
+			org.SyncFeatures.AnnualAppRunsGrouping.Active = license.AppRunsGrouping
 
 			org.SyncFeatures.WorkflowExecutions.Active = true
 			org.SyncFeatures.Webhook.Active = true
@@ -34369,6 +35025,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 			org.SyncFeatures.AppExecutions.Active = false
 			org.SyncFeatures.AppExecutions.Limit = 25000
+			org.SyncFeatures.AnnualAppRunsGrouping.Active = false
 		}
 
 		parsedEula := GetOnpremPaidEula()
@@ -34379,6 +35036,7 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 		var endDate int64
 		var cancellationDate int64
+		var startDate int64
 		active := false
 
 		features := []string{
@@ -34403,27 +35061,42 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 				parsedTimeout = time.Now()
 			}
 			endDate = parsedTimeout.Unix()
+
+			parsedStartDate, err := time.Parse("02-01-2006", license.StartDate)
+			if err != nil {
+				parsedStartDate = time.Now()
+			}
+			startDate = parsedStartDate.Unix()
+
 			cancellationDate = 0
 			active = true
 		} else {
 			endDate = time.Now().Unix()
+			startDate = time.Now().Unix()
 			cancellationDate = time.Now().Unix()
 			active = false
 		}
+		recurrance := string("monthly")
+		appRunLimit:= license.AppRuns.Limit
+
+		if license.AppRunsGrouping {
+			recurrance = string("annual")
+			appRunLimit = appRunLimit*12
+		}
 
 		subscription := PaymentSubscription{
-			Name:             "Enterprise License",
+			Name:             "Air Gapped License",
 			Active:           active,
 			CancellationDate: cancellationDate,
 			SupportLevel:     "Enterprise Support",
-			Startdate:        time.Now().Unix(),
+			Startdate:        startDate,
 			Enddate:          endDate,
-			Recurrence:       string("monthly"),
+			Recurrence:       recurrance,
 			Amount:           "0",
 			Currency:         string("USD"),
 			Level:            "1",
 			Reference:        "",
-			Limit:            1,
+			Limit:            appRunLimit,
 			Features:         features,
 			EulaSigned:       true,
 			Eula:             parsedEula,
@@ -34447,6 +35120,8 @@ func HandleCheckLicense(ctx context.Context, org Org) Org {
 
 		org.SyncFeatures.AppExecutions.Active = false
 		org.SyncFeatures.AppExecutions.Limit = 25000
+
+		org.SyncFeatures.AnnualAppRunsGrouping.Active = false
 	}
 
 	return org
@@ -36117,13 +36792,34 @@ func startSchedule(trigger Trigger, authorization string, workflow Workflow) err
 		}
 	}
 
+	// Resolve start node for this schedule: prefer branch from trigger, fallback to workflow.Start
+	scheduleStart := workflow.Start
+	for _, branch := range workflow.Branches {
+		if branch.SourceID == trigger.ID && len(branch.DestinationID) > 0 {
+			scheduleStart = branch.DestinationID
+			break
+		}
+	}
+
+	schedEnv := trigger.Environment
+	if len(schedEnv) == 0 {
+		schedEnv = workflow.ExecutionEnvironment
+	}
+	if len(schedEnv) == 0 {
+		if project.Environment == "cloud" {
+			schedEnv = "cloud"
+		} else {
+			schedEnv = "Shuffle"
+		}
+	}
+
 	scheduleRequest := Schedule{
 		Name:              "Schedule",
 		Frequency:         foundFrequency,
 		ExecutionArgument: "Automatically configured by Shuffle",
-		Environment:       trigger.Environment,
+		Environment:       schedEnv,
 		Id:                trigger.ID,
-		Start:             workflow.Start,
+		Start:             scheduleStart,
 	}
 
 	parsedBody, err := json.Marshal(scheduleRequest)
@@ -37571,8 +38267,15 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		// For delete_node: capture which branch IDs are connected to this node BEFORE apply, because opDeleteNode silently prunes them from wf.Branches. We'll stream an edge:remove for each one auto-cleaned.
 		var prunedBranchIDs []string
 		if operation.Op == "delete_node" || operation.Op == "remove_node" {
+			targetID := operation.ID
+			if len(targetID) == 0 && len(operation.TempID) > 0 {
+				targetID = operation.TempID
+			}
+			if realID, ok := tempIDMap[targetID]; ok {
+				targetID = realID
+			}
 			for _, branch := range workflow.Branches {
-				if branch.SourceID == operation.ID || branch.DestinationID == operation.ID {
+				if branch.SourceID == targetID || branch.DestinationID == targetID {
 					prunedBranchIDs = append(prunedBranchIDs, branch.ID)
 				}
 			}
@@ -37581,9 +38284,16 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		// Track triggers being added/deleted so we can start/stop them AFTER
 		// the full workflow is constructed (start node + branches all resolved).
 		var triggerToStop *Trigger
-		if (operation.Op == "delete_node" || operation.Op == "remove_node") && operation.NodeType == "trigger" {
+		if operation.Op == "delete_node" || operation.Op == "remove_node" {
+			targetID := operation.ID
+			if len(targetID) == 0 && len(operation.TempID) > 0 {
+				targetID = operation.TempID
+			}
+			if realID, ok := tempIDMap[targetID]; ok {
+				targetID = realID
+			}
 			for _, existingTrigger := range workflow.Triggers {
-				if existingTrigger.ID == operation.ID {
+				if existingTrigger.ID == targetID {
 					copy := existingTrigger
 					triggerToStop = &copy
 					break
@@ -37628,87 +38338,14 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 		// Don't fail the request, cache is best-effort
 	}
 
-	// Fire trigger start/stop goroutines NOW — workflow is fully constructed
-	// with all nodes, branches and start node resolved.
-	if len(addedTriggers) > 0 || len(deletedTriggers) > 0 {
-		go func(triggersToStart []Trigger, triggersToStop []Trigger, finalWorkflow Workflow, currentUser User) {
-			for _, trigger := range triggersToStart {
-				// Resolve start node: prefer a branch from this trigger, else use workflow start.
-				startNode := finalWorkflow.Start
-				for _, branch := range finalWorkflow.Branches {
-					if branch.SourceID == trigger.ID {
-						startNode = branch.DestinationID
-						break
-					}
-				}
-				if len(startNode) == 0 {
-					log.Printf("[INFO] Auto-start skipped for trigger %s: no start node in fully-constructed workflow", trigger.ID)
-					continue
-				}
-
-				switch strings.ToUpper(trigger.TriggerType) {
-				case "WEBHOOK":
-					auth := ""
-					customResponse := ""
-					version := "v1"
-					versionTimeout := 15
-					for _, param := range trigger.Parameters {
-						switch param.Name {
-						case "auth_headers":
-							auth = param.Value
-						case "custom_response_body":
-							customResponse = param.Value
-						case "await_response":
-							version = param.Value
-						case "version_timeout":
-							if parsedTimeout, convErr := strconv.Atoi(param.Value); convErr == nil {
-								versionTimeout = parsedTimeout
-							}
-						}
-					}
-					if startErr := startWebhookTrigger(context.Background(), finalWorkflow.ID, trigger.ID, trigger.Label, startNode, trigger.Environment, auth, customResponse, version, versionTimeout, currentUser, currentUser.ActiveOrg.Id); startErr != nil {
-						log.Printf("[WARNING] Auto-start webhook trigger %s failed: %s", trigger.ID, startErr)
-					} else {
-						log.Printf("[INFO] Auto-started webhook trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
-					}
-				case "SCHEDULE":
-					if startErr := startSchedule(trigger, currentUser.ApiKey, finalWorkflow); startErr != nil {
-						log.Printf("[WARNING] Auto-start schedule trigger %s failed: %s", trigger.ID, startErr)
-					} else {
-						log.Printf("[INFO] Auto-started schedule trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
-					}
-				}
-			}
-
-			for _, trigger := range triggersToStop {
-				switch strings.ToUpper(trigger.TriggerType) {
-				case "WEBHOOK":
-					hook, err := GetHook(context.Background(), trigger.ID)
-					if err != nil {
-						log.Printf("[WARNING] Auto-stop webhook: could not find hook %s: %s", trigger.ID, err)
-						continue
-					}
-					hook.Status = "stopped"
-					hook.Running = false
-					if setErr := SetHook(context.Background(), *hook); setErr != nil {
-						log.Printf("[WARNING] Auto-stop webhook: failed updating hook %s status: %s", trigger.ID, setErr)
-					}
-					log.Printf("[INFO] Auto-stopped webhook trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
-				case "SCHEDULE":
-					if stopErr := deleteScheduleGeneral(context.Background(), trigger.ID); stopErr != nil {
-						log.Printf("[WARNING] Auto-stop schedule trigger %s failed: %s", trigger.ID, stopErr)
-					} else {
-						log.Printf("[INFO] Auto-stopped schedule trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
-					}
-				}
-			}
-		}(addedTriggers, deletedTriggers, *workflow, user)
-	}
-
 	if shouldSaveDB {
 		env := workflow.ExecutionEnvironment
 		if len(env) == 0 {
-			env = "Shuffle"
+			if project.Environment == "cloud" {
+				env = "cloud"
+			} else {
+				env = "Shuffle"
+			}
 		}
 		for i := range workflow.Actions {
 			if len(workflow.Actions[i].Environment) == 0 {
@@ -37773,9 +38410,109 @@ func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Reque
 			return
 		}
 
+		go SetWorkflowRevision(context.Background(), *workflow)
+
 		// Invalidate the ops cache now that DB is the real source.
 		if delErr := DeleteCache(ctx, cacheKey); delErr != nil {
 			log.Printf("[WARNING] Failed to delete ops cache after DB save for workflow %s: %s", workflowID, delErr)
+		}
+
+		// Fire trigger start/stop goroutines AFTER workflow is successfully saved to DB.
+		// Start any newly added triggers or uninitialized triggers, and stop deleted triggers.
+		var triggersToActivate []Trigger
+		triggersToActivate = append(triggersToActivate, addedTriggers...)
+		for _, trig := range workflow.Triggers {
+			if trig.Status == "uninitialized" {
+				alreadyInList := false
+				for _, existing := range triggersToActivate {
+					if existing.ID == trig.ID {
+						alreadyInList = true
+						break
+					}
+				}
+				if !alreadyInList {
+					triggersToActivate = append(triggersToActivate, trig)
+				}
+			}
+		}
+
+		if len(triggersToActivate) > 0 || len(deletedTriggers) > 0 {
+			go func(triggersToStart []Trigger, triggersToStop []Trigger, finalWorkflow Workflow, currentUser User) {
+				for _, trigger := range triggersToStart {
+					// Resolve start node: prefer a branch from this trigger, else use workflow start.
+					startNode := finalWorkflow.Start
+					for _, branch := range finalWorkflow.Branches {
+						if branch.SourceID == trigger.ID {
+							startNode = branch.DestinationID
+							break
+						}
+					}
+					if len(startNode) == 0 {
+						log.Printf("[INFO] Auto-start skipped for trigger %s: no start node in fully-constructed workflow", trigger.ID)
+						continue
+					}
+
+					switch strings.ToUpper(trigger.TriggerType) {
+					case "WEBHOOK":
+						auth := ""
+						customResponse := ""
+						version := "v1"
+						versionTimeout := 15
+						for _, param := range trigger.Parameters {
+							switch param.Name {
+							case "auth_headers":
+								auth = param.Value
+							case "custom_response_body":
+								customResponse = param.Value
+							case "await_response":
+								version = param.Value
+							case "version_timeout":
+								if parsedTimeout, convErr := strconv.Atoi(param.Value); convErr == nil {
+									versionTimeout = parsedTimeout
+								}
+							}
+						}
+						if startErr := startWebhookTrigger(context.Background(), finalWorkflow.ID, trigger.ID, trigger.Label, startNode, trigger.Environment, auth, customResponse, version, versionTimeout, currentUser, currentUser.ActiveOrg.Id); startErr != nil {
+							log.Printf("[WARNING] Auto-start webhook trigger %s failed: %s", trigger.ID, startErr)
+						} else {
+							log.Printf("[INFO] Auto-started webhook trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
+						}
+					case "SCHEDULE":
+						authToken := currentUser.ApiKey
+						if len(authToken) == 0 {
+							authToken = currentUser.Session
+						}
+						if startErr := startSchedule(trigger, authToken, finalWorkflow); startErr != nil {
+							log.Printf("[WARNING] Auto-start schedule trigger %s failed: %s", trigger.ID, startErr)
+						} else {
+							log.Printf("[INFO] Auto-started schedule trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
+						}
+					}
+				}
+
+				for _, trigger := range triggersToStop {
+					switch strings.ToUpper(trigger.TriggerType) {
+					case "WEBHOOK":
+						hook, err := GetHook(context.Background(), trigger.ID)
+						if err != nil {
+							log.Printf("[WARNING] Auto-stop webhook: could not find hook %s: %s", trigger.ID, err)
+							continue
+						}
+						hook.Status = "stopped"
+						hook.Running = false
+						if setErr := SetHook(context.Background(), *hook); setErr != nil {
+							log.Printf("[WARNING] Auto-stop webhook: failed updating hook %s status: %s", trigger.ID, setErr)
+						}
+						log.Printf("[INFO] Auto-stopped webhook trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
+					case "SCHEDULE":
+						if stopErr := deleteScheduleGeneral(context.Background(), trigger.ID); stopErr != nil {
+							log.Printf("[WARNING] Auto-stop schedule trigger %s failed: %s", trigger.ID, stopErr)
+						} else {
+							log.Printf("[INFO] Auto-stopped schedule trigger %s for workflow %s", trigger.ID, finalWorkflow.ID)
+						}
+					}
+				}
+			}(triggersToActivate, deletedTriggers, *workflow, user)
 		}
 	}
 
@@ -38086,16 +38823,28 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 	case "edit_node":
 		if realID, exists := tempIDMap[op.ID]; exists {
 			op.ID = realID
+		} else if len(op.ID) == 0 && len(op.TempID) > 0 {
+			if realID, exists := tempIDMap[op.TempID]; exists {
+				op.ID = realID
+			}
 		}
 		return opEditNode(wf, op)
 	case "move_node":
 		if realID, exists := tempIDMap[op.ID]; exists {
 			op.ID = realID
+		} else if len(op.ID) == 0 && len(op.TempID) > 0 {
+			if realID, exists := tempIDMap[op.TempID]; exists {
+				op.ID = realID
+			}
 		}
 		return opMoveNode(wf, op)
 	case "delete_node", "remove_node":
 		if realID, exists := tempIDMap[op.ID]; exists {
 			op.ID = realID
+		} else if len(op.ID) == 0 && len(op.TempID) > 0 {
+			if realID, exists := tempIDMap[op.TempID]; exists {
+				op.ID = realID
+			}
 		}
 		return opDeleteNode(wf, op)
 
@@ -38109,8 +38858,10 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 
 	// ====== CONDITION OPERATIONS ======
 	case "add_condition", "edit_condition", "delete_condition":
-		if realBranchID, exists := tempIDMap[op.BranchID]; exists {
-			op.BranchID = realBranchID
+		if len(op.BranchID) > 0 {
+			if realBranchID, exists := tempIDMap[op.BranchID]; exists {
+				op.BranchID = realBranchID
+			}
 		}
 
 		switch op.Op {
@@ -38127,9 +38878,26 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 	case "set_start_node":
 		oldStart := wf.Start
 		newStart := op.ID
-		if realID, exists := tempIDMap[op.ID]; exists {
-			newStart = realID
+		if len(newStart) == 0 && len(op.TempID) > 0 {
+			newStart = op.TempID
 		}
+		if len(newStart) > 0 {
+			if realID, exists := tempIDMap[newStart]; exists {
+				newStart = realID
+			}
+		}
+
+		if len(newStart) == 0 {
+			return fmt.Errorf("start node ID cannot be empty")
+		}
+
+		// Validate that the target node actually exists in actions or triggers
+		actIdx := findActionIndexByID(wf, newStart)
+		trigIdx := findTriggerIndexByID(wf, newStart)
+		if actIdx == -1 && trigIdx == -1 {
+			return fmt.Errorf("cannot set start node: node %s not found in workflow", newStart)
+		}
+
 		wf.Start = newStart
 
 		for i := range wf.Actions {
@@ -38147,6 +38915,9 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 }
 
 func findNodePosition(wf *Workflow, nodeID string) (string, int, error) {
+	if len(nodeID) == 0 {
+		return "", -1, fmt.Errorf("node ID cannot be empty")
+	}
 	// Search actions
 	for i, act := range wf.Actions {
 		if act.ID == nodeID {
@@ -38208,6 +38979,18 @@ func opAddNodeWithMapping(ctx context.Context, user User, wf *Workflow, op *Work
 		}
 	}
 
+	// Resolve temp_ids in insert_before and insert_after if provided
+	if len(op.InsertBefore) > 0 {
+		if realID, exists := tempIDMap[op.InsertBefore]; exists {
+			op.InsertBefore = realID
+		}
+	}
+	if len(op.InsertAfter) > 0 {
+		if realID, exists := tempIDMap[op.InsertAfter]; exists {
+			op.InsertAfter = realID
+		}
+	}
+
 	err := opAddNode(ctx, user, wf, op)
 	if err != nil {
 		return err
@@ -38228,6 +39011,15 @@ func opAddNodeWithMapping(ctx context.Context, user User, wf *Workflow, op *Work
 }
 
 func opAddNode(ctx context.Context, user User, wf *Workflow, op *WorkflowOperation) error {
+	env := wf.ExecutionEnvironment
+	if len(env) == 0 {
+		if project.Environment == "cloud" {
+			env = "cloud"
+		} else {
+			env = "Shuffle"
+		}
+	}
+
 	switch op.NodeType {
 	case "action":
 		var minAct MinimalAction
@@ -38244,7 +39036,7 @@ func opAddNode(ctx context.Context, user User, wf *Workflow, op *WorkflowOperati
 			return fmt.Errorf("failed to find app %s: %w", minAct.AppID, err)
 		}
 
-		newAction, err := enrichActionFromApp(ctx, &minAct, realApp, wf.ExecutingOrg.Id)
+		newAction, err := enrichActionFromApp(ctx, &minAct, realApp, env)
 		if err != nil {
 			return fmt.Errorf("failed to enrich action: %w", err)
 		}
@@ -38342,7 +39134,7 @@ func opAddNode(ctx context.Context, user User, wf *Workflow, op *WorkflowOperati
 		}
 
 		// 1. ENRICH: Create full Trigger with real structure
-		newTrigger, err := enrichTriggerFromApp(&minTrig, wf.ExecutingOrg.Id)
+		newTrigger, err := enrichTriggerFromApp(&minTrig, env)
 		if err != nil {
 			return fmt.Errorf("failed to enrich trigger: %w", err)
 		}
@@ -38492,54 +39284,71 @@ func opMoveNode(wf *Workflow, op *WorkflowOperation) error {
 }
 
 func opDeleteNode(wf *Workflow, op *WorkflowOperation) error {
-	switch op.NodeType {
-	case "action":
-		idx := findActionIndexByID(wf, op.ID)
-		if idx == -1 {
-			// Already gone, idempotent no-op (e.g. cascade from a prior delete)
-			if debug {
-				log.Printf("[DEBUG] delete_node(action): action %s not found, already removed - skipping", op.ID)
-			}
-			return nil
-		}
+	nodeType := strings.ToLower(strings.TrimSpace(op.NodeType))
 
-		// Remove action
-		wf.Actions = append(wf.Actions[:idx], wf.Actions[idx+1:]...)
-
-		// Remove branches connected to this node
-		var newBranches []Branch
-		for _, branch := range wf.Branches {
-			if branch.SourceID != op.ID && branch.DestinationID != op.ID {
-				newBranches = append(newBranches, branch)
-			}
-		}
-		wf.Branches = newBranches
-
-	case "trigger":
-		idx := findTriggerIndexByID(wf, op.ID)
-		if idx == -1 {
-			// Already gone, idempotent no-op
-			if debug {
-				log.Printf("[DEBUG] delete_node(trigger): trigger %s not found, already removed - skipping", op.ID)
-			}
-			return nil
-		}
-
-		wf.Triggers = append(wf.Triggers[:idx], wf.Triggers[idx+1:]...)
-
-		// Remove branches connected to this trigger (both source and destination)
-		var newBranches []Branch
-		for _, branch := range wf.Branches {
-			if branch.SourceID != op.ID && branch.DestinationID != op.ID {
-				newBranches = append(newBranches, branch)
-			}
-		}
-		wf.Branches = newBranches
-
-	default:
-		return fmt.Errorf("unknown node_type: %s", op.NodeType)
+	if nodeType == "action" {
+		return deleteActionFromWorkflow(wf, op.ID)
+	} else if nodeType == "trigger" {
+		return deleteTriggerFromWorkflow(wf, op.ID)
 	}
 
+	// Auto-detect by searching Actions and Triggers when node_type is omitted
+	if idx := findActionIndexByID(wf, op.ID); idx != -1 {
+		return deleteActionFromWorkflow(wf, op.ID)
+	}
+	if idx := findTriggerIndexByID(wf, op.ID); idx != -1 {
+		return deleteTriggerFromWorkflow(wf, op.ID)
+	}
+
+	// Already gone, idempotent no-op (e.g. cascade from a prior delete)
+	if debug {
+		log.Printf("[DEBUG] delete_node: node %s not found in actions or triggers - skipping", op.ID)
+	}
+	return nil
+}
+
+func deleteActionFromWorkflow(wf *Workflow, id string) error {
+	idx := findActionIndexByID(wf, id)
+	if idx == -1 {
+		if debug {
+			log.Printf("[DEBUG] delete_node(action): action %s not found, already removed - skipping", id)
+		}
+		return nil
+	}
+
+	// Remove action
+	wf.Actions = append(wf.Actions[:idx], wf.Actions[idx+1:]...)
+
+	// Remove branches connected to this node
+	var newBranches []Branch
+	for _, branch := range wf.Branches {
+		if branch.SourceID != id && branch.DestinationID != id {
+			newBranches = append(newBranches, branch)
+		}
+	}
+	wf.Branches = newBranches
+	return nil
+}
+
+func deleteTriggerFromWorkflow(wf *Workflow, id string) error {
+	idx := findTriggerIndexByID(wf, id)
+	if idx == -1 {
+		if debug {
+			log.Printf("[DEBUG] delete_node(trigger): trigger %s not found, already removed - skipping", id)
+		}
+		return nil
+	}
+
+	wf.Triggers = append(wf.Triggers[:idx], wf.Triggers[idx+1:]...)
+
+	// Remove branches connected to this trigger (both source and destination)
+	var newBranches []Branch
+	for _, branch := range wf.Branches {
+		if branch.SourceID != id && branch.DestinationID != id {
+			newBranches = append(newBranches, branch)
+		}
+	}
+	wf.Branches = newBranches
 	return nil
 }
 
@@ -38549,6 +39358,11 @@ func opAddBranchWithMapping(wf *Workflow, op *WorkflowOperation, tempIDMap map[s
 		SourceID      string `json:"source_id"`
 		DestinationID string `json:"destination_id"`
 		Label         string `json:"label"`
+		Conditions    []struct {
+			Source      string `json:"source"`
+			Condition   string `json:"condition"`
+			Destination string `json:"destination"`
+		} `json:"conditions"`
 	}
 
 	if err := json.Unmarshal(op.Data, &branchData); err != nil {
@@ -38556,11 +39370,15 @@ func opAddBranchWithMapping(wf *Workflow, op *WorkflowOperation, tempIDMap map[s
 	}
 
 	// Resolve temp_ids to real_ids if provided
-	if realID, exists := tempIDMap[branchData.SourceID]; exists {
-		branchData.SourceID = realID
+	if len(branchData.SourceID) > 0 {
+		if realID, exists := tempIDMap[branchData.SourceID]; exists {
+			branchData.SourceID = realID
+		}
 	}
-	if realID, exists := tempIDMap[branchData.DestinationID]; exists {
-		branchData.DestinationID = realID
+	if len(branchData.DestinationID) > 0 {
+		if realID, exists := tempIDMap[branchData.DestinationID]; exists {
+			branchData.DestinationID = realID
+		}
 	}
 
 	// Re-marshal the resolved data back into op.Data for opAddBranch
@@ -38696,6 +39514,12 @@ func opDeleteBranch(wf *Workflow, op *WorkflowOperation) error {
 
 
 func opAddCondition(wf *Workflow, op *WorkflowOperation) error {
+	branchIdx := findBranchIndexByID(wf, op.BranchID)
+	if branchIdx == -1 {
+		return fmt.Errorf("branch %s not found", op.BranchID)
+	}
+
+	// 1. Try unmarshaling as {"conditions": [...]} (array of conditions)
 	var condData struct {
 		Conditions []struct {
 			Source      string `json:"source"`
@@ -38704,21 +39528,27 @@ func opAddCondition(wf *Workflow, op *WorkflowOperation) error {
 		} `json:"conditions"`
 	}
 
-	if err := json.Unmarshal(op.Data, &condData); err != nil {
-		return fmt.Errorf("invalid condition data: %w", err)
+	if err := json.Unmarshal(op.Data, &condData); err == nil && len(condData.Conditions) > 0 {
+		for _, c := range condData.Conditions {
+			newCond := createCondition(c.Source, c.Condition, c.Destination)
+			wf.Branches[branchIdx].Conditions = append(wf.Branches[branchIdx].Conditions, newCond)
+		}
+		return nil
 	}
 
-	branchIdx := findBranchIndexByID(wf, op.BranchID)
-	if branchIdx == -1 {
-		return fmt.Errorf("branch %s not found", op.BranchID)
+	// 2. Self-correct fallback: Try unmarshaling as a single condition object {"source": "...", "condition": "...", "destination": "..."}
+	var singleCond struct {
+		Source      string `json:"source"`
+		Condition   string `json:"condition"`
+		Destination string `json:"destination"`
 	}
-
-	for _, c := range condData.Conditions {
-		newCond := createCondition(c.Source, c.Condition, c.Destination)
+	if err := json.Unmarshal(op.Data, &singleCond); err == nil && (len(singleCond.Source) > 0 || len(singleCond.Condition) > 0 || len(singleCond.Destination) > 0) {
+		newCond := createCondition(singleCond.Source, singleCond.Condition, singleCond.Destination)
 		wf.Branches[branchIdx].Conditions = append(wf.Branches[branchIdx].Conditions, newCond)
+		return nil
 	}
 
-	return nil
+	return fmt.Errorf("invalid condition data: could not parse condition array or single condition from payload")
 }
 
 func opEditCondition(wf *Workflow, op *WorkflowOperation) error {
@@ -38922,6 +39752,39 @@ func init() {
 	if err != nil {
 		panic(fmt.Sprintf("[ERROR] Failed to initialize gzip middleware: %v", err))
 	}
+}
+
+func checkAllowedUrl(rawUrl string) error {
+	parsedUrl, err := url.Parse(rawUrl)
+	if err != nil {
+		return fmt.Errorf("invalid git url: %s", err)
+	}
+
+	host := strings.ToLower(parsedUrl.Hostname())
+
+	if parsedUrl.Scheme != "https" {
+		return fmt.Errorf("unsupported git url scheme")
+	}
+
+	if host == "google.internal" {
+		return fmt.Errorf("unsupported git host")
+	}
+
+	ips, err := net.LookupIP(host)
+
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() {
+			return fmt.Errorf("git host resolves to a private or loopback IP")
+		}
+
+		if ipv4 := ip.To4(); ipv4 != nil {
+			if ipv4[0] == 169 || ipv4[0] == 254 {
+				return fmt.Errorf("unsupported git host: resolves to blocked IP")
+			}
+		}
+	}
+
+	return nil
 }
 
 func Compress(next http.HandlerFunc) http.HandlerFunc {
