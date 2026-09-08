@@ -2493,24 +2493,29 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		}
 	}
 
-	//ExecutionDelay: selectedDelay,
-	timeout := time.Duration(30) * time.Second
+	toolTimeout := 120
+	if v := os.Getenv("AGENT_TOOL_TIMEOUT"); len(v) > 0 {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 300 {
+			toolTimeout = parsed
+		}
+	}
+	timeout := time.Duration(toolTimeout) * time.Second
 
 	// Immediate exits. 3 seconds due to body transfer worst case
 	if selectedDelay > 0 { 
 		timeout = time.Duration(2) * time.Second
 	}
 
-	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=%d&delay=%d&decision_id=%s", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg, (timeout/1000000000)-1, selectedDelay, decision.RunDetails.Id)
+	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=%d&delay=%d&decision_id=%s", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg, int(timeout.Seconds())-1, selectedDelay, decision.RunDetails.Id)
 
 	parentNode := ""
 	if len(parentNode) > 0 { 
 		requestUrl += fmt.Sprintf("parent_node=%s", parentNode)
 	}
 
-	// Gives it time to return properly with +2 delay
+	// Gives it time to return properly with +5 delay
 	client := GetExternalClientWithTimeout(requestUrl, 0)
-	client.Timeout = timeout + (1 * time.Second)
+	client.Timeout = timeout + (5 * time.Second)
 
 	//if debug { 
 		//log.Printf("\n\n\n\nRequest timeout: %d", client.Timeout)
