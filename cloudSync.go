@@ -2400,6 +2400,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		Name:             decision.Action, // overwritten below if schema match found
 		//AuthenticationId: resolvedAuthId,
 		Parameters:       []WorkflowAppActionParameter{},
+		Environment:      foundEnv,
 
 		ExecutionDelay: selectedDelay,
 	}
