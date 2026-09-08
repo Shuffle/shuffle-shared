@@ -38442,16 +38442,24 @@ func streamWorkflowOperations(ctx context.Context, request *http.Request, workfl
 		return
 	}
 
-	baseURL := os.Getenv("BASE_URL")
-	if len(baseURL) == 0 {
-		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-			baseURL = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-		} else {
-			port := os.Getenv("PORT")
-			if len(port) == 0 {
-				port = "5001"
+	var baseURL string
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 {
+		baseURL = os.Getenv("SHUFFLE_STREAM_URL")
+		if len(baseURL) == 0 {
+			baseURL = "https://stream.shuffler.io"
+		}
+	} else {
+		baseURL = os.Getenv("BASE_URL")
+		if len(baseURL) == 0 {
+			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+				baseURL = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+			} else {
+				port := os.Getenv("PORT")
+				if len(port) == 0 {
+					port = "5001"
+				}
+				baseURL = fmt.Sprintf("http://localhost:%s", port)
 			}
-			baseURL = fmt.Sprintf("http://localhost:%s", port)
 		}
 	}
 
