@@ -363,6 +363,22 @@ func savePresenceParticipant(ctx context.Context, workflowID, userID, username s
 	return readPresence(ctx, workflowID)
 }
 
+// removePresenceParticipant removes a user from the presence list immediately.
+func removePresenceParticipant(ctx context.Context, workflowID, userID string) []StreamPresenceEntry {
+	key := streamPresenceKeyFor(workflowID)
+	current := readPresence(ctx, workflowID)
+
+	updated := make([]StreamPresenceEntry, 0, len(current))
+	for _, u := range current {
+		if u.UserID != userID {
+			updated = append(updated, u)
+		}
+	}
+
+	SetCache(ctx, key, encodePresence(updated), streamPresenceTTL)
+	return updated
+}
+
 func streamAuthCtxKey(id string) string {
 	return fmt.Sprintf("%s_stream_authctx", id)
 }
@@ -612,6 +628,37 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	now := time.Now().UnixMilli()
 	var lastSeq int64
 	var failedSeqs []int64
+
+	for i := range ops {
+		if ops[i].Item != "presence" {
+			continue
+		}
+		uid := ops[i].UserID
+		uname := ops[i].Username
+		if len(uid) == 0 {
+			uid = user.Id
+			uname = user.Username
+		}
+		if len(uid) == 0 {
+			continue
+		}
+
+		var users []StreamPresenceEntry
+		if ops[i].Type == "remove" {
+			users = removePresenceParticipant(ctx, workflowID, uid)
+		} else {
+			users = savePresenceParticipant(ctx, workflowID, uid, uname)
+		}
+
+		type presencePayload struct {
+			Item  string                `json:"item"`
+			Users []StreamPresenceEntry `json:"users"`
+		}
+		if presenceBytes, err := json.Marshal(presencePayload{Item: "presence", Users: users}); err == nil {
+			ops[i].Data = presenceBytes
+		}
+	}
+
 	for i := range ops {
 		// Atomic allocation — two writers can never receive the same sequence, so their
 		// ops can never overwrite each other (each lives under its own key).
