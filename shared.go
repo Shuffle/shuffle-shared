@@ -19234,6 +19234,50 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
+	// Special handler for AI Agent hybrid dispatch (where worker ran run_agent and backend dispatched to Cloud)
+	isAgentHybrid := (actionResult.Action.AppName == "shuffle-ai" || actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent" || actionResult.Action.Name == "run_agent") &&
+		(strings.Contains(actionResult.Result, "\"mode\":\"hybrid\"") || strings.Contains(actionResult.Result, "\"mode\": \"hybrid\""))
+
+	if isAgentHybrid && actionResult.Status != "SKIPPED" {
+		log.Printf("[INFO][%s] AI Agent hybrid dispatch detected for action %s (%s). Setting node and workflow status to WAITING.", workflowExecution.ExecutionId, actionResult.Action.Label, actionResult.Action.ID)
+
+		actionResult.Status = "WAITING"
+		actionResult.CompletedAt = time.Now().Unix() * 1000
+		workflowExecution.Status = "WAITING"
+
+		foundWaiting := false
+		for resultIndex, result := range workflowExecution.Results {
+			if result.Action.ID != actionResult.Action.ID {
+				continue
+			}
+
+			workflowExecution.Results[resultIndex] = actionResult
+			actionResultBody, err := json.Marshal(actionResult)
+			if err == nil {
+				cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+				_ = SetCache(ctx, cacheId, actionResultBody, 600)
+			}
+			foundWaiting = true
+			break
+		}
+
+		if !foundWaiting {
+			workflowExecution.Results = append(workflowExecution.Results, actionResult)
+			actionResultBody, err := json.Marshal(actionResult)
+			if err == nil {
+				cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+				_ = SetCache(ctx, cacheId, actionResultBody, 600)
+			}
+		}
+
+		err = SetWorkflowExecution(ctx, workflowExecution, true)
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed setting workflow execution during AI Agent hybrid return: %s", workflowExecution.ExecutionId, err)
+		}
+
+		return &workflowExecution, true, nil
+	}
+
 	if actionResult.Action.AppName == "shuffle-subflow" {
 		// Verifying if the userinput should be sent properly or not
 		if actionResult.Action.Name == "run_userinput" && actionResult.Status != "SKIPPED" {
@@ -23796,7 +23840,18 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 		}
 	}
 
-	if execution.Status == "EXECUTING" {
+	hasWaiting := false
+	for _, result := range execution.Results {
+		if result.Status == "WAITING" {
+			hasWaiting = true
+			break
+		}
+	}
+
+	if hasWaiting {
+		log.Printf("[INFO][%s] Workflow execution has action(s) in WAITING status. Preserving WAITING status.", execution.ExecutionId)
+		execution.Status = "WAITING"
+	} else if execution.Status == "EXECUTING" {
 		//log.Printf("[INFO] Inside executing.")
 		extra := 0
 		for _, trigger := range execution.Workflow.Triggers {
