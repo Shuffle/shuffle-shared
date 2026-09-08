@@ -930,50 +930,10 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
 	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == false && validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
-	}
-
-		now := time.Now().Unix()
-		isExpiredAnnualPlan := false
-	planStartDate := int64(0)
-
-		for _, sub := range validationOrg.Subscriptions {
-			if sub.Active {
-				subName := strings.ToLower(sub.Name)
-			if (strings.Contains(subName, "business") || strings.Contains(subName, "enterprise") || (strings.Contains(subName, "scale") && !strings.Contains(subName, "trial"))) {
-					planStartDate = sub.Startdate
-				if sub.Active && sub.Enddate > 0 && sub.Enddate < now {
-						isExpiredAnnualPlan = true
-					}
-					break
-				}
-			}
-		}
-
-		if isExpiredAnnualPlan {
-			orgAdmin := User{}
-			for _, user := range validationOrg.Users {
-				if strings.ToLower(user.Role) == "admin" {
-					if len(user.ApiKey) > 0 && !strings.Contains(user.Username, "shuffler") {
-						orgAdmin = user
-						break
-					} else {
-						fullUser, err := GetUser(ctx, user.Id)
-						if err == nil && len(fullUser.ApiKey) > 0 && !strings.Contains(fullUser.Username, "shuffler") {
-							orgAdmin = *fullUser
-							break
-						}
-					}
-				}
-			}
-
-			if len(orgAdmin.ApiKey) > 0 {
-				log.Printf("[AUDIT] Sending license expired request with user %s for org %s", orgAdmin.Username, validationOrg.Id)
-				go SendLicenseExpiredRequest(validationOrg.Id, orgAdmin.ApiKey)
-		}
 			}
 
 	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == true && validationOrg.LeadInfo.Customer {
-
+		planStartDate := int64(0)
 		if planStartDate > 0 {
 			var annualAppRuns int64
 			for _, stat := range validationOrgStats.DailyStatistics {
