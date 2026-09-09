@@ -19238,6 +19238,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	isAgentHybrid := (actionResult.Action.AppName == "shuffle-ai" || actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent" || actionResult.Action.Name == "run_agent") &&
 		(strings.Contains(actionResult.Result, "\"mode\":\"hybrid\"") || strings.Contains(actionResult.Result, "\"mode\": \"hybrid\""))
 
+	log.Printf("[HEYOOO-PARSED] ParsedExecutionResult: Label='%s', AppName='%s', ActionName='%s', isAgentHybrid=%t, ResultPreview=%.150s", actionResult.Action.Label, actionResult.Action.AppName, actionResult.Action.Name, isAgentHybrid, actionResult.Result)
+
 	if isAgentHybrid && actionResult.Status != "SKIPPED" {
 		log.Printf("[INFO][%s] AI Agent hybrid dispatch detected for action %s (%s). Setting node status to WAITING.", workflowExecution.ExecutionId, actionResult.Action.Label, actionResult.Action.ID)
 
