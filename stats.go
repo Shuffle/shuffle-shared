@@ -2244,12 +2244,11 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			appRunsUsagePercentageStr := fmt.Sprintf("%d%% of your app runs limit", int64(AppRunsPercentage))
 			Subject := fmt.Sprintf("[Shuffle]: You've reached %s for your tenant %s", appRunsUsagePercentageStr, org.Name)
 			aiTokensUsage := orgStatistics.MonthlyLLMTokens + orgStatistics.MonthlyChildOrgLLMTokens
-			aiTokensUsagePercentage := float64(aiTokensUsage) / float64(org.SyncFeatures.AgentTokens.Limit) * 100
 
-			aiTokensLimit := org.SyncFeatures.AgentTokens.Limit
-			if aiTokensLimit == 0 {
-				aiTokensLimit = 10000000
-			}
+			//aiTokensLimit := org.SyncFeatures.AgentTokens.Limit
+			//if aiTokensLimit == 0 {
+			//	aiTokensLimit = 10000000
+			//}
 			substitutions := map[string]interface{}{
 				"app_runs_usage": totalAppExecutions,
 				"app_runs_limit": org.SyncFeatures.AppExecutions.Limit,
@@ -2260,7 +2259,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				"org_name":                  org.Name,
 				"org_id":                    org.Id,
 				"admin_email":               org.Name,
-				"app_runs_usage_percentage": int64(aiTokensUsagePercentage),
+				"app_runs_usage_percentage": int64(AppRunsPercentage),
 			}
 
 			err = sendMailSendgridV2(
