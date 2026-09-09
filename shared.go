@@ -19235,8 +19235,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	// Specific handler for AI Agent hybrid thing (where worker ran run_agent and it reached to Cloud)
-	isAgentHybrid := (actionResult.Action.AppName == "shuffle-ai" || actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent" || actionResult.Action.Name == "run_agent") &&
-		(strings.Contains(actionResult.Result, "\"mode\":\"hybrid\"") || strings.Contains(actionResult.Result, "\"mode\": \"hybrid\""))
+	isAgentAction := actionResult.Action.AppName == "shuffle-ai" || actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent" || actionResult.Action.Name == "run_agent"
+	isAgentHybrid := isAgentAction && (strings.Contains(strings.ToLower(actionResult.Result), "hybrid") || actionResult.Action.Name == "run_agent")
 
 	log.Printf("[HEYOOO-PARSED] ParsedExecutionResult: Label='%s', AppName='%s', ActionName='%s', isAgentHybrid=%t, ResultPreview=%.150s", actionResult.Action.Label, actionResult.Action.AppName, actionResult.Action.Name, isAgentHybrid, actionResult.Result)
 
