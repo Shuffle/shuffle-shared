@@ -19257,10 +19257,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 
 			workflowExecution.Results[resultIndex] = actionResult
-			actionResultBody, marshalError := json.Marshal(actionResult)
-			if marshalError == nil {
+			if strings.Contains(actionResult.Result, "decisions") {
 				cacheIdentifier := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
-				_ = SetCache(ctx, cacheIdentifier, actionResultBody, 600)
+				_ = SetCache(ctx, cacheIdentifier, []byte(actionResult.Result), 600)
 			}
 			foundWaiting = true
 			break
@@ -19268,10 +19267,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 		if !foundWaiting {
 			workflowExecution.Results = append(workflowExecution.Results, actionResult)
-			actionResultBody, marshalError := json.Marshal(actionResult)
-			if marshalError == nil {
+			if strings.Contains(actionResult.Result, "decisions") {
 				cacheIdentifier := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
-				_ = SetCache(ctx, cacheIdentifier, actionResultBody, 600)
+				_ = SetCache(ctx, cacheIdentifier, []byte(actionResult.Result), 600)
 			}
 		}
 
