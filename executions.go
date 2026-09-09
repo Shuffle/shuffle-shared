@@ -379,9 +379,16 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 								time.Sleep(1 * time.Second)
 								sendAgentActionSelfRequest("WAITING", capturedExec, capturedExec.Results[resultIndex])
 								time.Sleep(2 * time.Second)
-								_, err := HandleAiAgentExecutionStart(capturedExec, capturedAction, true, "fixexecution_timeout_recovery")
-								if err != nil {
-									log.Printf("[ERROR][%s] Failed re-invoking agent after decisions completed for action %s: %s", capturedExec.ExecutionId, capturedAction.ID, err)
+								// HandleAiAgentExecutionStart requires OpenSearch/Cloud DB infrastructure.
+								// The worker process runs without OpenSearch, so calling this there causes a nil pointer panic.
+								// On the worker, Cloud already handles re-invocation via the redeployment queue — skip here.
+								if project.Environment == "cloud" {
+									_, err := HandleAiAgentExecutionStart(capturedExec, capturedAction, true, "fixexecution_timeout_recovery")
+									if err != nil {
+										log.Printf("[ERROR][%s] Failed re-invoking agent after decisions completed for action %s: %s", capturedExec.ExecutionId, capturedAction.ID, err)
+									}
+								} else {
+									log.Printf("[DEBUG][%s] Skipping HandleAiAgentExecutionStart in non-cloud environment (fixexecution_timeout_recovery) — Cloud handles redeployment via queue.", capturedExec.ExecutionId)
 								}
 							}()
 						}
