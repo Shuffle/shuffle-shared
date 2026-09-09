@@ -10624,7 +10624,11 @@ data_filter:
 			isStandalone := execution.ExecutionId == execution.WorkflowId || execution.ExecutionId == execution.Workflow.ID
 			if isStandalone {
 				execution.Status = "FINISHED"
-				execution.CompletedAt = agentOutput.CompletedAt
+				if agentOutput.CompletedAt > 100000000000 {
+					execution.CompletedAt = agentOutput.CompletedAt / 1000
+				} else {
+					execution.CompletedAt = agentOutput.CompletedAt
+				}
 			}
 			execution.Results[foundResultIndex].Status = "SUCCESS"
 			execution.Results[foundResultIndex].CompletedAt = agentOutput.CompletedAt
