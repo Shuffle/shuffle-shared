@@ -514,7 +514,10 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		return errors.New("Same workflow ID as notification ID. Stopped for infinite loop")
 	}
 
-	log.Printf("[DEBUG] Should send notifications to workflow %s", workflowId)
+	if debug { 
+		log.Printf("[DEBUG] Should send notifications to workflow %s", workflowId)
+	}
+
 	backendUrl := os.Getenv("BASE_URL")
 	if project.Environment == "cloud" {
 		// Doesn't work multi-region
