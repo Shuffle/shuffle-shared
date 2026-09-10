@@ -1813,6 +1813,8 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(userInfo.Username)))
 		DeleteCache(ctx, fmt.Sprintf("session_%s", userInfo.Session))
 		DeleteCache(ctx, userInfo.Session)
+		DeleteCache(ctx, fmt.Sprintf("%s%s", userInfo.Session, userInfo.ActiveOrg.Id))
+		DeleteCache(ctx, userInfo.Session+userInfo.ActiveOrg.Id)
 
 		log.Printf("[INFO] Returning from logout request after cache cleanup")
 
@@ -1829,6 +1831,8 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(userInfo.Username)))
 	DeleteCache(ctx, fmt.Sprintf("session_%s", userInfo.Session))
 	DeleteCache(ctx, userInfo.Session)
+	DeleteCache(ctx, fmt.Sprintf("%s%s", userInfo.Session, userInfo.ActiveOrg.Id))
+	DeleteCache(ctx, userInfo.Session+userInfo.ActiveOrg.Id)
 
 	//store user's last session so we can force sso when user's session change.
 	userInfo.UsersLastSession = userInfo.Session
@@ -13000,32 +13004,44 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("apps_%s", oldOrgId))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
 			DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
+			DeleteCache(ctx, fmt.Sprintf("Users_%s", user.Session))
 			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+			DeleteCache(ctx, user.Session)
 			if len(user.ApiKey) > 0 {
 				DeleteCache(ctx, user.ApiKey+oldOrgId)
 			}
 
+			DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, oldOrgId))
+			DeleteCache(ctx, user.Session+oldOrgId)
 			DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, user.ActiveOrg.Id))
+			DeleteCache(ctx, user.Session+user.ActiveOrg.Id)
 
 			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("apps_%s", oldOrgId))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
+			DeleteCache(ctx, fmt.Sprintf("Users_%s", user.Session))
 			DeleteCache(ctx, fmt.Sprintf("%s", user.ApiKey))
 			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+			DeleteCache(ctx, user.Session)
 			if len(user.ApiKey) > 0 {
 				DeleteCache(ctx, user.ApiKey+oldOrgId)
 			}
 
+			DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, oldOrgId))
+			DeleteCache(ctx, user.Session+oldOrgId)
 			DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, user.ActiveOrg.Id))
+			DeleteCache(ctx, user.Session+user.ActiveOrg.Id)
 
 			return
 		}
@@ -13323,11 +13339,15 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 	DeleteCache(ctx, user.Session)
+	DeleteCache(ctx, fmt.Sprintf("Users_%s", user.Session))
 	DeleteCache(ctx, fmt.Sprintf("Users_%s", user.ApiKey))
 	DeleteCache(ctx, user.ApiKey+user.ActiveOrg.Id)
 	DeleteCache(ctx, user.ApiKey+oldOrgId)
 	DeleteCache(ctx, user.ApiKey)
 	DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, user.ActiveOrg.Id))
+	DeleteCache(ctx, user.Session+user.ActiveOrg.Id)
+	DeleteCache(ctx, fmt.Sprintf("%s%s", user.Session, oldOrgId))
+	DeleteCache(ctx, user.Session+oldOrgId)
 
 	log.Printf("[INFO] User %s (%s) successfully changed org to '%s' (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
