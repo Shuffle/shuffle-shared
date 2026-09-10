@@ -1338,6 +1338,8 @@ type DatastoreAutomationOption struct {
 	Apps        []string `json:"apps" datastore:"apps"`
 	Description string   `json:"description" datastore:"description"`
 	Disabled    bool     `json:"disabled" datastore:"disabled"`
+	Template    string   `json:"template,omitempty" datastore:"template"`
+	Skill       string   `json:"skill,omitempty" datastore:"skill"`
 }
 
 type DatastoreAutomation struct {

@@ -2150,9 +2150,37 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 				log.Printf("[ERROR] Failed to set cache key after running AI agent: %s", err)
 			}
 
-			requiredApps := []string{"shuffle-datastore"}
-			for _, req := range requiredApps {
+			template := option.Template
+			if len(template) == 0 {
+				template = option.Skill
+			}
 
+			// Fallback for legacy configs without explicit template
+			if len(template) == 0 {
+				if strings.Contains(cacheData.Category, "incident") {
+					template = "incident-handler"
+				} else if strings.Contains(cacheData.Category, "vuln") {
+					template = "vulnerability"
+				}
+			}
+
+			// Normalize known aliases
+			if template == "incident-response" {
+				template = "incident-handler"
+			} else if template == "vulnerability-agent" || template == "vulnerability-management" {
+				template = "vulnerability"
+			} else if template == "build-workflows" {
+				template = "workflow-edit"
+			}
+
+			requiredApps := []string{"shuffle-datastore"}
+			if template == "vulnerability" || strings.Contains(cacheData.Category, "vuln") {
+				requiredApps = append(requiredApps, "shuffle_vulnerabilities", "shuffle_software_and_packages")
+			} else if template == "incident-handler" || strings.Contains(cacheData.Category, "incident") {
+				requiredApps = append(requiredApps, "shuffle_incidents")
+			}
+
+			for _, req := range requiredApps {
 				if !ArrayContains(option.Apps, req) {
 					option.Apps = append(option.Apps, req)
 				}
@@ -2194,6 +2222,7 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 				Method: "tools/call",
 				Params: MCPRequestParams{
 					ToolName: allowedApps,
+					Template: template,
 					Input: MCPRequestInput{
 						Text: fmt.Sprintf("TASK: %s\n\nKey: %s\nCategory: %s\n\nRAW DATA:\n%s", option.Value, cacheData.Key, cacheData.Category, cacheData.Value),
 					},

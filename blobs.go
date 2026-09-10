@@ -175,9 +175,11 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 			Options: []DatastoreAutomationOption{
 				DatastoreAutomationOption{
 					Key:      "action",
-					Value:    "Provide a short triage plan for the incident in english and update it in the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. Make sure it is JSON formatted like {\"tasks\": []} so that we can inject it in existing data. Use the following format for each task, and ONLY update the relevant fields: [{\"assignee\": \"AI Agent\", \"title\": \"Title of the task\", \"category\": \"triage/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]. ONLY output as JSON and nothing more.    Change the incident \"severity\" to info/low/medium/high/critical where relevant. When done, ALWAYS make sure the \"status\" is inProgress or Resolved if it is not already. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.\n\nWhen done sending the previous update, start tackling the tasks one by one. When starting them, self-assign @AIAgent to make it clear you are working on it. Go in the order of incident response relevance, which is typically in order. If a task is irrelevant, set \"disabled\": true as a value for it. Some incidents are fake/tests/not important, so if the incident is irrelevant, set the \"status\" to \"Resolved\" and add to the activity array: {\"ai_handled\": true, \"id\":\"status-{timenow-unix}\",\"type\":\"status\",\"user\":\"@AIAgent\",\"timestamp\":{timenow-unix},\"content\":\"Resolved: ${close reason}\"}. ONLY send the modified fields. Do NOT send everything.\n\nDo not stop until you are finished with the tasks relevant for you to handle.",
-					Apps: []string{"48793430d21468f9e371ace402efcd8e"},
+					Value:    "Triage, investigate, and respond holistically to this incident. Choose the appropriate response path:\n\n1. AUTO-RESOLVE / CLOSE: If this alert is a false positive, benign administrative activity, authorized test/scan, routine noise, or a duplicate of an existing incident:\n- Set \"status\" to \"resolved\".\n- Add an activity entry: {\"ai_handled\": true, \"id\": \"status-{timenow-unix}\", \"type\": \"status\", \"user\": \"@AIAgent\", \"timestamp\": {timenow-unix}, \"content\": \"Resolved: [Specific evidence and rationale explaining why this is benign/FP/duplicate]\"}.\n- Do NOT generate unnecessary open tasks.\n\n2. ESCALATE: If this is a high/critical severity threat, active compromise, ransomware, credential theft, lateral movement, or high ambiguity requiring human judgment:\n- Update \"severity\" to \"high\" or \"critical\".\n- Set \"status\" to \"escalated\".\n- Add an activity entry: {\"ai_handled\": true, \"id\": \"status-{timenow-unix}\", \"type\": \"status\", \"user\": \"@AIAgent\", \"timestamp\": {timenow-unix}, \"content\": \"Escalated: High-priority threat detected. [Executive threat summary, affected assets/users, and recommended human actions]\"}.\n\n3. CONTAINMENT (BLOCK / ISOLATE / REVOKE):\n- For compromised endpoints: propose or execute host isolation via available EDR tools.\n- For malicious external IPs, domains, or hashes: propose or execute perimeter firewall/DNS blocks.\n- For compromised accounts: propose or execute session revocation or account lock.\n- For disruptive actions, set approval_required: true and request analyst confirmation.\n\n4. FIX SPAMMY DETECTIONS:\n- If this alert is from a noisy or misconfigured detection rule firing repeatedly on benign operations, propose specific rule tuning/exclusions in the activity log or create a task: {\"assignee\": \"AI Agent\", \"title\": \"Tune detection rule: [Rule Name] to exclude [Pattern]\", \"category\": \"triage\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}.\n\n5. TOOL REQUESTS:\n- Utilize available tools (shuffle-datastore, shuffle_incidents, etc.). If an essential tool (EDR, SIEM, Threat Intel, Firewall) is missing or unauthenticated, explicitly state what tool is required, why, and the specific query/action needed.\n\n6. INVESTIGATION & DOCUMENTATION:\n- If ongoing investigation is needed, set \"status\" to \"in_progress\" and update \"severity\" to info/low/medium/high/critical.\n- Generate structured tasks in JSON format: {\"tasks\": [{\"assignee\": \"AI Agent\", \"title\": \"Title of task\", \"category\": \"triage/investigation/containment/recovery/communication/documentation\", \"completed\": false, \"createdBy\": \"ai-agent@shuffler.io\"}]}.\n- Document findings, timeline, and MITRE ATT&CK techniques in activity and comments. Tackle tasks one by one, self-assigning and completing them as progress is made.\n\nUpdate the internal shuffle datastore with the same key and category 'shuffle-security_incidents'. ONLY send the modified fields in JSON format. Do NOT overwrite unrelated fields.",
+					Apps:     []string{"48793430d21468f9e371ace402efcd8e", "b82668d868f6dc7ac1dc14caa92c674b"},
 					Disabled: false,
+					Template: "incident-handler",
+					Skill:    "incident-response",
 				},
 			},
 			Type:     "singul",
@@ -244,6 +246,14 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 						if !found {
 							automation.Options = append(automation.Options, agentOption)
+							changed = true
+						}
+					}
+
+					for optIdx, curOpt := range automation.Options {
+						if len(curOpt.Template) == 0 && len(curOpt.Skill) == 0 {
+							automation.Options[optIdx].Template = "incident-handler"
+							automation.Options[optIdx].Skill = "incident-response"
 							changed = true
 						}
 					}
@@ -468,6 +478,166 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
 				if err != nil {
 					log.Printf("[ERROR] Failed to update category config for automation enablement (vuln comparison): %s", err)
+				}
+			}
+		}
+
+		// Auto-enable "Run AI Agent", Enrich, and Security Rules for shuffle-security_vulns
+		vulnCategoryCheck := "shuffle-security_vulns"
+		vulnCategoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, vulnCategoryCheck)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
+				vulnCategoryConfig = &DatastoreCategoryUpdate{
+					OrgId:       user.ActiveOrg.Id,
+					Category:    vulnCategoryCheck,
+					Automations: []DatastoreAutomation{},
+					Settings:    DatastoreCategorySettings{},
+				}
+			} else {
+				log.Printf("[ERROR] Failed to get category config for org %s (%s) in category %#v: %s", user.ActiveOrg.Name, user.ActiveOrg.Id, vulnCategoryCheck, err)
+			}
+		}
+
+		if vulnCategoryConfig != nil {
+			vulnConfigEdited := false
+
+			// 3 year retention
+			if vulnCategoryConfig.Settings.Timeout == 0 {
+				vulnCategoryConfig.Settings.Timeout = 94608000
+				vulnConfigEdited = true
+			}
+
+			vulnAgentAutomation := DatastoreAutomation{
+				Name:        "Run AI Agent",
+				Description: "Runs an AI Agent to process the updated value. Uses built-in ShuffleAI configs. Learn more: https://shuffler.io/docs/AI",
+				Options: []DatastoreAutomationOption{
+					DatastoreAutomationOption{
+						Key:      "action",
+						Value:    "Review, analyze, and remediate this vulnerability. Follow this evaluation process:\n\n1. CLARIFY & DEMYSTIFY:\n- Explain what this CVE/vulnerability actually means in plain, direct language.\n- Identify the exploit mechanism (e.g. remote code execution, SQLi, authentication bypass, DoS, privilege escalation) and attack prerequisites.\n\n2. REAL-WORLD RISK & EXPLOITABILITY:\n- Evaluate exploitability beyond theoretical CVSS: check CISA KEV (known exploited in the wild), EPSS score, and availability of public weaponized PoCs.\n- Assess asset context: determine if the affected software/system is internet-facing or isolated internally.\n- Classify urgency: Immediate Patching, Next Maintenance Window, Scheduled Backlog, or False Positive / Not Applicable.\n\n3. ACTIONABLE REMEDIATION & MITIGATION:\n- Provide exact, copy-pasteable update commands for the package/system (e.g. apt, dnf, apk, npm, pip, docker) to reach a patched version.\n- If patching is immediately disruptive or requires a maintenance window, provide concrete temporary workarounds, configuration tweaks, or compensating controls.\n\n4. VERIFICATION & DOCUMENTATION:\n- Specify how to verify the fix (package query, service status, vulnerability rescan).\n- Update the internal datastore with category 'shuffle-security_vulns' and key. ONLY update modified fields in JSON format.",
+						Apps:     []string{"shuffle_vulnerabilities", "shuffle_software_and_packages", "b82668d868f6dc7ac1dc14caa92c674b"},
+						Disabled: false,
+						Template: "vulnerability",
+						Skill:    "vulnerability",
+					},
+				},
+				Type:     "singul",
+				Beta:     true,
+				Disabled: false,
+				Enabled:  true,
+			}
+
+			vulnEnrichAutomation := DatastoreAutomation{
+				Name:        "Enrich",
+				Description: "Enriches the data. Only runs on valid JSON data AND if the 'enrichment' field does not exist.",
+				Type:        "singul",
+				Icon:        "/images/logos/singul.svg",
+				Beta:        false,
+				Disabled:    false,
+				Enabled:     true,
+			}
+
+			vulnSecurityRuleAutomation := DatastoreAutomation{
+				Name:        "Security Rules",
+				Description: "Describes security rules that are validated BEFORE an update occurs. This is in order for bad writes to be avoided. Control: allow, deny, merge, overwrite. Logic: if, or, and. Functions: same_shape, is_superset, has_deleted_field",
+				Options: []DatastoreAutomationOption{
+					DatastoreAutomationOption{
+						Key:   "rule",
+						Value: "merge if always; deny if has_deleted_field",
+					},
+				},
+				Type:     "",
+				Icon:     "",
+				Beta:     false,
+				Disabled: false,
+				Enabled:  true,
+			}
+
+			vulnAgentFound := false
+			vulnEnrichFound := false
+			vulnSecurityRuleFound := false
+
+			vulnDeleteIndex := []int{}
+			for automationIndex, automation := range vulnCategoryConfig.Automations {
+				if strings.ToLower(automation.Name) == "run ai agent" {
+					if vulnAgentFound {
+						vulnDeleteIndex = append(vulnDeleteIndex, automationIndex)
+						continue
+					}
+					vulnAgentFound = true
+					if !automation.Enabled {
+						vulnConfigEdited = true
+						vulnCategoryConfig.Automations[automationIndex].Enabled = true
+					}
+					found := false
+					for _, opt := range automation.Options {
+						if len(opt.Value) > 0 {
+							found = true
+							break
+						}
+					}
+					if !found {
+						vulnCategoryConfig.Automations[automationIndex].Options = vulnAgentAutomation.Options
+						vulnConfigEdited = true
+					} else {
+						for optIdx, opt := range automation.Options {
+							if len(opt.Template) == 0 && len(opt.Skill) == 0 {
+								vulnCategoryConfig.Automations[automationIndex].Options[optIdx].Template = "vulnerability"
+								vulnCategoryConfig.Automations[automationIndex].Options[optIdx].Skill = "vulnerability"
+								vulnConfigEdited = true
+							}
+						}
+					}
+				} else if strings.ToLower(automation.Name) == "enrich" {
+					if vulnEnrichFound {
+						vulnDeleteIndex = append(vulnDeleteIndex, automationIndex)
+						continue
+					}
+					vulnEnrichFound = true
+					if !automation.Enabled {
+						vulnConfigEdited = true
+						vulnCategoryConfig.Automations[automationIndex].Enabled = true
+					}
+				} else if strings.ToLower(automation.Name) == "security rules" {
+					if vulnSecurityRuleFound {
+						vulnDeleteIndex = append(vulnDeleteIndex, automationIndex)
+						continue
+					}
+					vulnSecurityRuleFound = true
+					if !automation.Enabled {
+						vulnConfigEdited = true
+						vulnCategoryConfig.Automations[automationIndex].Enabled = true
+					}
+				}
+			}
+
+			if len(vulnDeleteIndex) > 0 {
+				newAutomations := []DatastoreAutomation{}
+				for i, auto := range vulnCategoryConfig.Automations {
+					if !ArrayContainsInt(vulnDeleteIndex, i) {
+						newAutomations = append(newAutomations, auto)
+					}
+				}
+				vulnCategoryConfig.Automations = newAutomations
+				vulnConfigEdited = true
+			}
+
+			if !vulnAgentFound {
+				vulnCategoryConfig.Automations = append(vulnCategoryConfig.Automations, vulnAgentAutomation)
+				vulnConfigEdited = true
+			}
+			if !vulnEnrichFound {
+				vulnCategoryConfig.Automations = append(vulnCategoryConfig.Automations, vulnEnrichAutomation)
+				vulnConfigEdited = true
+			}
+			if !vulnSecurityRuleFound {
+				vulnCategoryConfig.Automations = append(vulnCategoryConfig.Automations, vulnSecurityRuleAutomation)
+				vulnConfigEdited = true
+			}
+
+			if vulnConfigEdited {
+				err := SetDatastoreCategoryConfig(ctx, *vulnCategoryConfig)
+				if err != nil {
+					log.Printf("[ERROR] Failed to update category config for vuln AI agent enablement: %s", err)
 				}
 			}
 		}
