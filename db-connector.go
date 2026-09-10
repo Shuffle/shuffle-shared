@@ -13799,7 +13799,9 @@ func GetDatastoreCategoryConfig(ctx context.Context, orgId, category string) (*D
 			DocumentID: id,
 		})
 		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			if debug {
+				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			}
 			return categoryData, err
 		}
 
