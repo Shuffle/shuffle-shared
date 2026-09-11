@@ -2146,6 +2146,7 @@ type loginStruct struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 	MFACode  string `json:"mfa_code"`
+	SSO      bool   `json:"sso"`
 }
 
 type ExecutionVariableWrapper struct {
