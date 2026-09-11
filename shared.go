@@ -16983,29 +16983,93 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
+
+	if data.SSO {
+		ssoStartTime := time.Now()
+		ensureMinTime := func() {
+			jitterMs := mathrand.Intn(1000)
+			minDuration := time.Duration(2500+jitterMs) * time.Millisecond
+			if elapsed := time.Since(ssoStartTime); elapsed < minDuration {
+				time.Sleep(minDuration - elapsed)
+			}
+		}
+
+		users, err := FindUser(ctx, data.Username)
+		if err != nil || len(users) == 0 {
+			log.Printf("[WARNING] SSO requested for unknown or unfound user %s", data.Username)
+			ensureMinTime()
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Single Sign-On is not configured for your organization. Please sign in with your password."}`))
+			return
+		}
+
+		userdata := users[0]
+		for _, u := range users {
+			if u.Id != "" || u.Username != "" {
+				userdata = u
+				break
+			}
+		}
+
+		org, orgerr := GetOrg(ctx, userdata.ActiveOrg.Id)
+		ssoOrg := org
+		if orgerr != nil || len(ssoOrg.SSOConfig.OpenIdAuthorization) == 0 {
+			for _, orgString := range userdata.Orgs {
+				innerorg, err := GetOrg(ctx, orgString)
+				if err == nil && len(innerorg.SSOConfig.OpenIdAuthorization) > 0 {
+					ssoOrg = innerorg
+					break
+				}
+			}
+		}
+
+		if len(ssoOrg.SSOConfig.OpenIdAuthorization) == 0 {
+			log.Printf("[WARNING] User %s has no SSO configured across tenants", userdata.Username)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Single Sign-On is not configured for your organization. Please sign in with your password."}`))
+			return
+		}
+
+		mode := "signin"
+		userdata.InitSSOInfos()
+		if existing, has := userdata.GetSSOInfo(ssoOrg.Id); !has || existing.Sub == "" {
+			mode = ""
+		}
+
+		baseSSOUrl, err := GetOpenIdUrl(request, *ssoOrg, userdata, mode)
+		if err != nil || !strings.HasPrefix(baseSSOUrl, "http") {
+			log.Printf("[ERROR] Failed getting SSO redirect URL for %s: %s", ssoOrg.Id, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting SSO redirect URL"}`))
+			return
+		}
+
+		b, err := json.Marshal(SSOResponse{
+			Success: true,
+			Reason:  "SSO_REDIRECT",
+			URL:     baseSSOUrl,
+		})
+		if err != nil {
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed marshalling SSO response"}`))
+			return
+		}
+
+		resp.WriteHeader(200)
+		resp.Write(b)
+		return
+	}
+
 	users, err := FindUser(ctx, data.Username)
 	if err != nil && len(users) == 0 {
 		log.Printf("[WARNING] Failed getting user %s during login", data.Username)
-		if data.SSO {
-			resp.WriteHeader(404)
-			resp.Write([]byte(`{"success": false, "reason": "No account found for this email address. Please contact your organization administrator or create an account."}`))
-			return
-		}
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
 		return
 	}
 
 	userdata := User{}
-	if data.SSO && len(users) > 0 {
-		for _, user := range users {
-			if user.Id == "" && user.Username == "" {
-				continue
-			}
-			userdata = user
-			break
-		}
-	} else if len(users) != 1 {
+	if len(users) != 1 {
 		log.Printf("[WARNING] Username %s has multiple or no users (%d). Checking if it matches any.", data.Username, len(users))
 
 		for _, user := range users {
@@ -17082,53 +17146,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting org. If this persists, please contact support@shuffler.io"}`)))
 			return
 		}
-	}
-
-	if data.SSO {
-		ssoOrg := org
-		if len(ssoOrg.SSOConfig.OpenIdAuthorization) == 0 {
-			for _, orgString := range userdata.Orgs {
-				innerorg, err := GetOrg(ctx, orgString)
-				if err == nil && len(innerorg.SSOConfig.OpenIdAuthorization) > 0 {
-					ssoOrg = innerorg
-					break
-				}
-			}
-		}
-
-		if len(ssoOrg.SSOConfig.OpenIdAuthorization) == 0 {
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "Single Sign-On is not configured for your organization. Please sign in with your password."}`))
-			return
-		}
-
-		mode := "signin"
-		userdata.InitSSOInfos()
-		if existing, has := userdata.GetSSOInfo(ssoOrg.Id); !has || existing.Sub == "" {
-			mode = ""
-		}
-
-		baseSSOUrl, err := GetOpenIdUrl(request, *ssoOrg, userdata, mode)
-		if err != nil || !strings.HasPrefix(baseSSOUrl, "http") {
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed getting SSO redirect URL"}`))
-			return
-		}
-
-		b, err := json.Marshal(SSOResponse{
-			Success: true,
-			Reason:  "SSO_REDIRECT",
-			URL:     baseSSOUrl,
-		})
-		if err != nil {
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed marshalling SSO response"}`))
-			return
-		}
-
-		resp.WriteHeader(200)
-		resp.Write(b)
-		return
 	}
 
 	changeActiveOrg := false
