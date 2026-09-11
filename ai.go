@@ -8256,10 +8256,26 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	var err error
 	aiStarttime := time.Now().UnixMilli()
 
-	// Only fetch from DB if the passed execution has no results somehow
-	if len(execution.Results) == 0 {
-		if replacedExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && replacedExecution != nil && len(replacedExecution.Results) > 0 {
-			execution = *replacedExecution
+	// Ensure we merge all prior node results from DB so earlier nodes (e.g. Shuffle Tools) are never clobbered or lost
+	if freshExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && freshExecution != nil && len(freshExecution.Results) > 0 {
+		if len(execution.Results) == 0 {
+			execution.Results = freshExecution.Results
+		} else {
+			for _, dbRes := range freshExecution.Results {
+				if dbRes.Action.ID == startNode.ID {
+					continue
+				}
+				found := false
+				for _, curRes := range execution.Results {
+					if curRes.Action.ID == dbRes.Action.ID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					execution.Results = append(execution.Results, dbRes)
+				}
+			}
 		}
 	}
 
@@ -10287,6 +10303,7 @@ data_filter:
 				execution.Status = "EXECUTING"
 				agentOutput.Status = "RUNNING"
 
+				foundAgentIndex := -1
 				for resultIndex, result := range execution.Results {
 					if result.Action.ID != startNode.ID {
 						continue
@@ -10309,6 +10326,26 @@ data_filter:
 					if err != nil {
 						log.Printf("[ERROR] AI Agent: Failed setting cache for action result %s: %s", actionCacheId, err)
 					}
+					foundAgentIndex = resultIndex
+					break
+				}
+
+				if foundAgentIndex < 0 {
+					agentOutputMarshalled, err := json.Marshal(agentOutput)
+					initialResult := string(agentOutputMarshalled)
+					if err != nil {
+						initialResult = "{}"
+					}
+					agentResult := ActionResult{
+						Action:      startNode,
+						ExecutionId: execution.ExecutionId,
+						Result:      initialResult,
+						Status:      "WAITING",
+						StartedAt:   time.Now().UnixMilli(),
+					}
+					execution.Results = append(execution.Results, agentResult)
+					actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
+					_ = SetCache(ctx, actionCacheId, []byte(initialResult), 600)
 				}
 
 				SetWorkflowExecution(ctx, execution, true)
