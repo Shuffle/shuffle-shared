@@ -17240,6 +17240,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			log.Printf("[DEBUG] Correct password with single user!")
 		}
+	} else if len(data.Password) == 0 {
+		userdata = User{}
 	}
 
 	if userdata.Id == "" && userdata.Username == "" {
