@@ -2276,6 +2276,29 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 	}
 }
 
+func getBackendBaseUrl() string {
+	baseUrl := os.Getenv("BASE_URL")
+	if len(baseUrl) > 0 {
+		return baseUrl
+	}
+
+	cloudrunUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	if len(cloudrunUrl) > 0 {
+		return cloudrunUrl
+	}
+
+	if project.Environment == "cloud" {
+		return "https://uk.shuffler.io"
+	}
+
+	port := os.Getenv("PORT")
+	if len(port) == 0 {
+		port = "5001"
+	}
+
+	return fmt.Sprintf("http://localhost:%s", port)
+}
+
 // runAgentDecisionDirectAppCall bypasses Singul and runs the app directly.
 func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDecision) (rawResult []byte, debugUrl string, appName string, categoryLabels []string, actionName string, err error) {
 	ctx := context.Background()
@@ -2503,21 +2526,10 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	}
 
 
-	baseURL := os.Getenv("BASE_URL")
-	if len(baseURL) == 0 {
-		if v := os.Getenv("SHUFFLE_CLOUDRUN_URL"); len(v) > 0 {
-			baseURL = v
-		} else {
-			port := os.Getenv("PORT")
-			if len(port) == 0 {
-				port = "5001"
-			}
-			baseURL = fmt.Sprintf("http://localhost:%s", port)
-		}
-	}
+	baseURL := getBackendBaseUrl()
 
-	toolTimeout := 120
-	if v := os.Getenv("AGENT_TOOL_TIMEOUT"); len(v) > 0 {
+	toolTimeout := 30
+	timeoutOverride := os.Getenv("AGENT_TOOL_TIMEOUT"); len(v) > 0 {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 300 {
 			toolTimeout = parsed
 		}
