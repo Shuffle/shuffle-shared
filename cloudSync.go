@@ -2529,9 +2529,10 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	baseURL := getBackendBaseUrl()
 
 	toolTimeout := 30
-	timeoutOverride := os.Getenv("AGENT_TOOL_TIMEOUT"); len(v) > 0 {
-		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 && parsed <= 300 {
-			toolTimeout = parsed
+	timeoutOverride := os.Getenv("AGENT_TOOL_TIMEOUT")
+	if len(timeoutOverride) > 0 {
+		if parsedTimeout, err := strconv.Atoi(timeoutOverride); err == nil && parsedTimeout > 0 && parsedTimeout <= 300 {
+			toolTimeout = parsedTimeout
 		}
 	}
 	timeout := time.Duration(toolTimeout) * time.Second
@@ -2548,9 +2549,9 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		requestUrl += fmt.Sprintf("parent_node=%s", parentNode)
 	}
 
-	// Gives it time to return properly with +5 delay
+	// Gives it time to return properly with +2 delay
 	client := GetExternalClientWithTimeout(requestUrl, 0)
-	client.Timeout = timeout + (5 * time.Second)
+	client.Timeout = timeout + (2 * time.Second)
 
 	//if debug { 
 		//log.Printf("\n\n\n\nRequest timeout: %d", client.Timeout)
@@ -2645,14 +2646,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	_ = debugUrl
 	
-	baseUrl := "https://shuffler.io"
-	if os.Getenv("BASE_URL") != "" {
-		baseUrl = os.Getenv("BASE_URL")
-	}
-
-	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
-		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
+	baseUrl := getBackendBaseUrl()
 
 	requestUrl := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
@@ -3102,17 +3096,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	//     2. Send the result through AI again to check if it changes (?). Should there be a verdict here?
 	//     3: Start the next steps of decisions after updates
 
-	baseUrl := "http://localhost:5001"
-	if project.Environment == "cloud" {
-		baseUrl = "https://shuffler.io"
-	}
-	if os.Getenv("BASE_URL") != "" {
-		baseUrl = os.Getenv("BASE_URL")
-	}
-
-	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
-		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
+	baseUrl := getBackendBaseUrl()
 
 	//url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 	url := fmt.Sprintf("%s/api/v1/streams", baseUrl)
