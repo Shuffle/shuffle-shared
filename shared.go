@@ -19234,14 +19234,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
-	// Specific handler for AI Agent hybrid thing (where worker ran run_agent and it reached to Cloud)
-	isAgentAction := actionResult.Action.AppName == "shuffle-ai" || actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent" || actionResult.Action.Name == "run_agent"
-	isAgentHybrid := isAgentAction && (strings.Contains(strings.ToLower(actionResult.Result), "hybrid") || actionResult.Action.Name == "run_agent")
-
-	log.Printf("[HEYOOO-PARSED] ParsedExecutionResult: Label='%s', AppName='%s', ActionName='%s', isAgentHybrid=%t, ResultPreview=%.150s", actionResult.Action.Label, actionResult.Action.AppName, actionResult.Action.Name, isAgentHybrid, actionResult.Result)
-
-	if isAgentHybrid && actionResult.Status != "SKIPPED" {
-		log.Printf("[INFO][%s] AI Agent hybrid dispatch detected for action %s (%s). Setting node status to WAITING.", workflowExecution.ExecutionId, actionResult.Action.Label, actionResult.Action.ID)
+	isAgentNode := actionResult.Action.AppName == "shuffle-ai" && actionResult.Action.Name == "run_agent"
+	if isAgentNode && actionResult.Status != "SKIPPED" && actionResult.Status != "FAILURE" && actionResult.Status != "ABORTED" {
+		log.Printf("[INFO][%s] AI Agent node executed for action %s (%s). Setting node status to WAITING.", workflowExecution.ExecutionId, actionResult.Action.Label, actionResult.Action.ID)
 
 		actionResult.Status = "WAITING"
 		actionResult.CompletedAt = time.Now().Unix() * 1000
@@ -19250,6 +19245,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		for resultIndex, existingResult := range workflowExecution.Results {
 			if existingResult.Action.ID != actionResult.Action.ID {
 				continue
+			}
+
+			// If the agent loop already finished or failed in the background, don't overwrite it back to WAITING
+			if existingResult.Status == "FINISHED" || existingResult.Status == "FAILURE" {
+				return &workflowExecution, false, nil
 			}
 
 			if strings.Contains(existingResult.Result, "decisions") && !strings.Contains(actionResult.Result, "decisions") {
@@ -19275,7 +19275,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 		saveError := SetWorkflowExecution(ctx, workflowExecution, true)
 		if saveError != nil {
-			log.Printf("[ERROR][%s] Failed setting workflow execution during AI Agent hybrid return: %s", workflowExecution.ExecutionId, saveError)
+			log.Printf("[ERROR][%s] Failed setting workflow execution during AI Agent return: %s", workflowExecution.ExecutionId, saveError)
 		}
 
 		return &workflowExecution, true, nil
