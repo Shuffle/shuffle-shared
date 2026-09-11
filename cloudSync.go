@@ -2900,6 +2900,8 @@ func normalizeAgentToolName(tool string) string {
 
 	if len(tool) > 33 && tool[32] == ':' {
 		tool = tool[33:]
+	} else if len(tool) > 37 && tool[36] == ':' {
+		tool = tool[37:]
 	}
 
 	tool = strings.TrimSpace(tool)

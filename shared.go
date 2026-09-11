@@ -36863,15 +36863,15 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 		log.Printf("[DEBUG] Getting prioritised app actions for '%s'", inputApp)
 	}
 
-	if strings.Contains(inputApp, ":") || len(inputApp) == 32 {
+	if strings.Contains(inputApp, ":") || len(inputApp) == 32 || len(inputApp) == 36 {
 		appnamesplit := strings.Split(inputApp, ":")
 		appId = appnamesplit[0]
-		if len(appId) != 32 {
+		if len(appId) != 32 && len(appId) != 36 {
 			appId = ""
 		}
 	}
 
-	if len(appId) == 32 {
+	if len(appId) == 32 || len(appId) == 36 {
 		foundApp, err = GetApp(ctx, appId, User{}, false)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting app %s for prioritised actions: %s", appId, err)
@@ -36891,7 +36891,7 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 		if err == nil && len(foundApps) > 0 {
 			foundApp = &foundApps[0]
 		}
-		if foundApp.ID == "" {
+		if foundApp.ID == "" && project.Environment == "cloud" {
 			algoliaApp, err := HandleAlgoliaAppSearch(ctx, cleanName)
 			if err == nil && len(algoliaApp.ObjectID) > 0 {
 				if len(foundApp.Actions) == 0 {
