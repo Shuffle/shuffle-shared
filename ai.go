@@ -8270,10 +8270,26 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	var err error
 	aiStarttime := time.Now().UnixMilli()
 
-	// Only fetch from DB if the passed execution has no results somehow
-	if len(execution.Results) == 0 {
-		if replacedExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && replacedExecution != nil && len(replacedExecution.Results) > 0 {
-			execution = *replacedExecution
+	// Ensure we merge all prior node results from DB so earlier nodes (e.g. Shuffle Tools) are never clobbered or lost
+	if freshExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && freshExecution != nil && len(freshExecution.Results) > 0 {
+		if len(execution.Results) == 0 {
+			execution.Results = freshExecution.Results
+		} else {
+			for _, dbRes := range freshExecution.Results {
+				if dbRes.Action.ID == startNode.ID {
+					continue
+				}
+				found := false
+				for _, curRes := range execution.Results {
+					if curRes.Action.ID == dbRes.Action.ID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					execution.Results = append(execution.Results, dbRes)
+				}
+			}
 		}
 	}
 
@@ -8618,11 +8634,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			executionMode = strings.ToLower(strings.TrimSpace(param.Value))
 		}
 
-		if param.Name == "action" {
+		if (param.Name == "action" || param.Name == "app_name" || param.Name == "tool_name") && len(param.Value) > 0 && param.Value != "openai" && param.Value != "AI Agent" && param.Value != "Shuffle Agent" {
 			param.Value = strings.ReplaceAll(param.Value, "app:undefined:api,", "")
 			param.Value = strings.ReplaceAll(param.Value, "app:undefined:api", "")
 
-			allowedActionString = param.Value
 			for _, actionStr := range strings.Split(param.Value, ",") {
 				actionStr = strings.ToLower(strings.TrimSpace(actionStr))
 
@@ -8630,22 +8645,18 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				//	log.Printf("[DEBUG] STRING: %s", actionStr)
 				//}
 
-				if actionStr == "" || actionStr == "nothing" || actionStr == "shuffle ai" || actionStr == "api" {
+				if actionStr == "" || actionStr == "nothing" || actionStr == "shuffle ai" || actionStr == "api" || actionStr == "openai" || actionStr == "ai agent" || actionStr == "shuffle agent" {
 					if debug {
 						log.Printf("[DEBUG][%s] Skipping action '%s' as it is not a valid action.", execution.ExecutionId, actionStr)
 					}
-					continue
-				}
-
-				if !strings.HasPrefix(actionStr, "app:") {
-					if debug {
-						log.Printf("[DEBUG][%s] Skipping action '%s' as it is not a valid action.", execution.ExecutionId, actionStr)
-					}
-
 					continue
 				}
 
 				trimmedActionStr := strings.TrimPrefix(actionStr, "app:")
+				if trimmedActionStr == "" || trimmedActionStr == "openai" {
+					continue
+				}
+
 				sortedAppActions := getPrioritisedAppActions(ctx, trimmedActionStr, 15)
 
 				// Sort alphabetically so the action list is byte-for-byte identical across every LLM loop, keeping the prompt cache prefix stable.
@@ -8653,14 +8664,37 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					return sortedAppActions[i].Name < sortedAppActions[j].Name
 				})
 
-				if len(sortedAppActions) > 0 {
-					// Cuts off the potential md5:appname prefix
-					if len(trimmedActionStr) > 33 && string(trimmedActionStr[32]) == ":" {
-						trimmedActionStr = trimmedActionStr[33:]
-					}
+				// Cuts off the potential md5:appname or uuid:appname prefix
+				baseToolName := trimmedActionStr
+				if len(baseToolName) > 33 && string(baseToolName[32]) == ":" {
+					baseToolName = baseToolName[33:]
+				} else if len(baseToolName) > 37 && string(baseToolName[36]) == ":" {
+					baseToolName = baseToolName[37:]
+				}
 
-					decidedApps = append(decidedApps, trimmedActionStr)
-					specificAppMetadata += fmt.Sprintf("\n\n**Available actions and fields for Tool '%s'**:\n", trimmedActionStr)
+				if !ArrayContains(decidedApps, baseToolName) {
+					decidedApps = append(decidedApps, baseToolName)
+				}
+
+				allowedEntry := actionStr
+				if !strings.Contains(trimmedActionStr, ":") {
+					if len(sortedAppActions) > 0 && len(sortedAppActions[0].AppID) > 0 {
+						allowedEntry = fmt.Sprintf("app:%s:%s", sortedAppActions[0].AppID, baseToolName)
+					} else {
+						allowedEntry = fmt.Sprintf("app:%s", baseToolName)
+					}
+				}
+
+				if len(allowedActionString) > 0 {
+					if !strings.Contains(allowedActionString, allowedEntry) && !strings.Contains(allowedActionString, baseToolName) {
+						allowedActionString += "," + allowedEntry
+					}
+				} else {
+					allowedActionString = allowedEntry
+				}
+
+				if len(sortedAppActions) > 0 {
+					specificAppMetadata += fmt.Sprintf("\n\n**Available actions and fields for Tool '%s'**:\n", baseToolName)
 
 					previousDesc := ""
 					for counter, sortedAppAction := range sortedAppActions {
@@ -10283,6 +10317,7 @@ data_filter:
 				execution.Status = "EXECUTING"
 				agentOutput.Status = "RUNNING"
 
+				foundAgentIndex := -1
 				for resultIndex, result := range execution.Results {
 					if result.Action.ID != startNode.ID {
 						continue
@@ -10305,6 +10340,26 @@ data_filter:
 					if err != nil {
 						log.Printf("[ERROR] AI Agent: Failed setting cache for action result %s: %s", actionCacheId, err)
 					}
+					foundAgentIndex = resultIndex
+					break
+				}
+
+				if foundAgentIndex < 0 {
+					agentOutputMarshalled, err := json.Marshal(agentOutput)
+					initialResult := string(agentOutputMarshalled)
+					if err != nil {
+						initialResult = "{}"
+					}
+					agentResult := ActionResult{
+						Action:      startNode,
+						ExecutionId: execution.ExecutionId,
+						Result:      initialResult,
+						Status:      "WAITING",
+						StartedAt:   time.Now().UnixMilli(),
+					}
+					execution.Results = append(execution.Results, agentResult)
+					actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
+					_ = SetCache(ctx, actionCacheId, []byte(initialResult), 600)
 				}
 
 				SetWorkflowExecution(ctx, execution, true)
@@ -10617,8 +10672,15 @@ data_filter:
 		}
 
 		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status != "ABORTED" && execution.Status != "FAILURE" {
-			execution.Status = "FINISHED"
-			execution.CompletedAt = agentOutput.CompletedAt
+			isStandalone := execution.ExecutionId == execution.WorkflowId || execution.ExecutionId == execution.Workflow.ID
+			if isStandalone {
+				execution.Status = "FINISHED"
+				if agentOutput.CompletedAt > 100000000000 {
+					execution.CompletedAt = agentOutput.CompletedAt / 1000
+				} else {
+					execution.CompletedAt = agentOutput.CompletedAt
+				}
+			}
 			execution.Results[foundResultIndex].Status = "SUCCESS"
 			execution.Results[foundResultIndex].CompletedAt = agentOutput.CompletedAt
 			SetWorkflowExecution(ctx, execution, true)

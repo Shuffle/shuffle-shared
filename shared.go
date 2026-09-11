@@ -18706,7 +18706,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 			log.Printf("[DEBUG][%s] AI Agent finished. Detected environment: '%s'", workflowExecution.ExecutionId, agentEnvironment)
 
-			if strings.ToLower(agentEnvironment) != "cloud" && agentEnvironment != "" {
+			if fullExecution.Workflow.ID != fullExecution.ExecutionId && strings.ToLower(agentEnvironment) != "cloud" && agentEnvironment != "" {
 				log.Printf("[INFO][%s] AI Agent finished (status: %s). Redeploying workflow to env '%s' with MAX priority",
 					workflowExecution.ExecutionId, status, agentEnvironment)
 
@@ -18718,7 +18718,10 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 					Priority:      11, // I'm assuming 11 is the max priority
 				}
 
-				parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(agentEnvironment, " ", "-"), "_", "-")), fullExecution.ExecutionOrg)
+				parsedEnv := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(agentEnvironment, " ", "-"), "_", "-"))
+				if project.Environment == "cloud" {
+					parsedEnv = fmt.Sprintf("%s_%s", parsedEnv, fullExecution.ExecutionOrg)
+				}
 
 				log.Printf("[INFO][%s] Redeploying workflow to queue: %s with priority %d", fullExecution.ExecutionId, parsedEnv, executionRequest.Priority)
 				// log.Printf("[DEBUG] AI Agent finished - REDEPLOYING workflow to Queue: '%s' (Priority: %d). Original Env: '%s', Org: '%s'", parsedEnv, executionRequest.Priority, agentEnvironment, fullExecution.ExecutionOrg)
@@ -18835,11 +18838,25 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	mappedResult := AgentOutput{}
 
-	//err := json.Unmarshal([]byte(actionResult.Result), &mappedResult)
 	err := json.Unmarshal([]byte(workflowExecution.Results[foundActionResultIndex].Result), &mappedResult)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed unmarshalling agent result: %s. Data: %s", workflowExecution.ExecutionId, err, actionResult.Result)
-		return &workflowExecution, false, err
+		actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+		recovered := false
+		if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil && cachedData != nil {
+			if cachedBytes, ok := cachedData.([]uint8); ok {
+				if cacheErr := json.Unmarshal(cachedBytes, &mappedResult); cacheErr == nil {
+					log.Printf("[INFO][%s] Recovered agent output from cache %s for action %s", workflowExecution.ExecutionId, actionCacheId, actionResult.Action.ID)
+					workflowExecution.Results[foundActionResultIndex].Result = string(cachedBytes)
+					recovered = true
+					err = nil
+				}
+			}
+		}
+
+		if !recovered {
+			log.Printf("[ERROR][%s] Failed unmarshalling agent result: %s. Data: %s", workflowExecution.ExecutionId, err, actionResult.Result)
+			return &workflowExecution, false, err
+		}
 	}
 
 	if mappedResult.Status == "ABORTED" || (mappedResult.Status == "FINISHED" && workflowExecution.Status != "EXECUTING") {
@@ -19118,6 +19135,10 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 		_ = returnAction
 
+		if freshExec, fetchErr := GetWorkflowExecution(ctx, workflowExecution.ExecutionId); fetchErr == nil && freshExec != nil {
+			workflowExecution = *freshExec
+		}
+
 		//go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 		return &workflowExecution, false, nil
 	}
@@ -19231,6 +19252,53 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				log.Printf("[ERROR][%s] Could not find agent to run in parent exec %s", actionResult.ExecutionId, workflowExecution.ExecutionParent)
 			}
 		}
+	}
+
+	isAgentNode := actionResult.Action.AppName == "shuffle-ai" && actionResult.Action.Name == "run_agent"
+	if isAgentNode && actionResult.Status != "SKIPPED" && actionResult.Status != "FAILURE" && actionResult.Status != "ABORTED" {
+		log.Printf("[INFO][%s] AI Agent node executed for action %s (%s). Setting node status to WAITING.", workflowExecution.ExecutionId, actionResult.Action.Label, actionResult.Action.ID)
+
+		actionResult.Status = "WAITING"
+		actionResult.CompletedAt = time.Now().Unix() * 1000
+
+		foundWaiting := false
+		for resultIndex, existingResult := range workflowExecution.Results {
+			if existingResult.Action.ID != actionResult.Action.ID {
+				continue
+			}
+
+			// If the agent loop already finished or failed in the background, don't overwrite it back to WAITING
+			if existingResult.Status == "FINISHED" || existingResult.Status == "FAILURE" {
+				return &workflowExecution, false, nil
+			}
+
+			if strings.Contains(existingResult.Result, "decisions") && !strings.Contains(actionResult.Result, "decisions") {
+				actionResult.Result = existingResult.Result
+			}
+
+			workflowExecution.Results[resultIndex] = actionResult
+			if strings.Contains(actionResult.Result, "decisions") {
+				cacheIdentifier := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+				_ = SetCache(ctx, cacheIdentifier, []byte(actionResult.Result), 600)
+			}
+			foundWaiting = true
+			break
+		}
+
+		if !foundWaiting {
+			workflowExecution.Results = append(workflowExecution.Results, actionResult)
+			if strings.Contains(actionResult.Result, "decisions") {
+				cacheIdentifier := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+				_ = SetCache(ctx, cacheIdentifier, []byte(actionResult.Result), 600)
+			}
+		}
+
+		saveError := SetWorkflowExecution(ctx, workflowExecution, true)
+		if saveError != nil {
+			log.Printf("[ERROR][%s] Failed setting workflow execution during AI Agent return: %s", workflowExecution.ExecutionId, saveError)
+		}
+
+		return &workflowExecution, true, nil
 	}
 
 	if actionResult.Action.AppName == "shuffle-subflow" {
@@ -22807,9 +22875,19 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 			return workflowExecution, errors.New("No source_execution provided")
 		}
 
-		workflow, err := GetWorkflow(ctx, action.SourceWorkflow, true)
+		oldExec, err := GetWorkflowExecution(ctx, action.SourceExecution)
 		if err != nil {
 			return workflowExecution, err
+		}
+
+		workflow, err := GetWorkflow(ctx, action.SourceWorkflow, true)
+		if err != nil {
+			if action.SourceWorkflow == action.SourceExecution || (oldExec != nil && oldExec.Workflow.ID == action.SourceWorkflow) {
+				workflow = &oldExec.Workflow
+				err = nil
+			} else {
+				return workflowExecution, err
+			}
 		}
 
 		if workflow.OrgId != user.ActiveOrg.Id && len(workflow.ID) > 0 {
@@ -22818,11 +22896,6 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 		// Check if the execution exists
 		workflowExecution.WorkflowId = workflow.ID
-		oldExec, err := GetWorkflowExecution(ctx, action.SourceExecution)
-		if err != nil {
-			return workflowExecution, err
-		}
-
 		if oldExec.Workflow.ID != action.SourceWorkflow {
 			return workflowExecution, errors.New("Previous execution (source_execution) doesn't belong to the workflow. Please try again.")
 		}
@@ -36112,11 +36185,22 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		return exec
 	}
 
-	workflow, err := GetWorkflow(ctx, exec.Workflow.ID, true)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting workflow '%s': %s (exec status)", exec.Workflow.ID, err)
-		//workflow = &exec.Workflow
-		//return exec
+	var workflow *Workflow
+	if exec.Workflow.ID == exec.ExecutionId && len(exec.Workflow.Actions) > 0 {
+		workflow = &exec.Workflow
+	} else {
+		workflow, err = GetWorkflow(ctx, exec.Workflow.ID, true)
+		if err != nil {
+			if len(exec.Workflow.Actions) > 0 {
+				workflow = &exec.Workflow
+			} else {
+				log.Printf("[WARNING] Failed getting workflow '%s': %s (exec status)", exec.Workflow.ID, err)
+				workflow = &exec.Workflow
+			}
+		}
+	}
+	if workflow == nil {
+		workflow = &exec.Workflow
 	}
 
 	// Make sure it only handles/keeps the relevant actions
@@ -36799,15 +36883,15 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 		log.Printf("[DEBUG] Getting prioritised app actions for '%s'", inputApp)
 	}
 
-	if strings.Contains(inputApp, ":") || len(inputApp) == 32 {
+	if strings.Contains(inputApp, ":") || len(inputApp) == 32 || len(inputApp) == 36 {
 		appnamesplit := strings.Split(inputApp, ":")
 		appId = appnamesplit[0]
-		if len(appId) != 32 {
+		if len(appId) != 32 && len(appId) != 36 {
 			appId = ""
 		}
 	}
 
-	if len(appId) == 32 {
+	if len(appId) == 32 || len(appId) == 36 {
 		foundApp, err = GetApp(ctx, appId, User{}, false)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting app %s for prioritised actions: %s", appId, err)
@@ -36816,12 +36900,43 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 	}
 
 	if foundApp.ID == "" && len(appName) > 0 {
-		log.Printf("[ERROR] Should find app + actions based on name (not implemented): %#v", appName)
+		cleanName := strings.TrimPrefix(appName, "app:")
+		if strings.Contains(cleanName, ":") {
+			parts := strings.Split(cleanName, ":")
+			cleanName = parts[len(parts)-1]
+		}
+		cleanName = strings.TrimSpace(strings.ToLower(cleanName))
+
+		foundApps, err := FindWorkflowAppByName(ctx, cleanName)
+		if err == nil && len(foundApps) > 0 {
+			foundApp = &foundApps[0]
+		}
+		if foundApp.ID == "" && project.Environment == "cloud" {
+			algoliaApp, err := HandleAlgoliaAppSearch(ctx, cleanName)
+			if err == nil && len(algoliaApp.ObjectID) > 0 {
+				if len(foundApp.Actions) == 0 {
+					discoveredApp, err := GetApp(ctx, algoliaApp.ObjectID, User{}, false)
+					if err == nil && discoveredApp != nil && len(discoveredApp.Actions) > 0 {
+						foundApp = discoveredApp
+					}
+				}
+				if foundApp.ID == "" {
+					foundApp.ID = algoliaApp.ObjectID
+				}
+			}
+		}
 	}
 
 	for _, action := range foundApp.Actions {
 		if action.Name == "custom_action" {
 			continue
+		}
+
+		if action.AppID == "" {
+			action.AppID = foundApp.ID
+		}
+		if action.AppName == "" {
+			action.AppName = foundApp.Name
 		}
 
 		if len(action.CategoryLabel) > 0 {
