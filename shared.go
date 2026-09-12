@@ -36752,6 +36752,10 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 		categoryUpdate.Settings.Timeout = 0
 	}
 
+	if categoryUpdate.Settings.RBAC != nil && HasActiveRBAC(categoryUpdate.Settings.RBAC) {
+		categoryUpdate.Settings.RBAC = EnsureOwnerRBAC(categoryUpdate.Settings.RBAC, user)
+	}
+
 	categoryUpdate.OrgId = user.ActiveOrg.Id
 	err = SetDatastoreCategoryConfig(ctx, categoryUpdate)
 	if err != nil {

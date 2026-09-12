@@ -1353,9 +1353,26 @@ type DatastoreAutomation struct {
 	Enabled     bool                        `json:"enabled" datastore:"enabled"`
 }
 
+type PermissionRule struct {
+	Roles  []string `json:"roles,omitempty" datastore:"roles,noindex"`
+	Users  []string `json:"users,omitempty" datastore:"users,noindex"`
+	Groups []string `json:"groups,omitempty" datastore:"groups,noindex"`
+	Scopes []string `json:"scopes,omitempty" datastore:"scopes,noindex"`
+}
+
+type RBAC struct {
+	Inherit bool           `json:"inherit,omitempty" datastore:"inherit,noindex"`
+	Public  bool           `json:"public,omitempty" datastore:"public,noindex"`
+	Read    PermissionRule `json:"read,omitempty" datastore:"read,noindex"`
+	Write   PermissionRule `json:"write,omitempty" datastore:"write,noindex"`
+	Execute PermissionRule `json:"execute,omitempty" datastore:"execute,noindex"`
+	Admin   PermissionRule `json:"admin,omitempty" datastore:"admin,noindex"`
+}
+
 type DatastoreCategorySettings struct {
 	Timeout int64 `json:"timeout" datastore:"timeout"`
 	Public  bool  `json:"public" datastore:"public"` // If the category is public, meaning that it can be accessed without authentication
+	RBAC    *RBAC `json:"rbac,omitempty" datastore:"rbac,noindex"`
 }
 
 type DatastoreCategoryUpdate struct {
@@ -1415,6 +1432,7 @@ type CacheKeyDataFallback struct {
 	Tags     []string `json:"tags,omitempty" datastore:"tags"`
 
 	Enrichments []Observable `json:"enrichments,omitempty" datastore:"enrichments,noindex"`
+	RBAC        *RBAC        `json:"rbac,omitempty" datastore:"rbac,noindex"`
 }
 
 type CacheKeyData struct {
@@ -1441,6 +1459,7 @@ type CacheKeyData struct {
 	SuborgDistribution  []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 	RevisionId          string   `json:"revision_id" datastore:"revision_id"`
 	UpdatedBy           string   `json:"updated_by" datastore:"updated_by"`
+	RBAC                *RBAC    `json:"rbac,omitempty" datastore:"rbac,noindex"`
 }
 
 type SyncConfig struct {

@@ -487,6 +487,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	requireCacheAuth := false
 	skipExecutionAuth := false
 
+	var user User
 	var tmpData CacheKeyData
 	if request.Method == "POST" {
 		body, err := ioutil.ReadAll(request.Body)
@@ -515,8 +516,9 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		user, err := HandleApiAuthentication(resp, request)
-		if err == nil {
+		var authErr error
+		user, authErr = HandleApiAuthentication(resp, request)
+		if authErr == nil {
 			if len(fileId) == 0 {
 				fileId = user.ActiveOrg.Id
 				tmpData.OrgId = user.ActiveOrg.Id
@@ -561,7 +563,8 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Use normal user auth
-		user, usererr := HandleApiAuthentication(resp, request)
+		var usererr error
+		user, usererr = HandleApiAuthentication(resp, request)
 		if usererr != nil {
 			// Check if authorization query exists
 			if len(query.Get("authorization")) == 0 {
@@ -740,6 +743,22 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		if cacheData.Category == "protected" {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Failed authentication or key doesn't exist"}`))
+			return
+		}
+	}
+
+	// Evaluate RBAC on key and parent category
+	categoryConfig, _ := GetDatastoreCategoryConfig(ctx, tmpData.OrgId, tmpData.Category)
+	var parentRBAC *RBAC
+	if categoryConfig != nil {
+		parentRBAC = categoryConfig.Settings.RBAC
+	}
+	if HasActiveRBAC(cacheData.RBAC) || HasActiveRBAC(parentRBAC) {
+		allowed, reason := CheckUserAccess(user, cacheData.RBAC, "read", tmpData.OrgId, parentRBAC)
+		if !allowed {
+			log.Printf("[AUDIT] User %s (%s) denied read access to datastore key %s: %s", user.Username, user.Id, tmpData.Key, reason)
+			resp.WriteHeader(404)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
 			return
 		}
 	}
@@ -940,6 +959,7 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 			Category:    tmpDataOverride.Category,
 			Tags:        tmpDataOverride.Tags,
 			Enrichments: tmpDataOverride.Enrichments,
+			RBAC:        tmpDataOverride.RBAC,
 
 			Value: parsedValue,
 		})
@@ -987,13 +1007,49 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	mainCategory := ""
-	for itemIndex, _ := range tmpData {
+	for itemIndex := range tmpData {
 		tmpData[itemIndex].UpdatedBy = user.Username
 		tmpData[itemIndex].OrgId = user.ActiveOrg.Id
+
+		// If RBAC is explicitly configured on this key, ensure modifying user is retained as owner and cannot remove themselves
+		if tmpData[itemIndex].RBAC != nil && HasActiveRBAC(tmpData[itemIndex].RBAC) {
+			tmpData[itemIndex].RBAC = EnsureOwnerRBAC(tmpData[itemIndex].RBAC, user)
+		}
 
 		mainCategory = tmpData[itemIndex].Category
 		if strings.ToLower(tmpData[itemIndex].Category) == "default" {
 			tmpData[itemIndex].Category = ""
+		}
+
+		// Check write permission if category or key has active RBAC
+		itemCatConfig, _ := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, tmpData[itemIndex].Category)
+		var itemParentRBAC *RBAC
+		if itemCatConfig != nil {
+			itemParentRBAC = itemCatConfig.Settings.RBAC
+		}
+
+		datastoreId := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, tmpData[itemIndex].Key)
+		if len(tmpData[itemIndex].Category) > 0 && tmpData[itemIndex].Category != "default" {
+			datastoreId = fmt.Sprintf("%s_%s", datastoreId, tmpData[itemIndex].Category)
+		}
+
+		existingKey, err := GetDatastoreKey(ctx, datastoreId, tmpData[itemIndex].Category)
+		if err == nil && existingKey != nil && (HasActiveRBAC(existingKey.RBAC) || HasActiveRBAC(itemParentRBAC)) {
+			allowed, reason := CheckUserAccess(user, existingKey.RBAC, "write", user.ActiveOrg.Id, itemParentRBAC)
+			if !allowed {
+				log.Printf("[AUDIT] User %s (%s) denied write access to datastore key %s: %s", user.Username, user.Id, tmpData[itemIndex].Key, reason)
+				resp.WriteHeader(403)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
+				return
+			}
+		} else if (err != nil || existingKey == nil || existingKey.Created == 0) && HasActiveRBAC(itemParentRBAC) {
+			allowed, reason := CheckUserAccess(user, nil, "write", user.ActiveOrg.Id, itemParentRBAC)
+			if !allowed {
+				log.Printf("[AUDIT] User %s (%s) denied write access to new key in category %s: %s", user.Username, user.Id, tmpData[itemIndex].Category, reason)
+				resp.WriteHeader(403)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
+				return
+			}
 		}
 	}
 
@@ -1064,13 +1120,6 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		//resp.WriteHeader(401)
 		//resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
 		//return
-	} else {
-		if user.Role != "admin" && !user.SupportAccess {
-			log.Printf("[AUDIT] User %s (%s) tried to list cache keys without admin role", user.Username, user.Id)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
-			return
-		}
 	}
 
 	//for key, value := range data.Apps {
@@ -1145,6 +1194,37 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	categoryConfig := &DatastoreCategoryUpdate{}
+	var parentRBAC *RBAC
+	if len(category) > 0 && category != "default" {
+		categoryConfig, err = GetDatastoreCategoryConfig(ctx, org.Id, category)
+		if err == nil && categoryConfig != nil {
+			parentRBAC = categoryConfig.Settings.RBAC
+		}
+	}
+
+	// RBAC permission check for listing keys in category
+	if HasActiveRBAC(parentRBAC) {
+		allowed, reason := CheckUserAccess(user, parentRBAC, "read", orgId, nil)
+		if !allowed {
+			log.Printf("[AUDIT] User %s (%s) denied listing cache keys in category %s: %s", user.Username, user.Id, category, reason)
+			resp.WriteHeader(403)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
+			return
+		}
+	} else {
+		// Category has no active RBAC: preserve legacy admin / public check
+		if usererr == nil && user.Role != "admin" && !user.SupportAccess {
+			isPublic := categoryConfig != nil && categoryConfig.Settings.Public
+			if !isPublic {
+				log.Printf("[AUDIT] User %s (%s) tried to list cache keys without admin role", user.Username, user.Id)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
+				return
+			}
+		}
+	}
+
 	maxAmount := 100
 	top, topOk := request.URL.Query()["top"]
 	if topOk && len(top) > 0 {
@@ -1208,17 +1288,25 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// Filter keys by RBAC if active on category or key
+	if HasActiveRBAC(parentRBAC) || len(keys) > 0 {
+		var filteredKeys []CacheKeyData
+		for _, item := range keys {
+			if HasActiveRBAC(item.RBAC) || HasActiveRBAC(parentRBAC) {
+				allowed, _ := CheckUserAccess(user, item.RBAC, "read", org.Id, parentRBAC)
+				if !allowed {
+					continue
+				}
+			}
+			filteredKeys = append(filteredKeys, item)
+		}
+		keys = filteredKeys
+	}
+
 	// This is NOT required unless automation/other config is set.
 	foundCategories := []string{}
-	categoryConfig := &DatastoreCategoryUpdate{}
 	if len(category) > 0 && category != "default" {
 		foundCategories = append(foundCategories, category)
-		categoryConfig, err = GetDatastoreCategoryConfig(ctx, org.Id, category)
-		if err != nil {
-			//if debug {
-			//	log.Printf("[WARNING] Failed to get category config for org %s: %s", org.Id, err)
-			//}
-		}
 	} else {
 		allCategories, err := GetDatastoreCategories(ctx, org.Id)
 		if err == nil {
@@ -1664,6 +1752,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	selectedOrg := tmpData.OrgId
+	var user User
 	if len(tmpData.ExecutionId) > 0 {
 		workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionId)
 		if err != nil {
@@ -1676,7 +1765,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		// Allows for execution auth AND user auth
 		if workflowExecution.Authorization != tmpData.Authorization {
 			// Get the user?
-			user, err := HandleApiAuthentication(resp, request)
+			user, err = HandleApiAuthentication(resp, request)
 			if err != nil {
 				log.Printf("[INFO] Execution auth %s and %s don't match", workflowExecution.Authorization, tmpData.Authorization)
 				resp.WriteHeader(401)
@@ -1708,7 +1797,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		// Fail over to user if exec isn't there
 
-		user, err := HandleApiAuthentication(resp, request)
+		user, err = HandleApiAuthentication(resp, request)
 		if err != nil {
 			log.Printf("[INFO] Missing auth when deleting key %s for org %s", tmpData.Key, tmpData.OrgId)
 			resp.WriteHeader(401)
@@ -1754,6 +1843,21 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 
 		resp.Write(marshalled)
 		return
+	}
+
+	categoryConfig, _ := GetDatastoreCategoryConfig(ctx, selectedOrg, tmpData.Category)
+	var parentRBAC *RBAC
+	if categoryConfig != nil {
+		parentRBAC = categoryConfig.Settings.RBAC
+	}
+	if HasActiveRBAC(cacheData.RBAC) || HasActiveRBAC(parentRBAC) {
+		allowed, reason := CheckUserAccess(user, cacheData.RBAC, "write", selectedOrg, parentRBAC)
+		if !allowed {
+			log.Printf("[AUDIT] User %s (%s) denied delete access to datastore key %s: %s", user.Username, user.Id, tmpData.Key, reason)
+			resp.WriteHeader(403)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, reason)))
+			return
+		}
 	}
 
 	if len(tmpData.Category) > 0 {
