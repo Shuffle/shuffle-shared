@@ -36753,7 +36753,14 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 	}
 
 	if categoryUpdate.Settings.RBAC != nil && HasActiveRBAC(categoryUpdate.Settings.RBAC) {
-		categoryUpdate.Settings.RBAC = EnsureOwnerRBAC(categoryUpdate.Settings.RBAC, user)
+		validatedRBAC, rbacErr := ValidateAndNormalizeRBAC(ctx, categoryUpdate.Settings.RBAC, user.ActiveOrg.Id, user, "category", categoryUpdate.Category)
+		if rbacErr != nil {
+			log.Printf("[WARNING] RBAC validation failed for category '%s': %s", categoryUpdate.Category, rbacErr)
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, rbacErr.Error())))
+			return
+		}
+		categoryUpdate.Settings.RBAC = EnsureOwnerRBAC(validatedRBAC, user)
 	}
 
 	categoryUpdate.OrgId = user.ActiveOrg.Id

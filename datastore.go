@@ -1011,9 +1011,16 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 		tmpData[itemIndex].UpdatedBy = user.Username
 		tmpData[itemIndex].OrgId = user.ActiveOrg.Id
 
-		// If RBAC is explicitly configured on this key, ensure modifying user is retained as owner and cannot remove themselves
+		// If RBAC is explicitly configured on this key, validate users and ensure modifying user is retained as owner
 		if tmpData[itemIndex].RBAC != nil && HasActiveRBAC(tmpData[itemIndex].RBAC) {
-			tmpData[itemIndex].RBAC = EnsureOwnerRBAC(tmpData[itemIndex].RBAC, user)
+			validatedRBAC, rbacErr := ValidateAndNormalizeRBAC(ctx, tmpData[itemIndex].RBAC, user.ActiveOrg.Id, user, "key", tmpData[itemIndex].Key)
+			if rbacErr != nil {
+				log.Printf("[WARNING] RBAC validation failed for datastore key '%s': %s", tmpData[itemIndex].Key, rbacErr)
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, rbacErr.Error())))
+				return
+			}
+			tmpData[itemIndex].RBAC = EnsureOwnerRBAC(validatedRBAC, user)
 		}
 
 		mainCategory = tmpData[itemIndex].Category
