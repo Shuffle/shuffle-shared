@@ -8155,8 +8155,43 @@ When evaluating an incident, execute the appropriate response path:
 - ONLY send the modified fields in JSON format. Do NOT overwrite unrelated fields.`
 
 	templateContext := ""
-	if len(execution.ExecutionArgument) > 0 {
-		templateContext = fmt.Sprintf("Target Incident Context / ID: %s", execution.ExecutionArgument)
+	incidentId := strings.TrimSpace(execution.ExecutionArgument)
+
+	if len(incidentId) == 0 && len(execution.Workflow.Actions) > 0 {
+		for _, param := range execution.Workflow.Actions[0].Parameters {
+			if param.Name == "incident_id" && len(param.Value) > 0 {
+				incidentId = strings.TrimSpace(param.Value)
+				break
+			}
+		}
+	}
+
+	if len(incidentId) > 0 {
+		orgId := strings.TrimSpace(execution.ExecutionOrg)
+		if len(orgId) == 0 {
+			orgId = strings.TrimSpace(execution.Workflow.OrgId)
+		}
+
+		incidentData := ""
+		cacheId := fmt.Sprintf("%s_%s", orgId, incidentId)
+		cacheData, err := GetDatastoreKey(ctx, cacheId, "shuffle-security_incidents")
+		if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+			incidentData = cacheData.Value
+		} else {
+			cacheData, err = GetDatastoreKey(ctx, incidentId, "shuffle-security_incidents")
+			if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+				incidentData = cacheData.Value
+			}
+		}
+
+		if len(incidentData) > 0 {
+			var prettyJson bytes.Buffer
+			if err := json.Indent(&prettyJson, []byte(incidentData), "", "  "); err == nil {
+				incidentData = prettyJson.String()
+			}
+
+			templateContext = fmt.Sprintf("TARGET INCIDENT (ID / Key: %s):\n```json\n%s\n```\n\nMANDATORY INVESTIGATION SCOPE:\n- Laser-focus exclusively on this incident (ID: %s).\n- All questions, triage, containment, observables, and recommendations must apply directly to this incident.\n- You do NOT need to ask what incident the user is referring to or query the datastore for basic details—its full state is provided above.", incidentId, incidentData, incidentId)
+		}
 	}
 
 	requiredApps := []string{

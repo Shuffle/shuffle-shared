@@ -22071,10 +22071,10 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				action.ID = uuid.NewV4().String()
 			}
 
-			targetWorkflowId := ""
+			targetArgument := ""
 			for _, param := range action.Parameters {
-				if param.Name == "workflow_id" {
-					targetWorkflowId = param.Value
+				if param.Name == "workflow_id" || param.Name == "incident_id" {
+					targetArgument = param.Value
 					break
 				}
 			}
@@ -22099,7 +22099,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 				ExecutionOrg:  user.ActiveOrg.Id,
 				StartedAt:     int64(time.Now().Unix()),
 				Authorization: uuid.NewV4().String(),
-				ExecutionArgument: targetWorkflowId,
+				ExecutionArgument: targetArgument,
 			}
 
 			SetWorkflowExecution(ctx, exec, true)
