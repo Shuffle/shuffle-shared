@@ -22073,7 +22073,7 @@ func PrepareSingleAction(ctx context.Context, parentRequest *http.Request, user 
 
 			targetArgument := ""
 			for _, param := range action.Parameters {
-				if param.Name == "workflow_id" || param.Name == "incident_id" {
+				if param.Name == "workflow_id" || param.Name == "incident_id" || param.Name == "vulnerability_id" {
 					targetArgument = param.Value
 					break
 				}

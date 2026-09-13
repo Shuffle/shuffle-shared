@@ -5527,8 +5527,9 @@ type MCPRequestInput struct {
 	}
 
 	// Special cases for templates
-	WorkflowId string `json:"workflow_id,omitempty"`
-	IncidentId string `json:"incident_id,omitempty"`
+	WorkflowId      string `json:"workflow_id,omitempty"`
+	IncidentId      string `json:"incident_id,omitempty"`
+	VulnerabilityId string `json:"vulnerability_id,omitempty"`
 }
 
 type MCPRequestParams struct {

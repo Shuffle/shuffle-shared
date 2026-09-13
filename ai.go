@@ -8252,8 +8252,53 @@ Your goal is first of all to be SUPPORTIVE, APPROACHABLE, and ACTIONABLE to the 
 - Focus on practical solutions and clear tradeoffs.`
 
 	templateContext := ""
-	if len(execution.ExecutionArgument) > 0 {
-		templateContext = fmt.Sprintf("Target Vulnerability / Asset Context: %s", execution.ExecutionArgument)
+	vulnerabilityId := strings.TrimSpace(execution.ExecutionArgument)
+
+	if len(vulnerabilityId) == 0 && len(execution.Workflow.Actions) > 0 {
+		for _, param := range execution.Workflow.Actions[0].Parameters {
+			if param.Name == "vulnerability_id" && len(param.Value) > 0 {
+				vulnerabilityId = strings.TrimSpace(param.Value)
+				break
+			}
+		}
+	}
+
+	if len(vulnerabilityId) > 0 {
+		orgId := strings.TrimSpace(execution.ExecutionOrg)
+		if len(orgId) == 0 {
+			orgId = strings.TrimSpace(execution.Workflow.OrgId)
+		}
+
+		vulnData := ""
+		cacheId := fmt.Sprintf("%s_%s", orgId, vulnerabilityId)
+		cacheData, err := GetDatastoreKey(ctx, cacheId, "shuffle-security_vulns")
+		if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+			vulnData = cacheData.Value
+		} else {
+			cacheData, err = GetDatastoreKey(ctx, cacheId, "shuffle-security_vulnerabilities")
+			if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+				vulnData = cacheData.Value
+			} else {
+				cacheData, err = GetDatastoreKey(ctx, vulnerabilityId, "shuffle-security_vulns")
+				if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+					vulnData = cacheData.Value
+				} else {
+					cacheData, err = GetDatastoreKey(ctx, vulnerabilityId, "shuffle-security_vulnerabilities")
+					if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+						vulnData = cacheData.Value
+					}
+				}
+			}
+		}
+
+		if len(vulnData) > 0 {
+			var prettyJson bytes.Buffer
+			if err := json.Indent(&prettyJson, []byte(vulnData), "", "  "); err == nil {
+				vulnData = prettyJson.String()
+			}
+
+			templateContext = fmt.Sprintf("TARGET VULNERABILITY (ID / Key: %s):\n```json\n%s\n```\n\nMANDATORY INVESTIGATION SCOPE:\n- Laser-focus exclusively on this vulnerability (ID: %s) and its affected assets/packages.\n- All analysis, remediation guidance, risk evaluation, and verification steps must apply directly to this vulnerability.\n- You do NOT need to ask what vulnerability the user is referring to or query the datastore for basic details—its full state is provided above.", vulnerabilityId, vulnData, vulnerabilityId)
+		}
 	}
 
 	requiredApps := []string{
