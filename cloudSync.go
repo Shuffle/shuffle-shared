@@ -2277,14 +2277,17 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 }
 
 func getBackendBaseUrl() string {
-	baseUrl := os.Getenv("BASE_URL")
-	if len(baseUrl) > 0 {
-		return baseUrl
+	backendUrl := ""
+	if len(os.Getenv("BASE_URL")) > 0 {
+		backendUrl = os.Getenv("BASE_URL")
 	}
 
-	cloudrunUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	if len(cloudrunUrl) > 0 {
-		return cloudrunUrl
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	if len(backendUrl) > 0 {
+		return backendUrl
 	}
 
 	if project.Environment == "cloud" {
