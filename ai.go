@@ -8332,8 +8332,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	// Validate On-Prem Configuration immediately
 	if project.Environment == "onprem" {
-			cloudSyncConfigured := false
-			if len(execution.Workflow.OrgId) > 0 {
+		cloudSyncConfigured := false
+		if len(execution.Workflow.OrgId) > 0 {
 			if validationOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId); orgErr == nil {
 				if len(validationOrg.CreatorOrg) > 0 {
 					validationOrg, orgErr = GetOrg(ctx, validationOrg.CreatorOrg)
@@ -8341,13 +8341,24 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				if orgErr == nil && len(validationOrg.SyncConfig.Apikey) > 0 && validationOrg.CloudSyncActive && validationOrg.SyncConfig.AiCloudSync {
 					cloudSyncConfigured = true
 				}
+			}
+		}
+
+		hasLocalAi := false
+		if len(execution.Workflow.OrgId) > 0 {
+			if auths, err := GetAllWorkflowAppAuth(ctx, execution.Workflow.OrgId); err == nil {
+				for _, auth := range auths {
+					if strings.ToLower(auth.App.Name) == "openai" && (auth.Defined || auth.Validation.Valid || len(auth.Id) > 0) {
+						hasLocalAi = true
+						break
+					}
 				}
 			}
+		}
 
-			if !cloudSyncConfigured {
-			onpremAiConfigErr := "AI_MODEL or OPENAI_MODEL environment variable must be set for On-Premise AI Agent execution. Alternatively, enable Cloud Sync and turn on \"Shuffle Cloud AI\" to run AI requests through Shuffle Cloud without any additional configuration"
+		if !cloudSyncConfigured && !hasLocalAi {
+			onpremAiConfigErr := "To use the AI Agent on-premise, configure your LLM credentials by connecting the OpenAI app in Shuffle App Auth (supports OpenAI and any compatible provider/proxy), or enable Cloud Sync with \"Shuffle Cloud AI\" to run requests through Shuffle Cloud."
 			log.Printf("[ERROR] AI Configuration Error: %s", onpremAiConfigErr)
-
 			return abortAgentExecution(ctx, execution, startNode, "missing_onprem_ai_config", onpremAiConfigErr)
 		}
 	}
@@ -8371,14 +8382,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	executionMode := ""
 
 	// Self-request starts here!
-	backendUrl := "https://shuffler.io"
-	if len(os.Getenv("BASE_URL")) > 0 {
-		backendUrl = os.Getenv("BASE_URL")
-	}
-
-	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
+	backendUrl := getBackendBaseUrl()
 
 	// This is a part of making sure variables work properly, no matter where
 	// in Shuffle we are
