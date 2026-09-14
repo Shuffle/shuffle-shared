@@ -18629,14 +18629,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	}
 	actionResult.CompletedAt = timenow
 
-	baseUrl := fmt.Sprintf("https://shuffler.io")
-	if len(os.Getenv("BASE_URL")) > 0 {
-		baseUrl = os.Getenv("BASE_URL")
-	}
-
-	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
+	baseUrl := getBackendBaseUrl()
 
 	marshalledResult, err := json.Marshal(actionResult)
 	if err != nil {
@@ -19493,14 +19486,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 										log.Printf("[ERROR][%s] Failed to marshal updated decision for delayed decision update: %s", workflowExecution.ExecutionId, err)
 									}
 
-									baseUrl := "https://shuffler.io"
-									if os.Getenv("BASE_URL") != "" {
-										baseUrl = os.Getenv("BASE_URL")
-									}
-
-									if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
-										baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-									}
+									baseUrl := getBackendBaseUrl()
 
 									url := fmt.Sprintf("%s/api/v1/streams", baseUrl)
 									if debug { 
