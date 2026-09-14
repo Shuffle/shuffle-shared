@@ -2532,12 +2532,10 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	baseURL := getBackendBaseUrl()
 
 	toolTimeout := 30
-	timeoutOverride := os.Getenv("AGENT_TOOL_TIMEOUT")
-	if len(timeoutOverride) > 0 {
-		if parsedTimeout, err := strconv.Atoi(timeoutOverride); err == nil && parsedTimeout > 0 && parsedTimeout <= 300 {
-			toolTimeout = parsedTimeout
-		}
+	if project.Environment != "cloud" || (len(foundEnv) > 0 && strings.ToLower(foundEnv) != "cloud") {
+		toolTimeout = 120
 	}
+	
 	timeout := time.Duration(toolTimeout) * time.Second
 
 	// Immediate exits. 3 seconds due to body transfer worst case
@@ -2554,7 +2552,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 
 	// Gives it time to return properly with +2 delay
 	client := GetExternalClientWithTimeout(requestUrl, 0)
-	client.Timeout = timeout + (2 * time.Second)
+	client.Timeout = timeout + (1 * time.Second)
 
 	//if debug { 
 		//log.Printf("\n\n\n\nRequest timeout: %d", client.Timeout)
