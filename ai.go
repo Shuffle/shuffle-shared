@@ -11599,6 +11599,11 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	if totalTokens > 0 && len(info.OrgID) > 0 {
 		// Count LLM tokens no matter what
+
+		if project.Environment == "onprem" && strings.Contains(aiRequestUrl, "shuffler.io") {
+			defaultCreds = true
+		}
+
 		if defaultCreds {
 			IncrementCache(ctx, info.OrgID, "llm_tokens", totalTokens)
 		}
