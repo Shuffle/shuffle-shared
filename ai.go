@@ -11544,6 +11544,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 					Reason:  lastError.Error(),
 				}
 
+				if !originalStreamEnabled {
+					info.Resp.Header().Set("Content-Type", "application/json")
+				}
 				info.Resp.WriteHeader(400)
 				marshalledResult, err := json.Marshal(result)
 				if err != nil {
@@ -11728,8 +11731,20 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 					contentOutput += chunk
 				}
-			} else {
-				contentOutput += string(rawResp)
+			} else if err != nil {
+				// If stream unmarshaling failed, check if rawResp was actually a full non-streaming ChatCompletionResponse
+				var nonStreamResp openai.ChatCompletionResponse
+				if jsonErr := json.Unmarshal(rawResp, &nonStreamResp); jsonErr == nil && len(nonStreamResp.Choices) > 0 {
+					fullResp = nonStreamResp
+					contentOutput = nonStreamResp.Choices[0].Message.Content
+					break
+				}
+
+				// Only capture if non-empty, plain text (not JSON), and content is currently empty
+				trimmed := strings.TrimSpace(string(rawResp))
+				if len(trimmed) > 0 && !strings.HasPrefix(trimmed, "{") && len(contentOutput) == 0 {
+					contentOutput = trimmed
+				}
 			}
 
 			if info.Resp != nil && originalStreamEnabled {
@@ -11741,15 +11756,20 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 
 		// 4. Assemble the ordered choices slice
-		fullResp.Choices = make([]openai.ChatCompletionChoice, len(choicesMap))
-		for idx, choice := range choicesMap {
-			fullResp.Choices[idx] = *choice
+		if len(choicesMap) > 0 {
+			fullResp.Choices = make([]openai.ChatCompletionChoice, len(choicesMap))
+			for idx, choice := range choicesMap {
+				if idx >= 0 && idx < len(fullResp.Choices) {
+					fullResp.Choices[idx] = *choice
+				}
+			}
 		}
 
 		break
 	}
 
 	if info.Resp != nil && !originalStreamEnabled {
+		info.Resp.Header().Set("Content-Type", "application/json")
 		// Marshal and send fullResp
 		marshalledData, err := json.Marshal(fullResp)
 		if err != nil {
@@ -11792,13 +11812,11 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		marshalledData, err := json.Marshal(chatCompletion)
 		if err != nil {
 			log.Printf("[ERROR] Failed to marshal chat completion: %s", err)
-			return contentOutput, err
-		}
-
-		err = SetCache(ctx, cachedChat, marshalledData, 30)
-		if err != nil {
-			log.Printf("[ERROR] Failed to set cache for chat completion: %s", err)
-			return contentOutput, err
+		} else {
+			err = SetCache(ctx, cachedChat, marshalledData, 30)
+			if err != nil {
+				log.Printf("[ERROR] Failed to set cache for chat completion: %s", err)
+			}
 		}
 	}
 
@@ -15776,6 +15794,38 @@ func isOnpremAppExecutionLimitReached(ctx context.Context, orgId string) (bool, 
 	return false, ""
 }
 
+// trackingResponseWriter wraps http.ResponseWriter to track if headers or body bytes have been written,
+// preventing duplicate header or body writes (such as duplicate JSON error responses).
+type trackingResponseWriter struct {
+	http.ResponseWriter
+	wroteHeader  bool
+	statusCode   int
+	bytesWritten int
+}
+
+func (w *trackingResponseWriter) WriteHeader(statusCode int) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		w.statusCode = statusCode
+		w.ResponseWriter.WriteHeader(statusCode)
+	}
+}
+
+func (w *trackingResponseWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	n, err := w.ResponseWriter.Write(b)
+	w.bytesWritten += n
+	return n, err
+}
+
+func (w *trackingResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // Wrapper for RunAiQuery() using Shuffle Credentials
 func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
@@ -15838,10 +15888,11 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	wrappedResp := &trackingResponseWriter{ResponseWriter: resp}
 	callInfo := AiCallInfo{
 		Caller: "RequestForwarding",
 		OrgID:  user.ActiveOrg.Id,
-		Resp:   resp,
+		Resp:   wrappedResp,
 	}
 
 	// Look for the "authentication_id" query and add to AiCallInfo
@@ -15853,8 +15904,11 @@ func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
 	contentOutput, err := RunAiQuery(ctx, callInfo, "", "", chatCompletion)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in chat completion forwarding: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to run AI query. This is most likely due to an invalid API key or model name. Please check your AI credentials on the https://shuffler.io/agents page."}`))
+		if !wrappedResp.wroteHeader && wrappedResp.bytesWritten == 0 {
+			wrappedResp.Header().Set("Content-Type", "application/json")
+			wrappedResp.WriteHeader(500)
+			wrappedResp.Write([]byte(`{"success": false, "reason": "Failed to run AI query. This is most likely due to an invalid API key or model name. Please check your AI credentials on the https://shuffler.io/agents page."}`))
+		}
 		return
 	}
 
