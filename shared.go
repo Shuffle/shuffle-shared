@@ -3618,7 +3618,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			newEnvironments[envIndex].SuborgDistribution = env.SuborgDistribution
 		}
 
-		if newEnvironments[envIndex].Checkin > 0 && timenow-newEnvironments[envIndex].Checkin < 120 {
+		if newEnvironments[envIndex].Checkin > 0 && timenow-newEnvironments[envIndex].Checkin <= 180 {
 			if len(newEnvironments[envIndex].RunningIp) == 0 {
 				newEnvironments[envIndex].RunningIp = "IP not available. Check back later."
 			}
