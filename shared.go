@@ -20238,7 +20238,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 				// Set cache for it too?
 				cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
-				err = SetCache(ctx, cacheId, actionResultBody, 35)
+				cachePayload := actionResultBody
+				if (actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent") && len(actionResult.Result) > 0 {
+					cachePayload = []byte(actionResult.Result)
+				}
+				err = SetCache(ctx, cacheId, cachePayload, 35)
 				if err != nil {
 					log.Printf("[ERROR] Failed setting cache for User Input to %s: %s", actionResult.Status, err)
 				} else {
