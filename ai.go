@@ -11230,10 +11230,13 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		if len(foundApikey) > 0 {
 			defaultCreds = false
 			apiKey = foundApikey
-		}
 
-		if len(foundrequestUrl) > 0 {
-			aiRequestUrl = foundrequestUrl
+			// Overwriting internal LLM URL is strictly permitted ONLY when paired with a custom API key
+			if len(foundrequestUrl) > 0 {
+				aiRequestUrl = foundrequestUrl
+			}
+		} else if len(foundrequestUrl) > 0 {
+			log.Printf("[WARNING] Org %s attempted to override AI URL without providing an API key. Ignoring custom URL to prevent credential leakage.", info.OrgID)
 		}
 
 		if len(foundModel) > 0 {
@@ -15859,13 +15862,17 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 			continue
 		}
 
+		curApiKey := ""
+		curUrl := ""
+		curModel := ""
+
 		for _, field := range auth.Fields {
 			// Check if the auth has a valid API key
 			if field.Key == "apikey" {
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
 				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 				if err == nil {
-					apiKey = string(decrypted)
+					curApiKey = string(decrypted)
 				}
 			}
 
@@ -15873,7 +15880,7 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
 				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 				if err == nil {
-					aiRequestUrl = string(decrypted)
+					curUrl = string(decrypted)
 				}
 			}
 
@@ -15881,9 +15888,20 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
 				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 				if err == nil {
-					foundModel = string(decrypted)
+					curModel = string(decrypted)
 				}
 			}
+		}
+
+		// Custom URL must only be used when paired with an API key
+		if len(curUrl) > 0 && len(curApiKey) == 0 {
+			curUrl = ""
+		}
+
+		if len(curApiKey) > 0 {
+			apiKey = curApiKey
+			aiRequestUrl = curUrl
+			foundModel = curModel
 		}
 
 		// openai auth.Active is the primary one at all times
@@ -15945,6 +15963,11 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 	// To avoid recursion of self-requesting backing to the same endpoint
 	if project.Environment == "cloud" && (strings.Contains(aiRequestUrl, "shuffler.io") || (strings.Contains(aiRequestUrl, "shuffle") && strings.Contains(aiRequestUrl, "app.run"))) {
 		return "", "", ""
+	}
+
+	// Defense-in-depth: custom URL must never be returned without an accompanying API key
+	if len(aiRequestUrl) > 0 && len(apiKey) == 0 {
+		aiRequestUrl = ""
 	}
 
 	return apiKey, aiRequestUrl, foundModel
