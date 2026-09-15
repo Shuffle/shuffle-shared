@@ -18737,7 +18737,11 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	}
 
 	actionResultCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
-	_ = SetCache(context.Background(), actionResultCacheId, marshalledResult, 35)
+    // Check if it's not empty first
+	if len(actionResult.Result) > 0 {
+		_ = SetCache(context.Background(), actionResultCacheId, []byte(actionResult.Result), 35)
+	}
+
 
 	fullUrl := fmt.Sprintf("%s/api/v1/streams", baseUrl)
 	client := &http.Client{}
@@ -20333,7 +20337,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 				// Set cache for it too?
 				cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
-				err = SetCache(ctx, cacheId, actionResultBody, 35)
+				cachePayload := actionResultBody
+				if (actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent") && len(actionResult.Result) > 0 {
+					cachePayload = []byte(actionResult.Result)
+				}
+				err = SetCache(ctx, cacheId, cachePayload, 35)
 				if err != nil {
 					log.Printf("[ERROR] Failed setting cache for User Input to %s: %s", actionResult.Status, err)
 				} else {
