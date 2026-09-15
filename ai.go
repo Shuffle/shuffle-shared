@@ -10675,10 +10675,8 @@ data_filter:
 			execution.Results[foundResultIndex].CompletedAt = agentOutput.CompletedAt
 			SetWorkflowExecution(ctx, execution, true)
 
-			if !isStandalone {
-				log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for agent action %s", execution.ExecutionId, startNode.ID)
-				go sendAgentActionSelfRequest("SUCCESS", execution, execution.Results[foundResultIndex])
-			}
+			log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for agent action %s", execution.ExecutionId, startNode.ID)
+			go sendAgentActionSelfRequest("SUCCESS", execution, execution.Results[foundResultIndex])
 		} else {
 			SetWorkflowExecution(ctx, execution, true)
 		}
