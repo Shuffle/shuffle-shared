@@ -18638,7 +18638,11 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	}
 
 	actionResultCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
-	_ = SetCache(context.Background(), actionResultCacheId, marshalledResult, 35)
+    // Check if it's not empty first
+	if len(actionResult.Result) > 0 {
+		_ = SetCache(context.Background(), actionResultCacheId, []byte(actionResult.Result), 35)
+	}
+
 
 	fullUrl := fmt.Sprintf("%s/api/v1/streams", baseUrl)
 	client := &http.Client{}
