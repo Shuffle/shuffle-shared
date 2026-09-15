@@ -6841,7 +6841,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		}
 
 		if environments[envIndex].Type == "onprem" {
-			if env.Checkin > 0 && timenow-env.Checkin > 90 {
+			if env.Checkin > 0 && timenow-env.Checkin > 180 {
 				environments[envIndex].RunningIp = ""
 				//environments[envIndex].Licensed = false
 			}
@@ -6908,7 +6908,9 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			return environments, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		// Heartbeats are persisted every 60 seconds. Other backend replicas may
+		// have independent caches, so expire this list before the 180s UI timeout.
+		err = SetCache(ctx, cacheKey, data, 1)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating environment cache: %s", err)
 		}

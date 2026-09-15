@@ -2276,6 +2276,32 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 	}
 }
 
+func getBackendBaseUrl() string {
+	backendUrl := ""
+	if len(os.Getenv("BASE_URL")) > 0 {
+		backendUrl = os.Getenv("BASE_URL")
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	if len(backendUrl) > 0 {
+		return backendUrl
+	}
+
+	if project.Environment == "cloud" {
+		return "https://uk.shuffler.io"
+	}
+
+	port := os.Getenv("PORT")
+	if len(port) == 0 {
+		port = "5001"
+	}
+
+	return fmt.Sprintf("http://localhost:%s", port)
+}
+
 // runAgentDecisionDirectAppCall bypasses Singul and runs the app directly.
 func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDecision) (rawResult []byte, debugUrl string, appName string, categoryLabels []string, actionName string, err error) {
 	ctx := context.Background()
@@ -2318,7 +2344,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		} else {
 			toolLower := strings.ToLower(decision.Tool)
 			for _, app := range allApps {
-				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != strings.ReplaceAll(toolLower, "_", "") {
 					continue
 				} 
 
@@ -2355,7 +2381,7 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		if err == nil {
 			toolLower := strings.ToLower(decision.Tool)
 			for _, app := range foundApps {
-				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != toolLower {
+				if strings.ToLower(app.Name) != toolLower && strings.ToLower(app.ID) != toolLower && strings.ReplaceAll(strings.ToLower(app.Name), " ", "") != strings.ReplaceAll(toolLower, "_", "") {
 					continue
 				} 
 
@@ -2409,12 +2435,24 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: Failed to parse Agent decision.Delay '%s' as int: %s", execution.ExecutionId, decision.Delay, err)
 	}
 
+	foundEnv := ""
+	for _, act := range execution.Workflow.Actions {
+		if (act.ID == execution.ExecutionSourceNode || act.ID == execution.Start || act.AppName == "AI Agent" || act.AppID == "agent") && len(act.Environment) > 0 {
+			foundEnv = act.Environment
+			break
+		}
+	}
+	if len(foundEnv) == 0 && len(execution.Workflow.Actions) > 0 {
+		foundEnv = execution.Workflow.Actions[0].Environment
+	}
+
 	action := Action{
 		AppID:            resolvedAppId,
 		AppName:          resolvedAppName,
 		Name:             decision.Action, // overwritten below if schema match found
 		//AuthenticationId: resolvedAuthId,
 		Parameters:       []WorkflowAppActionParameter{},
+		Environment:      foundEnv,
 
 		ExecutionDelay: selectedDelay,
 		SourceWorkflow: execution.Workflow.ID,
@@ -2491,28 +2529,21 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	}
 
 
-	baseURL := os.Getenv("BASE_URL")
-	if len(baseURL) == 0 {
-		if v := os.Getenv("SHUFFLE_CLOUDRUN_URL"); len(v) > 0 {
-			baseURL = v
-		} else {
-			port := os.Getenv("PORT")
-			if len(port) == 0 {
-				port = "5001"
-			}
-			baseURL = fmt.Sprintf("http://localhost:%s", port)
-		}
-	}
+	baseURL := getBackendBaseUrl()
 
-	//ExecutionDelay: selectedDelay,
-	timeout := time.Duration(30) * time.Second
+	toolTimeout := 30
+	if project.Environment != "cloud" || (len(foundEnv) > 0 && strings.ToLower(foundEnv) != "cloud") {
+		toolTimeout = 120
+	}
+	
+	timeout := time.Duration(toolTimeout) * time.Second
 
 	// Immediate exits. 3 seconds due to body transfer worst case
 	if selectedDelay > 0 { 
 		timeout = time.Duration(2) * time.Second
 	}
 
-	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=%d&delay=%d&decision_id=%s", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg, (timeout/1000000000)-1, selectedDelay, decision.RunDetails.Id)
+	requestUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=false&execution_id=%s&authorization=%s&org_id=%s&timeout=%d&delay=%d&decision_id=%s", baseURL, resolvedAppId, execution.ExecutionId, execution.Authorization, execution.ExecutionOrg, int(timeout.Seconds())-1, selectedDelay, decision.RunDetails.Id)
 
 	parentNode := ""
 	if len(parentNode) > 0 { 
@@ -2616,14 +2647,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	_ = debugUrl
 	
-	baseUrl := "https://shuffler.io"
-	if os.Getenv("BASE_URL") != "" {
-		baseUrl = os.Getenv("BASE_URL")
-	}
-
-	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
-		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
+	baseUrl := getBackendBaseUrl()
 
 	requestUrl := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
@@ -2877,6 +2901,8 @@ func normalizeAgentToolName(tool string) string {
 
 	if len(tool) > 33 && tool[32] == ':' {
 		tool = tool[33:]
+	} else if len(tool) > 37 && tool[36] == ':' {
+		tool = tool[37:]
 	}
 
 	tool = strings.TrimSpace(tool)
@@ -3073,14 +3099,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	//     2. Send the result through AI again to check if it changes (?). Should there be a verdict here?
 	//     3: Start the next steps of decisions after updates
 
-	baseUrl := "https://shuffler.io"
-	if os.Getenv("BASE_URL") != "" {
-		baseUrl = os.Getenv("BASE_URL")
-	}
-
-	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
-		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
+	baseUrl := getBackendBaseUrl()
 
 	//url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 	url := fmt.Sprintf("%s/api/v1/streams", baseUrl)
