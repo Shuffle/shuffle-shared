@@ -11248,25 +11248,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	cnt := 0
 	maxCharacters := 100000
 
-	apiKey := os.Getenv("AI_API_KEY")
-	aiRequestUrl := os.Getenv("AI_API_URL")
-	aiApiVersion := os.Getenv("AI_API_VERSION")
-	orgId := os.Getenv("AI_API_ORG")
-	if len(apiKey) == 0 {
-		apiKey = os.Getenv("OPENAI_API_KEY")
-	}
-
-	if len(aiRequestUrl) == 0 {
-		aiRequestUrl = os.Getenv("OPENAI_API_URL")
-	}
-
-	if len(aiApiVersion) == 0 {
-		aiApiVersion = os.Getenv("OPENAI_API_VERSION")
-	}
-
-	if len(orgId) == 0 {
-		orgId = os.Getenv("OPENAI_API_ORG")
-	}
+	apiKey := os.Getenv("SHUFFLE_AI_API_KEY")
+	aiRequestUrl := os.Getenv("SHUFFLE_AI_API_URL")
+	aiApiVersion := os.Getenv("SHUFFLE_AI_API_VERSION")
+	orgId := os.Getenv("SHUFFLE_AI_API_ORG")
 
 	defaultCreds := false
 
