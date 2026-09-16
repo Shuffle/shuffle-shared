@@ -621,7 +621,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	if (workflowExecution.Status == "WAITING" || workflowExecution.Status == "EXECUTING") && len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extra {
 		skipFinished := false
 		for _, result := range workflowExecution.Results {
-			if result.Status == "WAITING" {
+			if result.Status == "WAITING" || result.Status == "EXECUTING" || strings.HasPrefix(result.Status, "agent_") {
 				skipFinished = true
 				break
 			}
