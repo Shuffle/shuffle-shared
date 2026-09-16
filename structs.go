@@ -237,6 +237,7 @@ type WorkflowApp struct {
 	ReferenceOrg             string              `json:"reference_org" datastore:"reference_org"`
 	ReferenceUrl             string              `json:"reference_url" datastore:"reference_url"`
 	ActionFilePath           string              `json:"action_file_path" datastore:"action_file_path"`
+	ImageFilePath            string              `json:"image_file_path" datastore:"image_file_path"`
 	Template                 bool                `json:"template" datastore:"template,noindex"`
 	Documentation            string              `json:"documentation" datastore:"documentation,noindex"`
 	Description              string              `json:"description" datastore:"description,noindex"`

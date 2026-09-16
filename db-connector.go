@@ -529,6 +529,47 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 		workflowapp.Created = timeNow
 	}
 
+	cachedWorkflowApp := workflowapp
+	if project.Environment == "onprem" && (shouldStripWorkflowImage(workflowapp.SmallImage) || shouldStripWorkflowImage(workflowapp.LargeImage)) {
+		basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
+		if basepath == "" {
+			basepath = "files"
+		}
+
+		workflowapp.ImageFilePath = fmt.Sprintf("app_images/%s.json", id)
+		imageData, err := json.Marshal(struct {
+			SmallImage string `json:"small_image"`
+			LargeImage string `json:"large_image"`
+		}{
+			SmallImage: workflowapp.SmallImage,
+			LargeImage: workflowapp.LargeImage,
+		})
+		if err != nil {
+			return err
+		}
+
+		if err := os.MkdirAll(fmt.Sprintf("%s/app_images", basepath), 0755); err != nil {
+			return fmt.Errorf("create app image directory: %w", err)
+		}
+		if err := os.WriteFile(fmt.Sprintf("%s/%s", basepath, workflowapp.ImageFilePath), imageData, 0644); err != nil {
+			return fmt.Errorf("write app images: %w", err)
+		}
+
+		cachedWorkflowApp = workflowapp
+		if shouldStripWorkflowImage(workflowapp.SmallImage) {
+			workflowapp.SmallImage = ""
+		}
+		if shouldStripWorkflowImage(workflowapp.LargeImage) {
+			workflowapp.LargeImage = ""
+		}
+	}
+
+	cacheData, err := json.Marshal(cachedWorkflowApp)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in setapp: %s", err)
+		return nil
+	}
+
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflowapp)
 	if err != nil {
@@ -573,7 +614,7 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 		//	return nil
 		//}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, cacheData, 30)
 		if err != nil {
 			log.Printf("[ERROR] Failed setting cache for 'setapp' key %s: %s", cacheKey, err)
 
@@ -2067,6 +2108,33 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 
 			} else {
 				//log.Printf("[DEBUG] Returning %s (%s) normally", workflowApp.Name, id)
+			}
+		}
+	}
+
+	if project.Environment == "onprem" && workflowApp.ImageFilePath != "" {
+		basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
+		if basepath == "" {
+			basepath = "files"
+		}
+
+		imageData, err := os.ReadFile(fmt.Sprintf("%s/app_images/%s.json", basepath, workflowApp.ID))
+		if err != nil {
+			log.Printf("[WARNING] Failed reading app images for %s: %s", workflowApp.ID, err)
+		} else {
+			images := struct {
+				SmallImage string `json:"small_image"`
+				LargeImage string `json:"large_image"`
+			}{}
+			if err := json.Unmarshal(imageData, &images); err != nil {
+				log.Printf("[WARNING] Failed decoding app images for %s: %s", workflowApp.ID, err)
+			} else {
+				if workflowApp.SmallImage == "" {
+					workflowApp.SmallImage = images.SmallImage
+				}
+				if workflowApp.LargeImage == "" {
+					workflowApp.LargeImage = images.LargeImage
+				}
 			}
 		}
 	}
@@ -7969,6 +8037,32 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 		duplicates := map[string][]string{}
 		for _, hit := range wrapped.Hits.Hits {
 			innerApp := hit.Source
+			if project.Environment == "onprem" && innerApp.ImageFilePath != "" {
+				basepath := os.Getenv("SHUFFLE_FILE_LOCATION")
+				if basepath == "" {
+					basepath = "files"
+				}
+
+				imageData, readErr := os.ReadFile(fmt.Sprintf("%s/app_images/%s.json", basepath, innerApp.ID))
+				if readErr != nil {
+					log.Printf("[WARNING] Failed reading app images for %s: %s", innerApp.ID, readErr)
+				} else {
+					images := struct {
+						SmallImage string `json:"small_image"`
+						LargeImage string `json:"large_image"`
+					}{}
+					if readErr = json.Unmarshal(imageData, &images); readErr != nil {
+						log.Printf("[WARNING] Failed decoding app images for %s: %s", innerApp.ID, readErr)
+					} else {
+						if innerApp.SmallImage == "" {
+							innerApp.SmallImage = images.SmallImage
+						}
+						if innerApp.LargeImage == "" {
+							innerApp.LargeImage = images.LargeImage
+						}
+					}
+				}
+			}
 			//if strings.Contains(strings.ToLower(innerApp.Name), "shuffle") {
 			//	log.Printf("APP: %s", innerApp.Name)
 			//}
