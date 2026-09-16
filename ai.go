@@ -16056,7 +16056,7 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 		}
 
 		// Checks if cloud sync is set up
-		if len(org.SyncConfig.Apikey) > 0 {
+		if len(org.SyncConfig.Apikey) > 0 && org.SyncConfig.AiCloudSync {
 			apiKey = org.SyncConfig.Apikey
 		} else {
 			return "", "", ""
