@@ -11247,7 +11247,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	cnt := 0
 	maxCharacters := 100000
-
+	// Fallback only. Using SHUFFLE_AI_* instead of AI_API_KEY so legacy env vars
+	// don't accidentally block Cloud Gemini. If this is set, it's intentional.
 	apiKey := os.Getenv("SHUFFLE_AI_API_KEY")
 	aiRequestUrl := os.Getenv("SHUFFLE_AI_API_URL")
 	aiApiVersion := os.Getenv("SHUFFLE_AI_API_VERSION")
