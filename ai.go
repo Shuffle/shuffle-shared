@@ -42,15 +42,8 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
-// var model = "gpt-4-turbo-preview"
-// var model = "gpt-4o-mini"
-// var model = "o4-mini"
 var standalone bool
 
-// var model = "gpt-5-mini"
-// var model = "gpt-5-mini"
-// var model = "gpt-5.4-nano"
-// var model = "gpt-5.2-codex"
 var model = "google/gemini-3.8-flash"
 
 var fallbackModel = ""
@@ -9499,6 +9492,9 @@ data_filter:
 
 	// Inject template-specific rules as a secondary system message
 	if len(templateSystemRule) > 0 {
+		// Ensure foratting rules in this is ignored
+		templateSystemRule += `\n\n## IMPORTANT: Use the original JSON LIST OUTPUT FORMAT NO MATTER WHAT: [{"tool": "tool_name", ...}]`
+
 		primaryMessages = append(primaryMessages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
 			Content: templateSystemRule,
@@ -9799,6 +9795,11 @@ data_filter:
 			OrgID:  execution.Workflow.OrgId,
 
 			Resp: recorder,
+		}
+
+		// Check for authenticationId
+		if len(startNode.AuthenticationId) > 0 {
+			callInfo.AuthenticationId = startNode.AuthenticationId
 		}
 
 		output, err := RunAiQuery(
@@ -11270,7 +11271,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	defaultCreds := false
 
-	if len(apiKey) == 0 && project.Environment == "cloud" {
+	if project.Environment == "cloud" {
 		foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
 		if len(foundApikey) > 0 {
 			defaultCreds = true
@@ -16030,6 +16031,7 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 		}
 
 		// openai auth.Active is the primary one at all times
+		// you won't ever get here if it's not active = true
 		if auth.Validation.Valid && len(apiKey) > 0 && len(aiRequestUrl) > 0 {
 			break
 		}

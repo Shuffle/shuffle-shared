@@ -4048,7 +4048,6 @@ func addDefaultAlertThresholds(org *Org) bool {
 	return changed
 }
 
-// ListBooks returns a list of books, ordered by title.
 // Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {
 	if id == "public" {
@@ -14178,10 +14177,6 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 						if len(foundRule) > 5 {
 							oldDoc := config.Value
 							newDoc := cacheData.Value
-
-							if debug {
-								log.Printf("\n\nOLD: %s\n\nNEW: %s\n\n", oldDoc, newDoc)
-							}
 
 							mergedJSON, allowed, errString := EvalPolicyJSON(foundRule, oldDoc, newDoc)
 							if debug {
