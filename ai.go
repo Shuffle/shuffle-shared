@@ -8083,6 +8083,161 @@ CRITICAL RULES FOR THE AGENT
 	return systemRule, templateContext, requiredApps, nil
 }
 
+// resolveAllowedApps returns the union of:
+// 1. Base default apps for the template
+// 2. Apps explicitly passed in for this specific area (workflow actions/parameters)
+// 3. Apps configured on the datastore category automation for this area (e.g. shuffle-security_incidents)
+// 4. User-assigned tools configured in the Permissions tab (datastore shuffle-security_agent_tools / config)
+func resolveAllowedApps(ctx context.Context, execution WorkflowExecution, orgId string, baseApps []string, specificCategory string) []string {
+	requiredApps := []string{}
+
+	addApp := func(appName string) {
+		trimmed := strings.TrimSpace(appName)
+		if len(trimmed) == 0 || trimmed == "nothing" || trimmed == "api" || trimmed == "openai" || trimmed == "undefined" {
+			return
+		}
+
+		formatted := trimmed
+		if !strings.HasPrefix(formatted, "app:") {
+			formatted = fmt.Sprintf("app:%s", formatted)
+		}
+
+		clean := strings.TrimPrefix(formatted, "app:")
+		parts := strings.Split(clean, ":")
+
+		for _, existing := range requiredApps {
+			existingClean := strings.TrimPrefix(existing, "app:")
+			if strings.EqualFold(existingClean, clean) {
+				return
+			}
+			existingParts := strings.Split(existingClean, ":")
+			for _, part := range parts {
+				if len(part) == 0 {
+					continue
+				}
+				for _, existingPart := range existingParts {
+					if len(existingPart) > 0 && strings.EqualFold(part, existingPart) {
+						return
+					}
+				}
+			}
+		}
+
+		requiredApps = append(requiredApps, formatted)
+	}
+
+	// 1. Base default apps
+	for _, app := range baseApps {
+		addApp(app)
+	}
+
+	// 2. Apps explicitly passed in for this specific area (workflow actions/parameters)
+	for _, action := range execution.Workflow.Actions {
+		for _, param := range action.Parameters {
+			if (param.Name == "action" || param.Name == "apps" || param.Name == "app_name" || param.Name == "tool_name") && len(param.Value) > 0 {
+				for _, appItem := range strings.Split(param.Value, ",") {
+					addApp(appItem)
+				}
+			}
+		}
+	}
+
+	// 3. Category automation options configured on this category (e.g. shuffle-security_incidents)
+	if len(orgId) > 0 && len(specificCategory) > 0 {
+		catConfig, err := GetDatastoreCategoryConfig(ctx, orgId, specificCategory)
+		if err == nil && catConfig != nil {
+			for _, auto := range catConfig.Automations {
+				for _, opt := range auto.Options {
+					if opt.Template == "incident-handler" || opt.Skill == "incident-response" || strings.Contains(strings.ToLower(auto.Name), "ai") {
+						for _, app := range opt.Apps {
+							addApp(app)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 4. User-assigned tools from the Permissions tab in datastore (shuffle-security_agent_tools / config)
+	if len(orgId) > 0 {
+		toolsData := ""
+		cacheId := fmt.Sprintf("%s_config", orgId)
+		cacheData, err := GetDatastoreKey(ctx, cacheId, "shuffle-security_agent_tools")
+		if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+			toolsData = cacheData.Value
+		} else {
+			cacheData, err = GetDatastoreKey(ctx, "config", "shuffle-security_agent_tools")
+			if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+				toolsData = cacheData.Value
+			}
+		}
+
+		if len(toolsData) > 0 {
+			var unquoted string
+			if err := json.Unmarshal([]byte(toolsData), &unquoted); err == nil && len(unquoted) > 0 {
+				toolsData = unquoted
+			}
+
+			type toolRef struct {
+				Name string `json:"name"`
+				Id   string `json:"id"`
+			}
+			type agentToolsEntry struct {
+				Agent      string    `json:"agent"`
+				ActionType string    `json:"actionType"`
+				Tools      []toolRef `json:"tools"`
+			}
+
+			var entries []agentToolsEntry
+			if err := json.Unmarshal([]byte(toolsData), &entries); err == nil && len(entries) > 0 {
+				for _, entry := range entries {
+					for _, t := range entry.Tools {
+						if len(t.Id) == 32 || len(t.Id) == 36 {
+							if len(t.Name) > 0 {
+								cleanName := strings.ToLower(strings.ReplaceAll(t.Name, " ", "_"))
+								addApp(fmt.Sprintf("%s:%s", t.Id, cleanName))
+							} else {
+								addApp(t.Id)
+							}
+						} else if len(t.Id) > 0 {
+							addApp(t.Id)
+						} else if len(t.Name) > 0 {
+							addApp(t.Name)
+						}
+					}
+				}
+			} else {
+				var flatTools []toolRef
+				if err := json.Unmarshal([]byte(toolsData), &flatTools); err == nil && len(flatTools) > 0 {
+					for _, t := range flatTools {
+						if len(t.Id) == 32 || len(t.Id) == 36 {
+							if len(t.Name) > 0 {
+								cleanName := strings.ToLower(strings.ReplaceAll(t.Name, " ", "_"))
+								addApp(fmt.Sprintf("%s:%s", t.Id, cleanName))
+							} else {
+								addApp(t.Id)
+							}
+						} else if len(t.Id) > 0 {
+							addApp(t.Id)
+						} else if len(t.Name) > 0 {
+							addApp(t.Name)
+						}
+					}
+				} else {
+					var strTools []string
+					if err := json.Unmarshal([]byte(toolsData), &strTools); err == nil && len(strTools) > 0 {
+						for _, s := range strTools {
+							addApp(s)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return requiredApps
+}
+
 func buildIncidentHandlerContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
 	systemRule := `# ROLE & MISSION: INCIDENT HANDLER
 You are the Incident Handler, an expert security co-pilot and incident investigation partner within Shuffle.
@@ -8136,7 +8291,7 @@ When evaluating an incident, execute the appropriate response path:
      * Record the tuning proposal in incident activity or create a task: {"assignee": "AI Agent", "title": "Tune detection rule: [Rule Name] to exclude [Pattern]", "category": "triage", "action": "tune", "source": "detection_rule", "completed": false, "createdBy": "ai-agent@shuffler.io"}.
 
 5. TOOL USAGE & REQUESTING TOOLS:
-   - Leverage all available tools in context (shuffle_incidents, shuffle_datastore, EDR, SIEM, threat intel).
+   - Leverage all available tools in context (shuffle_incidents, EDR, SIEM, threat intel).
    - If an essential investigation or containment tool (e.g. VirusTotal, CrowdStrike, Okta, Splunk, Shodan, Jira) is missing or unauthenticated:
      * Explicitly state what tool is required, why it is needed, and the specific query/action you intend to run.
      * Ask the analyst to connect or authorize the tool, or emit a clear request to the user.
@@ -8157,6 +8312,14 @@ When evaluating an incident, execute the appropriate response path:
 - Update the internal datastore with category 'shuffle-security_incidents' and the incident key.
 - ONLY send the modified fields in JSON format. Do NOT overwrite unrelated fields.`
 
+	orgId := strings.TrimSpace(execution.ExecutionOrg)
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(execution.Workflow.OrgId)
+	}
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(execution.OrgId)
+	}
+
 	templateContext := ""
 	incidentId := strings.TrimSpace(execution.ExecutionArgument)
 
@@ -8170,11 +8333,6 @@ When evaluating an incident, execute the appropriate response path:
 	}
 
 	if len(incidentId) > 0 {
-		orgId := strings.TrimSpace(execution.ExecutionOrg)
-		if len(orgId) == 0 {
-			orgId = strings.TrimSpace(execution.Workflow.OrgId)
-		}
-
 		incidentData := ""
 		cacheId := fmt.Sprintf("%s_%s", orgId, incidentId)
 		cacheData, err := GetDatastoreKey(ctx, cacheId, "shuffle-security_incidents")
@@ -8197,10 +8355,9 @@ When evaluating an incident, execute the appropriate response path:
 		}
 	}
 
-	requiredApps := []string{
+	requiredApps := resolveAllowedApps(ctx, execution, orgId, []string{
 		"app:shuffle_incidents",
-		"app:shuffle_datastore",
-	}
+	}, "shuffle-security_incidents")
 
 	return systemRule, templateContext, requiredApps, nil
 }
@@ -8651,7 +8808,29 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			mergedIntoExisting := false
 			for paramIndex, param := range startNode.Parameters {
 				if param.Name == "action" {
-					startNode.Parameters[paramIndex].Value += "," + requiredAppsValue
+					existingParts := strings.Split(param.Value, ",")
+					toAdd := []string{}
+					for _, req := range requiredApps {
+						alreadyHas := false
+						reqClean := strings.TrimPrefix(req, "app:")
+						for _, exist := range existingParts {
+							existClean := strings.TrimPrefix(strings.TrimSpace(exist), "app:")
+							if strings.EqualFold(existClean, reqClean) {
+								alreadyHas = true
+								break
+							}
+						}
+						if !alreadyHas {
+							toAdd = append(toAdd, req)
+						}
+					}
+					if len(toAdd) > 0 {
+						if len(startNode.Parameters[paramIndex].Value) > 0 {
+							startNode.Parameters[paramIndex].Value += "," + strings.Join(toAdd, ",")
+						} else {
+							startNode.Parameters[paramIndex].Value = strings.Join(toAdd, ",")
+						}
+					}
 					mergedIntoExisting = true
 					break
 				}
