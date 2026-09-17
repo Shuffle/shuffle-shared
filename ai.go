@@ -7805,8 +7805,18 @@ When choosing one or more hostnames, NEVER guess which host. When available, ALW
 `
 
 	templateContext := ""
-	requiredApps := []string{
+	orgId := strings.TrimSpace(execution.ExecutionOrg)
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(execution.Workflow.OrgId)
+	}
+
+	requiredApps := resolveAllowedApps(ctx, execution, orgId, []string{
 		"app:48a954b9440b3913b8a2620e57b94a75:shuffle_host_monitors",
+	}, "shuffle-security_monitors", "host-monitor-control")
+
+	permissionsPolicy := buildAgentPermissionsPolicy(ctx, orgId, "host-monitor-control")
+	if len(permissionsPolicy) > 0 {
+		systemRule += permissionsPolicy
 	}
 
 	return systemRule, templateContext, requiredApps, nil
@@ -8075,9 +8085,14 @@ CRITICAL RULES FOR THE AGENT
 %s
 <End of Available Apps>`, workflowIdLine, string(appsJson))
 
-	requiredApps := []string{
+	requiredApps := resolveAllowedApps(ctx, execution, user.ActiveOrg.Id, []string{
 		"app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps",
 		"app:de4ef2287bd41b9d5563e39989643ee6:shuffle_workflows_builder",
+	}, "shuffle-security_workflows", "build-workflows")
+
+	permissionsPolicy := buildAgentPermissionsPolicy(ctx, user.ActiveOrg.Id, "build-workflows")
+	if len(permissionsPolicy) > 0 {
+		systemRule += permissionsPolicy
 	}
 
 	return systemRule, templateContext, requiredApps, nil
@@ -8088,7 +8103,12 @@ CRITICAL RULES FOR THE AGENT
 // 2. Apps explicitly passed in for this specific area (workflow actions/parameters)
 // 3. Apps configured on the datastore category automation for this area (e.g. shuffle-security_incidents)
 // 4. User-assigned tools configured in the Permissions tab (datastore shuffle-security_agent_tools / config)
-func resolveAllowedApps(ctx context.Context, execution WorkflowExecution, orgId string, baseApps []string, specificCategory string) []string {
+func resolveAllowedApps(ctx context.Context, execution WorkflowExecution, orgId string, baseApps []string, specificCategory string, skill ...string) []string {
+	targetSkill := "incident-handler"
+	if len(skill) > 0 && len(skill[0]) > 0 {
+		targetSkill = strings.ToLower(strings.TrimSpace(skill[0]))
+	}
+
 	requiredApps := []string{}
 
 	addApp := func(appName string) {
@@ -8148,7 +8168,13 @@ func resolveAllowedApps(ctx context.Context, execution WorkflowExecution, orgId 
 		if err == nil && catConfig != nil {
 			for _, auto := range catConfig.Automations {
 				for _, opt := range auto.Options {
-					if opt.Template == "incident-handler" || opt.Skill == "incident-response" || strings.Contains(strings.ToLower(auto.Name), "ai") {
+					optTarget := strings.ToLower(strings.TrimSpace(opt.Template))
+					optSkill := strings.ToLower(strings.TrimSpace(opt.Skill))
+					matchesSkill := optTarget == targetSkill || optSkill == targetSkill
+					if targetSkill == "incident-handler" && (optTarget == "incident-response" || optSkill == "incident-response" || optTarget == "default") {
+						matchesSkill = true
+					}
+					if matchesSkill || (len(targetSkill) == 0 && strings.Contains(strings.ToLower(auto.Name), "ai")) {
 						for _, app := range opt.Apps {
 							addApp(app)
 						}
@@ -8191,6 +8217,14 @@ func resolveAllowedApps(ctx context.Context, execution WorkflowExecution, orgId 
 			var entries []agentToolsEntry
 			if err := json.Unmarshal([]byte(toolsData), &entries); err == nil && len(entries) > 0 {
 				for _, entry := range entries {
+					entryAgent := strings.ToLower(strings.TrimSpace(entry.Agent))
+					if len(entryAgent) > 0 && entryAgent != targetSkill {
+						if targetSkill == "incident-handler" && (entryAgent == "default" || entryAgent == "incident-response") {
+							// matches incident-handler
+						} else {
+							continue
+						}
+					}
 					for _, t := range entry.Tools {
 						if len(t.Id) == 32 || len(t.Id) == 36 {
 							if len(t.Name) > 0 {
@@ -8236,6 +8270,130 @@ func resolveAllowedApps(ctx context.Context, execution WorkflowExecution, orgId 
 	}
 
 	return requiredApps
+}
+
+// fetchDatastoreAgentPermissions loads permission categories for a specific skill from shuffle-security_configuration.
+// Keys searched:
+// 1. {orgId}_agent_permissions_{skill}
+// 2. agent_permissions_{skill}
+// 3. Fallback (if skill == "incident-handler" or "incident-response" or "default"):
+//    {orgId}_agent_permissions / agent_permissions
+func fetchDatastoreAgentPermissions(ctx context.Context, orgId string, skill string) ([]string, []string, error) {
+	if len(skill) == 0 {
+		skill = "incident-handler"
+	}
+	skill = strings.ToLower(strings.TrimSpace(skill))
+
+	keysToTry := []string{
+		fmt.Sprintf("%s_agent_permissions_%s", orgId, skill),
+		fmt.Sprintf("agent_permissions_%s", skill),
+	}
+
+	if skill == "incident-handler" || skill == "incident-response" || skill == "default" {
+		keysToTry = append(keysToTry,
+			fmt.Sprintf("%s_agent_permissions", orgId),
+			"agent_permissions",
+		)
+	}
+
+	var permData string
+	for _, k := range keysToTry {
+		cacheData, getErr := GetDatastoreKey(ctx, k, "shuffle-security_configuration")
+		if getErr == nil && cacheData != nil && len(cacheData.Value) > 0 {
+			permData = cacheData.Value
+			break
+		}
+	}
+
+	if len(permData) == 0 {
+		return nil, nil, nil
+	}
+
+	var unquoted string
+	if err := json.Unmarshal([]byte(permData), &unquoted); err == nil && len(unquoted) > 0 {
+		permData = unquoted
+	}
+
+	type agentPermItem struct {
+		Id          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Risk        string `json:"risk"`
+		Enabled     bool   `json:"enabled"`
+		Category    string `json:"category"`
+		Disabled    bool   `json:"disabled"`
+	}
+
+	type agentPermCategoryItem struct {
+		Id          string          `json:"id"`
+		Label       string          `json:"label"`
+		Disabled    bool            `json:"disabled"`
+		Permissions []agentPermItem `json:"permissions"`
+	}
+
+	var categories []agentPermCategoryItem
+	if err := json.Unmarshal([]byte(permData), &categories); err != nil || len(categories) == 0 {
+		return nil, nil, err
+	}
+
+	var allowed []string
+	var prohibited []string
+
+	for _, cat := range categories {
+		for _, p := range cat.Permissions {
+			label := p.Name
+			if len(label) == 0 {
+				label = p.Id
+			}
+			desc := strings.TrimSpace(p.Description)
+			entry := label
+			if len(desc) > 0 {
+				entry = fmt.Sprintf("%s (%s)", label, desc)
+			}
+
+			// In useAgentPermissions:
+			// cat.Disabled means entire category is administratively disabled.
+			// p.Disabled means permission is administratively disabled.
+			// !p.Enabled means the user toggled it off.
+			if cat.Disabled || p.Disabled || !p.Enabled {
+				prohibited = append(prohibited, entry)
+			} else {
+				allowed = append(allowed, entry)
+			}
+		}
+	}
+
+	return allowed, prohibited, nil
+}
+
+// buildAgentPermissionsPolicy returns a markdown policy block formatted for injection into the agent's system prompt.
+func buildAgentPermissionsPolicy(ctx context.Context, orgId string, skill string) string {
+	allowed, prohibited, err := fetchDatastoreAgentPermissions(ctx, orgId, skill)
+	if err != nil || (len(allowed) == 0 && len(prohibited) == 0) {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n\n# AGENT PERMISSION GOVERNANCE (DYNAMIC SECURITY POLICIES)\n")
+	b.WriteString(fmt.Sprintf("The security team has configured dynamic operational permission boundaries for this agent skill ('%s'):\n", skill))
+
+	if len(allowed) > 0 {
+		b.WriteString("\nEXPLICITLY PERMITTED ACTIONS:\n")
+		for _, a := range allowed {
+			b.WriteString(fmt.Sprintf("- %s\n", a))
+		}
+	}
+
+	if len(prohibited) > 0 {
+		b.WriteString("\nCRITICAL PROHIBITED ACTIONS (DISABLED BY SECURITY POLICY):\n")
+		b.WriteString("The following capabilities are DISABLED by administrative policy. You are STRICTLY PROHIBITED from executing, proposing for autonomous action, scheduling, or initiating any of the following:\n")
+		for _, p := range prohibited {
+			b.WriteString(fmt.Sprintf("- %s: DISABLED BY POLICY. Do NOT perform or propose this action.\n", p))
+		}
+		b.WriteString("If a user or incident triage path requests a prohibited action, explicitly inform them that this capability is currently disabled by policy in your agent permissions.\n")
+	}
+
+	return b.String()
 }
 
 func buildIncidentHandlerContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
@@ -8357,7 +8515,12 @@ When evaluating an incident, execute the appropriate response path:
 
 	requiredApps := resolveAllowedApps(ctx, execution, orgId, []string{
 		"app:shuffle_incidents",
-	}, "shuffle-security_incidents")
+	}, "shuffle-security_incidents", "incident-handler")
+
+	permissionsPolicy := buildAgentPermissionsPolicy(ctx, orgId, "incident-handler")
+	if len(permissionsPolicy) > 0 {
+		systemRule += permissionsPolicy
+	}
 
 	return systemRule, templateContext, requiredApps, nil
 }
@@ -8423,12 +8586,12 @@ Your goal is first of all to be SUPPORTIVE, APPROACHABLE, and ACTIONABLE to the 
 		}
 	}
 
-	if len(vulnerabilityId) > 0 {
-		orgId := strings.TrimSpace(execution.ExecutionOrg)
-		if len(orgId) == 0 {
-			orgId = strings.TrimSpace(execution.Workflow.OrgId)
-		}
+	orgId := strings.TrimSpace(execution.ExecutionOrg)
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(execution.Workflow.OrgId)
+	}
 
+	if len(vulnerabilityId) > 0 {
 		vulnData := ""
 		cacheId := fmt.Sprintf("%s_%s", orgId, vulnerabilityId)
 		cacheData, err := GetDatastoreKey(ctx, cacheId, "shuffle-security_vulns")
@@ -8461,8 +8624,13 @@ Your goal is first of all to be SUPPORTIVE, APPROACHABLE, and ACTIONABLE to the 
 		}
 	}
 
-	requiredApps := []string{
+	requiredApps := resolveAllowedApps(ctx, execution, orgId, []string{
 		"app:shuffle_vulnerabilities",
+	}, "shuffle-security_vulns", "vulnerability")
+
+	permissionsPolicy := buildAgentPermissionsPolicy(ctx, orgId, "vulnerability")
+	if len(permissionsPolicy) > 0 {
+		systemRule += permissionsPolicy
 	}
 
 	return systemRule, templateContext, requiredApps, nil

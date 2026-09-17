@@ -15218,6 +15218,47 @@ func CheckWorkflowApp(workflowApp WorkflowApp) error {
 	return nil
 }
 
+// CheckAppAccess validates whether a user, organization, or workflow execution has permission to access or run an app.
+func CheckAppAccess(targetApp *WorkflowApp, user User, org *Org, optionalExec ...WorkflowExecution) bool {
+	if targetApp == nil || len(targetApp.ID) == 0 {
+		return false
+	}
+
+	if targetApp.Public {
+		return true
+	}
+
+	if len(user.Id) > 0 && !strings.HasPrefix(user.Id, "execution_") && (user.Id == targetApp.Owner || ArrayContains(targetApp.Contributors, user.Id)) {
+		return true
+	}
+
+	if user.Role == "admin" && (user.ActiveOrg.Id == targetApp.ReferenceOrg || targetApp.ReferenceOrg == "") {
+		return true
+	}
+
+	if len(user.ActiveOrg.Id) > 0 && user.ActiveOrg.Id == targetApp.ReferenceOrg {
+		return true
+	}
+
+	if org != nil && ArrayContains(org.ActiveApps, targetApp.ID) {
+		return true
+	}
+
+	if targetApp.Sharing && org != nil && (targetApp.ReferenceOrg == org.Id || ArrayContains(org.ActiveApps, targetApp.ID)) {
+		return true
+	}
+
+	if len(optionalExec) > 0 && len(optionalExec[0].ExecutionId) > 0 {
+		for _, action := range optionalExec[0].Workflow.Actions {
+			if action.AppID == targetApp.ID {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
