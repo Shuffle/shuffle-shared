@@ -4341,16 +4341,21 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 
 	if len(os.Getenv("IS_KUBERNETES")) > 0 && os.Getenv("IS_KUBERNETES") == "true" {
 		log.Printf("[INFO] In kubernetes pushing it to private registry")
-		localRegistry := os.Getenv("SHUFFLE_STREAM_PRIVATE_REGISTRY")
+		localRegistry := strings.TrimSuffix(strings.TrimSpace(os.Getenv("SHUFFLE_STREAM_PRIVATE_REGISTRY")), "/")
 		if localRegistry == "" {
-			log.Printf("[ERROR] No private registry defined")
-			return err
+			localRegistry = strings.TrimSuffix(strings.TrimSpace(os.Getenv("REGISTRY_URL")), "/")
+			if localRegistry == "docker.io" || localRegistry == "registry.hub.docker.com" || localRegistry == "index.docker.io" {
+				localRegistry = ""
+			}
+		}
+		if localRegistry == "" {
+			return errors.New("no private app registry configured for Kubernetes image distribution")
 		}
 
 		imgPath := strings.TrimPrefix(strings.ReplaceAll(imageName, " ", "-"), "/")
 		refStr := fmt.Sprintf("%s/%s", strings.TrimSuffix(localRegistry, "/"), imgPath)
 
-		insecure := os.Getenv("SHUFFLE_STREAM_PRIVATE_REGISTRY_INSECURE") == "true"
+		insecure := os.Getenv("SHUFFLE_STREAM_PRIVATE_REGISTRY_INSECURE") == "true" || os.Getenv("SHUFFLE_REGISTRY_INSECURE") == "true"
 		scheme := "https"
 		if insecure {
 			scheme = "http"

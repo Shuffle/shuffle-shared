@@ -42,15 +42,8 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
-// var model = "gpt-4-turbo-preview"
-// var model = "gpt-4o-mini"
-// var model = "o4-mini"
 var standalone bool
 
-// var model = "gpt-5-mini"
-// var model = "gpt-5-mini"
-// var model = "gpt-5.4-nano"
-// var model = "gpt-5.2-codex"
 var model = "google/gemini-3.8-flash"
 
 var fallbackModel = ""
@@ -7812,8 +7805,18 @@ When choosing one or more hostnames, NEVER guess which host. When available, ALW
 `
 
 	templateContext := ""
-	requiredApps := []string{
+	orgId := strings.TrimSpace(execution.ExecutionOrg)
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(execution.Workflow.OrgId)
+	}
+
+	requiredApps := resolveAllowedApps(ctx, execution, orgId, []string{
 		"app:48a954b9440b3913b8a2620e57b94a75:shuffle_host_monitors",
+	}, "shuffle-security_monitors", "host-monitor-control")
+
+	permissionsPolicy := buildAgentPermissionsPolicy(ctx, orgId, "host-monitor-control")
+	if len(permissionsPolicy) > 0 {
+		systemRule += permissionsPolicy
 	}
 
 	return systemRule, templateContext, requiredApps, nil
@@ -8082,12 +8085,315 @@ CRITICAL RULES FOR THE AGENT
 %s
 <End of Available Apps>`, workflowIdLine, string(appsJson))
 
-	requiredApps := []string{
+	requiredApps := resolveAllowedApps(ctx, execution, user.ActiveOrg.Id, []string{
 		"app:7db43ccd25261967b095cfbd467a75cc:shuffle_apps",
 		"app:de4ef2287bd41b9d5563e39989643ee6:shuffle_workflows_builder",
+	}, "shuffle-security_workflows", "build-workflows")
+
+	permissionsPolicy := buildAgentPermissionsPolicy(ctx, user.ActiveOrg.Id, "build-workflows")
+	if len(permissionsPolicy) > 0 {
+		systemRule += permissionsPolicy
 	}
 
 	return systemRule, templateContext, requiredApps, nil
+}
+
+// resolveAllowedApps returns the union of:
+// 1. Base default apps for the template
+// 2. Apps explicitly passed in for this specific area (workflow actions/parameters)
+// 3. Apps configured on the datastore category automation for this area (e.g. shuffle-security_incidents)
+// 4. User-assigned tools configured in the Permissions tab (datastore shuffle-security_agent_tools / config)
+func resolveAllowedApps(ctx context.Context, execution WorkflowExecution, orgId string, baseApps []string, specificCategory string, skill ...string) []string {
+	targetSkill := "incident-handler"
+	if len(skill) > 0 && len(skill[0]) > 0 {
+		targetSkill = strings.ToLower(strings.TrimSpace(skill[0]))
+	}
+
+	requiredApps := []string{}
+
+	addApp := func(appName string) {
+		trimmed := strings.TrimSpace(appName)
+		if len(trimmed) == 0 || trimmed == "nothing" || trimmed == "api" || trimmed == "openai" || trimmed == "undefined" {
+			return
+		}
+
+		formatted := trimmed
+		if !strings.HasPrefix(formatted, "app:") {
+			formatted = fmt.Sprintf("app:%s", formatted)
+		}
+
+		clean := strings.TrimPrefix(formatted, "app:")
+		parts := strings.Split(clean, ":")
+
+		for _, existing := range requiredApps {
+			existingClean := strings.TrimPrefix(existing, "app:")
+			if strings.EqualFold(existingClean, clean) {
+				return
+			}
+			existingParts := strings.Split(existingClean, ":")
+			for _, part := range parts {
+				if len(part) == 0 {
+					continue
+				}
+				for _, existingPart := range existingParts {
+					if len(existingPart) > 0 && strings.EqualFold(part, existingPart) {
+						return
+					}
+				}
+			}
+		}
+
+		requiredApps = append(requiredApps, formatted)
+	}
+
+	// 1. Base default apps
+	for _, app := range baseApps {
+		addApp(app)
+	}
+
+	// 2. Apps explicitly passed in for this specific area (workflow actions/parameters)
+	for _, action := range execution.Workflow.Actions {
+		for _, param := range action.Parameters {
+			if (param.Name == "action" || param.Name == "apps" || param.Name == "app_name" || param.Name == "tool_name") && len(param.Value) > 0 {
+				for _, appItem := range strings.Split(param.Value, ",") {
+					addApp(appItem)
+				}
+			}
+		}
+	}
+
+	// 3. Category automation options configured on this category (e.g. shuffle-security_incidents)
+	if len(orgId) > 0 && len(specificCategory) > 0 {
+		catConfig, err := GetDatastoreCategoryConfig(ctx, orgId, specificCategory)
+		if err == nil && catConfig != nil {
+			for _, auto := range catConfig.Automations {
+				for _, opt := range auto.Options {
+					optTarget := strings.ToLower(strings.TrimSpace(opt.Template))
+					optSkill := strings.ToLower(strings.TrimSpace(opt.Skill))
+					matchesSkill := optTarget == targetSkill || optSkill == targetSkill
+					if targetSkill == "incident-handler" && (optTarget == "incident-response" || optSkill == "incident-response" || optTarget == "default") {
+						matchesSkill = true
+					}
+					if matchesSkill || (len(targetSkill) == 0 && strings.Contains(strings.ToLower(auto.Name), "ai")) {
+						for _, app := range opt.Apps {
+							addApp(app)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 4. User-assigned tools from the Permissions tab in datastore (shuffle-security_agent_tools / config)
+	if len(orgId) > 0 {
+		toolsData := ""
+		cacheId := fmt.Sprintf("%s_config", orgId)
+		cacheData, err := GetDatastoreKey(ctx, cacheId, "shuffle-security_agent_tools")
+		if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+			toolsData = cacheData.Value
+		} else {
+			cacheData, err = GetDatastoreKey(ctx, "config", "shuffle-security_agent_tools")
+			if err == nil && cacheData != nil && len(cacheData.Value) > 0 {
+				toolsData = cacheData.Value
+			}
+		}
+
+		if len(toolsData) > 0 {
+			var unquoted string
+			if err := json.Unmarshal([]byte(toolsData), &unquoted); err == nil && len(unquoted) > 0 {
+				toolsData = unquoted
+			}
+
+			type toolRef struct {
+				Name string `json:"name"`
+				Id   string `json:"id"`
+			}
+			type agentToolsEntry struct {
+				Agent      string    `json:"agent"`
+				ActionType string    `json:"actionType"`
+				Tools      []toolRef `json:"tools"`
+			}
+
+			var entries []agentToolsEntry
+			if err := json.Unmarshal([]byte(toolsData), &entries); err == nil && len(entries) > 0 {
+				for _, entry := range entries {
+					entryAgent := strings.ToLower(strings.TrimSpace(entry.Agent))
+					if len(entryAgent) > 0 && entryAgent != targetSkill {
+						if targetSkill == "incident-handler" && (entryAgent == "default" || entryAgent == "incident-response") {
+							// matches incident-handler
+						} else {
+							continue
+						}
+					}
+					for _, t := range entry.Tools {
+						if len(t.Id) == 32 || len(t.Id) == 36 {
+							if len(t.Name) > 0 {
+								cleanName := strings.ToLower(strings.ReplaceAll(t.Name, " ", "_"))
+								addApp(fmt.Sprintf("%s:%s", t.Id, cleanName))
+							} else {
+								addApp(t.Id)
+							}
+						} else if len(t.Id) > 0 {
+							addApp(t.Id)
+						} else if len(t.Name) > 0 {
+							addApp(t.Name)
+						}
+					}
+				}
+			} else {
+				var flatTools []toolRef
+				if err := json.Unmarshal([]byte(toolsData), &flatTools); err == nil && len(flatTools) > 0 {
+					for _, t := range flatTools {
+						if len(t.Id) == 32 || len(t.Id) == 36 {
+							if len(t.Name) > 0 {
+								cleanName := strings.ToLower(strings.ReplaceAll(t.Name, " ", "_"))
+								addApp(fmt.Sprintf("%s:%s", t.Id, cleanName))
+							} else {
+								addApp(t.Id)
+							}
+						} else if len(t.Id) > 0 {
+							addApp(t.Id)
+						} else if len(t.Name) > 0 {
+							addApp(t.Name)
+						}
+					}
+				} else {
+					var strTools []string
+					if err := json.Unmarshal([]byte(toolsData), &strTools); err == nil && len(strTools) > 0 {
+						for _, s := range strTools {
+							addApp(s)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return requiredApps
+}
+
+// fetchDatastoreAgentPermissions loads permission categories for a specific skill from shuffle-security_configuration.
+// Keys searched:
+// 1. {orgId}_agent_permissions_{skill}
+// 2. agent_permissions_{skill}
+// 3. Fallback (if skill == "incident-handler" or "incident-response" or "default"):
+//    {orgId}_agent_permissions / agent_permissions
+func fetchDatastoreAgentPermissions(ctx context.Context, orgId string, skill string) ([]string, []string, error) {
+	if len(skill) == 0 {
+		skill = "incident-handler"
+	}
+	skill = strings.ToLower(strings.TrimSpace(skill))
+
+	keysToTry := []string{
+		fmt.Sprintf("%s_agent_permissions_%s", orgId, skill),
+		fmt.Sprintf("agent_permissions_%s", skill),
+	}
+
+	if skill == "incident-handler" || skill == "incident-response" || skill == "default" {
+		keysToTry = append(keysToTry,
+			fmt.Sprintf("%s_agent_permissions", orgId),
+			"agent_permissions",
+		)
+	}
+
+	var permData string
+	for _, k := range keysToTry {
+		cacheData, getErr := GetDatastoreKey(ctx, k, "shuffle-security_configuration")
+		if getErr == nil && cacheData != nil && len(cacheData.Value) > 0 {
+			permData = cacheData.Value
+			break
+		}
+	}
+
+	if len(permData) == 0 {
+		return nil, nil, nil
+	}
+
+	var unquoted string
+	if err := json.Unmarshal([]byte(permData), &unquoted); err == nil && len(unquoted) > 0 {
+		permData = unquoted
+	}
+
+	type agentPermItem struct {
+		Id          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Risk        string `json:"risk"`
+		Enabled     bool   `json:"enabled"`
+		Category    string `json:"category"`
+		Disabled    bool   `json:"disabled"`
+	}
+
+	type agentPermCategoryItem struct {
+		Id          string          `json:"id"`
+		Label       string          `json:"label"`
+		Disabled    bool            `json:"disabled"`
+		Permissions []agentPermItem `json:"permissions"`
+	}
+
+	var categories []agentPermCategoryItem
+	if err := json.Unmarshal([]byte(permData), &categories); err != nil || len(categories) == 0 {
+		return nil, nil, err
+	}
+
+	var allowed []string
+	var prohibited []string
+
+	for _, cat := range categories {
+		for _, p := range cat.Permissions {
+			label := p.Name
+			if len(label) == 0 {
+				label = p.Id
+			}
+			desc := strings.TrimSpace(p.Description)
+			entry := label
+			if len(desc) > 0 {
+				entry = fmt.Sprintf("%s (%s)", label, desc)
+			}
+
+			// In useAgentPermissions:
+			// cat.Disabled means entire category is administratively disabled.
+			// p.Disabled means permission is administratively disabled.
+			// !p.Enabled means the user toggled it off.
+			if cat.Disabled || p.Disabled || !p.Enabled {
+				prohibited = append(prohibited, entry)
+			} else {
+				allowed = append(allowed, entry)
+			}
+		}
+	}
+
+	return allowed, prohibited, nil
+}
+
+// buildAgentPermissionsPolicy returns a markdown policy block formatted for injection into the agent's system prompt.
+func buildAgentPermissionsPolicy(ctx context.Context, orgId string, skill string) string {
+	allowed, prohibited, err := fetchDatastoreAgentPermissions(ctx, orgId, skill)
+	if err != nil || (len(allowed) == 0 && len(prohibited) == 0) {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n\n# AGENT PERMISSION GOVERNANCE (DYNAMIC SECURITY POLICIES)\n")
+	b.WriteString(fmt.Sprintf("The security team has configured dynamic operational permission boundaries for this agent skill ('%s'):\n", skill))
+
+	if len(allowed) > 0 {
+		b.WriteString("\nEXPLICITLY PERMITTED ACTIONS:\n")
+		for _, a := range allowed {
+			b.WriteString(fmt.Sprintf("- %s\n", a))
+		}
+	}
+
+	if len(prohibited) > 0 {
+		b.WriteString("\nCRITICAL PROHIBITED ACTIONS (DISABLED BY SECURITY POLICY):\n")
+		b.WriteString("The following capabilities are DISABLED by administrative policy. You are STRICTLY PROHIBITED from executing, proposing for autonomous action, scheduling, or initiating any of the following:\n")
+		for _, p := range prohibited {
+			b.WriteString(fmt.Sprintf("- %s: DISABLED BY POLICY. Do NOT perform or propose this action.\n", p))
+		}
+		b.WriteString("If a user or incident triage path requests a prohibited action, explicitly inform them that this capability is currently disabled by policy in your agent permissions.\n")
+	}
+
+	return b.String()
 }
 
 func buildIncidentHandlerContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
@@ -8096,7 +8402,15 @@ You are the Incident Handler, an expert security co-pilot and incident investiga
 Your mission is to TRIAGE, INVESTIGATE, CONTAIN, and RESPOND HOLISTICALLY to security alerts and incidents, working alongside human incident responders and SOC analysts.
 
 # CRITICAL OPERATING PRINCIPLES
-1. ACTION BIAS WITH RISK GOVERNANCE:
+1. DUAL OPERATING POSTURE (AUTONOMOUS RESOLVER VS ANALYST COPILOT):
+   - Simple / Benign / Routine Alerts (False Positives, Authorized Scanners, Duplicates): Act as an AUTONOMOUS RESOLVER. Verify technical evidence, document findings, set status to "resolved", and close cleanly with zero open tasks.
+   - Complex Incidents & Confirmed Threats (Malware, C2 Beaconing, Ransomware, Lateral Movement): Act as an ANALYST COPILOT. Do NOT attempt to close the incident autonomously. Your mission is to prepare the case and accelerate the human analyst:
+     * Extract and correlate observables and forensic telemetry.
+     * Generate structured response tasks across categories (investigation, containment, documentation) so the analyst has an immediate operational roadmap.
+     * Queue priority containment actions for human confirmation (approval_required: true).
+     * Set status to "in_progress" or "escalated".
+
+2. ACTION BIAS WITH RISK GOVERNANCE:
    - Gather facts, enrich observables, analyze attack sequences, correlate alerts, and execute routine triage autonomously.
    - For routine low-risk actions (closing false positives, adding documentation, checking threat intel, querying SIEM/EDR, proposing detection tuning): act decisively.
    - For disruptive, destructive, or high-impact actions (isolating production endpoints, revoking executive accounts, pushing firewall blocks): set "approval_required": true and seek analyst confirmation.
@@ -8104,12 +8418,13 @@ Your mission is to TRIAGE, INVESTIGATE, CONTAIN, and RESPOND HOLISTICALLY to sec
 # HOLISTIC INCIDENT RESPONSE MATRIX (NIST / SANS ALIGNED)
 When evaluating an incident, execute the appropriate response path:
 
-1. AUTO-RESOLVE / JUST CLOSE (Benign, False Positive, Duplicate, or Test):
-   - Trigger: The alert is verified as a vendor false positive, authorized administrative activity, routine cron/scanner noise, or a duplicate of an existing ticket.
+1. AUTO-RESOLVE / JUST CLOSE (Benign, False Positive, Duplicate, or Test ONLY):
+   - Trigger: The alert is definitively verified as a vendor false positive, authorized administrative activity, routine cron/scanner noise, or a duplicate of an existing ticket.
+   - CRITICAL GUARDRAIL: NEVER set "status" to "resolved" if the alert is an active compromise, true positive threat (e.g. C2 beaconing, malware, credential theft), or if any open tasks remain. Completing initial triage does NOT resolve the incident.
    - Action:
      * Set "status" to "resolved" (or "closed").
      * Add a clear audit entry to the activity array: {"ai_handled": true, "id": "status-{timestamp}", "type": "status", "user": "@AIAgent", "timestamp": {timestamp}, "content": "Resolved: [Specific evidence and rationale explaining why this is benign/FP/duplicate]"}.
-     * Do NOT create unnecessary open tasks. Keep the record concise and clean.
+     * Do NOT create open tasks. Keep the record concise and clean.
 
 2. ESCALATE (High/Critical Threats, Active Compromise, or High Ambiguity):
    - Trigger: Confirmed active malware/ransomware, credential theft, lateral movement, data exfiltration, critical asset compromise, or high-risk ambiguity requiring senior human judgment.
@@ -8131,28 +8446,37 @@ When evaluating an incident, execute the appropriate response path:
    - Action:
      * Identify the root detection rule name and query logic.
      * Propose specific tuning recommendations: exact exclusion filters, threshold adjustments, or suppression logic.
-     * Record the tuning proposal in incident activity or create a task: {"assignee": "AI Agent", "title": "Tune detection rule: [Rule Name] to exclude [Pattern]", "category": "triage", "completed": false, "createdBy": "ai-agent@shuffler.io"}.
+     * Record the tuning proposal in incident activity or create a task: {"assignee": "AI Agent", "title": "Tune detection rule: [Rule Name] to exclude [Pattern]", "category": "triage", "action": "tune", "source": "detection_rule", "completed": false, "createdBy": "ai-agent@shuffler.io"}.
 
 5. TOOL USAGE & REQUESTING TOOLS:
-   - Leverage all available tools in context (shuffle_incidents, shuffle_datastore, EDR, SIEM, threat intel).
+   - Leverage all available tools in context (shuffle_incidents, EDR, SIEM, threat intel).
    - If an essential investigation or containment tool (e.g. VirusTotal, CrowdStrike, Okta, Splunk, Shodan, Jira) is missing or unauthenticated:
      * Explicitly state what tool is required, why it is needed, and the specific query/action you intend to run.
      * Ask the analyst to connect or authorize the tool, or emit a clear request to the user.
 
 6. INVESTIGATION, TASKS & DOCUMENTATION:
-   - For ongoing investigations, set "status" to "in_progress" and update "severity" to informational/low/medium/high/critical based on asset criticality and confirmed indicators.
-   - Generate structured tasks in JSON format: {"tasks": [{"assignee": "AI Agent", "title": "...", "category": "triage/investigation/containment/recovery/communication/documentation", "completed": false, "createdBy": "ai-agent@shuffler.io"}]}.
+   - For ongoing investigations or active threats, set "status" to "in_progress" (or "escalated" for high/critical threats). NEVER set "status" to "resolved" while open containment or investigation tasks exist.
+   - For progress notes and triage summaries, add activity with type "comment", NOT type "status": {"ai_handled": true, "id": "comment-{timestamp}", "type": "comment", "user": "@AIAgent", "timestamp": {timestamp}, "content": "Triage findings: [Summary of verified telemetry, indicators, and immediate actions]"}.
+   - Generate structured tasks in JSON format: {"tasks": [{"assignee": "AI Agent", "title": "...", "category": "triage/investigation/containment/recovery/communication/documentation", "action": "isolate/block/revoke/query/tune/document/etc.", "source": "sentinelone/crowdstrike/okta/splunk/virustotal/manual/etc.", "completed": false, "createdBy": "ai-agent@shuffler.io"}]}.
    - Document comprehensive incident notes:
      * Executive Summary: What happened and current status
      * Scope & Affected Assets: Hostnames, identities, IP addresses
      * MITRE ATT&CK Mapping: Tactics and techniques observed
      * Evidence & IOCs: Hashes, external IPs, malicious URLs, process chains
      * Actions Taken & Next Steps
-   - Tackle tasks step-by-step, self-assigning and completing them as progress is made.
+   - Leave generated tasks open (completed: false) for the analyst and incident response team to coordinate and track. Do NOT prematurely mark tasks completed or close the incident.
 
 # DATA FORMAT & MODIFICATIONS
 - Update the internal datastore with category 'shuffle-security_incidents' and the incident key.
 - ONLY send the modified fields in JSON format. Do NOT overwrite unrelated fields.`
+
+	orgId := strings.TrimSpace(execution.ExecutionOrg)
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(execution.Workflow.OrgId)
+	}
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(execution.OrgId)
+	}
 
 	templateContext := ""
 	incidentId := strings.TrimSpace(execution.ExecutionArgument)
@@ -8167,11 +8491,6 @@ When evaluating an incident, execute the appropriate response path:
 	}
 
 	if len(incidentId) > 0 {
-		orgId := strings.TrimSpace(execution.ExecutionOrg)
-		if len(orgId) == 0 {
-			orgId = strings.TrimSpace(execution.Workflow.OrgId)
-		}
-
 		incidentData := ""
 		cacheId := fmt.Sprintf("%s_%s", orgId, incidentId)
 		cacheData, err := GetDatastoreKey(ctx, cacheId, "shuffle-security_incidents")
@@ -8194,9 +8513,13 @@ When evaluating an incident, execute the appropriate response path:
 		}
 	}
 
-	requiredApps := []string{
+	requiredApps := resolveAllowedApps(ctx, execution, orgId, []string{
 		"app:shuffle_incidents",
-		"app:shuffle_datastore",
+	}, "shuffle-security_incidents", "incident-handler")
+
+	permissionsPolicy := buildAgentPermissionsPolicy(ctx, orgId, "incident-handler")
+	if len(permissionsPolicy) > 0 {
+		systemRule += permissionsPolicy
 	}
 
 	return systemRule, templateContext, requiredApps, nil
@@ -8263,12 +8586,12 @@ Your goal is first of all to be SUPPORTIVE, APPROACHABLE, and ACTIONABLE to the 
 		}
 	}
 
-	if len(vulnerabilityId) > 0 {
-		orgId := strings.TrimSpace(execution.ExecutionOrg)
-		if len(orgId) == 0 {
-			orgId = strings.TrimSpace(execution.Workflow.OrgId)
-		}
+	orgId := strings.TrimSpace(execution.ExecutionOrg)
+	if len(orgId) == 0 {
+		orgId = strings.TrimSpace(execution.Workflow.OrgId)
+	}
 
+	if len(vulnerabilityId) > 0 {
 		vulnData := ""
 		cacheId := fmt.Sprintf("%s_%s", orgId, vulnerabilityId)
 		cacheData, err := GetDatastoreKey(ctx, cacheId, "shuffle-security_vulns")
@@ -8301,8 +8624,13 @@ Your goal is first of all to be SUPPORTIVE, APPROACHABLE, and ACTIONABLE to the 
 		}
 	}
 
-	requiredApps := []string{
+	requiredApps := resolveAllowedApps(ctx, execution, orgId, []string{
 		"app:shuffle_vulnerabilities",
+	}, "shuffle-security_vulns", "vulnerability")
+
+	permissionsPolicy := buildAgentPermissionsPolicy(ctx, orgId, "vulnerability")
+	if len(permissionsPolicy) > 0 {
+		systemRule += permissionsPolicy
 	}
 
 	return systemRule, templateContext, requiredApps, nil
@@ -8648,7 +8976,29 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			mergedIntoExisting := false
 			for paramIndex, param := range startNode.Parameters {
 				if param.Name == "action" {
-					startNode.Parameters[paramIndex].Value += "," + requiredAppsValue
+					existingParts := strings.Split(param.Value, ",")
+					toAdd := []string{}
+					for _, req := range requiredApps {
+						alreadyHas := false
+						reqClean := strings.TrimPrefix(req, "app:")
+						for _, exist := range existingParts {
+							existClean := strings.TrimPrefix(strings.TrimSpace(exist), "app:")
+							if strings.EqualFold(existClean, reqClean) {
+								alreadyHas = true
+								break
+							}
+						}
+						if !alreadyHas {
+							toAdd = append(toAdd, req)
+						}
+					}
+					if len(toAdd) > 0 {
+						if len(startNode.Parameters[paramIndex].Value) > 0 {
+							startNode.Parameters[paramIndex].Value += "," + strings.Join(toAdd, ",")
+						} else {
+							startNode.Parameters[paramIndex].Value = strings.Join(toAdd, ",")
+						}
+					}
 					mergedIntoExisting = true
 					break
 				}
@@ -9499,6 +9849,9 @@ data_filter:
 
 	// Inject template-specific rules as a secondary system message
 	if len(templateSystemRule) > 0 {
+		// Ensure foratting rules in this is ignored
+		templateSystemRule += `\n\n## IMPORTANT: Use the original JSON LIST OUTPUT FORMAT NO MATTER WHAT: [{"tool": "tool_name", ...}]`
+
 		primaryMessages = append(primaryMessages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
 			Content: templateSystemRule,
@@ -9799,6 +10152,11 @@ data_filter:
 			OrgID:  execution.Workflow.OrgId,
 
 			Resp: recorder,
+		}
+
+		// Check for authenticationId
+		if len(startNode.AuthenticationId) > 0 {
+			callInfo.AuthenticationId = startNode.AuthenticationId
 		}
 
 		output, err := RunAiQuery(
@@ -11256,7 +11614,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	defaultCreds := false
 
-	if len(apiKey) == 0 && project.Environment == "cloud" {
+	if project.Environment == "cloud" {
 		foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
 		if len(foundApikey) > 0 {
 			defaultCreds = true
@@ -16022,6 +16380,7 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 		}
 
 		// openai auth.Active is the primary one at all times
+		// you won't ever get here if it's not active = true
 		if auth.Validation.Valid && len(apiKey) > 0 && len(aiRequestUrl) > 0 {
 			break
 		}
