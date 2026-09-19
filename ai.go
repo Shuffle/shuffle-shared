@@ -16177,8 +16177,12 @@ func (w *trackingResponseWriter) Flush() {
 
 // Wrapper for RunAiQuery() using Shuffle Credentials
 func RunAiQueryHandler(resp http.ResponseWriter, request *http.Request) {
-	ctx := GetContext(request)
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
 
+	ctx := GetContext(request)
 	err := ValidateRequestOverload(resp, request, 10)
 	if err != nil {
 		log.Printf("[INFO] Request overload for IP %s in AI query forwarding", GetRequestIp(request))

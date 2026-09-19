@@ -641,10 +641,12 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				}
 			}
 		}
-	} else if actionType == "assign_&_escalate" || actionType == "incident_routing" || actionType == "incident_routing_rules" {
-		// This makes incident edits the actual trigger
-
+	} else if actionType == "assign_&_escalate" {
+		// Assign & Escalate is a specialized operational escalation pipeline
+		// (on-call schedule parsing, responder shifts, mobile app paging, AI copilot prompt).
+		// It operates strictly in the context of incident response and case management.
 		categoryCheck := "shuffle-security_incidents"
+
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
@@ -726,7 +728,105 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		if datastoreCategoryConfigEdited {
 			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
 			if err != nil {
-				log.Printf("[ERROR] Failed to update category config for automation enablement: %s", err)
+				log.Printf("[ERROR] Failed to update category config for Assign & Escalate enablement: %s", err)
+			} else {
+				log.Printf("[INFO] Configured Singul 'Assign & Escalate' workflow %s for org %s in %s", workflow.ID, user.ActiveOrg.Id, categoryCheck)
+			}
+		}
+	} else if actionType == "incident_routing" || actionType == "incident_routing_rules" || strings.HasSuffix(actionType, "_routing") || strings.HasSuffix(actionType, "_routing_rules") {
+		// Dynamic Routing Rules evaluate declarative boolean condition trees on incoming entities
+		// and execute polymorphic actions (suggest_move, set_severity, add_label, run_agent, etc.).
+		categoryCheck := "shuffle-security_incidents"
+		if strings.HasPrefix(categoryAction.Category, "shuffle-security_") {
+			categoryCheck = categoryAction.Category
+		} else if strings.Contains(strings.ToLower(categoryAction.Label), "vulnerabilit") || strings.Contains(strings.ToLower(categoryAction.Category), "vuln") {
+			categoryCheck = "shuffle-security_vulns"
+		}
+
+		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
+				categoryConfig = &DatastoreCategoryUpdate{
+					OrgId:       user.ActiveOrg.Id,
+					Category:    categoryCheck,
+					Automations: []DatastoreAutomation{},
+					Settings:    DatastoreCategorySettings{},
+				}
+			} else {
+				return err
+			}
+		}
+
+		datastoreCategoryConfigEdited := false
+
+		foundRunWorkflow := DatastoreAutomation{
+			Name:        "Run workflow",
+			Description: "Runs one or more workflows with the updated value as runtime argument",
+			Options: []DatastoreAutomationOption{
+				DatastoreAutomationOption{
+					Key:   "workflow_id",
+					Value: workflow.ID,
+				},
+			},
+			Icon:    "",
+			Enabled: true,
+		}
+
+		automationFound := false
+		if len(categoryConfig.Automations) > 0 {
+			for automationIndex, automation := range categoryConfig.Automations {
+				if strings.ToLower(automation.Name) != "run workflow" {
+					continue
+				}
+
+				automationFound = true
+
+				workflowIdFound := false
+				for optionIndex, option := range automation.Options {
+					if option.Key != "workflow_id" {
+						continue
+					}
+
+					if debug {
+						log.Printf("[DEBUG] VALUE: %#v", option.Value)
+					}
+
+					workflowIdFound = true
+
+					if !strings.Contains(option.Value, workflow.ID) {
+						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+					}
+
+					break
+				}
+
+				if !workflowIdFound {
+					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+					automationOption := DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					}
+
+					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
+				}
+
+				datastoreCategoryConfigEdited = true
+				categoryConfig.Automations[automationIndex].Enabled = true
+				break
+			}
+		}
+
+		if !automationFound {
+			categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
+			datastoreCategoryConfigEdited = true
+		}
+
+		if datastoreCategoryConfigEdited {
+			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+			if err != nil {
+				log.Printf("[ERROR] Failed to update category config for dynamic routing rules enablement: %s", err)
+			} else {
+				log.Printf("[INFO] Configured Singul dynamic routing rules workflow %s for org %s in %s", workflow.ID, user.ActiveOrg.Id, categoryCheck)
 			}
 		}
 	} else if actionType == "notification" || actionType == "notifications" || actionType == "forward_notification" || actionType == "forward_notifications" {
@@ -2471,29 +2571,40 @@ $exec`,
 
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
-	} else if parsedActiontype == "incident_routing" || parsedActiontype == "incident_routing_rules" {
+	} else if parsedActiontype == "incident_routing" || parsedActiontype == "incident_routing_rules" || strings.HasSuffix(parsedActiontype, "_routing") || strings.HasSuffix(parsedActiontype, "_routing_rules") {
 		getRoutingRulesId := startActionId
 		evaluateAndApplyId := uuid.NewV4().String()
 
+		isVuln := strings.Contains(parsedActiontype, "vuln") || strings.Contains(strings.ToLower(categoryAction.Category), "vuln") || strings.Contains(strings.ToLower(categoryAction.Label), "vuln")
+		targetCategory := "shuffle-security_incidents"
+		workflowDescription := "Evaluates incidents against routing rules to suggest moves, assignees, severities, or automate containment."
+		workflowTags := []string{"routing", "incident", "automatic", "incident routing", "incident routing rules", "incident_routing_rules", "incident_routing"}
+		triggerLabel := "Incident Routing Rules"
+
+		if isVuln {
+			targetCategory = "shuffle-security_vulns"
+			workflowDescription = "Evaluates vulnerabilities against routing rules to suggest priorities, severities, or automate remediation."
+			workflowTags = []string{"routing", "vulnerability", "automatic", "vulnerabilities routing", "vulnerabilities routing rules", "vulnerability_routing_rules", "vulnerability_routing"}
+			triggerLabel = "Vulnerabilities Routing Rules"
+		} else if strings.HasPrefix(categoryAction.Category, "shuffle-security_") {
+			targetCategory = categoryAction.Category
+		}
+
 		defaultWorkflow := Workflow{
 			Name:        actionType,
-			Description: "Evaluates incidents against routing rules to suggest moves, assignees, severities, or automate containment.",
+			Description: workflowDescription,
 			OrgId:       orgId,
 			Start:       getRoutingRulesId,
 			UsecaseIds:  []string{},
-			Tags:        []string{"routing", "incident", "automatic", "incident routing", "incident routing rules", "incident_routing_rules", "incident_routing"},
+			Tags:        workflowTags,
 			Triggers: []Trigger{
 				Trigger{
 					ID:          startTriggerId,
-					Name:        "Schedule",
-					TriggerType: "SCHEDULE",
-					Label:       "Incident Routing Rules",
+					Name:        "Realtime Trigger",
+					TriggerType: "WEBHOOK",
+					Label:       triggerLabel,
 					Environment: triggerEnv,
 					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "cron",
-							Value: "*/10 * * * *",
-						},
 						WorkflowAppActionParameter{
 							Name:  "execution_argument",
 							Value: "Automatically configured by Shuffle Security",
@@ -2535,7 +2646,7 @@ $exec`,
 							Name:      "code",
 							Multiline: true,
 							Required:  true,
-							Value:     getIncidentRoutingScript(),
+							Value:     getIncidentRoutingScript(targetCategory),
 						},
 					},
 				},
@@ -5779,8 +5890,12 @@ print(json.dumps({
 }))`
 }
 
-func getIncidentRoutingScript() string {
-	return `import json
+func getIncidentRoutingScript(targetCategory string) string {
+	if targetCategory == "" {
+		targetCategory = "shuffle-security_incidents"
+	}
+
+	script := `import json
 import re
 import base64
 import binascii
@@ -6025,8 +6140,16 @@ def _build_groups(rule):
     return groups
 
 
-def evaluate_routing_rules(ctx: dict, rules) -> list:
-    active = [r for r in rules if isinstance(r, dict) and r.get("enabled", True) is not False]
+def evaluate_routing_rules(ctx: dict, rules, target_category: str = "__TARGET_CATEGORY__") -> list:
+    active = [
+        r for r in rules
+        if isinstance(r, dict)
+        and r.get("enabled", True) is not False
+        and (
+            r.get("entityCategory") == target_category
+            or (target_category == "shuffle-security_incidents" and not r.get("entityCategory"))
+        )
+    ]
     active.sort(key=lambda r: r.get("priority", 100))
 
     matches = []
@@ -6209,19 +6332,16 @@ if not rules:
     }))
     exit()
 
-ctx = {
-    "title": cur_exec.get("title"),
-    "description": cur_exec.get("description") or cur_exec.get("message"),
-    "source": cur_exec.get("source"),
-    "severity": cur_exec.get("severity"),
-    "status": cur_exec.get("status"),
-    "labels": cur_exec.get("labels") or [],
-    "observables": cur_exec.get("observables") or [],
-    "stakeholders": cur_exec.get("stakeholders") or [],
-    "rawOCSF": cur_exec.get("rawOCSF") or {},
-}
+ctx = dict(cur_exec)
+if not ctx.get("title"):
+    ctx["title"] = cur_exec.get("cve") or cur_exec.get("id") or ""
+if not ctx.get("description"):
+    ctx["description"] = cur_exec.get("message") or cur_exec.get("summary") or ""
+if not ctx.get("rawOCSF") and isinstance(cur_exec.get("rawOCSF"), dict):
+    ctx["rawOCSF"] = cur_exec["rawOCSF"]
 
-matches = evaluate_routing_rules(ctx, rules)
+target_entity_category = "__TARGET_CATEGORY__"
+matches = evaluate_routing_rules(ctx, rules, target_entity_category)
 
 now_ms = int(time.time() * 1000)
 changed = False
@@ -6375,9 +6495,9 @@ item_key = r"""$exec.shuffle_datastore.key"""
 item_cat = r"""$exec.shuffle_datastore.category"""
 
 if not item_key or item_key.startswith("$"):
-    item_key = cur_exec.get("finding_uid") or cur_exec.get("id") or cur_exec.get("key")
+    item_key = cur_exec.get("finding_uid") or cur_exec.get("id") or cur_exec.get("key") or cur_exec.get("cve")
 if not item_cat or item_cat.startswith("$"):
-    item_cat = "shuffle-security_incidents"
+    item_cat = target_entity_category
 
 db_updated = False
 if changed and item_key:
@@ -6396,4 +6516,6 @@ print(json.dumps({
     "incident": cur_exec,
     "agent_prompts": agent_prompts,
 }))`
+
+	return strings.ReplaceAll(script, "__TARGET_CATEGORY__", targetCategory)
 }
