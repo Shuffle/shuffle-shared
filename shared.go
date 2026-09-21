@@ -16787,7 +16787,7 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 			return
 		}
 
-		log.Printf("[WARNING] User %s doesn't in org (%v) but was provisioned by org %s", org.Id, provisionRequest.Email, user.ProvisionedByOrg)
+		log.Printf("[WARNING] User %s doesn't in org (%v) but was provisioned by org %s", provisionRequest.Email, org.Id, user.ProvisionedByOrg)
 		resp.WriteHeader(409)
 		resp.Write([]byte(`{"success": false, "reason": "User doesn't exist in this org"}`))
 		return
