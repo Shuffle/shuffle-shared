@@ -19762,15 +19762,16 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
-	if workflowExecution.Workflow.Configuration.SkipNotifications == false && actionResult.Status == "SUCCESS" && strings.Contains(actionResult.Result, "\"success\":") && strings.Contains(actionResult.Result, "\"status\":") {
+	if workflowExecution.Workflow.Configuration.SkipNotifications == false && actionResult.Status == "SUCCESS" && strings.Contains(actionResult.Result, "\"status\":") {
 		type resultMapping struct {
-			Success bool `json:"success"`
-			Status  int  `json:"status"`
+			Success *bool `json:"success"`
+			Status  int   `json:"status"`
 		}
 
 		var mapping resultMapping
 		err := json.Unmarshal([]byte(actionResult.Result), &mapping)
-		if err == nil && mapping.Success == true && mapping.Status >= 300 {
+
+		if err == nil && (mapping.Success == nil || *mapping.Success) && mapping.Status >= 300 {
 			//log.Printf("\n\n[DEBUG] Setting status to failure as it's a success with status code %d\n\n", mapping.Status)
 
 			parsedDescription := fmt.Sprintf("Bad status code in action %s: %d. This shows up if status is >= 300", actionResult.Action.Name, mapping.Status)
