@@ -4687,7 +4687,7 @@ func startAgentExecution(baseUrl, apiKey, orgId string) (agentStartResult, error
 			"input": map[string]string{
 				"text": "Get the current weather of new york using https://wttr.in/New+York?format=%t api and just output the current weather temperature without any commentary, just output the number in celcius and dont include the decimals, use action as custom_action, tool as http and category as singul keep the url as it and not needed for any other hallucinated params or headers, just include the url as is and the method name which is GET.",
 			},
-			"tool_name" : "http",
+			"tool_name" : "app:ebfe7d5c80000676588f86731db0a555:http",
 		},
 	}
 
