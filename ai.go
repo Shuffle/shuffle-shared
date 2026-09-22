@@ -9907,7 +9907,7 @@ data_filter:
 
 	if project.Environment == "cloud" {
 		//completionRequest.Store = true
-		completionRequest.MaxCompletionTokens = 5000
+		completionRequest.MaxCompletionTokens = 16384
 	} else {
 		// For on-prem
 		completionRequest.MaxCompletionTokens = aiMaxTokens
@@ -10148,8 +10148,9 @@ data_filter:
 		recorder := httptest.NewRecorder()
 
 		callInfo := AiCallInfo{
-			Caller: "aiAgentRunner",
-			OrgID:  execution.Workflow.OrgId,
+			Caller:      "aiAgentRunner",
+			OrgID:       execution.Workflow.OrgId,
+			ExecutionId: execution.ExecutionId,
 
 			Resp: recorder,
 		}
@@ -11855,7 +11856,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		reasoning = chatCompletion.ReasoningEffort
 	}
 
-	log.Printf("[INFO] AI_QUERY: caller=%s org_id=%s reasoning=%s system_tokens=%d user_tokens=%d other_tokens=%d total_tokens=%d model=%s url=%s", callerName, org, reasoning, estSysTokens, estUserTokens, estOtherTokens, totalEst, currentModel, aiRequestUrl)
+	log.Printf("[INFO][%s] AI_QUERY: caller=%s org_id=%s reasoning=%s system_tokens=%d user_tokens=%d other_tokens=%d total_tokens=%d model=%s url=%s", info.ExecutionId, callerName, org, reasoning, estSysTokens, estUserTokens, estOtherTokens, totalEst, currentModel, aiRequestUrl)
 
 	originalStreamEnabled := chatCompletion.Stream
 
@@ -11960,7 +11961,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 			lastError = err
 
-			log.Printf("[ERROR] Failed to create AI chat completion for URL '%s'. Retrying in 1 second (4): %s", aiRequestUrl, err)
+			log.Printf("[ERROR][%s] Failed to create AI chat completion for URL '%s'. Retrying in 1 second (4): %s", info.ExecutionId, aiRequestUrl, err)
 			time.Sleep(sleepTimer * time.Second)
 			continue
 		}
@@ -11970,8 +11971,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		for {
 			iterations += 1
 
-			if iterations > 1000 {
-				log.Printf("[ERROR] Fatal - Too many iterations agent LLM stream. Breaking out of loop.")
+			if iterations > 10000 {
+				log.Printf("[ERROR][%s] Fatal - Too many iterations agent LLM stream (%d). Breaking out of loop.", info.ExecutionId, iterations)
 				if info.Resp != nil && originalStreamEnabled {
 					info.Resp.Write([]byte("data: [ERROR] Fatal - Too many iterations agent LLM stream. Breaking out of loop.\n\n"))
 					flusher.Flush()
@@ -11999,7 +12000,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 					flusher.Flush()
 				}
 
-				log.Printf("[ERROR] Stream problem: %#v", err)
+				log.Printf("[ERROR][%s] Stream problem: %#v", info.ExecutionId, err)
 				break
 			}
 
@@ -12113,6 +12114,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			}
 		}
 
+		stream.Close()
+
 		// 4. Assemble the ordered choices slice
 		if len(choicesMap) > 0 {
 			fullResp.Choices = make([]openai.ChatCompletionChoice, len(choicesMap))
@@ -12121,6 +12124,16 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 					fullResp.Choices[idx] = *choice
 				}
 			}
+		}
+
+		if len(fullResp.Choices) > 0 && fullResp.Choices[0].FinishReason == "length" {
+			log.Printf("[ERROR][%s] AI_QUERY: LLM output was truncated due to token limit (finish_reason=length, model=%s, max_completion_tokens=%d, received_len=%d)", info.ExecutionId, currentModel, chatCompletion.MaxCompletionTokens, len(contentOutput))
+			return "", fmt.Errorf("LLM output was truncated: max completion tokens reached (finish_reason=length)")
+		}
+
+		if len(fullResp.Choices) > 0 && fullResp.Choices[0].FinishReason == "content_filter" {
+			log.Printf("[ERROR][%s] AI_QUERY: LLM output was blocked by safety filter (finish_reason=content_filter, model=%s)", info.ExecutionId, currentModel)
+			return "", fmt.Errorf("LLM output was blocked by safety filter")
 		}
 
 		break
