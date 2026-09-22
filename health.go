@@ -4685,7 +4685,7 @@ func startAgentExecution(baseUrl, apiKey, orgId string) (agentStartResult, error
 	requestBody := map[string]interface{}{
 		"params": map[string]interface{}{
 			"input": map[string]string{
-				"text": "Get the current weather of new york using https://wttr.in/New+York?format=%t api and just output the current weather temperature without any commentary, just output the number in celcius and dont include the decimals, use action as custom_action, tool as http and category as singul keep the url as it and not needed for any other hallucinated params or headers, just include the url as is and the method name which is GET.",
+				"text": "Get the current weather of new york using https://wttr.in/New+York?m&format=%t api and just output the current weather temperature without any commentary, just output the number in celcius and dont include the decimals, use action as custom_action, tool as http and category as singul keep the url as it and not needed for any other hallucinated params or headers, just include the url as is and the method name which is GET.",
 			},
 			"tool_name" : "app:ebfe7d5c80000676588f86731db0a555:http",
 		},
@@ -4947,7 +4947,7 @@ func RunOpsAgent(apiKey string, orgId string, cloudRunUrl string) (AgentHealth, 
 func getRealTempC() (int, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	resp, err := client.Get("https://wttr.in/New+York?format=%t")
+	resp, err := client.Get("https://wttr.in/New+York?m&format=%t")
 	if err != nil {
 		return 0, err
 	}
@@ -4959,11 +4959,24 @@ func getRealTempC() (int, error) {
 	}
 
 	str := strings.TrimSpace(string(body))
-	str = strings.Trim(str, "+°C")
+	isFahrenheit := strings.Contains(str, "F") || strings.Contains(str, "f")
 
-	val, err := strconv.Atoi(str)
+	numStr := ""
+	for _, ch := range str {
+		if (ch >= '0' && ch <= '9') || (ch == '-' && len(numStr) == 0) {
+			numStr += string(ch)
+		} else if len(numStr) > 0 {
+			break
+		}
+	}
+
+	val, err := strconv.Atoi(numStr)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to parse temperature from %q: %w", str, err)
+	}
+
+	if isFahrenheit {
+		val = (val - 32) * 5 / 9
 	}
 
 	return val, nil
