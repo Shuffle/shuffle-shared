@@ -7281,18 +7281,28 @@ func RunAgentFinishVerifier(ctx context.Context, orgId string, executionId strin
 // abortAgentExecution is the single, canonical way to terminate an agent run early.
 // Callers must return immediately after this call.
 func abortAgentExecution(ctx context.Context, execution WorkflowExecution, startNode Action, abortLabel, reason string, suppressLog ...bool) (Action, error) {
+	// Look for existing result in passed execution first
+	foundResult := ActionResult{}
+	for _, result := range execution.Results {
+		if result.Action.ID == startNode.ID && len(result.Result) > 0 {
+			foundResult = result
+			break
+		}
+	}
+
 	// Overwrite agent from scratch
 	newExec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
 	if err == nil {
 		execution = *newExec
 	}
 
-	// Problem with base: It can be missing data
-	foundResult := ActionResult{}
-	for _, result := range execution.Results {
-		if result.Action.ID == startNode.ID {
-			foundResult = result
-			break
+	// Fallback to refreshed execution if not found yet
+	if len(foundResult.Result) == 0 {
+		for _, result := range execution.Results {
+			if result.Action.ID == startNode.ID {
+				foundResult = result
+				break
+			}
 		}
 	}
 
@@ -10661,6 +10671,18 @@ data_filter:
 			completionRequest.Model = openaiOutput.Model
 		}
 
+		if len(openaiOutput.Choices) == 0 && len(bodyString) > 0 {
+			openaiOutput.Choices = []openai.ChatCompletionChoice{
+				{
+					Index: 0,
+					Message: openai.ChatCompletionMessage{
+						Role:    "assistant",
+						Content: string(bodyString),
+					},
+				},
+			}
+		}
+
 		agentOutput.LLMRequests = []openai.ChatCompletionRequest{
 			completionRequest,
 		}
@@ -11078,11 +11100,6 @@ data_filter:
 			decisionActionRan = true
 		}
 
-		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
-			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent run.", execution.ExecutionId)
-			return abortAgentExecution(ctx, execution, startNode, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions, but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. \n\nFailed Decision (debug): \n%s", decisionString))
-		}
-
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
 		if err != nil {
 			log.Printf("[ERROR] AI Agent: Failed marshalling agent output in AI Agent response: %s", err)
@@ -11112,6 +11129,11 @@ data_filter:
 		} else {
 			execution.Results = append(execution.Results, resultMapping)
 			foundResultIndex = len(execution.Results) - 1
+		}
+
+		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
+			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent run.", execution.ExecutionId)
+			return abortAgentExecution(ctx, execution, startNode, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions, but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. \n\nFailed Decision (debug): \n%s", decisionString))
 		}
 
 		if agentOutput.Status == "FINISHED" && agentOutput.CompletedAt > 0 && execution.Status != "ABORTED" && execution.Status != "FAILURE" {
