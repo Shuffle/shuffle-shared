@@ -832,7 +832,7 @@ func archiveOldStatsToGCSBucket(ctx context.Context, orgId string, stats *Execut
 	archiveCacheKey := fmt.Sprintf("gcs_archive_%s", orgId)
 	if cacheVal, cacheErr := GetCache(ctx, archiveCacheKey); cacheErr == nil {
 		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: skipping org %s – archive in progress (key=%s val=%v)", orgId, archiveCacheKey, cacheVal)
-		return errors.New(fmt.Sprintf("archiveOldStatsToGCSBucket: skipping org %s – archive in progress (key=%s val=%v)", orgId, archiveCacheKey, cacheVal))
+		return nil
 	} else {
 		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: proceeding for org %s (key=%s not set)", orgId, archiveCacheKey)
 	}
