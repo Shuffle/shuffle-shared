@@ -208,6 +208,13 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 			}
 
 			// Since we are becoming more and more of a platform
+
+			// The solution here will be:
+			// - Custom domain that handles all of this specifically. Not 
+			// - random *.shuffler.io or *.shuffle.security.
+			// - Custom platform URL's to avoid CORS nightmare
+
+			/*
 			if !allowed {
 				currentUrl := strings.ToLower(request.URL.String())
 				allowedUrls := []string{"/api/v1/", "/api/v2/"}
@@ -228,6 +235,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 					break
 				}
 			}
+			*/
 
 			if allowed {
 				resp.Header().Set("Access-Control-Allow-Origin", origin[0])
