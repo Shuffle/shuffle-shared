@@ -6054,8 +6054,9 @@ type VulnerabilityQuery struct {
 }
 
 type AiCallInfo struct {
-	Caller string
-	OrgID  string
+	Caller      string
+	OrgID       string
+	ExecutionId string
 
 	AuthenticationId string // To choose the Authentication ID to use
 

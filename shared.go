@@ -3811,7 +3811,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 			userdata := *userObj
 			userdata.SessionLogin = false
+			if newApikey != user.Session && len(userdata.ApiKey) == 0 {
 			userdata.ApiKey = newApikey
+			}
 			userdata.AllowedApps = oauthTok.AllowedApps
 			userdata.OAuthScope = oauthTok.Scope
 			if oauthTok.OrgId != "" {
@@ -3846,7 +3848,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 					return User{}, errors.New(fmt.Sprintf("Couldn't find user"))
 				}
 
+				if newApikey != user.Session && len(user.ApiKey) == 0 {
 				user.ApiKey = newApikey
+				}
 				user.SessionLogin = false
 
 				// Increment API usage
@@ -3892,7 +3896,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			}
 		} else if !strings.HasPrefix(apikeyCheck[1], "shfl_") {
 			userdata.SessionLogin = false
+			if newApikey != userdata.Session && len(userdata.ApiKey) == 0 {
 			userdata.ApiKey = newApikey
+			}
 		}
 
 		// Fallback with OAuth 2.0 / MCP access token (e.g. ChatGPT / Claude 
@@ -3909,7 +3915,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				if uErr == nil && userObj != nil && (len(userObj.Id) > 0 || len(userObj.Username) > 0) {
 					userdata = *userObj
 					userdata.SessionLogin = false
+					if newApikey != userdata.Session && len(user.ApiKey) == 0 {
 					userdata.ApiKey = newApikey
+					}
 					userdata.AllowedApps = oauthTok.AllowedApps
 					userdata.OAuthScope = oauthTok.Scope
 					if oauthTok.OrgId != "" {
@@ -16675,7 +16683,8 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	existingUser, err := GetUser(ctx, provisionRequest.Email)
+	existingUser := User{}
+	allUser, err := FindUser(ctx, provisionRequest.Email)
 	if err != nil {
 		users, err := FindGeneratedUser(ctx, provisionRequest.Email)
 		if err != nil {
@@ -16693,7 +16702,11 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 		}
 
 		if len(users) == 1 {
-			existingUser = &users[0]
+			existingUser = users[0]
+		}
+	} else {
+		if len(allUser) > 0 {
+			existingUser = allUser[0]
 		}
 	}
 
@@ -16709,9 +16722,6 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 			}
 		}
 
-		if existingUser.ProvisionedByOrg == org.Id || provisionedByParent == validationOrg.Id {
-			// If user is from a sibling org, add them to this org
-			if existingUser.ProvisionedByOrg != org.Id {
 				foundInOrg := false
 				for _, userOrg := range existingUser.Orgs {
 					if userOrg == org.Id {
@@ -16719,6 +16729,10 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 						break
 					}
 				}
+
+		if existingUser.ProvisionedByOrg == org.Id || provisionedByParent == validationOrg.Id || foundInOrg {
+			// If user is from a sibling org, add them to this org
+			if existingUser.ProvisionedByOrg != org.Id {
 
 				if !foundInOrg {
 					existingUser.Orgs = append(existingUser.Orgs, org.Id)
@@ -16728,7 +16742,7 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 						Role:     "user",
 					})
 
-					err = SetUser(ctx, existingUser, true)
+					err = SetUser(ctx, &existingUser, true)
 					if err != nil {
 						log.Printf("[ERROR] Failed to add user %s to org %s: %s", existingUser.Id, org.Id, err)
 						resp.WriteHeader(500)
@@ -16761,7 +16775,7 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 				log.Printf("[INFO] User %s was provisioned by org %s but SSO not completed, generating setup URL", provisionRequest.Email, org.Id)
 			}
 
-			ssoUrl, err := GetOpenIdUrl(request, *org, *existingUser, mode)
+			ssoUrl, err := GetOpenIdUrl(request, *org, existingUser, mode)
 			if err != nil {
 				log.Printf("[ERROR] Failed to generate SSO URL for existing user %s: %s", existingUser.Id, err)
 				resp.WriteHeader(500)
@@ -16781,9 +16795,9 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 			return
 		}
 
-		log.Printf("[WARNING] User %s already exists but wasn't provisioned by org %s", provisionRequest.Email, org.Id)
+		log.Printf("[WARNING] User %s doesn't in org (%v) but was provisioned by org %s", provisionRequest.Email, org.Id, user.ProvisionedByOrg)
 		resp.WriteHeader(409)
-		resp.Write([]byte(`{"success": false, "reason": "User already exists"}`))
+		resp.Write([]byte(`{"success": false, "reason": "User doesn't exist in this org"}`))
 		return
 	}
 
@@ -16794,7 +16808,7 @@ func HandleGenerateProvisionUrl(resp http.ResponseWriter, request *http.Request)
 	newUser.GeneratedUsername = provisionRequest.Email
 	newUser.Password = uuid.NewV4().String()
 	newUser.Verified = true
-	newUser.Active = true
+	newUser.Active = false
 	newUser.CreationTime = time.Now().Unix()
 	newUser.Orgs = []string{org.Id}
 	newUser.Role = "user"
