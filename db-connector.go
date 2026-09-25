@@ -832,7 +832,7 @@ func archiveOldStatsToGCSBucket(ctx context.Context, orgId string, stats *Execut
 	archiveCacheKey := fmt.Sprintf("gcs_archive_%s", orgId)
 	if cacheVal, cacheErr := GetCache(ctx, archiveCacheKey); cacheErr == nil {
 		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: skipping org %s – archive in progress (key=%s val=%v)", orgId, archiveCacheKey, cacheVal)
-		return nil
+		return fmt.Errorf("archiveOldStatsToGCSBucket: archive already in progress for org %s", orgId)
 	} else {
 		log.Printf("[DEBUG] archiveOldStatsToGCSBucket: proceeding for org %s (key=%s not set)", orgId, archiveCacheKey)
 	}
@@ -1124,8 +1124,10 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		//log.Printf("[DEBUG] Incremented org stats for %s", orgId)
 	} else {
 		maxRetries := 3
+		schemaMismatch := false
 		for i := 0; i < maxRetries; i++ {
 			concurrentTxn = false
+			schemaMismatch = false
 
 			tx, err := project.Dbclient.NewTransaction(ctx)
 			if err != nil {
@@ -1137,12 +1139,17 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			if err := tx.Get(key, orgStatistics); err != nil {
 				if strings.Contains(fmt.Sprintf("%s", err), "no such entity") {
 					log.Printf("[DEBUG] Continuing by creating entity for org %s", orgId)
+				} else if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					tx.Rollback()
+					schemaMismatch = true
+					errMsg = fmt.Sprintf("%s", err)
+					log.Printf("[ERROR] Schema mismatch on load for org %s (%s) - skipping write to avoid data loss", orgId, err)
+					time.Sleep(time.Duration(200*(i+1)) * time.Millisecond)
+					continue
 				} else {
-					if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 						log.Printf("[ERROR] Failed getting stats in increment: %s", err)
 						tx.Rollback()
 						return err
-					}
 				}
 			}
 
@@ -1173,6 +1180,31 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 					time.Sleep(time.Duration(200*(i+1)) * time.Millisecond)
 					continue
 				}
+
+				if strings.Contains(fmt.Sprintf("%s", err), "entity is too big") || strings.Contains(fmt.Sprintf("%s", err), "is longer than") {
+					log.Printf("[WARNING] Entity too big for org %s – attempting to archive to GCS", orgId)
+
+					if archiveErr := archiveOldStatsToGCSBucket(ctx, orgId, orgStatistics); archiveErr != nil {
+						log.Printf("[ERROR] GCS archive failed for org %s: %s – cannot trim stats without backup, returning original error", orgId, archiveErr)
+						return err
+					}
+
+					if len(orgStatistics.DailyStatistics) > 60 {
+						sort.Slice(orgStatistics.DailyStatistics, func(a, b int) bool {
+							return orgStatistics.DailyStatistics[a].Date.Before(orgStatistics.DailyStatistics[b].Date)
+						})
+						orgStatistics.DailyStatistics = orgStatistics.DailyStatistics[len(orgStatistics.DailyStatistics)-60:]
+					}
+
+					if _, retryErr := project.Dbclient.Put(ctx, key, orgStatistics); retryErr != nil {
+						log.Printf("[ERROR] Retry put failed for org %s: %s", orgId, retryErr)
+						return retryErr
+					}
+
+					log.Printf("[INFO] Saved trimmed stats (last 60 days) for org %s after archiving overflow to GCS", orgId)
+					break
+				}
+
 				return err
 			}
 
@@ -1181,6 +1213,11 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 
 		if concurrentTxn {
 			log.Printf("[ERROR] Failed to update stats for org %s after %d retries: concurrent transaction error: %s", orgId, maxRetries, errMsg)
+			return errors.New(errMsg)
+		}
+
+		if schemaMismatch {
+			log.Printf("[ERROR] Failed to update stats for org %s after %d retries: schema mismatch between HA backends kept dropping daily_statistics on load, skipped write(s) to avoid data loss: %s", orgId, maxRetries, errMsg)
 			return errors.New(errMsg)
 		}
 
@@ -3461,7 +3498,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		if err := project.Dbclient.Get(ctx, key, stats); err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[INFO] Error in org stats loading (1). Migrating org to new org and user handler (3): %s", err)
-				err = nil
+				return stats, errors.New(fmt.Sprintf("Failed to load org stats (1): %v for org: %s", err, orgId))
 			} else {
 				return stats, err
 			}

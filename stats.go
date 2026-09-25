@@ -1499,7 +1499,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 					err = IncrementCacheDump(ctx, orgId, dataType, int(oldNum))
 					if err != nil {
 						log.Printf("[ERROR] Failed dumping cache for key (1) %s: %s", key, err)
-						if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
+						if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") || strings.Contains(fmt.Sprintf("%s", err), "cannot load field") || strings.Contains(fmt.Sprintf("%s", err), "entity is too big") || strings.Contains(fmt.Sprintf("%s", err), "is longer than") {
 							// log.Printf("[ERROR] Concurrent transaction in cache dump: %s. Storing in cache (%s) instead with new amount: %d", err, key, oldNum)
 							incrementedItemInCache.Amount = oldNum
 
