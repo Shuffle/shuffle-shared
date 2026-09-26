@@ -3935,7 +3935,7 @@ func HandleSensorDatastoreUpdate(orborusDetails OrborusStats) {
 
 	// Loading in historical info 
 	// Putting it here so we don't re-upload without a reason
-	if len(sensorDetails.CodeScanner) == 0 || len(sensorDetails.CodeScanner) == 0 {
+	if len(sensorDetails.CodeScanner) == 0 {
 
 
 		datastoreId := fmt.Sprintf("%s_%s_%s", orborusDetails.OrgId, parsedHostname, datastoreSensorIndex)

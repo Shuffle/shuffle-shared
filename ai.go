@@ -1589,21 +1589,50 @@ func FixJSONNewlines(input string) string {
 	return string(out)
 }
 
-func FixContentOutput(contentOutput string) string {
-	// Safely extract content from ```json or ``` blocks
-	if start := strings.Index(contentOutput, "```json"); start != -1 {
-		start += 7 // skip ```json
-		if end := strings.Index(contentOutput[start:], "```"); end != -1 {
-			contentOutput = contentOutput[start : start+end]
-		} else {
-			contentOutput = contentOutput[start:] // Unmatched, take the rest
+func isJSONDocument(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	startsLikeJSON := strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "{")
+	return startsLikeJSON && json.Valid([]byte(trimmed))
+}
+
+func findFenceEnd(content string) int {
+	firstEnd := strings.Index(content, "```")
+	if firstEnd == -1 || isJSONDocument(content[:firstEnd]) {
+		return firstEnd
+	}
+
+	end := firstEnd
+	for {
+		if isJSONDocument(content[:end]) {
+			return end
 		}
-	} else if start := strings.Index(contentOutput, "```"); start != -1 {
-		start += 3 // skip ```
-		if end := strings.Index(contentOutput[start:], "```"); end != -1 {
-			contentOutput = contentOutput[start : start+end]
-		} else {
-			contentOutput = contentOutput[start:] // Unmatched, take the rest
+
+		nextEnd := strings.Index(content[end+3:], "```")
+		if nextEnd == -1 {
+			return firstEnd
+		}
+
+		end += 3 + nextEnd
+	}
+}
+
+func FixContentOutput(contentOutput string) string {
+	if !isJSONDocument(contentOutput) {
+		// Safely extract content from ```json or ``` blocks
+		if start := strings.Index(contentOutput, "```json"); start != -1 {
+			start += 7 // skip ```json
+			if end := findFenceEnd(contentOutput[start:]); end != -1 {
+				contentOutput = contentOutput[start : start+end]
+			} else {
+				contentOutput = contentOutput[start:] // Unmatched, take the rest
+			}
+		} else if start := strings.Index(contentOutput, "```"); start != -1 {
+			start += 3 // skip ```
+			if end := findFenceEnd(contentOutput[start:]); end != -1 {
+				contentOutput = contentOutput[start : start+end]
+			} else {
+				contentOutput = contentOutput[start:] // Unmatched, take the rest
+			}
 		}
 	}
 
