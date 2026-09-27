@@ -3739,6 +3739,38 @@ func AutoRepairUserOrgLinks(ctx context.Context, user *User) int {
 	return repairCount
 }
 
+func schedulerAllowedPath(p string) bool {
+	return strings.HasPrefix(p, "/api/v1/workflows/") &&
+		(strings.HasSuffix(p, "/execute") || strings.HasSuffix(p, "/run"))
+}
+
+func enforceSchedulerScope(user User, request *http.Request) error {
+	// No request/URL to inspect (defensive) — nothing to enforce.
+	if request == nil || request.URL == nil {
+		return nil
+	}
+
+	// Not a scheduler account — this rule doesn't apply, so leave the request alone.
+	if !strings.HasSuffix(user.Username, "scheduler@shuffler.io") {
+		return nil
+	}
+
+	// Only scheduler accounts reach this point; allow their execute/run calls.
+	if schedulerAllowedPath(request.URL.Path) {
+		return nil
+	}
+
+	// Scheduler on a disallowed path: block only when enforcement is on.
+	if os.Getenv("SCHEDULER_SCOPE_ENFORCE") == "true" {
+		log.Printf("[AUDIT] Blocked scheduler account (%s) from disallowed path %s %s (SCHEDULER_SCOPE_ENFORCE)", user.Username, request.Method, request.URL.Path)
+		return errors.New("Scheduler account is not permitted to use this endpoint")
+	}
+
+	// Shadow mode (default): don't block yet, just record it so we can verify before enforcing.
+	log.Printf("[AUDIT] scheduler-scope SHADOW: scheduler account (%s) used non-allowlisted path %s %s (would block if SCHEDULER_SCOPE_ENFORCE=true)", user.Username, request.Method, request.URL.Path)
+	return nil
+}
+
 func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (User, error) {
 	if request == nil {
 		return User{}, errors.New("No request given")
@@ -3829,7 +3861,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			}
 
 			// Increment API usage
-			if userdata.Username != "scheduler@shuffler.io" {
+			if !strings.HasSuffix(userdata.Username, "scheduler@shuffler.io") {
 				go IncrementCache(ctx, userdata.ActiveOrg.Id, "api_usage")
 			}
 
@@ -3854,8 +3886,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				user.SessionLogin = false
 
 				// Increment API usage
-				if user.Username != "scheduler@shuffler.io" {
+				if !strings.HasSuffix(user.Username, "scheduler@shuffler.io") {
 					go IncrementCache(ctx, user.ActiveOrg.Id, "api_usage")
+				}
+
+				if serr := enforceSchedulerScope(*user, request); serr != nil {
+					return User{}, serr
 				}
 
 				return *user, nil
@@ -3981,8 +4017,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		}
 
 		// Very specific to track schedules in Shuffle
-		if user.Username != "scheduler@shuffler.io" {
+		if !strings.HasSuffix(user.Username, "scheduler@shuffler.io") {
 			go IncrementCache(ctx, userdata.ActiveOrg.Id, "api_usage")
+		}
+
+		if serr := enforceSchedulerScope(userdata, request); serr != nil {
+			return User{}, serr
 		}
 
 		return userdata, nil
