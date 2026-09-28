@@ -1623,6 +1623,9 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		if err == nil {
 			cacheData := string(cache.([]uint8))
 			if len(cacheData) > 0 {
+				if isAgentAction(action.Action) {
+					cacheData = cleanAgentResultString(cacheData)
+				}
 				return cacheData, nil
 				//return "", errors.New(fmt.Sprintf("File '%s' doesn't exist (cache).", fullParsedPath))
 			}
@@ -1695,7 +1698,11 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
-	return string(data), nil
+	resultStr := string(data)
+	if isAgentAction(action.Action) {
+		resultStr = cleanAgentResultString(resultStr)
+	}
+	return resultStr, nil
 }
 
 func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {

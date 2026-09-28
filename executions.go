@@ -76,30 +76,37 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 			// Special cleanup for agents
 			if innerresult.Action.AppName == "AI Agent" || innerresult.Action.AppName == "Shuffle Agent" {
+				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, innerresult.Action.ID)
+				if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil && cachedData != nil {
+					var cachedBytes []byte
+					switch v := cachedData.(type) {
+					case []byte:
+						cachedBytes = v
+					case string:
+						cachedBytes = []byte(v)
+					}
+
+					var cachedOutput AgentOutput
+					if err := json.Unmarshal(cachedBytes, &cachedOutput); err == nil && len(cachedOutput.Decisions) > 0 {
+						var currentOutput AgentOutput
+						_ = json.Unmarshal([]byte(innerresult.Result), &currentOutput)
+						if len(cachedOutput.Decisions) >= len(currentOutput.Decisions) || strings.Contains(innerresult.Result, "Result too large to handle") {
+							innerresult.Result = string(cachedBytes)
+							workflowExecution.Results[resultIndex].Result = string(cachedBytes)
+							if cachedOutput.Status == "FINISHED" && innerresult.Status != "SUCCESS" {
+								innerresult.Status = "SUCCESS"
+								workflowExecution.Results[resultIndex].Status = "SUCCESS"
+							}
+						}
+					}
+				}
+
 				if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" { 
 					//if workflowExecution.Status == "FINISHED" {
 					//	log.Printf("[DEBUG][%s] Fixexecution: Agent execution is finished, skipping agent result %s", workflowExecution.ExecutionId, innerresult.Action.ID)
 					//}
 
 					break
-				}
-
-				actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, innerresult.Action.ID)
-				if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil {
-					cachedBytes := []byte(cachedData.([]uint8))
-					var cachedOutput AgentOutput
-					if err := json.Unmarshal(cachedBytes, &cachedOutput); err == nil && len(cachedOutput.Decisions) > 0 {
-						var currentOutput AgentOutput
-						_ = json.Unmarshal([]byte(innerresult.Result), &currentOutput)
-						if len(cachedOutput.Decisions) >= len(currentOutput.Decisions) {
-							//if debug {
-							//	log.Printf("[DEBUG][%s] Fixexecution: upgrading agent result index %d from cache (%d decisions vs %d)", workflowExecution.ExecutionId, resultIndex, len(cachedOutput.Decisions), len(currentOutput.Decisions))
-							//}
-
-							innerresult.Result = string(cachedBytes)
-							workflowExecution.Results[resultIndex].Result = string(cachedBytes)
-						}
-					}
 				}
 
 				// Starting autocorrections

@@ -54,7 +54,7 @@ var agentRunLocation = os.Getenv("SHUFFLE_AGENT_RUN_LOCATION")
 var assistantModel = model
 
 var decisionParameterName = "shuffle_agent_decision_id"
-var aiMaxTokens = 4096 // Controllable with AI_MAX_TOKENS env
+var aiMaxTokens = 16000 // Controllable with AI_MAX_TOKENS env
 var aiReasoningEffort = ""
 
 // The overall Agent controller
@@ -9096,7 +9096,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					continue
 				}
 
-				trimmedActionStr := strings.TrimPrefix(actionStr, "app:")
+				trimmedActionStr := strings.TrimSpace(strings.TrimPrefix(actionStr, "app:"))
 				if trimmedActionStr == "" || trimmedActionStr == "openai" {
 					continue
 				}
@@ -9273,6 +9273,14 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 
 			oldActionResult = result
+
+			if strings.Contains(result.Result, "Result too large to handle") {
+				if fullVal, fileErr := getExecutionFileValue(ctx, execution, result); fileErr == nil && len(fullVal) > 0 {
+					result.Result = cleanAgentResultString(fullVal)
+				}
+			} else {
+				result.Result = cleanAgentResultString(result.Result)
+			}
 
 			// Unmarshal the result and show decisions to make better decisions
 			mappedResult := AgentOutput{}
