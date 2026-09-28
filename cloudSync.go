@@ -918,15 +918,6 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		}
 	}
 
-	statsLenBefore := len(validationOrgStats.DailyStatistics)
-		validationOrgStats = handleDailyCacheUpdate(validationOrgStats)
-	if len(validationOrgStats.DailyStatistics) != statsLenBefore {
-		err = SetOrgStatistics(ctx, *validationOrgStats, validationOrg.Id)
-		if err != nil {
-			log.Printf("[ERROR] Failed setting org statistics after daily rollover for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
-		}
-	}
-
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
 	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == false && validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
