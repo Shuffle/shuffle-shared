@@ -18862,6 +18862,35 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 // Used both in /streams from RunAgentDecisionAction() AND sendAgentActionSelfRequest()
 // Further used for e.g. Question answers as to further guide the agent
 
+func isAgentAction(action Action) bool {
+	name := strings.ToLower(action.AppName)
+	name = strings.ReplaceAll(name, "-", " ")
+	name = strings.ReplaceAll(name, "_", " ")
+	return name == "ai agent" || name == "shuffle agent"
+}
+
+func cleanAgentResultString(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if len(trimmed) < 10 || !strings.HasPrefix(trimmed, "{") {
+		return raw
+	}
+
+	var wrapper struct {
+		Action Action          `json:"action"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &wrapper); err == nil && len(wrapper.Action.ID) > 0 && len(wrapper.Result) > 0 {
+		if isAgentAction(wrapper.Action) {
+			var strResult string
+			if strErr := json.Unmarshal(wrapper.Result, &strResult); strErr == nil {
+				return cleanAgentResultString(strResult)
+			}
+			return string(wrapper.Result)
+		}
+	}
+	return raw
+}
+
 // Also locally callable as we are doing in ai.go -> decision.Category == "standalone" -> ActionResult{}
 func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
 	decisionIdSplit := strings.Split(actionResult.Status, "_")
@@ -18928,7 +18957,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 				// Found cached agent output - use it!
 				cacheData := []byte(cache.([]uint8))
 				log.Printf("[DEBUG][%s] Found cached agent output for placeholder (size: %d bytes)", workflowExecution.ExecutionId, len(cacheData))
-				placeholderResult = string(cacheData)
+				placeholderResult = cleanAgentResultString(string(cacheData))
 			} else {
 				log.Printf("[DEBUG][%s] No cached agent output found, using empty placeholder", workflowExecution.ExecutionId)
 			}
@@ -18953,6 +18982,14 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
+	if strings.Contains(workflowExecution.Results[foundActionResultIndex].Result, "Result too large to handle") {
+		if fullVal, fileErr := getExecutionFileValue(ctx, workflowExecution, workflowExecution.Results[foundActionResultIndex]); fileErr == nil && len(fullVal) > 0 {
+			workflowExecution.Results[foundActionResultIndex].Result = cleanAgentResultString(fullVal)
+		}
+	} else {
+		workflowExecution.Results[foundActionResultIndex].Result = cleanAgentResultString(workflowExecution.Results[foundActionResultIndex].Result)
+	}
+
 	mappedResult := AgentOutput{}
 
 	err := json.Unmarshal([]byte(workflowExecution.Results[foundActionResultIndex].Result), &mappedResult)
@@ -18961,9 +18998,10 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		recovered := false
 		if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil && cachedData != nil {
 			if cachedBytes, ok := cachedData.([]uint8); ok {
-				if cacheErr := json.Unmarshal(cachedBytes, &mappedResult); cacheErr == nil {
+				cleanedCacheStr := cleanAgentResultString(string(cachedBytes))
+				if cacheErr := json.Unmarshal([]byte(cleanedCacheStr), &mappedResult); cacheErr == nil {
 					log.Printf("[INFO][%s] Recovered agent output from cache %s for action %s", workflowExecution.ExecutionId, actionCacheId, actionResult.Action.ID)
-					workflowExecution.Results[foundActionResultIndex].Result = string(cachedBytes)
+					workflowExecution.Results[foundActionResultIndex].Result = cleanedCacheStr
 					recovered = true
 					err = nil
 				}
@@ -19024,12 +19062,13 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil {
 			cachedBytes := []byte(cachedData.([]uint8))
 			var cachedOutput AgentOutput
-			if err := json.Unmarshal(cachedBytes, &cachedOutput); err == nil {
+			cleanedCacheStr := cleanAgentResultString(string(cachedBytes))
+			if err := json.Unmarshal([]byte(cleanedCacheStr), &cachedOutput); err == nil {
 				for resultDecisionIndex, resultDecision := range cachedOutput.Decisions {
 					if resultDecision.RunDetails.Id == decisionId {
 						log.Printf("[INFO][%s] Found decision ID '%s' in action result cache during fallback!", workflowExecution.ExecutionId, decisionId)
 						mappedResult = cachedOutput
-						workflowExecution.Results[foundActionResultIndex].Result = string(cachedBytes)
+						workflowExecution.Results[foundActionResultIndex].Result = cleanedCacheStr
 						decisionIdResultIndex = resultDecisionIndex
 						decisionIndex = resultDecision.I
 						break
@@ -20333,7 +20372,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			if item.Action.ID == actionResult.Action.ID {
 				found = true
 				if item.Status == actionResult.Status {
-					skip = true
+					isAgent := isAgentAction(item.Action)
+					if !isAgent {
+						skip = true
+					} else if len(actionResult.Result) == 0 || actionResult.Result == item.Result {
+						skip = true
+					}
 				}
 
 				outerindex = index
@@ -20369,7 +20413,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			log.Printf("[INFO][%s] Updating '%s' (%s) in workflow from %s to %s", workflowExecution.ExecutionId, actionResult.Action.Name, actionResult.Action.ID, workflowExecution.Results[outerindex].Status, actionResult.Status)
 
-			if workflowExecution.Results[outerindex].Status != actionResult.Status {
+			isAgent := isAgentAction(actionResult.Action)
+			if isAgent {
+				actionResult.Result = cleanAgentResultString(actionResult.Result)
+			}
+			if workflowExecution.Results[outerindex].Status != actionResult.Status || isAgent {
 				dbSave = true
 			}
 
@@ -20379,10 +20427,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				// Set cache for it too?
 				cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
 				cachePayload := actionResultBody
-				if (actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent") && len(actionResult.Result) > 0 {
+				cacheTtl := int32(35)
+				if isAgent && len(actionResult.Result) > 0 {
 					cachePayload = []byte(actionResult.Result)
+					cacheTtl = 600
 				}
-				err = SetCache(ctx, cacheId, cachePayload, 35)
+				err = SetCache(ctx, cacheId, cachePayload, cacheTtl)
 				if err != nil {
 					log.Printf("[ERROR] Failed setting cache for User Input to %s: %s", actionResult.Status, err)
 				} else {
@@ -21002,9 +21052,23 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 			newResults := []ActionResult{}
 			for _, item := range workflowExecution.Results {
+				isAgent := isAgentAction(item.Action)
+				if isAgent && strings.Contains(item.Result, "Result too large to handle") {
+					if fullVal, fileErr := getExecutionFileValue(ctx, workflowExecution, item); fileErr == nil && len(fullVal) > 32500 {
+						item.Result = cleanAgentResultString(fullVal)
+					}
+				}
+				if isAgent {
+					item.Result = cleanAgentResultString(item.Result)
+				}
+
 				if len(item.Result) > 32500 && !strings.Contains(item.Result, "Result too large to handle") {
 					dbSave = true
 					itemSize := len(item.Result)
+					rawResult := item.Result
+					if isAgent {
+						rawResult = cleanAgentResultString(rawResult)
+					}
 
 					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
 					localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
@@ -21019,17 +21083,25 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						"id": "%s_%s"
 					}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
 
-					if err := ioutil.WriteFile(localPath, []byte(item.Result), 0644); err != nil {
+					if err := ioutil.WriteFile(localPath, []byte(rawResult), 0644); err != nil {
 						dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
 						if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
 							log.Printf("[WARNING][%s] Failed creating directory %s: %s (original write error: %s)", workflowExecution.ExecutionId, dirPath, mkdirErr, err)
-						} else if retryErr := ioutil.WriteFile(localPath, []byte(item.Result), 0644); retryErr != nil {
+						} else if retryErr := ioutil.WriteFile(localPath, []byte(rawResult), 0644); retryErr != nil {
 							log.Printf("[WARNING][%s] Failed writing result file after creating directory: %s", workflowExecution.ExecutionId, retryErr)
 						} else {
 							item.Result = replacementJson
+							if isAgent {
+								actionReplaceKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, item.Action.ID)
+								_ = SetCache(ctx, actionReplaceKey, []byte(rawResult), 600)
+							}
 						}
 					} else {
 						item.Result = replacementJson
+						if isAgent {
+							actionReplaceKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, item.Action.ID)
+							_ = SetCache(ctx, actionReplaceKey, []byte(rawResult), 600)
+						}
 					}
 				}
 				newResults = append(newResults, item)
@@ -21043,6 +21115,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				dbSave = true
 				itemSize := len(workflowExecution.Result)
 				actionId := "execution_result"
+				rawExecResult := workflowExecution.Result
 
 				fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
 				localPath := fmt.Sprintf("%s/%s", basepath, fullParsedPath)
@@ -21057,17 +21130,21 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					"id": "%s_%s"
 				}`, itemSize, workflowExecution.ExecutionId, actionId)
 
-				if err := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); err != nil {
+				if err := ioutil.WriteFile(localPath, []byte(rawExecResult), 0644); err != nil {
 					dirPath := fmt.Sprintf("%s/large_executions/%s", basepath, workflowExecution.ExecutionOrg)
 					if mkdirErr := os.MkdirAll(dirPath, 0755); mkdirErr != nil {
 						log.Printf("[WARNING] Failed creating directory %s: %s (original write error: %s)", dirPath, mkdirErr, err)
-					} else if retryErr := ioutil.WriteFile(localPath, []byte(workflowExecution.Result), 0644); retryErr != nil {
+					} else if retryErr := ioutil.WriteFile(localPath, []byte(rawExecResult), 0644); retryErr != nil {
 						log.Printf("[WARNING] Failed writing Result file after creating directory: %s", retryErr)
 					} else {
 						workflowExecution.Result = replacementJson
+						actionReplaceKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, actionId)
+						_ = SetCache(ctx, actionReplaceKey, []byte(rawExecResult), 600)
 					}
 				} else {
 					workflowExecution.Result = replacementJson
+					actionReplaceKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, actionId)
+					_ = SetCache(ctx, actionReplaceKey, []byte(rawExecResult), 600)
 				}
 			}
 
