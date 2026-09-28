@@ -37085,11 +37085,12 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 		log.Printf("[DEBUG] Getting prioritised app actions for '%s'", inputApp)
 	}
 
-	if strings.Contains(inputApp, ":") || len(inputApp) == 32 || len(inputApp) == 36 {
-		appnamesplit := strings.Split(inputApp, ":")
-		appId = appnamesplit[0]
-		if len(appId) != 32 && len(appId) != 36 {
-			appId = ""
+	cleanInput := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(inputApp), "app:"))
+	if strings.Contains(cleanInput, ":") || len(cleanInput) == 32 || len(cleanInput) == 36 {
+		appnamesplit := strings.Split(cleanInput, ":")
+		candidate := strings.TrimSpace(appnamesplit[0])
+		if len(candidate) == 32 || len(candidate) == 36 {
+			appId = candidate
 		}
 	}
 
@@ -37112,6 +37113,25 @@ func getPrioritisedAppActions(ctx context.Context, inputApp string, maxAmount in
 		foundApps, err := FindWorkflowAppByName(ctx, cleanName)
 		if err == nil && len(foundApps) > 0 {
 			foundApp = &foundApps[0]
+		}
+
+		if foundApp.ID == "" {
+			foundApps, err = FindWorkflowAppByName(ctx, strings.Title(cleanName))
+			if err == nil && len(foundApps) > 0 {
+				foundApp = &foundApps[0]
+			}
+		}
+
+		if foundApp.ID == "" {
+			if allApps, err := GetPrioritizedApps(ctx, User{}); err == nil {
+				targetLower := strings.ToLower(cleanName)
+				for _, app := range allApps {
+					if strings.ToLower(app.Name) == targetLower || strings.ReplaceAll(strings.ToLower(app.Name), " ", "") == strings.ReplaceAll(targetLower, " ", "") {
+						foundApp = &app
+						break
+					}
+				}
+			}
 		}
 		if foundApp.ID == "" && project.Environment == "cloud" {
 			algoliaApp, err := HandleAlgoliaAppSearch(ctx, cleanName)
