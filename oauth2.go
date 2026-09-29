@@ -2627,10 +2627,13 @@ func isMatchingLoopbackURI(uriA, uriB string) bool {
 // or dynamic native loopback client.
 func isDynamicShuffleClient(clientID, redirectURI string) bool {
 	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return false
+	}
 	if strings.HasPrefix(clientID, "shuffle_client_") || clientID == "shuffle-agent" || strings.Contains(clientID, "shuffle_agent") {
 		return true
 	}
-	if isLoopbackURI(redirectURI) && (strings.Contains(strings.ToLower(clientID), "shuffle") || strings.Contains(strings.ToLower(clientID), "agent") || clientID == "") {
+	if isLoopbackURI(redirectURI) && (strings.Contains(strings.ToLower(clientID), "shuffle") || strings.Contains(strings.ToLower(clientID), "agent")) {
 		return true
 	}
 	return false
@@ -2777,7 +2780,7 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 				break
 			}
 		}
-		if !uriMatched && (isLoopbackURI(redirectURI) || client.IsDynamic || strings.HasPrefix(clientID, "shuffle_client_")) {
+		if !uriMatched && (client.IsDynamic || strings.HasPrefix(clientID, "shuffle_client_") || isDynamicShuffleClient(clientID, redirectURI)) {
 			uriMatched = true
 			client.RedirectUris = append(client.RedirectUris, redirectURI)
 			_ = SetOAuthClient(ctx, *client)
@@ -3188,7 +3191,7 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 				break
 			}
 		}
-		if !uriMatched && (isLoopbackURI(authReq.RedirectURI) || client.IsDynamic || strings.HasPrefix(authReq.ClientID, "shuffle_client_")) {
+		if !uriMatched && (client.IsDynamic || strings.HasPrefix(authReq.ClientID, "shuffle_client_") || isDynamicShuffleClient(authReq.ClientID, authReq.RedirectURI)) {
 			uriMatched = true
 			client.RedirectUris = append(client.RedirectUris, authReq.RedirectURI)
 			_ = SetOAuthClient(ctx, *client)
