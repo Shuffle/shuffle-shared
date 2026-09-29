@@ -5600,6 +5600,7 @@ func GetFileSingul(ctx context.Context, fileId string) (*File, error) {
 func init() {
 	if os.Getenv("STANDALONE") == "true" {
 		standalone = true
+		project.CacheDb = true
 	}
 
 	if len(os.Getenv("AI_MODEL")) > 0 {
@@ -10123,33 +10124,35 @@ data_filter:
 			monthlyLLMTokens = convertedStats.MonthlyLLMTokens + convertedStats.MonthlyChildOrgLLMTokens
 		}
 
-		appRunLimit := int64(billingOrg.SyncFeatures.AppExecutions.Limit)
-		if project.Environment == "cloud" {
-			useTokenOverride := false
-			if expiryMonthStr := os.Getenv("AI_CREDIT_END_MONTH"); len(expiryMonthStr) > 0 {
-				if expiryMonth, convErr := strconv.Atoi(expiryMonthStr); convErr == nil && expiryMonth >= 1 && expiryMonth <= 12 {
-					now := time.Now()
-					expiryDate := time.Date(now.Year(), time.Month(expiryMonth), 1, 0, 0, 0, 0, now.Location())
-					if now.Before(expiryDate) {
-						useTokenOverride = true
-					}
-				}
-			}
-
-			if useTokenOverride {
-				geminiTokenLimit := int64(100_000_000)
-				if os.Getenv("AI_CREDITS") > "" {
-					credVal, convErr := strconv.ParseInt(os.Getenv("AI_CREDITS"), 10, 64)
-					if convErr == nil {
-						geminiTokenLimit = credVal
+		if billingOrg != nil {
+			appRunLimit := int64(billingOrg.SyncFeatures.AppExecutions.Limit)
+			if project.Environment == "cloud" {
+				useTokenOverride := false
+				if expiryMonthStr := os.Getenv("AI_CREDIT_END_MONTH"); len(expiryMonthStr) > 0 {
+					if expiryMonth, convErr := strconv.Atoi(expiryMonthStr); convErr == nil && expiryMonth >= 1 && expiryMonth <= 12 {
+						now := time.Now()
+						expiryDate := time.Date(now.Year(), time.Month(expiryMonth), 1, 0, 0, 0, 0, now.Location())
+						if now.Before(expiryDate) {
+							useTokenOverride = true
+						}
 					}
 				}
 
-				if monthlyLLMTokens >= geminiTokenLimit {
-					return abortAgentExecution(ctx, execution, startNode, "app_limit_exceeded", fmt.Sprintf("AI LLM token limit reached: %d >= %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyLLMTokens, geminiTokenLimit))
+				if useTokenOverride {
+					geminiTokenLimit := int64(100_000_000)
+					if os.Getenv("AI_CREDITS") > "" {
+						credVal, convErr := strconv.ParseInt(os.Getenv("AI_CREDITS"), 10, 64)
+						if convErr == nil {
+							geminiTokenLimit = credVal
+						}
+					}
+
+					if monthlyLLMTokens >= geminiTokenLimit {
+						return abortAgentExecution(ctx, execution, startNode, "app_limit_exceeded", fmt.Sprintf("AI LLM token limit reached: %d >= %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyLLMTokens, geminiTokenLimit))
+					}
+				} else if monthlyAppRuns >= appRunLimit {
+					return abortAgentExecution(ctx, execution, startNode, "app_limit_exceeded", fmt.Sprintf("AI App limit reached: %d >= %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyAppRuns, appRunLimit))
 				}
-			} else if monthlyAppRuns >= appRunLimit {
-				return abortAgentExecution(ctx, execution, startNode, "app_limit_exceeded", fmt.Sprintf("AI App limit reached: %d >= %d. Contact support@shuffler.io to learn more, or connect to your API vendor/self-hosted model of choice to continue!", monthlyAppRuns, appRunLimit))
 			}
 		}
 	}
@@ -11684,7 +11687,37 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	//	log.Printf("[DEBUG] ORGID (1): %#v, apikey: %#v, requestUrl: %#v, model: %#v", info.OrgID, apiKey, aiRequestUrl, currentModel)
 	//}
 
-	if len(info.OrgID) > 0 {
+	if standalone || os.Getenv("STANDALONE") == "true" {
+		customKey := os.Getenv("AI_API_KEY")
+		customUrl := os.Getenv("AI_API_URL")
+
+		token := os.Getenv("SHUFFLE_SESSION_TOKEN")
+		if len(token) == 0 {
+			token = os.Getenv("SHUFFLE_AUTHORIZATION")
+		}
+
+		if len(customKey) > 0 && len(customUrl) > 0 {
+			// Either both or none: both custom key and URL provided together
+			apiKey = customKey
+			aiRequestUrl = customUrl
+		} else if len(token) > 0 {
+			// Session token with Shuffle backend URL paired together
+			apiKey = token
+
+			baseUrl := os.Getenv("SHUFFLE_BASE_URL")
+			if len(baseUrl) == 0 {
+				baseUrl = getBackendBaseUrl()
+			}
+			if len(baseUrl) == 0 {
+				baseUrl = "https://shuffler.io"
+			}
+			aiRequestUrl = fmt.Sprintf("%s/api/v1", strings.TrimSuffix(baseUrl, "/"))
+		} else {
+			// Neither matched pair is complete: do not allow half-configured credentials
+			apiKey = ""
+			aiRequestUrl = ""
+		}
+	} else if len(info.OrgID) > 0 {
 		// Look up custom auth to use instead
 		foundApikey, foundrequestUrl, foundModel := GetOrgAiCredentials(ctx, info)
 		if len(foundApikey) > 0 {

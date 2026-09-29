@@ -766,9 +766,9 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	// FIXME: This right here has caused more problems during dev than anything
-	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && !strings.Contains(strings.ToLower(hostname), "backend") {
+	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" || standalone || os.Getenv("STANDALONE") == "true") && !strings.Contains(strings.ToLower(hostname), "backend") {
 		if debug {
-			log.Printf("[DEBUG] Not saving execution to DB (just cache), since we are running in swarm mode (SHUFFLE_SWARM_CONFIG=run).")
+			log.Printf("[DEBUG] Not saving execution to DB (just cache), since we are running in swarm or standalone mode.")
 		}
 
 		return nil
@@ -1135,7 +1135,7 @@ func GetWorkflowExecution(ctx context.Context, id string, bypassCache ...bool) (
 		}
 	}
 
-	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && project.Environment != "cloud" {
+	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" || standalone || os.Getenv("STANDALONE") == "true") && project.Environment != "cloud" {
 		return workflowExecution, errors.New("ExecutionId doesn't exist in cache")
 	}
 
