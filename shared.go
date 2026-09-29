@@ -22120,7 +22120,7 @@ func resolveEncryptionModifiers() (string, []string, error) {
 	}
 
 	if len(encryptWith) == 0 {
-		return "", nil, errors.New("No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
+		return "", nil, errors.New("resolveEncryptionModifiers: No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
 	}
 
 	decryptWith := []string{}
@@ -22138,7 +22138,7 @@ func resolveEncryptionModifiers() (string, []string, error) {
 // Uses a simple way to be able to modify the encryption key being used
 func create32Hash(key string, modifier string) ([]byte, error) {
 	if len(modifier) == 0 {
-		return []byte{}, errors.New("No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
+		return []byte{}, errors.New("create32Hash: No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
 	}
 
 	key += modifier
@@ -22197,7 +22197,7 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 	
 	_, decryptWith, err := resolveEncryptionModifiers()
 	if err != nil {
-		log.Printf("[ERROR] Failed hashing in decrypt: %s", err)
+		log.Printf("[ERROR] Failed resolving encryption modifiers: %s", err)
 		return []byte{}, err
 	}
 
