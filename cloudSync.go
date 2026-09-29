@@ -918,15 +918,6 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		}
 	}
 
-	statsLenBefore := len(validationOrgStats.DailyStatistics)
-		validationOrgStats = handleDailyCacheUpdate(validationOrgStats)
-	if len(validationOrgStats.DailyStatistics) != statsLenBefore {
-		err = SetOrgStatistics(ctx, *validationOrgStats, validationOrg.Id)
-		if err != nil {
-			log.Printf("[ERROR] Failed setting org statistics after daily rollover for %s (%s): %s ", validationOrg.Name, validationOrg.Id, err)
-		}
-	}
-
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
 	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == false && validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
@@ -2600,26 +2591,47 @@ func runAgentDecisionDirectAppCall(execution WorkflowExecution, decision AgentDe
 	}
 
 	var singleResult SingleResult
-	if jsonErr := json.Unmarshal(respBody, &singleResult); jsonErr == nil && len(singleResult.Result) > 0 {
-		status := "SUCCESS"
-		if !singleResult.Success {
-			status = "FAILURE"
-		}
-
-		if status == "SUCCESS" {
-			var innerResult map[string]interface{}
-			if innerErr := json.Unmarshal([]byte(singleResult.Result), &innerResult); innerErr == nil {
-				if innerSuccess, ok := innerResult["success"].(bool); ok && !innerSuccess {
-					status = "FAILURE"
-				}
+	if jsonErr := json.Unmarshal(respBody, &singleResult); jsonErr == nil {
+		if strings.Contains(singleResult.Result, "Result too large to handle") {
+			subExec := WorkflowExecution{
+				ExecutionId:  singleResult.ExecutionId,
+				ExecutionOrg: execution.ExecutionOrg,
+			}
+			dummyRes := ActionResult{
+				Result: singleResult.Result,
+				Action: Action{ID: singleResult.Id},
+			}
+			if fullVal, fileErr := getExecutionFileValue(context.Background(), subExec, dummyRes); fileErr == nil && len(fullVal) > 0 {
+				singleResult.Result = fullVal
 			}
 		}
 
-		//if debug { 
-		//	log.Printf("[DEBUG][%s] DirectAppCall: result length %d, status %s", execution.ExecutionId, len(singleResult.Result), status)
-		//}
+		if len(singleResult.Result) > 0 {
+			status := "SUCCESS"
+			if !singleResult.Success {
+				status = "FAILURE"
+			}
 
-		return []byte(singleResult.Result), debugUrl, resolvedAppName, []string{}, action.Name, nil
+			if status == "SUCCESS" {
+				var innerResult map[string]interface{}
+				if innerErr := json.Unmarshal([]byte(singleResult.Result), &innerResult); innerErr == nil {
+					if innerSuccess, ok := innerResult["success"].(bool); ok && !innerSuccess {
+						status = "FAILURE"
+					}
+				}
+			}
+
+			//if debug { 
+			//	log.Printf("[DEBUG][%s] DirectAppCall: result length %d, status %s", execution.ExecutionId, len(singleResult.Result), status)
+			//}
+
+			return []byte(singleResult.Result), debugUrl, resolvedAppName, []string{}, action.Name, nil
+		}
+
+		if len(singleResult.Errors) > 0 {
+			errMsg := strings.Join(singleResult.Errors, "\n")
+			return []byte(errMsg), debugUrl, resolvedAppName, []string{}, action.Name, errors.New(errMsg)
+		}
 	}
 
 	// Fallback: return raw body when the response isn't a well-formed SingleResult
