@@ -3241,6 +3241,7 @@ type OAuthConsentInfoResponse struct {
 // OAuthAuthorizeRequest represents the decision sent by the consent UI or client to POST /oauth2/authorize.
 type OAuthAuthorizeRequest struct {
 	ClientID            string   `json:"client_id"`
+	ClientName          string   `json:"client_name,omitempty"`
 	RedirectURI         string   `json:"redirect_uri"`
 	ResponseType        string   `json:"response_type"`
 	Scope               string   `json:"scope"`

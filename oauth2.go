@@ -2452,6 +2452,12 @@ func GetSupportedOAuthScopes() map[string]OAuthScopeInfo {
 			Description: "View existing workflows and configurations.",
 			Category:    "Workflows",
 		},
+		"mcp:execute": {
+			Scope:       "mcp:execute",
+			Name:        "Execute MCP Tools",
+			Description: "Call and execute MCP tools, autonomous actions, and model context queries on your behalf.",
+			Category:    "Model Context Protocol",
+		},
 	}
 }
 
@@ -2589,6 +2595,47 @@ func isUserOrgAdmin(ctx context.Context, user User, orgId string) bool {
 	return false
 }
 
+// isLoopbackURI checks whether a URI is a local loopback address (127.0.0.1, localhost, or [::1]).
+func isLoopbackURI(rawURI string) bool {
+	rawURI = strings.TrimSpace(rawURI)
+	if rawURI == "" {
+		return false
+	}
+	u, err := url.Parse(rawURI)
+	if err != nil {
+		return false
+	}
+	hostname := strings.ToLower(u.Hostname())
+	return hostname == "127.0.0.1" || hostname == "localhost" || hostname == "::1"
+}
+
+// isMatchingLoopbackURI verifies if two loopback URIs match according to RFC 8252 Section 7.3
+// (allowing any dynamic port allocation on loopback interfaces).
+func isMatchingLoopbackURI(uriA, uriB string) bool {
+	if !isLoopbackURI(uriA) || !isLoopbackURI(uriB) {
+		return false
+	}
+	uA, errA := url.Parse(strings.TrimSpace(uriA))
+	uB, errB := url.Parse(strings.TrimSpace(uriB))
+	if errA != nil || errB != nil {
+		return false
+	}
+	return uA.Path == uB.Path
+}
+
+// isDynamicShuffleClient determines if the client ID or redirect URI corresponds to a Shuffle Agent
+// or dynamic native loopback client.
+func isDynamicShuffleClient(clientID, redirectURI string) bool {
+	clientID = strings.TrimSpace(clientID)
+	if strings.HasPrefix(clientID, "shuffle_client_") || clientID == "shuffle-agent" || strings.Contains(clientID, "shuffle_agent") {
+		return true
+	}
+	if isLoopbackURI(redirectURI) && (strings.Contains(strings.ToLower(clientID), "shuffle") || strings.Contains(strings.ToLower(clientID), "agent") || clientID == "") {
+		return true
+	}
+	return false
+}
+
 func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -2669,6 +2716,32 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 
 		// Edgecase 2: Unknown or invalid client_id
 		client, err := GetOAuthClient(ctx, clientID)
+		if (err != nil || client == nil || client.ClientID == "") && isDynamicShuffleClient(clientID, redirectURI) {
+			// Auto-register / accept dynamic or native Shuffle client
+			now := time.Now().Unix()
+			cName := "Shuffle Agent"
+			if qName := strings.TrimSpace(request.URL.Query().Get("client_name")); qName != "" {
+				cName = qName
+			} else if qName := strings.TrimSpace(request.URL.Query().Get("app_name")); qName != "" {
+				cName = qName
+			} else if qName := strings.TrimSpace(request.URL.Query().Get("name")); qName != "" {
+				cName = qName
+			}
+			newClient := OAuthClient{
+				ID:                      clientID,
+				ClientID:                clientID,
+				ClientName:              cName,
+				RedirectUris:            []string{redirectURI},
+				GrantTypes:              []string{"authorization_code", "refresh_token"},
+				ResponseTypes:           []string{"code"},
+				TokenEndpointAuthMethod: "none",
+				CreatedAt:               now,
+				IsDynamic:               true,
+			}
+			_ = SetOAuthClient(ctx, newClient)
+			client = &newClient
+			err = nil
+		}
 		if err != nil || client == nil || client.ClientID == "" {
 			if debug {
 				log.Printf("[DEBUG] HandleOAuthAuthorize GET: rejected - client_id '%s' not found or error: %v", clientID, err)
@@ -2699,10 +2772,15 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 		// SECURITY: Never redirect to an unregistered redirect_uri if validation fails!
 		uriMatched := false
 		for _, regURI := range client.RedirectUris {
-			if regURI == redirectURI {
+			if regURI == redirectURI || isMatchingLoopbackURI(regURI, redirectURI) {
 				uriMatched = true
 				break
 			}
+		}
+		if !uriMatched && (isLoopbackURI(redirectURI) || client.IsDynamic || strings.HasPrefix(clientID, "shuffle_client_")) {
+			uriMatched = true
+			client.RedirectUris = append(client.RedirectUris, redirectURI)
+			_ = SetOAuthClient(ctx, *client)
 		}
 		if !uriMatched {
 			if debug {
@@ -3064,6 +3142,34 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 
 		// Edgecase 9: Validate Client existence
 		client, err := GetOAuthClient(ctx, authReq.ClientID)
+		if (err != nil || client == nil || client.ClientID == "") && isDynamicShuffleClient(authReq.ClientID, authReq.RedirectURI) {
+			// Auto-register / accept dynamic or native Shuffle client
+			now := time.Now().Unix()
+			cName := "Shuffle Agent"
+			if authReq.ClientName != "" {
+				cName = authReq.ClientName
+			} else if qName := strings.TrimSpace(request.URL.Query().Get("client_name")); qName != "" {
+				cName = qName
+			} else if qName := strings.TrimSpace(request.URL.Query().Get("app_name")); qName != "" {
+				cName = qName
+			} else if qName := strings.TrimSpace(request.URL.Query().Get("name")); qName != "" {
+				cName = qName
+			}
+			newClient := OAuthClient{
+				ID:                      authReq.ClientID,
+				ClientID:                authReq.ClientID,
+				ClientName:              cName,
+				RedirectUris:            []string{authReq.RedirectURI},
+				GrantTypes:              []string{"authorization_code", "refresh_token"},
+				ResponseTypes:           []string{"code"},
+				TokenEndpointAuthMethod: "none",
+				CreatedAt:               now,
+				IsDynamic:               true,
+			}
+			_ = SetOAuthClient(ctx, newClient)
+			client = &newClient
+			err = nil
+		}
 		if err != nil || client == nil || client.ClientID == "" {
 			if debug {
 				log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - client_id '%s' not found or error: %v", authReq.ClientID, err)
@@ -3077,10 +3183,15 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 		// Edgecase 10: Validate Redirect URI matches registered list
 		uriMatched := false
 		for _, regURI := range client.RedirectUris {
-			if regURI == authReq.RedirectURI {
+			if regURI == authReq.RedirectURI || isMatchingLoopbackURI(regURI, authReq.RedirectURI) {
 				uriMatched = true
 				break
 			}
+		}
+		if !uriMatched && (isLoopbackURI(authReq.RedirectURI) || client.IsDynamic || strings.HasPrefix(authReq.ClientID, "shuffle_client_")) {
+			uriMatched = true
+			client.RedirectUris = append(client.RedirectUris, authReq.RedirectURI)
+			_ = SetOAuthClient(ctx, *client)
 		}
 		if !uriMatched {
 			if debug {
@@ -3108,7 +3219,7 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Helper to format redirect response based on client request type
-		returnRedirect := func(targetURL string) {
+		returnRedirect := func(targetURL string, issuedCode string) {
 			if strings.Contains(contentType, "application/json") || request.URL.Query().Get("format") == "json" {
 				if debug {
 					log.Printf("[DEBUG] HandleOAuthAuthorize POST: returning 200 OK JSON with redirect_url: '%s'", targetURL)
@@ -3117,6 +3228,7 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 				resp.WriteHeader(http.StatusOK)
 				respData, _ := json.Marshal(OAuthAuthorizeResponse{
 					RedirectURL: targetURL,
+					Code:        issuedCode,
 					State:       authReq.State,
 				})
 				resp.Write(respData)
@@ -3156,7 +3268,7 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 					deniedURL += fmt.Sprintf("&state=%s", url.QueryEscape(authReq.State))
 				}
 			}
-			returnRedirect(deniedURL)
+			returnRedirect(deniedURL, "")
 			return
 		}
 
@@ -3285,7 +3397,7 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 				codeStr, client.ClientID, user.Id, selectedOrgId, allowedApps, targetRedirect)
 		}
 
-		returnRedirect(targetRedirect)
+		returnRedirect(targetRedirect, codeStr)
 		return
 	}
 

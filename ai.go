@@ -11347,6 +11347,11 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[ERROR] Failed deleting workflow with ID %s in GenerateSingulWorkflows: %s", workflowId, err)
 			}
 
+			disableErr := HandleSingulWorkflowDisablement(ctx, workflowId, user.ActiveOrg.Id, categoryAction)
+			if disableErr != nil {
+				log.Printf("[WARNING] Failed to clean up datastore automations for workflow %s: %s", workflowId, disableErr)
+			}
+
 			/*
 				if debug {
 					log.Printf("[DEBUG] DELETING KEY: %s", deleteKey)
