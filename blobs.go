@@ -641,7 +641,7 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				}
 			}
 		}
-	} else if actionType == "assign_&_escalate" {
+	} else if actionType == "assign_&_escalate" || actionType == "schedules_&_phone_notifications" || actionType == "schedules_notifications" || actionType == "phone_notifications" {
 		// Assign & Escalate is a specialized operational escalation pipeline
 		// (on-call schedule parsing, responder shifts, mobile app paging, AI copilot prompt).
 		// It operates strictly in the context of incident response and case management.
@@ -849,6 +849,76 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 	return nil
 
+}
+
+func HandleSingulWorkflowDisablement(ctx context.Context, workflowId string, orgId string, categoryAction CategoryAction) error {
+	if len(orgId) == 0 || len(workflowId) == 0 {
+		return nil
+	}
+
+	categoriesToCheck := []string{
+		"shuffle-security_incidents",
+		"shuffle-security_packages",
+		"shuffle-security_software",
+		"shuffle-security_vulns",
+		"shuffle-security_routing",
+	}
+
+	for _, categoryCheck := range categoriesToCheck {
+		categoryConfig, err := GetDatastoreCategoryConfig(ctx, orgId, categoryCheck)
+		if err != nil || categoryConfig == nil {
+			continue
+		}
+
+		datastoreCategoryConfigEdited := false
+		for automationIndex, automation := range categoryConfig.Automations {
+			if strings.ToLower(automation.Name) != "run workflow" {
+				continue
+			}
+
+			for optionIndex, option := range automation.Options {
+				if option.Key != "workflow_id" {
+					continue
+				}
+
+				if strings.Contains(option.Value, workflowId) {
+					ids := strings.Split(option.Value, ",")
+					newIds := []string{}
+					for _, id := range ids {
+						trimmed := strings.TrimSpace(id)
+						if len(trimmed) > 0 && trimmed != workflowId {
+							newIds = append(newIds, trimmed)
+						}
+					}
+
+					categoryConfig.Automations[automationIndex].Options[optionIndex].Value = strings.Join(newIds, ",")
+					if len(newIds) == 0 {
+						categoryConfig.Automations[automationIndex].Enabled = false
+					}
+					datastoreCategoryConfigEdited = true
+				}
+			}
+		}
+
+		if datastoreCategoryConfigEdited {
+			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+			if err != nil {
+				log.Printf("[ERROR] Failed to update category config on Singul workflow disablement for %s: %s", categoryCheck, err)
+			}
+		}
+	}
+
+	// Reset default notification workflow if this was the one
+	foundOrg, err := GetOrg(ctx, orgId)
+	if err == nil && foundOrg != nil && foundOrg.Defaults.NotificationWorkflow == workflowId {
+		foundOrg.Defaults.NotificationWorkflow = ""
+		err = SetOrg(ctx, *foundOrg, foundOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed to reset notification workflow on org %s: %s", orgId, err)
+		}
+	}
+
+	return nil
 }
 
 // These are just specific examples for specific cases

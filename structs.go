@@ -1786,6 +1786,8 @@ type Comment struct {
 	Height          int64  `json:"height" datastore:"height"`
 	Color           string `json:"color" datastore:"color"`
 	BackgroundColor string `json:"backgroundcolor" datastore:"backgroundcolor"`
+	BackgroundImage   string `json:"backgroundimage" datastore:"backgroundimage"`
+	TextJustification string `json:"textJustification" datastore:"textJustification"`
 	Position        struct {
 		X float64 `json:"x" datastore:"x"`
 		Y float64 `json:"y" datastore:"y"`
@@ -3241,6 +3243,7 @@ type OAuthConsentInfoResponse struct {
 // OAuthAuthorizeRequest represents the decision sent by the consent UI or client to POST /oauth2/authorize.
 type OAuthAuthorizeRequest struct {
 	ClientID            string   `json:"client_id"`
+	ClientName          string   `json:"client_name,omitempty"`
 	RedirectURI         string   `json:"redirect_uri"`
 	ResponseType        string   `json:"response_type"`
 	Scope               string   `json:"scope"`
