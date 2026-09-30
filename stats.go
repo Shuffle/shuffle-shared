@@ -821,8 +821,25 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Sideload app runs, workflow runs and subflow runs (just in case)
-	// This makes numbers accurate even when less than  dbDumpInterval
+	today := time.Now()
+	todayStr := today.Format("2006-01-02")
+
+	todayIdx := -1
+		for i := range info.DailyStatistics {
+			if info.DailyStatistics[i].Date.Format("2006-01-02") == todayStr {
+			todayIdx = i
+			break
+			}
+		}
+	if todayIdx == -1 {
+		info.DailyStatistics = append(info.DailyStatistics, DailyStatistics{
+			Date: today,
+		})
+		todayIdx = len(info.DailyStatistics) - 1
+	}
+
+	todayStat := &info.DailyStatistics[todayIdx]
+
 	key := fmt.Sprintf("cache_%s_app_executions", orgId)
 	cacheItem, err := GetCache(ctx, key)
 	if err == nil {
@@ -834,6 +851,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.WeeklyAppExecutions += int64(increment)
 			info.DailyAppExecutions += int64(increment)
 			info.HourlyAppExecutions += int64(increment)
+			todayStat.AppExecutions += int64(increment)
 		}
 	}
 
@@ -848,6 +866,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.WeeklyChildAppExecutions += int64(increment)
 			info.DailyChildAppExecutions += int64(increment)
 			info.HourlyChildAppExecutions += int64(increment)
+			todayStat.ChildAppExecutions += int64(increment)
 		}
 	}
 
@@ -862,6 +881,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.WeeklyWorkflowExecutions += int64(increment)
 			info.DailyWorkflowExecutions += int64(increment)
 			info.HourlyWorkflowExecutions += int64(increment)
+			todayStat.WorkflowExecutions += int64(increment)
 		}
 	}
 
@@ -876,6 +896,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.WeeklySubflowExecutions += int64(increment)
 			info.DailySubflowExecutions += int64(increment)
 			info.HourlySubflowExecutions += int64(increment)
+			todayStat.SubflowExecutions += int64(increment)
 		}
 	}
 
@@ -888,6 +909,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.TotalEmailUsage += int64(increment)
 			info.MonthlyEmailUsage += int64(increment)
 			info.DailyEmailUsage += int64(increment)
+			todayStat.DailyEmailUsage += int64(increment)
 		}
 	}
 
@@ -900,6 +922,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.TotalChildOrgEmailUsage += int64(increment)
 			info.MonthlyChildOrgEmailUsage += int64(increment)
 			info.DailyChildOrgEmailUsage += int64(increment)
+			todayStat.DailyChildOrgEmailUsage += int64(increment)
 		}
 	}
 
@@ -912,6 +935,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.TotalSMSUsage += int64(increment)
 			info.MonthlySMSUsage += int64(increment)
 			info.DailySMSUsage += int64(increment)
+			todayStat.DailySMSUsage += int64(increment)
 		}
 	}
 
@@ -924,6 +948,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.TotalChildOrgSMSUsage += int64(increment)
 			info.MonthlyChildOrgSMSUsage += int64(increment)
 			info.DailyChildOrgSMSUsage += int64(increment)
+			todayStat.DailyChildOrgSMSUsage += int64(increment)
 		}
 	}
 
@@ -1654,78 +1679,164 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 	}
 }
 
-// 1. Check list if there is a record for yesterday
-// 2. If there isn't, set it and clear out the daily records
-// Also: can we dump a list of apps that run? Maybe a list of them?
+func carryDailyDelta(current, previous int64) int64 {
+	delta := current - previous
+	if delta < 0 {
+		delta = 0
+	}
+	return delta
+}
+
 func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	currentDate := time.Now().Format("2006-01-02")
+	var carriedDay DailyStatistics
 
 	// check if today's date exists in daily stats, if not (new day), append it and reset daily values
 	if len(executionInfo.DailyStatistics) == 0 || executionInfo.DailyStatistics[len(executionInfo.DailyStatistics)-1].Date.Format("2006-01-02") != currentDate {
+		var prevDay DailyStatistics
+		if len(executionInfo.DailyStatistics) > 0 {
+			prevDay = executionInfo.DailyStatistics[len(executionInfo.DailyStatistics)-1]
+		}
+
+		deltaApp := carryDailyDelta(executionInfo.DailyAppExecutions, prevDay.AppExecutions)
+		deltaChildApp := carryDailyDelta(executionInfo.DailyChildAppExecutions, prevDay.ChildAppExecutions)
+		deltaAppFailed := carryDailyDelta(executionInfo.DailyAppExecutionsFailed, prevDay.AppExecutionsFailed)
+		deltaSubflow := carryDailyDelta(executionInfo.DailySubflowExecutions, prevDay.SubflowExecutions)
+		deltaWorkflow := carryDailyDelta(executionInfo.DailyWorkflowExecutions, prevDay.WorkflowExecutions)
+		deltaWorkflowFinished := carryDailyDelta(executionInfo.DailyWorkflowExecutionsFinished, prevDay.WorkflowExecutionsFinished)
+		deltaWorkflowFailed := carryDailyDelta(executionInfo.DailyWorkflowExecutionsFailed, prevDay.WorkflowExecutionsFailed)
+		deltaOrgSync := carryDailyDelta(executionInfo.DailyOrgSyncActions, prevDay.OrgSyncActions)
+		deltaCloud := carryDailyDelta(executionInfo.DailyCloudExecutions, prevDay.CloudExecutions)
+		deltaOnprem := carryDailyDelta(executionInfo.DailyOnpremExecutions, prevDay.OnpremExecutions)
+		deltaAI := carryDailyDelta(executionInfo.DailyAIUsage, prevDay.AIUsage)
+		deltaApi := carryDailyDelta(executionInfo.DailyApiUsage, prevDay.ApiUsage)
+		deltaAgentExec := carryDailyDelta(executionInfo.DailyAgentExecutions, prevDay.AgentExecutions)
+		deltaAgentTokens := carryDailyDelta(executionInfo.DailyAgentTokens, prevDay.AgentTokens)
+		deltaAgentInputTokens := carryDailyDelta(executionInfo.DailyAgentInputTokens, prevDay.AgentInputTokens)
+		deltaChildAgentInputTokens := carryDailyDelta(executionInfo.DailyChildOrgAgentInputTokens, prevDay.ChildOrgAgentInputTokens)
+		deltaAgentOutputTokens := carryDailyDelta(executionInfo.DailyAgentOutputTokens, prevDay.AgentOutputTokens)
+		deltaChildAgentOutputTokens := carryDailyDelta(executionInfo.DailyChildOrgAgentOutputTokens, prevDay.ChildOrgAgentOutputTokens)
+		deltaChildAiUsage := carryDailyDelta(executionInfo.DailyChildOrgAiUsage, prevDay.ChildOrgAiUsage)
+		deltaChildAgentExec := carryDailyDelta(executionInfo.DailyChildOrgAgentExecutions, prevDay.ChildOrgAgentExecutions)
+		deltaChildAgentTokens := carryDailyDelta(executionInfo.DailyChildOrgAgentTokens, prevDay.ChildOrgAgentTokens)
+		deltaSMS := carryDailyDelta(executionInfo.DailySMSUsage, prevDay.DailySMSUsage)
+		deltaChildSMS := carryDailyDelta(executionInfo.DailyChildOrgSMSUsage, prevDay.DailyChildOrgSMSUsage)
+		deltaEmail := carryDailyDelta(executionInfo.DailyEmailUsage, prevDay.DailyEmailUsage)
+		deltaChildEmail := carryDailyDelta(executionInfo.DailyChildOrgEmailUsage, prevDay.DailyChildOrgEmailUsage)
+		deltaLLM := carryDailyDelta(executionInfo.DailyLLMTokens, prevDay.LLMTokens)
+		deltaChildLLM := carryDailyDelta(executionInfo.DailyChildOrgLLMTokens, prevDay.ChildOrgLLMTokens)
+		deltaAgentExecSuccess := carryDailyDelta(executionInfo.DailyAgentExecutionsSuccessful, prevDay.AgentExecutionsSuccessful)
+		deltaAgentExecFailed := carryDailyDelta(executionInfo.DailyAgentExecutionsFailed, prevDay.AgentExecutionsFailed)
+		deltaAgentCached := carryDailyDelta(executionInfo.DailyAgentCachedTokens, prevDay.AgentCachedTokens)
+		deltaAgentMaxLoops := carryDailyDelta(executionInfo.DailyAgentMaxLoopsHit, prevDay.AgentMaxLoopsHit)
+		deltaChildAgentExecSuccess := carryDailyDelta(executionInfo.DailyChildOrgAgentExecutionsSuccessful, prevDay.ChildOrgAgentExecutionsSuccessful)
+		deltaChildAgentExecFailed := carryDailyDelta(executionInfo.DailyChildOrgAgentExecutionsFailed, prevDay.ChildOrgAgentExecutionsFailed)
+		deltaChildAgentCached := carryDailyDelta(executionInfo.DailyChildOrgAgentCachedTokens, prevDay.ChildOrgAgentCachedTokens)
+		deltaChildAgentMaxLoops := carryDailyDelta(executionInfo.DailyChildOrgAgentMaxLoopsHit, prevDay.ChildOrgAgentMaxLoopsHit)
+
 		executionInfo.DailyStatistics = append(executionInfo.DailyStatistics, DailyStatistics{
-			Date: time.Now(),
+			Date:                              time.Now(),
+			AppExecutions:                     deltaApp,
+			ChildAppExecutions:                deltaChildApp,
+			AppExecutionsFailed:               deltaAppFailed,
+			SubflowExecutions:                 deltaSubflow,
+			WorkflowExecutions:                deltaWorkflow,
+			WorkflowExecutionsFinished:        deltaWorkflowFinished,
+			WorkflowExecutionsFailed:          deltaWorkflowFailed,
+			OrgSyncActions:                    deltaOrgSync,
+			CloudExecutions:                   deltaCloud,
+			OnpremExecutions:                  deltaOnprem,
+			AIUsage:                           deltaAI,
+			ApiUsage:                          deltaApi,
+			AgentExecutions:                   deltaAgentExec,
+			AgentTokens:                       deltaAgentTokens,
+			AgentInputTokens:                  deltaAgentInputTokens,
+			ChildOrgAgentInputTokens:          deltaChildAgentInputTokens,
+			AgentOutputTokens:                 deltaAgentOutputTokens,
+			ChildOrgAgentOutputTokens:         deltaChildAgentOutputTokens,
+			ChildOrgAiUsage:                   deltaChildAiUsage,
+			ChildOrgAgentExecutions:           deltaChildAgentExec,
+			ChildOrgAgentTokens:               deltaChildAgentTokens,
+			DailySMSUsage:                     deltaSMS,
+			DailyChildOrgSMSUsage:             deltaChildSMS,
+			DailyEmailUsage:                   deltaEmail,
+			DailyChildOrgEmailUsage:           deltaChildEmail,
+			LLMTokens:                         deltaLLM,
+			ChildOrgLLMTokens:                 deltaChildLLM,
+			AgentExecutionsSuccessful:         deltaAgentExecSuccess,
+			AgentExecutionsFailed:             deltaAgentExecFailed,
+			AgentCachedTokens:                 deltaAgentCached,
+			AgentMaxLoopsHit:                  deltaAgentMaxLoops,
+			ChildOrgAgentExecutionsSuccessful: deltaChildAgentExecSuccess,
+			ChildOrgAgentExecutionsFailed:     deltaChildAgentExecFailed,
+			ChildOrgAgentCachedTokens:         deltaChildAgentCached,
+			ChildOrgAgentMaxLoopsHit:          deltaChildAgentMaxLoops,
+			Additions:                         executionInfo.Additions,
 		})
 
-		// Reset daily and hourly/weekly fields so they start fresh
-		executionInfo.HourlyAppExecutions = 0
-		executionInfo.HourlyChildAppExecutions = 0
-		executionInfo.HourlyAppExecutionsFailed = 0
-		executionInfo.HourlySubflowExecutions = 0
-		executionInfo.HourlyWorkflowExecutions = 0
-		executionInfo.HourlyWorkflowExecutionsFinished = 0
+		carriedDay = executionInfo.DailyStatistics[len(executionInfo.DailyStatistics)-1]
+
+		// Reset daily and hourly/weekly fields to the carried-forward amount (not 0) so the
+		// batch that triggered this rollover is preserved instead of lost.
+		executionInfo.HourlyAppExecutions = deltaApp
+		executionInfo.HourlyChildAppExecutions = deltaChildApp
+		executionInfo.HourlyAppExecutionsFailed = deltaAppFailed
+		executionInfo.HourlySubflowExecutions = deltaSubflow
+		executionInfo.HourlyWorkflowExecutions = deltaWorkflow
+		executionInfo.HourlyWorkflowExecutionsFinished = deltaWorkflowFinished
 		executionInfo.HourlyChildWorkflowExecutions = 0
-		executionInfo.HourlyWorkflowExecutionsFailed = 0
-		executionInfo.HourlyOrgSyncActions = 0
-		executionInfo.HourlyCloudExecutions = 0
-		executionInfo.HourlyOnpremExecutions = 0
+		executionInfo.HourlyWorkflowExecutionsFailed = deltaWorkflowFailed
+		executionInfo.HourlyOrgSyncActions = deltaOrgSync
+		executionInfo.HourlyCloudExecutions = deltaCloud
+		executionInfo.HourlyOnpremExecutions = deltaOnprem
 
-		executionInfo.DailyAppExecutions = 0
-		executionInfo.DailyChildAppExecutions = 0
-		executionInfo.DailyAppExecutionsFailed = 0
-		executionInfo.DailySubflowExecutions = 0
-		executionInfo.DailyWorkflowExecutions = 0
-		executionInfo.DailyWorkflowExecutionsFinished = 0
+		executionInfo.DailyAppExecutions = deltaApp
+		executionInfo.DailyChildAppExecutions = deltaChildApp
+		executionInfo.DailyAppExecutionsFailed = deltaAppFailed
+		executionInfo.DailySubflowExecutions = deltaSubflow
+		executionInfo.DailyWorkflowExecutions = deltaWorkflow
+		executionInfo.DailyWorkflowExecutionsFinished = deltaWorkflowFinished
 		executionInfo.DailyChildWorkflowExecutions = 0
-		executionInfo.DailyWorkflowExecutionsFailed = 0
-		executionInfo.DailyOrgSyncActions = 0
-		executionInfo.DailyCloudExecutions = 0
-		executionInfo.DailyOnpremExecutions = 0
-		executionInfo.DailyApiUsage = 0
-		executionInfo.DailyAIUsage = 0
-		executionInfo.DailyAgentExecutions = 0
-		executionInfo.DailyLLMTokens = 0
-		executionInfo.DailyChildOrgLLMTokens = 0
-		executionInfo.DailyAgentTokens = 0
-		executionInfo.DailyAgentInputTokens = 0
-		executionInfo.DailyAgentOutputTokens = 0
-		executionInfo.DailyChildOrgAiUsage = 0
-		executionInfo.DailyChildOrgAgentExecutions = 0
-		executionInfo.DailyChildOrgAgentTokens = 0
-		executionInfo.DailyChildOrgAgentInputTokens = 0
-		executionInfo.DailyChildOrgAgentOutputTokens = 0
-		executionInfo.DailySMSUsage = 0
-		executionInfo.DailyChildOrgSMSUsage = 0
-		executionInfo.DailyEmailUsage = 0
-		executionInfo.DailyChildOrgEmailUsage = 0
-		executionInfo.DailyAgentExecutionsSuccessful = 0
-		executionInfo.DailyAgentExecutionsFailed = 0
-		executionInfo.DailyAgentCachedTokens = 0
-		executionInfo.DailyAgentMaxLoopsHit = 0
-		executionInfo.DailyChildOrgAgentExecutionsSuccessful = 0
-		executionInfo.DailyChildOrgAgentExecutionsFailed = 0
-		executionInfo.DailyChildOrgAgentCachedTokens = 0
-		executionInfo.DailyChildOrgAgentMaxLoopsHit = 0
+		executionInfo.DailyWorkflowExecutionsFailed = deltaWorkflowFailed
+		executionInfo.DailyOrgSyncActions = deltaOrgSync
+		executionInfo.DailyCloudExecutions = deltaCloud
+		executionInfo.DailyOnpremExecutions = deltaOnprem
+		executionInfo.DailyApiUsage = deltaApi
+		executionInfo.DailyAIUsage = deltaAI
+		executionInfo.DailyAgentExecutions = deltaAgentExec
+		executionInfo.DailyLLMTokens = deltaLLM
+		executionInfo.DailyChildOrgLLMTokens = deltaChildLLM
+		executionInfo.DailyAgentTokens = deltaAgentTokens
+		executionInfo.DailyAgentInputTokens = deltaAgentInputTokens
+		executionInfo.DailyAgentOutputTokens = deltaAgentOutputTokens
+		executionInfo.DailyChildOrgAiUsage = deltaChildAiUsage
+		executionInfo.DailyChildOrgAgentExecutions = deltaChildAgentExec
+		executionInfo.DailyChildOrgAgentTokens = deltaChildAgentTokens
+		executionInfo.DailyChildOrgAgentInputTokens = deltaChildAgentInputTokens
+		executionInfo.DailyChildOrgAgentOutputTokens = deltaChildAgentOutputTokens
+		executionInfo.DailySMSUsage = deltaSMS
+		executionInfo.DailyChildOrgSMSUsage = deltaChildSMS
+		executionInfo.DailyEmailUsage = deltaEmail
+		executionInfo.DailyChildOrgEmailUsage = deltaChildEmail
+		executionInfo.DailyAgentExecutionsSuccessful = deltaAgentExecSuccess
+		executionInfo.DailyAgentExecutionsFailed = deltaAgentExecFailed
+		executionInfo.DailyAgentCachedTokens = deltaAgentCached
+		executionInfo.DailyAgentMaxLoopsHit = deltaAgentMaxLoops
+		executionInfo.DailyChildOrgAgentExecutionsSuccessful = deltaChildAgentExecSuccess
+		executionInfo.DailyChildOrgAgentExecutionsFailed = deltaChildAgentExecFailed
+		executionInfo.DailyChildOrgAgentCachedTokens = deltaChildAgentCached
+		executionInfo.DailyChildOrgAgentMaxLoopsHit = deltaChildAgentMaxLoops
 
-		executionInfo.WeeklyAppExecutions = 0
-		executionInfo.WeeklyChildAppExecutions = 0
-		executionInfo.WeeklyAppExecutionsFailed = 0
-		executionInfo.WeeklySubflowExecutions = 0
-		executionInfo.WeeklyWorkflowExecutions = 0
-		executionInfo.WeeklyWorkflowExecutionsFinished = 0
-		executionInfo.WeeklyWorkflowExecutionsFailed = 0
-		executionInfo.WeeklyOrgSyncActions = 0
-		executionInfo.WeeklyCloudExecutions = 0
-		executionInfo.WeeklyOnpremExecutions = 0
+		executionInfo.WeeklyAppExecutions = deltaApp
+		executionInfo.WeeklyChildAppExecutions = deltaChildApp
+		executionInfo.WeeklyAppExecutionsFailed = deltaAppFailed
+		executionInfo.WeeklySubflowExecutions = deltaSubflow
+		executionInfo.WeeklyWorkflowExecutions = deltaWorkflow
+		executionInfo.WeeklyWorkflowExecutionsFinished = deltaWorkflowFinished
+		executionInfo.WeeklyWorkflowExecutionsFailed = deltaWorkflowFailed
+		executionInfo.WeeklyOrgSyncActions = deltaOrgSync
+		executionInfo.WeeklyCloudExecutions = deltaCloud
+		executionInfo.WeeklyOnpremExecutions = deltaOnprem
 		executionInfo.WeeklyChildWorkflowExecutions = 0
 
 		for additionIndex := range executionInfo.Additions {
@@ -1781,41 +1892,42 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	if executionInfo.LastMonthlyResetMonth != currentMonth {
 		log.Printf("[DEBUG] Resetting monthly stats for org %s on %s", executionInfo.OrgId, now.Format("2006-01-02"))
 
-		executionInfo.MonthlyAppExecutions = 0
-		executionInfo.MonthlyChildAppExecutions = 0
-		executionInfo.MonthlyAppExecutionsFailed = 0
-		executionInfo.MonthlySubflowExecutions = 0
-		executionInfo.MonthlyWorkflowExecutions = 0
-		executionInfo.MonthlyWorkflowExecutionsFinished = 0
+		executionInfo.MonthlyAppExecutions = carriedDay.AppExecutions
+		executionInfo.MonthlyChildAppExecutions = carriedDay.ChildAppExecutions
+		executionInfo.MonthlyAppExecutionsFailed = carriedDay.AppExecutionsFailed
+		executionInfo.MonthlySubflowExecutions = carriedDay.SubflowExecutions
+		executionInfo.MonthlyWorkflowExecutions = carriedDay.WorkflowExecutions
+		executionInfo.MonthlyWorkflowExecutionsFinished = carriedDay.WorkflowExecutionsFinished
 		executionInfo.MonthlyChildWorkflowExecutions = 0
-		executionInfo.MonthlyWorkflowExecutionsFailed = 0
-		executionInfo.MonthlyOrgSyncActions = 0
-		executionInfo.MonthlyCloudExecutions = 0
-		executionInfo.MonthlyOnpremExecutions = 0
-		executionInfo.MonthlyApiUsage = 0
-		executionInfo.MonthlyAIUsage = 0
-		executionInfo.MonthlyAgentExecutions = 0
-		executionInfo.MonthlyAgentExecutionsSuccessful = 0
-		executionInfo.MonthlyAgentExecutionsFailed = 0
-		executionInfo.MonthlyAgentMaxLoopsHit = 0
-		executionInfo.MonthlyLLMTokens = 0
-		executionInfo.MonthlyAgentTokens = 0
-		executionInfo.MonthlyAgentInputTokens = 0
-		executionInfo.MonthlyAgentOutputTokens = 0
-		executionInfo.MonthlyAgentCachedTokens = 0
-		executionInfo.MonthlyChildOrgAiUsage = 0
-		executionInfo.MonthlyChildOrgAgentExecutions = 0
-		executionInfo.MonthlyChildOrgAgentTokens = 0
-		executionInfo.MonthlyChildOrgAgentInputTokens = 0
-		executionInfo.MonthlyChildOrgAgentOutputTokens = 0
-		executionInfo.MonthlySMSUsage = 0
-		executionInfo.MonthlyChildOrgSMSUsage = 0
-		executionInfo.MonthlyEmailUsage = 0
-		executionInfo.MonthlyChildOrgEmailUsage = 0
-		executionInfo.MonthlyChildOrgAgentExecutionsSuccessful = 0
-		executionInfo.MonthlyChildOrgAgentExecutionsFailed = 0
-		executionInfo.MonthlyChildOrgAgentCachedTokens = 0
-		executionInfo.MonthlyChildOrgAgentMaxLoopsHit = 0
+		executionInfo.MonthlyWorkflowExecutionsFailed = carriedDay.WorkflowExecutionsFailed
+		executionInfo.MonthlyOrgSyncActions = carriedDay.OrgSyncActions
+		executionInfo.MonthlyCloudExecutions = carriedDay.CloudExecutions
+		executionInfo.MonthlyOnpremExecutions = carriedDay.OnpremExecutions
+		executionInfo.MonthlyApiUsage = carriedDay.ApiUsage
+		executionInfo.MonthlyAIUsage = carriedDay.AIUsage
+		executionInfo.MonthlyAgentExecutions = carriedDay.AgentExecutions
+		executionInfo.MonthlyAgentExecutionsSuccessful = carriedDay.AgentExecutionsSuccessful
+		executionInfo.MonthlyAgentExecutionsFailed = carriedDay.AgentExecutionsFailed
+		executionInfo.MonthlyAgentMaxLoopsHit = carriedDay.AgentMaxLoopsHit
+		executionInfo.MonthlyLLMTokens = carriedDay.LLMTokens
+		executionInfo.MonthlyChildOrgLLMTokens = carriedDay.ChildOrgLLMTokens
+		executionInfo.MonthlyAgentTokens = carriedDay.AgentTokens
+		executionInfo.MonthlyAgentInputTokens = carriedDay.AgentInputTokens
+		executionInfo.MonthlyAgentOutputTokens = carriedDay.AgentOutputTokens
+		executionInfo.MonthlyAgentCachedTokens = carriedDay.AgentCachedTokens
+		executionInfo.MonthlyChildOrgAiUsage = carriedDay.ChildOrgAiUsage
+		executionInfo.MonthlyChildOrgAgentExecutions = carriedDay.ChildOrgAgentExecutions
+		executionInfo.MonthlyChildOrgAgentTokens = carriedDay.ChildOrgAgentTokens
+		executionInfo.MonthlyChildOrgAgentInputTokens = carriedDay.ChildOrgAgentInputTokens
+		executionInfo.MonthlyChildOrgAgentOutputTokens = carriedDay.ChildOrgAgentOutputTokens
+		executionInfo.MonthlySMSUsage = carriedDay.DailySMSUsage
+		executionInfo.MonthlyChildOrgSMSUsage = carriedDay.DailyChildOrgSMSUsage
+		executionInfo.MonthlyEmailUsage = carriedDay.DailyEmailUsage
+		executionInfo.MonthlyChildOrgEmailUsage = carriedDay.DailyChildOrgEmailUsage
+		executionInfo.MonthlyChildOrgAgentExecutionsSuccessful = carriedDay.ChildOrgAgentExecutionsSuccessful
+		executionInfo.MonthlyChildOrgAgentExecutionsFailed = carriedDay.ChildOrgAgentExecutionsFailed
+		executionInfo.MonthlyChildOrgAgentCachedTokens = carriedDay.ChildOrgAgentCachedTokens
+		executionInfo.MonthlyChildOrgAgentMaxLoopsHit = carriedDay.ChildOrgAgentMaxLoopsHit
 		executionInfo.LastMonthlyResetMonth = currentMonth
 		executionInfo.LastUsageAlertThreshold = 0
 		executionInfo.MonthlyAIUsageAlertSent = false

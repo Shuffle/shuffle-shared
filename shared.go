@@ -19529,11 +19529,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						}
 					}
 
-					if strings.ToLower(actionResult.Action.Environment) == "cloud" {
-						workflowExecution.Status = "WAITING"
-						setWorkflow = true
-					}
-
 					if setWorkflow {
 						// Set with database saving
 						err = SetWorkflowExecution(ctx, workflowExecution, true)
