@@ -1,0 +1,1940 @@
+[
+ {
+  "id": "s01",
+  "group": "samples",
+  "caller": "AutofixAppLabels",
+  "description": "Fenced, pretty-printed category reply (most common production shape)",
+  "input": "```json\n{\n  \"success\": true,\n  \"category\": \"Cases\"\n}\n```",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Cases",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "s02",
+  "group": "samples",
+  "caller": "AutofixAppLabels",
+  "description": "Fenced, single-line category reply",
+  "input": "```json\n{\"category\": \"Other\", \"success\": false}\n```",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Other",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "s03",
+  "group": "samples",
+  "caller": "AutofixAppLabels",
+  "description": "Bare JSON, no fence",
+  "input": "{\"success\": true, \"category\": \"SIEM\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=SIEM",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "s04",
+  "group": "samples",
+  "caller": "AutofixAppLabels",
+  "description": "Empty reply from the model",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s05",
+  "group": "samples",
+  "caller": "HandleAiAgentExecutionStart",
+  "description": "Answer with bash code blocks in the answer text (the reported bug)",
+  "input": "[\n  {\n    \"i\": 0,\n    \"action\": \"finish\",\n    \"category\": \"finish\",\n    \"tool\": \"core\",\n    \"confidence\": 1.0,\n    \"runs\": \"1\",\n    \"delay\": \"0\",\n    \"approval_required\": false,\n    \"data_filter\": \"full\",\n    \"reason\": \"Provide clear, supportive, and exact remediation instructions and pip commands to fix the LangChain vulnerability.\",\n    \"fields\": [\n      {\n        \"key\": \"output\",\n        \"value\": \"### Remediation Guide: Fixing the LangChain Vulnerability\\n\\nLangChain has had several notable vulnerabilities historically (most notably arbitrary code execution via unsafe evaluation in modules like `PALChain` or SQL injection in early versions, e.g., CVE-2023-36258, CVE-2023-36095, CVE-2023-39659). In newer releases, LangChain has modularized its packages into `langchain`, `langchain-core`, and `langchain-community` with strict sandbox controls.\\n\\n---\\n\\n### 1. Exact Upgrade Commands\\n\\nTo upgrade `langchain` and its companion libraries to the latest secure versions, run the following command in your active Python environment:\\n\\n```bash\\npip install --upgrade langchain langchain-core langchain-community\\n```\\n\\nIf your service runs in a virtual environment (recommended), ensure it is activated first:\\n```bash\\nsource /path/to/your/venv/bin/activate\\npip install --upgrade langchain langchain-core langchain-community\\n```\\n\\nIf you need to update your `requirements.txt` file automatically:\\n```bash\\npip install --upgrade langchain langchain-core langchain-community\\npip freeze | grep langchain \u003e updated_langchain_requirements.txt\\n```\\n\\n---\\n\\n### 2. Verify the Installed Version\\n\\nRun the following command to verify that the upgraded package is active:\\n\\n```bash\\npython3 -c \\\"import langchain; print('LangChain version:', langchain.__version__)\\\"\\n```\\nOr inspect via pip:\\n```bash\\npip show langchain langchain-core\\n```\\n\\n---\\n\\n### 3. Practical Safety \u0026 Validation Steps\\n\\n1. **Restart Running Services:** Don't forget to restart your application or systemd service worker so the new package in memory is picked up:\\n   ```bash\\n   sudo systemctl restart \u003cyour-service-name\u003e\\n   ```\\n2. **Check for Deprecated Imports:** If upgrading from `0.0.x` or early `0.1.x`, some classes may have moved to `langchain_community` or `langchain_core`. Run your test suite or check logs on startup to catch any import changes.\\n3. **Sanitize Dynamic Code Execution:** If your application uses `load_tools` with tools like `python_repl` or `pal-chain`, ensure `allow_dangerous_tools=True` is only set if strictly necessary and input is strictly validated.\"\n      }\n    ]\n  }\n]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=2121",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s06",
+  "group": "samples",
+  "caller": "HandleAiAgentExecutionStart",
+  "description": "Normal tool call without fences (the common success case)",
+  "input": "[\n  {\n    \"i\": 0,\n    \"action\": \"post_update_ticket\",\n    \"category\": \"singul\",\n    \"tool\": \"shuffle_datastore\",\n    \"confidence\": 1.0,\n    \"runs\": \"1\",\n    \"delay\": \"0\",\n    \"approval_required\": false,\n    \"data_filter\": \"full\",\n    \"reason\": \"Update the ticket status\",\n    \"fields\": [\n      {\n        \"key\": \"body\",\n        \"value\": \"{\\\"status\\\": \\\"inProgress\\\", \\\"severity\\\": \\\"low\\\"}\"\n      }\n    ]\n  }\n]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"post_update_ticket\", answer length=43",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s07",
+  "group": "samples",
+  "caller": "HandleAiAgentExecutionStart",
+  "description": "Answer contains a ```json block with a tasks list",
+  "input": "[\n  {\n    \"i\": 0,\n    \"action\": \"finish\",\n    \"category\": \"finish\",\n    \"tool\": \"core\",\n    \"confidence\": 1.0,\n    \"runs\": \"1\",\n    \"delay\": \"0\",\n    \"approval_required\": false,\n    \"reason\": \"Created triage tasks\",\n    \"fields\": [\n      {\n        \"key\": \"output\",\n        \"value\": \"### Triage plan\\n\\n```json\\n{\\n  \\\"tasks\\\": [\\n    {\\n      \\\"assignee\\\": \\\"@AIAgent\\\",\\n      \\\"title\\\": \\\"Review login events for host A\\\",\\n      \\\"category\\\": \\\"triage\\\",\\n      \\\"action\\\": \\\"query\\\",\\n      \\\"source\\\": \\\"siem\\\",\\n      \\\"completed\\\": false\\n    },\\n    {\\n      \\\"assignee\\\": \\\"@AIAgent\\\",\\n      \\\"title\\\": \\\"Check reputation of the sender domain\\\",\\n      \\\"category\\\": \\\"triage\\\",\\n      \\\"action\\\": \\\"query\\\",\\n      \\\"source\\\": \\\"intel\\\",\\n      \\\"completed\\\": false\\n    }\\n  ]\\n}\\n```\"\n      }\n    ]\n  }\n]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=444",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s08",
+  "group": "samples",
+  "caller": "HandleAiAgentExecutionStart",
+  "description": "Answer contains a ```text ASCII diagram",
+  "input": "[\n  {\n    \"i\": 0,\n    \"action\": \"finish\",\n    \"category\": \"finish\",\n    \"tool\": \"core\",\n    \"confidence\": 1.0,\n    \"runs\": \"1\",\n    \"delay\": \"0\",\n    \"approval_required\": false,\n    \"reason\": \"Answered the request\",\n    \"fields\": [\n      {\n        \"key\": \"output\",\n        \"value\": \"Suggested flow:\\n\\n```text\\n[Webhook: alert]\\n       \\u2502\\n       \\u251c\\u2500\\u25ba [HTTP: enrich]\\n       \\u2502         \\u2502\\n       \\u2502         \\u2514\\u2500\\u25ba [Cases: create ticket]\\n       \\u25bc\\n[Email: notify]\\n```\"\n      }\n    ]\n  }\n]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=190",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s09",
+  "group": "samples",
+  "caller": "HandleAiAgentExecutionStart",
+  "description": "Answer contains an ```xml config block",
+  "input": "[\n  {\n    \"i\": 0,\n    \"action\": \"finish\",\n    \"category\": \"finish\",\n    \"tool\": \"core\",\n    \"confidence\": 1.0,\n    \"runs\": \"1\",\n    \"delay\": \"0\",\n    \"approval_required\": false,\n    \"reason\": \"Answered the request\",\n    \"fields\": [\n      {\n        \"key\": \"output\",\n        \"value\": \"Add this to the config file:\\n\\n```xml\\n\u003cconfig\u003e\\n  \u003cintegration\u003e\\n    \u003cname\u003eexample\u003c/name\u003e\\n    \u003chook_url\u003ehttps://example.com/hook\u003c/hook_url\u003e\\n    \u003cformat\u003ejson\u003c/format\u003e\\n  \u003c/integration\u003e\\n\u003c/config\u003e\\n```\"\n      }\n    ]\n  }\n]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=193",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s10",
+  "group": "samples",
+  "caller": "HandleAiAgentExecutionStart",
+  "description": "Answer contains a ```json OpenAPI spec",
+  "input": "[\n  {\n    \"i\": 0,\n    \"action\": \"finish\",\n    \"category\": \"finish\",\n    \"tool\": \"core\",\n    \"confidence\": 1.0,\n    \"runs\": \"1\",\n    \"delay\": \"0\",\n    \"approval_required\": false,\n    \"reason\": \"Answered the request\",\n    \"fields\": [\n      {\n        \"key\": \"output\",\n        \"value\": \"Here is the OpenAPI spec:\\n\\n```json\\n{\\n  \\\"openapi\\\": \\\"3.0.0\\\",\\n  \\\"info\\\": {\\n    \\\"title\\\": \\\"Example API\\\",\\n    \\\"version\\\": \\\"1.0.0\\\"\\n  },\\n  \\\"servers\\\": [\\n    {\\n      \\\"url\\\": \\\"https://api.example.com/v1\\\"\\n    }\\n  ],\\n  \\\"paths\\\": {\\n    \\\"/items\\\": {\\n      \\\"get\\\": {\\n        \\\"summary\\\": \\\"List items\\\"\\n      }\\n    }\\n  }\\n}\\n```\"\n      }\n    ]\n  }\n]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=300",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s11",
+  "group": "samples",
+  "caller": "HandleAiAgentExecutionStart",
+  "description": "Whole reply wrapped in ```json, answer also contains bash blocks",
+  "input": "```json\n[\n  {\n    \"i\": 0,\n    \"action\": \"finish\",\n    \"category\": \"finish\",\n    \"tool\": \"core\",\n    \"confidence\": 1.0,\n    \"runs\": \"1\",\n    \"delay\": \"0\",\n    \"approval_required\": false,\n    \"reason\": \"Answered the request\",\n    \"fields\": [\n      {\n        \"key\": \"output\",\n        \"value\": \"Upgrade the package:\\n\\n```bash\\npip install --upgrade example-package\\n```\\n\\nVerify:\\n```bash\\npip show example-package\\n```\"\n      }\n    ]\n  }\n]\n```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=117",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s12",
+  "group": "samples",
+  "caller": "HandleAiAgentExecutionStart",
+  "description": "Reply cut off mid-decision",
+  "input": "[\n  {\n    \"i\": 0,\n    \"action\": \"post_update_ticket\",\n    \"category\": \"singul\",\n    \"tool\": \"shuffle_datastore\",\n    \"",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s13",
+  "group": "samples",
+  "caller": "HandleAiAgentExecutionStart",
+  "description": "Valid JSON but the decision has no \"action\" key",
+  "input": "[\n  {\n    \"approval_required\": false,\n    \"category\": \"finish\",\n    \"confidence\": 1,\n    \"delay\": \"0\",\n    \"i\": 0,\n    \"runs\": \"1\",\n    \"tool\": \"core\",\n    \"reason\": \"Summary written\",\n    \"fields\": [\n      {\n        \"key\": \"output\",\n        \"value\": \"### Summary\\n- Severity: low\"\n      }\n    ]\n  }\n]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s14",
+  "group": "samples",
+  "caller": "HandleAiAgentExecutionStart",
+  "description": "Empty decision list",
+  "input": "[]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s15",
+  "group": "samples",
+  "caller": "HandleAiAgentExecutionStart",
+  "description": "Model returned a request-body template instead of decisions",
+  "input": "{\n  \"name\": \"{{ '''${name}''' | replace: '\\n', ' ' }}\",\n  \"link\": \"${link}\",\n  \"count\": ${count},\n  \"level\": \"${level}\",\n  \"enabled\": ${enabled}\n}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s16",
+  "group": "samples",
+  "caller": "RunSelfCorrectingRequest",
+  "description": "Corrected request as a clean JSON object (the success case)",
+  "input": "{\n  \"method\": \"GET\",\n  \"url\": \"https://api.example.com/v1/items\",\n  \"headers\": \"Content-Type=application/json\\nAccept=application/json\",\n  \"queries\": \"page=1\u0026limit=10\",\n  \"body\": \"\"\n}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 4 field(s)"
+  }
+ },
+ {
+  "id": "s17",
+  "group": "samples",
+  "caller": "RunSelfCorrectingRequest",
+  "description": "Model 'thinking out loud' with inline code and fences before its JSON",
+  "input": "Wait, the API returned `{\"error\":\"not found\"}`.\nWait! Is the path wrong? It should be ```/v1/items```.\nSo the fix is:\n```json\n{\n  \"method\": \"GET\",\n  \"url\": \"https://api.example.com/v1/items\",\n  \"headers\": \"Content-Type=application/json\\nAccept=application/json\",\n  \"queries\": \"page=1\u0026limit=10\",\n  \"body\": \"\"\n}\n```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 4 field(s)"
+  }
+ },
+ {
+  "id": "s18",
+  "group": "samples",
+  "caller": "RunSelfCorrectingRequest",
+  "description": "JSON-RPC body with a Liquid template and unescaped quotes",
+  "input": "{\n  \"headers\": \"\",\n  \"queries\": \"\",\n\"body\": {\n         \"params\": {\n             \"page\": 1\n         },\n         \"jsonrpc\": \"{{ [\"2\", \"0\"] | join: \".\" }}\",\n         \"method\": \"listItems\",\n         \"id\": \"1\"\n     },\n  \"method\": \"POST\",\n  \"path\": \"/v1/jsonrpc\"\n}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s19",
+  "group": "samples",
+  "caller": "RunSelfCorrectingRequest",
+  "description": "Request object cut off mid-field",
+  "input": "{\n  \"apikey\": \"\",\n  \"archived\": \"\",\n  \"headers\": \"Content-Type=application/json\",\n  \"page\": \"1\",\n  \"limit\":",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "s20",
+  "group": "samples",
+  "caller": "RunSelfCorrectingRequest",
+  "description": "Bare number instead of an object",
+  "input": "42",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_001",
+  "group": "empty",
+  "caller": "all",
+  "description": "empty string",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_002",
+  "group": "empty",
+  "caller": "all",
+  "description": "single space",
+  "input": " ",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_003",
+  "group": "empty",
+  "caller": "all",
+  "description": "newline only",
+  "input": "\n",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_004",
+  "group": "empty",
+  "caller": "all",
+  "description": "tabs, spaces and newlines",
+  "input": "\t\n   \n\t",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_005",
+  "group": "empty",
+  "caller": "all",
+  "description": "CRLF only",
+  "input": "\r\n",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_006",
+  "group": "empty",
+  "caller": "all",
+  "description": "non-breaking space",
+  "input": " ",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_007",
+  "group": "empty",
+  "caller": "all",
+  "description": "BOM only",
+  "input": "﻿",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_008",
+  "group": "empty",
+  "caller": "all",
+  "description": "zero-width space",
+  "input": "​",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_009",
+  "group": "not_json",
+  "caller": "all",
+  "description": "plain word",
+  "input": "hello",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_010",
+  "group": "not_json",
+  "caller": "all",
+  "description": "sentence",
+  "input": "The category is Intel.",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_011",
+  "group": "not_json",
+  "caller": "all",
+  "description": "undefined",
+  "input": "undefined",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_012",
+  "group": "not_json",
+  "caller": "all",
+  "description": "NaN",
+  "input": "NaN",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_013",
+  "group": "not_json",
+  "caller": "all",
+  "description": "Infinity",
+  "input": "Infinity",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_014",
+  "group": "not_json",
+  "caller": "all",
+  "description": "Python-style True",
+  "input": "True",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_015",
+  "group": "not_json",
+  "caller": "all",
+  "description": "braces without JSON",
+  "input": "{hello}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_016",
+  "group": "not_json",
+  "caller": "all",
+  "description": "brackets without JSON",
+  "input": "[hello]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_017",
+  "group": "not_json",
+  "caller": "all",
+  "description": "XML",
+  "input": "\u003ccategory\u003eIntel\u003c/category\u003e",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_018",
+  "group": "not_json",
+  "caller": "all",
+  "description": "markdown heading",
+  "input": "# Result\nIntel",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_019",
+  "group": "not_json",
+  "caller": "all",
+  "description": "YAML",
+  "input": "success: true\ncategory: Intel",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_020",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: null",
+  "input": "null",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 0 field(s)"
+  }
+ },
+ {
+  "id": "edge_021",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: true",
+  "input": "true",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_022",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: false",
+  "input": "false",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_023",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: 0",
+  "input": "0",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_024",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: -1",
+  "input": "-1",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_025",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: 3.14",
+  "input": "3.14",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_026",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: 1e309",
+  "input": "1e309",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_027",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: 12345678901234567890",
+  "input": "12345678901234567890",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_028",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: \"string\"",
+  "input": "\"string\"",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_029",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: \"\"",
+  "input": "\"\"",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_030",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: []",
+  "input": "[]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_031",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: {}",
+  "input": "{}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 0 field(s)"
+  }
+ },
+ {
+  "id": "edge_032",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: [1, 2, 3]",
+  "input": "[1, 2, 3]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_033",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: [null]",
+  "input": "[null]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_034",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: [[]]",
+  "input": "[[]]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_035",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: [{}]",
+  "input": "[{}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_036",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: [\"finish\"]",
+  "input": "[\"finish\"]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_037",
+  "group": "wrong_json_type",
+  "caller": "all",
+  "description": "top-level JSON: [1, {\"action\": \"finish\"}]",
+  "input": "[1, {\"action\": \"finish\"}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=0",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_038",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"category\": 123}",
+  "input": "{\"category\": 123}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_039",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"category\": null}",
+  "input": "{\"category\": null}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_040",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"category\": true}",
+  "input": "{\"category\": true}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_041",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"category\": [\"Intel\"]}",
+  "input": "{\"category\": [\"Intel\"]}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_042",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"category\": {\"name\": \"Intel\"}}",
+  "input": "{\"category\": {\"name\": \"Intel\"}}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_043",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"category\": \"\"}",
+  "input": "{\"category\": \"\"}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_044",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"category\": \" \"}",
+  "input": "{\"category\": \" \"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category= ",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_045",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"Category\": \"Intel\"}",
+  "input": "{\"Category\": \"Intel\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_046",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"CATEGORY\": \"Intel\"}",
+  "input": "{\"CATEGORY\": \"Intel\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_047",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"category\": \"Intel\", \"category\": \"Other\"}",
+  "input": "{\"category\": \"Intel\", \"category\": \"Other\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Other",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_048",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"success\": true}",
+  "input": "{\"success\": true}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_049",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"success\": \"yes\", \"category\": \"Intel\", \"extra\": [1, 2]}",
+  "input": "{\"success\": \"yes\", \"category\": \"Intel\", \"extra\": [1, 2]}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 3 field(s)"
+  }
+ },
+ {
+  "id": "edge_050",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"category\": \"Intel\\u0000\"}",
+  "input": "{\"category\": \"Intel\\u0000\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel\u0000",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_051",
+  "group": "category_type",
+  "caller": "all",
+  "description": "category shape: {\"category\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "input": "{\"category\": \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_052",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": 123}]",
+  "input": "[{\"action\": 123}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_053",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": null}]",
+  "input": "[{\"action\": null}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"\", answer length=0",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_054",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": true}]",
+  "input": "[{\"action\": true}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_055",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": \"\"}]",
+  "input": "[{\"action\": \"\"}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"\", answer length=0",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_056",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": [\"finish\"]}]",
+  "input": "[{\"action\": [\"finish\"]}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_057",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": \"finish\", \"fields\": \"not a list\"}]",
+  "input": "[{\"action\": \"finish\", \"fields\": \"not a list\"}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_058",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": \"finish\", \"fields\": [{\"key\": \"output\", \"value\": 5}]}]",
+  "input": "[{\"action\": \"finish\", \"fields\": [{\"key\": \"output\", \"value\": 5}]}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=1",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_059",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": \"finish\", \"fields\": [{\"key\": \"output\", \"value\": {\"a\": 1}}]",
+  "input": "[{\"action\": \"finish\", \"fields\": [{\"key\": \"output\", \"value\": {\"a\": 1}}]}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=7",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_060",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": \"finish\", \"fields\": [{\"key\": \"output\", \"value\": null}]}]",
+  "input": "[{\"action\": \"finish\", \"fields\": [{\"key\": \"output\", \"value\": null}]}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=0",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_061",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": \"finish\", \"fields\": [{\"value\": \"no key\"}]}]",
+  "input": "[{\"action\": \"finish\", \"fields\": [{\"value\": \"no key\"}]}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=6",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_062",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": \"finish\", \"fields\": [null]}]",
+  "input": "[{\"action\": \"finish\", \"fields\": [null]}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=0",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_063",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": \"finish\", \"i\": \"zero\"}]",
+  "input": "[{\"action\": \"finish\", \"i\": \"zero\"}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_064",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": \"finish\", \"confidence\": \"high\"}]",
+  "input": "[{\"action\": \"finish\", \"confidence\": \"high\"}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_065",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": \"finish\", \"runs\": 1}]",
+  "input": "[{\"action\": \"finish\", \"runs\": 1}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_066",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": \"finish\", \"approval_required\": \"yes\"}]",
+  "input": "[{\"action\": \"finish\", \"approval_required\": \"yes\"}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_067",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"action\": \"finish\", \"fields\": [[1, 2]]}]",
+  "input": "[{\"action\": \"finish\", \"fields\": [[1, 2]]}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_068",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [[{\"action\": \"finish\"}]]",
+  "input": "[[{\"action\": \"finish\"}]]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=0",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_069",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"tool\": \"core\"}]",
+  "input": "[{\"tool\": \"core\"}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_070",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "decisions: [{\"ACTION\": \"finish\"}]",
+  "input": "[{\"ACTION\": \"finish\"}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_071",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "single decision object (not array)",
+  "input": "{\"i\": 0, \"action\": \"finish\", \"category\": \"finish\", \"tool\": \"core\", \"confidence\": 1.0, \"fields\": [{\"key\": \"output\", \"value\": \"done\"}]}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=finish",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=4",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 6 field(s)"
+  }
+ },
+ {
+  "id": "edge_072",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "JSONL: two decision objects on separate lines",
+  "input": "{\"i\": 0, \"action\": \"finish\", \"category\": \"finish\", \"tool\": \"core\", \"confidence\": 1.0, \"fields\": [{\"key\": \"output\", \"value\": \"done\"}]}\n{\"i\": 0, \"action\": \"finish\", \"category\": \"finish\", \"tool\": \"core\", \"confidence\": 1.0, \"fields\": [{\"key\": \"output\", \"value\": \"done\"}]}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 2 decision(s), first action=\"finish\", answer length=4",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_073",
+  "group": "decision_types",
+  "caller": "all",
+  "description": "1000 decisions",
+  "generated": true,
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1000 decision(s), first action=\"finish\", answer length=4",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_074",
+  "group": "fences",
+  "caller": "all",
+  "description": "only ```",
+  "input": "```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_075",
+  "group": "fences",
+  "caller": "all",
+  "description": "six backticks",
+  "input": "``````",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_076",
+  "group": "fences",
+  "caller": "all",
+  "description": "```json with nothing after",
+  "input": "```json",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_077",
+  "group": "fences",
+  "caller": "all",
+  "description": "```json + newline",
+  "input": "```json\n",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_078",
+  "group": "fences",
+  "caller": "all",
+  "description": "empty plain fence",
+  "input": "```\n```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_079",
+  "group": "fences",
+  "caller": "all",
+  "description": "```json``` with no newline",
+  "input": "```json```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_080",
+  "group": "fences",
+  "caller": "all",
+  "description": "empty json fence",
+  "input": "```json\n```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_081",
+  "group": "fences",
+  "caller": "all",
+  "description": "unclosed ```json with JSON",
+  "input": "```json\n{\"success\": true, \"category\": \"Intel\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_082",
+  "group": "fences",
+  "caller": "all",
+  "description": "uppercase ```JSON",
+  "input": "```JSON\n{\"success\": true, \"category\": \"Intel\"}\n```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_083",
+  "group": "fences",
+  "caller": "all",
+  "description": "``` json (space before tag)",
+  "input": "``` json\n{\"success\": true, \"category\": \"Intel\"}\n```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_084",
+  "group": "fences",
+  "caller": "all",
+  "description": "tilde fence ~~~json",
+  "input": "~~~json\n{\"success\": true, \"category\": \"Intel\"}\n~~~",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_085",
+  "group": "fences",
+  "caller": "all",
+  "description": "four-backtick fence",
+  "input": "````json\n{\"success\": true, \"category\": \"Intel\"}\n````",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_086",
+  "group": "fences",
+  "caller": "all",
+  "description": "inline single backticks",
+  "input": "`{\"success\": true, \"category\": \"Intel\"}`",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_087",
+  "group": "fences",
+  "caller": "all",
+  "description": "CRLF fence",
+  "input": "```json\r\n{\"success\": true, \"category\": \"Intel\"}\r\n```",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_088",
+  "group": "fences",
+  "caller": "all",
+  "description": "prose then fence",
+  "input": "Here you go:\n```json\n{\"success\": true, \"category\": \"Intel\"}\n```",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_089",
+  "group": "fences",
+  "caller": "all",
+  "description": "fence then prose",
+  "input": "```json\n{\"success\": true, \"category\": \"Intel\"}\n```\nHope this helps!",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_090",
+  "group": "fences",
+  "caller": "all",
+  "description": "two json fences, both valid",
+  "input": "```json\n{\"success\": true, \"category\": \"Intel\"}\n```\n```json\n{\"category\": \"Other\"}\n```",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_091",
+  "group": "fences",
+  "caller": "all",
+  "description": "bash fence then json fence",
+  "input": "```bash\nls\n```\n```json\n{\"success\": true, \"category\": \"Intel\"}\n```",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_092",
+  "group": "fences",
+  "caller": "all",
+  "description": "plain fence with bash content",
+  "input": "```bash\nls -la\n```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_093",
+  "group": "fences",
+  "caller": "all",
+  "description": "fence at very end",
+  "input": "{\"success\": true, \"category\": \"Intel\"}```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_094",
+  "group": "fences",
+  "caller": "all",
+  "description": "fence at very start, nothing else",
+  "input": "```{\"success\": true, \"category\": \"Intel\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_095",
+  "group": "fences",
+  "caller": "all",
+  "description": "JSON with code blocks in a string (the prod bug)",
+  "input": "[\n  {\n    \"i\": 0,\n    \"action\": \"finish\",\n    \"category\": \"finish\",\n    \"tool\": \"core\",\n    \"confidence\": 1.0,\n    \"fields\": [\n      {\n        \"key\": \"output\",\n        \"value\": \"Upgrade:\\n```bash\\npip install -U langchain\\n```\\nVerify:\\n```bash\\npip show langchain\\n```\"\n      }\n    ]\n  }\n]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=84",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_096",
+  "group": "fences",
+  "caller": "all",
+  "description": "same, wrapped in ```json",
+  "input": "```json\n[\n  {\n    \"i\": 0,\n    \"action\": \"finish\",\n    \"category\": \"finish\",\n    \"tool\": \"core\",\n    \"confidence\": 1.0,\n    \"fields\": [\n      {\n        \"key\": \"output\",\n        \"value\": \"Upgrade:\\n```bash\\npip install -U langchain\\n```\\nVerify:\\n```bash\\npip show langchain\\n```\"\n      }\n    ]\n  }\n]\n```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=84",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_097",
+  "group": "fences",
+  "caller": "all",
+  "description": "same, wrapped in plain ```",
+  "input": "```\n[\n  {\n    \"i\": 0,\n    \"action\": \"finish\",\n    \"category\": \"finish\",\n    \"tool\": \"core\",\n    \"confidence\": 1.0,\n    \"fields\": [\n      {\n        \"key\": \"output\",\n        \"value\": \"Upgrade:\\n```bash\\npip install -U langchain\\n```\\nVerify:\\n```bash\\npip show langchain\\n```\"\n      }\n    ]\n  }\n]\n```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=84",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_098",
+  "group": "fences",
+  "caller": "all",
+  "description": "same, wrapped, plus trailing bash block",
+  "input": "```json\n[\n  {\n    \"i\": 0,\n    \"action\": \"finish\",\n    \"category\": \"finish\",\n    \"tool\": \"core\",\n    \"confidence\": 1.0,\n    \"fields\": [\n      {\n        \"key\": \"output\",\n        \"value\": \"Upgrade:\\n```bash\\npip install -U langchain\\n```\\nVerify:\\n```bash\\npip show langchain\\n```\"\n      }\n    ]\n  }\n]\n```\nThen:\n```bash\nls\n```",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=84",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_099",
+  "group": "fences",
+  "caller": "all",
+  "description": "JSON with escaped backticks \\u0060",
+  "input": "[{\"i\": 0, \"action\": \"finish\", \"category\": \"finish\", \"tool\": \"core\", \"confidence\": 1.0, \"fields\": [{\"key\": \"output\", \"value\": \"\\u0060\\u0060\\u0060bash ls\\u0060\\u0060\\u0060\"}]}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=13",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_100",
+  "group": "fences",
+  "caller": "all",
+  "description": "fence inside key name",
+  "input": "{\"```\": \"x\", \"category\": \"Intel\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_101",
+  "group": "fences",
+  "caller": "all",
+  "description": "{\"response\": \"```json [decisions] ```\"}",
+  "input": "{\"response\": \"```json\\n[{\\\"i\\\": 0, \\\"action\\\": \\\"finish\\\", \\\"category\\\": \\\"finish\\\", \\\"tool\\\": \\\"core\\\", \\\"confidence\\\": 1.0, \\\"fields\\\": [{\\\"key\\\": \\\"output\\\", \\\"value\\\": \\\"done\\\"}]}]\\n```\"}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=4",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_102",
+  "group": "fences",
+  "caller": "all",
+  "description": "only backticks, 100000 of them",
+  "generated": true,
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_103",
+  "group": "encoding",
+  "caller": "all",
+  "description": "unicode category",
+  "input": "{\"category\": \"Intél ✓ 情報\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intél ✓ 情報",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_104",
+  "group": "encoding",
+  "caller": "all",
+  "description": "emoji in answer",
+  "input": "[{\"i\": 0, \"action\": \"finish\", \"category\": \"finish\", \"tool\": \"core\", \"confidence\": 1.0, \"fields\": [{\"key\": \"output\", \"value\": \"done 🎉\"}]}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=9",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_105",
+  "group": "encoding",
+  "caller": "all",
+  "description": "right-to-left text",
+  "input": "{\"category\": \"استخبارات\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=استخبارات",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_106",
+  "group": "encoding",
+  "caller": "all",
+  "description": "BOM before JSON",
+  "input": "﻿{\"success\": true, \"category\": \"Intel\"}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_107",
+  "group": "encoding",
+  "caller": "all",
+  "description": "CRLF inside JSON",
+  "input": "{\"success\": true,\r\n\"category\": \"Intel\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_108",
+  "group": "encoding",
+  "caller": "all",
+  "description": "raw control character inside string (invalid JSON)",
+  "input": "{\"category\": \"In\u0001tel\"}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_109",
+  "group": "encoding",
+  "caller": "all",
+  "description": "escaped NUL inside string",
+  "input": "{\"category\": \"Intel\\u0000\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel\u0000",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_110",
+  "group": "encoding",
+  "caller": "all",
+  "description": "invalid UTF-8 bytes",
+  "input_b64": "eyJjYXRlZ29yeSI6ICJJbnT//mVsIn0=",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Int��el",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_111",
+  "group": "encoding",
+  "caller": "all",
+  "description": "invalid UTF-8 inside fence",
+  "input_b64": "YGBganNvbgp7ImNhdGVnb3J5IjogIsMoIn0KYGBg",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=�(",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_112",
+  "group": "encoding",
+  "caller": "all",
+  "description": "tabs instead of spaces",
+  "input": "{\"success\":\ttrue,\t\"category\":\t\"Intel\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_113",
+  "group": "encoding",
+  "caller": "all",
+  "description": "trailing comma",
+  "input": "{\"success\": true, \"category\": \"Intel\",}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_114",
+  "group": "encoding",
+  "caller": "all",
+  "description": "single-quoted JSON",
+  "input": "{'success': true, 'category': 'Intel'}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_115",
+  "group": "encoding",
+  "caller": "all",
+  "description": "JSON with // comment",
+  "input": "{\n  // model note\n  \"category\": \"Intel\"\n}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_116",
+  "group": "encoding",
+  "caller": "all",
+  "description": "real newline inside a string",
+  "input": "{\"category\": \"In\ntel\"}",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=In\ntel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_117",
+  "group": "truncated",
+  "caller": "all",
+  "description": "decision JSON cut at char 1",
+  "input": "[",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_118",
+  "group": "truncated",
+  "caller": "all",
+  "description": "decision JSON cut at char 2",
+  "input": "[{",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_119",
+  "group": "truncated",
+  "caller": "all",
+  "description": "decision JSON cut at char 5",
+  "input": "[{\"i\"",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_120",
+  "group": "truncated",
+  "caller": "all",
+  "description": "decision JSON cut at char 10",
+  "input": "[{\"i\": 0, ",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_121",
+  "group": "truncated",
+  "caller": "all",
+  "description": "decision JSON cut at char 20",
+  "input": "[{\"i\": 0, \"action\": ",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_122",
+  "group": "truncated",
+  "caller": "all",
+  "description": "decision JSON cut at char 40",
+  "input": "[{\"i\": 0, \"action\": \"finish\", \"category\"",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_123",
+  "group": "truncated",
+  "caller": "all",
+  "description": "decision JSON cut at char 60",
+  "input": "[{\"i\": 0, \"action\": \"finish\", \"category\": \"finish\", \"tool\": ",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_124",
+  "group": "truncated",
+  "caller": "all",
+  "description": "decision JSON cut at char 80",
+  "input": "[{\"i\": 0, \"action\": \"finish\", \"category\": \"finish\", \"tool\": \"core\", \"confidence\"",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_125",
+  "group": "truncated",
+  "caller": "all",
+  "description": "decision JSON cut at char 133",
+  "input": "[{\"i\": 0, \"action\": \"finish\", \"category\": \"finish\", \"tool\": \"core\", \"confidence\": 1.0, \"fields\": [{\"key\": \"output\", \"value\": \"done\"}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=4",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_126",
+  "group": "truncated",
+  "caller": "all",
+  "description": "decision JSON cut at char 134",
+  "input": "[{\"i\": 0, \"action\": \"finish\", \"category\": \"finish\", \"tool\": \"core\", \"confidence\": 1.0, \"fields\": [{\"key\": \"output\", \"value\": \"done\"}]}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=4",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_127",
+  "group": "truncated",
+  "caller": "all",
+  "description": "unclosed string",
+  "input": "{\"category\": \"Intel",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 1 field(s)"
+  }
+ },
+ {
+  "id": "edge_128",
+  "group": "truncated",
+  "caller": "all",
+  "description": "extra closing brackets",
+  "input": "{\"success\": true, \"category\": \"Intel\"}}}]]",
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_129",
+  "group": "truncated",
+  "caller": "all",
+  "description": "extra opening brackets",
+  "input": "[[[[{\"i\": 0, \"action\": \"finish\", \"category\": \"finish\", \"tool\": \"core\", \"confidence\": 1.0, \"fields\": [{\"key\": \"output\", \"value\": \"done\"}]}]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=4",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_130",
+  "group": "truncated",
+  "caller": "all",
+  "description": "missing colon",
+  "input": "{\"category\" \"Intel\"}",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_131",
+  "group": "truncated",
+  "caller": "all",
+  "description": "wrapped JSON cut before closing fence",
+  "input": "```json\n[\n  {\n    \"i\": 0,\n    \"action\": \"finish\",\n    \"category\": \"finish\",\n    \"tool\": \"core\",\n    \"confidence\": 1.0,\n    \"fields\": [\n      {\n        \"key\": \"output\",\n        \"value\": \"Upgrade:\\n```bash\\npip install -U langchain\\n```\\nVerify:\\n```bash\\npip show langchain\\n```\"",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=9",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_132",
+  "group": "bounds",
+  "caller": "all",
+  "description": "1 MB plain text, no fences",
+  "generated": true,
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_133",
+  "group": "bounds",
+  "caller": "all",
+  "description": "1 MB valid JSON string value",
+  "generated": true,
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_134",
+  "group": "bounds",
+  "caller": "all",
+  "description": "valid JSON with 10000 fences inside a string",
+  "generated": true,
+  "want": {
+   "AutofixAppLabels": "SUCCESS: category=Intel",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "SUCCESS: object with 2 field(s)"
+  }
+ },
+ {
+  "id": "edge_135",
+  "group": "bounds",
+  "caller": "all",
+  "description": "worst case: wrapped, 2000 inner fences, no valid span",
+  "generated": true,
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "SUCCESS: 1 decision(s), first action=\"finish\", answer length=4",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_136",
+  "group": "bounds",
+  "caller": "all",
+  "description": "very long single line of JSON numbers",
+  "generated": true,
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_137",
+  "group": "bounds",
+  "caller": "all",
+  "description": "fence followed by 1 MB",
+  "generated": true,
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_138",
+  "group": "bounds",
+  "caller": "all",
+  "description": "800-level nested arrays",
+  "input": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_139",
+  "group": "bounds",
+  "caller": "all",
+  "description": "2000-level nested arrays",
+  "input": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+  "want": null
+ },
+ {
+  "id": "edge_140",
+  "group": "bounds",
+  "caller": "all",
+  "description": "100000 unclosed [",
+  "generated": true,
+  "want": null
+ },
+ {
+  "id": "edge_141",
+  "group": "bounds",
+  "caller": "all",
+  "description": "100000 unclosed {",
+  "generated": true,
+  "want": {
+   "AutofixAppLabels": "NO_RESULT",
+   "HandleAiAgentExecutionStart": "NO_RESULT",
+   "RunSelfCorrectingRequest": "NO_RESULT"
+  }
+ },
+ {
+  "id": "edge_142",
+  "group": "bounds",
+  "caller": "all",
+  "description": "10000-level nested arrays (extreme)",
+  "input": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+  "want": null
+ },
+ {
+  "id": "edge_143",
+  "group": "bounds",
+  "caller": "all",
+  "description": "100000-level nested arrays (extreme)",
+  "generated": true,
+  "want": null
+ }
+]
