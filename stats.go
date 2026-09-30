@@ -821,21 +821,24 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Sideload app runs, workflow runs and subflow runs (just in case)
-	// This makes numbers accurate even when less than  dbDumpInterval
-	todayStr := time.Now().Format("2006-01-02")
-	getTodayDailyStat := func() *DailyStatistics {
+	today := time.Now()
+	todayStr := today.Format("2006-01-02")
+
+	todayIdx := -1
 		for i := range info.DailyStatistics {
 			if info.DailyStatistics[i].Date.Format("2006-01-02") == todayStr {
-				return &info.DailyStatistics[i]
+			todayIdx = i
+			break
 			}
 		}
-
+	if todayIdx == -1 {
 		info.DailyStatistics = append(info.DailyStatistics, DailyStatistics{
-			Date: time.Now(),
+			Date: today,
 		})
-		return &info.DailyStatistics[len(info.DailyStatistics)-1]
+		todayIdx = len(info.DailyStatistics) - 1
 	}
+
+	todayStat := &info.DailyStatistics[todayIdx]
 
 	key := fmt.Sprintf("cache_%s_app_executions", orgId)
 	cacheItem, err := GetCache(ctx, key)
@@ -848,7 +851,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.WeeklyAppExecutions += int64(increment)
 			info.DailyAppExecutions += int64(increment)
 			info.HourlyAppExecutions += int64(increment)
-			getTodayDailyStat().AppExecutions += int64(increment)
+			todayStat.AppExecutions += int64(increment)
 		}
 	}
 
@@ -863,7 +866,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.WeeklyChildAppExecutions += int64(increment)
 			info.DailyChildAppExecutions += int64(increment)
 			info.HourlyChildAppExecutions += int64(increment)
-			getTodayDailyStat().ChildAppExecutions += int64(increment)
+			todayStat.ChildAppExecutions += int64(increment)
 		}
 	}
 
@@ -878,7 +881,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.WeeklyWorkflowExecutions += int64(increment)
 			info.DailyWorkflowExecutions += int64(increment)
 			info.HourlyWorkflowExecutions += int64(increment)
-			getTodayDailyStat().WorkflowExecutions += int64(increment)
+			todayStat.WorkflowExecutions += int64(increment)
 		}
 	}
 
@@ -893,7 +896,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.WeeklySubflowExecutions += int64(increment)
 			info.DailySubflowExecutions += int64(increment)
 			info.HourlySubflowExecutions += int64(increment)
-			getTodayDailyStat().SubflowExecutions += int64(increment)
+			todayStat.SubflowExecutions += int64(increment)
 		}
 	}
 
@@ -906,7 +909,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.TotalEmailUsage += int64(increment)
 			info.MonthlyEmailUsage += int64(increment)
 			info.DailyEmailUsage += int64(increment)
-			getTodayDailyStat().DailyEmailUsage += int64(increment)
+			todayStat.DailyEmailUsage += int64(increment)
 		}
 	}
 
@@ -919,7 +922,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.TotalChildOrgEmailUsage += int64(increment)
 			info.MonthlyChildOrgEmailUsage += int64(increment)
 			info.DailyChildOrgEmailUsage += int64(increment)
-			getTodayDailyStat().DailyChildOrgEmailUsage += int64(increment)
+			todayStat.DailyChildOrgEmailUsage += int64(increment)
 		}
 	}
 
@@ -932,7 +935,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.TotalSMSUsage += int64(increment)
 			info.MonthlySMSUsage += int64(increment)
 			info.DailySMSUsage += int64(increment)
-			getTodayDailyStat().DailySMSUsage += int64(increment)
+			todayStat.DailySMSUsage += int64(increment)
 		}
 	}
 
@@ -945,7 +948,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			info.TotalChildOrgSMSUsage += int64(increment)
 			info.MonthlyChildOrgSMSUsage += int64(increment)
 			info.DailyChildOrgSMSUsage += int64(increment)
-			getTodayDailyStat().DailyChildOrgSMSUsage += int64(increment)
+			todayStat.DailyChildOrgSMSUsage += int64(increment)
 		}
 	}
 
