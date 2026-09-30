@@ -1290,13 +1290,16 @@ func HandleAppendStatistics(resp http.ResponseWriter, request *http.Request) {
 // Optional input is the amount to increment
 func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) {
 	// Check if environment is worker and skip
-	if project.Environment == "worker" {
+	if project.Environment == "worker" || standalone == true {
 		//log.Printf("[DEBUG] Skipping cache increment for worker with datatype %s", dataType)
 		return
 	}
 
 	if len(orgId) != 36 && orgId != "public" && orgId != "INTERNAL" {
-		log.Printf("[ERROR] Increment Stats with bad OrgId '%s' for type '%s'", orgId, dataType)
+		if len(orgId) > 0 { 
+			log.Printf("[ERROR] Increment Stats with bad OrgId '%s' for type '%s'", orgId, dataType)
+		}
+
 		return
 	}
 
