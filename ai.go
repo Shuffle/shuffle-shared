@@ -10949,6 +10949,7 @@ data_filter:
 				decision.RunDetails.Status = "WAITING"
 
 				agentOutput.Decisions[decisionIndex] = decision
+				agentOutput.Status = "WAITING"
 				continue
 			}
 
@@ -11142,7 +11143,7 @@ data_filter:
 			foundResultIndex = len(execution.Results) - 1
 		}
 
-		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
+		if !decisionActionRan && agentOutput.Status != "WAITING" && !strings.Contains(decisionString, conditionText) {
 			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent run.", execution.ExecutionId)
 			return abortAgentExecution(ctx, execution, startNode, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions, but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. \n\nFailed Decision (debug): \n%s", decisionString))
 		}
