@@ -2387,35 +2387,39 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		}
 
 	} else if parsedName == "enrich" {
-		// Prevent recursion
+		// Prevent recursion on automated enrichment write-backs while allowing
+		// user-modified content to trigger enrichment immediately.
 		cacheKey := fmt.Sprintf("enrich_wait_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
-
-
-		// Validates if the data is the same. Need a proper data diff
-		//md5sum := Md5sum([]byte(cacheData.Value))
-		//log.Printf("VALUE (%s):\n\n%s\n\n", md5sum, cacheData.Value)
+		contentLength := len(cacheData.Value)
 
 		data, err := GetCache(ctx, cacheKey)
 		if err == nil && data != nil {
-			//cacheData := []byte(data.([]uint8))
-			//if string(cacheData) == md5sum {
-			//	return nil
-			//}
+			cachedVal := ""
+			switch v := data.(type) {
+			case []byte:
+				cachedVal = string(v)
+			case string:
+				cachedVal = v
+			default:
+				cachedVal = fmt.Sprintf("%v", data)
+			}
 
-			return nil
+			// If the content length is identical to what was recently enriched within the last 5s, skip
+			if cachedVal == fmt.Sprintf("%d", contentLength) {
+				if debug {
+					log.Printf("[DEBUG] Enrich automation skipped for key %s in category %s: content length unchanged (%d bytes)", cacheData.Key, cacheData.Category, contentLength)
+				}
+				return nil
+			}
 		}
 
 		if debug { 
-			log.Printf("[DEBUG] Running enrich automation for key %s in category %s", cacheData.Key, cacheData.Category)
+			log.Printf("[DEBUG] Running enrich automation for key %s in category %s (length: %d bytes)", cacheData.Key, cacheData.Category, contentLength)
 		}
 
-		//SetCache(ctx, cacheKey, []byte("1"), 1)
-		var timeout int32 = 15000 
-		if project.Environment != "cloud" {
-			timeout = 60000 
-		}
-
-		SetCache(ctx, cacheKey, []byte("1"), timeout, true)
+		// Short 5-second cache timeout
+		var timeout int32 = 5000
+		SetCache(ctx, cacheKey, []byte(fmt.Sprintf("%d", contentLength)), timeout, true)
 		if cacheData.Enrichments != nil && len(cacheData.Enrichments) > 0 {
 		}
 

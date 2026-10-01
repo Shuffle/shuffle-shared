@@ -18715,7 +18715,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 			
 			// DB Fallback
 			dbExec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId, true)
-			if err == nil {
+			if err == nil && dbExec != nil {
 				for _, res := range dbExec.Results {
 					if res.Action.ID == actionResult.Action.ID {
 						if res.Status == "SUCCESS" || res.Status == "FINISHED" || res.Status == "FAILURE" || res.Status == "ABORTED" {

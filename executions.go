@@ -780,9 +780,13 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return fmt.Errorf("[ERROR] Failed to get new execution(%s): %s", workflowExecution.ExecutionId, err)
 	}
 
-	HandleExecutionCacheIncrement(ctx, *newexec)
-	if !dbSave && err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
-		log.Printf("[INFO][%s] Already finished (set workflow) with status %s! Stopping the rest of the request for execution.", workflowExecution.ExecutionId, newexec.Status)
+	if newexec != nil {
+		HandleExecutionCacheIncrement(ctx, *newexec)
+		if !dbSave && err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
+			log.Printf("[INFO][%s] Already finished (set workflow) with status %s! Stopping the rest of the request for execution.", workflowExecution.ExecutionId, newexec.Status)
+			return nil
+		}
+	} else {
 		return nil
 	}
 
@@ -927,6 +931,11 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 		//log.Printf("[INFO] Successfully saved new execution %s. Timestamp: %d!", workflowExecution.ExecutionId, workflowExecution.StartedAt)
 	} else {
+
+		// In case of standalone runs
+		if len(project.GceProject) == 0 {
+			return nil
+		}
 
 		// Compresses and removes unecessary things
 		workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
@@ -1183,7 +1192,7 @@ func GetWorkflowExecution(ctx context.Context, id string, bypassCache ...bool) (
 
 			workflowExecution = &wrapped.Source
 		}
-	} else {
+	} else if len(project.GceProject) > 0 {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if getErr = project.Dbclient.Get(ctx, key, workflowExecution); getErr != nil {
 			if strings.Contains(getErr.Error(), `cannot load field`) {
@@ -1192,6 +1201,8 @@ func GetWorkflowExecution(ctx context.Context, id string, bypassCache ...bool) (
 				//return workflowExecution, err
 			}
 		}
+	} else {
+		return workflowExecution, errors.New("no database client configured")
 	}
 	if len(workflowExecution.ExecutionId) > 0 {
 		// A workaround for large bits of information for execution argument
