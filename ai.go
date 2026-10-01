@@ -11700,6 +11700,28 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			// Either both or none: both custom key and URL provided together
 			apiKey = customKey
 			aiRequestUrl = customUrl
+			if strings.Contains(customUrl, "shuffler.io") || strings.Contains(customUrl, "shuffle") {
+				token = customKey
+				_ = os.Setenv("SHUFFLE_SESSION_TOKEN", customKey)
+				_ = os.Setenv("SHUFFLE_AUTHORIZATION", customKey)
+				cleanBase := strings.TrimRight(strings.TrimSuffix(customUrl, "/api/v1"), "/")
+				_ = os.Setenv("SHUFFLE_BASE_URL", cleanBase)
+				_ = os.Setenv("BASE_URL", cleanBase)
+			}
+		} else if len(customKey) > 0 {
+			apiKey = customKey
+			if len(customUrl) > 0 {
+				aiRequestUrl = customUrl
+			} else {
+				retUrl, _ := ValidateURLandModel("", currentModel)
+				if len(retUrl) > 0 {
+					aiRequestUrl = retUrl
+				} else if strings.HasPrefix(strings.ToLower(currentModel), "gemini") {
+					aiRequestUrl = "https://generativelanguage.googleapis.com/v1beta/openai"
+				} else {
+					aiRequestUrl = "https://api.openai.com/v1"
+				}
+			}
 		} else if len(token) > 0 {
 			// Session token with Shuffle backend URL paired together
 			apiKey = token
@@ -16551,14 +16573,15 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 // Simple validator for whether things are correct or not
 // Such as: default endpoint for openai etc
 func ValidateURLandModel(aiRequestUrl string, currentModel string) (string, string) {
-	if !strings.Contains(aiRequestUrl, "googleapis.com") && strings.Contains(currentModel, "gemini") {
+	if !strings.Contains(aiRequestUrl, "googleapis.com") && !strings.Contains(aiRequestUrl, "shuffler.io") && strings.Contains(currentModel, "gemini") {
 		currentModel = ""
 	}
 
 	// Just handling misconfigs of the most common ones
 	if strings.Contains(aiRequestUrl, "shuffler.io") {
-		//aiRequestUrl = "https://shuffler.io/api/v1"
-		currentModel = ""
+		if !strings.HasSuffix(aiRequestUrl, "/api/v1") {
+			aiRequestUrl = strings.TrimSuffix(aiRequestUrl, "/") + "/api/v1"
+		}
 	} else if strings.Contains(aiRequestUrl, "api.openai.com") {
 		aiRequestUrl = "https://api.openai.com/v1"
 
