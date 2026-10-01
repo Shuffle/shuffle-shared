@@ -11853,6 +11853,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	// Fixes some model & url errors
+	config.EmptyMessagesLimit = 100000
 	openaiClient := openai.NewClientWithConfig(config)
 
 	sysMsg := ""
@@ -11990,6 +11991,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 		// 2. Iterate over the stream
 		iterations := 0
+		var streamErr error
 		for {
 			iterations += 1
 
@@ -12006,7 +12008,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 			// 3. Check for End of File (EOF) to know when the stream is finished
 			if errors.Is(err, io.EOF) {
-				//log.Printf("[INFO] Stream finished after %d iterations", iterations)
+				// for debugging too
+				log.Printf("[INFO][%s] AI_QUERY_STREAM_DONE: chunks=%d content_len=%d total_tokens=%d", info.ExecutionId, iterations, len(contentOutput), totalTokens)
 				if info.Resp != nil && originalStreamEnabled {
 
 					info.Resp.Write([]byte("data: [DONE]\n\n"))
@@ -12023,6 +12026,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				}
 
 				log.Printf("[ERROR][%s] Stream problem: %#v", info.ExecutionId, err)
+				// Track stream error so we can retry instead of returning partial output
+				streamErr = err
 				break
 			}
 
@@ -12138,6 +12143,19 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 		stream.Close()
 
+		// If the stream was interrupted (not a clean EOF), retry instead of returning partial output
+		if streamErr != nil && len(contentOutput) == 0 {
+			cnt += 1
+			lastError = fmt.Errorf("stream interrupted prematurely: %w", streamErr)
+			log.Printf("[WARNING][%s] AI_QUERY: LLM stream disconnected mid-response (attempt %d/%d), retrying: %v", info.ExecutionId, cnt, maxRetries, streamErr)
+			// Reset state for the retry
+			contentOutput = ""
+			choicesMap = make(map[int]*openai.ChatCompletionChoice)
+			fullResp = openai.ChatCompletionResponse{}
+			time.Sleep(sleepTimer * time.Second)
+			continue
+		}
+
 		// 4. Assemble the ordered choices slice
 		if len(choicesMap) > 0 {
 			fullResp.Choices = make([]openai.ChatCompletionChoice, len(choicesMap))
@@ -12148,14 +12166,20 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			}
 		}
 
-		if len(fullResp.Choices) > 0 && fullResp.Choices[0].FinishReason == "length" {
-			log.Printf("[ERROR][%s] AI_QUERY: LLM output was truncated due to token limit (finish_reason=length, model=%s, max_completion_tokens=%d, received_len=%d)", info.ExecutionId, currentModel, chatCompletion.MaxCompletionTokens, len(contentOutput))
-			return "", fmt.Errorf("LLM output was truncated: max completion tokens reached (finish_reason=length)")
-		}
+		if len(fullResp.Choices) > 0 {
+			// Normalize finish_reason: Gemini uses "MAX_TOKENS"/"SAFETY"/"RECITATION", OpenAI uses "length"/"content_filter"
+			finishReason := strings.ToLower(string(fullResp.Choices[0].FinishReason))
+			log.Printf("[INFO][%s] AI_QUERY: finish_reason=%q model=%s received_len=%d", info.ExecutionId, finishReason, currentModel, len(contentOutput))
 
-		if len(fullResp.Choices) > 0 && fullResp.Choices[0].FinishReason == "content_filter" {
-			log.Printf("[ERROR][%s] AI_QUERY: LLM output was blocked by safety filter (finish_reason=content_filter, model=%s)", info.ExecutionId, currentModel)
-			return "", fmt.Errorf("LLM output was blocked by safety filter")
+			if finishReason == "length" || finishReason == "max_tokens" {
+				log.Printf("[ERROR][%s] AI_QUERY: LLM output was truncated due to token limit (finish_reason=%s, model=%s, max_completion_tokens=%d, received_len=%d)", info.ExecutionId, finishReason, currentModel, chatCompletion.MaxCompletionTokens, len(contentOutput))
+				return "", fmt.Errorf("LLM output was truncated: max completion tokens reached (finish_reason=%s)", finishReason)
+			}
+
+			if finishReason == "content_filter" || finishReason == "safety" || finishReason == "recitation" {
+				log.Printf("[ERROR][%s] AI_QUERY: LLM output was blocked by safety/filter (finish_reason=%s, model=%s)", info.ExecutionId, finishReason, currentModel)
+				return "", fmt.Errorf("LLM output was blocked by safety filter (finish_reason=%s)", finishReason)
+			}
 		}
 
 		break
@@ -12218,6 +12242,15 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 	}
 
+	// Diagnostic: log output so we can detect truncation in prod.
+		isTruncated := len(contentOutput) > 0 && !strings.HasSuffix(strings.TrimSpace(contentOutput), "]")
+		preview := contentOutput
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		
+		log.Printf("[INFO][%s] AI_QUERY_RESULT: model=%s output_len=%d truncated_json=%v preview=%q", info.ExecutionId, currentModel, len(contentOutput), isTruncated, preview)
+	
 	return contentOutput, nil
 }
 
