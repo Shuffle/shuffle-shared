@@ -3739,6 +3739,38 @@ func AutoRepairUserOrgLinks(ctx context.Context, user *User) int {
 	return repairCount
 }
 
+func schedulerAllowedPath(p string) bool {
+	return strings.HasPrefix(p, "/api/v1/workflows/") &&
+		(strings.HasSuffix(p, "/execute") || strings.HasSuffix(p, "/run"))
+}
+
+func enforceSchedulerScope(user User, request *http.Request) error {
+	// No request/URL to inspect (defensive) — nothing to enforce.
+	if request == nil || request.URL == nil {
+		return nil
+	}
+
+	// Not a scheduler account — this rule doesn't apply, so leave the request alone.
+	if !strings.HasSuffix(user.Username, "scheduler@shuffler.io") {
+		return nil
+	}
+
+	// Only scheduler accounts reach this point; allow their execute/run calls.
+	if schedulerAllowedPath(request.URL.Path) {
+		return nil
+	}
+
+	// Scheduler on a disallowed path: block only when enforcement is on.
+	if os.Getenv("SCHEDULER_SCOPE_ENFORCE") == "true" {
+		log.Printf("[AUDIT] Blocked scheduler account (%s) from disallowed path %s %s (SCHEDULER_SCOPE_ENFORCE)", user.Username, request.Method, request.URL.Path)
+		return errors.New("Scheduler account is not permitted to use this endpoint")
+	}
+
+	// Shadow mode (default): don't block yet, just record it so we can verify before enforcing.
+	log.Printf("[AUDIT] scheduler-scope SHADOW: scheduler account (%s) used non-allowlisted path %s %s (would block if SCHEDULER_SCOPE_ENFORCE=true)", user.Username, request.Method, request.URL.Path)
+	return nil
+}
+
 func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (User, error) {
 	if request == nil {
 		return User{}, errors.New("No request given")
@@ -3829,7 +3861,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			}
 
 			// Increment API usage
-			if userdata.Username != "scheduler@shuffler.io" {
+			if !strings.HasSuffix(userdata.Username, "scheduler@shuffler.io") {
 				go IncrementCache(ctx, userdata.ActiveOrg.Id, "api_usage")
 			}
 
@@ -3854,8 +3886,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				user.SessionLogin = false
 
 				// Increment API usage
-				if user.Username != "scheduler@shuffler.io" {
+				if !strings.HasSuffix(user.Username, "scheduler@shuffler.io") {
 					go IncrementCache(ctx, user.ActiveOrg.Id, "api_usage")
+				}
+
+				if serr := enforceSchedulerScope(*user, request); serr != nil {
+					return User{}, serr
 				}
 
 				return *user, nil
@@ -3981,8 +4017,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		}
 
 		// Very specific to track schedules in Shuffle
-		if user.Username != "scheduler@shuffler.io" {
+		if !strings.HasSuffix(user.Username, "scheduler@shuffler.io") {
 			go IncrementCache(ctx, userdata.ActiveOrg.Id, "api_usage")
+		}
+
+		if serr := enforceSchedulerScope(userdata, request); serr != nil {
+			return User{}, serr
 		}
 
 		return userdata, nil
@@ -22103,23 +22143,61 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 	return []Action{}, []Branch{}, ""
 }
 
-// Uses a simple way to be able to modify the encryption key being used
-// FIXME: Investigate better ways of handling EVERYTHING related to encryption
-// E.g. rolling keys and such
-func create32Hash(key string) ([]byte, error) {
-	encryptionModifier := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER")
-	if len(encryptionModifier) == 0 {
-		return []byte{}, errors.New(fmt.Sprintf("No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth."))
+const newEncryptionModifierEnv = "SHUFFLE_ENCRYPTION_MODIFIER_NEW"
+
+func resolveEncryptionModifiers() (string, []string, error) {
+	primary := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER")
+	next := os.Getenv(newEncryptionModifierEnv)
+
+	encryptWith := primary
+	if len(next) > 0 {
+		encryptWith = next
 	}
 
-	key += encryptionModifier
+	if len(encryptWith) == 0 {
+		return "", nil, errors.New("No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
+	}
+
+	decryptWith := []string{}
+	for _, modifier := range []string{next, primary} {
+		if len(modifier) == 0 || ArrayContains(decryptWith, modifier) {
+			continue
+		}
+
+		decryptWith = append(decryptWith, modifier)
+	}
+
+	return encryptWith, decryptWith, nil
+}
+
+// Uses a simple way to be able to modify the encryption key being used
+func create32Hash(key string, modifier string) ([]byte, error) {
+	if len(modifier) == 0 {
+		return []byte{}, errors.New("No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
+	}
+
+	key += modifier
 	hasher := md5.New()
 	hasher.Write([]byte(key))
 	return []byte(hex.EncodeToString(hasher.Sum(nil))), nil
 }
 
 func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
-	key, err := create32Hash(passphrase)
+	encryptWith, _, err := resolveEncryptionModifiers()
+	if err != nil {
+		log.Printf("[WARNING] Skipped hashing in encrypt: %s", err)
+		return []byte{}, err
+	}
+
+	if debug {
+		if len(os.Getenv(newEncryptionModifierEnv)) > 0 {
+			log.Printf("[DEBUG] Encrypting value with the NEW key (rotation in progress)")
+		} else {
+			log.Printf("[DEBUG] Encrypting value with the primary key (no rotation)")
+		}
+	}
+
+	key, err := create32Hash(passphrase, encryptWith)
 	if err != nil {
 		log.Printf("[WARNING] Skipped hashing in encrypt: %s", err)
 		return []byte{}, err
@@ -22151,12 +22229,59 @@ func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 }
 
 func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
+	
+	_, decryptWith, err := resolveEncryptionModifiers()
+	if err != nil {
+		log.Printf("[ERROR] Failed hashing in decrypt: %s", err)
+		return []byte{}, err
+	}
+
+	if debug {
+		log.Printf("[DEBUG] Decrypting value, %d key(s) available to try", len(decryptWith))
+	}
+
+	// Try each available key, newest first. AES-GCM authentication means the
+	// wrong key fails cleanly, so the first key that opens the value is correct.
+	var lastErr error
+	for i, modifier := range decryptWith {
+		plaintext, err := RunKeyDecryption(data, passphrase, modifier)
+		if err == nil {
+			if debug {
+				if i == 0 {
+					log.Printf("[DEBUG] Decrypted value with the current (newest) key [%d/%d]", i+1, len(decryptWith))
+				} else {
+					log.Printf("[DEBUG] Decrypted value with an older key [%d/%d] - value not yet moved to the current key", i+1, len(decryptWith))
+				}
+			}
+
+			return plaintext, nil
+		}
+
+		if debug {
+			log.Printf("[DEBUG] Key [%d/%d] did not open the value, trying next key", i+1, len(decryptWith))
+		}
+
+		lastErr = err
+	}
+
+	if lastErr == nil {
+		lastErr = errors.New("Failed decrypting value with all available keys")
+	}
+
+	if debug {
+		log.Printf("[DEBUG] Failed to decrypt value with all %d available key(s)", len(decryptWith))
+	}
+
+	return []byte{}, lastErr
+}
+
+func RunKeyDecryption(data []byte, passphrase string, modifier string) ([]byte, error) {
 	//if debug {
 	//	log.Printf("[DEBUG] Passphrase: %s", passphrase)
 	//	log.Printf("Decrypting key: %s", data)
 	//}
 
-	key, err := create32Hash(passphrase)
+	key, err := create32Hash(passphrase, modifier)
 	if err != nil {
 		log.Printf("[ERROR] Failed hashing in decrypt: %s", err)
 		return []byte{}, err
@@ -22201,8 +22326,6 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 
 	return plaintext, nil
 }
-
-
 
 // Checks authentication string for Webhooks
 func CheckHookAuth(request *http.Request, auth string) error {
