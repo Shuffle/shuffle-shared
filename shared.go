@@ -22108,7 +22108,7 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 	return []Action{}, []Branch{}, ""
 }
 
-const newEncryptionModifierEnv = "SHUFFLE_ENCRYPTION_MODIFIER_NEW"
+const newEncryptionModifierEnv = "SHUFFLE_ENCRYPTION_MODIFIER_ROLLOVER"
 
 func resolveEncryptionModifiers() (string, []string, error) {
 	primary := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER")
