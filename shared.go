@@ -3745,10 +3745,6 @@ func schedulerAllowedPath(p string) bool {
 }
 
 func enforceSchedulerScope(user User, request *http.Request) error {
-	// No request/URL to inspect (defensive) — nothing to enforce.
-	if request == nil || request.URL == nil {
-		return nil
-	}
 
 	// Not a scheduler account — this rule doesn't apply, so leave the request alone.
 	if !strings.HasSuffix(user.Username, "scheduler@shuffler.io") {
