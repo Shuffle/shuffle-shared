@@ -22108,33 +22108,6 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 	return []Action{}, []Branch{}, ""
 }
 
-const newEncryptionModifierEnv = "SHUFFLE_ENCRYPTION_MODIFIER_ROLLOVER"
-
-func resolveEncryptionModifiers() (string, []string, error) {
-	primary := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER")
-	next := os.Getenv(newEncryptionModifierEnv)
-
-	encryptWith := primary
-	if len(next) > 0 {
-		encryptWith = next
-	}
-
-	if len(encryptWith) == 0 {
-		return "", nil, errors.New("resolveEncryptionModifiers: No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
-	}
-
-	decryptWith := []string{}
-	for _, modifier := range []string{next, primary} {
-		if len(modifier) == 0 || ArrayContains(decryptWith, modifier) {
-			continue
-		}
-
-		decryptWith = append(decryptWith, modifier)
-	}
-
-	return encryptWith, decryptWith, nil
-}
-
 // Uses a simple way to be able to modify the encryption key being used
 func create32Hash(key string, modifier string) ([]byte, error) {
 	if len(modifier) == 0 {
@@ -22148,14 +22121,20 @@ func create32Hash(key string, modifier string) ([]byte, error) {
 }
 
 func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
-	encryptWith, _, err := resolveEncryptionModifiers()
-	if err != nil {
-		log.Printf("[WARNING] Skipped hashing in encrypt: %s", err)
-		return []byte{}, err
+	primary := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER")
+	next := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER_ROLLOVER")
+
+	encryptWith := primary
+	if len(next) > 0 {
+		encryptWith = next
+	}
+
+	if len(encryptWith) == 0 {
+		return []byte{}, errors.New("HandleKeyEncryption: No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
 	}
 
 	if debug {
-		if len(os.Getenv(newEncryptionModifierEnv)) > 0 {
+		if len(next) > 0 {
 			log.Printf("[DEBUG] Encrypting value with the NEW key (rotation in progress)")
 		} else {
 			log.Printf("[DEBUG] Encrypting value with the primary key (no rotation)")
@@ -22164,25 +22143,25 @@ func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 
 	key, err := create32Hash(passphrase, encryptWith)
 	if err != nil {
-		log.Printf("[WARNING] Skipped hashing in encrypt: %s", err)
+		log.Printf("[ERROR] Failed hashing in encrypt: %s", err)
 		return []byte{}, err
 	}
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		log.Printf("[WARNING] Error generating ciphertext: %s", err)
+		log.Printf("[ERROR] Error generating ciphertext: %s", err)
 		return []byte{}, err
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		log.Printf("[WARNING] Error creating new GCM from block: %s", err)
+		log.Printf("[ERROR] Error creating new GCM from block: %s", err)
 		return []byte{}, err
 	}
 
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-		log.Printf("[WARNING] Error reading GCM nonce: %s", err)
+		log.Printf("[ERROR] Error reading GCM nonce: %s", err)
 		return []byte{}, err
 	}
 
@@ -22194,11 +22173,19 @@ func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 }
 
 func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
-	
-	_, decryptWith, err := resolveEncryptionModifiers()
-	if err != nil {
-		log.Printf("[ERROR] Failed resolving encryption modifiers: %s", err)
-		return []byte{}, err
+	primary := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER")
+	next := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER_ROLLOVER")
+
+	decryptWith := []string{}
+	for _, modifier := range []string{next, primary} {
+		if len(modifier) == 0 || ArrayContains(decryptWith, modifier) {
+			continue
+		}
+		decryptWith = append(decryptWith, modifier)
+	}
+
+	if len(decryptWith) == 0 {
+		return []byte{}, errors.New("HandleKeyDecryption: No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
 	}
 
 	if debug {
@@ -22227,10 +22214,6 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 		}
 
 		lastErr = err
-	}
-
-	if lastErr == nil {
-		lastErr = errors.New("Failed decrypting value with all available keys")
 	}
 
 	if debug {
