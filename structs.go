@@ -300,6 +300,9 @@ type Valuereplace struct {
 	// Used for e.g. user input storage
 	Answer   string `json:"answer,omitempty" datastore:"answer,noindex" yaml:"answer,omitempty"`
 	Question string `json:"question,omitempty" datastore:"question,noindex" yaml:"question,omitempty"`
+
+	// Fixed choices for an agent "ask" question (the user can still type their own answer)
+	Options []string `json:"options,omitempty" datastore:"options,noindex" yaml:"options,omitempty"`
 }
 
 type WorkflowAppAction struct {
@@ -1799,6 +1802,12 @@ type InputQuestion struct {
 	Value    string `json:"value" datastore:"value,noindex"`
 	Required bool   `json:"required" datastore:"required"`
 	Deleted  bool   `json:"deleted" datastore:"deleted"`
+
+	// Optional form behaviour. Absent = today's behaviour.
+	Optional   bool `json:"optional,omitempty" datastore:"optional"`       // may be left empty
+	NoDefault  bool `json:"no_default,omitempty" datastore:"no_default"`   // dropdown starts unselected
+	AllowOther bool `json:"allow_other,omitempty" datastore:"allow_other"` // dropdown offers "Other…" with free text
+	HideLabel  bool `json:"hide_label,omitempty" datastore:"hide_label"`   // shows no field label (the question text is still shown)
 }
 
 type FormControl struct {
@@ -6154,9 +6163,10 @@ type WorkflowSetOpsResponse struct {
 }
 
 type rawField struct {
-	Name  string      `json:"name"`
-	Key   string      `json:"key,omitempty"`
-	Value interface{} `json:"value"`
+	Name    string      `json:"name"`
+	Key     string      `json:"key,omitempty"`
+	Value   interface{} `json:"value"`
+	Options interface{} `json:"options,omitempty"`
 }
 
 type agentResponse struct {
