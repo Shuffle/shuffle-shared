@@ -28975,7 +28975,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 
 				newAuth, err := RunOauth2Request(ctx, user, curAuth, true)
 				if err != nil {
-					log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens (1): '%s'. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
+					log.Printf("[ERROR][%s] Failed running oauth request to refresh oauth2 tokens (1): '%s'. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", workflowExecution.ExecutionId, err)
 
 					go CreateOrgNotification(
 						ctx,

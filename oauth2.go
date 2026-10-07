@@ -1323,7 +1323,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		if err == nil {
 			field.Value = string(newValue)
 		} else {
-			//log.Printf("[DEBUG] Failed decrypting field %s: %s", field.Key, err)
+			log.Printf("[DEBUG] Failed decrypting field %s: %s", field.Key, err)
 		}
 
 		if field.Key == "authentication_url" {
