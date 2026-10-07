@@ -10189,13 +10189,7 @@ data_filter:
 		if err != nil {
 			log.Printf("[ERROR][%s] AI Agent: Failed running AI query for action %s: %s", execution.ExecutionId, startNode.ID, err)
 			if strings.Contains(err.Error(), "429") {
-				rateLimitKey := fmt.Sprintf("openai_rate_limit_log_%s", execution.Workflow.OrgId)
-				if _, cacheErr := GetCache(ctx, rateLimitKey); cacheErr != nil {
-					log.Printf("[ERROR][%s] AI_OPENAI_RATE_LIMIT: org=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, err.Error())
-					_ = SetCache(ctx, rateLimitKey, []byte("1"), 30)
-				}
-
-				return abortAgentExecution(ctx, execution, startNode, "llm_rate_limit", "AI provider rate limit or credit quota exceeded. Please check your billing or API keys.")
+				return abortAgentExecution(ctx, execution, startNode, "llm_rate_limit", err.Error())
 			}
 			return abortAgentExecution(ctx, execution, startNode, "run_ai_query_failed", fmt.Sprintf("Failed to start AI Agent (6): %s", err.Error()))
 		}
@@ -10531,13 +10525,9 @@ data_filter:
 					abortMessage := fmt.Sprintf("LLM error (HTTP %d %s): %s", outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
 
 					if outputMap.Status == 429 {
-						rateLimitKey := "openai_rate_limit_log"
-						if _, cacheErr := GetCache(ctx, rateLimitKey); cacheErr != nil {
-							log.Printf("[ERROR][%s] AI_OPENAI_RATE_LIMIT: org=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, newOutput.Error.Message)
-							_ = SetCache(ctx, rateLimitKey, []byte("1"), 30)
-						}
 						abortReason = "llm_rate_limit"
-						abortMessage = "Agent execution failed due to rate limits. Please try again or contact support at support@shuffler.io"
+						abortMessage = newOutput.Error.Message
+						log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=429 error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, newOutput.Error.Type, newOutput.Error.Message)
 					} else {
 						log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s status_code=%d error_type=%s error_message=%s", execution.ExecutionId, execution.Workflow.OrgId, outputMap.Status, newOutput.Error.Type, newOutput.Error.Message)
 					}
@@ -11658,6 +11648,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	defaultCreds := false
+	if len(apiKey) > 0 {
+		defaultCreds = true
+	}
 
 	if project.Environment == "cloud" {
 		foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
@@ -11926,6 +11919,15 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	var fullResp openai.ChatCompletionResponse
 	for {
 		if cnt >= maxRetries {
+			if lastError != nil && strings.Contains(lastError.Error(), "429") {
+				if project.Environment != "cloud" || defaultCreds {
+					rateLimitKey := "openai_rate_limit_log"
+					if _, cacheErr := GetCache(ctx, rateLimitKey); cacheErr != nil {
+						log.Printf("[ERROR][%s] AI_OPENAI_RATE_LIMIT: org=%s error_message=%s", info.ExecutionId, info.OrgID, lastError.Error())
+						_ = SetCache(ctx, rateLimitKey, []byte("1"), 30)
+					}
+				}
+			}
 
 			if info.Resp != nil && lastError != nil {
 
@@ -12160,6 +12162,23 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			contentOutput = ""
 			choicesMap = make(map[int]*openai.ChatCompletionChoice)
 			fullResp = openai.ChatCompletionResponse{}
+			time.Sleep(sleepTimer * time.Second)
+			continue
+		}
+
+		// Detect false EOF: stream ended "cleanly" but final chunk (finish_reason + usage) never arrived.
+		finishReasonAfterStream := ""
+		if len(fullResp.Choices) > 0 {
+			finishReasonAfterStream = strings.ToLower(string(fullResp.Choices[0].FinishReason))
+		}
+		if finishReasonAfterStream == "" && totalTokens == 0 && len(contentOutput) > 0 {
+			cnt += 1
+			lastError = fmt.Errorf("stream ended without finish_reason or usage tokens (false EOF, likely Vertex AI mid-stream drop)")
+			log.Printf("[WARNING][%s] AI_QUERY: Stream false EOF detected (finish_reason empty, total_tokens=0, content_len=%d). Vertex AI likely dropped mid-stream. Retrying (attempt %d/%d)", info.ExecutionId, len(contentOutput), cnt, maxRetries)
+			contentOutput = ""
+			choicesMap = make(map[int]*openai.ChatCompletionChoice)
+			fullResp = openai.ChatCompletionResponse{}
+			totalTokens = 0
 			time.Sleep(sleepTimer * time.Second)
 			continue
 		}
