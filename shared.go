@@ -22183,6 +22183,14 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 		return []byte{}, errors.New("HandleKeyDecryption: No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
 	}
 
+	if primary == "" {
+		log.Printf("[WARNING] Encryption modifier is not set or rotation is not set. This means that the encryption key is not set and auth values are not encrypted. This is a security risk.")
+	}
+
+	if next == "" {
+		log.Printf("[WARNING] Encryption modifier rollover is not set. This means that the encryption key is not rotated and auth values are not encrypted with a new key. This is a security risk.")
+	}
+
 	if debug {
 		log.Printf("[DEBUG] Decrypting value, %d key(s) available to try", len(decryptWith))
 	}
