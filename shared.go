@@ -22172,7 +22172,7 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 	next := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER_ROLLOVER")
 
 	decryptWith := []string{}
-	for _, modifier := range []string{next, primary} {
+	for _, modifier := range []string{primary, next} {
 		if len(modifier) == 0 || ArrayContains(decryptWith, modifier) {
 			continue
 		}
@@ -22203,9 +22203,9 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 		if err == nil {
 			if debug {
 				if i == 0 {
-					log.Printf("[DEBUG] Decrypted value with the current (newest) key [%d/%d]", i+1, len(decryptWith))
+					log.Printf("[DEBUG] Decrypted value with the current (older) key [%d/%d]", i+1, len(decryptWith))
 				} else {
-					log.Printf("[DEBUG] Decrypted value with an older key [%d/%d] - value not yet moved to the current key", i+1, len(decryptWith))
+					log.Printf("[DEBUG] Decrypted value with an new key [%d/%d] - value not yet moved to the current key", i+1, len(decryptWith))
 				}
 			}
 
