@@ -1049,10 +1049,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		// Get it from opensearch (may be prone to more issues at scale (thousands/second) due to no transactional locking)
 
 		id := strings.ToLower(orgId)
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 
 		if err != nil {
 			if debug {
@@ -2027,10 +2024,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 
 	if project.DbType == "opensearch" {
 		indexAlias := strings.ToLower(GetESIndexPrefix(nameKey))
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      indexAlias,
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, indexAlias, id)
 		if err != nil {
 			if strings.Contains(err.Error(), "has more than one index associated with it") {
 				var buf bytes.Buffer
@@ -2255,10 +2249,7 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 	}
 
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return sub, err
@@ -3217,10 +3208,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 	}
 
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			if strings.Contains(err.Error(), "has more than one index associated with it") {
 				fallbackWorkflow, fallbackErr := getWorkflowByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
@@ -3445,10 +3433,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 	if project.DbType == "opensearch" {
 		shouldInitializeStats := false
 
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: orgId,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), orgId)
 
 		if err != nil && !strings.Contains(err.Error(), "status: 404") {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
@@ -4141,10 +4126,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 			return &Org{}, errors.New("Empty org id")
 		}
 
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error in org get: %s", err)
 			return &Org{}, err
@@ -4402,11 +4384,73 @@ func GetFirstOrg(ctx context.Context) (*Org, error) {
 	return curOrg, nil
 }
 
+// OpenSearch URL-decodes the request path, so document IDs are path-escaped
+// before they go into it. That makes the stored _id exactly the string we
+// built - same as bulk writes (ID in the body) and the Datastore backend.
+// Without it, an ID like "org_%E6%B0%B4" is stored as-is by bulk but
+// looked up as "org_水".
+func esDocumentId(id string) string {
+	return url.PathEscape(id)
+}
+
+// Documents written by path before IDs were escaped were stored under the
+// decoded ID. Returns that ID if it differs from id, otherwise "".
+func legacyEsDocumentId(id string) string {
+	if !strings.Contains(id, "%") {
+		return ""
+	}
+
+	decoded, err := url.PathUnescape(id)
+	if err != nil || decoded == id {
+		return ""
+	}
+
+	return decoded
+}
+
+func getEsDocument(ctx context.Context, index, id string) (*opensearchapi.DocumentGetResp, error) {
+	resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+		Index:      index,
+		DocumentID: esDocumentId(id),
+	})
+
+	legacyId := legacyEsDocumentId(id)
+	if len(legacyId) == 0 || resp == nil || resp.Inspect().Response == nil || resp.Inspect().Response.StatusCode != 404 {
+		return resp, err
+	}
+
+	resp.Inspect().Response.Body.Close()
+	return project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
+		Index:      index,
+		DocumentID: esDocumentId(legacyId),
+	})
+}
+
+// Also removes the legacy decoded-ID copy, if any, so it can't resurface.
+func deleteEsDocument(ctx context.Context, index, id string, params opensearchapi.DocumentDeleteParams) (*opensearchapi.DocumentDeleteResp, error) {
+	if legacyId := legacyEsDocumentId(id); len(legacyId) > 0 {
+		legacyResp, _ := project.Es.Document.Delete(ctx, opensearchapi.DocumentDeleteReq{
+			Index:      index,
+			DocumentID: esDocumentId(legacyId),
+			Params:     params,
+		})
+		if legacyResp != nil && legacyResp.Inspect().Response != nil {
+			legacyResp.Inspect().Response.Body.Close()
+		}
+	}
+
+	return project.Es.Document.Delete(ctx, opensearchapi.DocumentDeleteReq{
+		Index:      index,
+		DocumentID: esDocumentId(id),
+		Params:     params,
+	})
+}
+
 func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 	//req := esapi.IndexRequest{
 	req := opensearchapi.IndexReq{
 		Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-		DocumentID: id,
+		DocumentID: esDocumentId(id),
 		Body:       strings.NewReader(string(bytes)),
 		Params: opensearchapi.IndexParams{
 			Refresh: "true",
@@ -5004,12 +5048,8 @@ func DeleteKey(ctx context.Context, entity string, value string, orgIdList ...st
 	if project.DbType == "opensearch" {
 		//log.Printf("[DEBUG] Deleting from index '%s' with item '%s' from opensearch", entity, value)
 
-		resp, err := project.Es.Document.Delete(ctx, opensearchapi.DocumentDeleteReq{
-			Index:      strings.ToLower(GetESIndexPrefix(entity)),
-			DocumentID: value,
-			// Refresh so the delete is immediately reflected in reads; matches indexEs().
-			Params: opensearchapi.DocumentDeleteParams{Refresh: "true"},
-		})
+		// Refresh so the delete is immediately reflected in reads; matches indexEs().
+		resp, err := deleteEsDocument(ctx, strings.ToLower(GetESIndexPrefix(entity)), value, opensearchapi.DocumentDeleteParams{Refresh: "true"})
 
 		if err != nil {
 			if strings.Contains(err.Error(), "has more than one index associated with it") {
@@ -5240,10 +5280,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return *api, err
@@ -6001,10 +6038,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 	nameKey := "Users"
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: parsedKey,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), parsedKey)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return curUser, err
@@ -6236,10 +6270,7 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 
 	nameKey := "Users"
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Delete(ctx, opensearchapi.DocumentDeleteReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: user.Id,
-		})
+		resp, err := deleteEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), user.Id, opensearchapi.DocumentDeleteParams{})
 
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
@@ -9863,10 +9894,7 @@ func GetAppAuthGroup(ctx context.Context, id string) (*AppAuthenticationGroup, e
 	}
 
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return authGroup, err
@@ -10135,10 +10163,7 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 	schedulename = strings.ToLower(schedulename)
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: schedulename,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), schedulename)
 
 		if err != nil {
 			if strings.Contains(err.Error(), "status: 404") || strings.Contains(err.Error(), "not_found") {
@@ -10712,10 +10737,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 
 	var err error
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: hookId,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), hookId)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &Hook{}, err
@@ -10807,10 +10829,7 @@ func GetPipeline(ctx context.Context, triggerId string) (*Pipeline, error) {
 
 	if project.DbType == "opensearch" {
 
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: triggerId,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), triggerId)
 		if err != nil {
 			return &Pipeline{}, err
 		}
@@ -10851,10 +10870,7 @@ func GetNotification(ctx context.Context, id string) (*Notification, error) {
 	curFile := &Notification{}
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &Notification{}, err
@@ -10930,10 +10946,7 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 	curFile := &File{}
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &File{}, err
@@ -11129,10 +11142,7 @@ func GetDisabledRules(ctx context.Context, orgId string) (*DisabledRules, error)
 	nameKey := "disabled_rules"
 	disabledRules := &DisabledRules{}
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: orgId,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), orgId)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", nameKey, err)
 			return disabledRules, nil
@@ -11205,10 +11215,7 @@ func GetSelectedRules(ctx context.Context, TriggerId string) (*SelectedDetection
 	nameKey := "selected_rules"
 	selectedRules := &SelectedDetectionRules{}
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: TriggerId,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), TriggerId)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", nameKey, err)
 			return &SelectedDetectionRules{}, err
@@ -11756,10 +11763,7 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return appAuth, err
@@ -12017,10 +12021,7 @@ func GetTriggerAuth(ctx context.Context, id string) (*TriggerAuth, error) {
 	id = strings.ToLower(id)
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &TriggerAuth{}, err
@@ -13933,10 +13934,7 @@ func GetDatastoreCategoryConfig(ctx context.Context, orgId, category string) (*D
 	id := uuid.Must(uuid.FromBytes(uuidBytes)).String()
 
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			if debug {
 				log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
@@ -15297,10 +15295,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			if strings.Contains(err.Error(), "has more than one index associated with it") {
 				fallbackData, fallbackErr := getCacheKeyByAliasSearch(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
@@ -15991,10 +15986,7 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return usecase, err
@@ -17923,10 +17915,7 @@ func GetConversationMetadata(ctx context.Context, conversationId string) (*Conve
 	}
 
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: conversationId,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), conversationId)
 
 		if err != nil {
 			log.Printf("[WARNING] Error getting conversation metadata %s: %s", conversationId, err)
@@ -19130,10 +19119,7 @@ func GetDatastoreNGramItem(ctx context.Context, key string) (*NGramItem, error) 
 	}
 
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: key,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), key)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return ngramItem, err
@@ -19843,10 +19829,7 @@ func GetOAuthClient(ctx context.Context, id string) (*OAuthClient, error) {
 
 	client := &OAuthClient{}
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			if strings.Contains(err.Error(), "index_not_found_exception") {
 				return nil, errors.New("OAuth client doesn't exist")
@@ -20010,10 +19993,7 @@ func GetOAuthToken(ctx context.Context, accessToken string) (*OAuthToken, error)
 
 	token := &OAuthToken{}
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: accessToken,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), accessToken)
 		if err != nil {
 			if strings.Contains(err.Error(), "index_not_found_exception") {
 				return nil, errors.New("OAuth token doesn't exist")
@@ -20431,10 +20411,7 @@ func GetOAuthAuthCode(ctx context.Context, codeStr string) (*OAuthAuthCode, erro
 	code := &OAuthAuthCode{}
 	if project.DbType == "opensearch" {
 		log.Printf("[DEBUG] GetOAuthAuthCode: looking up '%s' in OpenSearch", codeStr)
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: codeStr,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), codeStr)
 		if err != nil {
 			if strings.Contains(err.Error(), "index_not_found_exception") {
 				return nil, errors.New("OAuth code doesn't exist")
