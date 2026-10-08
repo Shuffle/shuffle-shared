@@ -6064,6 +6064,11 @@ type AiCallInfo struct {
 	AuthenticationId string // To choose the Authentication ID to use
 
 	Resp http.ResponseWriter // Used to respond automatically if it exists
+
+	Url             string `json:"url,omitempty"`
+	Model           string `json:"model,omitempty"`
+	ApiKey          string `json:"api_key,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 type DisplaySize struct {

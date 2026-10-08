@@ -8814,6 +8814,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	enableQuestions := false
 	executionMode := ""
 
+	aiUrlOverride := ""
+	aiApiKeyOverride := ""
+	aiModelOverride := ""
+	aiReasoningOverride := ""
+
 	// Self-request starts here!
 	backendUrl := getBackendBaseUrl()
 
@@ -9043,6 +9048,25 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 		if param.Name == "reasoning" {
 			foundReasoning = strings.ToLower(strings.TrimSpace(param.Value))
+		}
+
+		if param.Name == "shuffle_ai_url_override" {
+			aiUrlOverride = strings.TrimSpace(param.Value)
+		}
+
+		if param.Name == "shuffle_ai_apikey_override" || param.Name == "shuffle_ai_api_key_override" {
+			aiApiKeyOverride = strings.TrimSpace(param.Value)
+		}
+
+		if param.Name == "shuffle_ai_model_override" {
+			aiModelOverride = strings.TrimSpace(param.Value)
+		}
+
+		if param.Name == "shuffle_ai_reasoning_effort_override" {
+			aiReasoningOverride = strings.ToLower(strings.TrimSpace(param.Value))
+			if len(aiReasoningOverride) > 0 {
+				foundReasoning = aiReasoningOverride
+			}
 		}
 
 		if param.Name == "image" {
@@ -9859,6 +9883,9 @@ data_filter:
 
 	// Set model based on environment
 	aiModel := model
+	if len(aiModelOverride) > 0 {
+		aiModel = aiModelOverride
+	}
 	primaryMessages := []openai.ChatCompletionMessage{
 		{
 			Role:    openai.ChatMessageRoleSystem,
@@ -10174,6 +10201,11 @@ data_filter:
 			ExecutionId: execution.ExecutionId,
 
 			Resp: recorder,
+
+			Url:             aiUrlOverride,
+			ApiKey:          aiApiKeyOverride,
+			Model:           aiModelOverride,
+			ReasoningEffort: foundReasoning,
 		}
 
 		// Check for authenticationId
@@ -11667,95 +11699,109 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 	defaultCreds := false
 
-	if project.Environment == "cloud" {
-		foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
-		if len(foundApikey) > 0 {
-			defaultCreds = true
-			apiKey = foundApikey
-		}
+	isStandalone := standalone || os.Getenv("STANDALONE") == "true" || os.Getenv("SHUFFLE_STANDALONE") == "true"
 
-		if len(foundRequestUrl) > 0 {
-			aiRequestUrl = foundRequestUrl
-		}
-
-		if len(currentModel) == 0 || !strings.HasPrefix(currentModel, "google/") {
-			currentModel = foundModel
+	hasExplicitCallInfo := false
+	if isStandalone && len(info.Url) > 0 && len(info.ApiKey) > 0 {
+		hasExplicitCallInfo = true
+		apiKey = info.ApiKey
+		aiRequestUrl = info.Url
+		if len(info.Model) > 0 {
+			currentModel = info.Model
 		}
 	}
 
-	//if debug {
-	//	log.Printf("[DEBUG] ORGID (1): %#v, apikey: %#v, requestUrl: %#v, model: %#v", info.OrgID, apiKey, aiRequestUrl, currentModel)
-	//}
+	if !hasExplicitCallInfo {
+		if project.Environment == "cloud" {
+			foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
+			if len(foundApikey) > 0 {
+				defaultCreds = true
+				apiKey = foundApikey
+			}
 
-	if standalone || os.Getenv("STANDALONE") == "true" {
-		customKey := os.Getenv("AI_API_KEY")
-		customUrl := os.Getenv("AI_API_URL")
+			if len(foundRequestUrl) > 0 {
+				aiRequestUrl = foundRequestUrl
+			}
 
-		token := os.Getenv("SHUFFLE_SESSION_TOKEN")
-		if len(token) == 0 {
-			token = os.Getenv("SHUFFLE_AUTHORIZATION")
+			if len(currentModel) == 0 || !strings.HasPrefix(currentModel, "google/") {
+				currentModel = foundModel
+			}
 		}
 
-		if len(customKey) > 0 && len(customUrl) > 0 {
-			// Either both or none: both custom key and URL provided together
-			apiKey = customKey
-			aiRequestUrl = customUrl
-			if strings.Contains(customUrl, "shuffler.io") || strings.Contains(customUrl, "shuffle") {
-				token = customKey
-				_ = os.Setenv("SHUFFLE_SESSION_TOKEN", customKey)
-				_ = os.Setenv("SHUFFLE_AUTHORIZATION", customKey)
-				cleanBase := strings.TrimRight(strings.TrimSuffix(customUrl, "/api/v1"), "/")
-				_ = os.Setenv("SHUFFLE_BASE_URL", cleanBase)
-				_ = os.Setenv("BASE_URL", cleanBase)
+		//if debug {
+		//	log.Printf("[DEBUG] ORGID (1): %#v, apikey: %#v, requestUrl: %#v, model: %#v", info.OrgID, apiKey, aiRequestUrl, currentModel)
+		//}
+
+		if standalone || os.Getenv("STANDALONE") == "true" {
+			customKey := os.Getenv("AI_API_KEY")
+			customUrl := os.Getenv("AI_API_URL")
+
+			token := os.Getenv("SHUFFLE_SESSION_TOKEN")
+			if len(token) == 0 {
+				token = os.Getenv("SHUFFLE_AUTHORIZATION")
 			}
-		} else if len(customKey) > 0 {
-			apiKey = customKey
-			if len(customUrl) > 0 {
+
+			if len(customKey) > 0 && len(customUrl) > 0 {
+				// Either both or none: both custom key and URL provided together
+				apiKey = customKey
 				aiRequestUrl = customUrl
-			} else {
-				retUrl, _ := ValidateURLandModel("", currentModel)
-				if len(retUrl) > 0 {
-					aiRequestUrl = retUrl
-				} else if strings.HasPrefix(strings.ToLower(currentModel), "gemini") {
-					aiRequestUrl = "https://generativelanguage.googleapis.com/v1beta/openai"
-				} else {
-					aiRequestUrl = "https://api.openai.com/v1"
+				if strings.Contains(customUrl, "shuffler.io") || strings.Contains(customUrl, "shuffle") {
+					token = customKey
+					_ = os.Setenv("SHUFFLE_SESSION_TOKEN", customKey)
+					_ = os.Setenv("SHUFFLE_AUTHORIZATION", customKey)
+					cleanBase := strings.TrimRight(strings.TrimSuffix(customUrl, "/api/v1"), "/")
+					_ = os.Setenv("SHUFFLE_BASE_URL", cleanBase)
+					_ = os.Setenv("BASE_URL", cleanBase)
 				}
-			}
-		} else if len(token) > 0 {
-			// Session token with Shuffle backend URL paired together
-			apiKey = token
+			} else if len(customKey) > 0 {
+				apiKey = customKey
+				if len(customUrl) > 0 {
+					aiRequestUrl = customUrl
+				} else {
+					retUrl, _ := ValidateURLandModel("", currentModel)
+					if len(retUrl) > 0 {
+						aiRequestUrl = retUrl
+					} else if strings.HasPrefix(strings.ToLower(currentModel), "gemini") {
+						aiRequestUrl = "https://generativelanguage.googleapis.com/v1beta/openai"
+					} else {
+						aiRequestUrl = "https://api.openai.com/v1"
+					}
+				}
+			} else if len(token) > 0 {
+				// Session token with Shuffle backend URL paired together
+				apiKey = token
 
-			baseUrl := os.Getenv("SHUFFLE_BASE_URL")
-			if len(baseUrl) == 0 {
-				baseUrl = getBackendBaseUrl()
+				baseUrl := os.Getenv("SHUFFLE_BASE_URL")
+				if len(baseUrl) == 0 {
+					baseUrl = getBackendBaseUrl()
+				}
+				if len(baseUrl) == 0 {
+					baseUrl = "https://shuffler.io"
+				}
+				aiRequestUrl = fmt.Sprintf("%s/api/v1", strings.TrimSuffix(baseUrl, "/"))
+			} else {
+				// Neither matched pair is complete: do not allow half-configured credentials
+				apiKey = ""
+				aiRequestUrl = ""
 			}
-			if len(baseUrl) == 0 {
-				baseUrl = "https://shuffler.io"
-			}
-			aiRequestUrl = fmt.Sprintf("%s/api/v1", strings.TrimSuffix(baseUrl, "/"))
-		} else {
-			// Neither matched pair is complete: do not allow half-configured credentials
-			apiKey = ""
-			aiRequestUrl = ""
-		}
-	} else if len(info.OrgID) > 0 {
-		// Look up custom auth to use instead
-		foundApikey, foundrequestUrl, foundModel := GetOrgAiCredentials(ctx, info)
-		if len(foundApikey) > 0 {
-			defaultCreds = false
-			apiKey = foundApikey
+		} else if len(info.OrgID) > 0 {
+			// Look up custom auth to use instead
+			foundApikey, foundrequestUrl, foundModel := GetOrgAiCredentials(ctx, info)
+			if len(foundApikey) > 0 {
+				defaultCreds = false
+				apiKey = foundApikey
 
-			// Overwriting internal LLM URL is strictly permitted ONLY when paired with a custom API key
-			if len(foundrequestUrl) > 0 {
-				aiRequestUrl = foundrequestUrl
+				// Overwriting internal LLM URL is strictly permitted ONLY when paired with a custom API key
+				if len(foundrequestUrl) > 0 {
+					aiRequestUrl = foundrequestUrl
+				}
+			} else if len(foundrequestUrl) > 0 {
+				log.Printf("[WARNING] Org %s attempted to override AI URL without providing an API key. Ignoring custom URL to prevent credential leakage.", info.OrgID)
 			}
-		} else if len(foundrequestUrl) > 0 {
-			log.Printf("[WARNING] Org %s attempted to override AI URL without providing an API key. Ignoring custom URL to prevent credential leakage.", info.OrgID)
-		}
 
-		if len(foundModel) > 0 {
-			currentModel = foundModel
+			if len(foundModel) > 0 {
+				currentModel = foundModel
+			}
 		}
 	}
 
@@ -11802,13 +11848,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		ReasoningEffort: "low",
 	}
 
-	if len(os.Getenv("SHUFFLE_REASONING_EFFORT")) > 0 {
-		//availableOptions := []string{"", "minimal", "low", "medium", "high"}
-		//if ArrayContains(availableOptions, strings.ToLower(os.Getenv("SHUFFLE_REASONING_EFFORT"))) {
+	if isStandalone && len(info.ReasoningEffort) > 0 {
+		chatCompletion.ReasoningEffort = strings.ToLower(info.ReasoningEffort)
+	} else if len(os.Getenv("SHUFFLE_REASONING_EFFORT")) > 0 {
 		chatCompletion.ReasoningEffort = strings.ToLower(os.Getenv("SHUFFLE_REASONING_EFFORT"))
-		//} else {
-		//	log.Printf("[WARNING] Invalid REASONING_EFFORT option '%s'. Available options: %v. Defaulting to 'minimal' for non-configured requests.", os.Getenv("SHUFFLE_REASONING_EFFORT"), availableOptions)
-		//}
 	}
 
 	// FIXME: Too specific. Should be self-corrective.. :)
@@ -11887,14 +11930,16 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	maxRetries := 3
 	contentOutput := ""
 
-	// Overwrites it all
-	retUrl, retModel := ValidateURLandModel(aiRequestUrl, currentModel)
-	if len(retUrl) > 0 {
-		aiRequestUrl = retUrl
-	}
+	// Overwrites it all if not explicitly specified by caller
+	if !hasExplicitCallInfo {
+		retUrl, retModel := ValidateURLandModel(aiRequestUrl, currentModel)
+		if len(retUrl) > 0 {
+			aiRequestUrl = retUrl
+		}
 
-	if len(retModel) > 0 {
-		currentModel = retModel
+		if len(retModel) > 0 {
+			currentModel = retModel
+		}
 	}
 
 	if len(apiKey) == 0 {
