@@ -1221,10 +1221,10 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Multiplayer (live collaboration) is enabled for everyone by default.
-		if !org.SyncFeatures.Multiplayer.Active {
-			org.SyncFeatures.Multiplayer.Active = true
-			orgChanged = true
-		}
+		// if !org.SyncFeatures.Multiplayer.Active {
+		// 	org.SyncFeatures.Multiplayer.Active = true
+		// 	orgChanged = true
+		// }
 
 		org.SyncFeatures.EmailTrigger.Limit = 0
 
