@@ -22104,42 +22104,59 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 }
 
 // Uses a simple way to be able to modify the encryption key being used
-// FIXME: Investigate better ways of handling EVERYTHING related to encryption
-// E.g. rolling keys and such
-func create32Hash(key string) ([]byte, error) {
-	encryptionModifier := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER")
-	if len(encryptionModifier) == 0 {
-		return []byte{}, errors.New(fmt.Sprintf("No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth."))
+func create32Hash(key string, modifier string) ([]byte, error) {
+	if len(modifier) == 0 {
+		return []byte{}, errors.New("create32Hash: No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
 	}
 
-	key += encryptionModifier
+	key += modifier
 	hasher := md5.New()
 	hasher.Write([]byte(key))
 	return []byte(hex.EncodeToString(hasher.Sum(nil))), nil
 }
 
 func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
-	key, err := create32Hash(passphrase)
+	primary := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER")
+	next := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER_ROLLOVER")
+
+	encryptWith := primary
+	if len(next) > 0 {
+		encryptWith = next
+	}
+
+	if len(encryptWith) == 0 {
+		return []byte{}, errors.New("HandleKeyEncryption: No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
+	}
+
+	if debug {
+		if len(next) > 0 {
+			log.Printf("[DEBUG] Encrypting value with the NEW key (rotation in progress)")
+		} else {
+			log.Printf("[DEBUG] Encrypting value with the primary key (no rotation)")
+		}
+	}
+
+	key, err := create32Hash(passphrase, encryptWith)
 	if err != nil {
-		log.Printf("[WARNING] Skipped hashing in encrypt: %s", err)
+		log.Printf("[ERROR] Failed hashing in encrypt: %s", err)
 		return []byte{}, err
 	}
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		log.Printf("[WARNING] Error generating ciphertext: %s", err)
+		log.Printf("[ERROR] Error generating ciphertext: %s", err)
 		return []byte{}, err
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		log.Printf("[WARNING] Error creating new GCM from block: %s", err)
+		log.Printf("[ERROR] Error creating new GCM from block: %s", err)
 		return []byte{}, err
 	}
 
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
-		log.Printf("[WARNING] Error reading GCM nonce: %s", err)
+		log.Printf("[ERROR] Error reading GCM nonce: %s", err)
 		return []byte{}, err
 	}
 
@@ -22151,12 +22168,71 @@ func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 }
 
 func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
+	primary := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER")
+	next := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER_ROLLOVER")
+
+	decryptWith := []string{}
+	for _, modifier := range []string{primary, next} {
+		if len(modifier) == 0 || ArrayContains(decryptWith, modifier) {
+			continue
+		}
+		decryptWith = append(decryptWith, modifier)
+	}
+
+	if len(decryptWith) == 0 {
+		return []byte{}, errors.New("HandleKeyDecryption: No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth.")
+	}
+
+	if primary == "" {
+		log.Printf("[WARNING] Encryption modifier is not set or rotation is not set. This means that the encryption key is not set and auth values are not encrypted. This is a security risk.")
+	}
+
+	if next == "" {
+		log.Printf("[WARNING] Encryption modifier rollover is not set. This means that the encryption key is not rotated and auth values are not encrypted with a new key. This is a security risk.")
+	}
+
+	if debug {
+		log.Printf("[DEBUG] Decrypting value, %d key(s) available to try", len(decryptWith))
+	}
+
+	// Try each available key, newest first. AES-GCM authentication means the
+	// wrong key fails cleanly, so the first key that opens the value is correct.
+	var lastErr error
+	for i, modifier := range decryptWith {
+		plaintext, err := RunKeyDecryption(data, passphrase, modifier)
+		if err == nil {
+			if debug {
+				if i == 0 {
+					log.Printf("[DEBUG] Decrypted value with the current (older) key [%d/%d]", i+1, len(decryptWith))
+				} else {
+					log.Printf("[DEBUG] Decrypted value with an new key [%d/%d] - value not yet moved to the current key", i+1, len(decryptWith))
+				}
+			}
+
+			return plaintext, nil
+		}
+
+		if debug {
+			log.Printf("[DEBUG] Key [%d/%d] did not open the value, trying next key", i+1, len(decryptWith))
+		}
+
+		lastErr = err
+	}
+
+	if debug {
+		log.Printf("[DEBUG] Failed to decrypt value with all %d available key(s)", len(decryptWith))
+	}
+
+	return []byte{}, lastErr
+}
+
+func RunKeyDecryption(data []byte, passphrase string, modifier string) ([]byte, error) {
 	//if debug {
 	//	log.Printf("[DEBUG] Passphrase: %s", passphrase)
 	//	log.Printf("Decrypting key: %s", data)
 	//}
 
-	key, err := create32Hash(passphrase)
+	key, err := create32Hash(passphrase, modifier)
 	if err != nil {
 		log.Printf("[ERROR] Failed hashing in decrypt: %s", err)
 		return []byte{}, err
@@ -22201,8 +22277,6 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 
 	return plaintext, nil
 }
-
-
 
 // Checks authentication string for Webhooks
 func CheckHookAuth(request *http.Request, auth string) error {
@@ -28909,7 +28983,7 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 
 				newAuth, err := RunOauth2Request(ctx, user, curAuth, true)
 				if err != nil {
-					log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens (1): '%s'. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
+					log.Printf("[ERROR][%s] Failed running oauth request to refresh oauth2 tokens (1): '%s'. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", workflowExecution.ExecutionId, err)
 
 					go CreateOrgNotification(
 						ctx,

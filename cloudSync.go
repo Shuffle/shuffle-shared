@@ -918,11 +918,20 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		}
 	}
 
+	now := time.Now()
+	currentMonth := int(now.Month())
+	if currentMonth != validationOrgStats.LastMonthlyResetMonth {
+		validationOrgStats = handleDailyCacheUpdate(validationOrgStats)
+		validationOrgStats.LastMonthlyResetMonth = currentMonth
+		if err = SetOrgStatistics(ctx, *validationOrgStats, validationOrgStats.OrgId); err != nil {
+			log.Printf("[ERROR] Failed setting org statistics in validate execution usage for org %s (%s): %s", validationOrg.Name, validationOrg.Id, err)
+		}
+	}
+
 	totalAppExecutions := validationOrgStats.MonthlyAppExecutions + validationOrgStats.MonthlyChildAppExecutions
 	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == false && validationOrg.Billing.InternalAppRunsHardLimit > 0 && totalAppExecutions > validationOrg.Billing.InternalAppRunsHardLimit {
 		return validationOrg, errors.New(fmt.Sprintf("Org %s (%s) has exceeded app runs hard limit (%d/%d)", validationOrg.Name, validationOrg.Id, totalAppExecutions, validationOrg.Billing.InternalAppRunsHardLimit))
-			}
-
+	}
 	if validationOrg.SyncFeatures.AnnualAppRunsGrouping.Active == true && validationOrg.LeadInfo.Customer {
 		planStartDate := int64(0)
 		if planStartDate > 0 {
