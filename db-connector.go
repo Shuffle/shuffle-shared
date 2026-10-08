@@ -3502,7 +3502,18 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		}
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
-		if err := project.Dbclient.Get(ctx, key, stats); err != nil {
+		var getErr error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					getErr = errors.New("datastore client not initialized")
+				}
+			}()
+			if err := project.Dbclient.Get(ctx, key, stats); err != nil {
+				getErr = err
+			}
+		}()
+		if err := getErr; err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[INFO] Error in org stats loading (1). Migrating org to new org and user handler (3): %s", err)
 				return stats, errors.New(fmt.Sprintf("Failed to load org stats (1): %v for org: %s", err, orgId))
