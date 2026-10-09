@@ -1689,12 +1689,18 @@ func extractDecisionArray(rawText string) ([]AgentDecision, error) {
 			continue
 		}
 
-		// Check if the first item has an "action" key
-		if _, hasAction := decodedRawDecisions[0]["action"]; !hasAction {
-			continue
-		}
-
 		for mapIndex, rawMap := range decodedRawDecisions {
+			// If "action" is missing, but "category" is "finish", auto-populate action as "finish"
+			if _, hasAction := rawMap["action"]; !hasAction {
+				if catBytes, hasCat := rawMap["category"]; hasCat {
+					var catStr string
+					if json.Unmarshal(catBytes, &catStr) == nil && strings.ToLower(strings.TrimSpace(catStr)) == "finish" {
+						actionBytes, _ := json.Marshal("finish")
+						decodedRawDecisions[mapIndex]["action"] = actionBytes
+					}
+				}
+			}
+
 			if rawFields, hasFields := rawMap["fields"]; hasFields {
 				var fields []rawField
 				if unmarshalErr := json.Unmarshal(rawFields, &fields); unmarshalErr == nil {
@@ -1706,6 +1712,11 @@ func extractDecisionArray(rawText string) ([]AgentDecision, error) {
 					}
 				}
 			}
+		}
+
+		// Check if the first item has an "action" key
+		if _, hasAction := decodedRawDecisions[0]["action"]; !hasAction {
+			continue
 		}
 
 		marshaledJSONBytes, marshalErr := json.Marshal(decodedRawDecisions)
@@ -1751,6 +1762,17 @@ func extractDecisionJSONL(rawText string) ([]AgentDecision, error) {
 
 		if decodeErr != nil {
 			continue
+		}
+
+		// If "action" is missing, but "category" is "finish", auto-populate action as "finish"
+		if _, hasAction := rawMap["action"]; !hasAction {
+			if catBytes, hasCat := rawMap["category"]; hasCat {
+				var catStr string
+				if json.Unmarshal(catBytes, &catStr) == nil && strings.ToLower(strings.TrimSpace(catStr)) == "finish" {
+					actionBytes, _ := json.Marshal("finish")
+					rawMap["action"] = actionBytes
+				}
+			}
 		}
 
 		if _, hasAction := rawMap["action"]; !hasAction {
