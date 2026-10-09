@@ -90,6 +90,9 @@ type AgentOutput struct {
 	// Ordered debug info for full understanding
 	LLMRequests  []openai.ChatCompletionRequest  `json:"llm_requests,omitempty" datastore:"llm_requests"`
 	LLMResponses []openai.ChatCompletionResponse `json:"llm_responses,omitempty" datastore:"llm_responses"`
+
+	// Questions for everything currently waiting on the user, rendered by the form (FormInput)
+	InputQuestions []InputQuestion `json:"input_questions,omitempty" datastore:"input_questions"`
 }
 
 func init() {
@@ -1656,9 +1659,121 @@ func FixContentOutput(contentOutput string) string {
 	return contentOutput
 }
 
-// normalizeRawDecisionFields converts any non-string 'Value' into a JSON-encoded string.
+// buildAgentInputQuestions turns every decision waiting on the user into form questions (FormInput).
+// The part of Value before the first ";" is the key the form answers with:
+// "answer:<decisionId>:<fieldIndex>" for ask questions, "approve:<decisionId>" and "note:<decisionId>" for approvals.
+func buildAgentInputQuestions(decisions []AgentDecision) []InputQuestion {
+	questions := []InputQuestion{}
+	for _, decision := range decisions {
+		if decision.RunDetails.Status != "WAITING" || len(decision.RunDetails.Id) == 0 {
+			continue
+		}
+
+		if decision.Action == "ask" || decision.Action == "question" {
+			for fieldIndex, field := range decision.Fields {
+				if field.Key != "question" || len(field.Answer) > 0 {
+					continue
+				}
+
+				question := InputQuestion{Name: field.Value, Value: fmt.Sprintf("answer:%s:%d", decision.RunDetails.Id, fieldIndex), Required: true, HideLabel: true}
+
+				// Fixed choices become a dropdown that always offers "Other…", so the model can't box the user in
+				options := []string{}
+				for _, option := range field.Options {
+					option = strings.TrimSpace(strings.ReplaceAll(option, ";", ","))
+					if len(option) > 0 && !ArrayContains(options, option) {
+						options = append(options, option)
+					}
+				}
+
+				if len(options) > 0 {
+					question.Value += ";" + strings.Join(options, ";")
+					question.NoDefault = true
+					question.AllowOther = true
+				}
+
+				questions = append(questions, question)
+			}
+
+			continue
+		}
+
+		if decision.ApprovalRequired {
+			details := []string{}
+			for _, field := range decision.Fields {
+				if len(field.Key) > 0 && field.Key != "approve" && field.Key != "note" && len(details) < 5 {
+					value := []rune(field.Value)
+					if len(value) > 80 {
+						value = append(value[:77], []rune("...")...)
+					}
+
+					details = append(details, fmt.Sprintf("%s=%s", field.Key, string(value)))
+				}
+			}
+
+			name := fmt.Sprintf("Approve running '%s' on '%s'?", decision.Action, decision.Tool)
+			if len(details) > 0 {
+				name += " (" + strings.Join(details, ", ") + ")"
+			}
+
+			if len(strings.TrimSpace(decision.Reason)) > 0 {
+				name += " Reason: " + strings.TrimSpace(decision.Reason)
+			}
+
+			questions = append(questions,
+				InputQuestion{Name: name, Value: fmt.Sprintf("approve:%s;Approve;Deny", decision.RunDetails.Id), Required: true, NoDefault: true, AllowOther: true, HideLabel: true},
+				InputQuestion{Name: "Note (optional)", Value: "note:" + decision.RunDetails.Id, Optional: true, HideLabel: true},
+			)
+		}
+	}
+
+	return questions
+}
+
+// agentFinishOnly is true when the user denied an action after the last finish/continue.
+// The agent may then only summarize (finish), not take further actions.
+func agentFinishOnly(decisions []AgentDecision) bool {
+	lastDenied, lastReset := -1, -1
+	for _, decision := range decisions {
+		if (decision.Action == "finish" || decision.Category == "finish") && decision.I > lastReset {
+			lastReset = decision.I
+		}
+
+		for _, field := range decision.Fields {
+			if field.Key == "continue" && decision.I > lastReset {
+				lastReset = decision.I
+			}
+
+			// "DENIED by user..." and the older "Approval DENIED at ..."
+			if field.Key == "approve" && strings.Contains(field.Value, "DENIED") && decision.I > lastDenied {
+				lastDenied = decision.I
+			}
+		}
+	}
+
+	return lastDenied >= 0 && lastDenied > lastReset
+}
+
+// normalizeRawDecisionFields converts any non-string 'Value' into a JSON-encoded string, and 'Options' into a list of strings.
 func normalizeRawDecisionFields(fields []rawField) {
 	for fieldIndex := range fields {
+		// Models sometimes send options as "Yes, No" or [true, false]. Anything else is dropped so the decision still parses.
+		switch options := fields[fieldIndex].Options.(type) {
+		case string:
+			fields[fieldIndex].Options = strings.FieldsFunc(options, func(r rune) bool { return r == ',' || r == ';' })
+		case []interface{}:
+			stringOptions := []string{}
+			for _, option := range options {
+				if option != nil {
+					stringOptions = append(stringOptions, fmt.Sprint(option))
+				}
+			}
+
+			fields[fieldIndex].Options = stringOptions
+		default:
+			fields[fieldIndex].Options = nil
+		}
+
 		if fields[fieldIndex].Value == nil {
 			continue
 		}
@@ -9440,10 +9555,13 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				for fieldIndex, field := range mappedDecision.Fields {
 					if field.Key == "question" {
 						if len(field.Answer) > 0 {
-							previousAnswers += fmt.Sprintf("'%s': '%s'\n", field.Value, field.Answer)
+							previousAnswers += fmt.Sprintf("%q: %q\n", field.Value, field.Answer)
 						} else {
 							log.Printf("[WARNING][%s] No answer found for question '%s'. Index: %d", execution.ExecutionId, field.Value, fieldIndex)
 						}
+					} else if (field.Key == "approve" || field.Key == "note") && len(field.Value) > 0 {
+						// Approval outcome (and optional note) for an action that needed the user's approval
+						previousAnswers += fmt.Sprintf("%q: %q\n", fmt.Sprintf("%s for '%s' on '%s'", map[bool]string{true: "Approval", false: "Note"}[field.Key == "approve"], mappedDecision.Action, mappedDecision.Tool), field.Value)
 					}
 				}
 
@@ -9707,6 +9825,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	enableQuestionsString := `
 2. **Explicit 'Ask' Command:** 
 	- Avoid asking questions. Have an action bias and make decisions for the user!
+	- Only if the user explicitly COMMANDS you to ask them something: select "ask" (Category: "standalone") with ONE "question" field per question in a single decision, and add "options" for yes/no or fixed-choice questions: "fields": [{"key": "question", "value": "Restart the service?", "options": ["Yes", "No"]}, {"key": "question", "value": "Which host?"}]
 `
 
 	if enableQuestions {
@@ -9714,7 +9833,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 5. **Explicit 'Ask' Command:**
    - **Trigger:** LOWEST PRIORITY. Does the user explicitly COMMAND you to ask them for input (e.g., "Ask me for the IP")?
    - **Action:** Select "ask" (Category: "standalone").
-   - **Field "question":** The specific questions you have. Make decisions FOR the user instead of asking. Do NOT ask questions about authentication or authorization. Do NOT ask to confirm the obvious. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, ask one question at a time as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}]`
+   - **Field "question":** The specific questions you have. Make decisions FOR the user instead of asking. Do NOT ask questions about authentication or authorization. Do NOT ask to confirm the obvious. Assume you are allowed to use the mentioned tool. Do NOT ask unless absolutely necessary. This command should generally be avoided in favor of action bias. Have as few questions as possible, but if multiple questions are required, put ALL of them in ONE "ask" decision with ONE "question" field per question (never several questions in one field) as such: "fields": [{"key": "question", "value": "question1"}, {"key": "question", "value": "question2"}]
+   - **Field "options":** REQUIRED for yes/no or fixed-choice questions. Add the choices as a list of strings to that question field: {"key": "question", "value": "Restart the service?", "options": ["Yes", "No"]}. The user can always answer in their own words instead.`
 
 		// FIXME: Uncomment below and add to the enableQuestionsString. New feature for auto-generating and approving new apps. The generate API docs API supports this
 
@@ -10032,6 +10152,15 @@ data_filter:
 		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,
 			Content: fmt.Sprintf("USER ANSWERS:\n%s", previousAnswers),
+		})
+	}
+
+	// After the user denies an action, the agent may only summarize. Enforced again when the decisions are merged.
+	finishOnly := createNextActions && agentFinishOnly(oldAgentOutput.Decisions)
+	if finishOnly {
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: "The user denied one or more actions. Do NOT take any further actions or ask questions. Respond ONLY with a single \"finish\" decision that summarizes what was done, what was denied and any note from the user.",
 		})
 	}
 
@@ -10778,7 +10907,17 @@ data_filter:
 			}
 
 			additions := 0
+			finishAdded := false
 			for _, mappedDecision := range mappedDecisions {
+				if finishOnly && mappedDecision.Action != "finish" && mappedDecision.Category != "finish" {
+					log.Printf("[INFO][%s] AI Agent: Dropping '%s' decision because the user denied an action. Only finish is allowed.", execution.ExecutionId, mappedDecision.Action)
+					continue
+				}
+
+				if mappedDecision.Action == "finish" || mappedDecision.Category == "finish" {
+					finishAdded = true
+				}
+
 				if mappedDecision.I < lastFinishedIndex {
 					log.Printf("[WARNING][%s] Setting decision index %d to last finished index %d + additions %d", execution.ExecutionId, mappedDecision.I, lastFinishedIndex, additions)
 
@@ -10797,6 +10936,19 @@ data_filter:
 				}
 
 				agentOutput.Decisions = append(agentOutput.Decisions, mappedDecision)
+			}
+
+			if finishOnly && !finishAdded {
+				agentOutput.Decisions = append(agentOutput.Decisions, AgentDecision{
+					I:          lastFinishedIndex + additions,
+					Action:     "finish",
+					Category:   "finish",
+					Tool:       "core",
+					Confidence: 1,
+					Runs:       "1",
+					Reason:     "The user denied an action, so no further actions were taken.",
+					Fields:     []Valuereplace{{Key: "output", Value: "No further actions were taken because the user denied an action."}},
+				})
 			}
 
 			if len(openaiOutput.ID) > 0 {
@@ -10902,6 +11054,7 @@ data_filter:
 		}
 
 		decisionActionRan := false
+		waitingForUser := []AgentDecision{} // decisions newly paused for the user. One notification per batch.
 
 		for decisionIndex, decision := range agentOutput.Decisions {
 			// Random generate an ID that's 10 chars long
@@ -10953,26 +11106,10 @@ data_filter:
 
 			// Handles approvals
 			if decision.ApprovalRequired && decision.Action != "ask" && decision.Action != "question" && (decision.Category == "singul" || decision.Category == "standalone") && (decision.RunDetails.Status == "" || decision.RunDetails.Status == "RUNNING") {
-				log.Printf("[DEBUG] Decision %d requires approval. SHOULD mark as waiting for approval (not implemented)...", decision.I)
+				log.Printf("[DEBUG][%s] Decision %d requires approval. Waiting for the user.", execution.ExecutionId, decision.I)
 
 				if agentOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
-
-					mappedDecision := agentOutput.Decisions[decisionIndex]
-
-					err = CreateOrgNotification(
-						ctx,
-						fmt.Sprintf("Agent - approval required for '%s'", mappedDecision.Tool),
-						fmt.Sprintf("Approval required during agent run."),
-						fmt.Sprintf("/forms/%s?authorization=%s&reference_execution=%s&source_node=%s&decision_id=%s&backend_url=%s", execution.WorkflowId, execution.Authorization, execution.ExecutionId, startNode.ID, mappedDecision.RunDetails.Id, backendUrl),
-						execution.ExecutionOrg,
-						false,
-						"MEDIUM",
-						"agent_approval",
-					)
-
-					if err != nil {
-						log.Printf("[ERROR][%s] Failed creating notification for ask input", execution.ExecutionId)
-					}
+					waitingForUser = append(waitingForUser, agentOutput.Decisions[decisionIndex])
 				}
 
 				decision.RunDetails.StartedAt = time.Now().UnixMilli()
@@ -10981,6 +11118,7 @@ data_filter:
 				decision.RunDetails.Status = "WAITING"
 
 				agentOutput.Decisions[decisionIndex] = decision
+				agentOutput.Status = "WAITING"
 				continue
 			}
 
@@ -11026,33 +11164,7 @@ data_filter:
 				}
 
 				if agentOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
-
-					//http://localhost:3002/forms/9d327719-5ee3-43d9-a775-7b13d5add416?authorization=5fc12b1d-e418-47e0-9789-f6f82f8826df&reference_execution=9d327719-5ee3-43d9-a775-7b13d5add416&source_node=2cf6fc9b-f470-40b3-aa52-56ad2e1a952b&decision_id=UVrjdHiQ&backend_url=http://localhost:5002
-					mappedDecision := agentOutput.Decisions[decisionIndex]
-
-					log.Printf("[DEBUG][%s] AI Agent: Decision index %d is an 'ask' action. Setting approval required to true for manual review in the UI.", execution.ExecutionId, mappedDecision.I)
-					question := mappedDecision.Reason
-					if len(mappedDecision.Fields) > 0 {
-						question = mappedDecision.Fields[0].Value
-					}
-
-					// Escape single quotes to prevent quote injection
-					safeQuestion := strings.ReplaceAll(question, "'", "\\'")
-
-					err = CreateOrgNotification(
-						ctx,
-						fmt.Sprintf("Agent - input required: '%s'", safeQuestion),
-						fmt.Sprintf("Input required during agent run."),
-						fmt.Sprintf("/forms/%s?authorization=%s&reference_execution=%s&source_node=%s&decision_id=%s&backend_url=%s", execution.WorkflowId, url.QueryEscape(execution.Authorization), execution.ExecutionId, startNode.ID, mappedDecision.RunDetails.Id, url.QueryEscape(backendUrl)),
-						execution.ExecutionOrg,
-						false,
-						"LOW",
-						"agent_approval",
-					)
-
-					if err != nil {
-						log.Printf("[ERROR][%s] Failed creating notification for ask input", execution.ExecutionId)
-					}
+					waitingForUser = append(waitingForUser, agentOutput.Decisions[decisionIndex])
 				}
 
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
@@ -11143,6 +11255,49 @@ data_filter:
 			decisionActionRan = true
 		}
 
+		// One notification for everything newly waiting on the user. A single item keeps the old title.
+		if len(waitingForUser) > 0 {
+			first := waitingForUser[0]
+			title := fmt.Sprintf("Agent - input required (%d items)", len(waitingForUser))
+			description := "Input required during agent run."
+			priority := "LOW"
+			for _, waiting := range waitingForUser {
+				if waiting.Action != "ask" && waiting.Action != "question" {
+					priority = "MEDIUM"
+				}
+			}
+
+			if len(waitingForUser) == 1 && (first.Action == "ask" || first.Action == "question") {
+				question := first.Reason
+				if len(first.Fields) > 0 {
+					question = first.Fields[0].Value
+				}
+
+				// Escape single quotes to prevent quote injection
+				title = fmt.Sprintf("Agent - input required: '%s'", strings.ReplaceAll(question, "'", "\\'"))
+			} else if len(waitingForUser) == 1 {
+				title = fmt.Sprintf("Agent - approval required for '%s'", first.Tool)
+				description = "Approval required during agent run."
+			}
+
+			err = CreateOrgNotification(
+				ctx,
+				title,
+				description,
+				fmt.Sprintf("/forms/%s?authorization=%s&reference_execution=%s&source_node=%s&decision_id=%s&backend_url=%s", execution.WorkflowId, url.QueryEscape(execution.Authorization), execution.ExecutionId, startNode.ID, first.RunDetails.Id, url.QueryEscape(backendUrl)),
+				execution.ExecutionOrg,
+				false,
+				priority,
+				"agent_approval",
+			)
+
+			if err != nil {
+				log.Printf("[ERROR][%s] Failed creating notification for agent input", execution.ExecutionId)
+			}
+		}
+
+		agentOutput.InputQuestions = buildAgentInputQuestions(agentOutput.Decisions)
+
 		marshalledAgentOutput, err := json.Marshal(agentOutput)
 		if err != nil {
 			log.Printf("[ERROR] AI Agent: Failed marshalling agent output in AI Agent response: %s", err)
@@ -11174,7 +11329,7 @@ data_filter:
 			foundResultIndex = len(execution.Results) - 1
 		}
 
-		if !decisionActionRan && !strings.Contains(decisionString, conditionText) {
+		if !decisionActionRan && agentOutput.Status != "WAITING" && !strings.Contains(decisionString, conditionText) {
 			log.Printf("[ERROR][%s] AI Agent: No decision action was run. Aborting agent run.", execution.ExecutionId)
 			return abortAgentExecution(ctx, execution, startNode, "no_decision_action_ran", fmt.Sprintf("Agent produced decisions, but none could be executed. This may indicate an unsupported action type or a bug in decision parsing. \n\nFailed Decision (debug): \n%s", decisionString))
 		}
