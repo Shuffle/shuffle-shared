@@ -12168,9 +12168,12 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 		// Detect false EOF: stream ended "cleanly" but final chunk (finish_reason + usage) never arrived.
 		finishReasonAfterStream := ""
-		if len(fullResp.Choices) > 0 {
+		if firstChoice, exists := choicesMap[0]; exists && firstChoice != nil {
+			finishReasonAfterStream = strings.ToLower(string(firstChoice.FinishReason))
+		} else if len(fullResp.Choices) > 0 {
 			finishReasonAfterStream = strings.ToLower(string(fullResp.Choices[0].FinishReason))
 		}
+
 		if finishReasonAfterStream == "" && totalTokens == 0 && len(contentOutput) > 0 {
 			cnt += 1
 			lastError = fmt.Errorf("stream ended without finish_reason or usage tokens (false EOF, likely Vertex AI mid-stream drop)")
