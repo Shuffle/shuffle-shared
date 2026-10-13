@@ -1702,6 +1702,21 @@ func normalizeRawDecisionFields(fields []rawField) {
 	}
 }
 
+// isFinishCategory checks if the raw decision has category set to "finish".
+func isFinishCategory(rawMap map[string]json.RawMessage) bool {
+	catBytes, hasCat := rawMap["category"]
+	if !hasCat {
+		return false
+	}
+
+	var catStr string
+	if err := json.Unmarshal(catBytes, &catStr); err != nil {
+		return false
+	}
+
+	return strings.EqualFold(strings.TrimSpace(catStr), "finish")
+}
+
 // extractDecisionArray scans the text for the first '[' that successfully decodes into a valid array of decisions.
 func extractDecisionArray(rawText string) ([]AgentDecision, error) {
 	for byteIndex := 0; byteIndex < len(rawText); byteIndex++ {
@@ -1722,14 +1737,11 @@ func extractDecisionArray(rawText string) ([]AgentDecision, error) {
 			// If "action" is missing, null, or empty, but "category" is "finish", auto-populate action as "finish"
 			actionBytes, hasAction := rawMap["action"]
 			rawAction := strings.Trim(strings.TrimSpace(string(actionBytes)), "\"")
-			if !hasAction || rawAction == "null" || strings.TrimSpace(rawAction) == "" {
-				if catBytes, hasCat := rawMap["category"]; hasCat {
-					var catStr string
-					if json.Unmarshal(catBytes, &catStr) == nil && strings.ToLower(strings.TrimSpace(catStr)) == "finish" {
-						actionBytes, _ := json.Marshal("finish")
-						decodedRawDecisions[mapIndex]["action"] = actionBytes
-					}
-				}
+			isActionMissing := !hasAction || rawAction == "null" || strings.TrimSpace(rawAction) == ""
+
+			if isActionMissing && isFinishCategory(rawMap) {
+				finishBytes, _ := json.Marshal("finish")
+				decodedRawDecisions[mapIndex]["action"] = finishBytes
 			}
 
 			if rawFields, hasFields := rawMap["fields"]; hasFields {
@@ -1798,14 +1810,11 @@ func extractDecisionJSONL(rawText string) ([]AgentDecision, error) {
 		// If "action" is missing, null, or empty, but "category" is "finish", auto-populate action as "finish"
 		actionBytes, hasAction := rawMap["action"]
 		rawAction := strings.Trim(strings.TrimSpace(string(actionBytes)), "\"")
-		if !hasAction || rawAction == "null" || strings.TrimSpace(rawAction) == "" {
-			if catBytes, hasCat := rawMap["category"]; hasCat {
-				var catStr string
-				if json.Unmarshal(catBytes, &catStr) == nil && strings.ToLower(strings.TrimSpace(catStr)) == "finish" {
-					actionBytes, _ := json.Marshal("finish")
-					rawMap["action"] = actionBytes
-				}
-			}
+		isActionMissing := !hasAction || rawAction == "null" || strings.TrimSpace(rawAction) == ""
+
+		if isActionMissing && isFinishCategory(rawMap) {
+			finishBytes, _ := json.Marshal("finish")
+			rawMap["action"] = finishBytes
 		}
 
 		if _, hasAction := rawMap["action"]; !hasAction {
