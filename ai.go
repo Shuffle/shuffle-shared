@@ -12152,10 +12152,14 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				return "", errors.New(fmt.Sprintf("Request from org %s with model '%s' exceeds the maximum number of tokens. %s", org, currentModel, err))
 			}
 
-			lastError = err
+			// Some AI Providers might return multi-line error bodies. Flatten them so the whole error stays in ONE log entry instead of being split per line.
+			lastError = errors.New(strings.Join(strings.Fields(err.Error()), " "))
 
-			log.Printf("[ERROR][%s] Failed to create AI chat completion for URL '%s'. Retrying in 1 second (4): %s", info.ExecutionId, aiRequestUrl, err)
-			time.Sleep(sleepTimer * time.Second)
+			log.Printf("[ERROR][%s] Failed to create AI chat completion for URL '%s'. Attempt %d/%d: %s", info.ExecutionId, aiRequestUrl, cnt, maxRetries, lastError)
+			if cnt < maxRetries {
+				// Back off a bit more on each attempt (5s, 10s) to ride out 429 capacity errors
+				time.Sleep(sleepTimer * time.Duration(cnt) * time.Second)
+			}
 			continue
 		}
 
@@ -12318,30 +12322,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			cnt += 1
 			lastError = fmt.Errorf("stream interrupted prematurely: %w", streamErr)
 			log.Printf("[WARNING][%s] AI_QUERY: LLM stream disconnected mid-response (attempt %d/%d), retrying: %v", info.ExecutionId, cnt, maxRetries, streamErr)
-			// Reset state for the retry
-			contentOutput = ""
-			choicesMap = make(map[int]*openai.ChatCompletionChoice)
-			fullResp = openai.ChatCompletionResponse{}
-			time.Sleep(sleepTimer * time.Second)
-			continue
-		}
-
-		// Detect false EOF: stream ended "cleanly" but final chunk (finish_reason + usage) never arrived.
-		finishReasonAfterStream := ""
-		if firstChoice, exists := choicesMap[0]; exists && firstChoice != nil {
-			finishReasonAfterStream = strings.ToLower(string(firstChoice.FinishReason))
-		} else if len(fullResp.Choices) > 0 {
-			finishReasonAfterStream = strings.ToLower(string(fullResp.Choices[0].FinishReason))
-		}
-
-		if finishReasonAfterStream == "" && totalTokens == 0 && len(contentOutput) > 0 {
-			cnt += 1
-			lastError = fmt.Errorf("stream ended without finish_reason or usage tokens (false EOF, likely Vertex AI mid-stream drop)")
-			log.Printf("[WARNING][%s] AI_QUERY: Stream false EOF detected (finish_reason empty, total_tokens=0, content_len=%d). Vertex AI likely dropped mid-stream. Retrying (attempt %d/%d)", info.ExecutionId, len(contentOutput), cnt, maxRetries)
-			contentOutput = ""
-			choicesMap = make(map[int]*openai.ChatCompletionChoice)
-			fullResp = openai.ChatCompletionResponse{}
-			totalTokens = 0
 			time.Sleep(sleepTimer * time.Second)
 			continue
 		}
@@ -12351,14 +12331,17 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			fullResp.Choices = make([]openai.ChatCompletionChoice, len(choicesMap))
 			for idx, choice := range choicesMap {
 				if idx >= 0 && idx < len(fullResp.Choices) {
-					fullResp.Choices[idx] = *choice
+					if choice != nil {
+						fullResp.Choices[idx] = *choice
+					}
 				}
 			}
 		}
 
+		finishReason := ""
 		if len(fullResp.Choices) > 0 {
 			// Normalize finish_reason: Gemini uses "MAX_TOKENS"/"SAFETY"/"RECITATION", OpenAI uses "length"/"content_filter"
-			finishReason := strings.ToLower(string(fullResp.Choices[0].FinishReason))
+			finishReason = strings.ToLower(string(fullResp.Choices[0].FinishReason))
 			log.Printf("[INFO][%s] AI_QUERY: finish_reason=%q model=%s received_len=%d", info.ExecutionId, finishReason, currentModel, len(contentOutput))
 
 			if finishReason == "length" || finishReason == "max_tokens" {
@@ -12370,6 +12353,15 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				log.Printf("[ERROR][%s] AI_QUERY: LLM output was blocked by safety/filter (finish_reason=%s, model=%s)", info.ExecutionId, finishReason, currentModel)
 				return "", fmt.Errorf("LLM output was blocked by safety filter (finish_reason=%s)", finishReason)
 			}
+		}
+
+		// Detect false EOF: stream ended "cleanly" but final chunk (finish_reason + usage) never arrived.
+		if finishReason == "" && totalTokens == 0 && len(contentOutput) > 0 {
+			cnt += 1
+			lastError = fmt.Errorf("stream ended without finish_reason or usage tokens (false EOF, likely mid-stream drop)")
+			log.Printf("[WARNING][%s] AI_QUERY: Stream false EOF detected (finish_reason empty, total_tokens=0, content_len=%d). Vertex AI likely dropped mid-stream. Retrying (attempt %d/%d)", info.ExecutionId, len(contentOutput), cnt, maxRetries)
+			time.Sleep(sleepTimer * time.Second)
+			continue
 		}
 
 		break
