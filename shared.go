@@ -10509,12 +10509,26 @@ func HandleGenerateRolloverApikey(resp http.ResponseWriter, request *http.Reques
 	if err != nil {
 		log.Printf("[WARNING] Failed creating rollover apikey for %s: %s", target.Username, err)
 		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		resp.Write([]byte(`{"success": false, "reason": "Failed creating rollover API key"}`))
 		return
 	}
 
+	newjson, err := json.Marshal(map[string]interface{}{
+		"success":         true,
+		"username":        newUserInfo.Username,
+		"verified":        newUserInfo.Verified,
+		"apikey":          newUserInfo.ApiKey,
+		"rollover_apikey": newUserInfo.RolloverApiKey,
+	})
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "username": "%s", "verified": %t, "apikey": "%s", "rollover_apikey": "%s"}`, newUserInfo.Username, newUserInfo.Verified, newUserInfo.ApiKey, newUserInfo.RolloverApiKey)))
+	resp.Write(newjson)
 }
 
 func HandlePromoteRolloverApikey(resp http.ResponseWriter, request *http.Request) {
@@ -10550,12 +10564,25 @@ func HandlePromoteRolloverApikey(resp http.ResponseWriter, request *http.Request
 	if err != nil {
 		log.Printf("[WARNING] Failed promoting rollover apikey for %s: %s", target.Username, err)
 		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		resp.Write([]byte(`{"success": false, "reason": "Failed deleting old API key"}`))
 		return
 	}
 
+	newjson, err := json.Marshal(map[string]interface{}{
+		"success":  true,
+		"username": newUserInfo.Username,
+		"verified": newUserInfo.Verified,
+		"apikey":   newUserInfo.ApiKey,
+	})
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "username": "%s", "verified": %t, "apikey": "%s"}`, newUserInfo.Username, newUserInfo.Verified, newUserInfo.ApiKey)))
+	resp.Write(newjson)
 }
 
 func HandleSettings(resp http.ResponseWriter, request *http.Request) {
