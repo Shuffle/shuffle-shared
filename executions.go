@@ -16,7 +16,6 @@ import (
 	"io/ioutil"
 
 	"cloud.google.com/go/datastore"
-	"github.com/shuffle/opensearch-go/v4/opensearchapi"
 )
 
 // A file built single-handedly for optimising executions. Functions:
@@ -1150,10 +1149,7 @@ func GetWorkflowExecution(ctx context.Context, id string, bypassCache ...bool) (
 
 	var getErr error = nil
 	if project.DbType == "opensearch" {
-		resp, err := project.Es.Document.Get(ctx, opensearchapi.DocumentGetReq{
-			Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
-			DocumentID: id,
-		})
+		resp, err := getEsDocument(ctx, strings.ToLower(GetESIndexPrefix(nameKey)), id)
 
 		if err != nil {
 			if strings.Contains(err.Error(), "has more than one index associated with it") {
