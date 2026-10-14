@@ -21841,6 +21841,14 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		if swagger.Info == nil {
+			defaultInfo := openapi3.Info{
+				Title:   fmt.Sprintf("Shuffle-Defult-Info-%s", idstring),
+				Version: "1.0.0",
+			}
+			swagger.Info = &defaultInfo
+		}
+
 		log.Printf("[INFO] Successfully set OpenAPI with name %s and ID %s", swagger.Info.Title, idstring)
 		resp.WriteHeader(200)
 		resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, idstring)))
