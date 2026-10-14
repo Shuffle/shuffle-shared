@@ -6862,6 +6862,68 @@ func GenerateApikey(ctx context.Context, userInfo User) (User, error) {
 	return userInfo, nil
 }
 
+func GenerateRolloverApikey(ctx context.Context, userInfo User) (User, error) {
+	if len(userInfo.Username) == 0 || len(userInfo.Id) == 0 {
+		return userInfo, fmt.Errorf("User ID and username are required to generate API key")
+	}
+
+	if len(userInfo.ApiKey) == 0 {
+		return GenerateApikey(ctx, userInfo)
+	}
+
+	if len(userInfo.RolloverApiKey) > 0 {
+		return userInfo, fmt.Errorf("A rollover API key already exists. Delete the old key first")
+	}
+
+	userInfo.RolloverApiKey = uuid.NewV4().String()
+
+	if err := SetApikey(ctx, userInfo); err != nil {
+		log.Printf("[WARNING] Failed updating apikey index on rollover create: %s", err)
+		return userInfo, err
+	}
+
+	log.Printf("[AUDIT] Created rollover apikey for user '%s' (%s)", userInfo.Username, userInfo.Id)
+	if err := SetUser(ctx, &userInfo, true); err != nil {
+		log.Printf("[WARNING] Failed updating users' rollover apikey: %s", err)
+		return userInfo, err
+	}
+
+	return userInfo, nil
+}
+
+func PromoteRolloverApikey(ctx context.Context, userInfo User) (User, error) {
+	if len(userInfo.Username) == 0 || len(userInfo.Id) == 0 {
+		return userInfo, fmt.Errorf("User ID and username are required to promote API key")
+	}
+
+	if len(userInfo.RolloverApiKey) == 0 {
+		return userInfo, fmt.Errorf("No rollover API key to promote")
+	}
+
+	oldApiKey := userInfo.ApiKey
+
+	userInfo.ApiKey = userInfo.RolloverApiKey
+	userInfo.RolloverApiKey = ""
+
+	if len(oldApiKey) > 0 {
+		DeleteCache(ctx, oldApiKey)
+		DeleteCache(ctx, fmt.Sprintf("Users_%s", oldApiKey))
+	}
+
+	if err := SetApikey(ctx, userInfo); err != nil {
+		log.Printf("[WARNING] Failed updating apikey index on rollover promote: %s", err)
+		return userInfo, err
+	}
+
+	log.Printf("[AUDIT] Promoted rollover apikey for user '%s' (%s); old key deleted", userInfo.Username, userInfo.Id)
+	if err := SetUser(ctx, &userInfo, true); err != nil {
+		log.Printf("[WARNING] Failed updating users' promoted apikey: %s", err)
+		return userInfo, err
+	}
+
+	return userInfo, nil
+}
+
 func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -10361,6 +10423,141 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "username": "%s", "verified": %t, "apikey": "%s"}`, userInfo.Username, userInfo.Verified, userInfo.ApiKey)))
 }
 
+// authorizeApikeyTarget decides which user an apikey action applies to and whether the caller is allowed to do it.
+func authorizeApikeyTarget(ctx context.Context, resp http.ResponseWriter, request *http.Request, caller User) (*User, bool) {
+	// Default the target to the caller; an optional "user_id" in the body targets someone else.
+	targetId := caller.Id
+
+	// Read the optional "user_id" from the request body (admins use this to act on another user).
+	if request.Body != nil {
+		body, err := ioutil.ReadAll(request.Body)
+		if err == nil && len(body) > 0 {
+			var t struct {
+				UserId string `json:"user_id"`
+			}
+			if err := json.Unmarshal(body, &t); err == nil && len(t.UserId) > 0 {
+				targetId = t.UserId
+			}
+		}
+	}
+
+	// Self-service: a user acting on their own key is always allowed.
+	if targetId == caller.Id {
+		self := caller
+		return &self, true
+	}
+
+	// Acting on someone else requires the caller to be an admin.
+	if caller.Role != "admin" {
+		log.Printf("[AUDIT] %s (%s) tried to change apikey for %s without admin role", caller.Username, caller.Id, targetId)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "You need to be admin to change another user's API key"}`))
+		return nil, false
+	}
+
+	// Load the target user; 404 if they don't exist.
+	target, err := GetUser(ctx, targetId)
+	if err != nil {
+		log.Printf("[WARNING] Can't find target user %s for apikey change: %s", targetId, err)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Target user not found"}`))
+		return nil, false
+	}
+
+	// Multi-tenant isolation: the admin can only touch users inside their own active org.
+	if !ArrayContains(target.Orgs, caller.ActiveOrg.Id) {
+		log.Printf("[AUDIT] admin %s (%s) tried to change apikey for %s outside their org %s", caller.Username, caller.Id, targetId, caller.ActiveOrg.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Target user is not in your organization"}`))
+		return nil, false
+	}
+
+	return target, true
+}
+
+func HandleGenerateRolloverApikey(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting rollover apikey create to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	caller, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in rollover create: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	target, ok := authorizeApikeyTarget(ctx, resp, request, caller)
+	if !ok {
+		return
+	}
+
+	newUserInfo, err := GenerateRolloverApikey(ctx, *target)
+	if err != nil {
+		log.Printf("[WARNING] Failed creating rollover apikey for %s: %s", target.Username, err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "username": "%s", "verified": %t, "apikey": "%s", "rollover_apikey": "%s"}`, newUserInfo.Username, newUserInfo.Verified, newUserInfo.ApiKey, newUserInfo.RolloverApiKey)))
+}
+
+func HandlePromoteRolloverApikey(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting rollover apikey promote to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	caller, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in rollover promote: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	target, ok := authorizeApikeyTarget(ctx, resp, request, caller)
+	if !ok {
+		return
+	}
+
+	newUserInfo, err := PromoteRolloverApikey(ctx, *target)
+	if err != nil {
+		log.Printf("[WARNING] Failed promoting rollover apikey for %s: %s", target.Username, err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "username": "%s", "verified": %t, "apikey": "%s"}`, newUserInfo.Username, newUserInfo.Verified, newUserInfo.ApiKey)))
+}
+
 func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -10397,6 +10594,7 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 		Username: userInfo.Username,
 		Verified: userInfo.Verified,
 		Apikey:   userInfo.ApiKey,
+		RolloverApikey: userInfo.RolloverApiKey,
 		Image:    userInfo.PublicProfile.GithubAvatar,
 
 		Devices: userInfo.Devices,
@@ -10417,6 +10615,7 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 func CleanCreds(user *User, currentUser User) *User {
 	user.Password = ""
 	user.ApiKey = ""
+	user.RolloverApiKey = ""
 	user.Session = ""
 	user.UsersLastSession = ""
 	user.VerificationToken = ""
@@ -10529,9 +10728,11 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 
 		if item.Id != user.Id {
 			item.ApiKey = ""
+			item.RolloverApiKey = ""
 		}
 
 		item.ApiKey = ""
+		item.RolloverApiKey = ""
 		item.Password = ""
 		item.Session = ""
 		item.UsersLastSession = ""
@@ -10626,6 +10827,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				orgUser.ApiKey = ""
+				orgUser.RolloverApiKey = ""
 				orgUser.Password = ""
 				orgUser.Session = ""
 				orgUser.UsersLastSession = ""
@@ -14997,6 +15199,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				user.Password = ""
 				user.Session = ""
 				user.ApiKey = ""
+				user.RolloverApiKey = ""
 				user.LoginInfo = []LoginInfo{}
 				user.PrivateApps = []WorkflowApp{}
 
