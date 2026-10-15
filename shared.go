@@ -149,6 +149,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 		allowedDomains := []string{
 			"https://shuffler.io",
 			"https://stream.shuffler.io",
+			"https://sandbox.shuffler.io",
 
 			"https://us.shuffler.io",
 			"https://california.shuffler.io",
