@@ -14818,7 +14818,10 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		err = SetWorkflow(ctx, *output, output.ID)
 		if err != nil {
 			log.Printf("[ERROR] Failed to save generated workflow to database: %s", err)
-			// Continue anyway - user still gets the workflow and can manually save later
+			// The frontend reloads the workflow from the database, so an unsaved one shows up empty
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to save the generated workflow. Please try again"}`))
+			return
 		}
 	}
 

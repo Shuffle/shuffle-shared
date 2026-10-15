@@ -5338,7 +5338,7 @@ type NGramItem struct {
 
 type AIConfig struct {
 	Generated bool   `json:"generated" datastore:"generated"`
-	Prompt    string `json:"prompt" datastore:"prompt"`
+	Prompt    string `json:"prompt" datastore:"prompt,noindex"`
 	Model     string `json:"model" datastore:"model"`
 	Status    string `json:"status" datastore:"status"`
 }
