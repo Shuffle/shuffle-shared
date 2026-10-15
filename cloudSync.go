@@ -2660,6 +2660,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		return body, debugUrl, appName, []string{}, "", err
 	}
 
+	if builderRequest, ok := getWorkflowBuilderRequest(decision); ok {
+		return runWorkflowBuilderDecisionInProcess(execution, decision, builderRequest)
+	}
+
 	skipSingul := executionMode == "direct" || os.Getenv("AGENT_SKIP_SINGUL") != "false"
 	if skipSingul {
 		if debug { 

@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -38502,6 +38503,165 @@ func enrichTriggerFromApp(minTrig *MinimalTrigger, environment string) (Trigger,
 	default:
 		return Trigger{}, fmt.Errorf("unsupported trigger type: %s", minTrig.AppName)
 	}
+}
+
+// The workflow builder app is a thin wrapper around this backend's own workflow APIs.
+// Running it as an app sends every parameter through the app SDK, which treats
+// "$node.field" and liquid "{{ }}" inside the workflow content as variables and
+// replaces them, so edits made by the agent end up with empty references.
+// These actions are therefore handled in-process, passing the content through as-is.
+const workflowBuilderAppId = "de4ef2287bd41b9d5563e39989643ee6"
+const workflowBuilderAppName = "Shuffle_Workflows_Builder"
+
+type workflowBuilderRequest struct {
+	Method  string
+	Path    string
+	Body    []byte
+	Handler http.HandlerFunc
+}
+
+func normalizeToolName(name string) string {
+	return strings.ToLower(strings.NewReplacer("_", "", " ", "", "-", "").Replace(strings.TrimSpace(name)))
+}
+
+// Only the actions that read or write workflow content. Anything else the
+// builder app can do (running workflows, reading executions) keeps the normal app path.
+func getWorkflowBuilderRequest(decision AgentDecision) (workflowBuilderRequest, bool) {
+	action := normalizeToolName(decision.Action)
+	tool := normalizeToolName(decision.Tool)
+
+	// The model sometimes puts the action name in the tool field
+	if tool != normalizeToolName(workflowBuilderAppId) && tool != normalizeToolName(workflowBuilderAppName) && tool != action {
+		return workflowBuilderRequest{}, false
+	}
+
+	fields := map[string]string{}
+	for _, field := range decision.Fields {
+		value := field.Value
+		if len(field.Answer) > 0 {
+			value = field.Answer
+		}
+
+		fields[normalizeToolName(field.Key)] = value
+	}
+
+	switch action {
+	case "getminimalworkflow":
+		workflowId := fields["workflowid"]
+		if len(workflowId) == 0 {
+			return workflowBuilderRequest{}, false
+		}
+
+		return workflowBuilderRequest{
+			Method:  "GET",
+			Path:    fmt.Sprintf("/api/v1/workflows/%s/minimal", url.PathEscape(workflowId)),
+			Handler: GetWorkflowMinimal,
+		}, true
+	case "putagentupdate":
+		return workflowBuilderRequest{
+			Method:  "PUT",
+			Path:    "/api/v1/workflows/operations",
+			Body:    []byte(fields["body"]),
+			Handler: HandleAgentWorkflowOperations,
+		}, true
+	case "postcreateworkflow":
+		minimal := fields["minimal"]
+		if len(minimal) == 0 {
+			minimal = "true"
+		}
+
+		return workflowBuilderRequest{
+			Method:  "POST",
+			Path:    fmt.Sprintf("/api/v1/workflows?minimal=%s", url.QueryEscape(minimal)),
+			Body:    []byte(fields["body"]),
+			Handler: SetNewWorkflow,
+		}, true
+	}
+
+	return workflowBuilderRequest{}, false
+}
+
+// Wraps the handler response in the same shape the builder app returns, so the agent reads it the same way
+func runWorkflowBuilderRequest(builderRequest workflowBuilderRequest, apikey, orgId string) []byte {
+	request := httptest.NewRequest(builderRequest.Method, builderRequest.Path, bytes.NewReader(builderRequest.Body))
+	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apikey))
+	request.Header.Set("Org-Id", orgId)
+	request.Header.Set("Content-Type", "application/json")
+
+	recorder := httptest.NewRecorder()
+	builderRequest.Handler(recorder, request)
+
+	var body interface{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		body = recorder.Body.String()
+	}
+
+	success := recorder.Code < 300
+	if parsedBody, ok := body.(map[string]interface{}); ok {
+		if innerSuccess, ok := parsedBody["success"].(bool); ok && !innerSuccess {
+			success = false
+		}
+	}
+
+	result, _ := json.Marshal(map[string]interface{}{
+		"success": success,
+		"status":  recorder.Code,
+		"url":     builderRequest.Path,
+		"body":    body,
+	})
+
+	return result
+}
+
+// Acts as the user who started the agent. Falls back to the same org user
+// the app path would have picked, so nobody gains access they didn't have.
+func getWorkflowBuilderApikey(ctx context.Context, execution WorkflowExecution) (string, error) {
+	orgId := execution.ExecutionOrg
+	if len(execution.Workflow.UpdatedBy) > 0 {
+		users, err := FindUser(ctx, execution.Workflow.UpdatedBy)
+		if err == nil {
+			for _, user := range users {
+				if !ArrayContains(user.Orgs, orgId) {
+					continue
+				}
+
+				if len(user.ApiKey) > 0 {
+					return user.ApiKey, nil
+				}
+
+				newUser, err := GenerateApikey(ctx, user)
+				if err == nil && len(newUser.ApiKey) > 0 {
+					return newUser.ApiKey, nil
+				}
+			}
+		}
+	}
+
+	org, err := GetOrg(ctx, orgId)
+	if err != nil {
+		return "", err
+	}
+
+	for _, orgUser := range org.Users {
+		user, err := GetUser(ctx, orgUser.Id)
+		if err == nil && len(user.ApiKey) > 0 {
+			return user.ApiKey, nil
+		}
+	}
+
+	return "", errors.New("no user with an API key found in the org")
+}
+
+func runWorkflowBuilderDecisionInProcess(execution WorkflowExecution, decision AgentDecision, builderRequest workflowBuilderRequest) ([]byte, string, string, []string, string, error) {
+	apikey, err := getWorkflowBuilderApikey(context.Background(), execution)
+	if err != nil {
+		log.Printf("[ERROR][%s] AI Agent: Failed finding a user to run workflow builder action '%s' as: %s", execution.ExecutionId, decision.Action, err)
+		return nil, "", workflowBuilderAppName, []string{}, decision.Action, err
+	}
+
+	result := runWorkflowBuilderRequest(builderRequest, apikey, execution.ExecutionOrg)
+	log.Printf("[INFO][%s] AI Agent: Ran workflow builder action '%s' in-process (%s %s)", execution.ExecutionId, decision.Action, builderRequest.Method, strings.Split(builderRequest.Path, "?")[0])
+	return result, "", workflowBuilderAppName, []string{}, decision.Action, nil
 }
 
 func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Request) {
