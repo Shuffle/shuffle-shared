@@ -2153,6 +2153,14 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 			} else {
 				//log.Printf("[DEBUG] Returning %s (%s) normally", workflowApp.Name, id)
 			}
+
+			// Other regions only get a public app's actions when someone activates it there
+			if len(workflowApp.Actions) == 0 && workflowApp.Public && project.Environment == "cloud" && gceProject != "shuffler" {
+				mainApp, err := getPublicAppFromMain(ctx, id)
+				if err == nil {
+					workflowApp = &mainApp
+				}
+			}
 		}
 	}
 

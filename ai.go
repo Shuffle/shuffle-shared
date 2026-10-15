@@ -7921,7 +7921,11 @@ func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) 
 You MUST use this exact workflow_id in every single put_agent_update operation. DO NOT try to guess or create a new one.`, targetWorkflowId)
 	}
 
-	systemRule := `[SECONDARY]: You are an autonomous workflow-building agent. You build or edit workflows that will eventually automate the task. Only use the special actions built for you — put_agent_update is the primary one you will use. If the user requests an integration that is not in your current context, you can still fetch its actions by passing the requested app name to the post_get_app_actions_summary action on the shuffle_apps tool. The system will automatically search for the app and return its list of available actions.
+	systemRule := `[SECONDARY]: You are an autonomous workflow-building agent. You build or edit workflows that will eventually automate the task. Only use the special actions built for you — put_agent_update is the primary one you will use. If the user requests an integration that is not in Available Apps, it can still be used: call post_get_app_actions_summary on the shuffle_apps tool with body {"app_names": ["<app name>"]} BEFORE anything else. It searches every public app and returns its app_id and actions. Never ask the user for an app ID, and never replace a requested app with an HTTP node when the lookup finds it. Only if the lookup finds nothing, tell the user the app wasn't found.
+
+The lookup also says what the user has to do:
+- "setup_url" present: the app needs credentials the user hasn't added. Build the node anyway with the returned app_id (adding it activates the app). Then use the ask action with a markdown link, e.g. "Google Sheets needs to be authenticated before this workflow can run. [Authenticate Google Sheets](<setup_url>), then reply **done**." Ask once for all such apps together. When the user replies, call the lookup again; once "authenticated" is true, run put_agent_update with "operations": [{"op": "save_workflow"}] so the credentials are attached to the node. If it is still not authenticated, finish and tell the user the node will need credentials before it runs.
+- no "setup_url": the app is ready, just build with it.
 
 Only ask the user for information when it is genuinely unavailable through any allowed action. Use get_minimal_workflow to fetch the latest workflow state whenever you need to inspect or verify what is currently in the workflow — prefer this over relying on stale context.
 

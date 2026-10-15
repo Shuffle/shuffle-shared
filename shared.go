@@ -37995,7 +37995,7 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 			lowerName := strings.ToLower(strings.TrimSpace(appName))
 			foundInOrg := false
 			for _, app := range allApps {
-				if strings.ToLower(app.Name) == lowerName && len(app.ID) > 0 {
+				if normalizeToolName(app.Name) == normalizeToolName(lowerName) && len(app.ID) > 0 {
 					if debug {
 						log.Printf("[DEBUG] Found app by name '%s' (ID %s) in org apps list", appName, app.ID)
 					}
@@ -38066,6 +38066,40 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(404)
 		resp.Write([]byte(`{"success": false, "reason": "No actions found in matched apps"}`))
 		return
+	}
+
+	// Tell the agent which apps the user still has to authenticate, and where.
+	// Activation isn't needed here: adding a node with a public app activates it.
+	orgApps := map[string]bool{}
+	for _, app := range allApps {
+		orgApps[app.ID] = true
+	}
+
+	matchedById := map[string]WorkflowApp{}
+	for _, app := range matchedApps {
+		matchedById[app.ID] = app
+	}
+
+	orgAuths, authErr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+	if authErr != nil {
+		log.Printf("[WARNING] Failed loading org auths in GetWorkflowAppActions: %s", authErr)
+	}
+
+	for i := range responses {
+		app := matchedById[responses[i].AppID]
+		responses[i].Activated = orgApps[app.ID]
+		responses[i].AuthenticationRequired = app.Authentication.Required
+
+		for _, auth := range orgAuths {
+			if auth.App.ID == app.ID || strings.EqualFold(auth.App.Name, app.Name) {
+				responses[i].Authenticated = true
+				break
+			}
+		}
+
+		if responses[i].AuthenticationRequired && !responses[i].Authenticated && authErr == nil {
+			responses[i].SetupUrl = fmt.Sprintf("/apps/%s", app.ID)
+		}
 	}
 
 	if debug {
@@ -38513,6 +38547,10 @@ func enrichTriggerFromApp(minTrig *MinimalTrigger, environment string) (Trigger,
 const workflowBuilderAppId = "de4ef2287bd41b9d5563e39989643ee6"
 const workflowBuilderAppName = "Shuffle_Workflows_Builder"
 
+// The app lookup lives on the shuffle_apps tool, but the model often files it under the builder
+const shuffleAppsAppId = "7db43ccd25261967b095cfbd467a75cc"
+const shuffleAppsAppName = "shuffle_apps"
+
 type workflowBuilderRequest struct {
 	Method  string
 	Path    string
@@ -38531,7 +38569,16 @@ func getWorkflowBuilderRequest(decision AgentDecision) (workflowBuilderRequest, 
 	tool := normalizeToolName(decision.Tool)
 
 	// The model sometimes puts the action name in the tool field
-	if tool != normalizeToolName(workflowBuilderAppId) && tool != normalizeToolName(workflowBuilderAppName) && tool != action {
+	knownTools := []string{workflowBuilderAppId, workflowBuilderAppName, shuffleAppsAppId, shuffleAppsAppName, decision.Action}
+	known := false
+	for _, knownTool := range knownTools {
+		if tool == normalizeToolName(knownTool) {
+			known = true
+			break
+		}
+	}
+
+	if !known {
 		return workflowBuilderRequest{}, false
 	}
 
@@ -38576,9 +38623,54 @@ func getWorkflowBuilderRequest(decision AgentDecision) (workflowBuilderRequest, 
 			Body:    []byte(fields["body"]),
 			Handler: SetNewWorkflow,
 		}, true
+	case "postgetappactionssummary", "getappactionssummary":
+		body := fields["body"]
+		if len(body) == 0 {
+			body = getAppLookupBody(fields)
+		}
+
+		if len(body) == 0 {
+			return workflowBuilderRequest{}, false
+		}
+
+		return workflowBuilderRequest{
+			Method:  "POST",
+			Path:    "/api/v1/apps/actions",
+			Body:    []byte(body),
+			Handler: GetWorkflowAppActions,
+		}, true
 	}
 
 	return workflowBuilderRequest{}, false
+}
+
+// The model sometimes sends app_names as its own field instead of inside body
+func getAppLookupBody(fields map[string]string) string {
+	lookup := map[string][]string{}
+	for key, field := range map[string]string{"appnames": "app_names", "appname": "app_names", "name": "app_names", "appids": "app_ids", "appid": "app_ids"} {
+		value := strings.TrimSpace(fields[key])
+		if len(value) == 0 {
+			continue
+		}
+
+		values := []string{}
+		if json.Unmarshal([]byte(value), &values) != nil {
+			values = strings.Split(value, ",")
+		}
+
+		for _, item := range values {
+			if item = strings.TrimSpace(item); len(item) > 0 {
+				lookup[field] = append(lookup[field], item)
+			}
+		}
+	}
+
+	if len(lookup) == 0 {
+		return ""
+	}
+
+	body, _ := json.Marshal(lookup)
+	return string(body)
 }
 
 // Wraps the handler response in the same shape the builder app returns, so the agent reads it the same way
