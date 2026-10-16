@@ -8095,6 +8095,19 @@ Only provide the fields you actually want to change.
 }
 }
 
+To swap a node to another app or action (e.g. an HTTP node to Google Sheets), use edit_node with the new app_id and action_name. The node keeps its id, label, position and branches, and its parameters become those of the new action, so pass the values for them:
+{
+"op": "edit_node",
+"id": "<real_node_id>",
+"data": {
+  "app_id": "<app_id from the app lookup>",
+  "action_name": "<action of that app>",
+  "parameters": [
+    { "name": "<parameter of that action>", "value": "<value>" }
+  ]
+}
+}
+
 4. DELETING OR MOVING
 { "op": "delete_node", "node_type": "action", "id": "<real_node_id>" }
 { "op": "delete_branch", "id": "<real_branch_id>" }
@@ -8158,7 +8171,9 @@ CRITICAL RULES FOR THE AGENT
 1. Handling Errors: If you make a mistake, the API will reject your request and tell you EXACTLY which operation failed and why (e.g., "Operation 1 failed: app_id is required"). Read the error carefully, fix the specific missing or incorrect field, and try again.
 2. Special actions are built exclusively for you. put_agent_update is the core action that does most of the heavy lifting.
 3. Use get_minimal_workflow to fetch the current workflow state only whenever you need it.
-4. Try not to use parallel decision calling; always do sequential tool calls.`
+4. Try not to use parallel decision calling; always do sequential tool calls.
+5. Verify before you report: put_agent_update returns the updated workflow. Check that the nodes you changed now have the app, action and parameter values you intended before you tell the user it's done. If they don't, fix it first.
+6. Asking for credentials is not asking for approval. If you need both, ask for the approval separately and wait for an explicit yes.`
 
 	templateContext := fmt.Sprintf(`%s
 

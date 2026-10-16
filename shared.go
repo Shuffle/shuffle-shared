@@ -39439,7 +39439,7 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 				op.ID = realID
 			}
 		}
-		return opEditNode(wf, op)
+		return opEditNodeWithApp(ctx, user, wf, op)
 	case "move_node":
 		if realID, exists := tempIDMap[op.ID]; exists {
 			op.ID = realID
@@ -39790,6 +39790,44 @@ func opAddNode(ctx context.Context, user User, wf *Workflow, op *WorkflowOperati
 	}
 }
 
+// edit_node from the agent. Changing the app or the action changes which parameters
+// exist, so the node is rebuilt from the app instead of only renaming the action
+// (which left e.g. an HTTP node pointing at a Google Sheets action). Anything else
+// is a plain edit.
+func opEditNodeWithApp(ctx context.Context, user User, wf *Workflow, op *WorkflowOperation) error {
+	actidx := findActionIndexByID(wf, op.ID)
+	if actidx == -1 {
+		return opEditNode(wf, op)
+	}
+
+	var updates MinimalAction
+	if err := json.Unmarshal(op.Data, &updates); err != nil {
+		return fmt.Errorf("invalid action update data: %w", err)
+	}
+
+	current := wf.Actions[actidx]
+	appChanged := len(updates.AppID) > 0 && updates.AppID != current.AppID
+	if !appChanged && len(updates.AppID) == 0 && len(updates.AppName) > 0 && normalizeToolName(updates.AppName) != normalizeToolName(current.AppName) {
+		return fmt.Errorf("to change the app of node %s from %s to %s, pass the new app_id (from the app lookup) in data", current.Label, current.AppName, updates.AppName)
+	}
+
+	if appChanged {
+		return rebuildActionFromApp(ctx, user, wf, actidx, &updates, true)
+	}
+
+	if len(updates.Name) > 0 && updates.Name != current.Name {
+		// Same app, other action. If the app can't be loaded, keep the old behaviour.
+		err := rebuildActionFromApp(ctx, user, wf, actidx, &updates, false)
+		if !errors.Is(err, errEditAppUnavailable) {
+			return err
+		}
+	}
+
+	return opEditNode(wf, op)
+}
+
+var errEditAppUnavailable = errors.New("app unavailable")
+
 func opEditNode(wf *Workflow, op *WorkflowOperation) error {
 	// Auto-detect node type: check if it's an action or trigger
 	actidx := findActionIndexByID(wf, op.ID)
@@ -39866,6 +39904,105 @@ func opEditNode(wf *Workflow, op *WorkflowOperation) error {
 	}
 
 	return fmt.Errorf("node %s not found in workflow (not an action or trigger)", op.ID)
+}
+
+// Rebuilds an action from its (new) app definition, like add_node does, while keeping
+// what ties it into the workflow: id (so branches stay), label, position and start node.
+func rebuildActionFromApp(ctx context.Context, user User, wf *Workflow, actidx int, updates *MinimalAction, appChanged bool) error {
+	current := wf.Actions[actidx]
+	appId := current.AppID
+	if appChanged {
+		appId = updates.AppID
+	}
+
+	app, err := findAppByID(ctx, appId, user)
+	if err != nil || app == nil || len(app.Actions) == 0 {
+		if !appChanged {
+			return errEditAppUnavailable
+		}
+		return fmt.Errorf("failed to find app %s: %v", appId, err)
+	}
+
+	actionName := updates.Name
+	if len(actionName) == 0 {
+		actionName = current.Name
+		if appChanged {
+			return fmt.Errorf("action_name is required when changing node %s to app %s (available: %s)", current.Label, app.Name, getActionNames(app.Actions))
+		}
+	}
+
+	var appAction *WorkflowAppAction
+	for i := range app.Actions {
+		if strings.EqualFold(app.Actions[i].Name, actionName) {
+			appAction = &app.Actions[i]
+			break
+		}
+	}
+
+	if appAction == nil {
+		return fmt.Errorf("action %s not found in app %s (available: %s)", actionName, app.Name, getActionNames(app.Actions))
+	}
+
+	// Unknown parameters would be dropped silently, so say which ones exist instead
+	for _, param := range updates.Parameters {
+		found := false
+		for _, appParam := range appAction.Parameters {
+			if strings.EqualFold(appParam.Name, param.Name) {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			names := []string{}
+			for _, appParam := range appAction.Parameters {
+				names = append(names, appParam.Name)
+			}
+			return fmt.Errorf("parameter %s does not exist in %s %s (available: %s)", param.Name, app.Name, appAction.Name, strings.Join(names, ", "))
+		}
+	}
+
+	// Same app, other action: keep values the user already set for parameters both actions share
+	parameters := []MinimalParameter{}
+	if !appChanged {
+		for _, param := range current.Parameters {
+			if len(param.Value) > 0 {
+				parameters = append(parameters, MinimalParameter{Name: param.Name, Value: param.Value})
+			}
+		}
+	}
+	parameters = append(parameters, updates.Parameters...)
+
+	label := current.Label
+	if len(updates.Label) > 0 {
+		label = updates.Label
+	}
+
+	minAct := MinimalAction{AppID: app.ID, Name: appAction.Name, Label: label, Parameters: parameters}
+	newAction, err := enrichActionFromApp(ctx, &minAct, app, current.Environment)
+	if err != nil {
+		return fmt.Errorf("failed to rebuild node %s: %w", current.Label, err)
+	}
+
+	// enrichActionFromApp applies values in order, so the agent's updates win over carried ones
+	for _, param := range parameters {
+		for i := range newAction.Parameters {
+			if strings.EqualFold(newAction.Parameters[i].Name, param.Name) {
+				newAction.Parameters[i].Value = param.Value
+			}
+		}
+	}
+
+	newAction.ID = current.ID
+	newAction.Position = current.Position
+	newAction.IsStartNode = current.IsStartNode
+	newAction.ExecutionDelay = current.ExecutionDelay
+	if !appChanged {
+		newAction.AuthenticationId = current.AuthenticationId
+	}
+
+	wf.Actions[actidx] = newAction
+	return nil
 }
 
 func opMoveNode(wf *Workflow, op *WorkflowOperation) error {
