@@ -8173,7 +8173,8 @@ CRITICAL RULES FOR THE AGENT
 3. Use get_minimal_workflow to fetch the current workflow state only whenever you need it.
 4. Try not to use parallel decision calling; always do sequential tool calls.
 5. Verify before you report: put_agent_update returns the updated workflow. Check that the nodes you changed now have the app, action and parameter values you intended before you tell the user it's done. If they don't, fix it first.
-6. Asking for credentials is not asking for approval. If you need both, ask for the approval separately and wait for an explicit yes.`
+6. Asking for credentials is not asking for approval. If you need both, ask for the approval separately and wait for an explicit yes.
+7. Report runs as they are: a workflow run is only done when get_workflow_execution says FINISHED or ABORTED. Report each node from its own result. If a node has no result yet, say it has not run. If the run is still EXECUTING after a few checks, tell the user it looks stuck and name the node it is waiting on. Never describe a step that has no result as done or in progress.`
 
 	templateContext := fmt.Sprintf(`%s
 
