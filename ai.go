@@ -10750,6 +10750,7 @@ data_filter:
 			ApiKey:          aiApiKeyOverride,
 			Model:           aiModelOverride,
 			ReasoningEffort: foundReasoning,
+			ResponseFormat:  "json",
 		}
 
 		// Check for authenticationId
@@ -12624,6 +12625,15 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	sleepTimer := time.Duration(5)
 	chatCompletion.StreamOptions = &openai.StreamOptions{
 		IncludeUsage: true,
+	}
+
+	if chatCompletion.ResponseFormat == nil {
+		respFormat := strings.ToLower(strings.TrimSpace(info.ResponseFormat))
+		if respFormat == "json" || respFormat == "json_object" {
+			chatCompletion.ResponseFormat = &openai.ChatCompletionResponseFormat{
+				Type: openai.ChatCompletionResponseFormatTypeJSONObject,
+			}
+		}
 	}
 
 	// In case of non-streaming Resp input
