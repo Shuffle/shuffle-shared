@@ -20943,10 +20943,11 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 								"id": "%s_%s"
 							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
 
-						// 1. Get the value and set it instead if it exists
-						// 2. If it doesn't exist, add it
-						_, err := getExecutionFileValue(ctx, workflowExecution, item)
-						if err == nil {
+						// Write the file unless it already holds this exact value.
+						// Most results never change, but an AI Agent's result grows with every turn,
+						// and keeping the first file would bring back old history once the cache expires.
+						existing, err := getExecutionFileValue(ctx, workflowExecution, item)
+						if err == nil && (existing == item.Result || (isAgentAction(item.Action) && existing == cleanAgentResultString(item.Result))) {
 							//log.Printf("[DEBUG][%s] Found execution file locally for '%s'. Not saving another.", workflowExecution.ExecutionId, item.Action.Label)
 						} else {
 							fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
@@ -20969,6 +20970,11 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 								newResults = append(newResults, item)
 								continue
 							}
+
+							// Readers check this cache before the file. Drop the old copy even if setting the new one fails.
+							actionReplaceKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, item.Action.ID)
+							DeleteCache(ctx, actionReplaceKey)
+							_ = SetCache(ctx, actionReplaceKey, []byte(item.Result), 600)
 						}
 
 						item.Result = fmt.Sprintf(`{
