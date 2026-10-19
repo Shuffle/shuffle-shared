@@ -7389,9 +7389,36 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 	// Check if result contains AgentOutput mapping as string
 	agentOutput := AgentOutput{}
 	if len(foundResult.Result) > 0 {
+		if strings.Contains(foundResult.Result, "Result too large to handle") {
+			fileValue, fileErr := getExecutionFileValue(ctx, execution, foundResult)
+			if fileErr == nil && len(fileValue) > 0 {
+				foundResult.Result = fileValue
+			}
+		}
+		foundResult.Result = cleanAgentResultString(foundResult.Result)
 		err := json.Unmarshal([]byte(foundResult.Result), &agentOutput)
 		if err != nil {
 			log.Printf("[ERROR][%s] abortAgentExecution: failed to parse AgentOutput from result. This is NOT critical. Details: %s", execution.ExecutionId, err)
+		}
+	}
+
+	actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
+	cachedData, cacheErr := GetCache(ctx, actionCacheId)
+	if cacheErr == nil && cachedData != nil {
+		var cachedBytes []byte
+		switch cachedValue := cachedData.(type) {
+		case []byte:
+			cachedBytes = cachedValue
+		case string:
+			cachedBytes = []byte(cachedValue)
+		}
+		if len(cachedBytes) > 0 {
+			cleanedCached := cleanAgentResultString(string(cachedBytes))
+			var cachedOutput AgentOutput
+			unmarshalErr := json.Unmarshal([]byte(cleanedCached), &cachedOutput)
+			if unmarshalErr == nil && len(cachedOutput.Decisions) > len(agentOutput.Decisions) {
+				agentOutput = cachedOutput
+			}
 		}
 	}
 
@@ -7526,7 +7553,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		execution.Results = append(execution.Results, abortResult)
 	}
 
-	actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
+	// Update action cache before saving to DB so Fixexecution does not overwrite abortResult with a stale cached output
 	_ = SetCache(ctx, actionCacheId, marshalledOutput, 600)
 
 	if !standalone {
@@ -9835,8 +9862,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			oldActionResult = result
 
 			if strings.Contains(result.Result, "Result too large to handle") {
-				if fullVal, fileErr := getExecutionFileValue(ctx, execution, result); fileErr == nil && len(fullVal) > 0 {
-					result.Result = cleanAgentResultString(fullVal)
+				fullValue, fileErr := getExecutionFileValue(ctx, execution, result)
+				if fileErr == nil && len(fullValue) > 0 {
+					result.Result = cleanAgentResultString(fullValue)
 				}
 			} else {
 				result.Result = cleanAgentResultString(result.Result)
@@ -9853,15 +9881,17 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				break
 			}
 
-			if len(mappedResult.Decisions) == 0 {
-				actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
-				if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil && cachedData != nil {
-					if cachedBytes, ok := cachedData.([]uint8); ok {
-						var cachedOut AgentOutput
-						if err := json.Unmarshal(cachedBytes, &cachedOut); err == nil && len(cachedOut.Decisions) > 0 {
-							mappedResult = cachedOut
-							log.Printf("[INFO][%s] AI Agent: Fetched %d decisions from action cache fallback", execution.ExecutionId, len(mappedResult.Decisions))
-						}
+			actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
+			cachedData, cacheErr := GetCache(ctx, actionCacheId)
+			if cacheErr == nil && cachedData != nil {
+				cachedBytes, isByteSlice := cachedData.([]uint8)
+				if isByteSlice {
+					cleanedCached := cleanAgentResultString(string(cachedBytes))
+					var cachedOutput AgentOutput
+					unmarshalErr := json.Unmarshal([]byte(cleanedCached), &cachedOutput)
+					if unmarshalErr == nil && len(cachedOutput.Decisions) > len(mappedResult.Decisions) {
+						mappedResult = cachedOutput
+						log.Printf("[INFO][%s] AI Agent: Fetched %d decisions from action cache fallback", execution.ExecutionId, len(mappedResult.Decisions))
 					}
 				}
 			}
