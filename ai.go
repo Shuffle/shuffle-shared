@@ -12642,7 +12642,6 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	outputTokens := 0
 	cachedTokens := 0
 	var lastError error
-	choicesMap := make(map[int]*openai.ChatCompletionChoice)
 	var fullResp openai.ChatCompletionResponse
 	var reasoningOutput string
 	for {
@@ -12734,6 +12733,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		// 2. Iterate over the stream
 		iterations := 0
 		var streamErr error
+		contentOutput = ""
+		fullResp = openai.ChatCompletionResponse{}
+		choicesMap := make(map[int]*openai.ChatCompletionChoice)
 		for {
 			iterations += 1
 
