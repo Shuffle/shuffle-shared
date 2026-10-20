@@ -7882,7 +7882,12 @@ func getComputerUseActions() []WorkflowAppAction {
 				},
 				{
 					Name:        "path",
-					Description: "Optional directory path to search within (defaults to active workspace)",
+					Description: "Optional directory path (or comma-separated paths) to search within (defaults to active workspace)",
+					Required:    false,
+				},
+				{
+					Name:        "max_depth",
+					Description: "Optional maximum directory recursion depth (defaults to 8)",
 					Required:    false,
 				},
 			},
@@ -7999,7 +8004,12 @@ func getComputerUseActions() []WorkflowAppAction {
 				},
 				{
 					Name:        "path",
-					Description: "Optional directory or file path to search in (defaults to active workspace)",
+					Description: "Optional directory or file path (or comma-separated paths) to search in (defaults to active workspace)",
+					Required:    false,
+				},
+				{
+					Name:        "max_depth",
+					Description: "Optional maximum directory recursion depth (defaults to 6)",
 					Required:    false,
 				},
 				{
@@ -9461,7 +9471,12 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 								},
 								{
 									Name:        "path",
-									Description: "Optional directory path to search within (defaults to active workspace)",
+									Description: "Optional directory path (or comma-separated paths) to search within (defaults to active workspace)",
+					Required:    false,
+				},
+				{
+					Name:        "max_depth",
+					Description: "Optional maximum directory recursion depth (defaults to 8)",
 									Required:    false,
 								},
 							},
@@ -9578,7 +9593,12 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 								},
 								{
 									Name:        "path",
-									Description: "Optional directory or file path to search in (defaults to active workspace)",
+									Description: "Optional directory or file path (or comma-separated paths) to search in (defaults to active workspace)",
+					Required:    false,
+				},
+				{
+					Name:        "max_depth",
+					Description: "Optional maximum directory recursion depth (defaults to 6)",
 									Required:    false,
 								},
 								{
