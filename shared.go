@@ -149,6 +149,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 		allowedDomains := []string{
 			"https://shuffler.io",
 			"https://stream.shuffler.io",
+			"https://sandbox.shuffler.io",
 
 			"https://us.shuffler.io",
 			"https://california.shuffler.io",
@@ -21839,6 +21840,14 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 			resp.WriteHeader(422)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi2: %s"}`, err)))
 			return
+		}
+
+		if swagger.Info == nil {
+			defaultInfo := openapi3.Info{
+				Title:   fmt.Sprintf("Shuffle-Defult-Info-%s", idstring),
+				Version: "1.0.0",
+			}
+			swagger.Info = &defaultInfo
 		}
 
 		log.Printf("[INFO] Successfully set OpenAPI with name %s and ID %s", swagger.Info.Title, idstring)
