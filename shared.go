@@ -20971,10 +20971,11 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 								continue
 							}
 
-							// Readers check this cache before the file. Drop the old copy even if setting the new one fails.
+							// Readers check this cache before the file. Set overwrites the old copy; only drop it if the set fails.
 							actionReplaceKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, item.Action.ID)
-							DeleteCache(ctx, actionReplaceKey)
-							_ = SetCache(ctx, actionReplaceKey, []byte(item.Result), 600)
+							if err := SetCache(ctx, actionReplaceKey, []byte(item.Result), 600); err != nil {
+								DeleteCache(ctx, actionReplaceKey)
+							}
 						}
 
 						item.Result = fmt.Sprintf(`{
