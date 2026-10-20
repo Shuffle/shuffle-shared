@@ -99,9 +99,11 @@ func init() {
 		}
 	}
 
-	reasoningEffort := os.Getenv("AI_REASONING_EFFORT")
-	if reasoningEffort == "minimal" || reasoningEffort == "low" || reasoningEffort == "medium" || reasoningEffort == "high" {
+	reasoningEffort := strings.ToLower(strings.TrimSpace(os.Getenv("AI_REASONING_EFFORT")))
+	if reasoningEffort == "low" || reasoningEffort == "medium" || reasoningEffort == "high" {
 		aiReasoningEffort = reasoningEffort
+	} else if reasoningEffort == "minimal" || reasoningEffort == "off" || reasoningEffort == "none" {
+		aiReasoningEffort = "off"
 	}
 
 	// Forcing it to be local for ALL requests going forward
@@ -7342,10 +7344,17 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		}
 	}
 
+	if os.Getenv("STANDALONE") == "true" {
+		standalone = true
+		project.CacheDb = true
+	}
+
 	// Overwrite agent from scratch
-	newExec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
-	if err == nil {
-		execution = *newExec
+	if !standalone {
+		newExec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
+		if err == nil {
+			execution = *newExec
+		}
 	}
 
 	// Fallback to refreshed execution if not found yet
@@ -7367,7 +7376,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 	// Check if result contains AgentOutput mapping as string
 	agentOutput := AgentOutput{}
 	if len(foundResult.Result) > 0 {
-		err = json.Unmarshal([]byte(foundResult.Result), &agentOutput)
+		err := json.Unmarshal([]byte(foundResult.Result), &agentOutput)
 		if err != nil {
 			log.Printf("[ERROR][%s] abortAgentExecution: failed to parse AgentOutput from result. This is NOT critical. Details: %s", execution.ExecutionId, err)
 		}
@@ -7504,10 +7513,15 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		execution.Results = append(execution.Results, abortResult)
 	}
 
-	// Save to DB immediately so callers (like PrepareSingleAction) see the abort state
-	SetWorkflowExecution(ctx, execution, true)
+	actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
+	_ = SetCache(ctx, actionCacheId, marshalledOutput, 600)
 
-	go sendAgentActionSelfRequest("FAILURE", execution, abortResult)
+	if !standalone {
+		// Save to DB immediately so callers (like PrepareSingleAction) see the abort state
+		SetWorkflowExecution(ctx, execution, true)
+
+		go sendAgentActionSelfRequest("FAILURE", execution, abortResult)
+	}
 
 	return startNode, errors.New(reason)
 }
@@ -7815,6 +7829,213 @@ func getTemplateContext(ctx context.Context, template string, execution Workflow
 
 // Control a computer (Computer-Use)
 // Toolset: Screenshot, mouse & kb. CLI. API.
+// getComputerUseActions returns the built-in osctrl / Computer-Use actions
+// supported across standalone, cloud, and onprem environments.
+func getComputerUseActions() []WorkflowAppAction {
+	return []WorkflowAppAction{
+		{
+			Name:        "execute_command",
+			Label:       "Execute Command",
+			Description: "Execute a shell/terminal command on the system in the active workspace directory",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "cmd",
+					Description: "Command to execute",
+					Required:    true,
+				},
+			},
+		},
+		{
+			Name:        "list_files",
+			Label:       "List Files",
+			Description: "List files and directories in the active workspace or a specified path",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "path",
+					Description: "Optional relative or absolute directory path (defaults to active workspace)",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "find_files",
+			Label:       "Find Files",
+			Description: "Recursively find files and directories in the workspace by name or glob pattern (e.g. *.go)",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "pattern",
+					Description: "Optional file name substring or glob pattern (e.g. *.go, bridge.go)",
+					Required:    false,
+				},
+				{
+					Name:        "path",
+					Description: "Optional directory path to search within (defaults to active workspace)",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "read_file",
+			Label:       "Read File",
+			Description: "Read line-numbered text contents of a file in the workspace (optionally within a specific line range)",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "path",
+					Description: "Relative or absolute path to the file",
+					Required:    true,
+				},
+				{
+					Name:        "start_line",
+					Description: "Optional 1-indexed starting line number",
+					Required:    false,
+				},
+				{
+					Name:        "end_line",
+					Description: "Optional 1-indexed ending line number (inclusive)",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "edit_file",
+			Label:       "Edit File",
+			Description: "Modify a specific section of an existing file by replacing target_content with replacement_content",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "path",
+					Description: "Relative or absolute path to the file to modify",
+					Required:    true,
+				},
+				{
+					Name:        "target_content",
+					Description: "Exact existing text block in the file to replace",
+					Required:    true,
+				},
+				{
+					Name:        "replacement_content",
+					Description: "New text content to replace target_content with",
+					Required:    true,
+				},
+				{
+					Name:        "start_line",
+					Description: "Optional 1-indexed start line to scope the replacement",
+					Required:    false,
+				},
+				{
+					Name:        "end_line",
+					Description: "Optional 1-indexed end line to scope the replacement",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "write_file",
+			Label:       "Write File",
+			Description: "Create a new file or overwrite the entire content of a file in the workspace",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "path",
+					Description: "Relative or absolute path to the file",
+					Required:    true,
+				},
+				{
+					Name:        "content",
+					Description: "Full content to write to the file",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "create_file",
+			Label:       "Create File",
+			Description: "Create a new file in the workspace (automatically creates parent directories)",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "path",
+					Description: "Relative or absolute path to the new file",
+					Required:    true,
+				},
+				{
+					Name:        "content",
+					Description: "Optional initial content for the file",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "create_directory",
+			Label:       "Create Directory",
+			Description: "Create a new directory/folder in the workspace (creates parent directories as needed)",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "path",
+					Description: "Relative or absolute path to the new directory",
+					Required:    true,
+				},
+			},
+		},
+		{
+			Name:        "search_files",
+			Label:       "Search Files",
+			Description: "Search across all files in the workspace for matching text or regular expressions (returns file:line matches)",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "query",
+					Description: "Text or regex pattern to search for across files",
+					Required:    true,
+				},
+				{
+					Name:        "path",
+					Description: "Optional directory or file path to search in (defaults to active workspace)",
+					Required:    false,
+				},
+				{
+					Name:        "file_pattern",
+					Description: "Optional file glob filter (e.g. *.go, *.js)",
+					Required:    false,
+				},
+				{
+					Name:        "is_regex",
+					Description: "Optional boolean ('true'/'false') to enable regex matching",
+					Required:    false,
+				},
+			},
+		},
+		{
+			Name:        "list_processes",
+			Label:       "List Processes",
+			Description: "List currently running OS processes on the host",
+		},
+		{
+			Name:        "list_installed_software",
+			Label:       "List Installed Software",
+			Description: "List installed software and applications on the host",
+		},
+		{
+			Name:        "take_screenshot",
+			Label:       "Take Screenshot",
+			Description: "Capture display screenshot metadata and active window UI element tree",
+		},
+		{
+			Name:        "inspect_ui",
+			Label:       "Inspect UI",
+			Description: "Inspect the currently focused foreground window and UI element tree",
+		},
+		{
+			Name:        "remote_control",
+			Label:       "Remote Control",
+			Description: "Execute OS mouse and keyboard automation actions (mouse.move, mouse.click, mouse.drag, keyboard.type, keyboard.press, keyboard.hotkey, system.wait)",
+			Parameters: []WorkflowAppActionParameter{
+				{
+					Name:        "actions",
+					Description: `JSON array or batch of actions, e.g. [{"op":"mouse.move","params":{"x":500,"y":500}}] or [{"op":"mouse.click","params":{"x":500,"y":500,"button":"left"}}] or [{"op":"keyboard.type","params":{"text":"hello"}}]`,
+					Required:    true,
+				},
+			},
+		},
+	}
+}
+
 func buildComputerUseContext(ctx context.Context, execution WorkflowExecution) (string, string, []string, error) {
 
 	// Question: Can this be done in a "specialised" fashion as well?
@@ -7825,6 +8046,7 @@ You are an autonomous Computer-Using Agent interacting with a desktop/browser en
 
 # RULES & RESPONSIBILITIES
 - For terminal commands, always assume they do not exist by testing them first. If running bash scripts, always validate the output. STDOUT is captured.
+- Prefer direct osctrl / Computer-Use actions when available (` + "`execute_command`" + `, ` + "`list_files`" + `, ` + "`find_files`" + `, ` + "`read_file`" + `, ` + "`edit_file`" + `, ` + "`write_file`" + `, ` + "`create_file`" + `, ` + "`create_directory`" + `, ` + "`search_files`" + `, ` + "`list_processes`" + `, ` + "`list_installed_software`" + `, ` + "`take_screenshot`" + `, ` + "`inspect_ui`" + `, ` + "`remote_control`" + `).
 - Use the 'post_control_mouse_and_keyboard' function for keyboard & mouse control if it is available. You can chain together escaped JSON commands in the the "actions" array using the operations detailed below. 
 - If an action produces no state change in the new screenshot, do NOT repeat the exact same action. Try an alternative input method (e.g., press Enter instead of clicking 'Search', or scroll to reveal hidden UI elements).
 - When an action takes more than 30 seconds, it will return an execution_id and authorization key to be used for polling results. When polling, always add 30 second or more delay. 
@@ -7874,6 +8096,7 @@ When choosing one or more hostnames, NEVER guess which host. When available, ALW
 
 	requiredApps := resolveAllowedApps(ctx, execution, orgId, []string{
 		"app:48a954b9440b3913b8a2620e57b94a75:shuffle_host_monitors",
+		"app:osctrl",
 	}, "shuffle-security_monitors", "host-monitor-control")
 
 	permissionsPolicy := buildAgentPermissionsPolicy(ctx, orgId, "host-monitor-control")
@@ -8740,24 +8963,31 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	var err error
 	aiStarttime := time.Now().UnixMilli()
 
+	if os.Getenv("STANDALONE") == "true" {
+		standalone = true
+		project.CacheDb = true
+	}
+
 	// Ensure we merge all prior node results from DB so earlier nodes (e.g. Shuffle Tools) are never clobbered or lost
-	if freshExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && freshExecution != nil && len(freshExecution.Results) > 0 {
-		if len(execution.Results) == 0 {
-			execution.Results = freshExecution.Results
-		} else {
-			for _, dbRes := range freshExecution.Results {
-				if dbRes.Action.ID == startNode.ID {
-					continue
-				}
-				found := false
-				for _, curRes := range execution.Results {
-					if curRes.Action.ID == dbRes.Action.ID {
-						found = true
-						break
+	if !standalone {
+		if freshExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && freshExecution != nil && len(freshExecution.Results) > 0 {
+			if len(execution.Results) == 0 {
+				execution.Results = freshExecution.Results
+			} else {
+				for _, dbRes := range freshExecution.Results {
+					if dbRes.Action.ID == startNode.ID {
+						continue
 					}
-				}
-				if !found {
-					execution.Results = append(execution.Results, dbRes)
+					found := false
+					for _, curRes := range execution.Results {
+						if curRes.Action.ID == dbRes.Action.ID {
+							found = true
+							break
+						}
+					}
+					if !found {
+						execution.Results = append(execution.Results, dbRes)
+					}
 				}
 			}
 		}
@@ -8899,7 +9129,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 	llmStatusCode := 0
 	parsedAgentInput := ""
-	if hasConditions || len(parsingBody) > 0 {
+	if !standalone && (hasConditions || len(parsingBody) > 0) {
 		marshalledBody, err := json.Marshal(parsingBody)
 		if err == nil && len(marshalledBody) > 0 {
 			repeaterNode := Action{}
@@ -9177,7 +9407,228 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					continue
 				}
 
-				sortedAppActions := getPrioritisedAppActions(ctx, trimmedActionStr, 15)
+				var sortedAppActions []WorkflowAppAction
+				if trimmedActionStr == "osctrl" || trimmedActionStr == "subflow:osctrl" || trimmedActionStr == "computer-use" || trimmedActionStr == "computer_use" {
+					sortedAppActions = getComputerUseActions()
+					if false {
+						_ = []WorkflowAppAction{
+						{
+							Name:        "execute_command",
+							Label:       "Execute Command",
+							Description: "Execute a shell/terminal command on the local system in the active workspace directory",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "cmd",
+									Description: "Command to execute",
+									Required:    true,
+								},
+							},
+						},
+						{
+							Name:        "list_files",
+							Label:       "List Files",
+							Description: "List files and directories in the active workspace or a specified path",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "path",
+									Description: "Optional relative or absolute directory path (defaults to active workspace)",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "find_files",
+							Label:       "Find Files",
+							Description: "Recursively find files and directories in the workspace by name or glob pattern (e.g. *.go)",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "pattern",
+									Description: "Optional file name substring or glob pattern (e.g. *.go, bridge.go)",
+									Required:    false,
+								},
+								{
+									Name:        "path",
+									Description: "Optional directory path to search within (defaults to active workspace)",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "read_file",
+							Label:       "Read File",
+							Description: "Read line-numbered text contents of a file in the workspace (optionally within a specific line range)",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "path",
+									Description: "Relative or absolute path to the file",
+									Required:    true,
+								},
+								{
+									Name:        "start_line",
+									Description: "Optional 1-indexed starting line number",
+									Required:    false,
+								},
+								{
+									Name:        "end_line",
+									Description: "Optional 1-indexed ending line number (inclusive)",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "edit_file",
+							Label:       "Edit File",
+							Description: "Modify a specific section of an existing file by replacing target_content with replacement_content",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "path",
+									Description: "Relative or absolute path to the file to modify",
+									Required:    true,
+								},
+								{
+									Name:        "target_content",
+									Description: "Exact existing text block in the file to replace",
+									Required:    true,
+								},
+								{
+									Name:        "replacement_content",
+									Description: "New text content to replace target_content with",
+									Required:    true,
+								},
+								{
+									Name:        "start_line",
+									Description: "Optional 1-indexed start line to scope the replacement",
+									Required:    false,
+								},
+								{
+									Name:        "end_line",
+									Description: "Optional 1-indexed end line to scope the replacement",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "write_file",
+							Label:       "Write File",
+							Description: "Create a new file or overwrite the entire content of a file in the workspace",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "path",
+									Description: "Relative or absolute path to the file",
+									Required:    true,
+								},
+								{
+									Name:        "content",
+									Description: "Full content to write to the file",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "create_file",
+							Label:       "Create File",
+							Description: "Create a new file in the workspace (automatically creates parent directories)",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "path",
+									Description: "Relative or absolute path to the new file",
+									Required:    true,
+								},
+								{
+									Name:        "content",
+									Description: "Optional initial content for the file",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "create_directory",
+							Label:       "Create Directory",
+							Description: "Create a new directory/folder in the workspace (creates parent directories as needed)",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "path",
+									Description: "Relative or absolute path to the new directory",
+									Required:    true,
+								},
+							},
+						},
+						{
+							Name:        "search_files",
+							Label:       "Search Files",
+							Description: "Search across all files in the workspace for matching text or regular expressions (returns file:line matches)",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "query",
+									Description: "Text or regex pattern to search for across files",
+									Required:    true,
+								},
+								{
+									Name:        "path",
+									Description: "Optional directory or file path to search in (defaults to active workspace)",
+									Required:    false,
+								},
+								{
+									Name:        "file_pattern",
+									Description: "Optional file glob filter (e.g. *.go, *.js)",
+									Required:    false,
+								},
+								{
+									Name:        "is_regex",
+									Description: "Optional boolean ('true'/'false') to enable regex matching",
+									Required:    false,
+								},
+							},
+						},
+						{
+							Name:        "list_processes",
+							Label:       "List Processes",
+							Description: "List currently running OS processes on the host",
+						},
+						{
+							Name:        "list_installed_software",
+							Label:       "List Installed Software",
+							Description: "List installed software and applications on the host",
+						},
+						{
+							Name:        "take_screenshot",
+							Label:       "Take Screenshot",
+							Description: "Capture display screenshot metadata and active window UI element tree",
+						},
+						{
+							Name:        "inspect_ui",
+							Label:       "Inspect UI",
+							Description: "Inspect the currently focused foreground window and UI element tree",
+						},
+						{
+							Name:        "remote_control",
+							Label:       "Remote Control",
+							Description: "Execute OS mouse and keyboard automation actions (mouse.move, mouse.click, mouse.drag, keyboard.type, keyboard.press, keyboard.hotkey, system.wait)",
+							Parameters: []WorkflowAppActionParameter{
+								{
+									Name:        "actions",
+									Description: `JSON array or batch of actions, e.g. [{"op":"mouse.move","params":{"x":500,"y":500}}] or [{"op":"mouse.click","params":{"x":500,"y":500,"button":"left"}}] or [{"op":"keyboard.type","params":{"text":"hello"}}]`,
+									Required:    true,
+								},
+							},
+						},
+					}
+					}
+					trimmedActionStr = "osctrl"
+				} else {
+					sortedAppActions = getPrioritisedAppActions(ctx, trimmedActionStr, 15)
+					if strings.Contains(trimmedActionStr, "shuffle_host_monitors") {
+						existingNames := make(map[string]bool, len(sortedAppActions))
+						for _, act := range sortedAppActions {
+							existingNames[act.Name] = true
+						}
+						for _, cuAct := range getComputerUseActions() {
+							if !existingNames[cuAct.Name] {
+								sortedAppActions = append(sortedAppActions, cuAct)
+							}
+						}
+					}
+				}
 
 				// Sort alphabetically so the action list is byte-for-byte identical across every LLM loop, keeping the prompt cache prefix stable.
 				sort.Slice(sortedAppActions, func(i, j int) bool {
@@ -9705,7 +10156,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 	// This makes it so we can start from this index.
 	lastFinishedIndex += 1
 
-	if len(execution.Workflow.OrgId) > 0 {
+	if !standalone && len(execution.Workflow.OrgId) > 0 {
 		org, err := GetOrg(ctx, execution.Workflow.OrgId)
 		if err == nil && len(org.Id) > 0 {
 			metadata += fmt.Sprintf("Organization name: %s\n", org.Name)
@@ -9745,6 +10196,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
 			}
 		}
+	} else if len(decidedApps) > 0 {
+		metadata += fmt.Sprintf("\n\nAVAILABLE TOOLS: %s\n\n", strings.Join(decidedApps, ", "))
 	}
 
 	// Not necessary as it's directly injected instead
@@ -9871,15 +10324,25 @@ data_filter:
 	// earlier (before the "action" parameter merge), no need to fetch them again here.
 
 	agentReasoningEffort := "low"
-	newReasoningEffort := os.Getenv("AI_AGENT_REASONING_EFFORT")
+	if aiReasoningEffort == "low" || aiReasoningEffort == "medium" || aiReasoningEffort == "high" {
+		agentReasoningEffort = aiReasoningEffort
+	} else if aiReasoningEffort == "minimal" || aiReasoningEffort == "off" || aiReasoningEffort == "none" {
+		agentReasoningEffort = ""
+	}
+
+	newReasoningEffort := strings.ToLower(strings.TrimSpace(os.Getenv("AI_AGENT_REASONING_EFFORT")))
 	if len(newReasoningEffort) > 0 {
-		if newReasoningEffort == "minimal" || newReasoningEffort == "low" || newReasoningEffort == "medium" || newReasoningEffort == "high" {
+		if newReasoningEffort == "low" || newReasoningEffort == "medium" || newReasoningEffort == "high" {
 			agentReasoningEffort = newReasoningEffort
+		} else if newReasoningEffort == "minimal" || newReasoningEffort == "off" || newReasoningEffort == "none" {
+			agentReasoningEffort = ""
 		}
 	}
 
-	if foundReasoning == "minimal" || foundReasoning == "low" || foundReasoning == "medium" || foundReasoning == "high" {
+	if foundReasoning == "low" || foundReasoning == "medium" || foundReasoning == "high" {
 		agentReasoningEffort = foundReasoning
+	} else if foundReasoning == "minimal" || foundReasoning == "off" || foundReasoning == "none" {
+		agentReasoningEffort = ""
 	}
 
 	added := false
@@ -10008,9 +10471,6 @@ data_filter:
 	} else {
 		// For on-prem
 		completionRequest.MaxCompletionTokens = aiMaxTokens
-		if aiReasoningEffort != "" {
-			completionRequest.ReasoningEffort = aiReasoningEffort
-		}
 	}
 
 	if len(marshalledDecisions) > 4 {
@@ -10169,7 +10629,7 @@ data_filter:
 
 	billingOrgId := execution.Workflow.OrgId
 	var billingOrg *Org
-	if len(execution.Workflow.OrgId) > 0 {
+	if !standalone && len(execution.Workflow.OrgId) > 0 {
 		currentOrg, orgErr := GetOrg(ctx, execution.Workflow.OrgId)
 		billingOrg = currentOrg
 
@@ -10802,10 +11262,12 @@ data_filter:
 			}
 
 			// Validate if user actively aborted the workflow while LLM query was in flight
-			if tmpExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && tmpExecution != nil {
-				if tmpExecution.Status == "ABORTED" {
-					log.Printf("[INFO][%s] Workflow was aborted by user while LLM query was in flight. Stopping agent.", execution.ExecutionId)
-					return startNode, errors.New("Agent Workflow run was aborted")
+			if !standalone {
+				if tmpExecution, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && tmpExecution != nil {
+					if tmpExecution.Status == "ABORTED" {
+						log.Printf("[INFO][%s] Workflow was aborted by user while LLM query was in flight. Stopping agent.", execution.ExecutionId)
+						return startNode, errors.New("Agent Workflow run was aborted")
+					}
 				}
 			}
 
@@ -10911,7 +11373,9 @@ data_filter:
 					_ = SetCache(ctx, actionCacheId, []byte(initialResult), 600)
 				}
 
-				SetWorkflowExecution(ctx, execution, true)
+				if !standalone {
+					SetWorkflowExecution(ctx, execution, true)
+				}
 			}
 		}
 
@@ -10993,7 +11457,7 @@ data_filter:
 			agentOutput.Decisions[decisionIndex] = decision
 
 			// Handles approvals
-			if decision.ApprovalRequired && decision.Action != "ask" && decision.Action != "question" && (decision.Category == "singul" || decision.Category == "standalone") && (decision.RunDetails.Status == "" || decision.RunDetails.Status == "RUNNING") {
+			if !standalone && decision.ApprovalRequired && decision.Action != "ask" && decision.Action != "question" && (decision.Category == "singul" || decision.Category == "standalone") && (decision.RunDetails.Status == "" || decision.RunDetails.Status == "RUNNING") {
 				log.Printf("[DEBUG] Decision %d requires approval. SHOULD mark as waiting for approval (not implemented)...", decision.I)
 
 				if agentOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
@@ -11066,7 +11530,7 @@ data_filter:
 					}
 				}
 
-				if agentOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
+				if !standalone && agentOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 {
 
 					//http://localhost:3002/forms/9d327719-5ee3-43d9-a775-7b13d5add416?authorization=5fc12b1d-e418-47e0-9789-f6f82f8826df&reference_execution=9d327719-5ee3-43d9-a775-7b13d5add416&source_node=2cf6fc9b-f470-40b3-aa52-56ad2e1a952b&decision_id=UVrjdHiQ&backend_url=http://localhost:5002
 					mappedDecision := agentOutput.Decisions[decisionIndex]
@@ -11106,7 +11570,9 @@ data_filter:
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 
-				go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
+				if !standalone {
+					go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
+				}
 
 			} else {
 				// 	if decision.Category == "standalone" || decision.Action == "add_tool" {
@@ -11129,7 +11595,7 @@ data_filter:
 					marshalledDecision, err := json.Marshal(decision)
 					if err != nil {
 						log.Printf("[ERROR] AI Agent: Failed marshalling decision in AI Agent decision handler: %s", err)
-					} else {
+					} else if !standalone {
 						actionResult := ActionResult{
 							ExecutionId:   execution.ExecutionId,
 							Authorization: execution.Authorization,
@@ -11232,11 +11698,13 @@ data_filter:
 			}
 			execution.Results[foundResultIndex].Status = "SUCCESS"
 			execution.Results[foundResultIndex].CompletedAt = agentOutput.CompletedAt
-			SetWorkflowExecution(ctx, execution, true)
+			if !standalone {
+				SetWorkflowExecution(ctx, execution, true)
 
-			log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for agent action %s", execution.ExecutionId, startNode.ID)
-			go sendAgentActionSelfRequest("SUCCESS", execution, execution.Results[foundResultIndex])
-		} else {
+				log.Printf("[DEBUG][%s] About to call sendAgentActionSelfRequest for agent action %s", execution.ExecutionId, startNode.ID)
+				go sendAgentActionSelfRequest("SUCCESS", execution, execution.Results[foundResultIndex])
+			}
+		} else if !standalone {
 			SetWorkflowExecution(ctx, execution, true)
 		}
 
@@ -11283,7 +11751,7 @@ data_filter:
 		*/
 	}
 
-	if createNextActions || agentOutput.Status == "FINISHED" {
+	if standalone || createNextActions || agentOutput.Status == "FINISHED" {
 		return startNode, nil
 	}
 
@@ -11703,6 +12171,10 @@ curl https://shuffler.io/api/v1/chat/completions -sN -H "Authorization: Bearer "
 }'
 */
 func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
+	if os.Getenv("STANDALONE") == "true" {
+		standalone = true
+		project.CacheDb = true
+	}
 
 	currentModel := model
 	if ctx == nil {
@@ -11743,7 +12215,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		defaultCreds = true
 	}
 
-	isStandalone := standalone || os.Getenv("STANDALONE") == "true" || os.Getenv("SHUFFLE_STANDALONE") == "true"
+	isStandalone := standalone || os.Getenv("STANDALONE") == "true" || os.Getenv("SHUFFLE_STANDALONE") == "true" || strings.HasPrefix(info.Caller, "orborus")
 
 	hasExplicitCallInfo := false
 	if isStandalone && len(info.Url) > 0 && len(info.ApiKey) > 0 {
@@ -11801,6 +12273,27 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				apiKey = customKey
 				if len(customUrl) > 0 {
 					aiRequestUrl = customUrl
+				} else if strings.HasPrefix(strings.TrimSpace(customKey), "shfl_") {
+					if project.Environment == "cloud" {
+						foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
+						if len(foundApikey) > 0 {
+							defaultCreds = true
+							apiKey = foundApikey
+							aiRequestUrl = foundRequestUrl
+							if len(foundModel) > 0 {
+								currentModel = foundModel
+							}
+						}
+					} else {
+						baseUrl := os.Getenv("SHUFFLE_BASE_URL")
+						if len(baseUrl) == 0 {
+							baseUrl = getBackendBaseUrl()
+						}
+						if len(baseUrl) == 0 || strings.Contains(strings.ToLower(baseUrl), "shuffle.security") {
+							baseUrl = "https://uk.shuffler.io"
+						}
+						aiRequestUrl = fmt.Sprintf("%s/api/v1", strings.TrimSuffix(baseUrl, "/"))
+					}
 				} else {
 					retUrl, _ := ValidateURLandModel("", currentModel)
 					if len(retUrl) > 0 {
@@ -11819,8 +12312,8 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 				if len(baseUrl) == 0 {
 					baseUrl = getBackendBaseUrl()
 				}
-				if len(baseUrl) == 0 {
-					baseUrl = "https://shuffler.io"
+				if len(baseUrl) == 0 || strings.Contains(strings.ToLower(baseUrl), "shuffle.security") {
+					baseUrl = "https://uk.shuffler.io"
 				}
 				aiRequestUrl = fmt.Sprintf("%s/api/v1", strings.TrimSuffix(baseUrl, "/"))
 			} else {
@@ -11893,9 +12386,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	}
 
 	if isStandalone && len(info.ReasoningEffort) > 0 {
-		chatCompletion.ReasoningEffort = strings.ToLower(info.ReasoningEffort)
+		chatCompletion.ReasoningEffort = strings.ToLower(strings.TrimSpace(info.ReasoningEffort))
 	} else if len(os.Getenv("SHUFFLE_REASONING_EFFORT")) > 0 {
-		chatCompletion.ReasoningEffort = strings.ToLower(os.Getenv("SHUFFLE_REASONING_EFFORT"))
+		chatCompletion.ReasoningEffort = strings.ToLower(strings.TrimSpace(os.Getenv("SHUFFLE_REASONING_EFFORT")))
 	}
 
 	// FIXME: Too specific. Should be self-corrective.. :)
@@ -11951,6 +12444,11 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		}
 	}
 
+	normalizedReasoning := strings.ToLower(strings.TrimSpace(chatCompletion.ReasoningEffort))
+	if normalizedReasoning == "minimal" || normalizedReasoning == "off" || normalizedReasoning == "none" {
+		chatCompletion.ReasoningEffort = ""
+	}
+
 	// Gotta cut it back down, as it can get into 50+ etc
 	if len(chatCompletion.Messages) > 10 {
 		// Ensures we keep the system messages
@@ -11983,6 +12481,35 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 		if len(retModel) > 0 {
 			currentModel = retModel
+		}
+	}
+
+	isShuffleModel := strings.EqualFold(strings.TrimSpace(currentModel), "shuffle-ai") || strings.EqualFold(strings.TrimSpace(currentModel), "shuffle-cloud")
+	if isShuffleModel {
+		currentModel = "gemini-3.8-flash"
+	}
+
+	// Hard guard: never send a Shuffle token (shfl_...) or Shuffle AI model to OpenAI's endpoint
+	if (strings.HasPrefix(strings.TrimSpace(apiKey), "shfl_") || isShuffleModel) && (len(aiRequestUrl) == 0 || strings.Contains(strings.ToLower(aiRequestUrl), "api.openai.com")) {
+		if project.Environment == "cloud" {
+			foundApikey, foundRequestUrl, foundModel := GetGeminiCredentials(ctx)
+			if len(foundApikey) > 0 {
+				defaultCreds = true
+				apiKey = foundApikey
+				aiRequestUrl = foundRequestUrl
+				if len(foundModel) > 0 {
+					currentModel = foundModel
+				}
+			}
+		} else {
+			baseUrl := os.Getenv("SHUFFLE_BASE_URL")
+			if len(baseUrl) == 0 {
+				baseUrl = getBackendBaseUrl()
+			}
+			if len(baseUrl) == 0 || strings.Contains(strings.ToLower(baseUrl), "shuffle.security") {
+				baseUrl = "https://uk.shuffler.io"
+			}
+			aiRequestUrl = fmt.Sprintf("%s/api/v1", strings.TrimSuffix(baseUrl, "/"))
 		}
 	}
 
@@ -12031,7 +12558,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	estOtherTokens := int(math.Ceil(float64(len(otherMsg)) / 3.5))
 	totalEst := estSysTokens + estUserTokens + estOtherTokens
 
-	reasoning := "medium"
+	reasoning := "off"
 	if len(chatCompletion.ReasoningEffort) > 0 {
 		reasoning = chatCompletion.ReasoningEffort
 	}
@@ -12073,6 +12600,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 	var lastError error
 	choicesMap := make(map[int]*openai.ChatCompletionChoice)
 	var fullResp openai.ChatCompletionResponse
+	var reasoningOutput string
 	for {
 		if cnt >= maxRetries {
 			if lastError != nil && strings.Contains(lastError.Error(), "429") {
@@ -12283,6 +12811,25 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 					contentOutput += chunk
 				}
+
+				// Capture reasoning tokens from stream delta if present
+				var rawDelta struct {
+					Choices []struct {
+						Delta struct {
+							ReasoningContent string `json:"reasoning_content"`
+							Reasoning        string `json:"reasoning"`
+						} `json:"delta"`
+					} `json:"choices"`
+				}
+				if json.Unmarshal(rawResp, &rawDelta) == nil && len(rawDelta.Choices) > 0 {
+					rChunk := rawDelta.Choices[0].Delta.ReasoningContent
+					if rChunk == "" {
+						rChunk = rawDelta.Choices[0].Delta.Reasoning
+					}
+					if rChunk != "" {
+						reasoningOutput += rChunk
+					}
+				}
 			} else if err != nil {
 				// If stream unmarshaling failed, check if rawResp was actually a full non-streaming ChatCompletionResponse
 				var nonStreamResp openai.ChatCompletionResponse
@@ -12309,6 +12856,10 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 
 		stream.Close()
 
+		if reasoningOutput != "" && !strings.Contains(contentOutput, "<thought>") {
+			contentOutput = "<thought>\n" + reasoningOutput + "\n</thought>\n\n" + contentOutput
+		}
+
 		// If the stream was interrupted (not a clean EOF), retry instead of returning partial output
 		if streamErr != nil && len(contentOutput) == 0 {
 			cnt += 1
@@ -12316,6 +12867,7 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 			log.Printf("[WARNING][%s] AI_QUERY: LLM stream disconnected mid-response (attempt %d/%d), retrying: %v", info.ExecutionId, cnt, maxRetries, streamErr)
 			// Reset state for the retry
 			contentOutput = ""
+			reasoningOutput = ""
 			choicesMap = make(map[int]*openai.ChatCompletionChoice)
 			fullResp = openai.ChatCompletionResponse{}
 			time.Sleep(sleepTimer * time.Second)
@@ -16638,6 +17190,12 @@ func GetOrgAiCredentials(ctx context.Context, callInfo AiCallInfo) (string, stri
 					curModel = field.Value
 				}
 			}
+		}
+
+		// Never allow a Shuffle token (shfl_...) to be used as an OpenAI API key
+		if strings.HasPrefix(strings.TrimSpace(curApiKey), "shfl_") && (len(curUrl) == 0 || strings.Contains(strings.ToLower(curUrl), "api.openai.com")) {
+			log.Printf("[WARNING] Ignoring OpenAI app auth for org %s because api_key is a Shuffle token (shfl_...)", orgId)
+			continue
 		}
 
 		// Custom URL must only be used when paired with an API key

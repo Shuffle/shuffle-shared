@@ -36371,7 +36371,7 @@ func SanitizeFuzzySubstring(haystack, secret string, maxDistance int) string {
 // Basic cleanup.
 func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 	// Basic checks to return
-	if os.Getenv("SHUFFLE_PROTECTED_CLEANUP_DISABLED") == "true" || project.Environment == "worker" {
+	if standalone || os.Getenv("STANDALONE") == "true" || os.Getenv("SHUFFLE_PROTECTED_CLEANUP_DISABLED") == "true" || project.Environment == "worker" {
 		return exec
 	}
 
