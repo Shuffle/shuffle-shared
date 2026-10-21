@@ -2342,11 +2342,11 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				}
 			}
 
-			if !ArrayContains(allAdmins, "chris@shuffler.io") {
+			if org.SyncFeatures.AppExecutions.Limit > 2000 && !ArrayContains(allAdmins, "chris@shuffler.io") {
 				allAdmins = append(allAdmins, "chris@shuffler.io")
 			}
 
-			if !ArrayContains(allAdmins, "jay@shuffler.io") {
+			if org.SyncFeatures.AppExecutions.Limit > 2000 && !ArrayContains(allAdmins, "jay@shuffler.io") {
 				allAdmins = append(allAdmins, "jay@shuffler.io")
 			}
 
@@ -2377,13 +2377,43 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				"app_runs_usage_percentage": int64(AppRunsPercentage),
 			}
 
+			var toEmail []string
+			if org.SyncFeatures.AppExecutions.Limit > 2000 {
+				toEmail = append(toEmail, "support@shuffler.io")
+			} else {
+				firstAdmin := ""
+				allShufflerEmails := true
+				for _, admin := range allAdmins {
+					if !strings.Contains(admin, "shuffler.io") {
+						firstAdmin = admin
+						allShufflerEmails = false
+						break
+					}
+				}
+
+				if allShufflerEmails && len(allAdmins) > 0 {
+					firstAdmin = allAdmins[0]
+				}
+
+				if firstAdmin != "" {
+					toEmail = append(toEmail, firstAdmin)
+				}
+			}
+
+			bccAdmins := []string{}
+			for _, admin := range allAdmins {
+				if !ArrayContains(toEmail, admin) {
+					bccAdmins = append(bccAdmins, admin)
+				}
+			}
+
 			err = sendMailSendgridV2(
-				[]string{"support@shuffler.io"},
+				toEmail,
 				Subject,
 				substitutions,
 				false,
 				"d-3678d48b2b7144feb4b0b4cff7045016",
-				allAdmins,
+				bccAdmins,
 			)
 			if err != nil {
 				log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
