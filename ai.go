@@ -7750,6 +7750,21 @@ func findExplicitTotal(v interface{}, depth int) (interface{}, bool) {
 	return nil, false
 }
 
+// paginationHeaders keeps only the response headers that tell the agent more data exists.
+// ponytail: name heuristic, not a vendor list; add names here if an API paginates with an odd header.
+func paginationHeaders(headers map[string]string) map[string]string {
+	kept := map[string]string{}
+	for key, value := range headers {
+		name := strings.ToLower(key)
+		if name == "link" || strings.Contains(name, "pagination") || strings.Contains(name, "cursor") ||
+			strings.Contains(name, "next") || strings.Contains(name, "continuation") ||
+			strings.Contains(name, "total") || strings.HasSuffix(name, "-page") || strings.HasSuffix(name, "-pages") {
+			kept[key] = value
+		}
+	}
+	return kept
+}
+
 func ReduceAgentResponseData(rawResponse []byte, dataFilter string, fieldsNeeded []string) []byte {
 	if len(rawResponse) == 0 {
 		return rawResponse
@@ -9997,7 +10012,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 
 					if parsedOutput.Status <= 0 && parsedOutput.Reason == "" {
 					} else {
-						parsedOutput.Headers = map[string]string{}
+						// Pagination headers (Link rel="next", X-Total-Count, cursors...) are the only way the agent
+						// knows more data exists, so they survive. Everything else is noise for the LLM.
+						parsedOutput.Headers = paginationHeaders(parsedOutput.Headers)
 						parsedOutput.Cookies = map[string]string{}
 						marshalledBody, err := json.Marshal(parsedOutput)
 						if err != nil {
@@ -10271,6 +10288,7 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 7. If action delay is required, set the "delay" in seconds for that decision. Max delay is 31 days ("delay": "2678400"). Delay should be relative to original start time.
 8. App Actions show up in the python function format. Put the function name in the 'action' field and the parameters in 'fields' array. Don't add empty fields.
 9. IF an App Action parameter contains a value, use it and fill it in with relevant values. Ask questions, if important data is missing. Do not add random values to nested JSON bodies unless necessary.
+10. PAGINATION: If a tool result shows more data exists (headers like Link rel="next", X-Next-Page or a cursor, or body fields like next, next_page, next_cursor, has_more) and the request needs all of it, call the same action again for the next page before finishing. Do not say "all" unless every page was fetched.
 
 ### INTERNAL CAPABILITIES (DO NOT USE TOOLS FOR THESE)
 1. **General QA/Help:** YOU answer questions like "What can you do?" or "Hi". Do NOT use tools.
