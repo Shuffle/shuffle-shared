@@ -4079,6 +4079,27 @@ func mergeDefaultAlertThresholds(thresholds []AlertThreshold, limit int64) []Ale
 	return thresholds
 }
 
+func recalculateAlertThresholds(thresholds []AlertThreshold, limit int64) []AlertThreshold {
+	for i := range thresholds {
+		thresholds[i].Count = int(float64(thresholds[i].Percentage) / 100 * float64(limit))
+		thresholds[i].Email_send = false
+	}
+
+	return mergeDefaultAlertThresholds(thresholds, limit)
+}
+
+func syncAlertThresholdsToLimits(org *Org, oldAppLimit int64, oldOnpremLimit int64) {
+	if org.SyncFeatures.AppExecutions.Limit > 0 && org.SyncFeatures.AppExecutions.Limit != oldAppLimit {
+		org.Billing.AlertThreshold = recalculateAlertThresholds(org.Billing.AlertThreshold, org.SyncFeatures.AppExecutions.Limit)
+		org.Billing.DefaultAlertsApplied = true
+	}
+
+	if org.SyncFeatures.OnpremAppExecutions.Limit > 0 && org.SyncFeatures.OnpremAppExecutions.Limit != oldOnpremLimit && isOnpremAlertEligible(org) {
+		org.Billing.OnpremAlertThreshold = recalculateAlertThresholds(org.Billing.OnpremAlertThreshold, org.SyncFeatures.OnpremAppExecutions.Limit)
+		org.Billing.DefaultOnpremAlertsApplied = true
+	}
+}
+
 func addDefaultAlertThresholds(org *Org) bool {
 	changed := false
 
@@ -4098,6 +4119,34 @@ func addDefaultAlertThresholds(org *Org) bool {
 			org.Billing.DefaultOnpremAlertsApplied = true
 			changed = true
 		}
+	}
+
+	return changed
+}
+
+func alertThresholdCountsDrifted(thresholds []AlertThreshold, limit int64) bool {
+	for _, threshold := range thresholds {
+		if threshold.Count != int(float64(threshold.Percentage)/100*float64(limit)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func fixDriftedAlertThresholds(org *Org) bool {
+	changed := false
+
+	limit := org.SyncFeatures.AppExecutions.Limit
+	if limit > 0 && alertThresholdCountsDrifted(org.Billing.AlertThreshold, limit) {
+		org.Billing.AlertThreshold = recalculateAlertThresholds(org.Billing.AlertThreshold, limit)
+		changed = true
+	}
+
+	onpremLimit := org.SyncFeatures.OnpremAppExecutions.Limit
+	if onpremLimit > 0 && isOnpremAlertEligible(org) && alertThresholdCountsDrifted(org.Billing.OnpremAlertThreshold, onpremLimit) {
+		org.Billing.OnpremAlertThreshold = recalculateAlertThresholds(org.Billing.OnpremAlertThreshold, onpremLimit)
+		changed = true
 	}
 
 	return changed

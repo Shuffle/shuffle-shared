@@ -1072,10 +1072,14 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Seed default alert thresholds once if not yet applied.
-	if addDefaultAlertThresholds(org) {
+	alertThresholdsChanged := addDefaultAlertThresholds(org)
+	if fixDriftedAlertThresholds(org) {
+		alertThresholdsChanged = true
+	}
+
+	if alertThresholdsChanged {
 		if setErr := SetOrg(ctx, *org, org.Id); setErr != nil {
-			log.Printf("[WARNING] Failed persisting default alert thresholds for org %s (%s): %s", org.Name, org.Id, setErr)
+			log.Printf("[WARNING] Failed persisting alert threshold updates for org %s (%s): %s", org.Name, org.Id, setErr)
 		}
 	}
 
@@ -14610,6 +14614,9 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 		org.LeadInfo = newLeadinfo
 
+		oldAppExecutionsLimit := org.SyncFeatures.AppExecutions.Limit
+		oldOnpremAppExecutionsLimit := org.SyncFeatures.OnpremAppExecutions.Limit
+
 		if newLeadinfo.EnterpriseLicenseOnprem ||
 			newLeadinfo.BusinessLicenseOnprem {
 
@@ -14695,6 +14702,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Reset limits to defaults (2000 app runs / 1 env / 3 tenants) for org %s (no license)", org.Id)
 		}
 
+		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 
 		if newLeadinfo.EnterpriseLicenseCloud ||
 			newLeadinfo.EnterpriseLicenseOnprem ||
@@ -14896,8 +14904,13 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	if project.Environment == "cloud" && user.SupportAccess && tmpData.SyncFeatures.Editing {
 		log.Printf("[DEBUG] Updating features for org %s (%s)", org.Name, org.Id)
 
+		oldAppExecutionsLimit := org.SyncFeatures.AppExecutions.Limit
+		oldOnpremAppExecutionsLimit := org.SyncFeatures.OnpremAppExecutions.Limit
+
 		org.SyncFeatures = tmpData.SyncFeatures
 		org.SyncFeatures.Editing = false
+
+		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 	}
 
 	if tmpData.EditingBranding {
@@ -14959,8 +14972,14 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		log.Printf("[DEBUG] User %s (%s) is allowed to edit sync features of suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
+
+		oldAppExecutionsLimit := org.SyncFeatures.AppExecutions.Limit
+		oldOnpremAppExecutionsLimit := org.SyncFeatures.OnpremAppExecutions.Limit
+
 		org.SyncFeatures = tmpData.SyncFeatures
 		org.SyncFeatures.Editing = false
+
+		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 	}
 
 	if (len(tmpData.Billing.Consultation.Hours) > 0 || len(tmpData.Billing.Consultation.Minutes) > 0) && user.SupportAccess {
