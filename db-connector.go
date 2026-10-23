@@ -4009,6 +4009,7 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 		user.PrivateApps = []WorkflowApp{}
 		user.VerificationToken = ""
 		user.ApiKey = ""
+		user.RolloverApiKey = ""
 		newUsers = append(newUsers, user)
 	}
 
@@ -4284,6 +4285,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		user.PrivateApps = []WorkflowApp{}
 		user.VerificationToken = ""
 		user.ApiKey = ""
+		user.RolloverApiKey = ""
 		newUsers = append(newUsers, user)
 	}
 
@@ -4920,6 +4922,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		user.Password = ""
 		user.Session = ""
 		user.ApiKey = ""
+		user.RolloverApiKey = ""
 		user.PrivateApps = []WorkflowApp{}
 		user.MFA = MFAInfo{}
 		user.Authentication = []UserAuth{}
@@ -10600,8 +10603,12 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			"from": 0,
 			"size": 1000,
 			"query": map[string]interface{}{
-				"match": map[string]interface{}{
-					"apikey": apikey,
+				"bool": map[string]interface{}{
+					"should": []map[string]interface{}{
+						{"match": map[string]interface{}{"apikey": apikey}},
+						{"match": map[string]interface{}{"rollover_apikey": apikey}},
+					},
+					"minimum_should_match": 1,
 				},
 			},
 		}
@@ -10666,7 +10673,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 		users = []User{}
 		for _, hit := range wrapped.Hits.Hits {
-			if hit.Source.ApiKey != apikey {
+			if hit.Source.ApiKey != apikey && hit.Source.RolloverApiKey != apikey {
 				continue
 			}
 
@@ -10680,6 +10687,16 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			if !strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[WARNING] Error getting apikey: %s", err)
 				//return User{}, err
+			}
+		}
+
+		if len(users) == 0 {
+			rq := datastore.NewQuery(nameKey).Filter("rollover_apikey =", apikey).Limit(1)
+			_, err := project.Dbclient.GetAll(ctx, rq, &users)
+			if err != nil && len(users) == 0 {
+				if !strings.Contains(err.Error(), `cannot load field`) {
+					log.Printf("[WARNING] Error getting rollover apikey: %s", err)
+				}
 			}
 		}
 	}
