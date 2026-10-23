@@ -2517,7 +2517,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			shouldSendAlert = true
 		}
 
-		if currentThreshold >= 50 && currentThreshold > validationOrgStatistics.LastUsageAlertThreshold && shouldSendAlert {
+		if currentThreshold >= 50 && currentThreshold > validationOrgStatistics.LastUsageAlertThreshold && shouldSendAlert && validationOrg.SyncFeatures.AppExecutions.Limit > 2000 {
 
 			allAdmins := []string{}
 			firstAdmin := ""
