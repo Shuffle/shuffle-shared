@@ -8154,7 +8154,13 @@ func buildWorkflowEditContext(ctx context.Context, execution WorkflowExecution) 
 You MUST use this exact workflow_id in every single put_agent_update operation. DO NOT try to guess or create a new one.`, targetWorkflowId)
 	}
 
-	systemRule := `[SECONDARY]: You are an autonomous workflow-building agent. You build or edit workflows that will eventually automate the task. Only use the special actions built for you — put_agent_update is the primary one you will use. If the user requests an integration that is not in your current context, you can still fetch its actions by passing the requested app name to the post_get_app_actions_summary action on the shuffle_apps tool. The system will automatically search for the app and return its list of available actions.
+	systemRule := `[SECONDARY]: You are an autonomous workflow-building agent. You build or edit workflows that will eventually automate the task. Only use the special actions built for you — put_agent_update is the primary one you will use. If the user requests an integration that is not in Available Apps, it can still be used: call post_get_app_actions_summary on the shuffle_apps tool with body {"app_names": ["<app name>"]} BEFORE anything else. It searches every public app and returns its app_id and actions. Never ask the user for an app ID, and never replace a requested app with an HTTP node when the lookup finds it. Only if the lookup finds nothing, tell the user the app wasn't found.
+
+The lookup also says what the user has to do:
+- "setup_url" present: the app needs credentials the user hasn't added. Build the node anyway with the returned app_id (adding it activates the app). Then use the ask action with a markdown link, e.g. "Google Sheets needs to be authenticated before this workflow can run. [Authenticate Google Sheets](<setup_url>), then reply **done**." Ask once for all such apps together. When the user replies, call the lookup again; once "authenticated" is true, run put_agent_update with "operations": [{"op": "save_workflow"}] so the credentials are attached to the node. If it is still not authenticated, finish and tell the user the node will need credentials before it runs.
+- no "setup_url": the app is ready, just build with it.
+
+The user sees the "reason" of every decision as progress while you work, so write it as one short, plain sentence about what you are doing and why (e.g. "Looking up Google Sheets to find its append action"). No JSON or IDs in it. When you ask the user something, keep the question short; if there are a few clear options, put them as a numbered list. Your finish output should briefly list what you changed.
 
 Only ask the user for information when it is genuinely unavailable through any allowed action. Use get_minimal_workflow to fetch the latest workflow state whenever you need to inspect or verify what is currently in the workflow — prefer this over relying on stale context.
 
@@ -8322,6 +8328,19 @@ Only provide the fields you actually want to change.
 }
 }
 
+To swap a node to another app or action (e.g. an HTTP node to Google Sheets), use edit_node with the new app_id and action_name. The node keeps its id, label, position and branches, and its parameters become those of the new action, so pass the values for them:
+{
+"op": "edit_node",
+"id": "<real_node_id>",
+"data": {
+  "app_id": "<app_id from the app lookup>",
+  "action_name": "<action of that app>",
+  "parameters": [
+    { "name": "<parameter of that action>", "value": "<value>" }
+  ]
+}
+}
+
 4. DELETING OR MOVING
 { "op": "delete_node", "node_type": "action", "id": "<real_node_id>" }
 { "op": "delete_branch", "id": "<real_branch_id>" }
@@ -8385,7 +8404,10 @@ CRITICAL RULES FOR THE AGENT
 1. Handling Errors: If you make a mistake, the API will reject your request and tell you EXACTLY which operation failed and why (e.g., "Operation 1 failed: app_id is required"). Read the error carefully, fix the specific missing or incorrect field, and try again.
 2. Special actions are built exclusively for you. put_agent_update is the core action that does most of the heavy lifting.
 3. Use get_minimal_workflow to fetch the current workflow state only whenever you need it.
-4. Try not to use parallel decision calling; always do sequential tool calls.`
+4. Try not to use parallel decision calling; always do sequential tool calls.
+5. Verify before you report: put_agent_update returns the updated workflow. Check that the nodes you changed now have the app, action and parameter values you intended before you tell the user it's done. If they don't, fix it first.
+6. Asking for credentials is not asking for approval. If you need both, ask for the approval separately and wait for an explicit yes.
+7. Report runs as they are: a workflow run is only done when get_workflow_execution says FINISHED or ABORTED. Report each node from its own result. If a node has no result yet, say it has not run. If the run is still EXECUTING after a few checks, tell the user it looks stuck and name the node it is waiting on. Never describe a step that has no result as done or in progress.`
 
 	templateContext := fmt.Sprintf(`%s
 
@@ -15418,7 +15440,10 @@ func HandleWorkflowGenerationResponse(resp http.ResponseWriter, request *http.Re
 		err = SetWorkflow(ctx, *output, output.ID)
 		if err != nil {
 			log.Printf("[ERROR] Failed to save generated workflow to database: %s", err)
-			// Continue anyway - user still gets the workflow and can manually save later
+			// The frontend reloads the workflow from the database, so an unsaved one shows up empty
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to save the generated workflow. Please try again"}`))
+			return
 		}
 	}
 
