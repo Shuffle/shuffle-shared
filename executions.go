@@ -171,7 +171,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 						decisionsUpdated = true
 					}
 
-					if decision.Action == "finish" || decision.Category == "finish" { 
+					if (decision.Action == "finish" || decision.Category == "finish") && (decision.RunDetails.Status == "FINISHED" || mappedOutput.CompletedAt > 0) { 
 
 						if decision.RunDetails.Status != "FINISHED" {  
 							if mappedOutput.Decisions[decisionIndex].RunDetails.StartedAt == 0 { 
@@ -337,6 +337,12 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 								if foundDecision.RunDetails.Status != "" {
 									decisionsUpdated = true
 									mappedOutput.Decisions[decisionIndex] = foundDecision
+									if foundDecision.RunDetails.Status == "FINISHED" || foundDecision.RunDetails.Status == "IGNORED" {
+										finishedDecisions = append(finishedDecisions, foundDecision.RunDetails.Id)
+									} else if foundDecision.RunDetails.Status == "FAILURE" {
+										finishedDecisions = append(finishedDecisions, foundDecision.RunDetails.Id)
+										failedFound = true
+									}
 								}
 							}
 						}
@@ -359,6 +365,12 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 							go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[resultIndex])
 						*/
 
+					}
+
+					if decisionsUpdated {
+						if marshalledResult, err := json.Marshal(mappedOutput); err == nil {
+							workflowExecution.Results[resultIndex].Result = string(marshalledResult)
+						}
 					}
 
 					if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {

@@ -19187,6 +19187,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	// Find next action
 	allFinishedDecisions := []string{}
+	nextDecisionsToDispatch := []AgentDecision{}
 	for decisionId, curDecision := range mappedResult.Decisions {
 		if curDecision.RunDetails.Status == "FINISHED" || curDecision.RunDetails.Status == "IGNORED" {
 			allFinishedDecisions = append(allFinishedDecisions, curDecision.RunDetails.Id)
@@ -19240,7 +19241,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		if len(foundDecisions) == len(finishedDecisions) {
 			mappedResult.Decisions[decisionId].RunDetails.Status = "RUNNING"
 			mappedResult.Decisions[decisionId].RunDetails.StartedAt = time.Now().UnixMilli()
-			go RunAgentDecisionAction(workflowExecution, mappedResult, curDecision)
+			nextDecisionsToDispatch = append(nextDecisionsToDispatch, mappedResult.Decisions[decisionId])
 		}
 	}
 
@@ -19354,7 +19355,12 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			workflowExecution.Results[foundActionResultIndex].Result = string(marshalledResult)
 			actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
 			_ = SetCache(ctx, actionCacheId, marshalledResult, 600)
+			SetWorkflowExecution(ctx, workflowExecution, true)
 		}
+	}
+
+	for _, nextDec := range nextDecisionsToDispatch {
+		go RunAgentDecisionAction(workflowExecution, mappedResult, nextDec)
 	}
 
 	return &workflowExecution, true, nil
