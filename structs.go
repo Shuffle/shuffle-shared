@@ -813,6 +813,7 @@ type User struct {
 	Roles                []string      `datastore:"roles" json:"roles"`
 	VerificationToken    string        `datastore:"verification_token" json:"verification_token"`
 	ApiKey               string        `datastore:"apikey" json:"apikey"`
+	RolloverApiKey       string        `datastore:"rollover_apikey" json:"rollover_apikey,omitempty"`
 	ResetReference       string        `datastore:"reset_reference" json:"reset_reference"`
 	Executions           ExecutionInfo `datastore:"executions" json:"executions"`
 	Limits               UserLimits    `datastore:"limits" json:"limits,omitempty"`
@@ -4216,6 +4217,7 @@ type SettingsReturn struct {
 	Username string `json:"username"`
 	Verified bool   `json:"verified"`
 	Apikey   string `json:"apikey"`
+	RolloverApikey string `json:"rollover_apikey,omitempty"`
 	Image    string `json:"image"`
 
 	Devices []Device `json:"devices"`
