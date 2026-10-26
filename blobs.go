@@ -733,15 +733,10 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 				log.Printf("[INFO] Configured Singul 'Assign & Escalate' workflow %s for org %s in %s", workflow.ID, user.ActiveOrg.Id, categoryCheck)
 			}
 		}
-	} else if actionType == "incident_routing" || actionType == "incident_routing_rules" || strings.HasSuffix(actionType, "_routing") || strings.HasSuffix(actionType, "_routing_rules") {
+	} else if actionType == "incident_routing" || actionType == "incident_routing_rules" || actionType == "automated_routing" || actionType == "automated_routing_rules" || strings.HasSuffix(actionType, "_routing") || strings.HasSuffix(actionType, "_routing_rules") {
 		// Dynamic Routing Rules evaluate declarative boolean condition trees on incoming entities
 		// and execute polymorphic actions (suggest_move, set_severity, add_label, run_agent, etc.).
-		categoryCheck := "shuffle-security_incidents"
-		if strings.HasPrefix(categoryAction.Category, "shuffle-security_") {
-			categoryCheck = categoryAction.Category
-		} else if strings.Contains(strings.ToLower(categoryAction.Label), "vulnerabilit") || strings.Contains(strings.ToLower(categoryAction.Category), "vuln") {
-			categoryCheck = "shuffle-security_vulns"
-		}
+		categoryCheck := resolveRoutingDatastoreCategory(actionType, categoryAction)
 
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
 		if err != nil {
@@ -851,6 +846,51 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 
 }
 
+func resolveRoutingDatastoreCategory(actionType string, categoryAction CategoryAction) string {
+	baselineCategories := map[string]string{
+		"incidents":      "shuffle-security_incidents",
+		"incident":       "shuffle-security_incidents",
+		"vulns":          "shuffle-security_vulns",
+		"vuln":           "shuffle-security_vulns",
+		"vulnerabilities": "shuffle-security_vulns",
+		"vulnerability":  "shuffle-security_vulns",
+		"infrastructure": "shuffle-security_infrastructure",
+		"assets":         "shuffle-security_assets",
+		"asset":          "shuffle-security_assets",
+		"packages":       "shuffle-security_packages",
+		"package":        "shuffle-security_packages",
+		"software":       "shuffle-security_software",
+		"users":          "shuffle-security_users",
+		"user":           "shuffle-security_users",
+	}
+
+	rawCat := strings.TrimSpace(categoryAction.Category)
+	if strings.HasPrefix(rawCat, "shuffle-security_") {
+		return rawCat
+	}
+	lowerCat := strings.ToLower(rawCat)
+	if mapped, ok := baselineCategories[lowerCat]; ok {
+		return mapped
+	}
+
+	lowerLabel := strings.ToLower(categoryAction.Label)
+	lowerAction := strings.ToLower(actionType)
+	for key, mapped := range baselineCategories {
+		if key == "incident" || key == "incidents" {
+			continue
+		}
+		if strings.Contains(lowerCat, key) || strings.Contains(lowerLabel, key) || strings.Contains(lowerAction, key) {
+			return mapped
+		}
+	}
+
+	if rawCat != "" && !strings.Contains(rawCat, " ") {
+		return rawCat
+	}
+
+	return "shuffle-security_incidents"
+}
+
 func HandleSingulWorkflowDisablement(ctx context.Context, workflowId string, orgId string, categoryAction CategoryAction) error {
 	if len(orgId) == 0 || len(workflowId) == 0 {
 		return nil
@@ -858,10 +898,26 @@ func HandleSingulWorkflowDisablement(ctx context.Context, workflowId string, org
 
 	categoriesToCheck := []string{
 		"shuffle-security_incidents",
+		"shuffle-security_vulns",
+		"shuffle-security_infrastructure",
+		"shuffle-security_assets",
 		"shuffle-security_packages",
 		"shuffle-security_software",
-		"shuffle-security_vulns",
+		"shuffle-security_users",
 		"shuffle-security_routing",
+	}
+	if strings.TrimSpace(categoryAction.Category) != "" {
+		resolved := resolveRoutingDatastoreCategory("", categoryAction)
+		found := false
+		for _, c := range categoriesToCheck {
+			if c == resolved {
+				found = true
+				break
+			}
+		}
+		if !found {
+			categoriesToCheck = append(categoriesToCheck, resolved)
+		}
 	}
 
 	for _, categoryCheck := range categoriesToCheck {
@@ -2641,47 +2697,27 @@ $exec`,
 
 		workflow = defaultWorkflow
 		workflow.OrgId = orgId
-	} else if parsedActiontype == "incident_routing" || parsedActiontype == "incident_routing_rules" || strings.HasSuffix(parsedActiontype, "_routing") || strings.HasSuffix(parsedActiontype, "_routing_rules") {
+	} else if parsedActiontype == "incident_routing" || parsedActiontype == "incident_routing_rules" || parsedActiontype == "automated_routing" || parsedActiontype == "automated_routing_rules" || strings.HasSuffix(parsedActiontype, "_routing") || strings.HasSuffix(parsedActiontype, "_routing_rules") {
 		getRoutingRulesId := startActionId
-		evaluateAndApplyId := uuid.NewV4().String()
+		validateRulesId := uuid.NewV4().String()
+		executeRulesId := uuid.NewV4().String()
 
-		isVuln := strings.Contains(parsedActiontype, "vuln") || strings.Contains(strings.ToLower(categoryAction.Category), "vuln") || strings.Contains(strings.ToLower(categoryAction.Label), "vuln")
-		targetCategory := "shuffle-security_incidents"
-		workflowDescription := "Evaluates incidents against routing rules to suggest moves, assignees, severities, or automate containment."
-		workflowTags := []string{"routing", "incident", "automatic", "incident routing", "incident routing rules", "incident_routing_rules", "incident_routing"}
-		triggerLabel := "Incident Routing Rules"
+		targetCategory := resolveRoutingDatastoreCategory(parsedActiontype, categoryAction)
+		workflowDescription := "Evaluates items against routing rules to suggest moves, assignees, severities, or automate containment."
+		workflowTags := []string{"routing", "incident", "automatic", "automated routing", "automated routing rules", "automated_routing_rules", "incident routing", "incident routing rules", "incident_routing_rules", "incident_routing"}
 
-		if isVuln {
-			targetCategory = "shuffle-security_vulns"
+		if targetCategory == "shuffle-security_vulns" {
 			workflowDescription = "Evaluates vulnerabilities against routing rules to suggest priorities, severities, or automate remediation."
-			workflowTags = []string{"routing", "vulnerability", "automatic", "vulnerabilities routing", "vulnerabilities routing rules", "vulnerability_routing_rules", "vulnerability_routing"}
-			triggerLabel = "Vulnerabilities Routing Rules"
-		} else if strings.HasPrefix(categoryAction.Category, "shuffle-security_") {
-			targetCategory = categoryAction.Category
+			workflowTags = []string{"routing", "vulnerability", "automatic", "automated routing", "automated routing rules", "automated_routing_rules", "vulnerabilities routing", "vulnerabilities routing rules", "vulnerability_routing_rules", "vulnerability_routing"}
 		}
 
 		defaultWorkflow := Workflow{
-			Name:        actionType,
+			Name:        "Automated Routing Rules",
 			Description: workflowDescription,
 			OrgId:       orgId,
 			Start:       getRoutingRulesId,
 			UsecaseIds:  []string{},
 			Tags:        workflowTags,
-			Triggers: []Trigger{
-				Trigger{
-					ID:          startTriggerId,
-					Name:        "Realtime Trigger",
-					TriggerType: "WEBHOOK",
-					Label:       triggerLabel,
-					Environment: triggerEnv,
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "execution_argument",
-							Value: "Automatically configured by Shuffle Security",
-						},
-					},
-				},
-			},
 			Actions: []Action{
 				Action{
 					Name:        "list_datastore_category",
@@ -2691,6 +2727,7 @@ $exec`,
 					AppVersion:  "1.2.0",
 					Environment: actionEnv,
 					Label:       "Get_routing_rules",
+					IsStartNode: true,
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:     "category",
@@ -2707,30 +2744,63 @@ $exec`,
 					Name:        "execute_python",
 					AppID:       "Shuffle Tools",
 					AppName:     "Shuffle Tools",
-					ID:          evaluateAndApplyId,
+					ID:          validateRulesId,
 					AppVersion:  "1.2.0",
 					Environment: actionEnv,
-					Label:       "Evaluate_and_apply_rules",
+					Label:       "Validate_routing_rules",
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:      "code",
 							Multiline: true,
 							Required:  true,
-							Value:     getIncidentRoutingScript(targetCategory),
+							Value:     getRoutingValidationScript(targetCategory),
+						},
+					},
+				},
+				Action{
+					Name:        "execute_python",
+					AppID:       "Shuffle Tools",
+					AppName:     "Shuffle Tools",
+					ID:          executeRulesId,
+					AppVersion:  "1.2.0",
+					Environment: actionEnv,
+					Label:       "Execute_matched_rules",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "code",
+							Multiline: true,
+							Required:  true,
+							Value:     getRoutingExecutionScript(targetCategory),
 						},
 					},
 				},
 			},
 			Branches: []Branch{
 				Branch{
-					SourceID:      startTriggerId,
-					DestinationID: getRoutingRulesId,
+					SourceID:      getRoutingRulesId,
+					DestinationID: validateRulesId,
 					ID:            uuid.NewV4().String(),
 				},
 				Branch{
-					SourceID:      getRoutingRulesId,
-					DestinationID: evaluateAndApplyId,
+					SourceID:      validateRulesId,
+					DestinationID: executeRulesId,
 					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$validate_routing_rules.matched",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "equals",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "true",
+							},
+						},
+					},
 				},
 			},
 		}
@@ -5960,7 +6030,7 @@ print(json.dumps({
 }))`
 }
 
-func getIncidentRoutingScript(targetCategory string) string {
+func getRoutingValidationScript(targetCategory string) string {
 	if targetCategory == "" {
 		targetCategory = "shuffle-security_incidents"
 	}
@@ -5969,7 +6039,6 @@ func getIncidentRoutingScript(targetCategory string) string {
 import re
 import base64
 import binascii
-import time
 
 # ── Evaluator helpers ────────────────────────────────────────────────────────
 
@@ -5979,6 +6048,52 @@ MIN_BASE64_LEN = 16
 MAX_BASE64_LEN = 65536
 
 _BASE64_RE = re.compile(r"^[A-Za-z0-9+/_-]+={0,2}$")
+
+BASELINE_CATEGORIES = {
+    "incidents": "shuffle-security_incidents",
+    "incident": "shuffle-security_incidents",
+    "vulns": "shuffle-security_vulns",
+    "vuln": "shuffle-security_vulns",
+    "vulnerabilities": "shuffle-security_vulns",
+    "vulnerability": "shuffle-security_vulns",
+    "infrastructure": "shuffle-security_infrastructure",
+    "assets": "shuffle-security_assets",
+    "asset": "shuffle-security_assets",
+    "packages": "shuffle-security_packages",
+    "package": "shuffle-security_packages",
+    "software": "shuffle-security_software",
+    "users": "shuffle-security_users",
+    "user": "shuffle-security_users",
+}
+
+
+def normalize_category(cat) -> str:
+    if not cat or not isinstance(cat, str):
+        return ""
+    s = cat.strip()
+    if not s or s.startswith("$"):
+        return ""
+    low = s.lower()
+    if low in ("*", "all", "any"):
+        return "*"
+    if low.startswith("shuffle-security_"):
+        suffix = low[len("shuffle-security_"):]
+        if suffix in BASELINE_CATEGORIES:
+            return BASELINE_CATEGORIES[suffix]
+        return s
+    if low in BASELINE_CATEGORIES:
+        return BASELINE_CATEGORIES[low]
+    return s
+
+
+def _categories_match(rule_cat, target_cat: str) -> bool:
+    norm_target = normalize_category(target_cat) or "shuffle-security_incidents"
+    norm_rule = normalize_category(rule_cat)
+    if norm_rule == "*":
+        return True
+    if not norm_rule:
+        return norm_target == "shuffle-security_incidents"
+    return norm_rule == norm_target or norm_rule.lower() == norm_target.lower()
 
 
 def _looks_base64ish(s: str) -> bool:
@@ -6038,20 +6153,35 @@ def _collect_all_strings(val, out, depth=0):
 
 
 def _get_deep(obj, path: str):
-    if not path or not isinstance(obj, dict):
+    if not path or obj is None:
         return None
     parts = [p for p in path.split(".") if p]
     cur = obj
-    for p in parts:
-        if isinstance(cur, dict) and p in cur:
-            cur = cur[p]
+    for idx, p in enumerate(parts):
+        if isinstance(cur, dict):
+            if p in cur:
+                cur = cur[p]
+            else:
+                return None
+        elif isinstance(cur, list):
+            rest = ".".join(parts[idx:])
+            vals = []
+            for item in cur:
+                v = _get_deep(item, rest)
+                if v is not None:
+                    if isinstance(v, list):
+                        vals.extend(v)
+                    else:
+                        vals.append(v)
+            return vals if vals else None
         else:
             return None
     return cur
 
 
 def _resolve_field(ctx: dict, field: str):
-    if not field or field in ("*", "$whole"):
+    whole_tok = "$" + "whole"
+    if not field or field in ("*", whole_tok):
         all_strs = []
         _collect_all_strings(ctx, all_strs)
         return all_strs
@@ -6077,13 +6207,21 @@ def _resolve_field(ctx: dict, field: str):
     direct = ctx.get(field)
     if direct is not None:
         return direct
-    if field in ("message", "description", "desc"):
-        return ctx.get("description") or ctx.get("message")
+    if "." in field:
+        deep_val = _get_deep(ctx, field)
+        if deep_val is not None:
+            return deep_val
+    if field in ("message", "description", "desc", "details", "summary"):
+        return ctx.get("description") or ctx.get("message") or ctx.get("summary") or ctx.get("details")
+    if field in ("title", "name"):
+        return ctx.get("title") or ctx.get("name") or ctx.get("hostname") or ctx.get("username") or ctx.get("email") or ctx.get("cve") or ctx.get("id")
+    if field == "severity":
+        return ctx.get("severity") or _get_deep(ctx, "database_specific.severity") or _get_deep(ctx, "rawOCSF.severity")
     raw_ocsf = ctx.get("rawOCSF")
     if isinstance(raw_ocsf, dict):
-        ocsf_direct = raw_ocsf.get(field)
-        if ocsf_direct is not None:
-            return ocsf_direct
+        ocsf_val = _get_deep(raw_ocsf, field) if "." in field else raw_ocsf.get(field)
+        if ocsf_val is not None:
+            return ocsf_val
     return None
 
 
@@ -6215,10 +6353,7 @@ def evaluate_routing_rules(ctx: dict, rules, target_category: str = "__TARGET_CA
         r for r in rules
         if isinstance(r, dict)
         and r.get("enabled", True) is not False
-        and (
-            r.get("entityCategory") == target_category
-            or (target_category == "shuffle-security_incidents" and not r.get("entityCategory"))
-        )
+        and _categories_match(r.get("entityCategory"), target_category)
     ]
     active.sort(key=lambda r: r.get("priority", 100))
 
@@ -6261,7 +6396,233 @@ def evaluate_routing_rules(ctx: dict, rules, target_category: str = "__TARGET_CA
     return matches
 
 
+def _parse_input_safely(raw, default=None):
+    if raw is None:
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s or s.startswith("$"):
+            return default
+        try:
+            val = json.loads(s)
+            if isinstance(val, str):
+                try:
+                    val = json.loads(val)
+                except Exception:
+                    pass
+            return val
+        except Exception:
+            return default
+    return default
+
+
+def _extract_rules(raw_rules_input):
+    parsed = _parse_input_safely(raw_rules_input, default=[])
+    if isinstance(parsed, dict):
+        if "values" in parsed and isinstance(parsed["values"], list):
+            parsed = parsed["values"]
+        elif "value" in parsed:
+            val = parsed["value"]
+            if isinstance(val, str):
+                val = _parse_input_safely(val, default=[])
+            if isinstance(val, list):
+                parsed = val
+            elif isinstance(val, dict):
+                parsed = [val]
+        elif "data" in parsed and isinstance(parsed["data"], list):
+            parsed = parsed["data"]
+        else:
+            parsed = [parsed]
+
+    rules = []
+    if isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, str):
+                item = _parse_input_safely(item)
+            if not isinstance(item, dict):
+                continue
+            if "value" in item and len(item) <= 4 and ("key" in item or "id" in item):
+                inner = item["value"]
+                if isinstance(inner, str):
+                    inner = _parse_input_safely(inner)
+                if isinstance(inner, dict):
+                    rules.append(inner)
+                else:
+                    rules.append(item)
+            else:
+                rules.append(item)
+    return rules
+
+
+def _infer_category_from_entity(entity: dict, fallback: str) -> str:
+    if not isinstance(entity, dict):
+        return normalize_category(fallback) or "shuffle-security_incidents"
+    explicit = entity.get("entityCategory") or entity.get("category_name")
+    if isinstance(explicit, str) and explicit.strip():
+        return normalize_category(explicit)
+    if entity.get("cve") or entity.get("vuln_id") or entity.get("osv_id") or isinstance(entity.get("affected"), list):
+        return "shuffle-security_vulns"
+    if entity.get("purl") or entity.get("ecosystem") or entity.get("package_manager"):
+        return "shuffle-security_packages"
+    if entity.get("vendor") and entity.get("version") and not entity.get("finding_uid"):
+        return "shuffle-security_software"
+    if entity.get("username") or (entity.get("email") and entity.get("role") and not entity.get("finding_uid")):
+        return "shuffle-security_users"
+    if entity.get("hostname") and entity.get("ip") and not entity.get("finding_uid"):
+        return "shuffle-security_assets"
+    return normalize_category(fallback) or "shuffle-security_incidents"
+
+
+# ── Validation Entrypoint ──────────────────────────────────────────────────
+
+raw_exec = r"""$exec"""
+raw_datastore_key = r"""$exec.shuffle_datastore.key"""
+raw_datastore_cat = r"""$exec.shuffle_datastore.category"""
+
+cur_exec = _parse_input_safely(raw_exec, default={})
+datastore_meta = {}
+if isinstance(cur_exec, dict):
+    if isinstance(cur_exec.get("shuffle_datastore"), dict):
+        datastore_meta = cur_exec.pop("shuffle_datastore", {})
+    for wrapper_key in ("incident", "vulnerability", "vuln", "asset", "infrastructure", "package", "software", "user", "entity", "item"):
+        if wrapper_key in cur_exec and isinstance(cur_exec[wrapper_key], dict) and len(cur_exec) == 1:
+            cur_exec = cur_exec[wrapper_key]
+            break
+
+if not isinstance(cur_exec, dict) or not cur_exec:
+    print(json.dumps({
+        "success": False,
+        "matched": False,
+        "matched_count": 0,
+        "reason": "No valid entity data found in execution argument",
+        "matches": [],
+    }))
+    exit()
+
+default_target_category = "__TARGET_CATEGORY__"
+item_key = raw_datastore_key.strip() if isinstance(raw_datastore_key, str) else ""
+if not item_key or item_key.startswith("$"):
+    item_key = str(datastore_meta.get("key") or "").strip()
+if not item_key or item_key.startswith("$"):
+    item_key = (
+        cur_exec.get("finding_uid")
+        or cur_exec.get("id")
+        or cur_exec.get("key")
+        or cur_exec.get("cve")
+        or cur_exec.get("purl")
+        or cur_exec.get("hostname")
+        or cur_exec.get("username")
+        or cur_exec.get("email")
+        or cur_exec.get("name")
+        or ""
+    )
+
+item_cat = normalize_category(raw_datastore_cat)
+if not item_cat:
+    item_cat = normalize_category(datastore_meta.get("category"))
+if not item_cat:
+    item_cat = _infer_category_from_entity(cur_exec, default_target_category)
+
+raw_rules_input = r"""$get_routing_rules"""
+rules = _extract_rules(raw_rules_input)
+
+if not rules:
+    print(json.dumps({
+        "success": True,
+        "matched": False,
+        "matched_count": 0,
+        "category": item_cat,
+        "key": item_key,
+        "reason": "No routing rules found in shuffle-security_routing",
+        "matches": [],
+    }))
+    exit()
+
+ctx = dict(cur_exec)
+ctx["category"] = item_cat
+if not ctx.get("title"):
+    ctx["title"] = (
+        cur_exec.get("name")
+        or cur_exec.get("cve")
+        or cur_exec.get("hostname")
+        or cur_exec.get("username")
+        or cur_exec.get("email")
+        or cur_exec.get("purl")
+        or cur_exec.get("id")
+        or ""
+    )
+if not ctx.get("description"):
+    ctx["description"] = (
+        cur_exec.get("message")
+        or cur_exec.get("summary")
+        or cur_exec.get("details")
+        or ""
+    )
+if not ctx.get("rawOCSF") and isinstance(cur_exec.get("rawOCSF"), dict):
+    ctx["rawOCSF"] = cur_exec["rawOCSF"]
+
+matches = evaluate_routing_rules(ctx, rules, item_cat)
+
+print(json.dumps({
+    "success": True,
+    "matched": len(matches) > 0,
+    "matched_count": len(matches),
+    "category": item_cat,
+    "key": item_key,
+    "matched_rules": [m["rule"].get("name") for m in matches if isinstance(m.get("rule"), dict)],
+    "matches": matches,
+}))`
+
+	return strings.ReplaceAll(script, "__TARGET_CATEGORY__", targetCategory)
+}
+
+func getRoutingExecutionScript(targetCategory string) string {
+	if targetCategory == "" {
+		targetCategory = "shuffle-security_incidents"
+	}
+
+	script := `import json
+import re
+import time
+
 # ── Action application helpers ─────────────────────────────────────────────
+
+BASELINE_CATEGORIES = {
+    "incidents": "shuffle-security_incidents",
+    "incident": "shuffle-security_incidents",
+    "vulns": "shuffle-security_vulns",
+    "vuln": "shuffle-security_vulns",
+    "vulnerabilities": "shuffle-security_vulns",
+    "vulnerability": "shuffle-security_vulns",
+    "infrastructure": "shuffle-security_infrastructure",
+    "assets": "shuffle-security_assets",
+    "asset": "shuffle-security_assets",
+    "packages": "shuffle-security_packages",
+    "package": "shuffle-security_packages",
+    "software": "shuffle-security_software",
+    "users": "shuffle-security_users",
+    "user": "shuffle-security_users",
+}
+
+
+def normalize_category(cat) -> str:
+    if not cat or not isinstance(cat, str):
+        return ""
+    s = cat.strip()
+    if not s or s.startswith("$"):
+        return ""
+    low = s.lower()
+    if low.startswith("shuffle-security_"):
+        suffix = low[len("shuffle-security_"):]
+        if suffix in BASELINE_CATEGORIES:
+            return BASELINE_CATEGORIES[suffix]
+        return s
+    if low in BASELINE_CATEGORIES:
+        return BASELINE_CATEGORIES[low]
+    return s
+
 
 def normalize_severity(v):
     if not v:
@@ -6338,80 +6699,97 @@ def _parse_input_safely(raw, default=None):
     return default
 
 
-def _extract_rules(raw_rules_input):
-    parsed = _parse_input_safely(raw_rules_input, default=[])
-    if isinstance(parsed, dict):
-        if "values" in parsed and isinstance(parsed["values"], list):
-            parsed = parsed["values"]
-        elif "value" in parsed:
-            val = parsed["value"]
-            if isinstance(val, str):
-                val = _parse_input_safely(val, default=[])
-            if isinstance(val, list):
-                parsed = val
-            elif isinstance(val, dict):
-                parsed = [val]
-        elif "data" in parsed and isinstance(parsed["data"], list):
-            parsed = parsed["data"]
-        else:
-            parsed = [parsed]
-
-    rules = []
-    if isinstance(parsed, list):
-        for item in parsed:
-            if isinstance(item, str):
-                item = _parse_input_safely(item)
-            if not isinstance(item, dict):
-                continue
-            if "value" in item and len(item) <= 4 and ("key" in item or "id" in item):
-                inner = item["value"]
-                if isinstance(inner, str):
-                    inner = _parse_input_safely(inner)
-                if isinstance(inner, dict):
-                    rules.append(inner)
-                else:
-                    rules.append(item)
-            else:
-                rules.append(item)
-    return rules
+def _infer_category_from_entity(entity: dict, fallback: str) -> str:
+    if not isinstance(entity, dict):
+        return normalize_category(fallback) or "shuffle-security_incidents"
+    explicit = entity.get("entityCategory") or entity.get("category_name")
+    if isinstance(explicit, str) and explicit.strip():
+        return normalize_category(explicit)
+    if entity.get("cve") or entity.get("vuln_id") or entity.get("osv_id") or isinstance(entity.get("affected"), list):
+        return "shuffle-security_vulns"
+    if entity.get("purl") or entity.get("ecosystem") or entity.get("package_manager"):
+        return "shuffle-security_packages"
+    if entity.get("vendor") and entity.get("version") and not entity.get("finding_uid"):
+        return "shuffle-security_software"
+    if entity.get("username") or (entity.get("email") and entity.get("role") and not entity.get("finding_uid")):
+        return "shuffle-security_users"
+    if entity.get("hostname") and entity.get("ip") and not entity.get("finding_uid"):
+        return "shuffle-security_assets"
+    return normalize_category(fallback) or "shuffle-security_incidents"
 
 
 # ── Execution Entrypoint ───────────────────────────────────────────────────
 
 raw_exec = r"""$exec"""
+raw_datastore_key = r"""$exec.shuffle_datastore.key"""
+raw_datastore_cat = r"""$exec.shuffle_datastore.category"""
+raw_validation = r"""$validate_routing_rules"""
+
 cur_exec = _parse_input_safely(raw_exec, default={})
-if isinstance(cur_exec, dict) and "incident" in cur_exec and isinstance(cur_exec["incident"], dict):
-    cur_exec = cur_exec["incident"]
+datastore_meta = {}
+if isinstance(cur_exec, dict):
+    if isinstance(cur_exec.get("shuffle_datastore"), dict):
+        datastore_meta = cur_exec.pop("shuffle_datastore", {})
+    for wrapper_key in ("incident", "vulnerability", "vuln", "asset", "infrastructure", "package", "software", "user", "entity", "item"):
+        if wrapper_key in cur_exec and isinstance(cur_exec[wrapper_key], dict) and len(cur_exec) == 1:
+            cur_exec = cur_exec[wrapper_key]
+            break
 
 if not isinstance(cur_exec, dict) or not cur_exec:
     print(json.dumps({
         "success": False,
-        "reason": "No valid incident data found in $exec",
+        "reason": "No valid entity data found in execution argument",
     }))
     exit()
 
-raw_rules_input = r"""$get_routing_rules"""
-rules = _extract_rules(raw_rules_input)
+validation_res = _parse_input_safely(raw_validation, default={})
+if not isinstance(validation_res, dict):
+    validation_res = {}
 
-if not rules:
+matches = validation_res.get("matches") or []
+if not isinstance(matches, list):
+    matches = []
+
+default_target_category = "__TARGET_CATEGORY__"
+item_key = str(validation_res.get("key") or "").strip()
+if not item_key or item_key.startswith("$"):
+    item_key = raw_datastore_key.strip() if isinstance(raw_datastore_key, str) else ""
+if not item_key or item_key.startswith("$"):
+    item_key = str(datastore_meta.get("key") or "").strip()
+if not item_key or item_key.startswith("$"):
+    item_key = (
+        cur_exec.get("finding_uid")
+        or cur_exec.get("id")
+        or cur_exec.get("key")
+        or cur_exec.get("cve")
+        or cur_exec.get("purl")
+        or cur_exec.get("hostname")
+        or cur_exec.get("username")
+        or cur_exec.get("email")
+        or cur_exec.get("name")
+        or ""
+    )
+
+item_cat = normalize_category(validation_res.get("category"))
+if not item_cat:
+    item_cat = normalize_category(raw_datastore_cat)
+if not item_cat:
+    item_cat = normalize_category(datastore_meta.get("category"))
+if not item_cat:
+    item_cat = _infer_category_from_entity(cur_exec, default_target_category)
+
+if not matches:
     print(json.dumps({
         "success": True,
         "changed": False,
-        "reason": "No routing rules found in shuffle-security_routing",
+        "db_updated": False,
+        "category": item_cat,
+        "key": item_key,
+        "matched_rules": [],
         "incident": cur_exec,
+        "agent_prompts": [],
     }))
     exit()
-
-ctx = dict(cur_exec)
-if not ctx.get("title"):
-    ctx["title"] = cur_exec.get("cve") or cur_exec.get("id") or ""
-if not ctx.get("description"):
-    ctx["description"] = cur_exec.get("message") or cur_exec.get("summary") or ""
-if not ctx.get("rawOCSF") and isinstance(cur_exec.get("rawOCSF"), dict):
-    ctx["rawOCSF"] = cur_exec["rawOCSF"]
-
-target_entity_category = "__TARGET_CATEGORY__"
-matches = evaluate_routing_rules(ctx, rules, target_entity_category)
 
 now_ms = int(time.time() * 1000)
 changed = False
@@ -6419,10 +6797,14 @@ agent_prompts = []
 prev_status = str(cur_exec.get("status") or "").lower()
 
 for m in matches:
-    rule = m.get("rule") or {}
+    rule = m.get("rule") if isinstance(m, dict) else None
+    if not isinstance(rule, dict):
+        continue
     rule_name = rule.get("name", "Routing rule")
     actions = rule.get("actions") or []
     for action in actions:
+        if not isinstance(action, dict):
+            continue
         atype = action.get("type")
         if atype == "suggest_move":
             target_org = action.get("targetOrgId")
@@ -6481,7 +6863,7 @@ for m in matches:
                     cur_act.append({
                         "id": f"routing-comment-{now_ms}-{len(cur_act)}",
                         "type": "comment",
-                        "user": "Incident Routing Rules",
+                        "user": "Automated Routing Rules",
                         "timestamp": now_ms,
                         "content": txt,
                         "details": {"source": "incident_routing_rule", "rule": rule_name},
@@ -6499,7 +6881,7 @@ for m in matches:
                     cur_act.append({
                         "id": f"routing-agent-{now_ms}-{len(cur_act)}",
                         "type": "comment",
-                        "user": "Incident Routing Rules",
+                        "user": "Automated Routing Rules",
                         "timestamp": now_ms,
                         "content": content,
                         "details": {"source": "incident_routing_rule", "rule": rule_name, "run_agent": True},
@@ -6552,7 +6934,7 @@ if prev_status not in resolving and now_status in resolving:
     cur_act.append({
         "id": f"routing-autoresolve-{now_ms}-{len(cur_act)}",
         "type": "comment",
-        "user": "Incident Routing Rules",
+        "user": "Automated Routing Rules",
         "timestamp": now_ms,
         "content": note,
         "details": {"source": "incident_routing_rule", "auto_resolved": True},
@@ -6561,16 +6943,8 @@ if prev_status not in resolving and now_status in resolving:
     })
     changed = True
 
-item_key = r"""$exec.shuffle_datastore.key"""
-item_cat = r"""$exec.shuffle_datastore.category"""
-
-if not item_key or item_key.startswith("$"):
-    item_key = cur_exec.get("finding_uid") or cur_exec.get("id") or cur_exec.get("key") or cur_exec.get("cve")
-if not item_cat or item_cat.startswith("$"):
-    item_cat = target_entity_category
-
 db_updated = False
-if changed and item_key:
+if changed and item_key and item_cat:
     try:
         if "self" in locals() or "self" in globals():
             res = self.set_key(item_key, json.dumps(cur_exec), category=item_cat)
@@ -6582,7 +6956,9 @@ print(json.dumps({
     "success": True,
     "changed": changed,
     "db_updated": db_updated,
-    "matched_rules": [m["rule"].get("name") for m in matches if isinstance(m.get("rule"), dict)],
+    "category": item_cat,
+    "key": item_key,
+    "matched_rules": [m["rule"].get("name") for m in matches if isinstance(m, dict) and isinstance(m.get("rule"), dict)],
     "incident": cur_exec,
     "agent_prompts": agent_prompts,
 }))`
