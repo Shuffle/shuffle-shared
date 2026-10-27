@@ -9917,7 +9917,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			// Increment for this iteration
 			newLoopCount := trustedCount + 1
 			_ = SetCache(ctx, loopCacheKey, []byte(strconv.Itoa(newLoopCount)), 60)
-			maxLoops := 60
+			maxLoops := 100
 			if envVal := os.Getenv("AI_AGENT_MAX_STEPS"); envVal != "" {
 				if parsed, err := strconv.Atoi(envVal); err == nil {
 					maxLoops = parsed
@@ -9925,7 +9925,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			}
 
 			if maxLoops <= 0 {
-				maxLoops = 60
+				maxLoops = 100
 			}
 
 			if newLoopCount >= maxLoops {
@@ -10386,7 +10386,7 @@ data_filter:
 	// templateSystemRule, templateContext and requiredApps were already resolved
 	// earlier (before the "action" parameter merge), no need to fetch them again here.
 
-	agentReasoningEffort := "low"
+	agentReasoningEffort := "medium"
 	if aiReasoningEffort == "low" || aiReasoningEffort == "medium" || aiReasoningEffort == "high" {
 		agentReasoningEffort = aiReasoningEffort
 	} else if aiReasoningEffort == "minimal" || aiReasoningEffort == "off" || aiReasoningEffort == "none" {
