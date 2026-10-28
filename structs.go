@@ -6069,6 +6069,7 @@ type AiCallInfo struct {
 	Model           string `json:"model,omitempty"`
 	ApiKey          string `json:"api_key,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	ResponseFormat  string `json:"response_format,omitempty"`
 }
 
 type DisplaySize struct {

@@ -18789,10 +18789,16 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		}
 
 		if status == "FINISHED" {
-			fixedActionResult.CompletedAt = time.Now().Unix()
+			if fixedActionResult.CompletedAt == 0 {
+				fixedActionResult.CompletedAt = time.Now().UnixMilli()
+			}
 		} else if status == "ABORTED" || status == "FAILURE" {
-			fixedActionResult.CompletedAt = time.Now().Unix()
-			fixedActionResult.Error = "Agent decision was aborted or failed. Check the last decision for more information."
+			if fixedActionResult.CompletedAt == 0 {
+				fixedActionResult.CompletedAt = time.Now().UnixMilli()
+			}
+			if fixedActionResult.Error == "" {
+				fixedActionResult.Error = "Agent decision was aborted or failed. Check the last decision for more information."
+			}
 		}
 
 		marshalledResult, err := json.Marshal(fixedActionResult)
@@ -19181,6 +19187,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	// Find next action
 	allFinishedDecisions := []string{}
+	nextDecisionsToDispatch := []AgentDecision{}
 	for decisionId, curDecision := range mappedResult.Decisions {
 		if curDecision.RunDetails.Status == "FINISHED" || curDecision.RunDetails.Status == "IGNORED" {
 			allFinishedDecisions = append(allFinishedDecisions, curDecision.RunDetails.Id)
@@ -19192,7 +19199,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			allFinishedDecisions = append(allFinishedDecisions, curDecision.RunDetails.Id)
 		}
 
-		if curDecision.I <= decisionIndex {
+		if curDecision.I <= decisionIndex || curDecision.RunDetails.Status != "" {
 			continue
 		}
 
@@ -19211,7 +19218,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		finishedDecisions := []string{}
 		failedDecisions := []string{}
 		for _, foundDecision := range foundDecisions {
-			if foundDecision.RunDetails.Status == "RUNNING" {
+			if foundDecision.RunDetails.Status == "RUNNING" || foundDecision.RunDetails.Status == "WAITING" || foundDecision.RunDetails.Status == "" {
 				continue
 			} else if foundDecision.RunDetails.Status == "FAILURE" || foundDecision.RunDetails.Status == "FAILED" {
 				failedDecisions = append(failedDecisions, foundDecision.RunDetails.Id)
@@ -19234,7 +19241,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		if len(foundDecisions) == len(finishedDecisions) {
 			mappedResult.Decisions[decisionId].RunDetails.Status = "RUNNING"
 			mappedResult.Decisions[decisionId].RunDetails.StartedAt = time.Now().UnixMilli()
-			go RunAgentDecisionAction(workflowExecution, mappedResult, curDecision)
+			nextDecisionsToDispatch = append(nextDecisionsToDispatch, mappedResult.Decisions[decisionId])
 		}
 	}
 
@@ -19333,12 +19340,27 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 		_ = returnAction
 
-		if freshExec, fetchErr := GetWorkflowExecution(ctx, workflowExecution.ExecutionId); fetchErr == nil && freshExec != nil {
-			workflowExecution = *freshExec
+		freshExecution, fetchErr := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+		if fetchErr == nil && freshExecution != nil {
+			workflowExecution = *freshExecution
 		}
 
 		//go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 		return &workflowExecution, false, nil
+	}
+
+	if foundActionResultIndex >= 0 && foundActionResultIndex < len(workflowExecution.Results) {
+		marshalledResult, marshalErr := json.Marshal(mappedResult)
+		if marshalErr == nil {
+			workflowExecution.Results[foundActionResultIndex].Result = string(marshalledResult)
+			actionCacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+			_ = SetCache(ctx, actionCacheId, marshalledResult, 600)
+			SetWorkflowExecution(ctx, workflowExecution, true)
+		}
+	}
+
+	for _, nextDec := range nextDecisionsToDispatch {
+		go RunAgentDecisionAction(workflowExecution, mappedResult, nextDec)
 	}
 
 	return &workflowExecution, true, nil
@@ -19766,14 +19788,21 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	if setCache {
 		go RunExecutionTranslation(ctx, actionResult)
 
-		actionResultBody, err := json.Marshal(actionResult)
-		if err == nil {
-			err = SetCache(ctx, actionCacheId, actionResultBody, 35)
-			if err != nil {
-				//log.Printf("\n\n\n[ERROR] Failed setting cache for action in parsed exec results %s: %s\n\n", actionCacheId, err)
+		if isAgentAction(actionResult.Action) {
+			cleanedAgentResult := cleanAgentResultString(actionResult.Result)
+			if len(cleanedAgentResult) > 0 && !strings.Contains(cleanedAgentResult, "Result too large to handle") {
+				_ = SetCache(ctx, actionCacheId, []byte(cleanedAgentResult), 600)
 			}
 		} else {
-			log.Printf("[ERROR] Failed marshalling result and put it in cache.")
+			actionResultBody, err := json.Marshal(actionResult)
+			if err == nil {
+				err = SetCache(ctx, actionCacheId, actionResultBody, 35)
+				if err != nil {
+					//log.Printf("\n\n\n[ERROR] Failed setting cache for action in parsed exec results %s: %s\n\n", actionCacheId, err)
+				}
+			} else {
+				log.Printf("[ERROR] Failed marshalling result and put it in cache.")
+			}
 		}
 	} else {
 		//log.Printf("[WARNING] Skipping cache for %s", actionResult.Action.Name)
@@ -19797,8 +19826,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
-	newResult := FixBadJsonBody([]byte(actionResult.Result))
-	actionResult.Result = string(newResult)
+	if isAgentAction(actionResult.Action) {
+		actionResult.Result = cleanAgentResultString(actionResult.Result)
+	} else {
+		newResult := FixBadJsonBody([]byte(actionResult.Result))
+		actionResult.Result = string(newResult)
+	}
 
 	if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
 
@@ -20949,11 +20982,23 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				newResults := []ActionResult{}
 				//shuffle-large-executions
 				for _, item := range workflowExecution.Results {
+					isAgent := isAgentAction(item.Action)
+					if isAgent {
+						if strings.Contains(item.Result, "Result too large to handle") {
+							fileValue, fileErr := getExecutionFileValue(ctx, workflowExecution, item)
+							if fileErr == nil && len(fileValue) > 0 {
+								item.Result = fileValue
+							}
+						}
+						item.Result = cleanAgentResultString(item.Result)
+					}
+
 					//log.Printf("[DEBUG] Result length is %d for execution Id %s (%s)", len(item.Result), workflowExecution.ExecutionId, saveLocationInfo)
-					if len(item.Result) > maxSize {
+					if len(item.Result) > maxSize && !strings.Contains(item.Result, "Result too large to handle") {
 						//log.Printf("[WARNING][%s](%s) result length is larger than maxSize for %s (%d)", workflowExecution.ExecutionId, saveLocationInfo, item.Action.Label, len(item.Result))
 
-						itemSize := len(item.Result)
+						rawItemResult := item.Result
+						itemSize := len(rawItemResult)
 						baseResult := fmt.Sprintf(`{
 								"success": false,
 								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
@@ -20966,7 +21011,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						// Most results never change, but an AI Agent's result grows with every turn,
 						// and keeping the first file would bring back old history once the cache expires.
 						existing, err := getExecutionFileValue(ctx, workflowExecution, item)
-						if err == nil && (existing == item.Result || (isAgentAction(item.Action) && existing == cleanAgentResultString(item.Result))) {
+						if err == nil && (existing == rawItemResult || (isAgent && existing == cleanAgentResultString(rawItemResult))) {
 							//log.Printf("[DEBUG][%s] Found execution file locally for '%s'. Not saving another.", workflowExecution.ExecutionId, item.Action.Label)
 						} else {
 							fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
@@ -20975,7 +21020,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							obj := bucket.Object(fullParsedPath)
 							w := obj.NewWriter(ctx)
 							//log.Printf("RES: ", item.Result)
-							if _, err := fmt.Fprint(w, item.Result); err != nil {
+							if _, err := fmt.Fprint(w, rawItemResult); err != nil {
 								log.Printf("[WARNING][%s] Failed writing new exec file: %s", err, workflowExecution.ExecutionId)
 								item.Result = baseResult
 								newResults = append(newResults, item)
@@ -20992,7 +21037,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 							// Readers check this cache before the file. Set overwrites the old copy; only drop it if the set fails.
 							actionReplaceKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, item.Action.ID)
-							if err := SetCache(ctx, actionReplaceKey, []byte(item.Result), 600); err != nil {
+							if err := SetCache(ctx, actionReplaceKey, []byte(rawItemResult), 600); err != nil {
 								DeleteCache(ctx, actionReplaceKey)
 							}
 						}

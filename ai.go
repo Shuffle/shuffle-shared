@@ -7389,9 +7389,36 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 	// Check if result contains AgentOutput mapping as string
 	agentOutput := AgentOutput{}
 	if len(foundResult.Result) > 0 {
+		if strings.Contains(foundResult.Result, "Result too large to handle") {
+			fileValue, fileErr := getExecutionFileValue(ctx, execution, foundResult)
+			if fileErr == nil && len(fileValue) > 0 {
+				foundResult.Result = fileValue
+			}
+		}
+		foundResult.Result = cleanAgentResultString(foundResult.Result)
 		err := json.Unmarshal([]byte(foundResult.Result), &agentOutput)
 		if err != nil {
 			log.Printf("[ERROR][%s] abortAgentExecution: failed to parse AgentOutput from result. This is NOT critical. Details: %s", execution.ExecutionId, err)
+		}
+	}
+
+	actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
+	cachedData, cacheErr := GetCache(ctx, actionCacheId)
+	if cacheErr == nil && cachedData != nil {
+		var cachedBytes []byte
+		switch cachedValue := cachedData.(type) {
+		case []byte:
+			cachedBytes = cachedValue
+		case string:
+			cachedBytes = []byte(cachedValue)
+		}
+		if len(cachedBytes) > 0 {
+			cleanedCached := cleanAgentResultString(string(cachedBytes))
+			var cachedOutput AgentOutput
+			unmarshalErr := json.Unmarshal([]byte(cleanedCached), &cachedOutput)
+			if unmarshalErr == nil && len(cachedOutput.Decisions) > len(agentOutput.Decisions) {
+				agentOutput = cachedOutput
+			}
 		}
 	}
 
@@ -7526,7 +7553,7 @@ func abortAgentExecution(ctx context.Context, execution WorkflowExecution, start
 		execution.Results = append(execution.Results, abortResult)
 	}
 
-	actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
+	// Update action cache before saving to DB so Fixexecution does not overwrite abortResult with a stale cached output
 	_ = SetCache(ctx, actionCacheId, marshalledOutput, 600)
 
 	if !standalone {
@@ -9835,8 +9862,9 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 			oldActionResult = result
 
 			if strings.Contains(result.Result, "Result too large to handle") {
-				if fullVal, fileErr := getExecutionFileValue(ctx, execution, result); fileErr == nil && len(fullVal) > 0 {
-					result.Result = cleanAgentResultString(fullVal)
+				fullValue, fileErr := getExecutionFileValue(ctx, execution, result)
+				if fileErr == nil && len(fullValue) > 0 {
+					result.Result = cleanAgentResultString(fullValue)
 				}
 			} else {
 				result.Result = cleanAgentResultString(result.Result)
@@ -9853,15 +9881,17 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 				break
 			}
 
-			if len(mappedResult.Decisions) == 0 {
-				actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
-				if cachedData, cacheErr := GetCache(ctx, actionCacheId); cacheErr == nil && cachedData != nil {
-					if cachedBytes, ok := cachedData.([]uint8); ok {
-						var cachedOut AgentOutput
-						if err := json.Unmarshal(cachedBytes, &cachedOut); err == nil && len(cachedOut.Decisions) > 0 {
-							mappedResult = cachedOut
-							log.Printf("[INFO][%s] AI Agent: Fetched %d decisions from action cache fallback", execution.ExecutionId, len(mappedResult.Decisions))
-						}
+			actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
+			cachedData, cacheErr := GetCache(ctx, actionCacheId)
+			if cacheErr == nil && cachedData != nil {
+				cachedBytes, isByteSlice := cachedData.([]uint8)
+				if isByteSlice {
+					cleanedCached := cleanAgentResultString(string(cachedBytes))
+					var cachedOutput AgentOutput
+					unmarshalErr := json.Unmarshal([]byte(cleanedCached), &cachedOutput)
+					if unmarshalErr == nil && len(cachedOutput.Decisions) > len(mappedResult.Decisions) {
+						mappedResult = cachedOutput
+						log.Printf("[INFO][%s] AI Agent: Fetched %d decisions from action cache fallback", execution.ExecutionId, len(mappedResult.Decisions))
 					}
 				}
 			}
@@ -9968,7 +9998,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action, 
 					successCount++
 				}
 
-				if mappedDecision.I > lastFinishedIndex {
+				if mappedDecision.RunDetails.Status != "" && mappedDecision.I > lastFinishedIndex {
 					lastFinishedIndex = mappedDecision.I
 				}
 
@@ -10751,6 +10781,7 @@ data_filter:
 			ApiKey:          aiApiKeyOverride,
 			Model:           aiModelOverride,
 			ReasoningEffort: foundReasoning,
+			ResponseFormat:  "json",
 		}
 
 		// Check for authenticationId
@@ -11363,59 +11394,10 @@ data_filter:
 
 			}
 
-			// Realtime update so that it looks correct in the UI between requests
+			// Ensure status is updated for the active turn; persistence happens after in-memory decision processing below.
 			if len(mappedDecisions) > 0 {
 				execution.Status = "EXECUTING"
 				agentOutput.Status = "RUNNING"
-
-				foundAgentIndex := -1
-				for resultIndex, result := range execution.Results {
-					if result.Action.ID != startNode.ID {
-						continue
-					}
-
-					// Re-marshal the result
-					agentOutputMarshalled, err := json.Marshal(agentOutput)
-					if err != nil {
-						log.Printf("[ERROR] AI Agent: Failed marshalling agent output in AI Agent response: %s", err)
-					} else {
-						execution.Results[resultIndex].Result = string(agentOutputMarshalled)
-					}
-
-					// Waiting 1
-					execution.Results[resultIndex].Status = "WAITING"
-
-					// Update the result in cache as actions are self-corrective
-					actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, result.Action.ID)
-					err = SetCache(ctx, actionCacheId, []byte(execution.Results[resultIndex].Result), 600)
-					if err != nil {
-						log.Printf("[ERROR] AI Agent: Failed setting cache for action result %s: %s", actionCacheId, err)
-					}
-					foundAgentIndex = resultIndex
-					break
-				}
-
-				if foundAgentIndex < 0 {
-					agentOutputMarshalled, err := json.Marshal(agentOutput)
-					initialResult := string(agentOutputMarshalled)
-					if err != nil {
-						initialResult = "{}"
-					}
-					agentResult := ActionResult{
-						Action:      startNode,
-						ExecutionId: execution.ExecutionId,
-						Result:      initialResult,
-						Status:      "WAITING",
-						StartedAt:   time.Now().UnixMilli(),
-					}
-					execution.Results = append(execution.Results, agentResult)
-					actionCacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, startNode.ID)
-					_ = SetCache(ctx, actionCacheId, []byte(initialResult), 600)
-				}
-
-				if !standalone {
-					SetWorkflowExecution(ctx, execution, true)
-				}
 			}
 		}
 
@@ -11428,6 +11410,15 @@ data_filter:
 		if !createNextActions {
 			if len(mappedDecisions) == 0 {
 				agentOutput.DecisionString = decisionString
+			}
+
+			additions := 0
+			for decisionIndex := range agentOutput.Decisions {
+				if agentOutput.Decisions[decisionIndex].I < lastFinishedIndex {
+					log.Printf("[WARNING][%s] Setting decision index %d to last finished index %d + additions %d", execution.ExecutionId, agentOutput.Decisions[decisionIndex].I, lastFinishedIndex, additions)
+					agentOutput.Decisions[decisionIndex].I = lastFinishedIndex + additions
+					additions += 1
+				}
 			}
 
 			// Initialize tracking on first call
@@ -11447,6 +11438,30 @@ data_filter:
 		}
 
 		decisionActionRan := false
+		decisionsToDispatch := []AgentDecision{}
+
+		// Pre-populate RunDetails.Id and normalize Category for all decisions (including lookahead steps)
+		// before dispatching any goroutines or persisting state.
+		for decisionIndex := range agentOutput.Decisions {
+			if len(agentOutput.Decisions[decisionIndex].RunDetails.Id) == 0 {
+				b := make([]byte, 6)
+				_, err := rand.Read(b)
+				if err != nil {
+					log.Printf("[ERROR][%s] AI Agent: Failed generating random string for decision index %s-%d", execution.ExecutionId, agentOutput.Decisions[decisionIndex].Tool, agentOutput.Decisions[decisionIndex].I)
+				} else {
+					agentOutput.Decisions[decisionIndex].RunDetails.Id = base64.RawURLEncoding.EncodeToString(b)
+				}
+			}
+
+			if agentOutput.Decisions[decisionIndex].Action != "" {
+				normalizedAction := strings.ToLower(strings.TrimSpace(agentOutput.Decisions[decisionIndex].Action))
+				normalizedCategory := strings.ToLower(strings.TrimSpace(agentOutput.Decisions[decisionIndex].Category))
+				expected := expectedCategory(normalizedAction)
+				if normalizedCategory != expected {
+					agentOutput.Decisions[decisionIndex].Category = expected
+				}
+			}
+		}
 
 		for decisionIndex, decision := range agentOutput.Decisions {
 			// Random generate an ID that's 10 chars long
@@ -11607,12 +11622,12 @@ data_filter:
 				agentOutput.Status = "WAITING"
 
 			} else if decision.Category != "standalone" {
-				// Do we run the singul action directly?
+				// Defer spawning RunAgentDecisionAction until agentOutput & execution are persisted below
 				agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().UnixMilli()
 				agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
 
 				if !standalone {
-					go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
+					decisionsToDispatch = append(decisionsToDispatch, agentOutput.Decisions[decisionIndex])
 				}
 
 			} else {
@@ -11749,77 +11764,42 @@ data_filter:
 			SetWorkflowExecution(ctx, execution, true)
 		}
 
+		if !standalone && !createNextActions && agentOutput.Status != "FINISHED" {
+			// 1. Map the response back before launching decision goroutines so Turn 1 state is persisted first
+			newResult, err := json.Marshal(resultMapping)
+			if err != nil {
+				log.Printf("[ERROR] AI Agent: Failed marshalling response from sending request for stream during SKIPPED user input: %s", err)
+			}
+
+			// Send the stream result to /api/v1/streams
+			streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
+			streamReq, err := http.NewRequest(
+				"POST",
+				streamUrl,
+				bytes.NewBuffer([]byte(newResult)),
+			)
+
+			if err != nil {
+				log.Printf("[ERROR] AI Agent: Failed creating request for stream during SKIPPED user input: %s", err)
+				return startNode, err
+			}
+
+			client := GetExternalClient(streamUrl)
+			_, _, streamErr := DoRequestWithRetry(client, streamReq, 3)
+			if streamErr != nil {
+				log.Printf("[ERROR] AI Agent: Failed sending request for stream during SKIPPED user input: %s", streamErr)
+				return startNode, streamErr
+			}
+		}
+
+		for _, dec := range decisionsToDispatch {
+			go RunAgentDecisionAction(execution, agentOutput, dec)
+		}
+
 	} else {
 		// LLM returned an empty result body — this is a failure
 		log.Printf("[ERROR][%s] AI_AGENT_LLM_FAILURE: org=%s Empty result body from LLM response (status %d). Aborting agent.", execution.ExecutionId, execution.Workflow.OrgId, llmStatusCode)
 		return abortAgentExecution(ctx, execution, startNode, "empty_llm_result", fmt.Sprintf("LLM returned empty response body with HTTP status %d", llmStatusCode))
-	}
-
-	if memorizationEngine == "shuffle_db" {
-
-		/*
-			// This is NOT what Memory is used for...
-			requestKey := fmt.Sprintf("chat_%s_%s", execution.ExecutionId, startNode.ID)
-
-			for messageIndex, _ := range completionRequest.Messages {
-				if len(completionRequest.Messages[messageIndex].Name) == 0 {
-					completionRequest.Messages[messageIndex].Name = fmt.Sprintf("%d", time.Now().UnixMilli())
-				}
-			}
-
-			// Stores the key in shuffle datastore
-			marshalledCompletionRequest, err := json.MarshalIndent(completionRequest, "", "  ")
-
-			if err != nil {
-				log.Printf("[ERROR][%s] AI Agent: Failed marshalling openai completion request: %s", execution.ExecutionId, err)
-			} else {
-				cacheData := CacheKeyData{
-					Key:      requestKey,
-					Value:    string(marshalledCompletionRequest),
-					Category: "agent_requests",
-
-					WorkflowId:    execution.Workflow.ID,
-					ExecutionId:   execution.ExecutionId,
-					Authorization: execution.Authorization,
-					OrgId:         execution.ExecutionOrg,
-				}
-
-				err := SetDatastoreKey(ctx, cacheData)
-				if err != nil {
-					log.Printf("[ERROR][%s] AI Agent: Failed updating AI requests: %s", execution.ExecutionId, err)
-				}
-			}
-		*/
-	}
-
-	if standalone || createNextActions || agentOutput.Status == "FINISHED" {
-		return startNode, nil
-	}
-
-	// 1. Map the response back
-	newResult, err := json.Marshal(resultMapping)
-	if err != nil {
-		log.Printf("[ERROR] AI Agent: Failed marshalling response from sending request for stream during SKIPPED user input: %s", err)
-	}
-
-	// Send the stream result to /api/v1/streams
-	streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
-	streamReq, err := http.NewRequest(
-		"POST",
-		streamUrl,
-		bytes.NewBuffer([]byte(newResult)),
-	)
-
-	if err != nil {
-		log.Printf("[ERROR] AI Agent: Failed creating request for stream during SKIPPED user input: %s", err)
-		return startNode, err
-	}
-
-	client := GetExternalClient(streamUrl)
-	_, _, streamErr := DoRequestWithRetry(client, streamReq, 3)
-	if streamErr != nil {
-		log.Printf("[ERROR] AI Agent: Failed sending request for stream during SKIPPED user input: %s", streamErr)
-		return startNode, streamErr
 	}
 
 	return startNode, nil
@@ -12661,13 +12641,21 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		IncludeUsage: true,
 	}
 
+	if chatCompletion.ResponseFormat == nil {
+		respFormat := strings.ToLower(strings.TrimSpace(info.ResponseFormat))
+		if respFormat == "json" || respFormat == "json_object" {
+			chatCompletion.ResponseFormat = &openai.ChatCompletionResponseFormat{
+				Type: openai.ChatCompletionResponseFormatTypeJSONObject,
+			}
+		}
+	}
+
 	// In case of non-streaming Resp input
 	totalTokens := 0
 	inputTokens := 0
 	outputTokens := 0
 	cachedTokens := 0
 	var lastError error
-	choicesMap := make(map[int]*openai.ChatCompletionChoice)
 	var fullResp openai.ChatCompletionResponse
 	var reasoningOutput string
 	for {
@@ -12759,6 +12747,9 @@ func RunAiQuery(ctx context.Context, info AiCallInfo, systemMessage, userMessage
 		// 2. Iterate over the stream
 		iterations := 0
 		var streamErr error
+		contentOutput = ""
+		fullResp = openai.ChatCompletionResponse{}
+		choicesMap := make(map[int]*openai.ChatCompletionChoice)
 		for {
 			iterations += 1
 
