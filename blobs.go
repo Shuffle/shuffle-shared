@@ -22,8 +22,8 @@ import (
 func IsShuffleApp(app WorkflowApp) bool {
 	parsedAppname := strings.ReplaceAll(strings.ToLower(app.Name), " ", "_")
 
-	skipAuthAppnames := []string{"openai", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors", "shuffle_apps", "shuffle_workflows_builder", "shuffle_incidents", "shuffle_vulnerabilities"}
-	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75", "7db43ccd25261967b095cfbd467a75cc", "de4ef2287bd41b9d5563e39989643ee6", "48793430d21468f9e371ace402efcd8e", "a92601b227d534edb614986f5beedf52", "39bba3e99693fc1d39620e778c477e8c"} 
+	skipAuthAppnames := []string{"openai", "shuffle_openapi", "shuffle_datastore", "shuffle_workflows", "shuffle_detection", "shuffle_sensors", "shuffle_monitors", "shuffle_host_monitors", "shuffle_apps", "shuffle_workflows_builder", "shuffle_incidents", "shuffle_vulnerabilities"}
+	skipAuthAppIds := []string{"5d19dd82517870c68d40cacad9b5ca91", "fc92c1d806df0c96f0c152a7b43b2878", "b82668d868f6dc7ac1dc14caa92c674b", "b598b078fd5c531699fca803c172ce72", "afda48b8d1f7dc7ac3caae87b2c072e9", "7f12d725c356677d28db042170444448", "48a954b9440b3913b8a2620e57b94a75", "7db43ccd25261967b095cfbd467a75cc", "de4ef2287bd41b9d5563e39989643ee6", "48793430d21468f9e371ace402efcd8e", "a92601b227d534edb614986f5beedf52", "39bba3e99693fc1d39620e778c477e8c"} 
 
 	isShuffleApp := false
 	if project.Environment == "cloud" && len(app.ID) > 0 {
@@ -735,93 +735,117 @@ func HandleSingulWorkflowEnablement(ctx context.Context, workflow Workflow, user
 		}
 	} else if actionType == "incident_routing" || actionType == "incident_routing_rules" || actionType == "automated_routing" || actionType == "automated_routing_rules" || strings.HasSuffix(actionType, "_routing") || strings.HasSuffix(actionType, "_routing_rules") {
 		// Dynamic Routing Rules evaluate declarative boolean condition trees on incoming entities
-		// and execute polymorphic actions (suggest_move, set_severity, add_label, run_agent, etc.).
-		categoryCheck := resolveRoutingDatastoreCategory(actionType, categoryAction)
-
-		categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
-		if err != nil {
-			if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
-				categoryConfig = &DatastoreCategoryUpdate{
-					OrgId:       user.ActiveOrg.Id,
-					Category:    categoryCheck,
-					Automations: []DatastoreAutomation{},
-					Settings:    DatastoreCategorySettings{},
+		// across all datastore categories using $exec.shuffle_datastore.category and execute
+		// polymorphic actions (suggest_move, set_severity, add_label, run_agent, etc.).
+		resolvedCategory := resolveRoutingDatastoreCategory(actionType, categoryAction)
+		routingCategories := []string{
+			"shuffle-security_incidents",
+			"shuffle-security_vulns",
+			"shuffle-security_assets",
+			"shuffle-security_infrastructure",
+			"shuffle-security_packages",
+			"shuffle-security_software",
+			"shuffle-security_users",
+		}
+		if resolvedCategory != "" {
+			alreadyIncluded := false
+			for _, existingCat := range routingCategories {
+				if existingCat == resolvedCategory {
+					alreadyIncluded = true
+					break
 				}
-			} else {
-				return err
+			}
+			if !alreadyIncluded {
+				routingCategories = append(routingCategories, resolvedCategory)
 			}
 		}
 
-		datastoreCategoryConfigEdited := false
-
-		foundRunWorkflow := DatastoreAutomation{
-			Name:        "Run workflow",
-			Description: "Runs one or more workflows with the updated value as runtime argument",
-			Options: []DatastoreAutomationOption{
-				DatastoreAutomationOption{
-					Key:   "workflow_id",
-					Value: workflow.ID,
-				},
-			},
-			Icon:    "",
-			Enabled: true,
-		}
-
-		automationFound := false
-		if len(categoryConfig.Automations) > 0 {
-			for automationIndex, automation := range categoryConfig.Automations {
-				if strings.ToLower(automation.Name) != "run workflow" {
-					continue
+		for _, categoryCheck := range routingCategories {
+			categoryConfig, err := GetDatastoreCategoryConfig(ctx, user.ActiveOrg.Id, categoryCheck)
+			if err != nil {
+				if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "no such entity") || strings.Contains(err.Error(), "doesn't exist") {
+					categoryConfig = &DatastoreCategoryUpdate{
+						OrgId:       user.ActiveOrg.Id,
+						Category:    categoryCheck,
+						Automations: []DatastoreAutomation{},
+						Settings:    DatastoreCategorySettings{},
+					}
+				} else {
+					return err
 				}
+			}
 
-				automationFound = true
+			datastoreCategoryConfigEdited := false
 
-				workflowIdFound := false
-				for optionIndex, option := range automation.Options {
-					if option.Key != "workflow_id" {
+			foundRunWorkflow := DatastoreAutomation{
+				Name:        "Run workflow",
+				Description: "Runs one or more workflows with the updated value as runtime argument",
+				Options: []DatastoreAutomationOption{
+					DatastoreAutomationOption{
+						Key:   "workflow_id",
+						Value: workflow.ID,
+					},
+				},
+				Icon:    "",
+				Enabled: true,
+			}
+
+			automationFound := false
+			if len(categoryConfig.Automations) > 0 {
+				for automationIndex, automation := range categoryConfig.Automations {
+					if strings.ToLower(automation.Name) != "run workflow" {
 						continue
 					}
 
-					if debug {
-						log.Printf("[DEBUG] VALUE: %#v", option.Value)
+					automationFound = true
+
+					workflowIdFound := false
+					for optionIndex, option := range automation.Options {
+						if option.Key != "workflow_id" {
+							continue
+						}
+
+						if debug {
+							log.Printf("[DEBUG] VALUE: %#v", option.Value)
+						}
+
+						workflowIdFound = true
+
+						if !strings.Contains(option.Value, workflow.ID) {
+							categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+						}
+
+						break
 					}
 
-					workflowIdFound = true
+					if !workflowIdFound {
+						log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
+						automationOption := DatastoreAutomationOption{
+							Key:   "workflow_id",
+							Value: workflow.ID,
+						}
 
-					if !strings.Contains(option.Value, workflow.ID) {
-						categoryConfig.Automations[automationIndex].Options[optionIndex].Value = fmt.Sprintf("%s,%s", workflow.ID, categoryConfig.Automations[automationIndex].Options[optionIndex].Value)
+						categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
 					}
 
+					datastoreCategoryConfigEdited = true
+					categoryConfig.Automations[automationIndex].Enabled = true
 					break
 				}
-
-				if !workflowIdFound {
-					log.Printf("[ERROR] Didn't find workflow ID field in datastore automation for org %s (%s) in category %#v", user.ActiveOrg.Name, user.ActiveOrg.Id, categoryCheck)
-					automationOption := DatastoreAutomationOption{
-						Key:   "workflow_id",
-						Value: workflow.ID,
-					}
-
-					categoryConfig.Automations[automationIndex].Options = append(categoryConfig.Automations[automationIndex].Options, automationOption)
-				}
-
-				datastoreCategoryConfigEdited = true
-				categoryConfig.Automations[automationIndex].Enabled = true
-				break
 			}
-		}
 
-		if !automationFound {
-			categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
-			datastoreCategoryConfigEdited = true
-		}
+			if !automationFound {
+				categoryConfig.Automations = append(categoryConfig.Automations, foundRunWorkflow)
+				datastoreCategoryConfigEdited = true
+			}
 
-		if datastoreCategoryConfigEdited {
-			err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
-			if err != nil {
-				log.Printf("[ERROR] Failed to update category config for dynamic routing rules enablement: %s", err)
-			} else {
-				log.Printf("[INFO] Configured Singul dynamic routing rules workflow %s for org %s in %s", workflow.ID, user.ActiveOrg.Id, categoryCheck)
+			if datastoreCategoryConfigEdited {
+				err := SetDatastoreCategoryConfig(ctx, *categoryConfig)
+				if err != nil {
+					log.Printf("[ERROR] Failed to update category config for dynamic routing rules enablement: %s", err)
+				} else {
+					log.Printf("[INFO] Configured Singul dynamic routing rules workflow %s for org %s in %s", workflow.ID, user.ActiveOrg.Id, categoryCheck)
+				}
 			}
 		}
 	} else if actionType == "notification" || actionType == "notifications" || actionType == "forward_notification" || actionType == "forward_notifications" {
@@ -2701,14 +2725,42 @@ $exec`,
 		getRoutingRulesId := startActionId
 		validateRulesId := uuid.NewV4().String()
 		executeRulesId := uuid.NewV4().String()
+		updateStatsId := uuid.NewV4().String()
+		setCrossTenantCacheId := uuid.NewV4().String()
 
 		targetCategory := resolveRoutingDatastoreCategory(parsedActiontype, categoryAction)
-		workflowDescription := "Evaluates items against routing rules to suggest moves, assignees, severities, or automate containment."
-		workflowTags := []string{"routing", "incident", "automatic", "automated routing", "automated routing rules", "automated_routing_rules", "incident routing", "incident routing rules", "incident_routing_rules", "incident_routing"}
+		workflowDescription := "Evaluates items against routing rules based on $exec.shuffle_datastore.category to suggest moves, assignees, severities, or automate containment."
+		workflowTags := []string{"routing", "incident", "vulnerability", "asset", "automatic", "automated routing", "automated routing rules", "automated_routing_rules", "incident routing", "incident routing rules", "incident_routing_rules", "incident_routing"}
 
 		if targetCategory == "shuffle-security_vulns" {
 			workflowDescription = "Evaluates vulnerabilities against routing rules to suggest priorities, severities, or automate remediation."
 			workflowTags = []string{"routing", "vulnerability", "automatic", "automated routing", "automated routing rules", "automated_routing_rules", "vulnerabilities routing", "vulnerabilities routing rules", "vulnerability_routing_rules", "vulnerability_routing"}
+		}
+
+		openapiAuthId := ""
+		allAuths, authErr := GetAllWorkflowAppAuth(ctx, orgId)
+		if authErr == nil {
+			for _, auth := range allAuths {
+				if !auth.Defined {
+					continue
+				}
+				normalizedAppName := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(auth.App.Name), " ", "_"))
+				if auth.App.ID == "fc92c1d806df0c96f0c152a7b43b2878" || normalizedAppName == "shuffle_openapi" {
+					openapiAuthId = auth.Id
+					if auth.Active {
+						break
+					}
+				}
+			}
+			if openapiAuthId == "" {
+				for _, auth := range allAuths {
+					normalizedAppName := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(auth.App.Name), " ", "_"))
+					if auth.App.ID == "fc92c1d806df0c96f0c152a7b43b2878" || normalizedAppName == "shuffle_openapi" {
+						openapiAuthId = auth.Id
+						break
+					}
+				}
+			}
 		}
 
 		defaultWorkflow := Workflow{
@@ -2718,6 +2770,7 @@ $exec`,
 			Start:       getRoutingRulesId,
 			UsecaseIds:  []string{},
 			Tags:        workflowTags,
+			Triggers:    []Trigger{},
 			Actions: []Action{
 				Action{
 					Name:        "list_datastore_category",
@@ -2726,8 +2779,11 @@ $exec`,
 					ID:          getRoutingRulesId,
 					AppVersion:  "1.2.0",
 					Environment: actionEnv,
-					Label:       "Get_routing_rules",
-					IsStartNode: true,
+					Label:       "Get_all_rules_from_the_system",
+					Position: Position{
+						X: 100,
+						Y: 200,
+					},
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:     "category",
@@ -2747,7 +2803,11 @@ $exec`,
 					ID:          validateRulesId,
 					AppVersion:  "1.2.0",
 					Environment: actionEnv,
-					Label:       "Validate_routing_rules",
+					Label:       "Find_relevant_rules_for_category",
+					Position: Position{
+						X: 400,
+						Y: 200,
+					},
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:      "code",
@@ -2764,7 +2824,11 @@ $exec`,
 					ID:          executeRulesId,
 					AppVersion:  "1.2.0",
 					Environment: actionEnv,
-					Label:       "Execute_matched_rules",
+					Label:       "Execute_rule_automation_for_found_rules",
+					Position: Position{
+						X: 700,
+						Y: 200,
+					},
 					Parameters: []WorkflowAppActionParameter{
 						WorkflowAppActionParameter{
 							Name:      "code",
@@ -2774,12 +2838,118 @@ $exec`,
 						},
 					},
 				},
+				Action{
+					Name:             "post_count_custom_stats",
+					AppID:            "fc92c1d806df0c96f0c152a7b43b2878",
+					AppName:          "shuffle_openapi",
+					ID:               updateStatsId,
+					AppVersion:       "1.0.0",
+					Environment:      actionEnv,
+					AuthenticationId: openapiAuthId,
+					Label:            "Update_rule_statistics",
+					Position: Position{
+						X: 1050,
+						Y: 80,
+					},
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "body",
+							Multiline: true,
+							Required:  true,
+							Value:     `{"key": "$execute_rule_automation_for_found_rules.message.stats_key", "value": $execute_rule_automation_for_found_rules.message.stats_value}`,
+						},
+						WorkflowAppActionParameter{
+							Name:     "queries",
+							Value:    "",
+							Required: false,
+						},
+						WorkflowAppActionParameter{
+							Name:     "org_id",
+							Value:    "",
+							Required: false,
+						},
+						WorkflowAppActionParameter{
+							Name:     "ssl_verify",
+							Value:    "",
+							Required: false,
+						},
+						WorkflowAppActionParameter{
+							Name:     "to_file",
+							Value:    "",
+							Required: false,
+						},
+					},
+				},
+				Action{
+					Name:             "post_add_a_key",
+					AppID:            "fc92c1d806df0c96f0c152a7b43b2878",
+					AppName:          "shuffle_openapi",
+					ID:               setCrossTenantCacheId,
+					AppVersion:       "1.0.0",
+					Environment:      actionEnv,
+					AuthenticationId: openapiAuthId,
+					Label:            "Set_key_in_target_tenant",
+					Position: Position{
+						X: 1050,
+						Y: 320,
+					},
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:      "headers",
+							Multiline: true,
+							Required:  false,
+							Value:     "Org-Id: $execute_rule_automation_for_found_rules.message.target_org_id",
+						},
+						WorkflowAppActionParameter{
+							Name:      "body",
+							Multiline: true,
+							Required:  true,
+							Value:     `{"key": "$execute_rule_automation_for_found_rules.message.key", "category": "$execute_rule_automation_for_found_rules.message.category", "value": $execute_rule_automation_for_found_rules.message.updated_value}`,
+						},
+						WorkflowAppActionParameter{
+							Name:     "queries",
+							Value:    "",
+							Required: false,
+						},
+						WorkflowAppActionParameter{
+							Name:     "org_id",
+							Value:    "",
+							Required: false,
+						},
+						WorkflowAppActionParameter{
+							Name:     "ssl_verify",
+							Value:    "",
+							Required: false,
+						},
+						WorkflowAppActionParameter{
+							Name:     "to_file",
+							Value:    "",
+							Required: false,
+						},
+					},
+				},
 			},
 			Branches: []Branch{
 				Branch{
 					SourceID:      getRoutingRulesId,
 					DestinationID: validateRulesId,
 					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "{{ $$get_all_rules_from_the_system | size }}",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "larger than",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "0",
+							},
+						},
+					},
 				},
 				Branch{
 					SourceID:      validateRulesId,
@@ -2789,7 +2959,49 @@ $exec`,
 						Condition{
 							Source: WorkflowAppActionParameter{
 								Name:  "source",
-								Value: "$validate_routing_rules.matched",
+								Value: "$find_relevant_rules_for_category.message.matched",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "equals",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "true",
+							},
+						},
+					},
+				},
+				Branch{
+					SourceID:      executeRulesId,
+					DestinationID: updateStatsId,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$execute_rule_automation_for_found_rules.message.matched",
+							},
+							Condition: WorkflowAppActionParameter{
+								Name:  "condition",
+								Value: "equals",
+							},
+							Destination: WorkflowAppActionParameter{
+								Name:  "destination",
+								Value: "true",
+							},
+						},
+					},
+				},
+				Branch{
+					SourceID:      executeRulesId,
+					DestinationID: setCrossTenantCacheId,
+					ID:            uuid.NewV4().String(),
+					Conditions: []Condition{
+						Condition{
+							Source: WorkflowAppActionParameter{
+								Name:  "source",
+								Value: "$execute_rule_automation_for_found_rules.message.move_to_org",
 							},
 							Condition: WorkflowAppActionParameter{
 								Name:  "condition",
@@ -6171,13 +6383,19 @@ def normalize_category(cat) -> str:
     return s
 
 
+def _resolve_rule_category(rule: dict) -> str:
+    if not isinstance(rule, dict):
+        return "shuffle-security_incidents"
+    raw_cat = rule.get("entityCategory") or rule.get("category") or ""
+    norm = normalize_category(raw_cat)
+    return norm or "shuffle-security_incidents"
+
+
 def _categories_match(rule_cat, target_cat: str) -> bool:
     norm_target = normalize_category(target_cat) or "shuffle-security_incidents"
-    norm_rule = normalize_category(rule_cat)
+    norm_rule = normalize_category(rule_cat) or "shuffle-security_incidents"
     if norm_rule == "*":
         return True
-    if not norm_rule:
-        return norm_target == "shuffle-security_incidents"
     return norm_rule == norm_target or norm_rule.lower() == norm_target.lower()
 
 
@@ -6347,7 +6565,7 @@ def _with_base64_decodes(haystacks):
     return out
 
 
-def evaluate_condition(ctx: dict, condition: dict) -> bool:
+def evaluate_condition_detailed(ctx: dict, condition: dict) -> dict:
     field = condition.get("field", "")
     op = condition.get("op", "")
     value = condition.get("value")
@@ -6357,25 +6575,37 @@ def evaluate_condition(ctx: dict, condition: dict) -> bool:
     haystacks = [s.lower() for s in _with_base64_decodes(raw_strings)]
     needle = (value or "").lower()
 
+    is_matched = False
     if op == "exists":
-        return len(haystacks) > 0 and any(len(s) > 0 for s in haystacks)
-    if op == "equals":
-        return any(s == needle for s in haystacks)
-    if op == "contains":
-        return len(needle) > 0 and any(needle in s for s in haystacks)
-    if op == "startsWith":
-        return len(needle) > 0 and any(s.startswith(needle) for s in haystacks)
-    if op == "endsWith":
-        return len(needle) > 0 and any(s.endswith(needle) for s in haystacks)
-    if op == "regex":
-        if not value:
-            return False
-        try:
-            re_c = re.compile(value, re.IGNORECASE)
-        except re.error:
-            return False
-        return any(re_c.search(s) is not None for s in haystacks)
-    return False
+        is_matched = len(haystacks) > 0 and any(len(s) > 0 for s in haystacks)
+    elif op == "equals":
+        is_matched = any(s == needle for s in haystacks)
+    elif op == "contains":
+        is_matched = len(needle) > 0 and any(needle in s for s in haystacks)
+    elif op == "startsWith":
+        is_matched = len(needle) > 0 and any(s.startswith(needle) for s in haystacks)
+    elif op == "endsWith":
+        is_matched = len(needle) > 0 and any(s.endswith(needle) for s in haystacks)
+    elif op == "regex":
+        if value:
+            try:
+                re_c = re.compile(value, re.IGNORECASE)
+                is_matched = any(re_c.search(s) is not None for s in haystacks)
+            except re.error:
+                is_matched = False
+
+    preview_actuals = [s[:200] for s in raw_strings[:10]]
+    return {
+        "field": field,
+        "op": op,
+        "expected_value": value,
+        "actual_values": preview_actuals,
+        "matched": is_matched,
+    }
+
+
+def evaluate_condition(ctx: dict, condition: dict) -> bool:
+    return evaluate_condition_detailed(ctx, condition)["matched"]
 
 
 def _is_group(n):
@@ -6433,52 +6663,156 @@ def _build_groups(rule):
     return groups
 
 
-def evaluate_routing_rules(ctx: dict, rules, target_category: str = "__TARGET_CATEGORY__") -> list:
+def filter_relevant_rules_for_category(rules, target_category: str = "__TARGET_CATEGORY__") -> list:
     active = [
         r for r in rules
         if isinstance(r, dict)
         and r.get("enabled", True) is not False
-        and _categories_match(r.get("entityCategory"), target_category)
+        and _categories_match(_resolve_rule_category(r), target_category)
     ]
     active.sort(key=lambda r: r.get("priority", 100))
+    return active
 
+
+def inspect_and_evaluate_rules(ctx: dict, rules, target_category: str = "__TARGET_CATEGORY__", incident_ref: dict = None) -> tuple:
+    incident_info = incident_ref or {}
+    rules_checked = []
+    rules_skipped = []
     matches = []
-    for rule in active:
+
+    sorted_rules = [r for r in rules if isinstance(r, dict)]
+    sorted_rules.sort(key=lambda r: r.get("priority", 100))
+
+    for rule in sorted_rules:
+        rule_id = str(rule.get("id") or "")
+        rule_name = str(rule.get("name") or "Unnamed rule")
+        rule_priority = rule.get("priority", 100)
+        rule_enabled = rule.get("enabled", True) is not False
+        rule_cat = _resolve_rule_category(rule)
+        if not rule.get("entityCategory"):
+            rule["entityCategory"] = rule_cat
+        cat_matches = _categories_match(rule_cat, target_category)
+
+        if not rule_enabled:
+            rules_skipped.append({
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "priority": rule_priority,
+                "enabled": False,
+                "entity_category": rule_cat,
+                "checked": False,
+                "matched": False,
+                "should_trigger": False,
+                "status": "skipped_disabled",
+                "reason": "Rule is disabled",
+            })
+            continue
+
+        if not cat_matches:
+            rules_skipped.append({
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "priority": rule_priority,
+                "enabled": True,
+                "entity_category": rule_cat,
+                "checked": False,
+                "matched": False,
+                "should_trigger": False,
+                "status": "skipped_category_mismatch",
+                "reason": f"Rule targets category '{rule_cat}', incoming entity is '{target_category}'",
+            })
+            continue
+
+        evaluated_conditions = []
+        matched_conditions = []
+        failed_conditions = []
+        rule_matched = False
+        reason = ""
+
         tree = rule.get("conditionTree")
         if _is_group(tree):
-            if evaluate_tree(tree, ctx):
-                leaves = _collect_leaves(tree)
-                matched_leaves = [
-                    leaf
-                    for leaf in leaves
-                    if evaluate_condition(
-                        ctx,
-                        {
-                            "field": leaf.get("field", ""),
-                            "op": leaf.get("op", ""),
-                            "value": leaf.get("value"),
-                        },
-                    )
-                ]
-                matches.append({"rule": rule, "matched": matched_leaves})
-            continue
+            leaves = _collect_leaves(tree)
+            for leaf in leaves:
+                detail = evaluate_condition_detailed(
+                    ctx,
+                    {
+                        "field": leaf.get("field", ""),
+                        "op": leaf.get("op", ""),
+                        "value": leaf.get("value"),
+                    },
+                )
+                evaluated_conditions.append(detail)
+                if detail["matched"]:
+                    matched_conditions.append(detail)
+                else:
+                    failed_conditions.append(detail)
 
-        conds = rule.get("conditions") or []
-        if not conds:
-            continue
-        groups = _build_groups(rule)
-        matched_leaves = []
-        all_passed = True
-        for g in groups:
-            group_matched = [c for c in g if evaluate_condition(ctx, c)]
-            if not group_matched:
-                all_passed = False
-                break
-            matched_leaves.extend(group_matched)
-        if all_passed:
-            matches.append({"rule": rule, "matched": matched_leaves})
+            if not leaves:
+                rule_matched = False
+                reason = "Rule condition tree has no conditions configured"
+            else:
+                rule_matched = evaluate_tree(tree, ctx)
+                if rule_matched:
+                    reason = f"Matched {len(matched_conditions)} of {len(evaluated_conditions)} condition(s) in condition tree"
+                else:
+                    reason = f"Did not match condition tree ({len(failed_conditions)} of {len(evaluated_conditions)} condition(s) failed)"
+        else:
+            conds = rule.get("conditions") or []
+            if not conds:
+                rule_matched = False
+                reason = "Rule has no conditions configured"
+            else:
+                groups = _build_groups(rule)
+                all_passed = True
+                for g in groups:
+                    group_matched_any = False
+                    for c in g:
+                        detail = evaluate_condition_detailed(ctx, c)
+                        evaluated_conditions.append(detail)
+                        if detail["matched"]:
+                            matched_conditions.append(detail)
+                            group_matched_any = True
+                        else:
+                            failed_conditions.append(detail)
+                    if not group_matched_any:
+                        all_passed = False
+                rule_matched = all_passed
+                if rule_matched:
+                    reason = f"Matched {len(matched_conditions)} condition(s)"
+                else:
+                    reason = f"Did not match ({len(failed_conditions)} of {len(evaluated_conditions)} condition(s) failed)"
 
-    return matches
+        checked_entry = {
+            "rule_id": rule_id,
+            "rule_name": rule_name,
+            "priority": rule_priority,
+            "enabled": True,
+            "entity_category": rule_cat,
+            "checked": True,
+            "matched": rule_matched,
+            "should_trigger": rule_matched,
+            "status": "matched" if rule_matched else "not_matched",
+            "reason": reason,
+            "incident": incident_info,
+            "evaluated_conditions": evaluated_conditions,
+            "matched_conditions": matched_conditions,
+            "failed_conditions": failed_conditions,
+            "configured_actions": rule.get("actions") or [],
+        }
+        rules_checked.append(checked_entry)
+
+        if rule_matched:
+            matches.append({
+                "rule": rule,
+                "rule_id": rule_id,
+                "rule_name": rule_name,
+                "should_trigger": True,
+                "incident": incident_info,
+                "matched": matched_conditions,
+                "evaluated_conditions": evaluated_conditions,
+            })
+
+    return rules_checked, rules_skipped, matches
 
 
 def _parse_input_safely(raw, default=None):
@@ -6508,6 +6842,14 @@ def _extract_rules(raw_rules_input):
     if isinstance(parsed, dict):
         if "values" in parsed and isinstance(parsed["values"], list):
             parsed = parsed["values"]
+        elif "message" in parsed:
+            msg = _parse_input_safely(parsed["message"], default=[])
+            if isinstance(msg, list):
+                parsed = msg
+            elif isinstance(msg, dict) and isinstance(msg.get("values"), list):
+                parsed = msg["values"]
+            elif isinstance(msg, dict):
+                parsed = [msg]
         elif "value" in parsed:
             val = parsed["value"]
             if isinstance(val, str):
@@ -6533,11 +6875,10 @@ def _extract_rules(raw_rules_input):
                 if isinstance(inner, str):
                     inner = _parse_input_safely(inner)
                 if isinstance(inner, dict):
-                    rules.append(inner)
-                else:
-                    rules.append(item)
-            else:
-                rules.append(item)
+                    item = inner
+            resolved_cat = _resolve_rule_category(item)
+            item["entityCategory"] = resolved_cat
+            rules.append(item)
     return rules
 
 
@@ -6610,16 +6951,37 @@ if not item_cat:
 if not item_cat:
     item_cat = _infer_category_from_entity(cur_exec, default_target_category)
 
-raw_rules_input = r"""$get_routing_rules"""
+item_title = (
+    cur_exec.get("title")
+    or cur_exec.get("name")
+    or cur_exec.get("cve")
+    or cur_exec.get("hostname")
+    or cur_exec.get("username")
+    or cur_exec.get("email")
+    or cur_exec.get("purl")
+    or cur_exec.get("id")
+    or ""
+)
+incident_ref = {
+    "key": item_key,
+    "id": cur_exec.get("finding_uid") or cur_exec.get("id") or item_key,
+    "finding_uid": cur_exec.get("finding_uid") or "",
+    "title": item_title,
+    "category": item_cat,
+    "severity": cur_exec.get("severity") or "",
+    "status": cur_exec.get("status") or "",
+}
+
+raw_rules_input = r"""$get_all_rules_from_the_system"""
 rules = _extract_rules(raw_rules_input)
 
 if not rules:
     print(json.dumps({
-        "success": True,
         "matched": False,
-        "matched_count": 0,
         "category": item_cat,
         "key": item_key,
+        "matched_rules": [],
+        "unmatched_rules": [],
         "reason": "No routing rules found in shuffle-security_routing",
         "matches": [],
     }))
@@ -6628,16 +6990,7 @@ if not rules:
 ctx = dict(cur_exec)
 ctx["category"] = item_cat
 if not ctx.get("title"):
-    ctx["title"] = (
-        cur_exec.get("name")
-        or cur_exec.get("cve")
-        or cur_exec.get("hostname")
-        or cur_exec.get("username")
-        or cur_exec.get("email")
-        or cur_exec.get("purl")
-        or cur_exec.get("id")
-        or ""
-    )
+    ctx["title"] = item_title
 if not ctx.get("description"):
     ctx["description"] = (
         cur_exec.get("message")
@@ -6648,15 +7001,48 @@ if not ctx.get("description"):
 if not ctx.get("rawOCSF") and isinstance(cur_exec.get("rawOCSF"), dict):
     ctx["rawOCSF"] = cur_exec["rawOCSF"]
 
-matches = evaluate_routing_rules(ctx, rules, item_cat)
+rules_checked, rules_skipped, matches = inspect_and_evaluate_rules(ctx, rules, item_cat, incident_ref)
+
+def _summarize_cond(c):
+    if not isinstance(c, dict):
+        return str(c)
+    f = c.get("field") or ""
+    op = c.get("op") or ""
+    exp = c.get("expected")
+    act = c.get("actual_values")
+    act_str = act[0] if isinstance(act, list) and len(act) == 1 else act
+    return f"{f} {op} {json.dumps(exp)} (actual: {json.dumps(act_str)})"
+
+matched_summary = []
+unmatched_summary = []
+for rc in rules_checked:
+    entry = {
+        "rule_id": rc.get("rule_id") or "",
+        "rule_name": rc.get("rule_name") or "",
+        "priority": rc.get("priority", 100),
+    }
+    if rc.get("matched"):
+        entry["matched_on"] = [_summarize_cond(c) for c in (rc.get("matched_conditions") or [])]
+        matched_summary.append(entry)
+    else:
+        failed = [_summarize_cond(c) for c in (rc.get("failed_conditions") or [])]
+        entry["reason"] = "; ".join(failed) if failed else (rc.get("reason") or "Did not match")
+        unmatched_summary.append(entry)
+
+for rs in rules_skipped:
+    unmatched_summary.append({
+        "rule_id": rs.get("rule_id") or "",
+        "rule_name": rs.get("rule_name") or "",
+        "priority": rs.get("priority", 100),
+        "reason": rs.get("reason") or "Skipped",
+    })
 
 print(json.dumps({
-    "success": True,
     "matched": len(matches) > 0,
-    "matched_count": len(matches),
     "category": item_cat,
     "key": item_key,
-    "matched_rules": [m["rule"].get("name") for m in matches if isinstance(m.get("rule"), dict)],
+    "matched_rules": matched_summary,
+    "unmatched_rules": unmatched_summary,
     "matches": matches,
 }))`
 
@@ -6751,6 +7137,16 @@ def parse_action_value(val):
     return s
 
 
+def get_deep(d, path):
+    parts = [p for p in path.split(".") if p]
+    cur = d
+    for p in parts:
+        if not isinstance(cur, dict) or p not in cur:
+            return None
+        cur = cur[p]
+    return cur
+
+
 def set_deep(d, path, value):
     parts = [p for p in path.split(".") if p]
     cur = d
@@ -6803,12 +7199,37 @@ def _infer_category_from_entity(entity: dict, fallback: str) -> str:
     return normalize_category(fallback) or "shuffle-security_incidents"
 
 
+def _summarize_cond(c):
+    if isinstance(c, str):
+        return c
+    if not isinstance(c, dict):
+        return str(c)
+    f = c.get("field") or ""
+    op = c.get("op") or ""
+    exp = c.get("expected")
+    act = c.get("actual_values")
+    act_str = act[0] if isinstance(act, list) and len(act) == 1 else act
+    return f"{f} {op} {json.dumps(exp)} (actual: {json.dumps(act_str)})"
+
+
+def _rule_priority(match_item):
+    if not isinstance(match_item, dict):
+        return 100
+    rule = match_item.get("rule")
+    raw_p = rule.get("priority", 100) if isinstance(rule, dict) else match_item.get("priority", 100)
+    try:
+        return int(raw_p)
+    except Exception:
+        return 100
+
+
 # ── Execution Entrypoint ───────────────────────────────────────────────────
 
 raw_exec = r"""$exec"""
 raw_datastore_key = r"""$exec.shuffle_datastore.key"""
 raw_datastore_cat = r"""$exec.shuffle_datastore.category"""
-raw_validation = r"""$validate_routing_rules"""
+raw_datastore_org = r"""$exec.shuffle_datastore.org_id"""
+raw_validation = r"""$find_relevant_rules_for_category"""
 
 cur_exec = _parse_input_safely(raw_exec, default={})
 datastore_meta = {}
@@ -6820,20 +7241,43 @@ if isinstance(cur_exec, dict):
             cur_exec = cur_exec[wrapper_key]
             break
 
+source_org_id = str(datastore_meta.get("org_id") or "").strip()
+if not source_org_id or source_org_id.startswith("$"):
+    if isinstance(raw_datastore_org, str) and not raw_datastore_org.strip().startswith("$"):
+        source_org_id = raw_datastore_org.strip()
+if not source_org_id and isinstance(cur_exec, dict):
+    source_org_id = str(cur_exec.get("org_id") or "").strip()
+
 if not isinstance(cur_exec, dict) or not cur_exec:
     print(json.dumps({
-        "success": False,
-        "reason": "No valid entity data found in execution argument",
+        "matched": False,
+        "matched_rules": [],
+        "unmatched_rules": [],
+        "modified_fields": {},
+        "what_happened": ["No valid entity data found in execution argument"],
+        "db_updated": False,
+        "move_to_org": False,
+        "target_org_id": "",
+        "stats_key": "routing_rules_matched",
+        "stats_value": 0,
     }))
     exit()
 
 validation_res = _parse_input_safely(raw_validation, default={})
+if isinstance(validation_res, dict) and "message" in validation_res:
+    inner_msg = _parse_input_safely(validation_res.get("message"), default=None)
+    if isinstance(inner_msg, dict):
+        validation_res = inner_msg
 if not isinstance(validation_res, dict):
     validation_res = {}
 
 matches = validation_res.get("matches") or []
 if not isinstance(matches, list):
     matches = []
+
+unmatched_rules = validation_res.get("unmatched_rules") or []
+if not isinstance(unmatched_rules, list):
+    unmatched_rules = []
 
 default_target_category = "__TARGET_CATEGORY__"
 item_key = str(validation_res.get("key") or "").strip()
@@ -6865,80 +7309,150 @@ if not item_cat:
 
 if not matches:
     print(json.dumps({
-        "success": True,
-        "changed": False,
-        "db_updated": False,
-        "category": item_cat,
-        "key": item_key,
+        "matched": False,
         "matched_rules": [],
-        "incident": cur_exec,
-        "agent_prompts": [],
+        "unmatched_rules": unmatched_rules,
+        "modified_fields": {},
+        "what_happened": ["No rules matched"],
+        "db_updated": False,
+        "move_to_org": False,
+        "target_org_id": "",
+        "stats_key": "routing_rules_matched",
+        "stats_value": 0,
     }))
     exit()
 
+# Sort all matched rules strictly by priority ascending before running any actions
+matches_sorted = sorted(matches, key=_rule_priority)
+
 now_ms = int(time.time() * 1000)
 changed = False
-agent_prompts = []
 prev_status = str(cur_exec.get("status") or "").lower()
 
-for m in matches:
+modified_fields = {}
+what_happened = []
+rule_reports = {}
+rule_order = []
+
+def record_field_change(field_name, old_val, new_val, rule_name):
+    if field_name not in modified_fields:
+        modified_fields[field_name] = {
+            "from": old_val,
+            "to": new_val,
+            "by_rule": rule_name,
+        }
+    else:
+        modified_fields[field_name]["to"] = new_val
+        prev_by = modified_fields[field_name]["by_rule"]
+        if rule_name not in str(prev_by):
+            modified_fields[field_name]["by_rule"] = f"{prev_by} -> {rule_name}"
+
+# Prepare per-rule report entries in priority order
+for idx, m in enumerate(matches_sorted):
     rule = m.get("rule") if isinstance(m, dict) else None
     if not isinstance(rule, dict):
         continue
-    rule_name = rule.get("name", "Routing rule")
+    rule_id = str(rule.get("id") or m.get("rule_id") or f"rule_{idx}")
+    rule_name = str(rule.get("name") or m.get("rule_name") or "Routing rule")
+    rule_priority = _rule_priority(m)
+    rk = f"{idx}:{rule_id}:{rule_name}"
+    rule_order.append((rk, m, rule, rule_id, rule_name, rule_priority))
+    rule_reports[rk] = {
+        "rule_id": rule_id,
+        "rule_name": rule_name,
+        "priority": rule_priority,
+        "matched_on": [_summarize_cond(c) for c in (m.get("matched") or [])],
+        "did": [],
+    }
+
+# ── PHASE 1: Apply all field & metadata modifications in priority order ────
+FIELD_ACTION_TYPES = {
+    "set_severity",
+    "set_status",
+    "set_priority",
+    "add_label",
+    "assign_to",
+    "set_field",
+    "add_comment",
+}
+
+for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
     actions = rule.get("actions") or []
     for action in actions:
         if not isinstance(action, dict):
             continue
         atype = action.get("type")
-        if atype == "suggest_move":
-            target_org = action.get("targetOrgId")
-            if target_org:
-                raw_ocsf = cur_exec.setdefault("rawOCSF", {})
-                meta = raw_ocsf.setdefault("metadata", {})
-                ext = meta.setdefault("extensions", {})
-                custom_attrs = ext.setdefault("custom_attributes", {})
-                suggs = custom_attrs.setdefault("routing_suggestions", [])
-                already = any(s.get("ruleId") == rule.get("id") and s.get("status") == "pending" for s in suggs if isinstance(s, dict))
-                if not already:
-                    suggs.append({
-                        "ruleId": rule.get("id", ""),
-                        "ruleName": rule_name,
-                        "targetOrgId": target_org,
-                        "targetOrgName": action.get("targetOrgName", ""),
-                        "reason": action.get("reason", ""),
-                        "suggestedTs": now_ms,
-                        "status": "pending",
-                    })
-                    changed = True
-        elif atype == "set_severity":
+        if atype not in FIELD_ACTION_TYPES:
+            continue
+
+        if atype == "set_severity":
             sev = normalize_severity(action.get("value"))
-            if sev and cur_exec.get("severity") != sev:
+            prev_val = cur_exec.get("severity")
+            if sev and prev_val != sev:
                 cur_exec["severity"] = sev
                 changed = True
+                record_field_change("severity", prev_val, sev, rule_name)
+                msg = f"severity: '{prev_val}' -> '{sev}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"severity already '{prev_val}' (no change)")
+
         elif atype == "set_status":
             st = normalize_status(action.get("value"))
-            if st and cur_exec.get("status") != st:
+            prev_val = cur_exec.get("status")
+            if st and prev_val != st:
                 cur_exec["status"] = st
                 changed = True
+                record_field_change("status", prev_val, st, rule_name)
+                msg = f"status: '{prev_val}' -> '{st}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"status already '{prev_val}' (no change)")
+
         elif atype == "set_priority":
             pri = str(action.get("value") or "").strip()
-            if pri and cur_exec.get("priority") != pri:
+            prev_val = cur_exec.get("priority")
+            if pri and prev_val != pri:
                 cur_exec["priority"] = pri
-                raw_ocsf = cur_exec.setdefault("rawOCSF", {})
-                raw_ocsf["priority"] = pri
+                cur_exec.setdefault("rawOCSF", {})["priority"] = pri
                 changed = True
+                record_field_change("priority", prev_val, pri, rule_name)
+                msg = f"priority: '{prev_val}' -> '{pri}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"priority already '{prev_val}' (no change)")
+
         elif atype == "add_label":
             lbl = str(action.get("value") or "").strip()
-            cur_labels = cur_exec.setdefault("labels", [])
+            cur_labels = list(cur_exec.get("labels") or [])
             if lbl and lbl not in cur_labels:
+                prev_labels = list(cur_labels)
                 cur_labels.append(lbl)
+                cur_exec["labels"] = cur_labels
                 changed = True
+                record_field_change("labels", prev_labels, list(cur_labels), rule_name)
+                msg = f"added label '{lbl}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"label '{lbl}' already present (no change)")
+
         elif atype == "assign_to":
             ass = str(action.get("value") or "").strip()
-            if ass and cur_exec.get("assignee") != ass:
+            prev_val = cur_exec.get("assignee")
+            if ass and prev_val != ass:
                 cur_exec["assignee"] = ass
                 changed = True
+                record_field_change("assignee", prev_val, ass, rule_name)
+                msg = f"assignee: '{prev_val}' -> '{ass}'"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+            else:
+                rule_reports[rk]["did"].append(f"assignee already '{prev_val}' (no change)")
+
         elif atype == "add_comment":
             txt = str(action.get("value") or "").strip()
             if txt:
@@ -6956,60 +7470,85 @@ for m in matches:
                         "ai_handled": True,
                     })
                     changed = True
-        elif atype == "run_agent":
-            prompt = str(action.get("value") or "").strip()
-            if prompt:
-                cur_act = cur_exec.setdefault("activity", [])
-                content = f"@AIAgent {prompt}"
-                already = any(it.get("type") == "comment" and it.get("content", "").strip().startswith(f"@AIAgent {prompt}") for it in cur_act if isinstance(it, dict))
-                if not already:
-                    cur_act.append({
-                        "id": f"routing-agent-{now_ms}-{len(cur_act)}",
-                        "type": "comment",
-                        "user": "Automated Routing Rules",
-                        "timestamp": now_ms,
-                        "content": content,
-                        "details": {"source": "incident_routing_rule", "rule": rule_name, "run_agent": True},
-                        "attachments": [],
-                        "ai_handled": True,
-                    })
-                    agent_prompts.append(prompt)
-                    changed = True
+                    record_field_change("activity", "existing activity", f"added comment: {txt}", rule_name)
+                    msg = f"added comment: '{txt}'"
+                    rule_reports[rk]["did"].append(msg)
+                    what_happened.append(f"[{rule_name}] {msg}")
+                else:
+                    rule_reports[rk]["did"].append("comment already present (no change)")
+
         elif atype == "set_field":
             field = str(action.get("field") or "").strip()
             if field:
                 val = parse_action_value(action.get("value"))
                 canonical = field[len("rawOCSF."):] if field.startswith("rawOCSF.") else field
                 if canonical == "title":
-                    cur_exec["title"] = str(val)
+                    prev_val = cur_exec.get("title")
+                    new_val = str(val)
+                    cur_exec["title"] = new_val
+                    target_field = "title"
                 elif canonical in ("description", "desc", "message"):
-                    cur_exec["message"] = str(val)
-                    cur_exec["description"] = str(val)
+                    prev_val = cur_exec.get("description") or cur_exec.get("message")
+                    new_val = str(val)
+                    cur_exec["message"] = new_val
+                    cur_exec["description"] = new_val
+                    target_field = "description"
                 elif canonical == "severity":
-                    s = normalize_severity(val)
-                    if s: cur_exec["severity"] = s
+                    prev_val = cur_exec.get("severity")
+                    new_val = normalize_severity(val) or prev_val
+                    if new_val:
+                        cur_exec["severity"] = new_val
+                    target_field = "severity"
                 elif canonical == "status":
-                    s = normalize_status(val)
-                    if s: cur_exec["status"] = s
+                    prev_val = cur_exec.get("status")
+                    new_val = normalize_status(val) or prev_val
+                    if new_val:
+                        cur_exec["status"] = new_val
+                    target_field = "status"
                 elif canonical == "assignee":
-                    cur_exec["assignee"] = str(val)
+                    prev_val = cur_exec.get("assignee")
+                    new_val = str(val)
+                    cur_exec["assignee"] = new_val
+                    target_field = "assignee"
                 elif canonical == "priority":
-                    cur_exec["priority"] = str(val)
-                    cur_exec.setdefault("rawOCSF", {})["priority"] = str(val)
+                    prev_val = cur_exec.get("priority")
+                    new_val = str(val)
+                    cur_exec["priority"] = new_val
+                    cur_exec.setdefault("rawOCSF", {})["priority"] = new_val
+                    target_field = "priority"
                 elif canonical in ("labels", "types"):
                     lbl = str(val).strip()
-                    cur_labels = cur_exec.setdefault("labels", [])
+                    cur_labels = list(cur_exec.get("labels") or [])
+                    prev_val = list(cur_labels)
                     if lbl and lbl not in cur_labels:
                         cur_labels.append(lbl)
+                        cur_exec["labels"] = cur_labels
+                    new_val = list(cur_labels)
+                    target_field = "labels"
                 elif field.startswith("rawOCSF."):
-                    set_deep(cur_exec.setdefault("rawOCSF", {}), field[len("rawOCSF."):], val)
+                    subpath = field[len("rawOCSF."):]
+                    prev_val = get_deep(cur_exec.get("rawOCSF") or {}, subpath)
+                    new_val = val
+                    set_deep(cur_exec.setdefault("rawOCSF", {}), subpath, val)
+                    target_field = field
                 else:
                     cf = cur_exec.setdefault("customFields", {})
                     clean_k = re.sub(r"^(customFields\.|custom_fields\.)", "", field)
+                    prev_val = cf.get(clean_k)
+                    new_val = val
                     cf[clean_k] = val
-                changed = True
+                    target_field = f"customFields.{clean_k}"
 
-# Auto-resolve audit comment
+                if prev_val != new_val:
+                    changed = True
+                    record_field_change(target_field, prev_val, new_val, rule_name)
+                    msg = f"{target_field}: '{prev_val}' -> '{new_val}'"
+                    rule_reports[rk]["did"].append(msg)
+                    what_happened.append(f"[{rule_name}] {msg}")
+                else:
+                    rule_reports[rk]["did"].append(f"{target_field} already '{prev_val}' (no change)")
+
+# Auto-resolve audit comment after all status changes have been evaluated
 resolving = {"resolved", "closed"}
 now_status = str(cur_exec.get("status") or "").lower()
 if prev_status not in resolving and now_status in resolving:
@@ -7027,26 +7566,121 @@ if prev_status not in resolving and now_status in resolving:
         "ai_handled": True,
     })
     changed = True
+    what_happened.append(f"Added auto-{now_status} activity note")
 
+# ── PHASE 2: Apply forwarding / move / agent actions in priority order ─────
+move_to_org = False
+target_org_id = ""
+
+for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
+    actions = rule.get("actions") or []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        atype = action.get("type")
+        if atype in FIELD_ACTION_TYPES:
+            continue
+
+        if atype in ("suggest_move", "move"):
+            target_org = str(action.get("targetOrgId") or "").strip()
+            target_org_name = str(action.get("targetOrgName") or "").strip()
+            if target_org:
+                raw_ocsf = cur_exec.setdefault("rawOCSF", {})
+                meta = raw_ocsf.setdefault("metadata", {})
+                ext = meta.setdefault("extensions", {})
+                custom_attrs = ext.setdefault("custom_attributes", {})
+
+                prev_tenants = [t for t in (custom_attrs.get("_tenants") or []) if isinstance(t, str) and t != target_org]
+                removed_tenants = list(custom_attrs.get("_tenants_removed") or [])
+                for pt in prev_tenants:
+                    if pt not in removed_tenants:
+                        removed_tenants.append(pt)
+                if source_org_id and source_org_id != target_org and source_org_id not in removed_tenants:
+                    removed_tenants.append(source_org_id)
+                custom_attrs["_tenants"] = [target_org]
+                custom_attrs["_tenants_removed"] = removed_tenants
+                custom_attrs["_tenants_updated_at"] = now_ms
+
+                suggs = custom_attrs.setdefault("routing_suggestions", [])
+                already = any(s.get("ruleId") == rule_id and s.get("status") in ("pending", "moved") for s in suggs if isinstance(s, dict))
+                target_label = target_org_name or target_org
+                if not already:
+                    suggs.append({
+                        "ruleId": rule_id,
+                        "ruleName": rule_name,
+                        "targetOrgId": target_org,
+                        "targetOrgName": target_org_name,
+                        "reason": action.get("reason", ""),
+                        "suggestedTs": now_ms,
+                        "status": "moved",
+                    })
+                move_to_org = True
+                target_org_id = target_org
+                changed = True
+                record_field_change("target_org_id", source_org_id or "current", target_label, rule_name)
+                msg = f"move/forward to org '{target_label}' ({target_org})"
+                rule_reports[rk]["did"].append(msg)
+                what_happened.append(f"[{rule_name}] {msg}")
+
+        elif atype == "run_agent":
+            prompt = str(action.get("value") or "").strip()
+            if prompt:
+                cur_act = cur_exec.setdefault("activity", [])
+                content = f"@AIAgent {prompt}"
+                already = any(it.get("type") == "comment" and it.get("content", "").strip().startswith(f"@AIAgent {prompt}") for it in cur_act if isinstance(it, dict))
+                if not already:
+                    cur_act.append({
+                        "id": f"routing-agent-{now_ms}-{len(cur_act)}",
+                        "type": "comment",
+                        "user": "Automated Routing Rules",
+                        "timestamp": now_ms,
+                        "content": content,
+                        "details": {"source": "incident_routing_rule", "rule": rule_name, "run_agent": True},
+                        "attachments": [],
+                        "ai_handled": True,
+                    })
+                    changed = True
+                    record_field_change("agent_prompt", "none", prompt, rule_name)
+                    msg = f"queued @AIAgent: '{prompt}'"
+                    rule_reports[rk]["did"].append(msg)
+                    what_happened.append(f"[{rule_name}] {msg}")
+                else:
+                    rule_reports[rk]["did"].append("@AIAgent prompt already queued (no change)")
+
+# ── PHASE 3: Persist final entity state once at the very end ───────────────
 db_updated = False
 if changed and item_key and item_cat:
     try:
         if "self" in locals() or "self" in globals():
             res = self.set_key(item_key, json.dumps(cur_exec), category=item_cat)
             db_updated = isinstance(res, dict) and res.get("success", False)
-    except Exception:
-        pass
+            if db_updated:
+                what_happened.append(f"Updated '{item_key}' in datastore category '{item_cat}'")
+            else:
+                what_happened.append(f"Attempted datastore update for '{item_key}' in '{item_cat}', but set_key returned {res}")
+    except Exception as e:
+        what_happened.append(f"Datastore update failed for '{item_key}': {str(e)}")
+elif not changed:
+    what_happened.append("Rules matched, but all target fields already had the configured values (no changes needed)")
 
-print(json.dumps({
-    "success": True,
-    "changed": changed,
+output_payload = {
+    "matched": len(rule_order) > 0,
+    "matched_rules": [rule_reports[rk] for rk, _, _, _, _, _ in rule_order],
+    "unmatched_rules": unmatched_rules,
+    "modified_fields": modified_fields,
+    "what_happened": what_happened,
     "db_updated": db_updated,
-    "category": item_cat,
-    "key": item_key,
-    "matched_rules": [m["rule"].get("name") for m in matches if isinstance(m, dict) and isinstance(m.get("rule"), dict)],
-    "incident": cur_exec,
-    "agent_prompts": agent_prompts,
-}))`
+    "move_to_org": move_to_org,
+    "target_org_id": target_org_id,
+    "stats_key": f"routing_rule_{rule_order[0][3]}" if len(rule_order) == 1 else "routing_rules_matched",
+    "stats_value": len(rule_order),
+}
+if move_to_org:
+    output_payload["key"] = item_key
+    output_payload["category"] = item_cat
+    output_payload["updated_value"] = cur_exec
+
+print(json.dumps(output_payload))`
 
 	return strings.ReplaceAll(script, "__TARGET_CATEGORY__", targetCategory)
 }
