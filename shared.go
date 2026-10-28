@@ -19266,6 +19266,13 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	}
 
 	if len(allFinishedDecisions) == len(mappedResult.Decisions) {
+		// A run the user aborted must not ask the LLM for more, and this copy (which can still
+		// say EXECUTING) must not be saved over the aborted one
+		if latestExec, fetchErr := GetWorkflowExecution(ctx, workflowExecution.ExecutionId); fetchErr == nil && latestExec != nil && latestExec.Status == "ABORTED" {
+			log.Printf("[INFO][%s] Agent run was aborted. Not asking the LLM for a next step.", workflowExecution.ExecutionId)
+			return latestExec, false, nil
+		}
+
 		// Handle agent decisionmaking. Use the same
 		log.Printf("[INFO][%s] With the agent being finished, we are asking it whether it would like to do anything else", workflowExecution.ExecutionId)
 
