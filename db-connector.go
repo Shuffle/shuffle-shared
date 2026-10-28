@@ -3170,26 +3170,12 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				}
 
 				// Somehow this can happen. Reverting to LATEST revision
-				if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 {
+				if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 && !workflow.BackgroundProcessing {
 					revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 2)
 					if err != nil {
 						log.Printf("[WARNING] Failed getting revisions during trigger load for workflow %s: %s", workflow.ID, err)
-					} else {
-						if len(revisions) > 0 {
-							for _, revision := range revisions {
-								if revision.ID != workflow.ID {
-									continue
-								}
-
-								if len(revision.Triggers) > 0 {
-									workflow.Triggers = revision.Triggers
-									break
-								}
-							}
-
-							//log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
-							workflow.Triggers = revisions[0].Triggers
-						}
+					} else if len(revisions) > 0 && revisions[0].ID == workflow.ID && len(revisions[0].Triggers) > 0 {
+						workflow.Triggers = revisions[0].Triggers
 					}
 				}
 
@@ -3299,26 +3285,12 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 	}
 
 	// Somehow this can happen. Reverting to LATEST revision
-	if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 {
+	if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 && !workflow.BackgroundProcessing {
 		revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 2)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting revisions during trigger load for workflow %s: %s", workflow.ID, err)
-		} else {
-			if len(revisions) > 0 {
-				for _, revision := range revisions {
-					if revision.ID != workflow.ID {
-						continue
-					}
-
-					if len(revision.Triggers) > 0 {
-						workflow.Triggers = revision.Triggers
-						break
-					}
-				}
-
-				//log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
-				workflow.Triggers = revisions[0].Triggers
-			}
+		} else if len(revisions) > 0 && revisions[0].ID == workflow.ID && len(revisions[0].Triggers) > 0 {
+			workflow.Triggers = revisions[0].Triggers
 		}
 	}
 
