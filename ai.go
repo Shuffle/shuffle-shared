@@ -10316,12 +10316,13 @@ You are an Action Execution Agent that performs actions in third-party tools. Yo
 	- Do NOT ask the same question again when an answer already exists in prior context.
 
 5. **Action Selection & Risk Assessment:**
-   - Select the tool that performs the *next logical step*.
+   - Select the tool(s) that perform the *next logical step(s)*.
    - **Destructive Guard:**
      - If action is DESTRUCTIVE (stop/delete/remove) -> Set "approval_required": true on the action/tool. 
 
-6. **Validation & Continuation:**
-   - Decisions can be dependant. Make sure to validate the output of one decision before proceeding to the next. If you need to run multiple steps, run them and validate each time.
+6. **Validation & Continuation (Parallel vs. Sequential):**
+   - Decisions can be dependent. Always validate the output of one step before proceeding to dependent steps in the next turn. Do NOT chain unvalidated dependent actions in a single response.
+   - When multiple actions are **independent** and do NOT depend on each other's output (e.g., querying multiple sources, inspecting multiple files/hosts, or running independent checks), output them together in the JSON array with the **same index "i"** so they execute concurrently in parallel and are awaited together before the next validation turn.
 
 %s
 
@@ -10334,7 +10335,7 @@ data_filter:
 
 [
   {
-    "i": 0, // For paralell actions, re-use the same index for related actions 
+    "i": 0, // For parallel actions in the same turn, re-use the same index across all decisions in this array.
     "action": "exact_name", // Name of the function/action WITHOUT parameters. Use "finish" if done/answering, "ask" if asking. JUST add the name.
     "category": "singul", // Use "singul" for actions. Use "finish" if done. Use "standalone" ONLY if asking
     "tool": "tool_name", // Name of the tool. Use "core" for finish/ask
@@ -11234,6 +11235,15 @@ data_filter:
 			allowedActions = strings.Split(allowedActionString, ",")
 		}
 
+		if !createNextActions {
+			for idx := range mappedDecisions {
+				if mappedDecisions[idx].I != lastFinishedIndex {
+					log.Printf("[WARNING][%s] Setting initial decision index %d to %d", execution.ExecutionId, mappedDecisions[idx].I, lastFinishedIndex)
+					mappedDecisions[idx].I = lastFinishedIndex
+				}
+			}
+		}
+
 		agentOutput.Status = "RUNNING"
 		agentOutput.Error = errorMessage
 		agentOutput.Decisions = mappedDecisions
@@ -11313,13 +11323,10 @@ data_filter:
 				}
 			}
 
-			additions := 0
 			for _, mappedDecision := range mappedDecisions {
-				if mappedDecision.I < lastFinishedIndex {
-					log.Printf("[WARNING][%s] Setting decision index %d to last finished index %d + additions %d", execution.ExecutionId, mappedDecision.I, lastFinishedIndex, additions)
-
-					mappedDecision.I = lastFinishedIndex + additions
-					additions += 1
+				if mappedDecision.I != lastFinishedIndex {
+					log.Printf("[WARNING][%s] Setting decision index %d to last finished index %d", execution.ExecutionId, mappedDecision.I, lastFinishedIndex)
+					mappedDecision.I = lastFinishedIndex
 				}
 
 				if len(mappedDecision.RunDetails.Id) == 0 {
@@ -11927,6 +11934,12 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	if categoryAction.ActionName == "remove" || categoryAction.ActionName == "disable" || categoryAction.ActionName == "stop" {
 
 		if workflowErr == nil && workflow.OrgId == user.ActiveOrg.Id {
+			for _, trigger := range workflow.Triggers {
+				if trigger.TriggerType == "WEBHOOK" && len(trigger.ID) > 0 {
+					_ = DeleteKey(ctx, "hooks", trigger.ID)
+				}
+			}
+
 			// Delete the workflow
 			err = DeleteKey(ctx, "workflow", workflowId, user.ActiveOrg.Id)
 			if err != nil {
@@ -11960,12 +11973,32 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	previousTriggers := []Trigger{}
+	if workflowErr == nil && workflow != nil {
+		previousTriggers = workflow.Triggers
+	}
+
 	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get default workflow in GenerateSingulWorkflows: %s", err)
 		resp.WriteHeader(http.StatusInternalServerError)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get default workflow for this category. Please contact support@shuffler.io"}`))
 		return
+	}
+
+	for _, oldTrigger := range previousTriggers {
+		if oldTrigger.TriggerType == "WEBHOOK" && len(oldTrigger.ID) > 0 {
+			stillExists := false
+			for _, newTrigger := range newWorkflow.Triggers {
+				if newTrigger.ID == oldTrigger.ID {
+					stillExists = true
+					break
+				}
+			}
+			if !stillExists {
+				_ = DeleteKey(ctx, "hooks", oldTrigger.ID)
+			}
+		}
 	}
 
 	workflow = &newWorkflow
@@ -12179,6 +12212,8 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed to set workflow"}`))
 		return
 	}
+
+	_ = SetWorkflowRevision(ctx, *workflow)
 
 	/*
 		if debug {
