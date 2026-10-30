@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -38020,7 +38021,7 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 			lowerName := strings.ToLower(strings.TrimSpace(appName))
 			foundInOrg := false
 			for _, app := range allApps {
-				if strings.ToLower(app.Name) == lowerName && len(app.ID) > 0 {
+				if normalizeToolName(app.Name) == normalizeToolName(lowerName) && len(app.ID) > 0 {
 					if debug {
 						log.Printf("[DEBUG] Found app by name '%s' (ID %s) in org apps list", appName, app.ID)
 					}
@@ -38091,6 +38092,40 @@ func GetWorkflowAppActions(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(404)
 		resp.Write([]byte(`{"success": false, "reason": "No actions found in matched apps"}`))
 		return
+	}
+
+	// Tell the agent which apps the user still has to authenticate, and where.
+	// Activation isn't needed here: adding a node with a public app activates it.
+	orgApps := map[string]bool{}
+	for _, app := range allApps {
+		orgApps[app.ID] = true
+	}
+
+	matchedById := map[string]WorkflowApp{}
+	for _, app := range matchedApps {
+		matchedById[app.ID] = app
+	}
+
+	orgAuths, authErr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+	if authErr != nil {
+		log.Printf("[WARNING] Failed loading org auths in GetWorkflowAppActions: %s", authErr)
+	}
+
+	for i := range responses {
+		app := matchedById[responses[i].AppID]
+		responses[i].Activated = orgApps[app.ID]
+		responses[i].AuthenticationRequired = app.Authentication.Required
+
+		for _, auth := range orgAuths {
+			if auth.App.ID == app.ID || strings.EqualFold(auth.App.Name, app.Name) {
+				responses[i].Authenticated = true
+				break
+			}
+		}
+
+		if responses[i].AuthenticationRequired && !responses[i].Authenticated && authErr == nil {
+			responses[i].SetupUrl = fmt.Sprintf("/apps/%s", app.ID)
+		}
 	}
 
 	if debug {
@@ -38528,6 +38563,223 @@ func enrichTriggerFromApp(minTrig *MinimalTrigger, environment string) (Trigger,
 	default:
 		return Trigger{}, fmt.Errorf("unsupported trigger type: %s", minTrig.AppName)
 	}
+}
+
+// The workflow builder app is a thin wrapper around this backend's own workflow APIs.
+// Running it as an app sends every parameter through the app SDK, which treats
+// "$node.field" and liquid "{{ }}" inside the workflow content as variables and
+// replaces them, so edits made by the agent end up with empty references.
+// These actions are therefore handled in-process, passing the content through as-is.
+const workflowBuilderAppId = "de4ef2287bd41b9d5563e39989643ee6"
+const workflowBuilderAppName = "Shuffle_Workflows_Builder"
+
+// The app lookup lives on the shuffle_apps tool, but the model often files it under the builder
+const shuffleAppsAppId = "7db43ccd25261967b095cfbd467a75cc"
+const shuffleAppsAppName = "shuffle_apps"
+
+type workflowBuilderRequest struct {
+	Method  string
+	Path    string
+	Body    []byte
+	Handler http.HandlerFunc
+}
+
+func normalizeToolName(name string) string {
+	return strings.ToLower(strings.NewReplacer("_", "", " ", "", "-", "").Replace(strings.TrimSpace(name)))
+}
+
+// Only the actions that read or write workflow content. Anything else the
+// builder app can do (running workflows, reading executions) keeps the normal app path.
+func getWorkflowBuilderRequest(decision AgentDecision) (workflowBuilderRequest, bool) {
+	action := normalizeToolName(decision.Action)
+	tool := normalizeToolName(decision.Tool)
+
+	// The model sometimes puts the action name in the tool field
+	knownTools := []string{workflowBuilderAppId, workflowBuilderAppName, shuffleAppsAppId, shuffleAppsAppName, decision.Action}
+	known := false
+	for _, knownTool := range knownTools {
+		if tool == normalizeToolName(knownTool) {
+			known = true
+			break
+		}
+	}
+
+	if !known {
+		return workflowBuilderRequest{}, false
+	}
+
+	fields := map[string]string{}
+	for _, field := range decision.Fields {
+		value := field.Value
+		if len(field.Answer) > 0 {
+			value = field.Answer
+		}
+
+		fields[normalizeToolName(field.Key)] = value
+	}
+
+	switch action {
+	case "getminimalworkflow":
+		workflowId := fields["workflowid"]
+		if len(workflowId) == 0 {
+			return workflowBuilderRequest{}, false
+		}
+
+		return workflowBuilderRequest{
+			Method:  "GET",
+			Path:    fmt.Sprintf("/api/v1/workflows/%s/minimal", url.PathEscape(workflowId)),
+			Handler: GetWorkflowMinimal,
+		}, true
+	case "putagentupdate":
+		return workflowBuilderRequest{
+			Method:  "PUT",
+			Path:    "/api/v1/workflows/operations",
+			Body:    []byte(fields["body"]),
+			Handler: HandleAgentWorkflowOperations,
+		}, true
+	case "postcreateworkflow":
+		minimal := fields["minimal"]
+		if len(minimal) == 0 {
+			minimal = "true"
+		}
+
+		return workflowBuilderRequest{
+			Method:  "POST",
+			Path:    fmt.Sprintf("/api/v1/workflows?minimal=%s", url.QueryEscape(minimal)),
+			Body:    []byte(fields["body"]),
+			Handler: SetNewWorkflow,
+		}, true
+	case "postgetappactionssummary", "getappactionssummary":
+		body := fields["body"]
+		if len(body) == 0 {
+			body = getAppLookupBody(fields)
+		}
+
+		if len(body) == 0 {
+			return workflowBuilderRequest{}, false
+		}
+
+		return workflowBuilderRequest{
+			Method:  "POST",
+			Path:    "/api/v1/apps/actions",
+			Body:    []byte(body),
+			Handler: GetWorkflowAppActions,
+		}, true
+	}
+
+	return workflowBuilderRequest{}, false
+}
+
+// The model sometimes sends app_names as its own field instead of inside body
+func getAppLookupBody(fields map[string]string) string {
+	lookup := map[string][]string{}
+	for key, field := range map[string]string{"appnames": "app_names", "appname": "app_names", "name": "app_names", "appids": "app_ids", "appid": "app_ids"} {
+		value := strings.TrimSpace(fields[key])
+		if len(value) == 0 {
+			continue
+		}
+
+		values := []string{}
+		if json.Unmarshal([]byte(value), &values) != nil {
+			values = strings.Split(value, ",")
+		}
+
+		for _, item := range values {
+			if item = strings.TrimSpace(item); len(item) > 0 {
+				lookup[field] = append(lookup[field], item)
+			}
+		}
+	}
+
+	if len(lookup) == 0 {
+		return ""
+	}
+
+	body, _ := json.Marshal(lookup)
+	return string(body)
+}
+
+// Wraps the handler response in the same shape the builder app returns, so the agent reads it the same way
+func runWorkflowBuilderRequest(builderRequest workflowBuilderRequest, apikey, orgId string) []byte {
+	request := httptest.NewRequest(builderRequest.Method, builderRequest.Path, bytes.NewReader(builderRequest.Body))
+	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apikey))
+	request.Header.Set("Org-Id", orgId)
+	request.Header.Set("Content-Type", "application/json")
+
+	recorder := httptest.NewRecorder()
+	builderRequest.Handler(recorder, request)
+
+	var body interface{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		body = recorder.Body.String()
+	}
+
+	success := recorder.Code < 300
+	if parsedBody, ok := body.(map[string]interface{}); ok {
+		if innerSuccess, ok := parsedBody["success"].(bool); ok && !innerSuccess {
+			success = false
+		}
+	}
+
+	result, _ := json.Marshal(map[string]interface{}{
+		"success": success,
+		"status":  recorder.Code,
+		"url":     builderRequest.Path,
+		"body":    body,
+	})
+
+	return result
+}
+
+// Acts as the user who started the agent. Falls back to the same org user
+// the app path would have picked, so nobody gains access they didn't have.
+func getWorkflowBuilderApikey(ctx context.Context, execution WorkflowExecution) (string, error) {
+	orgId := execution.ExecutionOrg
+	if len(execution.Workflow.UpdatedBy) > 0 {
+		users, err := FindUser(ctx, execution.Workflow.UpdatedBy)
+		if err == nil {
+			for _, user := range users {
+				if !ArrayContains(user.Orgs, orgId) {
+					continue
+				}
+
+				if len(user.ApiKey) > 0 {
+					return user.ApiKey, nil
+				}
+
+				newUser, err := GenerateApikey(ctx, user)
+				if err == nil && len(newUser.ApiKey) > 0 {
+					return newUser.ApiKey, nil
+				}
+			}
+		}
+	}
+
+	org, err := GetOrg(ctx, orgId)
+	if err != nil {
+		return "", err
+	}
+
+	for _, orgUser := range org.Users {
+		user, err := GetUser(ctx, orgUser.Id)
+		if err == nil && len(user.ApiKey) > 0 {
+			return user.ApiKey, nil
+		}
+	}
+
+	return "", errors.New("no user with an API key found in the org")
+}
+
+func runWorkflowBuilderDecisionInProcess(execution WorkflowExecution, decision AgentDecision, builderRequest workflowBuilderRequest) ([]byte, string, string, []string, string, error) {
+	apikey, err := getWorkflowBuilderApikey(context.Background(), execution)
+	if err != nil {
+		log.Printf("[ERROR][%s] AI Agent: Failed finding a user to run workflow builder action '%s' as: %s", execution.ExecutionId, decision.Action, err)
+		return nil, "", workflowBuilderAppName, []string{}, decision.Action, err
+	}
+
+	result := runWorkflowBuilderRequest(builderRequest, apikey, execution.ExecutionOrg)
+	log.Printf("[INFO][%s] AI Agent: Ran workflow builder action '%s' in-process (%s %s)", execution.ExecutionId, decision.Action, builderRequest.Method, strings.Split(builderRequest.Path, "?")[0])
+	return result, "", workflowBuilderAppName, []string{}, decision.Action, nil
 }
 
 func HandleAgentWorkflowOperations(resp http.ResponseWriter, request *http.Request) {
@@ -39213,7 +39465,7 @@ func applyWorkflowOperationWithMapping(ctx context.Context, user User, wf *Workf
 				op.ID = realID
 			}
 		}
-		return opEditNode(wf, op)
+		return opEditNodeWithApp(ctx, user, wf, op)
 	case "move_node":
 		if realID, exists := tempIDMap[op.ID]; exists {
 			op.ID = realID
@@ -39564,6 +39816,44 @@ func opAddNode(ctx context.Context, user User, wf *Workflow, op *WorkflowOperati
 	}
 }
 
+// edit_node from the agent. Changing the app or the action changes which parameters
+// exist, so the node is rebuilt from the app instead of only renaming the action
+// (which left e.g. an HTTP node pointing at a Google Sheets action). Anything else
+// is a plain edit.
+func opEditNodeWithApp(ctx context.Context, user User, wf *Workflow, op *WorkflowOperation) error {
+	actidx := findActionIndexByID(wf, op.ID)
+	if actidx == -1 {
+		return opEditNode(wf, op)
+	}
+
+	var updates MinimalAction
+	if err := json.Unmarshal(op.Data, &updates); err != nil {
+		return fmt.Errorf("invalid action update data: %w", err)
+	}
+
+	current := wf.Actions[actidx]
+	appChanged := len(updates.AppID) > 0 && updates.AppID != current.AppID
+	if !appChanged && len(updates.AppID) == 0 && len(updates.AppName) > 0 && normalizeToolName(updates.AppName) != normalizeToolName(current.AppName) {
+		return fmt.Errorf("to change the app of node %s from %s to %s, pass the new app_id (from the app lookup) in data", current.Label, current.AppName, updates.AppName)
+	}
+
+	if appChanged {
+		return rebuildActionFromApp(ctx, user, wf, actidx, &updates, true)
+	}
+
+	if len(updates.Name) > 0 && updates.Name != current.Name {
+		// Same app, other action. If the app can't be loaded, keep the old behaviour.
+		err := rebuildActionFromApp(ctx, user, wf, actidx, &updates, false)
+		if !errors.Is(err, errEditAppUnavailable) {
+			return err
+		}
+	}
+
+	return opEditNode(wf, op)
+}
+
+var errEditAppUnavailable = errors.New("app unavailable")
+
 func opEditNode(wf *Workflow, op *WorkflowOperation) error {
 	// Auto-detect node type: check if it's an action or trigger
 	actidx := findActionIndexByID(wf, op.ID)
@@ -39640,6 +39930,105 @@ func opEditNode(wf *Workflow, op *WorkflowOperation) error {
 	}
 
 	return fmt.Errorf("node %s not found in workflow (not an action or trigger)", op.ID)
+}
+
+// Rebuilds an action from its (new) app definition, like add_node does, while keeping
+// what ties it into the workflow: id (so branches stay), label, position and start node.
+func rebuildActionFromApp(ctx context.Context, user User, wf *Workflow, actidx int, updates *MinimalAction, appChanged bool) error {
+	current := wf.Actions[actidx]
+	appId := current.AppID
+	if appChanged {
+		appId = updates.AppID
+	}
+
+	app, err := findAppByID(ctx, appId, user)
+	if err != nil || app == nil || len(app.Actions) == 0 {
+		if !appChanged {
+			return errEditAppUnavailable
+		}
+		return fmt.Errorf("failed to find app %s: %v", appId, err)
+	}
+
+	actionName := updates.Name
+	if len(actionName) == 0 {
+		actionName = current.Name
+		if appChanged {
+			return fmt.Errorf("action_name is required when changing node %s to app %s (available: %s)", current.Label, app.Name, getActionNames(app.Actions))
+		}
+	}
+
+	var appAction *WorkflowAppAction
+	for i := range app.Actions {
+		if strings.EqualFold(app.Actions[i].Name, actionName) {
+			appAction = &app.Actions[i]
+			break
+		}
+	}
+
+	if appAction == nil {
+		return fmt.Errorf("action %s not found in app %s (available: %s)", actionName, app.Name, getActionNames(app.Actions))
+	}
+
+	// Unknown parameters would be dropped silently, so say which ones exist instead
+	for _, param := range updates.Parameters {
+		found := false
+		for _, appParam := range appAction.Parameters {
+			if strings.EqualFold(appParam.Name, param.Name) {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			names := []string{}
+			for _, appParam := range appAction.Parameters {
+				names = append(names, appParam.Name)
+			}
+			return fmt.Errorf("parameter %s does not exist in %s %s (available: %s)", param.Name, app.Name, appAction.Name, strings.Join(names, ", "))
+		}
+	}
+
+	// Same app, other action: keep values the user already set for parameters both actions share
+	parameters := []MinimalParameter{}
+	if !appChanged {
+		for _, param := range current.Parameters {
+			if len(param.Value) > 0 {
+				parameters = append(parameters, MinimalParameter{Name: param.Name, Value: param.Value})
+			}
+		}
+	}
+	parameters = append(parameters, updates.Parameters...)
+
+	label := current.Label
+	if len(updates.Label) > 0 {
+		label = updates.Label
+	}
+
+	minAct := MinimalAction{AppID: app.ID, Name: appAction.Name, Label: label, Parameters: parameters}
+	newAction, err := enrichActionFromApp(ctx, &minAct, app, current.Environment)
+	if err != nil {
+		return fmt.Errorf("failed to rebuild node %s: %w", current.Label, err)
+	}
+
+	// enrichActionFromApp applies values in order, so the agent's updates win over carried ones
+	for _, param := range parameters {
+		for i := range newAction.Parameters {
+			if strings.EqualFold(newAction.Parameters[i].Name, param.Name) {
+				newAction.Parameters[i].Value = param.Value
+			}
+		}
+	}
+
+	newAction.ID = current.ID
+	newAction.Position = current.Position
+	newAction.IsStartNode = current.IsStartNode
+	newAction.ExecutionDelay = current.ExecutionDelay
+	if !appChanged {
+		newAction.AuthenticationId = current.AuthenticationId
+	}
+
+	wf.Actions[actidx] = newAction
+	return nil
 }
 
 func opMoveNode(wf *Workflow, op *WorkflowOperation) error {

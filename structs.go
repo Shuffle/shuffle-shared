@@ -5338,7 +5338,7 @@ type NGramItem struct {
 
 type AIConfig struct {
 	Generated bool   `json:"generated" datastore:"generated"`
-	Prompt    string `json:"prompt" datastore:"prompt"`
+	Prompt    string `json:"prompt" datastore:"prompt,noindex"`
 	Model     string `json:"model" datastore:"model"`
 	Status    string `json:"status" datastore:"status"`
 }
@@ -6124,6 +6124,12 @@ type AppActionResponse struct {
 	AppDescription string          `json:"app_description"`
 	AppID          string          `json:"app_id"`
 	Actions        []ActionSummary `json:"actions"`
+
+	// Set by the app lookup so the agent knows what the user still has to do
+	Activated              bool   `json:"activated,omitempty"`
+	AuthenticationRequired bool   `json:"authentication_required,omitempty"`
+	Authenticated          bool   `json:"authenticated,omitempty"`
+	SetupUrl               string `json:"setup_url,omitempty"`
 }
 
 // WorkflowOperation represents a single modification operation
