@@ -1273,3 +1273,258 @@ func TestDynamicShuffleClientLoopback(t *testing.T) {
 		t.Errorf("Unregistered non-shuffle desktop app should not be auto-treated as dynamic shuffle client")
 	}
 }
+
+func TestAllThreeOAuth2Flows_Dynamic_ConfiguredClient_ConfiguredServer(t *testing.T) {
+	ctx := context.Background()
+	project.CacheDb = true
+
+	// Setup authenticated admin user and org in cache
+	testOrg := Org{
+		Id:   "org_all_oauth_flows",
+		Name: "All OAuth Flows Org",
+		Users: []User{
+			{
+				Id:       "usr_all_oauth_admin",
+				Username: "admin@shuffler.io",
+				Role:     "admin",
+			},
+		},
+	}
+	orgBytes, _ := json.Marshal(testOrg)
+	_ = SetCache(ctx, "Organizations_org_all_oauth_flows", orgBytes, 300)
+
+	adminUser := User{
+		Id:        "usr_all_oauth_admin",
+		Username:  "admin@shuffler.io",
+		Role:      "admin",
+		ActiveOrg: OrgMini{Id: "org_all_oauth_flows"},
+		Orgs:      []string{"org_all_oauth_flows"},
+	}
+	adminBytes, _ := json.Marshal(adminUser)
+	_ = SetCache(ctx, "Users_usr_all_oauth_admin", adminBytes, 300)
+	_ = SetCache(ctx, "user_usr_all_oauth_admin", adminBytes, 300)
+	_ = SetCache(ctx, "session_sess_all_oauth_admin", adminBytes, 300)
+
+	// =========================================================================
+	// FLOW 1: Dynamic OAuth2 (RFC 7591 Register + PKCE S256 Authorize + Token)
+	// =========================================================================
+	regPayload := `{
+		"client_name": "ChatGPT",
+		"client_uri": "https://chatgpt.com",
+		"logo_uri": "https://chatgpt.com/favicon.ico",
+		"redirect_uris": ["https://chatgpt.com/connector_platform_oauth_redirect"],
+		"grant_types": ["authorization_code", "refresh_token"],
+		"response_types": ["code"],
+		"token_endpoint_auth_method": "none"
+	}`
+	reqReg := httptest.NewRequest("POST", "/api/v1/oauth2/register", strings.NewReader(regPayload))
+	reqReg.Header.Set("Content-Type", "application/json")
+	recReg := httptest.NewRecorder()
+	HandleOAuthRegister(recReg, reqReg)
+	if recReg.Code != http.StatusCreated {
+		t.Fatalf("Flow 1 (Dynamic Register): expected 201 Created, got %d: %s", recReg.Code, recReg.Body.String())
+	}
+	var regResp OAuthClientRegistrationResponse
+	if err := json.Unmarshal(recReg.Body.Bytes(), &regResp); err != nil {
+		t.Fatalf("Flow 1: failed to parse register response: %v", err)
+	}
+	if regResp.ClientName != "ChatGPT" || regResp.LogoURI != "https://chatgpt.com/favicon.ico" {
+		t.Errorf("Flow 1: expected registered metadata preserved, got %+v", regResp)
+	}
+
+	// Browser GET /oauth2/authorize on tunnel should redirect to frontend with enriched metadata & issuer
+	verifier := "dynamic_pkce_verifier_secret_string_1234567890"
+	h := sha256.New()
+	h.Write([]byte(verifier))
+	challenge := base64URLEncode(h.Sum(nil))
+
+	authGetURL := fmt.Sprintf("/oauth2/authorize?client_id=%s&redirect_uri=%s&response_type=code&code_challenge=%s&code_challenge_method=S256&state=dyn_state_1",
+		url.QueryEscape(regResp.ClientID),
+		url.QueryEscape("https://chatgpt.com/connector_platform_oauth_redirect"),
+		url.QueryEscape(challenge),
+	)
+	reqGetDyn := httptest.NewRequest("GET", authGetURL, nil)
+	reqGetDyn.Host = "tunnel.schemaless.org"
+	recGetDyn := httptest.NewRecorder()
+	HandleOAuthAuthorize(recGetDyn, reqGetDyn)
+	if recGetDyn.Code != http.StatusFound {
+		t.Fatalf("Flow 1 (Browser GET /oauth2/authorize): expected 302 redirect to frontend, got %d: %s", recGetDyn.Code, recGetDyn.Body.String())
+	}
+	locDyn := recGetDyn.Header().Get("Location")
+	if !strings.Contains(locDyn, "client_name=ChatGPT") || !strings.Contains(locDyn, "issuer=https%3A%2F%2Ftunnel.schemaless.org") {
+		t.Errorf("Flow 1: expected redirect Location to include enriched client_name and issuer, got: %s", locDyn)
+	}
+
+	// =========================================================================
+	// FLOW 2: Configured Client OAuth2 (No /oauth2/register, No PKCE)
+	// =========================================================================
+	configuredClientID := "configured_custom_gpt_client_1"
+	configuredRedirectURI := "https://chat.openai.com/aip/g-12345/oauth/callback"
+
+	// Step 2a: Browser GET /oauth2/authorize WITHOUT pre-registration and WITHOUT code_challenge
+	cfgGetURL := fmt.Sprintf("/oauth2/authorize?client_id=%s&redirect_uri=%s&response_type=code&state=cfg_state_2",
+		url.QueryEscape(configuredClientID),
+		url.QueryEscape(configuredRedirectURI),
+	)
+	reqGetCfg := httptest.NewRequest("GET", cfgGetURL, nil)
+	recGetCfg := httptest.NewRecorder()
+	HandleOAuthAuthorize(recGetCfg, reqGetCfg)
+	if recGetCfg.Code != http.StatusFound {
+		t.Fatalf("Flow 2 (Configured Client GET without PKCE): expected 302 Found, got %d: %s", recGetCfg.Code, recGetCfg.Body.String())
+	}
+
+	// Step 2b: POST /api/v1/oauth2/authorize WITHOUT code_challenge
+	cfgPostBody := fmt.Sprintf(`{
+		"client_id": %q,
+		"redirect_uri": %q,
+		"org_id": "org_all_oauth_flows",
+		"scope": "workflow:edit",
+		"state": "cfg_state_2",
+		"approved": true
+	}`, configuredClientID, configuredRedirectURI)
+	reqPostCfg := httptest.NewRequest("POST", "/api/v1/oauth2/authorize", strings.NewReader(cfgPostBody))
+	reqPostCfg.Header.Set("Content-Type", "application/json")
+	reqPostCfg.AddCookie(&http.Cookie{Name: "session_token", Value: "sess_all_oauth_admin"})
+	recPostCfg := httptest.NewRecorder()
+	HandleOAuthAuthorize(recPostCfg, reqPostCfg)
+	if recPostCfg.Code != http.StatusOK {
+		t.Fatalf("Flow 2 (Configured Client POST without PKCE): expected 200 OK, got %d: %s", recPostCfg.Code, recPostCfg.Body.String())
+	}
+	var cfgAuthResp OAuthAuthorizeResponse
+	_ = json.Unmarshal(recPostCfg.Body.Bytes(), &cfgAuthResp)
+	if cfgAuthResp.Code == "" {
+		t.Fatalf("Flow 2: expected authorization code to be issued, got empty code (redirect_url: %s)", cfgAuthResp.RedirectURL)
+	}
+
+	// Step 2c: POST /oauth2/token WITHOUT code_verifier
+	cfgTokenForm := url.Values{}
+	cfgTokenForm.Set("grant_type", "authorization_code")
+	cfgTokenForm.Set("code", cfgAuthResp.Code)
+	cfgTokenForm.Set("client_id", configuredClientID)
+	cfgTokenForm.Set("redirect_uri", configuredRedirectURI)
+	reqTokCfg := httptest.NewRequest("POST", "/oauth2/token", strings.NewReader(cfgTokenForm.Encode()))
+	reqTokCfg.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recTokCfg := httptest.NewRecorder()
+	HandleOAuthToken(recTokCfg, reqTokCfg)
+	if recTokCfg.Code != http.StatusOK {
+		t.Fatalf("Flow 2 (Configured Client token exchange without PKCE): expected 200 OK, got %d: %s", recTokCfg.Code, recTokCfg.Body.String())
+	}
+
+	// =========================================================================
+	// FLOW 3: Configured Server-based OAuth2 (Confidential Client with Secret)
+	// =========================================================================
+	serverClient := OAuthClient{
+		ID:                      "server_confidential_client_1",
+		ClientID:                "server_confidential_client_1",
+		ClientSecret:            "shf_secret_super_confidential_999",
+		ClientName:              "Enterprise Copilot Server",
+		RedirectUris:            []string{"https://copilot.enterprise.internal/oauth/callback"},
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		ResponseTypes:           []string{"code"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	}
+	_ = SetOAuthClient(ctx, serverClient)
+
+	// Step 3a: Authorize server client (without PKCE)
+	srvPostBody := fmt.Sprintf(`{
+		"client_id": %q,
+		"redirect_uri": %q,
+		"org_id": "org_all_oauth_flows",
+		"scope": "workflow:read workflow:run",
+		"state": "srv_state_3",
+		"approved": true
+	}`, serverClient.ClientID, serverClient.RedirectUris[0])
+	reqPostSrv := httptest.NewRequest("POST", "/api/v1/oauth2/authorize", strings.NewReader(srvPostBody))
+	reqPostSrv.Header.Set("Content-Type", "application/json")
+	reqPostSrv.AddCookie(&http.Cookie{Name: "session_token", Value: "sess_all_oauth_admin"})
+	recPostSrv := httptest.NewRecorder()
+	HandleOAuthAuthorize(recPostSrv, reqPostSrv)
+	if recPostSrv.Code != http.StatusOK {
+		t.Fatalf("Flow 3 (Server-based authorize): expected 200 OK, got %d: %s", recPostSrv.Code, recPostSrv.Body.String())
+	}
+	var srvAuthResp OAuthAuthorizeResponse
+	_ = json.Unmarshal(recPostSrv.Body.Bytes(), &srvAuthResp)
+
+	// Step 3b: Attempt token exchange with WRONG client_secret -> MUST fail with 400 invalid_client
+	badSrvForm := url.Values{}
+	badSrvForm.Set("grant_type", "authorization_code")
+	badSrvForm.Set("code", srvAuthResp.Code)
+	badSrvForm.Set("client_id", serverClient.ClientID)
+	badSrvForm.Set("client_secret", "wrong_secret_value")
+	badSrvForm.Set("redirect_uri", serverClient.RedirectUris[0])
+	reqBadSrv := httptest.NewRequest("POST", "/oauth2/token", strings.NewReader(badSrvForm.Encode()))
+	reqBadSrv.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recBadSrv := httptest.NewRecorder()
+	HandleOAuthToken(recBadSrv, reqBadSrv)
+	if recBadSrv.Code != http.StatusBadRequest || !strings.Contains(recBadSrv.Body.String(), "invalid_client") {
+		t.Fatalf("Flow 3: expected 400 invalid_client for wrong client_secret, got %d: %s", recBadSrv.Code, recBadSrv.Body.String())
+	}
+
+	// Step 3c: Exchange code using HTTP Basic Auth (client_secret_basic) AND client_id in form body
+	goodSrvForm := url.Values{}
+	goodSrvForm.Set("grant_type", "authorization_code")
+	goodSrvForm.Set("code", srvAuthResp.Code)
+	goodSrvForm.Set("client_id", serverClient.ClientID)
+	goodSrvForm.Set("redirect_uri", serverClient.RedirectUris[0])
+	reqGoodSrv := httptest.NewRequest("POST", "/oauth2/token", strings.NewReader(goodSrvForm.Encode()))
+	reqGoodSrv.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	reqGoodSrv.SetBasicAuth(serverClient.ClientID, serverClient.ClientSecret)
+	recGoodSrv := httptest.NewRecorder()
+	HandleOAuthToken(recGoodSrv, reqGoodSrv)
+	if recGoodSrv.Code != http.StatusOK {
+		t.Fatalf("Flow 3 (Server-based token exchange with Basic Auth): expected 200 OK, got %d: %s", recGoodSrv.Code, recGoodSrv.Body.String())
+	}
+	var srvTokenResp OAuthTokenResponse
+	if err := json.Unmarshal(recGoodSrv.Body.Bytes(), &srvTokenResp); err != nil {
+		t.Fatalf("Flow 3: failed to parse token response: %v", err)
+	}
+	if srvTokenResp.RefreshToken == "" {
+		t.Fatalf("Flow 3: expected refresh_token to be issued")
+	}
+
+	// Step 3d: Refresh token WITHOUT resending client_secret (many MCP / OAuth clients omit secret on refresh) -> MUST succeed
+	refreshNoSecretForm := url.Values{}
+	refreshNoSecretForm.Set("grant_type", "refresh_token")
+	refreshNoSecretForm.Set("refresh_token", srvTokenResp.RefreshToken)
+	refreshNoSecretForm.Set("client_id", serverClient.ClientID)
+	reqRefNoSec := httptest.NewRequest("POST", "/oauth2/token", strings.NewReader(refreshNoSecretForm.Encode()))
+	reqRefNoSec.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recRefNoSec := httptest.NewRecorder()
+	HandleOAuthToken(recRefNoSec, reqRefNoSec)
+	if recRefNoSec.Code != http.StatusOK {
+		t.Fatalf("Flow 3d (Refresh token without client_secret): expected 200 OK, got %d: %s", recRefNoSec.Code, recRefNoSec.Body.String())
+	}
+	var refreshedResp1 OAuthTokenResponse
+	_ = json.Unmarshal(recRefNoSec.Body.Bytes(), &refreshedResp1)
+	if refreshedResp1.AccessToken == "" || refreshedResp1.RefreshToken == "" {
+		t.Fatalf("Flow 3d: expected rotated access_token and refresh_token, got %+v", refreshedResp1)
+	}
+
+	// Step 3e: Concurrent / Retried refresh using the JUST-ROTATED refresh token within 60s grace period -> MUST NOT fail
+	reqRefRetry := httptest.NewRequest("POST", "/oauth2/token", strings.NewReader(refreshNoSecretForm.Encode()))
+	reqRefRetry.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recRefRetry := httptest.NewRecorder()
+	HandleOAuthToken(recRefRetry, reqRefRetry)
+	if recRefRetry.Code != http.StatusOK {
+		t.Fatalf("Flow 3e (Grace period retry on rotated refresh_token): expected 200 OK, got %d: %s", recRefRetry.Code, recRefRetry.Body.String())
+	}
+	var retryResp OAuthTokenResponse
+	_ = json.Unmarshal(recRefRetry.Body.Bytes(), &retryResp)
+	if retryResp.AccessToken != refreshedResp1.AccessToken || retryResp.RefreshToken != refreshedResp1.RefreshToken {
+		t.Errorf("Flow 3e: expected grace period retry to return identical rotated token response, got %+v vs %+v", retryResp, refreshedResp1)
+	}
+
+	// Step 3f: Refresh token WITH client_secret (server-based refresh with credentials) -> MUST succeed
+	refreshWithSecretForm := url.Values{}
+	refreshWithSecretForm.Set("grant_type", "refresh_token")
+	refreshWithSecretForm.Set("refresh_token", refreshedResp1.RefreshToken)
+	refreshWithSecretForm.Set("client_id", serverClient.ClientID)
+	refreshWithSecretForm.Set("client_secret", serverClient.ClientSecret)
+	reqRefSec := httptest.NewRequest("POST", "/oauth2/token", strings.NewReader(refreshWithSecretForm.Encode()))
+	reqRefSec.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recRefSec := httptest.NewRecorder()
+	HandleOAuthToken(recRefSec, reqRefSec)
+	if recRefSec.Code != http.StatusOK {
+		t.Fatalf("Flow 3f (Refresh token with client_secret): expected 200 OK, got %d: %s", recRefSec.Code, recRefSec.Body.String())
+	}
+}

@@ -2134,6 +2134,27 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 		return nil
 	}
 
+	contentLength := len(cacheData.Value)
+
+	// Skip category automations if the key value did not change (e.g. enrichment-only write-backs or identical writes)
+	skipAutomationKey := fmt.Sprintf("datastore_unchanged_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
+	if unchangedData, err := GetCache(ctx, skipAutomationKey); err == nil && unchangedData != nil {
+		if debug {
+			log.Printf("[DEBUG] Skipping automation '%s' for key %s in category %s: value unchanged (%d bytes)", parsedName, cacheData.Key, cacheData.Category, contentLength)
+		}
+		return nil
+	}
+
+	// Unified per-key cooldown cache across all automations (5-second TTL like Enrich)
+	automationCacheKey := fmt.Sprintf("automation_wait_%s_%s_%s_%s", parsedName, cacheData.OrgId, cacheData.Category, cacheData.Key)
+	if existingLock, err := GetCache(ctx, automationCacheKey); err == nil && existingLock != nil {
+		if debug {
+			log.Printf("[DEBUG] Per-key cooldown hit for automation '%s' on key %s in category %s - skipping", parsedName, cacheData.Key, cacheData.Category)
+		}
+		return nil
+	}
+	SetCache(ctx, automationCacheKey, []byte(fmt.Sprintf("%d", contentLength)), 5000, true)
+
 	// Unmarshal cacheData.Value to parsedOutput
 	parsedOutput := map[string]interface{}{}
 	if err := json.Unmarshal([]byte(cacheData.Value), &parsedOutput); err != nil {
@@ -2417,11 +2438,10 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 			log.Printf("[DEBUG] Running enrich automation for key %s in category %s (length: %d bytes)", cacheData.Key, cacheData.Category, contentLength)
 		}
 
-		// Short 5-second cache timeout
-		var timeout int32 = 5000
+		// Store enriched content length for 60s so delayed enrichment write-backs with identical content do not re-trigger enrich,
+		// while user edits that change content length can still run after the 5-second automation_wait cooldown.
+		var timeout int32 = 60000
 		SetCache(ctx, cacheKey, []byte(fmt.Sprintf("%d", contentLength)), timeout, true)
-		if cacheData.Enrichments != nil && len(cacheData.Enrichments) > 0 {
-		}
 
 		// Send the data into shuffle_tools => parse_ioc?
 		// Or generate a workflow that runs for it? :thinking:
@@ -2565,6 +2585,15 @@ func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, a
 				}
 
 				handled = append(handled, workflowId)
+
+				workflowCacheKey := fmt.Sprintf("workflow_wait_%s_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key, workflowId)
+				if wfData, err := GetCache(ctx, workflowCacheKey); err == nil && wfData != nil {
+					if debug {
+						log.Printf("[DEBUG] Skipping run_workflow %s for key %s in category %s: per-key workflow cooldown active", workflowId, cacheData.Key, cacheData.Category)
+					}
+					continue
+				}
+				SetCache(ctx, workflowCacheKey, []byte(fmt.Sprintf("%d", contentLength)), 10000, true)
 
 				go handleDatastoreAutomationRequest(ctx, marshalledBody, cacheData, automation, fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), "run_workflow")
 			}

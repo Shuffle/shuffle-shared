@@ -4487,6 +4487,15 @@ if target_cat.startswith("$"):
 if target_org.startswith("$"):
     target_org = ""
 
+if not found_items or not target_key or not target_cat:
+    print(json.dumps({
+        "success": True,
+        "reason": "No new indicators to upload or missing target key/category",
+        "types": found_types,
+        "count": 0,
+    }))
+    exit()
+
 full_body = [{
     "key": target_key,
     "category": target_cat,
@@ -6002,6 +6011,10 @@ for activityIndex in range(len(activities)):
     if not isinstance(activity, dict):
         continue
 
+    content = str(activity.get("content") or "")
+    if "@aiagent" not in content.lower():
+        continue
+
     if not activity.get("ai_handled"):
         activity["ai_handled"] = True
         if exec_id:
@@ -6009,10 +6022,6 @@ for activityIndex in range(len(activities)):
         activities_changed = True
         activities[activityIndex] = activity
     else:
-        continue
-
-    content = str(activity.get("content") or "")
-    if "@aiagent" not in content.lower():
         continue
 
     agent_name = "default"
@@ -6027,11 +6036,13 @@ if isinstance(assignee_outer, dict):
     elif "assign" in assignee_outer:
         assignee = str(assignee_outer.get("assign") or "")
 
+assignee_changed = len(assignee) > 0 and "@" in assignee and not cur_exec.get("assignee")
+
 db_updated = False
-if activities_changed or (len(assignee) > 0 and "@" in assignee):
+if activities_changed or assignee_changed:
     if activities_changed:
         cur_exec["activity"] = activities
-    if len(assignee) > 0 and "@" in assignee:
+    if assignee_changed:
         cur_exec["assignee"] = assignee
 
     if item_key and item_cat:
@@ -6188,10 +6199,8 @@ for item in activities:
         continue
     if not item.get("replyToId"):
         continue
-    if str(item.get("user", "")).lower() == currentuser:
-        continue
-    if item.get("replyToId") == agent_act.get("id"):
-        if item.get("content") == agent_response:
+    if str(item.get("user", "")).lower() == currentuser and item.get("replyToId") == agent_act.get("id"):
+        if item.get("content") == agent_response or len(str(item.get("content", ""))) > 0:
             print(json.dumps({
                 "success": True,
                 "reason": "Already answered with this message"
@@ -8475,8 +8484,8 @@ output_payload = {
     "target_org_id": target_org_id,
     "target_region": target_region,
     "target_region_url": target_region_url,
-    "stats_key": f"routing_rule_{rule_order[0][3]}" if len(rule_order) == 1 else "routing_rules_matched",
-    "stats_value": len(rule_order),
+    "stats_key": f"routing_rule_{rule_order[0][3]}" if len(rule_order) > 0 else "routing_rules_matched",
+    "stats_value": 1 if len(rule_order) > 0 else 0,
 }
 if move_to_org:
     output_payload["key"] = item_key
