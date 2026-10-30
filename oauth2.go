@@ -1151,6 +1151,11 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	if zscalerAuth && len(scope) == 0 {
 		scope = "https://api.zscaler.com"
 	}
+	mimecastAuth := false
+	if parsedTokenURL, err := url.Parse(tokenUrl); err == nil {
+		tokenHostname := strings.ToLower(parsedTokenURL.Hostname())
+		mimecastAuth = tokenHostname == "api.services.mimecast.com" || strings.HasSuffix(tokenHostname, "-api.services.mimecast.com")
+	}
 
 	refreshData := fmt.Sprintf("grant_type=client_credentials")
 	if len(grantType) > 0 {
@@ -1175,6 +1180,11 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		refreshData += fmt.Sprintf("&client_secret=%s", clientSecret)
 	}
 
+	if grantType == "client_credentials" && mimecastAuth {
+		refreshData += fmt.Sprintf("&client_id=%s", url.QueryEscape(clientId))
+		refreshData += fmt.Sprintf("&client_secret=%s", url.QueryEscape(clientSecret))
+	}
+
 	if len(scope) > 0 {
 		if zscalerAuth {
 			refreshData += fmt.Sprintf("&audience=%s", strings.Replace(scope, ",", " ", -1))
@@ -1189,7 +1199,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	}
 
 	// Not necessary for refresh
-	log.Printf("[DEBUG] Oauth2 REFRESH DATA: %#v. URL: %#v", refreshData, tokenUrl)
+	log.Printf("[DEBUG] Oauth2 application auth URL: %#v", tokenUrl)
 
 	client := GetExternalClient(tokenUrl)
 	req, err := http.NewRequest(
@@ -1203,7 +1213,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	}
 
 	// Basic auth handler for client_credentials. May not always be the case, it's currently used by default
-	if grantType == "client_credentials" && !zscalerAuth {
+	if grantType == "client_credentials" && !zscalerAuth && !mimecastAuth {
 		authHeader := fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", clientId, clientSecret))))
 		req.Header.Set("Authorization", authHeader)
 	}
@@ -1238,10 +1248,14 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 			}
 
 			refreshData += fmt.Sprintf("&audience=%s", strings.Replace(scope, ",", " ", -1))
+			if mimecastAuth {
+				refreshData += fmt.Sprintf("&client_id=%s", url.QueryEscape(clientId))
+				refreshData += fmt.Sprintf("&client_secret=%s", url.QueryEscape(clientSecret))
+			}
 			req.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(refreshData)))
 			req.ContentLength = int64(len(refreshData))
 
-			if !zscalerAuth {
+			if !zscalerAuth && !mimecastAuth {
 				authHeader := fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", clientId, clientSecret))))
 				req.Header.Set("Authorization", authHeader)
 			}
