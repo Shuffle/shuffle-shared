@@ -3011,6 +3011,12 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		}
 	}
 
+	// Steps the agent planned before the user aborted the run must not run anymore
+	if latestExec, fetchErr := GetWorkflowExecution(ctx, execution.ExecutionId); fetchErr == nil && latestExec != nil && latestExec.Status == "ABORTED" {
+		log.Printf("[INFO][%s] Agent run was aborted. Skipping decision %s (%s).", execution.ExecutionId, decision.RunDetails.Id, decision.Action)
+		return
+	}
+
 	// Set it to this at the start
 	if decision.RunDetails.StartedAt <= 0 {
 		decision.RunDetails.StartedAt = time.Now().UnixMilli()
