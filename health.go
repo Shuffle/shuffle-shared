@@ -1319,6 +1319,336 @@ func fixHealthSubflowParameters(ctx context.Context, workflow *Workflow) (Workfl
 
 	return *workflow, nil
 }
+func truncateForLog(value string) string {
+	const maxLen = 300
+	if len(value) <= maxLen {
+		return value
+	}
+
+	return value[:maxLen] + fmt.Sprintf("...(truncated, %d bytes total)", len(value))
+}
+
+func flattenResultPaths(value interface{}, prefix string, out map[string]interface{}) {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		if len(v) == 0 {
+			out[prefix] = v
+			return
+		}
+
+		for key, nested := range v {
+			path := key
+			if prefix != "" {
+				path = prefix + "." + key
+			}
+			flattenResultPaths(nested, path, out)
+		}
+	case []interface{}:
+		if len(v) == 0 {
+			out[prefix] = v
+			return
+		}
+
+		for i, nested := range v {
+			flattenResultPaths(nested, fmt.Sprintf("%s[%d]", prefix, i), out)
+		}
+	default:
+		out[prefix] = v
+	}
+}
+
+func parseAndFlattenResult(raw string) (map[string]interface{}, bool) {
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil, false
+	}
+
+	out := map[string]interface{}{}
+	flattenResultPaths(parsed, "", out)
+	return out, true
+}
+
+func jsonValuesEqual(a, b interface{}) bool {
+	switch aVal := a.(type) {
+	case map[string]interface{}:
+		bVal, ok := b.(map[string]interface{})
+		if !ok || len(aVal) != len(bVal) {
+			return false
+		}
+
+		for key, aItem := range aVal {
+			bItem, ok := bVal[key]
+			if !ok || !jsonValuesEqual(aItem, bItem) {
+				return false
+			}
+		}
+
+		return true
+	case []interface{}:
+		bVal, ok := b.([]interface{})
+		if !ok || len(aVal) != len(bVal) {
+			return false
+		}
+
+		for i, aItem := range aVal {
+			if !jsonValuesEqual(aItem, bVal[i]) {
+				return false
+			}
+		}
+
+		return true
+	default:
+		return a == b
+	}
+}
+
+func computeStablePaths(history []map[string]interface{}) map[string]bool {
+	stable := map[string]bool{}
+	if len(history) == 0 {
+		return stable
+	}
+
+	for path, value := range history[0] {
+		isStable := true
+		for _, sample := range history[1:] {
+			sampleValue, ok := sample[path]
+			if !ok || !jsonValuesEqual(value, sampleValue) {
+				isStable = false
+				break
+			}
+		}
+
+		if isStable {
+			stable[path] = true
+		}
+	}
+
+	return stable
+}
+
+func diffAgainstStablePaths(current, previous map[string]interface{}, stablePaths map[string]bool) []string {
+	var changed []string
+	for path := range stablePaths {
+		currentValue, currentOk := current[path]
+		previousValue, previousOk := previous[path]
+
+		if currentOk != previousOk || (currentOk && !jsonValuesEqual(currentValue, previousValue)) {
+			changed = append(changed, path)
+		}
+	}
+
+	sort.Strings(changed)
+	return changed
+}
+
+func HandleGetRecentFinishedExecutions(ctx context.Context, workflowId string, excludeExecutionId string, limit int) ([]WorkflowExecution, error) {
+	executions, err := GetAllWorkflowExecutions(ctx, workflowId, limit*3+5)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(executions, func(i, j int) bool {
+		return executions[i].StartedAt > executions[j].StartedAt
+	})
+
+	finished := make([]WorkflowExecution, 0, limit)
+	for _, execution := range executions {
+		if execution.Status != "FINISHED" || execution.ExecutionId == excludeExecutionId {
+			continue
+		}
+
+		finished = append(finished, execution)
+		if len(finished) >= limit {
+			break
+		}
+	}
+
+	return finished, nil
+}
+
+func HandleActionRanAsExpected(result ActionResult) (bool, string) {
+	if result.Status == "SKIPPED" {
+		return true, ""
+	}
+
+	if result.Status != "SUCCESS" {
+		return false, fmt.Sprintf("action did not succeed (status: %s)", result.Status)
+	}
+
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(result.Result), &parsed); err != nil {
+		if len(strings.TrimSpace(result.Result)) == 0 {
+			return false, "action succeeded but returned an empty result"
+		}
+
+		return true, ""
+	}
+
+	resultObj, ok := parsed.(map[string]interface{})
+	if !ok {
+		return true, ""
+	}
+
+	if success, ok := resultObj["success"].(bool); ok && !success {
+		return false, "action result reports success: false"
+	}
+
+	if status, ok := resultObj["status"].(float64); ok && status >= 300 {
+		return false, fmt.Sprintf("action result reports HTTP status %d", int(status))
+	}
+
+	return true, ""
+}
+
+func HandleCompareWorkflowExecutionResults(ctx context.Context, workflowId string, currentExecutionId string, currentResults []ActionResult) (bool, []WorkflowValidationError) {
+	workflowValidationHistoryWindow := 5
+	workflowValidationMinHistory := 3
+
+	history, err := HandleGetRecentFinishedExecutions(ctx, workflowId, currentExecutionId, workflowValidationHistoryWindow)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting execution history for workflow %s validation: %s", workflowId, err)
+	}
+
+	if len(history) == 0 {
+		return true, nil
+	}
+
+	previousExecution := history[0]
+
+	previousResults := map[string]ActionResult{}
+	for _, result := range previousExecution.Results {
+		previousResults[result.Action.ID] = result
+	}
+
+	nodeHistory := map[string][]string{}
+	for _, execution := range history {
+		seenThisExecution := map[string]bool{}
+		for _, result := range execution.Results {
+			if result.Status == "SKIPPED" || seenThisExecution[result.Action.ID] {
+				continue
+			}
+
+			seenThisExecution[result.Action.ID] = true
+			nodeHistory[result.Action.ID] = append(nodeHistory[result.Action.ID], result.Result)
+		}
+	}
+
+	var validationErrors []WorkflowValidationError
+
+	currentResultIds := map[string]bool{}
+	for _, result := range currentResults {
+		currentResultIds[result.Action.ID] = true
+
+		previousResult, hasPrevious := previousResults[result.Action.ID]
+		if !hasPrevious {
+			validationError := WorkflowValidationError{
+				NodeId:     result.Action.ID,
+				NodeLabel:  result.Action.Label,
+				AppName:    result.Action.AppName,
+				ActionName: result.Action.Name,
+				Reason:     "ran in the current execution but wasn't part of the previous execution",
+			}
+			log.Printf("[DEBUG] Workflow validation failed: node %q (app: %s, action: %s, id: %s) %s", validationError.NodeLabel, validationError.AppName, validationError.ActionName, validationError.NodeId, validationError.Reason)
+			validationErrors = append(validationErrors, validationError)
+			continue
+		}
+
+		// Signal 1: absolute correctness, independent of history.
+		if ok, reason := HandleActionRanAsExpected(result); !ok {
+			validationError := WorkflowValidationError{
+				NodeId:             result.Action.ID,
+				NodeLabel:          result.Action.Label,
+				AppName:            result.Action.AppName,
+				ActionName:         result.Action.Name,
+				Reason:             fmt.Sprintf("did not run as expected (%s)", reason),
+				CurrentExecutionId: result.ExecutionId,
+				CurrentResult:      truncateForLog(result.Result),
+			}
+			log.Printf("[DEBUG] Workflow validation failed: node %q (app: %s, action: %s, id: %s) %s. execution_id: %s, result: %s", validationError.NodeLabel, validationError.AppName, validationError.ActionName, validationError.NodeId, validationError.Reason, validationError.CurrentExecutionId, validationError.CurrentResult)
+			validationErrors = append(validationErrors, validationError)
+			continue
+		}
+
+		// Signal 2: relative stability, only once there's enough history to
+		rawHistory := nodeHistory[result.Action.ID]
+		if len(rawHistory) < workflowValidationMinHistory {
+			continue
+		}
+
+		flattenedHistory := make([]map[string]interface{}, 0, len(rawHistory))
+		parseable := true
+		for _, raw := range rawHistory {
+			flat, ok := parseAndFlattenResult(raw)
+			if !ok {
+				parseable = false
+				break
+			}
+
+			flattenedHistory = append(flattenedHistory, flat)
+		}
+
+		if !parseable {
+			if previousResult.Result != result.Result {
+				validationError := WorkflowValidationError{
+					NodeId:              result.Action.ID,
+					NodeLabel:           result.Action.Label,
+					AppName:             result.Action.AppName,
+					ActionName:          result.Action.Name,
+					Reason:              "output changed between runs (raw output differs)",
+					PreviousExecutionId: previousExecution.ExecutionId,
+					PreviousResult:      truncateForLog(previousResult.Result),
+					CurrentExecutionId:  result.ExecutionId,
+					CurrentResult:       truncateForLog(result.Result),
+				}
+				log.Printf("[DEBUG] Workflow validation failed: node %q (app: %s, action: %s, id: %s) %s", validationError.NodeLabel, validationError.AppName, validationError.ActionName, validationError.NodeId, validationError.Reason)
+				validationErrors = append(validationErrors, validationError)
+			}
+
+			continue
+		}
+
+		currentFlat, ok := parseAndFlattenResult(result.Result)
+		if !ok {
+			continue
+		}
+
+		stablePaths := computeStablePaths(flattenedHistory)
+		changedPaths := diffAgainstStablePaths(currentFlat, flattenedHistory[0], stablePaths)
+		if len(changedPaths) > 0 {
+			validationError := WorkflowValidationError{
+				NodeId:              result.Action.ID,
+				NodeLabel:           result.Action.Label,
+				AppName:             result.Action.AppName,
+				ActionName:          result.Action.Name,
+				Reason:              fmt.Sprintf("output changed at field(s) that have been stable across the last %d runs: %s", len(rawHistory), strings.Join(changedPaths, ", ")),
+				PreviousExecutionId: previousExecution.ExecutionId,
+				PreviousResult:      truncateForLog(previousResult.Result),
+				CurrentExecutionId:  result.ExecutionId,
+				CurrentResult:       truncateForLog(result.Result),
+			}
+			log.Printf("[DEBUG] Workflow validation failed: node %q (app: %s, action: %s, id: %s) %s. previous_execution_id: %s, current_execution_id: %s", validationError.NodeLabel, validationError.AppName, validationError.ActionName, validationError.NodeId, validationError.Reason, validationError.PreviousExecutionId, validationError.CurrentExecutionId)
+			validationErrors = append(validationErrors, validationError)
+		}
+	}
+
+	for actionId, previousResult := range previousResults {
+		if currentResultIds[actionId] {
+			continue
+		}
+
+		validationError := WorkflowValidationError{
+			NodeId:     actionId,
+			NodeLabel:  previousResult.Action.Label,
+			AppName:    previousResult.Action.AppName,
+			ActionName: previousResult.Action.Name,
+			Reason:     "ran in the previous execution but is missing from the current execution",
+		}
+		log.Printf("[DEBUG] Workflow validation failed: node %q (app: %s, action: %s, id: %s) %s", validationError.NodeLabel, validationError.AppName, validationError.ActionName, validationError.NodeId, validationError.Reason)
+		validationErrors = append(validationErrors, validationError)
+	}
+
+	return len(validationErrors) == 0, validationErrors
+}
 
 func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHealth, error) {
 	// run workflow with id 602c7cf5-500e-4bd1-8a97-aa5bc8a554e6
@@ -1510,7 +1840,16 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 
 		if executionResults.Status == "FINISHED" {
 			log.Printf("[DEBUG] Workflow Health exeution is finished, checking it's results")
-			workflowHealth.WorkflowValidation = executionResults.Workflow.Validation.Valid
+
+			isValid, validationErrors := HandleCompareWorkflowExecutionResults(ctx, id, executionResults.ExecutionId, executionResults.Results)
+			workflowHealth.WorkflowValidation = isValid
+			if !isValid {
+				workflowHealth.Error.WorkflowValidations = validationErrors
+				if debug {
+					log.Printf("[DEBUG] Ops workflow validation failed for execution %s: %d node(s) failed: %+v", workflowHealth.ExecutionId, len(validationErrors), validationErrors)
+				}
+			}
+
 			finishTime := time.Since(startTime).Seconds()
 			workflowHealth.ExecutionTook = finishTime
 			//workflowHealth = time.Since(startTime)

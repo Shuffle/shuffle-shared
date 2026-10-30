@@ -4853,11 +4853,25 @@ type WorkflowHealth struct {
 }
 
 type WorkflowOpsError struct {
-	Create             string `json:"create"`
-	Run                string `json:"run"`
-	Delete             string `json:"delete"`
-	RunFinished        string `json:"run_finished"`
-	WorkflowValidation string `json:"workflow_validation"`
+	Create              string                    `json:"create"`
+	Run                 string                    `json:"run"`
+	Delete              string                    `json:"delete"`
+	RunFinished         string                    `json:"run_finished"`
+	WorkflowValidation  string                    `json:"workflow_validation"`
+	WorkflowValidations []WorkflowValidationError `json:"workflow_validations"`
+}
+
+type WorkflowValidationError struct {
+	NodeId     string `json:"node_id"`
+	NodeLabel  string `json:"node_label"`
+	AppName    string `json:"app_name"`
+	ActionName string `json:"action_name"`
+	Reason     string `json:"reason"`
+
+	PreviousExecutionId string `json:"previous_execution_id,omitempty"`
+	PreviousResult      string `json:"previous_result,omitempty"`
+	CurrentExecutionId  string `json:"current_execution_id,omitempty"`
+	CurrentResult       string `json:"current_result,omitempty"`
 }
 
 type RegionChangeHistory struct {
