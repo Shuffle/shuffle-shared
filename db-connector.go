@@ -424,10 +424,18 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 
 				var err error
 				if len(memcached) > 0 {
+					expSeconds := expiration * 60
+					if useMilliseconds {
+						expSeconds = expiration / 1000
+						if expSeconds < 1 {
+							expSeconds = 1
+						}
+					}
+
 					newitem := &gomemcache.Item{
 						Key:        keyname,
 						Value:      parsedData,
-						Expiration: expiration * 60,
+						Expiration: expSeconds,
 					}
 
 					err = mc.Set(newitem)
@@ -469,10 +477,18 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 
 			var err error
 			if len(memcached) > 0 {
+				expSeconds := expiration * 60
+				if useMilliseconds {
+					expSeconds = expiration / 1000
+					if expSeconds < 1 {
+						expSeconds = 1
+					}
+				}
+
 				newitem := &gomemcache.Item{
 					Key:        name,
 					Value:      data,
-					Expiration: expiration * 60,
+					Expiration: expSeconds,
 				}
 
 				err = mc.Set(newitem)
@@ -14173,6 +14189,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				}
 
 				cacheData.Value = config.Value
+				if getCacheError == nil && config.Created > 0 {
+					sameValue = true
+				}
 			}
 
 			// Works on merging enrichments
@@ -14306,6 +14325,16 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				if len(cacheData.Tags) == 0 {
 					cacheData.Tags = config.Tags
 				} else {
+					for _, existingTag := range config.Tags {
+						if strings.HasPrefix(existingTag, "agent-") && !ArrayContains(cacheData.Tags, existingTag) {
+							cacheData.Tags = append(cacheData.Tags, existingTag)
+						}
+					}
+				}
+
+				if config.Value == cacheData.Value {
+					sameValue = true
+				} else {
 					sameValue = false
 				}
 
@@ -14366,7 +14395,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				}
 			}
 
+			skipAutomationKey := fmt.Sprintf("datastore_unchanged_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
 			if sameValue {
+				SetCache(ctx, skipAutomationKey, []byte(fmt.Sprintf("%d", len(cacheData.Value))), 5000, true)
+
 				// cacheData.Changed = false
 
 				// FIXME: Should NOT be returning keys?
@@ -14377,6 +14409,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				//datastoreKeys <- *datastore.NameKey("", datastoreId, nil)
 				//cacheKeys <- CacheKeyData{}
 
+			} else {
+				DeleteCache(ctx, skipAutomationKey)
 			}
 
 			cacheData.Changed = keyUpdated

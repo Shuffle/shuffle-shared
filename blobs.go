@@ -2763,6 +2763,51 @@ $exec`,
 			}
 		}
 
+		crossTenantParams := []WorkflowAppActionParameter{
+			WorkflowAppActionParameter{
+				Name:      "headers",
+				Multiline: true,
+				Required:  false,
+				Value:     "Org-Id: $execute_rule_automation_for_found_rules.message.target_org_id",
+			},
+			WorkflowAppActionParameter{
+				Name:      "body",
+				Multiline: true,
+				Required:  true,
+				Value:     `{"key": "$execute_rule_automation_for_found_rules.message.key", "category": "$execute_rule_automation_for_found_rules.message.category", "value": $execute_rule_automation_for_found_rules.message.updated_value}`,
+			},
+			WorkflowAppActionParameter{
+				Name:     "queries",
+				Value:    "",
+				Required: false,
+			},
+			WorkflowAppActionParameter{
+				Name:     "org_id",
+				Value:    "",
+				Required: false,
+			},
+			WorkflowAppActionParameter{
+				Name:     "ssl_verify",
+				Value:    "",
+				Required: false,
+			},
+			WorkflowAppActionParameter{
+				Name:     "to_file",
+				Value:    "",
+				Required: false,
+			},
+		}
+		if project.Environment == "cloud" {
+			crossTenantParams = append([]WorkflowAppActionParameter{
+				WorkflowAppActionParameter{
+					Name:          "url",
+					Value:         "$execute_rule_automation_for_found_rules.message.target_region_url",
+					Required:      true,
+					Configuration: true,
+				},
+			}, crossTenantParams...)
+		}
+
 		defaultWorkflow := Workflow{
 			Name:        "Automated Routing Rules",
 			Description: workflowDescription,
@@ -2893,40 +2938,7 @@ $exec`,
 						X: 1050,
 						Y: 320,
 					},
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:      "headers",
-							Multiline: true,
-							Required:  false,
-							Value:     "Org-Id: $execute_rule_automation_for_found_rules.message.target_org_id",
-						},
-						WorkflowAppActionParameter{
-							Name:      "body",
-							Multiline: true,
-							Required:  true,
-							Value:     `{"key": "$execute_rule_automation_for_found_rules.message.key", "category": "$execute_rule_automation_for_found_rules.message.category", "value": $execute_rule_automation_for_found_rules.message.updated_value}`,
-						},
-						WorkflowAppActionParameter{
-							Name:     "queries",
-							Value:    "",
-							Required: false,
-						},
-						WorkflowAppActionParameter{
-							Name:     "org_id",
-							Value:    "",
-							Required: false,
-						},
-						WorkflowAppActionParameter{
-							Name:     "ssl_verify",
-							Value:    "",
-							Required: false,
-						},
-						WorkflowAppActionParameter{
-							Name:     "to_file",
-							Value:    "",
-							Required: false,
-						},
-					},
+					Parameters: crossTenantParams,
 				},
 			},
 			Branches: []Branch{
@@ -4475,6 +4487,15 @@ if target_cat.startswith("$"):
 if target_org.startswith("$"):
     target_org = ""
 
+if not found_items or not target_key or not target_cat:
+    print(json.dumps({
+        "success": True,
+        "reason": "No new indicators to upload or missing target key/category",
+        "types": found_types,
+        "count": 0,
+    }))
+    exit()
+
 full_body = [{
     "key": target_key,
     "category": target_cat,
@@ -5990,6 +6011,10 @@ for activityIndex in range(len(activities)):
     if not isinstance(activity, dict):
         continue
 
+    content = str(activity.get("content") or "")
+    if "@aiagent" not in content.lower():
+        continue
+
     if not activity.get("ai_handled"):
         activity["ai_handled"] = True
         if exec_id:
@@ -5997,10 +6022,6 @@ for activityIndex in range(len(activities)):
         activities_changed = True
         activities[activityIndex] = activity
     else:
-        continue
-
-    content = str(activity.get("content") or "")
-    if "@aiagent" not in content.lower():
         continue
 
     agent_name = "default"
@@ -6015,11 +6036,13 @@ if isinstance(assignee_outer, dict):
     elif "assign" in assignee_outer:
         assignee = str(assignee_outer.get("assign") or "")
 
+assignee_changed = len(assignee) > 0 and "@" in assignee and not cur_exec.get("assignee")
+
 db_updated = False
-if activities_changed or (len(assignee) > 0 and "@" in assignee):
+if activities_changed or assignee_changed:
     if activities_changed:
         cur_exec["activity"] = activities
-    if len(assignee) > 0 and "@" in assignee:
+    if assignee_changed:
         cur_exec["assignee"] = assignee
 
     if item_key and item_cat:
@@ -6176,10 +6199,8 @@ for item in activities:
         continue
     if not item.get("replyToId"):
         continue
-    if str(item.get("user", "")).lower() == currentuser:
-        continue
-    if item.get("replyToId") == agent_act.get("id"):
-        if item.get("content") == agent_response:
+    if str(item.get("user", "")).lower() == currentuser and item.get("replyToId") == agent_act.get("id"):
+        if item.get("content") == agent_response or len(str(item.get("content", ""))) > 0:
             print(json.dumps({
                 "success": True,
                 "reason": "Already answered with this message"
@@ -6336,15 +6357,22 @@ func getRoutingValidationScript(targetCategory string) string {
 import re
 import base64
 import binascii
+import html
+import urllib.parse
 
 # ── Evaluator helpers ────────────────────────────────────────────────────────
 
-MAX_STRINGS = 200
-MAX_DEPTH = 8
-MIN_BASE64_LEN = 16
+MAX_STRINGS = 400
+MAX_DEPTH = 12
+MIN_BASE64_LEN = 8
 MAX_BASE64_LEN = 65536
 
 _BASE64_RE = re.compile(r"^[A-Za-z0-9+/_-]+={0,2}$")
+_EMBEDDED_B64_RE = re.compile(r"(?:data:[^;\s]+;base64,)?([A-Za-z0-9+/_-]{12,}={0,2}|[A-Za-z0-9+/_-]{6,}={1,2})")
+_HEX_CONTINUOUS_RE = re.compile(r"^(?:0x)?([0-9a-fA-F]{8,})$")
+_HEX_ESCAPED_RE = re.compile(r"(?:\\x[0-9a-fA-F]{2}){2,}")
+_UNICODE_ESCAPE_RE = re.compile(r"\\u[0-9a-fA-F]{4}")
+_PCT_ENCODED_RE = re.compile(r"%[0-9a-fA-F]{2}")
 
 BASELINE_CATEGORIES = {
     "incidents": "shuffle-security_incidents",
@@ -6361,6 +6389,21 @@ BASELINE_CATEGORIES = {
     "software": "shuffle-security_software",
     "users": "shuffle-security_users",
     "user": "shuffle-security_users",
+}
+
+OBSERVABLE_TYPE_ALIASES = {
+    "ip": {"ip", "ip_address", "ipv4", "ipv6", "src_ip", "dst_ip", "ip_addr", "client_ip", "remote_ip"},
+    "domain": {"domain", "domain_name", "hostname", "fqdn", "host", "dns"},
+    "hostname": {"hostname", "host", "domain", "domain_name", "fqdn", "device_name"},
+    "url": {"url", "uri", "link", "http_url"},
+    "hash": {"hash", "file_hash", "md5", "sha1", "sha256", "sha512", "imp_hash", "ssdeep"},
+    "md5": {"md5", "hash", "file_hash"},
+    "sha1": {"sha1", "hash", "file_hash"},
+    "sha256": {"sha256", "hash", "file_hash"},
+    "email": {"email", "email_address", "email_addr", "sender", "recipient", "mail"},
+    "user": {"user", "username", "user_name", "account", "actor_user", "uid"},
+    "file": {"file", "file_name", "filename", "filepath", "file_path", "path"},
+    "process": {"process", "process_name", "cmd_line", "command_line", "executable"},
 }
 
 
@@ -6399,38 +6442,278 @@ def _categories_match(rule_cat, target_cat: str) -> bool:
     return norm_rule == norm_target or norm_rule.lower() == norm_target.lower()
 
 
+def _is_mostly_printable(s: str, threshold: float = 0.85) -> bool:
+    if not s:
+        return False
+    printable = sum(1 for ch in s if ch.isprintable() or ch in "\r\n\t")
+    return (printable / len(s)) >= threshold
+
+
+def _decode_bytes_to_Printable(raw: bytes):
+    if not raw:
+        return None
+    # Check for UTF-16LE (common in PowerShell -EncodedCommand payloads)
+    if len(raw) >= 4 and len(raw) % 2 == 0:
+        null_odds = sum(1 for i in range(1, len(raw), 2) if raw[i] == 0)
+        if null_odds >= (len(raw) // 2) * 0.75:
+            try:
+                u16 = raw.decode("utf-16-le").rstrip("\x00")
+                if u16 and _is_mostly_printable(u16):
+                    return u16
+            except Exception:
+                pass
+    try:
+        decoded = raw.decode("utf-8")
+        if _is_mostly_printable(decoded):
+            return decoded
+    except UnicodeDecodeError:
+        pass
+    try:
+        decoded = raw.decode("latin-1")
+        if _is_mostly_printable(decoded, 0.92):
+            return decoded
+    except UnicodeDecodeError:
+        pass
+    return None
+
+
 def _looks_base64ish(s: str) -> bool:
-    if len(s) < MIN_BASE64_LEN or len(s) > MAX_BASE64_LEN:
+    if not s or len(s) > MAX_BASE64_LEN:
         return False
-    if " " in s or "\n" in s or "\t" in s:
-        return False
+    # Allow padded short base64 (e.g. "dGVzdA==" len 8) or longer unpadded tokens
+    has_padding = s.endswith("=")
+    if has_padding:
+        if len(s) < 4 or len(s) % 4 != 0:
+            return False
+    else:
+        if len(s) < MIN_BASE64_LEN:
+            return False
+        # Avoid treating plain lowercase/uppercase dictionary words as unpadded base64
+        has_digit_or_sym = any(c.isdigit() or c in "+/_-" for c in s)
+        has_mixed_case = any(c.islower() for c in s) and any(c.isupper() for c in s)
+        if not has_digit_or_sym and not has_mixed_case and len(s) < 20:
+            return False
     return bool(_BASE64_RE.match(s))
 
 
 def _try_decode_base64(s: str):
-    if not _looks_base64ish(s):
+    if not s or not isinstance(s, str):
         return None
-    normalized = s.replace("-", "+").replace("_", "/")
+    candidate = s.strip()
+    if candidate.lower().startswith("data:") and ";base64," in candidate.lower():
+        candidate = candidate.split(",", 1)[1].strip()
+    # Handle multiline MIME base64
+    if "\n" in candidate or "\r" in candidate:
+        compact = re.sub(r"[\r\n\s]+", "", candidate)
+    else:
+        compact = candidate
+    if not _looks_base64ish(compact):
+        return None
+    normalized = compact.replace("-", "+").replace("_", "/")
     pad = (4 - (len(normalized) % 4)) % 4
     if pad:
+        if pad == 3:
+            return None
         normalized += "=" * pad
     try:
         raw = base64.b64decode(normalized, validate=True)
     except (binascii.Error, ValueError):
         return None
-    try:
-        decoded = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        try:
-            decoded = raw.decode("latin-1")
-        except UnicodeDecodeError:
-            return None
-    if decoded == s:
-        return None
-    printable = sum(1 for ch in decoded if ch.isprintable() or ch in "\r\n\t")
-    if not decoded or (printable / len(decoded)) < 0.85:
+    decoded = _decode_bytes_to_Printable(raw)
+    if not decoded or decoded == s or decoded == compact:
         return None
     return decoded
+
+
+def _try_decode_url(s: str):
+    if not s or not isinstance(s, str):
+        return None
+    if _PCT_ENCODED_RE.search(s):
+        try:
+            unq = urllib.parse.unquote(s)
+            if unq and unq != s and _is_mostly_printable(unq):
+                return unq
+        except Exception:
+            pass
+    if "+" in s and (_PCT_ENCODED_RE.search(s) or "=" in s or "&" in s):
+        try:
+            unq_plus = urllib.parse.unquote_plus(s)
+            if unq_plus and unq_plus != s and _is_mostly_printable(unq_plus):
+                return unq_plus
+        except Exception:
+            pass
+    return None
+
+
+def _try_decode_hex(s: str):
+    if not s or not isinstance(s, str):
+        return None
+    stripped = s.strip()
+    # Check \xNN\xNN escaped hex sequences
+    if "\\x" in stripped and _HEX_ESCAPED_RE.search(stripped):
+        try:
+            def _replace_hex_seq(m):
+                hex_bytes = bytes.fromhex(m.group(0).replace("\\x", ""))
+                dec = _decode_bytes_to_Printable(hex_bytes)
+                return dec if dec is not None else m.group(0)
+            converted = _HEX_ESCAPED_RE.sub(_replace_hex_seq, stripped)
+            if converted != stripped:
+                return converted
+        except Exception:
+            pass
+    # Check continuous hex string (e.g. 0x61646d696e or 48656c6c6f)
+    m = _HEX_CONTINUOUS_RE.match(stripped)
+    if m:
+        hex_part = m.group(1)
+        if len(hex_part) % 2 == 0 and len(hex_part) <= MAX_BASE64_LEN:
+            try:
+                raw = bytes.fromhex(hex_part)
+                dec = _decode_bytes_to_Printable(raw)
+                if dec and dec != stripped and _is_mostly_printable(dec, 0.9):
+                    return dec
+            except Exception:
+                pass
+    return None
+
+
+def _try_decode_escapes_and_html(s: str):
+    if not s or not isinstance(s, str):
+        return None
+    out = s
+    if "&" in out and ";" in out:
+        try:
+            unesc = html.unescape(out)
+            if unesc != out:
+                out = unesc
+        except Exception:
+            pass
+    if "\\u" in out and _UNICODE_ESCAPE_RE.search(out):
+        try:
+            unesc = _UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(0)[2:], 16)), out)
+            if unesc != out and _is_mostly_printable(unesc):
+                out = unesc
+        except Exception:
+            pass
+    return out if out != s else None
+
+
+def _decode_single_pass(s: str) -> list:
+    if not s or not isinstance(s, str):
+        return []
+    variants = []
+    # 1. Whole-string decodes
+    for fn in (_try_decode_base64, _try_decode_url, _try_decode_hex, _try_decode_escapes_and_html):
+        dec = fn(s)
+        if dec and dec != s and dec not in variants:
+            variants.append(dec)
+
+    # 2. JWT token segments (header.payload.signature)
+    if s.count(".") == 2 and " " not in s and len(s) >= 24:
+        for seg in s.split(".")[:2]:
+            dec = _try_decode_base64(seg)
+            if dec and dec not in variants:
+                variants.append(dec)
+
+    # 3. Embedded base64 tokens inside command lines / log strings
+    if (" " in s or "=" in s or ":" in s or "/" in s) and len(s) <= MAX_BASE64_LEN:
+        for m in _EMBEDDED_B64_RE.finditer(s):
+            tok = m.group(1)
+            if tok and tok != s:
+                dec = _try_decode_base64(tok)
+                if dec and len(dec) >= 3 and dec not in variants:
+                    variants.append(dec)
+                    # Also provide the full string with the token decoded in-place
+                    replaced = s.replace(m.group(0), dec)
+                    if replaced != s and replaced not in variants:
+                        variants.append(replaced)
+
+    # 4. If s (or any decoded variant) is JSON, extract inner strings as well
+    json_Check_list = [s] + list(variants)
+    for candidate in json_Check_list:
+        st = candidate.strip()
+        if (st.startswith("{") and st.endswith("}")) or (st.startswith("[") and st.endswith("]")):
+            try:
+                parsed = json.loads(st)
+                extracted = []
+                _collect_all_strings(parsed, extracted)
+                for ex in extracted:
+                    if isinstance(ex, str) and ex and ex not in variants and ex != s:
+                        variants.append(ex)
+            except Exception:
+                pass
+
+    return variants
+
+
+def _with_all_decodes(haystacks) -> list:
+    seen = set()
+    out = []
+
+    def _add(val):
+        if not isinstance(val, str):
+            val = str(val)
+        if val not in seen and len(out) < MAX_STRINGS:
+            seen.add(val)
+            out.append(val)
+            return True
+        return False
+
+    queue = []
+    for s in haystacks:
+        if s is None:
+            continue
+        s_str = s if isinstance(s, str) else str(s)
+        if _add(s_str):
+            queue.append((s_str, 0))
+
+    # Multi-pass decoding (up to 3 levels deep, e.g. URL -> Base64 -> JSON -> inner Base64)
+    idx = 0
+    while idx < len(queue) and len(out) < MAX_STRINGS:
+        cur_str, depth = queue[idx]
+        idx += 1
+        if depth >= 3:
+            continue
+        for dec in _decode_single_pass(cur_str):
+            if _add(dec):
+                queue.append((dec, depth + 1))
+
+    return out
+
+
+def _try_coerce_structured(val):
+    """If val is a string that is JSON or encoded (Base64/URL/Hex) JSON, parse and return the dict/list."""
+    if isinstance(val, (dict, list)):
+        return val
+    if not isinstance(val, str):
+        return None
+    s = val.strip()
+    if not s:
+        return None
+    candidates = [s]
+    for fn in (_try_decode_base64, _try_decode_url, _try_decode_hex, _try_decode_escapes_and_html):
+        dec = fn(s)
+        if dec and dec not in candidates:
+            candidates.append(dec)
+            # Second pass (e.g. URL-encoded Base64 JSON)
+            dec2 = _try_decode_base64(dec) or _try_decode_url(dec)
+            if dec2 and dec2 not in candidates:
+                candidates.append(dec2)
+
+    for c in candidates:
+        st = c.strip()
+        if (st.startswith("{") and st.endswith("}")) or (st.startswith("[") and st.endswith("]")):
+            try:
+                parsed = json.loads(st)
+                if isinstance(parsed, str):
+                    try:
+                        parsed = json.loads(parsed)
+                    except Exception:
+                        pass
+                if isinstance(parsed, (dict, list)):
+                    return parsed
+            except Exception:
+                pass
+    return None
 
 
 def _collect_all_strings(val, out, depth=0):
@@ -6439,8 +6722,14 @@ def _collect_all_strings(val, out, depth=0):
     if isinstance(val, str):
         out.append(val)
         return
-    if isinstance(val, (int, float, bool)):
-        out.append(str(val))
+    if isinstance(val, bool):
+        out.append("true" if val else "false")
+        return
+    if isinstance(val, (int, float)):
+        if isinstance(val, float) and val.is_integer():
+            out.append(str(int(val)))
+        else:
+            out.append(str(val))
         return
     if isinstance(val, list):
         for item in val:
@@ -6455,77 +6744,357 @@ def _collect_all_strings(val, out, depth=0):
                 break
 
 
+def _norm_key(k: str) -> str:
+    return re.sub(r"[\s_\-]+", "", str(k or "").lower())
+
+
+def _dict_lookup(d: dict, key: str):
+    if not isinstance(d, dict) or not key:
+        return False, None
+    if key in d:
+        return True, d[key]
+    key_low = key.lower()
+    for k, v in d.items():
+        if str(k).lower() == key_low:
+            return True, v
+    key_norm = _norm_key(key)
+    if key_norm:
+        for k, v in d.items():
+            if _norm_key(k) == key_norm:
+                return True, v
+    return False, None
+
+
+def _split_field_path(path: str) -> list:
+    if not path or not isinstance(path, str):
+        return []
+    s = path.strip()
+    # Strip common root prefixes if user typed $exec.foo or $.foo or incident.foo
+    s = re.sub(r"^\$\.?exec\.?", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"^\$\.?", "", s)
+    # Convert bracket notation like a['b.c'][0].d or a[0].b into segments
+    tokens = []
+    pos = 0
+    n = len(s)
+    buf = []
+    while pos < n:
+        ch = s[pos]
+        if ch == ".":
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+            pos += 1
+        elif ch == "[":
+            if buf:
+                tokens.append("".join(buf))
+                buf = []
+            end_bracket = s.find("]", pos + 1)
+            if end_bracket == -1:
+                buf.append(ch)
+                pos += 1
+            else:
+                inner = s[pos + 1 : end_bracket].strip()
+                if (inner.startswith("'") and inner.endswith("'")) or (inner.startswith('"') and inner.endswith('"')):
+                    inner = inner[1:-1]
+                if inner and inner != "*":
+                    tokens.append(inner)
+                pos = end_bracket + 1
+        else:
+            buf.append(ch)
+            pos += 1
+    if buf:
+        tokens.append("".join(buf))
+    return [t for t in tokens if t and t != "*"]
+
+
+def _get_deep_parts(obj, parts: list, depth: int = 0):
+    if obj is None or depth > MAX_DEPTH:
+        return None
+    if not parts:
+        return obj
+
+    if isinstance(obj, str):
+        coerced = _try_coerce_structured(obj)
+        if coerced is not None:
+            obj = coerced
+        else:
+            return None
+
+    head = parts[0]
+    tail = parts[1:]
+
+    if isinstance(obj, dict):
+        # Also support composite dotted keys stored flat in dicts (e.g. customFields["a.b"])
+        if len(parts) > 1:
+            joined = ".".join(parts)
+            found_flat, flat_val = _dict_lookup(obj, joined)
+            if found_flat and flat_val is not None:
+                return flat_val
+        found, val = _dict_lookup(obj, head)
+        if found:
+            return _get_deep_parts(val, tail, depth + 1)
+        return None
+
+    if isinstance(obj, list):
+        # Support explicit list index (e.g. evidences[0].actor or evidences.0.actor)
+        if re.match(r"^-?\d+$", head):
+            idx = int(head)
+            if -len(obj) <= idx < len(obj):
+                return _get_deep_parts(obj[idx], tail, depth + 1)
+        vals = []
+        for item in obj:
+            v = _get_deep_parts(item, parts, depth + 1)
+            if v is not None:
+                if isinstance(v, list):
+                    vals.extend(v)
+                else:
+                    vals.append(v)
+        return vals if vals else None
+
+    return None
+
+
 def _get_deep(obj, path: str):
     if not path or obj is None:
         return None
-    parts = [p for p in path.split(".") if p]
-    cur = obj
-    for idx, p in enumerate(parts):
-        if isinstance(cur, dict):
-            if p in cur:
-                cur = cur[p]
-            else:
-                return None
-        elif isinstance(cur, list):
-            rest = ".".join(parts[idx:])
-            vals = []
-            for item in cur:
-                v = _get_deep(item, rest)
-                if v is not None:
-                    if isinstance(v, list):
-                        vals.extend(v)
-                    else:
-                        vals.append(v)
-            return vals if vals else None
+    parts = _split_field_path(path)
+    if not parts:
+        return None
+    return _get_deep_parts(obj, parts)
+
+
+def _search_deep_by_suffix(obj, target_parts: list, depth: int = 0, out: list = None) -> list:
+    """Fallback recursive search for deeply nested fields when a user specifies a partial path or leaf key."""
+    if out is None:
+        out = []
+    if obj is None or depth > MAX_DEPTH or not target_parts or len(out) >= MAX_STRINGS:
+        return out
+
+    if isinstance(obj, str):
+        coerced = _try_coerce_structured(obj)
+        if coerced is not None:
+            obj = coerced
         else:
-            return None
-    return cur
+            return out
+
+    if isinstance(obj, dict):
+        # Check if target_parts resolves directly from this dict node
+        direct = _get_deep_parts(obj, target_parts, depth)
+        if not _is_empty_val(direct):
+            if isinstance(direct, list):
+                out.extend(direct)
+            else:
+                out.append(direct)
+        for k, v in obj.items():
+            if len(out) >= MAX_STRINGS:
+                break
+            if isinstance(v, (dict, list, str)):
+                _search_deep_by_suffix(v, target_parts, depth + 1, out)
+    elif isinstance(obj, list):
+        for item in obj:
+            if len(out) >= MAX_STRINGS:
+                break
+            if isinstance(item, (dict, list, str)):
+                _search_deep_by_suffix(item, target_parts, depth + 1, out)
+
+    return out
+
+
+def _is_empty_val(v) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, str) and v == "":
+        return True
+    if isinstance(v, (list, dict)) and len(v) == 0:
+        return True
+    return False
+
+
+def _merge_resolved_values(results: list):
+    non_empty = [r for r in results if not _is_empty_val(r)]
+    if not non_empty:
+        return None
+    if len(non_empty) == 1:
+        return non_empty[0]
+    merged = []
+    for r in non_empty:
+        if isinstance(r, list):
+            merged.extend(r)
+        else:
+            merged.append(r)
+    return merged
+
+
+def _gather_observables(ctx: dict) -> list:
+    obs = []
+    for src in (ctx.get("observables"), _get_deep(ctx.get("rawOCSF") or {}, "observables")):
+        if isinstance(src, str):
+            src = _try_coerce_structured(src)
+        if isinstance(src, list):
+            for item in src:
+                if isinstance(item, dict):
+                    obs.append(item)
+    return obs
 
 
 def _resolve_field(ctx: dict, field: str):
     whole_tok = "$" + "whole"
-    if not field or field in ("*", whole_tok):
+    clean_field = (field or "").strip()
+    if not clean_field or clean_field.lower() in ("*", whole_tok, "all", "any", "_raw"):
         all_strs = []
         _collect_all_strings(ctx, all_strs)
         return all_strs
-    if field.startswith("observables."):
-        obs_type = field.split(".", 1)[1].lower()
-        observables = ctx.get("observables") or []
+
+    parts = _split_field_path(clean_field)
+    if not parts:
+        all_strs = []
+        _collect_all_strings(ctx, all_strs)
+        return all_strs
+
+    # Strip leading entity wrapper prefix if present (e.g. "incident.title" -> "title")
+    wrapper_prefixes = ("incident", "vulnerability", "vuln", "asset", "infrastructure", "package", "software", "user", "entity", "item")
+    if len(parts) > 1 and parts[0].lower() in wrapper_prefixes and parts[0] not in ctx:
+        parts = parts[1:]
+        clean_field = ".".join(parts)
+
+    candidates = []
+
+    # 1. Special handling for observables.*
+    if parts[0].lower() == "observables" and len(parts) >= 2:
+        obs_list = _gather_observables(ctx)
+        sub_key = parts[1].lower()
+        rest_parts = parts[2:]
+        type_matches = OBSERVABLE_TYPE_ALIASES.get(sub_key, {sub_key})
         vals = []
-        for o in observables:
-            if isinstance(o, dict) and str(o.get("type", "")).lower() == obs_type:
-                v = o.get("value")
-                if v:
-                    vals.append(str(v))
-        return vals
-    if field == "stakeholders.email":
-        stakeholders = ctx.get("stakeholders") or []
-        vals = []
-        for s in stakeholders:
-            if isinstance(s, dict) and s.get("email"):
-                vals.append(str(s["email"]))
-        return vals
-    if field.startswith("rawOCSF."):
-        return _get_deep(ctx.get("rawOCSF") or {}, field[len("rawOCSF.") :])
-    direct = ctx.get(field)
-    if direct is not None:
-        return direct
-    if "." in field:
-        deep_val = _get_deep(ctx, field)
-        if deep_val is not None:
-            return deep_val
-    if field in ("message", "description", "desc", "details", "summary"):
-        return ctx.get("description") or ctx.get("message") or ctx.get("summary") or ctx.get("details")
-    if field in ("title", "name"):
-        return ctx.get("title") or ctx.get("name") or ctx.get("hostname") or ctx.get("username") or ctx.get("email") or ctx.get("cve") or ctx.get("id")
-    if field == "severity":
-        return ctx.get("severity") or _get_deep(ctx, "database_specific.severity") or _get_deep(ctx, "rawOCSF.severity")
+        for o in obs_list:
+            o_type = str(o.get("type") or o.get("type_id") or "").lower().strip()
+            if o_type in type_matches or _norm_key(o_type) in {_norm_key(t) for t in type_matches}:
+                if rest_parts:
+                    v = _get_deep_parts(o, rest_parts)
+                else:
+                    v = o.get("value") if o.get("value") is not None else (o.get("name") or o.get("data"))
+                if not _is_empty_val(v):
+                    vals.append(v)
+        if vals:
+            candidates.append(vals)
+        # Also allow normal property traversal on observables (e.g. observables.value, observables[0].value)
+        prop_val = _get_deep_parts(obs_list, parts[1:])
+        if not _is_empty_val(prop_val):
+            candidates.append(prop_val)
+
+    # 2. Special handling for stakeholders.*
+    if parts[0].lower() == "stakeholders" and len(parts) >= 2:
+        stk_list = ctx.get("stakeholders") or _get_deep(ctx.get("rawOCSF") or {}, "stakeholders") or []
+        if isinstance(stk_list, list):
+            prop_val = _get_deep_parts(stk_list, parts[1:])
+            if not _is_empty_val(prop_val):
+                candidates.append(prop_val)
+
+    # 3. Explicit rawOCSF.* prefix
     raw_ocsf = ctx.get("rawOCSF")
-    if isinstance(raw_ocsf, dict):
-        ocsf_val = _get_deep(raw_ocsf, field) if "." in field else raw_ocsf.get(field)
-        if ocsf_val is not None:
-            return ocsf_val
-    return None
+    if isinstance(raw_ocsf, str):
+        raw_ocsf = _try_coerce_structured(raw_ocsf)
+    if not isinstance(raw_ocsf, dict):
+        raw_ocsf = {}
+
+    if parts[0].lower() in ("rawocsf", "raw_ocsf") and len(parts) > 1:
+        v = _get_deep_parts(raw_ocsf, parts[1:])
+        if not _is_empty_val(v):
+            candidates.append(v)
+
+    # 4. Direct & deep lookup on ctx
+    direct_ctx = _get_deep_parts(ctx, parts)
+    if not _is_empty_val(direct_ctx):
+        candidates.append(direct_ctx)
+
+    # 5. Lookup inside rawOCSF, customFields, custom_attributes, and unmapped
+    if parts[0].lower() not in ("rawocsf", "raw_ocsf"):
+        ocsf_val = _get_deep_parts(raw_ocsf, parts)
+        if not _is_empty_val(ocsf_val):
+            candidates.append(ocsf_val)
+
+    for cf_key in ("customFields", "custom_fields"):
+        cf = ctx.get(cf_key)
+        if isinstance(cf, str):
+            cf = _try_coerce_structured(cf)
+        if isinstance(cf, dict):
+            sub_parts = parts[1:] if parts[0].lower() in ("customfields", "custom_fields") and len(parts) > 1 else parts
+            cf_val = _get_deep_parts(cf, sub_parts)
+            if not _is_empty_val(cf_val):
+                candidates.append(cf_val)
+
+    custom_attrs = _get_deep_parts(raw_ocsf, ["metadata", "extensions", "custom_attributes"])
+    if isinstance(custom_attrs, dict):
+        sub_parts = parts[1:] if parts[0].lower() in ("custom_attributes", "customattributes") and len(parts) > 1 else parts
+        ca_val = _get_deep_parts(custom_attrs, sub_parts)
+        if not _is_empty_val(ca_val):
+            candidates.append(ca_val)
+
+    unmapped = raw_ocsf.get("unmapped")
+    if isinstance(unmapped, dict):
+        sub_parts = parts[1:] if parts[0].lower() == "unmapped" and len(parts) > 1 else parts
+        um_val = _get_deep_parts(unmapped, sub_parts)
+        if not _is_empty_val(um_val):
+            candidates.append(um_val)
+
+    # 6. Well-known semantic field aliases across entity types
+    leaf_low = clean_field.lower()
+    if leaf_low in ("message", "description", "desc", "details", "summary"):
+        for k in ("description", "message", "summary", "details"):
+            v = ctx.get(k) or raw_ocsf.get(k) or _get_deep_parts(raw_ocsf, ["finding_info", "desc"])
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low in ("title", "name"):
+        for v in (
+            ctx.get("title"),
+            ctx.get("name"),
+            _get_deep_parts(raw_ocsf, ["finding_info", "title"]),
+            ctx.get("hostname"),
+            ctx.get("username"),
+            ctx.get("email"),
+            ctx.get("cve"),
+            ctx.get("purl"),
+            ctx.get("id"),
+        ):
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low == "severity":
+        for v in (
+            ctx.get("severity"),
+            _get_deep_parts(ctx, ["database_specific", "severity"]),
+            raw_ocsf.get("severity"),
+        ):
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low in ("assignee", "assigned_to", "owner"):
+        for k in ("assignee", "assigned_to", "owner"):
+            v = ctx.get(k) or raw_ocsf.get(k)
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low in ("labels", "tags", "types", "type"):
+        for k in ("labels", "tags", "types", "type"):
+            v = ctx.get(k) or raw_ocsf.get(k)
+            if not _is_empty_val(v):
+                candidates.append(v)
+    elif leaf_low in ("source", "source_tool", "product", "vendor"):
+        for v in (
+            ctx.get("source"),
+            ctx.get("source_tool"),
+            ctx.get("product"),
+            ctx.get("vendor"),
+            _get_deep_parts(raw_ocsf, ["metadata", "product", "name"]),
+            _get_deep_parts(raw_ocsf, ["metadata", "product", "vendor_name"]),
+        ):
+            if not _is_empty_val(v):
+                candidates.append(v)
+
+    merged = _merge_resolved_values(candidates)
+    if merged is not None:
+        return merged
+
+    # 7. Deep recursive suffix fallback (finds very nested fields anywhere in ctx or decoded JSON blobs)
+    deep_matches = _search_deep_by_suffix(ctx, parts)
+    return _merge_resolved_values(deep_matches)
 
 
 def _as_string_array(v):
@@ -6549,55 +7118,126 @@ def _as_string_array(v):
     return [str(v)]
 
 
-def _with_base64_decodes(haystacks):
-    seen = set()
-    out = []
-    for s in haystacks:
-        if s not in seen:
-            seen.add(s)
-            out.append(s)
-        if len(out) >= MAX_STRINGS:
-            break
-        decoded = _try_decode_base64(s.strip())
-        if decoded is not None and decoded not in seen:
-            seen.add(decoded)
-            out.append(decoded)
-    return out
+def _normalize_operator(op: str) -> str:
+    s = str(op or "").strip().lower()
+    if s in ("==", "=", "is", "equal", "equals", "exact"):
+        return "equals"
+    if s in ("!=", "!==", "is_not", "is not", "not_equal", "not_equals", "notequals", "notequal", "does_not_equal", "does not equal"):
+        return "not_equals"
+    if s in ("contains", "contain", "includes", "include", "has"):
+        return "contains"
+    if s in ("not_contains", "not contains", "notcontains", "does_not_contain", "does not contain", "excludes", "exclude"):
+        return "not_contains"
+    if s in ("startswith", "starts_with", "starts with", "start_with", "start with", "prefix"):
+        return "startsWith"
+    if s in ("endswith", "ends_with", "ends with", "end_with", "end with", "suffix"):
+        return "endsWith"
+    if s in ("regex", "matches_regex", "matches regex", "match_regex", "match regex", "matchesregex", "match", "matches", "re", "pattern"):
+        return "regex"
+    if s in ("exists", "is_set", "is set", "not_empty", "not empty", "is_not_empty", "is not empty", "present"):
+        return "exists"
+    if s in ("not_exists", "not exists", "notexists", "does_not_exist", "does not exist", "is_empty", "is empty", "empty", "missing"):
+        return "not_exists"
+    if s in ("in", "one_of", "one of", "oneof"):
+        return "in"
+    if s in (">", "gt", "greater_than", "greater than", "larger_than", "larger than"):
+        return "gt"
+    if s in (">=", "gte", "greater_or_equal", "at_least"):
+        return "gte"
+    if s in ("<", "lt", "less_than", "less than", "smaller_than", "smaller than"):
+        return "lt"
+    if s in ("<=", "lte", "less_or_equal", "at_most"):
+        return "lte"
+    return s
+
+
+def _compare_numeric_or_str(haystacks: list, needle: str, op_norm: str) -> bool:
+    if not needle:
+        return False
+    try:
+        n_val = float(needle)
+        for h in haystacks:
+            try:
+                h_val = float(h.strip())
+                if op_norm == "gt" and h_val > n_val:
+                    return True
+                if op_norm == "gte" and h_val >= n_val:
+                    return True
+                if op_norm == "lt" and h_val < n_val:
+                    return True
+                if op_norm == "lte" and h_val <= n_val:
+                    return True
+            except ValueError:
+                continue
+        return False
+    except ValueError:
+        for h in haystacks:
+            if op_norm == "gt" and h > needle:
+                return True
+            if op_norm == "gte" and h >= needle:
+                return True
+            if op_norm == "lt" and h < needle:
+                return True
+            if op_norm == "lte" and h <= needle:
+                return True
+        return False
 
 
 def evaluate_condition_detailed(ctx: dict, condition: dict) -> dict:
-    field = condition.get("field", "")
-    op = condition.get("op", "")
+    field = condition.get("field") or condition.get("key") or ""
+    raw_op = condition.get("op") or condition.get("operator") or "contains"
+    op = _normalize_operator(raw_op)
     value = condition.get("value")
 
     raw = _resolve_field(ctx, field)
     raw_strings = _as_string_array(raw)
-    haystacks = [s.lower() for s in _with_base64_decodes(raw_strings)]
-    needle = (value or "").lower()
+    expanded_strings = _with_all_decodes(raw_strings)
+    haystacks = [s.lower() for s in expanded_strings]
+
+    needle_str = "" if value is None else str(value)
+    needle_variants = [s.lower() for s in _with_all_decodes([needle_str])] if needle_str else [""]
+    needle = needle_str.lower()
 
     is_matched = False
     if op == "exists":
-        is_matched = len(haystacks) > 0 and any(len(s) > 0 for s in haystacks)
+        is_matched = len(haystacks) > 0 and any(len(s.strip()) > 0 for s in haystacks)
+    elif op == "not_exists":
+        is_matched = len(haystacks) == 0 or all(len(s.strip()) == 0 for s in haystacks)
     elif op == "equals":
-        is_matched = any(s == needle for s in haystacks)
+        is_matched = any(s == n or s.strip() == n.strip() for s in haystacks for n in needle_variants)
+    elif op == "not_equals":
+        is_matched = len(haystacks) == 0 or not any(s == n or s.strip() == n.strip() for s in haystacks for n in needle_variants)
     elif op == "contains":
-        is_matched = len(needle) > 0 and any(needle in s for s in haystacks)
+        is_matched = len(needle) > 0 and any(n in s for s in haystacks for n in needle_variants if n)
+    elif op == "not_contains":
+        is_matched = len(needle) > 0 and not any(n in s for s in haystacks for n in needle_variants if n)
     elif op == "startsWith":
-        is_matched = len(needle) > 0 and any(s.startswith(needle) for s in haystacks)
+        is_matched = len(needle) > 0 and any(s.startswith(n) or s.strip().startswith(n.strip()) for s in haystacks for n in needle_variants if n)
     elif op == "endsWith":
-        is_matched = len(needle) > 0 and any(s.endswith(needle) for s in haystacks)
+        is_matched = len(needle) > 0 and any(s.endswith(n) or s.strip().endswith(n.strip()) for s in haystacks for n in needle_variants if n)
+    elif op == "in":
+        items = [p.strip().lower() for p in re.split(r"[,;|]", needle_str) if p.strip()]
+        expanded_items = [s.lower() for s in _with_all_decodes(items)]
+        is_matched = len(expanded_items) > 0 and any(s == it or s.strip() == it for s in haystacks for it in expanded_items)
+    elif op in ("gt", "gte", "lt", "lte"):
+        is_matched = _compare_numeric_or_str(haystacks, needle.strip(), op)
     elif op == "regex":
-        if value:
-            try:
-                re_c = re.compile(value, re.IGNORECASE)
-                is_matched = any(re_c.search(s) is not None for s in haystacks)
-            except re.error:
-                is_matched = False
+        if needle_str:
+            for pat in _with_all_decodes([needle_str]):
+                try:
+                    re_c = re.compile(pat, re.IGNORECASE)
+                    if any(re_c.search(s) is not None for s in expanded_strings):
+                        is_matched = True
+                        break
+                except re.error:
+                    continue
 
-    preview_actuals = [s[:200] for s in raw_strings[:10]]
+    # Include both raw and decoded values in preview_actuals so it is clear when decoding occurred
+    preview_actuals = [s[:200] for s in expanded_strings[:10]]
     return {
         "field": field,
-        "op": op,
+        "op": raw_op,
+        "expected": value,
         "expected_value": value,
         "actual_values": preview_actuals,
         "matched": is_matched,
@@ -6608,55 +7248,96 @@ def evaluate_condition(ctx: dict, condition: dict) -> bool:
     return evaluate_condition_detailed(ctx, condition)["matched"]
 
 
-def _is_group(n):
-    return isinstance(n, dict) and n.get("kind") == "group"
+def _get_group_children(n: dict) -> list:
+    if not isinstance(n, dict):
+        return []
+    for k in ("children", "conditions", "rules", "groups"):
+        ch = n.get(k)
+        if isinstance(ch, list):
+            return ch
+    return []
 
 
-def _is_leaf(n):
-    return isinstance(n, dict) and n.get("kind") == "condition"
+def _is_group(n) -> bool:
+    if not isinstance(n, dict):
+        return False
+    kind = str(n.get("kind") or n.get("type") or "").lower()
+    if kind == "group":
+        return True
+    if kind == "condition":
+        return False
+    return any(isinstance(n.get(k), list) for k in ("children", "conditions", "rules", "groups"))
 
 
-def evaluate_tree(node: dict, ctx: dict) -> bool:
+def _is_leaf(n) -> bool:
+    if not isinstance(n, dict) or _is_group(n):
+        return False
+    kind = str(n.get("kind") or n.get("type") or "").lower()
+    if kind == "condition":
+        return True
+    return bool(n.get("field") or n.get("key") or n.get("op") or n.get("operator"))
+
+
+def _is_and_group(node: dict) -> bool:
+    raw = str(
+        node.get("op")
+        or node.get("operator")
+        or node.get("matchMode")
+        or node.get("logicalOp")
+        or node.get("logic")
+        or "and"
+    ).strip().lower()
+    if raw in ("or", "any", "match_any", "match any", "||"):
+        return False
+    return True
+
+
+def evaluate_tree(node: dict, ctx: dict, depth: int = 0) -> bool:
+    if depth > 16 or not isinstance(node, dict):
+        return False
     if _is_leaf(node):
         return evaluate_condition(
             ctx,
             {
-                "field": node.get("field", ""),
-                "op": node.get("op", ""),
+                "field": node.get("field") or node.get("key") or "",
+                "op": node.get("op") or node.get("operator") or "contains",
                 "value": node.get("value"),
             },
         )
     if not _is_group(node):
         return False
-    children = node.get("children") or []
+    children = [c for c in _get_group_children(node) if _is_leaf(c) or (_is_group(c) and len(_collect_leaves(c)) > 0)]
     if not children:
         return False
-    if node.get("op") == "and":
-        return all(evaluate_tree(c, ctx) for c in children)
-    return any(evaluate_tree(c, ctx) for c in children)
+    if _is_and_group(node):
+        return all(evaluate_tree(c, ctx, depth + 1) for c in children)
+    return any(evaluate_tree(c, ctx, depth + 1) for c in children)
 
 
-def _collect_leaves(node):
+def _collect_leaves(node, depth: int = 0) -> list:
+    if depth > 16 or not isinstance(node, dict):
+        return []
     if _is_leaf(node):
         return [node]
     if not _is_group(node):
         return []
     out = []
-    for c in node.get("children") or []:
-        out.extend(_collect_leaves(c))
+    for c in _get_group_children(node):
+        out.extend(_collect_leaves(c, depth + 1))
     return out
 
 
 def _build_groups(rule):
     conditions = rule.get("conditions") or []
-    has_or_flag = any(c.get("or") for c in conditions)
+    has_or_flag = any(isinstance(c, dict) and c.get("or") for c in conditions)
     if not has_or_flag:
-        if rule.get("matchMode") == "any":
+        match_mode = str(rule.get("matchMode") or rule.get("op") or "all").strip().lower()
+        if match_mode in ("any", "or", "match_any", "match any"):
             return [list(conditions)]
         return [[c] for c in conditions]
     groups = []
     for c in conditions:
-        if c.get("or") and groups:
+        if isinstance(c, dict) and c.get("or") and groups:
             groups[-1].append(c)
         else:
             groups.append([c])
@@ -6767,13 +7448,24 @@ def inspect_and_evaluate_rules(ctx: dict, rules, target_category: str = "__TARGE
                 for g in groups:
                     group_matched_any = False
                     for c in g:
-                        detail = evaluate_condition_detailed(ctx, c)
-                        evaluated_conditions.append(detail)
-                        if detail["matched"]:
-                            matched_conditions.append(detail)
-                            group_matched_any = True
+                        if _is_group(c):
+                            for leaf in _collect_leaves(c):
+                                detail = evaluate_condition_detailed(ctx, leaf)
+                                evaluated_conditions.append(detail)
+                                if detail["matched"]:
+                                    matched_conditions.append(detail)
+                                else:
+                                    failed_conditions.append(detail)
+                            if evaluate_tree(c, ctx):
+                                group_matched_any = True
                         else:
-                            failed_conditions.append(detail)
+                            detail = evaluate_condition_detailed(ctx, c)
+                            evaluated_conditions.append(detail)
+                            if detail["matched"]:
+                                matched_conditions.append(detail)
+                                group_matched_any = True
+                            else:
+                                failed_conditions.append(detail)
                     if not group_matched_any:
                         all_passed = False
                 rule_matched = all_passed
@@ -7137,25 +7829,65 @@ def parse_action_value(val):
     return s
 
 
+def _split_path(path: str) -> list:
+    if not path or not isinstance(path, str):
+        return []
+    s = path.strip()
+    if s.startswith("$."):
+        s = s[2:]
+    elif s.startswith("$"):
+        s = s[1:]
+    normalized = re.sub(r"\[['\"]?([^'\"\]]+)['\"]?\]", r".\1", s)
+    return [p for p in normalized.split(".") if p != ""]
+
+
 def get_deep(d, path):
-    parts = [p for p in path.split(".") if p]
+    parts = _split_path(path) if isinstance(path, str) else list(path or [])
     cur = d
     for p in parts:
-        if not isinstance(cur, dict) or p not in cur:
+        if isinstance(cur, dict):
+            if p not in cur:
+                return None
+            cur = cur[p]
+        elif isinstance(cur, list) and p.isdigit():
+            idx = int(p)
+            if 0 <= idx < len(cur):
+                cur = cur[idx]
+            else:
+                return None
+        else:
             return None
-        cur = cur[p]
     return cur
 
 
 def set_deep(d, path, value):
-    parts = [p for p in path.split(".") if p]
+    parts = _split_path(path) if isinstance(path, str) else list(path or [])
+    if not parts or not isinstance(d, dict):
+        return
     cur = d
-    for p in parts[:-1]:
-        if p not in cur or not isinstance(cur[p], dict):
-            cur[p] = {}
-        cur = cur[p]
-    if parts:
-        cur[parts[-1]] = value
+    for i, p in enumerate(parts[:-1]):
+        next_p = parts[i + 1]
+        if isinstance(cur, dict):
+            if p not in cur or not isinstance(cur[p], (dict, list)):
+                cur[p] = [] if next_p.isdigit() else {}
+            cur = cur[p]
+        elif isinstance(cur, list) and p.isdigit():
+            idx = int(p)
+            while len(cur) <= idx:
+                cur.append({} if not next_p.isdigit() else [])
+            if not isinstance(cur[idx], (dict, list)):
+                cur[idx] = {} if not next_p.isdigit() else []
+            cur = cur[idx]
+        else:
+            return
+    last = parts[-1]
+    if isinstance(cur, dict):
+        cur[last] = value
+    elif isinstance(cur, list) and last.isdigit():
+        idx = int(last)
+        while len(cur) <= idx:
+            cur.append(None)
+        cur[idx] = value
 
 
 def _parse_input_safely(raw, default=None):
@@ -7531,12 +8263,43 @@ for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
                     new_val = val
                     set_deep(cur_exec.setdefault("rawOCSF", {}), subpath, val)
                     target_field = field
+                elif field.startswith("customFields.") or field.startswith("custom_fields."):
+                    cf = cur_exec.setdefault("customFields", {})
+                    clean_k = re.sub(r"^(customFields\.|custom_fields\.)", "", field)
+                    prev_val = cf.get(clean_k) if clean_k in cf else get_deep(cf, clean_k)
+                    new_val = val
+                    cf[clean_k] = val
+                    if "." in clean_k or "[" in clean_k:
+                        set_deep(cf, clean_k, val)
+                    target_field = f"customFields.{clean_k}"
+                elif "." in field or "[" in field:
+                    top_key = _split_path(field)[0] if _split_path(field) else ""
+                    raw_ocsf = cur_exec.get("rawOCSF")
+                    if top_key and top_key in cur_exec:
+                        prev_val = get_deep(cur_exec, field)
+                        set_deep(cur_exec, field, val)
+                        if isinstance(raw_ocsf, dict) and top_key in raw_ocsf:
+                            set_deep(raw_ocsf, field, val)
+                        target_field = field
+                    elif isinstance(raw_ocsf, dict) and top_key and top_key in raw_ocsf:
+                        prev_val = get_deep(raw_ocsf, field)
+                        set_deep(raw_ocsf, field, val)
+                        target_field = f"rawOCSF.{field}"
+                    else:
+                        prev_val = get_deep(cur_exec, field)
+                        set_deep(cur_exec, field, val)
+                        cf = cur_exec.setdefault("customFields", {})
+                        cf[field] = val
+                        target_field = field
+                    new_val = val
                 else:
                     cf = cur_exec.setdefault("customFields", {})
                     clean_k = re.sub(r"^(customFields\.|custom_fields\.)", "", field)
-                    prev_val = cf.get(clean_k)
+                    prev_val = cf.get(clean_k) if clean_k in cf else cur_exec.get(clean_k)
                     new_val = val
                     cf[clean_k] = val
+                    if clean_k in cur_exec:
+                        cur_exec[clean_k] = val
                     target_field = f"customFields.{clean_k}"
 
                 if prev_val != new_val:
@@ -7571,6 +8334,40 @@ if prev_status not in resolving and now_status in resolving:
 # ── PHASE 2: Apply forwarding / move / agent actions in priority order ─────
 move_to_org = False
 target_org_id = ""
+target_region = ""
+target_region_url = ""
+
+def normalize_cloud_region(raw_url, raw_reg):
+    reg = str(raw_reg or "").strip().lower()
+    url = str(raw_url or "").strip().rstrip("/")
+    if url:
+        low = url.lower()
+        host = low.split("://", 1)[-1].split("/", 1)[0]
+        if host.endswith(".shuffle.security"):
+            sub = host[:-len(".shuffle.security")]
+            if not reg and sub and sub != "www":
+                reg = sub
+            url = f"https://{sub}.shuffler.io" if (sub and sub != "www") else "https://shuffler.io"
+        elif host == "shuffle.security":
+            if not reg:
+                reg = "us"
+            url = "https://shuffler.io"
+        elif host.endswith(".shuffler.io"):
+            sub = host[:-len(".shuffler.io")]
+            if not reg and sub and sub != "www":
+                reg = sub
+            url = f"https://{host}"
+        elif host == "shuffler.io":
+            if not reg:
+                reg = "us"
+            url = "https://shuffler.io"
+    elif reg:
+        url = "https://shuffler.io" if reg in ("us", "default") else f"https://{reg}.shuffler.io"
+    if not url and ("self" in locals() or "self" in globals()):
+        fallback_url = str(getattr(self, "url", "") or "").strip().rstrip("/")
+        if fallback_url:
+            url = fallback_url
+    return reg, url
 
 for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
     actions = rule.get("actions") or []
@@ -7584,6 +8381,9 @@ for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
         if atype in ("suggest_move", "move"):
             target_org = str(action.get("targetOrgId") or "").strip()
             target_org_name = str(action.get("targetOrgName") or "").strip()
+            raw_region_url = action.get("targetRegionUrl") or action.get("region_url") or ""
+            raw_region = action.get("targetRegion") or action.get("region") or ""
+            resolved_reg, resolved_reg_url = normalize_cloud_region(raw_region_url, raw_region)
             if target_org:
                 raw_ocsf = cur_exec.setdefault("rawOCSF", {})
                 meta = raw_ocsf.setdefault("metadata", {})
@@ -7605,7 +8405,7 @@ for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
                 already = any(s.get("ruleId") == rule_id and s.get("status") in ("pending", "moved") for s in suggs if isinstance(s, dict))
                 target_label = target_org_name or target_org
                 if not already:
-                    suggs.append({
+                    sugg_entry = {
                         "ruleId": rule_id,
                         "ruleName": rule_name,
                         "targetOrgId": target_org,
@@ -7613,12 +8413,22 @@ for rk, m, rule, rule_id, rule_name, rule_priority in rule_order:
                         "reason": action.get("reason", ""),
                         "suggestedTs": now_ms,
                         "status": "moved",
-                    })
+                    }
+                    if resolved_reg:
+                        sugg_entry["targetRegion"] = resolved_reg
+                        sugg_entry["region"] = resolved_reg
+                    if resolved_reg_url:
+                        sugg_entry["targetRegionUrl"] = resolved_reg_url
+                        sugg_entry["region_url"] = resolved_reg_url
+                    suggs.append(sugg_entry)
                 move_to_org = True
                 target_org_id = target_org
+                target_region = resolved_reg
+                target_region_url = resolved_reg_url
                 changed = True
                 record_field_change("target_org_id", source_org_id or "current", target_label, rule_name)
-                msg = f"move/forward to org '{target_label}' ({target_org})"
+                reg_suffix = f" [region: {resolved_reg}]" if resolved_reg else ""
+                msg = f"move/forward to org '{target_label}' ({target_org}){reg_suffix}"
                 rule_reports[rk]["did"].append(msg)
                 what_happened.append(f"[{rule_name}] {msg}")
 
@@ -7672,8 +8482,10 @@ output_payload = {
     "db_updated": db_updated,
     "move_to_org": move_to_org,
     "target_org_id": target_org_id,
-    "stats_key": f"routing_rule_{rule_order[0][3]}" if len(rule_order) == 1 else "routing_rules_matched",
-    "stats_value": len(rule_order),
+    "target_region": target_region,
+    "target_region_url": target_region_url,
+    "stats_key": f"routing_rule_{rule_order[0][3]}" if len(rule_order) > 0 else "routing_rules_matched",
+    "stats_value": 1 if len(rule_order) > 0 else 0,
 }
 if move_to_org:
     output_payload["key"] = item_key

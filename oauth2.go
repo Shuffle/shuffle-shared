@@ -2244,18 +2244,23 @@ func HandleOAuthAuthorizationServer(resp http.ResponseWriter, request *http.Requ
 		}
 	}
 
+	authEndpoint := fmt.Sprintf("%s/oauth2/authorize", baseURL)
+	if os.Getenv("SHUFFLE_OAUTH_DIRECT_FRONTEND") == "true" {
+		authEndpoint = fmt.Sprintf("%s/oauth2/authorize", frontendURL)
+	}
+
 	metadata := map[string]interface{}{
-		"issuer":                                baseURL,
-		"authorization_endpoint":                fmt.Sprintf("%s/oauth2/authorize", frontendURL),
-		"token_endpoint":                        fmt.Sprintf("%s%s/oauth2/token", baseURL, oauthPrefix),
-		"registration_endpoint":                 fmt.Sprintf("%s%s/oauth2/register", baseURL, oauthPrefix),
-		"revocation_endpoint":                   fmt.Sprintf("%s%s/oauth2/revoke", baseURL, oauthPrefix),
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code"},
-		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post", "none"},
-		"code_challenge_methods_supported":      []string{"S256"},
+		"issuer":                                         baseURL,
+		"authorization_endpoint":                         authEndpoint,
+		"token_endpoint":                                 fmt.Sprintf("%s%s/oauth2/token", baseURL, oauthPrefix),
+		"registration_endpoint":                          fmt.Sprintf("%s%s/oauth2/register", baseURL, oauthPrefix),
+		"revocation_endpoint":                            fmt.Sprintf("%s%s/oauth2/revoke", baseURL, oauthPrefix),
+		"response_types_supported":                       []string{"code"},
+		"grant_types_supported":                          []string{"authorization_code", "refresh_token"},
+		"token_endpoint_auth_methods_supported":          []string{"client_secret_basic", "client_secret_post", "none"},
+		"code_challenge_methods_supported":               []string{"S256"},
 		"authorization_response_iss_parameter_supported": true,
-		"scopes_supported":                      []string{"workflow:edit"},
+		"scopes_supported":                               []string{"workflow:edit", "workflow:run", "workflow:read", "mcp:execute"},
 	}
 
 	parsedMeta, err := json.Marshal(metadata)
@@ -2273,7 +2278,13 @@ func HandleOAuthAuthorizationServer(resp http.ResponseWriter, request *http.Requ
 }
 
 type OAuthClientRegistrationRequest struct {
+	ClientID                string   `json:"client_id,omitempty"`
+	ClientSecret            string   `json:"client_secret,omitempty"`
 	ClientName              string   `json:"client_name"`
+	ClientURI               string   `json:"client_uri,omitempty"`
+	LogoURI                 string   `json:"logo_uri,omitempty"`
+	SoftwareID              string   `json:"software_id,omitempty"`
+	SoftwareVersion         string   `json:"software_version,omitempty"`
 	RedirectUris            []string `json:"redirect_uris"`
 	GrantTypes              []string `json:"grant_types"`
 	ResponseTypes           []string `json:"response_types"`
@@ -2285,6 +2296,10 @@ type OAuthClientRegistrationResponse struct {
 	ClientID                string   `json:"client_id"`
 	ClientSecret            string   `json:"client_secret,omitempty"`
 	ClientName              string   `json:"client_name,omitempty"`
+	ClientURI               string   `json:"client_uri,omitempty"`
+	LogoURI                 string   `json:"logo_uri,omitempty"`
+	SoftwareID              string   `json:"software_id,omitempty"`
+	SoftwareVersion         string   `json:"software_version,omitempty"`
 	RedirectUris            []string `json:"redirect_uris"`
 	GrantTypes              []string `json:"grant_types,omitempty"`
 	ResponseTypes           []string `json:"response_types,omitempty"`
@@ -2349,8 +2364,11 @@ func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Generate a unique client_id for this registration
-	clientID := fmt.Sprintf("shuffle_client_%s", uuid.NewV4().String())
+	// Use explicit client_id if provided, otherwise generate a unique client_id for this registration
+	clientID := strings.TrimSpace(regReq.ClientID)
+	if clientID == "" {
+		clientID = fmt.Sprintf("shuffle_client_%s", uuid.NewV4().String())
+	}
 
 	// Default grant types and response types if omitted
 	if len(regReq.GrantTypes) == 0 {
@@ -2360,16 +2378,29 @@ func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
 		regReq.ResponseTypes = []string{"code"}
 	}
 	if len(regReq.TokenEndpointAuthMethod) == 0 {
-		regReq.TokenEndpointAuthMethod = "none"
+		if strings.TrimSpace(regReq.ClientSecret) != "" {
+			regReq.TokenEndpointAuthMethod = "client_secret_post"
+		} else {
+			regReq.TokenEndpointAuthMethod = "none"
+		}
 	}
 
 	now := time.Now().Unix()
+	primaryRedirect := ""
+	if len(regReq.RedirectUris) > 0 {
+		primaryRedirect = regReq.RedirectUris[0]
+	}
+	resolvedClientName := inferOAuthClientName(clientID, strings.TrimSpace(regReq.ClientName), primaryRedirect, strings.TrimSpace(regReq.ClientURI))
 
 	ctx := GetContext(request)
 	client := OAuthClient{
 		ID:                      clientID,
 		ClientID:                clientID,
-		ClientName:              regReq.ClientName,
+		ClientName:              resolvedClientName,
+		ClientURI:               strings.TrimSpace(regReq.ClientURI),
+		LogoURI:                 strings.TrimSpace(regReq.LogoURI),
+		SoftwareID:              strings.TrimSpace(regReq.SoftwareID),
+		SoftwareVersion:         strings.TrimSpace(regReq.SoftwareVersion),
 		RedirectUris:            regReq.RedirectUris,
 		GrantTypes:              regReq.GrantTypes,
 		ResponseTypes:           regReq.ResponseTypes,
@@ -2396,8 +2427,10 @@ func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
 		client.UserId = userId
 	}
 
-	clientSecret := ""
-	if regReq.TokenEndpointAuthMethod == "client_secret_post" || regReq.TokenEndpointAuthMethod == "client_secret_basic" {
+	clientSecret := strings.TrimSpace(regReq.ClientSecret)
+	if clientSecret != "" {
+		client.ClientSecret = clientSecret
+	} else if regReq.TokenEndpointAuthMethod == "client_secret_post" || regReq.TokenEndpointAuthMethod == "client_secret_basic" {
 		clientSecret = fmt.Sprintf("shf_secret_%s", strings.ReplaceAll(uuid.NewV4().String(), "-", ""))
 		client.ClientSecret = clientSecret
 	}
@@ -2413,7 +2446,11 @@ func HandleOAuthRegister(resp http.ResponseWriter, request *http.Request) {
 	regResp := OAuthClientRegistrationResponse{
 		ClientID:                clientID,
 		ClientSecret:            clientSecret,
-		ClientName:              regReq.ClientName,
+		ClientName:              resolvedClientName,
+		ClientURI:               client.ClientURI,
+		LogoURI:                 client.LogoURI,
+		SoftwareID:              client.SoftwareID,
+		SoftwareVersion:         client.SoftwareVersion,
 		RedirectUris:            regReq.RedirectUris,
 		GrantTypes:              regReq.GrantTypes,
 		ResponseTypes:           regReq.ResponseTypes,
@@ -2653,6 +2690,118 @@ func isDynamicShuffleClient(clientID, redirectURI string) bool {
 	return false
 }
 
+// isValidConfiguredOAuthRedirectURI checks whether a redirect_uri is a valid callback URI
+// for a manually configured OAuth2 client or server-based OAuth2 integration (HTTPS, loopback, or native app scheme).
+func isValidConfiguredOAuthRedirectURI(rawURI string) bool {
+	rawURI = strings.TrimSpace(rawURI)
+	if rawURI == "" {
+		return false
+	}
+	if isLoopbackURI(rawURI) {
+		return true
+	}
+	u, err := url.Parse(rawURI)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(strings.TrimSpace(u.Scheme))
+	if scheme == "https" && strings.TrimSpace(u.Host) != "" {
+		return true
+	}
+	switch scheme {
+	case "cursor", "vscode", "vscode-insiders", "windsurf", "raycast", "shuffle", "claude", "chatgpt", "openai":
+		return true
+	}
+	return false
+}
+
+// isConfiguredOAuthClient checks whether a client_id + redirect_uri pair represents a valid
+// configured OAuth2 client (client-based or server-based) that did not use dynamic registration (/oauth2/register).
+func isConfiguredOAuthClient(clientID, redirectURI string) bool {
+	clientID = strings.TrimSpace(clientID)
+	redirectURI = strings.TrimSpace(redirectURI)
+	if clientID == "" || redirectURI == "" {
+		return false
+	}
+	for _, envKey := range []string{"SHUFFLE_OAUTH_CLIENT_ID", "OAUTH_CLIENT_ID"} {
+		if raw := strings.TrimSpace(os.Getenv(envKey)); raw != "" {
+			for _, part := range strings.Split(raw, ",") {
+				if strings.TrimSpace(part) == clientID {
+					return true
+				}
+			}
+		}
+	}
+	return isValidConfiguredOAuthRedirectURI(redirectURI)
+}
+
+// inferOAuthClientName resolves a human-friendly OAuth client display name from explicit registration
+// metadata, redirect_uri, client_uri, or client_id without misclassifying third-party dynamic clients
+// (e.g. ChatGPT, Claude, Gemini, Copilot, Cursor) as "Shuffle Agent".
+func inferOAuthClientName(clientID, explicitName, redirectURI, clientURI string) string {
+	explicitName = strings.TrimSpace(explicitName)
+	lowerExplicit := strings.ToLower(explicitName)
+	lowerID := strings.ToLower(strings.TrimSpace(clientID))
+	lowerRedirect := strings.ToLower(strings.TrimSpace(redirectURI))
+	lowerClientURI := strings.ToLower(strings.TrimSpace(clientURI))
+
+	// Check if explicitName is already a meaningful non-generic name
+	isGenericExplicit := explicitName == "" ||
+		lowerExplicit == lowerID ||
+		strings.HasPrefix(lowerExplicit, "shuffle_client_") ||
+		lowerExplicit == "application" ||
+		lowerExplicit == "external application" ||
+		lowerExplicit == "external-app"
+
+	if !isGenericExplicit && lowerExplicit != "shuffle agent" {
+		return explicitName
+	}
+
+	combined := lowerRedirect + " " + lowerClientURI + " " + lowerExplicit + " " + lowerID
+
+	switch {
+	case strings.Contains(combined, "chatgpt.com") || strings.Contains(combined, "openai.com") || strings.Contains(combined, "chatgpt") || strings.Contains(combined, "openai"):
+		return "ChatGPT"
+	case strings.Contains(combined, "claude.ai") || strings.Contains(combined, "anthropic.com") || strings.Contains(combined, "claude") || strings.Contains(combined, "anthropic"):
+		return "Claude"
+	case strings.Contains(combined, "gemini.google.com") || strings.Contains(combined, "aistudio.google.com") || strings.Contains(combined, "makersuite.google.com") || strings.Contains(combined, "vertexai") || strings.Contains(combined, "gemini"):
+		return "Google Gemini"
+	case strings.Contains(combined, "copilot") || strings.Contains(combined, "github.com") || strings.Contains(combined, "github"):
+		return "GitHub Copilot"
+	case strings.Contains(combined, "cursor.sh") || strings.Contains(combined, "cursor.com") || strings.Contains(combined, "cursor://") || strings.Contains(combined, "cursor"):
+		return "Cursor"
+	case strings.Contains(combined, "vscode://") || strings.Contains(combined, "vscode.dev") || strings.Contains(combined, "vscode") || strings.Contains(combined, "visual studio code"):
+		return "VS Code"
+	case strings.Contains(combined, "windsurf") || strings.Contains(combined, "codeium"):
+		return "Windsurf"
+	case strings.Contains(combined, "raycast"):
+		return "Raycast"
+	case strings.Contains(lowerID, "shuffle-agent") || strings.Contains(lowerID, "shuffle_agent") || lowerExplicit == "shuffle agent":
+		return "Shuffle Agent"
+	}
+
+	if isLoopbackURI(redirectURI) {
+		if strings.Contains(lowerID, "shuffle") || strings.Contains(lowerExplicit, "shuffle") {
+			return "Shuffle Agent"
+		}
+		if !isGenericExplicit {
+			return explicitName
+		}
+		return "Local MCP Client"
+	}
+
+	if !isGenericExplicit {
+		return explicitName
+	}
+	if strings.HasPrefix(lowerID, "shuffle_client_") {
+		return "MCP Client"
+	}
+	if clientID != "" {
+		return clientID
+	}
+	return "Application"
+}
+
 func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -2733,21 +2882,26 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 
 		// Edgecase 2: Unknown or invalid client_id
 		client, err := GetOAuthClient(ctx, clientID)
-		if (err != nil || client == nil || client.ClientID == "") && isDynamicShuffleClient(clientID, redirectURI) {
-			// Auto-register / accept dynamic or native Shuffle client
+		qClientName := strings.TrimSpace(request.URL.Query().Get("client_name"))
+		if qClientName == "" {
+			qClientName = strings.TrimSpace(request.URL.Query().Get("app_name"))
+		}
+		if qClientName == "" {
+			qClientName = strings.TrimSpace(request.URL.Query().Get("name"))
+		}
+		qClientURI := strings.TrimSpace(request.URL.Query().Get("client_uri"))
+		qLogoURI := strings.TrimSpace(request.URL.Query().Get("logo_uri"))
+
+		if (err != nil || client == nil || client.ClientID == "") && (isDynamicShuffleClient(clientID, redirectURI) || isConfiguredOAuthClient(clientID, redirectURI)) {
+			// Auto-register / accept dynamic or configured OAuth2 client
 			now := time.Now().Unix()
-			cName := "Shuffle Agent"
-			if qName := strings.TrimSpace(request.URL.Query().Get("client_name")); qName != "" {
-				cName = qName
-			} else if qName := strings.TrimSpace(request.URL.Query().Get("app_name")); qName != "" {
-				cName = qName
-			} else if qName := strings.TrimSpace(request.URL.Query().Get("name")); qName != "" {
-				cName = qName
-			}
+			cName := inferOAuthClientName(clientID, qClientName, redirectURI, qClientURI)
 			newClient := OAuthClient{
 				ID:                      clientID,
 				ClientID:                clientID,
 				ClientName:              cName,
+				ClientURI:               qClientURI,
+				LogoURI:                 qLogoURI,
 				RedirectUris:            []string{redirectURI},
 				GrantTypes:              []string{"authorization_code", "refresh_token"},
 				ResponseTypes:           []string{"code"},
@@ -2767,6 +2921,29 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_client", "error_description": "Unknown or invalid client_id"}`))
 			return
+		}
+
+		// Ensure client name/metadata is enriched if it was previously saved with a generic fallback
+		inferredName := inferOAuthClientName(client.ClientID, client.ClientName, redirectURI, client.ClientURI)
+		clientUpdated := false
+		if client.ClientName == "" || (client.ClientName == "Shuffle Agent" && inferredName != "Shuffle Agent") || (client.ClientName == "MCP Client" && inferredName != "MCP Client") {
+			if qClientName != "" {
+				client.ClientName = inferOAuthClientName(client.ClientID, qClientName, redirectURI, client.ClientURI)
+			} else {
+				client.ClientName = inferredName
+			}
+			clientUpdated = true
+		}
+		if client.LogoURI == "" && qLogoURI != "" {
+			client.LogoURI = qLogoURI
+			clientUpdated = true
+		}
+		if client.ClientURI == "" && qClientURI != "" {
+			client.ClientURI = qClientURI
+			clientUpdated = true
+		}
+		if clientUpdated {
+			_ = SetOAuthClient(ctx, *client)
 		}
 
 		if debug {
@@ -2794,7 +2971,7 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 				break
 			}
 		}
-		if !uriMatched && (client.IsDynamic || strings.HasPrefix(clientID, "shuffle_client_") || isDynamicShuffleClient(clientID, redirectURI)) {
+		if !uriMatched && (client.IsDynamic || strings.HasPrefix(clientID, "shuffle_client_") || isDynamicShuffleClient(clientID, redirectURI)) && isValidConfiguredOAuthRedirectURI(redirectURI) {
 			uriMatched = true
 			client.RedirectUris = append(client.RedirectUris, redirectURI)
 			_ = SetOAuthClient(ctx, *client)
@@ -2821,18 +2998,9 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		// Edgecase 6: PKCE validation (RFC 7636 / OAuth 2.1 requires code_challenge)
-		if codeChallenge == "" {
-			log.Printf("[WARNING] OAuth authorize request missing PKCE code_challenge from client %s", clientID)
-			if debug {
-				log.Printf("[DEBUG] HandleOAuthAuthorize GET: rejected - code_challenge is required (RFC 7636 PKCE)")
-			}
-			resp.Header().Set("Content-Type", "application/json")
-			resp.WriteHeader(http.StatusBadRequest)
-			resp.Write([]byte(`{"error": "invalid_request", "error_description": "code_challenge is required (RFC 7636 PKCE)"}`))
-			return
-		}
-		if codeChallengeMethod != "" && codeChallengeMethod != "S256" && codeChallengeMethod != "plain" {
+		// Edgecase 6: PKCE validation (RFC 7636)
+		// Enforced when code_challenge is provided; optional when omitted by configured client/server OAuth2 flows.
+		if codeChallenge != "" && codeChallengeMethod != "" && codeChallengeMethod != "S256" && codeChallengeMethod != "plain" {
 			if debug {
 				log.Printf("[DEBUG] HandleOAuthAuthorize GET: rejected - invalid code_challenge_method '%s'", codeChallengeMethod)
 			}
@@ -2840,37 +3008,78 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_request", "error_description": "code_challenge_method must be S256 or plain"}`))
 			return
+		} else if codeChallenge == "" && debug {
+			log.Printf("[DEBUG] HandleOAuthAuthorize GET: no PKCE code_challenge provided for client '%s' (configured client/server OAuth2 flow)", clientID)
 		}
 
-		// Edgecase 7: Check User Authentication Status
-		user, userErr := getOAuthUser(resp, request)
+		// Enrich query parameters with registered client metadata and issuer for frontend consent UI
+		enrichedQuery := request.URL.Query()
+		resolvedClientName := inferOAuthClientName(client.ClientID, client.ClientName, redirectURI, client.ClientURI)
+		if resolvedClientName != "" && enrichedQuery.Get("client_name") == "" {
+			enrichedQuery.Set("client_name", resolvedClientName)
+		}
+		if client.LogoURI != "" && enrichedQuery.Get("logo_uri") == "" {
+			enrichedQuery.Set("logo_uri", client.LogoURI)
+		}
+		if client.ClientURI != "" && enrichedQuery.Get("client_uri") == "" {
+			enrichedQuery.Set("client_uri", client.ClientURI)
+		}
+		if baseURL != "" && enrichedQuery.Get("issuer") == "" {
+			enrichedQuery.Set("issuer", baseURL)
+		}
+
 		isAPIRequest := strings.Contains(request.URL.Path, "/api/v1/") ||
 			strings.Contains(request.Header.Get("Accept"), "application/json") ||
 			request.URL.Query().Get("format") == "json"
 
+		isSameOriginAsFrontend := strings.EqualFold(strings.TrimSuffix(baseURL, "/"), strings.TrimSuffix(frontendURL, "/"))
+
+		// Direct browser navigation to a separate backend / tunnel /oauth2/authorize:
+		// Redirect to the frontend consent SPA with enriched metadata so the frontend
+		// can verify the user's session on its own origin and render the true client profile.
+		if !isAPIRequest && !isSameOriginAsFrontend && request.Header.Get("Authorization") == "" {
+			consentRedirect := fmt.Sprintf("%s/oauth2/authorize?%s", frontendURL, enrichedQuery.Encode())
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: browser redirecting 302 to frontend consent UI: %s", consentRedirect)
+			}
+			http.Redirect(resp, request, consentRedirect, http.StatusFound)
+			return
+		}
+
+		// Edgecase 7: Check User Authentication Status for API consent metadata requests (or same-origin requests)
+		user, userErr := getOAuthUser(resp, request)
 		if userErr != nil || len(user.Id) == 0 {
 			if debug {
 				log.Printf("[DEBUG] HandleOAuthAuthorize GET: user is unauthenticated (userErr: %v, isAPIRequest: %v)", userErr, isAPIRequest)
 			}
-			// User is NOT logged in
-			if isAPIRequest {
-				// Frontend API call: Return 401 with login prompt URL
-				resp.Header().Set("Content-Type", "application/json")
-				resp.WriteHeader(http.StatusUnauthorized)
-				loginURL := fmt.Sprintf("%s/login?redirect=%s", frontendURL, url.QueryEscape(request.URL.String()))
-				if debug {
-					log.Printf("[DEBUG] HandleOAuthAuthorize GET: returning 401 with login_url: %s", loginURL)
+			loginURL := fmt.Sprintf("%s/login?redirect=%s", frontendURL, url.QueryEscape(fmt.Sprintf("/oauth2/authorize?%s", enrichedQuery.Encode())))
+			if !isAPIRequest {
+				targetRedirect := fmt.Sprintf("%s/oauth2/authorize?%s", frontendURL, enrichedQuery.Encode())
+				if isSameOriginAsFrontend {
+					targetRedirect = loginURL
 				}
-				resp.Write([]byte(fmt.Sprintf(`{"error": "unauthorized", "login_url": "%s"}`, loginURL)))
+				http.Redirect(resp, request, targetRedirect, http.StatusFound)
 				return
 			}
-
-			// Direct browser GET: Redirect user to the frontend login page with return redirect
-			targetLogin := fmt.Sprintf("%s/login?redirect=%s", frontendURL, url.QueryEscape(request.URL.String()))
-			if debug {
-				log.Printf("[DEBUG] HandleOAuthAuthorize GET: redirecting unauthenticated browser 302 to '%s'", targetLogin)
+			// Frontend API call: Return 401 with login prompt URL AND public client metadata
+			// so the Sign In Required view can still display the right application name and icon.
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusUnauthorized)
+			unauthResp := map[string]interface{}{
+				"error":       "unauthorized",
+				"login_url":   loginURL,
+				"client_id":   client.ClientID,
+				"client_name": resolvedClientName,
+				"client_uri":  client.ClientURI,
+				"logo_uri":    client.LogoURI,
+				"issuer":      baseURL,
+				"scopes":      ParseOAuthScopes(scope),
 			}
-			http.Redirect(resp, request, targetLogin, http.StatusFound)
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: returning 401 with login_url: %s", loginURL)
+			}
+			unauthBytes, _ := json.Marshal(unauthResp)
+			resp.Write(unauthBytes)
 			return
 		}
 
@@ -2890,78 +3099,63 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 				user.Username, user.Id, user.ActiveOrg.Id, user.Orgs)
 		}
 
-		// If user IS authenticated:
-		// If this is the frontend API calling to fetch consent details:
-		if isAPIRequest {
-			// Build available organizations list for the user (only orgs where user is admin)
-			availableOrgs := []OrgMini{}
-			for _, orgId := range user.Orgs {
-				isAdmin := isUserOrgAdmin(ctx, user, orgId)
-				if debug {
-					log.Printf("[DEBUG] HandleOAuthAuthorize GET: checking isUserOrgAdmin for user %s, org %s -> %v", user.Id, orgId, isAdmin)
-				}
-				if isAdmin {
-					orgData, oErr := GetOrg(ctx, orgId)
-					if oErr == nil && orgData != nil && orgData.Id != "" {
-						availableOrgs = append(availableOrgs, OrgMini{
-							Id:   orgData.Id,
-							Name: orgData.Name,
-						})
-					} else {
-						availableOrgs = append(availableOrgs, OrgMini{
-							Id:   orgId,
-							Name: orgId,
-						})
-					}
-				}
-			}
-
-			selectedOrg := ""
-			if isUserOrgAdmin(ctx, user, user.ActiveOrg.Id) {
-				selectedOrg = user.ActiveOrg.Id
-			} else if len(availableOrgs) > 0 {
-				selectedOrg = availableOrgs[0].Id
-			}
-
-			clientName := client.ClientName
-			if clientName == "" {
-				clientName = client.ClientID
-			}
-
-			consentResponse := OAuthConsentInfoResponse{
-				ClientID:      client.ClientID,
-				ClientName:    clientName,
-				Scopes:        ParseOAuthScopes(scope),
-				User:          OAuthUserInfo{ID: user.Id, Username: user.Username},
-				AvailableOrgs: availableOrgs,
-				SelectedOrgId: selectedOrg,
-				RedirectURI:   redirectURI,
-				State:         state,
-			}
-
-			data, mErr := json.Marshal(consentResponse)
-			if mErr != nil {
-				log.Printf("[ERROR] HandleOAuthAuthorize GET: marshal consentResponse failed: %v", mErr)
-				resp.WriteHeader(http.StatusInternalServerError)
-				return
-			}
+		// Build available organizations list for the user (only orgs where user is admin)
+		availableOrgs := []OrgMini{}
+		for _, orgId := range user.Orgs {
+			isAdmin := isUserOrgAdmin(ctx, user, orgId)
 			if debug {
-				log.Printf("[DEBUG] HandleOAuthAuthorize GET: returning 200 OK consent metadata for user %s (selectedOrg: %s, availableOrgs: %d): %s",
-					user.Id, selectedOrg, len(availableOrgs), string(data))
+				log.Printf("[DEBUG] HandleOAuthAuthorize GET: checking isUserOrgAdmin for user %s, org %s -> %v", user.Id, orgId, isAdmin)
 			}
-			resp.Header().Set("Content-Type", "application/json")
-			resp.WriteHeader(http.StatusOK)
-			resp.Write(data)
+			if isAdmin {
+				orgData, oErr := GetOrg(ctx, orgId)
+				if oErr == nil && orgData != nil && orgData.Id != "" {
+					availableOrgs = append(availableOrgs, OrgMini{
+						Id:   orgData.Id,
+						Name: orgData.Name,
+					})
+				} else {
+					availableOrgs = append(availableOrgs, OrgMini{
+						Id:   orgId,
+						Name: orgId,
+					})
+				}
+			}
+		}
+
+		selectedOrg := ""
+		if isUserOrgAdmin(ctx, user, user.ActiveOrg.Id) {
+			selectedOrg = user.ActiveOrg.Id
+		} else if len(availableOrgs) > 0 {
+			selectedOrg = availableOrgs[0].Id
+		}
+
+		consentResponse := OAuthConsentInfoResponse{
+			ClientID:      client.ClientID,
+			ClientName:    resolvedClientName,
+			ClientURI:     client.ClientURI,
+			LogoURI:       client.LogoURI,
+			Issuer:        baseURL,
+			Scopes:        ParseOAuthScopes(scope),
+			User:          OAuthUserInfo{ID: user.Id, Username: user.Username},
+			AvailableOrgs: availableOrgs,
+			SelectedOrgId: selectedOrg,
+			RedirectURI:   redirectURI,
+			State:         state,
+		}
+
+		data, mErr := json.Marshal(consentResponse)
+		if mErr != nil {
+			log.Printf("[ERROR] HandleOAuthAuthorize GET: marshal consentResponse failed: %v", mErr)
+			resp.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-
-		// Direct browser navigation to backend /oauth2/authorize:
-		// Redirect to frontend consent page preserving all query parameters
-		consentRedirect := fmt.Sprintf("%s/oauth2/authorize?%s", frontendURL, request.URL.RawQuery)
 		if debug {
-			log.Printf("[DEBUG] HandleOAuthAuthorize GET: browser redirecting 302 to frontend consent UI: %s", consentRedirect)
+			log.Printf("[DEBUG] HandleOAuthAuthorize GET: returning 200 OK consent metadata for user %s (selectedOrg: %s, availableOrgs: %d): %s",
+				user.Id, selectedOrg, len(availableOrgs), string(data))
 		}
-		http.Redirect(resp, request, consentRedirect, http.StatusFound)
+		resp.Header().Set("Content-Type", "application/json")
+		resp.WriteHeader(http.StatusOK)
+		resp.Write(data)
 		return
 	}
 
@@ -3159,23 +3353,35 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 
 		// Edgecase 9: Validate Client existence
 		client, err := GetOAuthClient(ctx, authReq.ClientID)
-		if (err != nil || client == nil || client.ClientID == "") && isDynamicShuffleClient(authReq.ClientID, authReq.RedirectURI) {
-			// Auto-register / accept dynamic or native Shuffle client
+		reqClientName := strings.TrimSpace(authReq.ClientName)
+		if reqClientName == "" {
+			reqClientName = strings.TrimSpace(request.URL.Query().Get("client_name"))
+		}
+		if reqClientName == "" {
+			reqClientName = strings.TrimSpace(request.URL.Query().Get("app_name"))
+		}
+		if reqClientName == "" {
+			reqClientName = strings.TrimSpace(request.URL.Query().Get("name"))
+		}
+		reqClientURI := strings.TrimSpace(authReq.ClientURI)
+		if reqClientURI == "" {
+			reqClientURI = strings.TrimSpace(request.URL.Query().Get("client_uri"))
+		}
+		reqLogoURI := strings.TrimSpace(authReq.LogoURI)
+		if reqLogoURI == "" {
+			reqLogoURI = strings.TrimSpace(request.URL.Query().Get("logo_uri"))
+		}
+
+		if (err != nil || client == nil || client.ClientID == "") && (isDynamicShuffleClient(authReq.ClientID, authReq.RedirectURI) || isConfiguredOAuthClient(authReq.ClientID, authReq.RedirectURI)) {
+			// Auto-register / accept dynamic or configured OAuth2 client
 			now := time.Now().Unix()
-			cName := "Shuffle Agent"
-			if authReq.ClientName != "" {
-				cName = authReq.ClientName
-			} else if qName := strings.TrimSpace(request.URL.Query().Get("client_name")); qName != "" {
-				cName = qName
-			} else if qName := strings.TrimSpace(request.URL.Query().Get("app_name")); qName != "" {
-				cName = qName
-			} else if qName := strings.TrimSpace(request.URL.Query().Get("name")); qName != "" {
-				cName = qName
-			}
+			cName := inferOAuthClientName(authReq.ClientID, reqClientName, authReq.RedirectURI, reqClientURI)
 			newClient := OAuthClient{
 				ID:                      authReq.ClientID,
 				ClientID:                authReq.ClientID,
 				ClientName:              cName,
+				ClientURI:               reqClientURI,
+				LogoURI:                 reqLogoURI,
 				RedirectUris:            []string{authReq.RedirectURI},
 				GrantTypes:              []string{"authorization_code", "refresh_token"},
 				ResponseTypes:           []string{"code"},
@@ -3197,6 +3403,29 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		// Update client metadata if previously empty or generic placeholder
+		inferredPostName := inferOAuthClientName(client.ClientID, client.ClientName, authReq.RedirectURI, client.ClientURI)
+		postClientUpdated := false
+		if client.ClientName == "" || (client.ClientName == "Shuffle Agent" && inferredPostName != "Shuffle Agent") || (client.ClientName == "MCP Client" && inferredPostName != "MCP Client") {
+			if reqClientName != "" && reqClientName != "Shuffle Agent" {
+				client.ClientName = inferOAuthClientName(client.ClientID, reqClientName, authReq.RedirectURI, client.ClientURI)
+			} else {
+				client.ClientName = inferredPostName
+			}
+			postClientUpdated = true
+		}
+		if client.LogoURI == "" && reqLogoURI != "" {
+			client.LogoURI = reqLogoURI
+			postClientUpdated = true
+		}
+		if client.ClientURI == "" && reqClientURI != "" {
+			client.ClientURI = reqClientURI
+			postClientUpdated = true
+		}
+		if postClientUpdated {
+			_ = SetOAuthClient(ctx, *client)
+		}
+
 		// Edgecase 10: Validate Redirect URI matches registered list
 		uriMatched := false
 		for _, regURI := range client.RedirectUris {
@@ -3205,7 +3434,7 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 				break
 			}
 		}
-		if !uriMatched && (client.IsDynamic || strings.HasPrefix(authReq.ClientID, "shuffle_client_") || isDynamicShuffleClient(authReq.ClientID, authReq.RedirectURI)) {
+		if !uriMatched && (client.IsDynamic || strings.HasPrefix(authReq.ClientID, "shuffle_client_") || isDynamicShuffleClient(authReq.ClientID, authReq.RedirectURI)) && isValidConfiguredOAuthRedirectURI(authReq.RedirectURI) {
 			uriMatched = true
 			client.RedirectUris = append(client.RedirectUris, authReq.RedirectURI)
 			_ = SetOAuthClient(ctx, *client)
@@ -3221,18 +3450,25 @@ func HandleOAuthAuthorize(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		// Edgecase 11: Validate PKCE
-		if authReq.CodeChallenge == "" {
-			if debug {
-				log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - missing code_challenge")
+		// Edgecase 11: Validate PKCE when code_challenge is provided (optional for configured client/server OAuth2 flows)
+		if authReq.CodeChallenge != "" {
+			if authReq.CodeChallengeMethod == "" {
+				authReq.CodeChallengeMethod = "S256"
 			}
-			resp.Header().Set("Content-Type", "application/json")
-			resp.WriteHeader(http.StatusBadRequest)
-			resp.Write([]byte(`{"error": "invalid_request", "error_description": "code_challenge is required"}`))
-			return
-		}
-		if authReq.CodeChallengeMethod == "" {
-			authReq.CodeChallengeMethod = "S256"
+			if authReq.CodeChallengeMethod != "S256" && authReq.CodeChallengeMethod != "plain" {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthAuthorize POST: rejected - invalid code_challenge_method '%s'", authReq.CodeChallengeMethod)
+				}
+				resp.Header().Set("Content-Type", "application/json")
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(`{"error": "invalid_request", "error_description": "code_challenge_method must be S256 or plain"}`))
+				return
+			}
+		} else {
+			authReq.CodeChallengeMethod = ""
+			if debug {
+				log.Printf("[DEBUG] HandleOAuthAuthorize POST: no PKCE code_challenge provided for client '%s' (configured client/server OAuth2 flow)", authReq.ClientID)
+			}
 		}
 
 		// Helper to format redirect response based on client request type
@@ -3505,6 +3741,45 @@ func IsAppAllowedForOAuth(allowedApps []string, app WorkflowApp) bool {
 	return false
 }
 
+// validateOAuthClientSecret validates confidential / server-based OAuth2 client credentials
+// (client_secret_basic or client_secret_post) when a client has a configured ClientSecret
+// or when SHUFFLE_OAUTH_CLIENT_SECRET is set.
+func validateOAuthClientSecret(ctx context.Context, clientID, providedSecret string) error {
+	clientID = strings.TrimSpace(clientID)
+	providedSecret = strings.TrimSpace(providedSecret)
+	if clientID == "" {
+		return nil
+	}
+
+	envSecret := strings.TrimSpace(os.Getenv("SHUFFLE_OAUTH_CLIENT_SECRET"))
+
+	client, err := GetOAuthClient(ctx, clientID)
+	if err == nil && client != nil && client.ClientSecret != "" {
+		requiresSecret := client.TokenEndpointAuthMethod == "client_secret_basic" ||
+			client.TokenEndpointAuthMethod == "client_secret_post" ||
+			providedSecret != ""
+		if requiresSecret {
+			if providedSecret == "" {
+				return errors.New("client_secret is required for confidential client")
+			}
+			matchesClient := subtle.ConstantTimeCompare([]byte(providedSecret), []byte(client.ClientSecret)) == 1
+			matchesEnv := envSecret != "" && subtle.ConstantTimeCompare([]byte(providedSecret), []byte(envSecret)) == 1
+			if !matchesClient && !matchesEnv {
+				return errors.New("Invalid client_secret")
+			}
+		}
+		return nil
+	}
+
+	if envSecret != "" && providedSecret != "" {
+		if subtle.ConstantTimeCompare([]byte(providedSecret), []byte(envSecret)) != 1 {
+			return errors.New("Invalid client_secret")
+		}
+	}
+
+	return nil
+}
+
 // HandleOAuthToken handles the OAuth 2.0 / 2.1 token issuance and refresh endpoint.
 //
 // Routes:
@@ -3600,13 +3875,23 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		tokenReq.Scope = strings.TrimSpace(request.FormValue("scope"))
 	}
 
-	// Support HTTP Basic Authentication for Client Credentials
+	// Support HTTP Basic Authentication for Client Credentials (client_secret_basic)
 	basicUser, basicPass, hasBasic := request.BasicAuth()
-	if hasBasic && tokenReq.ClientID == "" {
-		tokenReq.ClientID = strings.TrimSpace(basicUser)
-		tokenReq.ClientSecret = strings.TrimSpace(basicPass)
+	if hasBasic {
+		if decodedUser, err := url.QueryUnescape(basicUser); err == nil {
+			basicUser = decodedUser
+		}
+		if decodedPass, err := url.QueryUnescape(basicPass); err == nil {
+			basicPass = decodedPass
+		}
+		if tokenReq.ClientID == "" {
+			tokenReq.ClientID = strings.TrimSpace(basicUser)
+		}
+		if tokenReq.ClientSecret == "" {
+			tokenReq.ClientSecret = strings.TrimSpace(basicPass)
+		}
 		if debug {
-			log.Printf("[DEBUG] HandleOAuthToken: extracted client_id '%s' from HTTP Basic Auth", tokenReq.ClientID)
+			log.Printf("[DEBUG] HandleOAuthToken: extracted credentials for client_id '%s' from HTTP Basic Auth", tokenReq.ClientID)
 		}
 	}
 
@@ -3687,7 +3972,7 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		// Edgecase 5: Client ID Mismatch
+		// Edgecase 5: Client ID Mismatch & Confidential Client Secret Verification
 		if authCode.ClientID != "" {
 			if tokenReq.ClientID == "" {
 				if debug {
@@ -3708,6 +3993,16 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 				resp.Header().Set("Cache-Control", "no-store")
 				resp.WriteHeader(http.StatusBadRequest)
 				resp.Write([]byte(`{"error": "invalid_client", "error_description": "client_id does not match authorization code"}`))
+				return
+			}
+			if secretErr := validateOAuthClientSecret(ctx, tokenReq.ClientID, tokenReq.ClientSecret); secretErr != nil {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthToken [authorization_code]: rejected - client_secret validation failed for '%s': %v", tokenReq.ClientID, secretErr)
+				}
+				resp.Header().Set("Content-Type", "application/json")
+				resp.Header().Set("Cache-Control", "no-store")
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(fmt.Sprintf(`{"error": "invalid_client", "error_description": %q}`, secretErr.Error())))
 				return
 			}
 		}
@@ -3843,6 +4138,30 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 		}
 		oldToken, err := GetOAuthTokenByRefreshToken(ctx, tokenReq.RefreshToken)
 		if err != nil || oldToken == nil || oldToken.AccessToken == "" {
+			// Grace period check: if a client retried a refresh request due to a network blip or
+			// sent concurrent refresh requests within 60s of rotation, return the rotated token response
+			// so the handoff/refresh never fails with invalid_grant.
+			if graceData, gErr := GetCache(ctx, "oauth_refresh_grace_"+tokenReq.RefreshToken); gErr == nil && len(graceData) > 0 {
+				if tokenReq.ClientID != "" && tokenReq.ClientSecret != "" {
+					if secretErr := validateOAuthClientSecret(ctx, tokenReq.ClientID, tokenReq.ClientSecret); secretErr != nil {
+						resp.Header().Set("Content-Type", "application/json")
+						resp.Header().Set("Cache-Control", "no-store")
+						resp.WriteHeader(http.StatusBadRequest)
+						resp.Write([]byte(fmt.Sprintf(`{"error": "invalid_client", "error_description": %q}`, secretErr.Error())))
+						return
+					}
+				}
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: serving grace-period cached response for recently rotated refresh_token")
+				}
+				resp.Header().Set("Content-Type", "application/json;charset=UTF-8")
+				resp.Header().Set("Cache-Control", "no-store")
+				resp.Header().Set("Pragma", "no-cache")
+				resp.WriteHeader(http.StatusOK)
+				resp.Write(graceData)
+				return
+			}
+
 			if debug {
 				log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: rejected - refresh token not found or error: %v", err)
 			}
@@ -3858,7 +4177,7 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 				oldToken.ID, oldToken.UserId, oldToken.OrgId, oldToken.ClientID, oldToken.ExpiresAt)
 		}
 
-		// Edgecase 9: Client ID mismatch on refresh
+		// Edgecase 9: Client ID mismatch & Confidential Client Secret Verification on refresh
 		if tokenReq.ClientID != "" && oldToken.ClientID != "" && tokenReq.ClientID != oldToken.ClientID {
 			if debug {
 				log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: rejected - client_id mismatch: request has '%s', token has '%s'",
@@ -3869,6 +4188,24 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			resp.WriteHeader(http.StatusBadRequest)
 			resp.Write([]byte(`{"error": "invalid_client", "error_description": "client_id does not match refresh token"}`))
 			return
+		}
+		effectiveRefreshClientID := tokenReq.ClientID
+		if effectiveRefreshClientID == "" {
+			effectiveRefreshClientID = oldToken.ClientID
+		}
+		// Only validate client_secret on refresh when the caller actually provides one, so clients
+		// that omit client_secret (or client_id) during refresh_token rotation never fail unexpectedly.
+		if effectiveRefreshClientID != "" && tokenReq.ClientSecret != "" {
+			if secretErr := validateOAuthClientSecret(ctx, effectiveRefreshClientID, tokenReq.ClientSecret); secretErr != nil {
+				if debug {
+					log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: rejected - client_secret validation failed for '%s': %v", effectiveRefreshClientID, secretErr)
+				}
+				resp.Header().Set("Content-Type", "application/json")
+				resp.Header().Set("Cache-Control", "no-store")
+				resp.WriteHeader(http.StatusBadRequest)
+				resp.Write([]byte(fmt.Sprintf(`{"error": "invalid_client", "error_description": %q}`, secretErr.Error())))
+				return
+			}
 		}
 
 		// Edgecase 10: Validate Scope Downscoping (RFC 6749 Section 6)
@@ -3903,12 +4240,6 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		// Invalidate old access token
-		if debug {
-			log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: deleting old access token")
-		}
-		_ = DeleteOAuthToken(ctx, oldToken.AccessToken)
-
 		// Rotate token: Issue new access token and refresh token
 		newAccessToken := fmt.Sprintf("shfl_mcp_%s", strings.ReplaceAll(uuid.NewV4().String(), "-", ""))
 		newRefreshToken := fmt.Sprintf("shfl_mcp_refresh_%s", strings.ReplaceAll(uuid.NewV4().String(), "-", ""))
@@ -3935,6 +4266,8 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			CreatedAt:    time.Now().Unix(),
 		}
 
+		// Persist the new token BEFORE deleting the old token so a transient storage failure
+		// can never leave the client without a valid token.
 		if err := SetOAuthToken(ctx, newToken); err != nil {
 			log.Printf("[ERROR] HandleOAuthToken [refresh_token]: Failed to persist refreshed OAuth token: %v", err)
 			resp.Header().Set("Content-Type", "application/json")
@@ -3959,6 +4292,19 @@ func HandleOAuthToken(resp http.ResponseWriter, request *http.Request) {
 			resp.Header().Set("Cache-Control", "no-store")
 			resp.WriteHeader(http.StatusInternalServerError)
 			return
+		}
+
+		// Cache the new token response under a 60-second grace key for the old refresh token
+		// before invalidating the old token records.
+		_ = SetCache(ctx, "oauth_refresh_grace_"+tokenReq.RefreshToken, respData, 60)
+
+		// Invalidate old access token and old refresh token index
+		if debug {
+			log.Printf("[DEBUG] HandleOAuthToken [refresh_token]: deleting old access token")
+		}
+		_ = DeleteOAuthToken(ctx, oldToken.AccessToken)
+		if oldToken.RefreshToken != "" && oldToken.RefreshToken != newRefreshToken {
+			_ = DeleteKey(ctx, "oauth_refresh", oldToken.RefreshToken)
 		}
 
 		if debug {
@@ -4200,8 +4546,18 @@ func HandleListOAuthTokens(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		clientName := tok.ClientID
-		if client, cErr := GetOAuthClient(ctx, tok.ClientID); cErr == nil && client != nil && client.ClientName != "" {
-			clientName = client.ClientName
+		clientURI := ""
+		logoURI := ""
+		if client, cErr := GetOAuthClient(ctx, tok.ClientID); cErr == nil && client != nil {
+			primaryRedirect := ""
+			if len(client.RedirectUris) > 0 {
+				primaryRedirect = client.RedirectUris[0]
+			}
+			clientName = inferOAuthClientName(client.ClientID, client.ClientName, primaryRedirect, client.ClientURI)
+			clientURI = client.ClientURI
+			logoURI = client.LogoURI
+		} else {
+			clientName = inferOAuthClientName(tok.ClientID, "", "", "")
 		}
 
 		connID := tok.ID
@@ -4213,6 +4569,8 @@ func HandleListOAuthTokens(resp http.ResponseWriter, request *http.Request) {
 			ID:          connID,
 			ClientID:    tok.ClientID,
 			ClientName:  clientName,
+			ClientURI:   clientURI,
+			LogoURI:     logoURI,
 			TokenType:   tok.TokenType,
 			Scope:       tok.Scope,
 			AllowedApps: tok.AllowedApps,
