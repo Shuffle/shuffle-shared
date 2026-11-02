@@ -784,22 +784,30 @@ type UserGeoInfo struct {
 }
 
 type DeviceNotificationPreferences struct {
-	CriticalPager bool `datastore:"critical_pager" json:"critical_pager"` // Critical downtime siren alerts
-	AgentRequests bool `datastore:"agent_requests" json:"agent_requests"` // AI agent human-in-the-loop approvals
-	GeneralAlerts bool `datastore:"general_alerts" json:"general_alerts"` // General FYI updates & reports
+	CriticalPager bool `json:"critical_pager"` // Critical downtime siren alerts
+	AgentRequests bool `json:"agent_requests"` // AI agent human-in-the-loop approvals
+	GeneralAlerts bool `json:"general_alerts"` // General FYI updates & reports
+
+	// Optional per-type tenant (org_id) routing rules. By default (when empty), all tenants are enabled.
+	CriticalPagerOrgs         []string `datastore:",omitempty" json:"critical_pager_orgs,omitempty"`
+	AgentRequestsOrgs         []string `datastore:",omitempty" json:"agent_requests_orgs,omitempty"`
+	GeneralAlertsOrgs         []string `datastore:",omitempty" json:"general_alerts_orgs,omitempty"`
+	CriticalPagerDisabledOrgs []string `datastore:",omitempty" json:"critical_pager_disabled_orgs,omitempty"`
+	AgentRequestsDisabledOrgs []string `datastore:",omitempty" json:"agent_requests_disabled_orgs,omitempty"`
+	GeneralAlertsDisabledOrgs []string `datastore:",omitempty" json:"general_alerts_disabled_orgs,omitempty"`
 }
 
 type Device struct {
-	ID          string                        `datastore:"id" json:"id"`                                       // Unique device identifier
-	Token       string                        `datastore:"token,noindex" json:"token"`                         // FCM registration token
-	Platform    string                        `datastore:"platform" json:"platform"`                           // "ios", "android", "web", "desktop"
-	DeviceName  string                        `datastore:"device_name,omitempty" json:"device_name,omitempty"` // e.g., "iPhone 16 Pro", "Chrome macOS"
-	AppVersion  string                        `datastore:"app_version,omitempty" json:"app_version,omitempty"` // App version
-	Preferences DeviceNotificationPreferences `datastore:"preferences" json:"preferences"`                     // Granular notification settings
+	ID          string                        `json:"id"`                                         // Unique device identifier
+	Token       string                        `datastore:",noindex" json:"token"`                 // FCM registration token
+	Platform    string                        `json:"platform"`                                   // "ios", "android", "web", "desktop"
+	DeviceName  string                        `datastore:",omitempty" json:"device_name,omitempty"` // e.g., "iPhone 16 Pro", "Chrome macOS"
+	AppVersion  string                        `datastore:",omitempty" json:"app_version,omitempty"` // App version
+	Preferences DeviceNotificationPreferences `json:"preferences"`                                // Granular notification settings
 
-	CreatedAt  int64 `datastore:"created_at" json:"created_at"`     // Registration timestamp
-	EditedAt   int64 `datastore:"edited_at" json:"edited_at"`       // Last updated timestamp
-	LastSeenAt int64 `datastore:"last_seen_at" json:"last_seen_at"` // Last active timestamp
+	CreatedAt  int64 `json:"created_at"`   // Registration timestamp
+	EditedAt   int64 `json:"edited_at"`    // Last updated timestamp
+	LastSeenAt int64 `json:"last_seen_at"` // Last active timestamp
 }
 
 type User struct {
@@ -6429,8 +6437,9 @@ type NotificationRequest struct {
 	Source      string `json:"source,omitempty"`
 	Origin      string `json:"origin,omitempty"`
 	// User & Org Routing
-	UserID string `json:"user_id,omitempty"`
-	OrgID  string `json:"org_id,omitempty"`
+	UserID         string `json:"user_id,omitempty"`
+	OrgID          string `json:"org_id,omitempty"`
+	NotificationID string `json:"notification_id,omitempty"`
 	// Device Routing
 	TargetTokens []string `json:"target_tokens"`
 	TargetToken  string   `json:"target_token,omitempty"`
