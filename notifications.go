@@ -77,14 +77,14 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if notification.Personal && notification.UserId != user.Id {
-		log.Printf("[WARNING] Bad user for notification. %s (wanted) vs %s", notification.UserId, user.Id)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Bad userId or notification doesn't exist"}`))
-		return
-	}
-
-	if notification.OrgId != user.ActiveOrg.Id {
+	if notification.Personal || len(notification.UserId) > 0 {
+		if notification.UserId != user.Id {
+			log.Printf("[WARNING] Bad user for notification. %s (wanted) vs %s", notification.UserId, user.Id)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Bad userId or notification doesn't exist"}`))
+			return
+		}
+	} else if notification.OrgId != user.ActiveOrg.Id {
 		log.Printf("[WARNING] Bad org for notification. %s (wanted) vs %s", notification.OrgId, user.ActiveOrg.Id)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Bad userId or notification doesn't exist"}`))
@@ -118,6 +118,19 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 	return
 }
 
+func isPersonalNotificationRequest(request *http.Request) bool {
+	if strings.EqualFold(request.URL.Query().Get("personal"), "true") {
+		return true
+	}
+	if strings.EqualFold(request.URL.Query().Get("type"), "personal") {
+		return true
+	}
+	if strings.EqualFold(request.URL.Query().Get("origin"), "personal") {
+		return true
+	}
+	return false
+}
+
 func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -144,8 +157,14 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 	*/
 
 	ctx := GetContext(request)
-	//notifications, err := GetUserNotifications(ctx, user.Id)
-	notifications, err := GetOrgNotifications(ctx, user.ActiveOrg.Id)
+	personal := isPersonalNotificationRequest(request)
+
+	var notifications []Notification
+	if personal {
+		notifications, err = GetUserNotifications(ctx, user.Id)
+	} else {
+		notifications, err = GetOrgNotifications(ctx, user.ActiveOrg.Id)
+	}
 	if err != nil && len(notifications) == 0 {
 		log.Printf("[ERROR] Failed to get notifications (clear): %s", err)
 		resp.WriteHeader(500)
@@ -154,12 +173,15 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	for _, notification := range notifications {
-		// Not including this as we want to mark as read for all users in the org
-		// We stopped using personal vs org notifications
-		// Also added index to track by updated time
-		//if user.Id != notification.UserId {
-		//	continue
-		//}
+		if personal {
+			if notification.UserId != user.Id {
+				continue
+			}
+		} else {
+			if notification.Personal || len(notification.UserId) > 0 {
+				continue
+			}
+		}
 
 		notification.ModifiedBy = user.Username
 		err = markNotificationRead(ctx, &notification)
@@ -206,9 +228,16 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 
 	// Should be made org-wide instead? Right now, it's cross org
 	ctx := GetContext(request)
+	personal := isPersonalNotificationRequest(request)
 
-	//notifications, err := GetUserNotifications(ctx, user.Id)
-	notifications, err := GetOrgNotifications(ctx, user.ActiveOrg.Id)
+	var notifications []Notification
+	if personal {
+		if len(user.Id) > 0 {
+			notifications, err = GetUserNotifications(ctx, user.Id)
+		}
+	} else {
+		notifications, err = GetOrgNotifications(ctx, user.ActiveOrg.Id)
+	}
 	if err != nil && len(notifications) == 0 {
 		log.Printf("[ERROR] Failed to get notifications: %s", err)
 		resp.WriteHeader(500)
@@ -225,6 +254,9 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		if typeOk && len(typeList) > 0 {
 			curType = typeList[0]
 		}
+	}
+	if strings.EqualFold(curType, "personal") {
+		curType = ""
 	}
 
 	severity := ""
@@ -250,8 +282,16 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		if notification.Personal {
-			continue
+		if personal {
+			if len(user.Id) == 0 || notification.UserId != user.Id {
+				continue
+			}
+			notification.Personal = true
+		} else {
+			if notification.Personal || len(notification.UserId) > 0 {
+				continue
+			}
+			notification.UserId = ""
 		}
 
 		if len(severity) > 0 && notification.Severity != severity {
@@ -262,11 +302,6 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		//if notification.UserId != user.Id {
-		//	continue
-		//}
-
-		notification.UserId = ""
 		//notification.OrgId = ""
 		newNotifications = append(newNotifications, notification)
 	}
@@ -1094,6 +1129,128 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 	return nil
 }
 
+func CreatePersonalNotification(ctx context.Context, title, description, referenceUrl, userId, orgId, severity, origin string) error {
+	if standalone {
+		return nil
+	}
+
+	if len(userId) == 0 {
+		log.Printf("[ERROR] No user ID provided to create personal notification '%s'", title)
+		return errors.New("no user ID provided")
+	}
+
+	if len(referenceUrl) > 0 {
+		cacheKey := fmt.Sprintf("notification-%s-%s", userId, referenceUrl)
+		_, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			return nil
+		}
+
+		err = SetCache(ctx, cacheKey, []byte("1"), 1)
+		if err != nil {
+			log.Printf("[ERROR] Failed saving cached personal notification %s: %s", cacheKey, err)
+		}
+	}
+
+	notifications, err := GetUserNotifications(ctx, userId)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting user notifications for %s: %s", userId, err)
+	}
+
+	matchingNotifications := []Notification{}
+	for _, notification := range notifications {
+		if notification.UserId != userId {
+			continue
+		}
+
+		if notification.Title == title && notification.Description == description {
+			matchingNotifications = append(matchingNotifications, notification)
+		}
+	}
+
+	orgName := ""
+	if len(orgId) > 0 {
+		org, err := GetOrg(ctx, orgId)
+		if err == nil && org != nil {
+			orgName = org.Name
+		}
+	}
+
+	enrichedFailureContext := enrichNotificationFailureContext(ctx, referenceUrl, description)
+
+	generatedId := uuid.NewV4().String()
+	now := int64(time.Now().Unix())
+	mainNotification := Notification{
+		Title:             title,
+		Description:       description,
+		Id:                generatedId,
+		OrgId:             orgId,
+		OrgName:           orgName,
+		UserId:            userId,
+		Tags:              []string{},
+		Amount:            1,
+		ReferenceUrl:      referenceUrl,
+		OrgNotificationId: "",
+		Dismissable:       true,
+		Personal:          true,
+		Read:              false,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+		ExecutionId:       enrichedFailureContext.ExecutionId,
+		WorkflowId:        enrichedFailureContext.WorkflowId,
+		NodeId:            enrichedFailureContext.NodeId,
+		NodeLabel:         enrichedFailureContext.NodeLabel,
+		ActionName:        enrichedFailureContext.ActionName,
+		AppName:           enrichedFailureContext.AppName,
+		NodeStatus:        enrichedFailureContext.NodeStatus,
+		FailureReason:     enrichedFailureContext.FailureReason,
+		Severity:          severity,
+		Origin:            origin,
+	}
+
+	if len(matchingNotifications) > 0 {
+		notification := matchingNotifications[0]
+		notification.Personal = true
+		notification.UserId = userId
+		notification.Amount += 1
+		notification.Read = false
+		notification.UpdatedAt = now
+		notification.ReferenceUrl = referenceUrl
+		notification.ExecutionId = mainNotification.ExecutionId
+		notification.WorkflowId = mainNotification.WorkflowId
+		notification.NodeId = mainNotification.NodeId
+		notification.NodeLabel = mainNotification.NodeLabel
+		notification.ActionName = mainNotification.ActionName
+		notification.AppName = mainNotification.AppName
+		notification.NodeStatus = mainNotification.NodeStatus
+		notification.FailureReason = mainNotification.FailureReason
+		if len(severity) > 0 {
+			notification.Severity = severity
+		}
+		if len(origin) > 0 {
+			notification.Origin = origin
+		}
+		if notification.Ignored {
+			notification.Read = true
+		}
+
+		err = SetNotification(ctx, notification)
+		if err != nil {
+			log.Printf("[WARNING] Failed to reopen personal notification %s for user %s: %s", notification.Title, userId, err)
+			return err
+		}
+		return nil
+	}
+
+	err = SetNotification(ctx, mainNotification)
+	if err != nil {
+		log.Printf("[ERROR] Failed making personal notification with title %#v for user %s: %s", title, userId, err)
+		return err
+	}
+
+	return nil
+}
+
 func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1263,7 +1420,9 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		notification.OrgId = orgId
 	}
 
-	if user.Role == "org-reader" {
+	isPersonal := notification.Personal || len(notification.UserId) > 0 || isPersonalNotificationRequest(request) || strings.EqualFold(notification.Origin, "personal")
+
+	if user.Role == "org-reader" && !(isPersonal && (len(notification.UserId) == 0 || notification.UserId == user.Id)) {
 		log.Printf("[INFO] User %s (%s) tried to create a notification without being admin", user.Username, user.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
@@ -1303,17 +1462,80 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[DEBUG] User '%s' (%s) in org '%s' (%s) is creating notification '%s'", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id, notification.Title)
-	err = CreateOrgNotification(
-		ctx,
-		notification.Title,
-		notification.Description,
-		notification.ReferenceUrl,
-		orgId,
-		false,
-		notification.Severity,
-		notification.Origin,
-	)
+	if isPersonal {
+		targetUserId := strings.TrimSpace(notification.UserId)
+		if len(targetUserId) == 0 {
+			targetUserId = user.Id
+		}
+
+		if len(targetUserId) == 0 {
+			log.Printf("[ERROR] No user ID provided for personal notification in create notification api")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No user_id provided for personal notification"}`))
+			return
+		}
+
+		// When notifying another user, verify the target user exists and belongs to the authorized org
+		if targetUserId != user.Id {
+			targetUser, err := GetUser(ctx, targetUserId)
+			if err != nil || len(targetUser.Id) == 0 {
+				log.Printf("[WARNING] Target user %s not found in create personal notification api: %s", targetUserId, err)
+				resp.WriteHeader(400)
+				resp.Write([]byte(`{"success": false, "reason": "Target user not found"}`))
+				return
+			}
+
+			if !user.SupportAccess && len(orgId) > 0 {
+				org, err := GetOrg(ctx, orgId)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting org %s in create personal notification api: %s", orgId, err)
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false}`))
+					return
+				}
+
+				memberFound := false
+				for _, orgUser := range org.Users {
+					if orgUser.Id == targetUserId {
+						memberFound = true
+						break
+					}
+				}
+
+				if !memberFound {
+					log.Printf("[WARNING] Target user %s is not a member of org %s in create personal notification api", targetUserId, orgId)
+					resp.WriteHeader(403)
+					resp.Write([]byte(`{"success": false, "reason": "User is not a member of this organization"}`))
+					return
+				}
+			}
+		}
+
+		log.Printf("[DEBUG] User '%s' (%s) is creating personal notification '%s' for user '%s'", user.Username, user.Id, notification.Title, targetUserId)
+		err = CreatePersonalNotification(
+			ctx,
+			notification.Title,
+			notification.Description,
+			notification.ReferenceUrl,
+			targetUserId,
+			orgId,
+			notification.Severity,
+			notification.Origin,
+		)
+		DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", targetUserId))
+	} else {
+		log.Printf("[DEBUG] User '%s' (%s) in org '%s' (%s) is creating notification '%s'", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id, notification.Title)
+		err = CreateOrgNotification(
+			ctx,
+			notification.Title,
+			notification.Description,
+			notification.ReferenceUrl,
+			orgId,
+			false,
+			notification.Severity,
+			notification.Origin,
+		)
+	}
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", user.Id))
