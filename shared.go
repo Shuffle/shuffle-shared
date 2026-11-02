@@ -142,6 +142,8 @@ func AllowedDomain(referer string) bool {
 	return false
 }
 
+var prPreviewOriginRegex = regexp.MustCompile(`^https://shuffler-pr-previews--pr-[0-9]+-[a-z0-9]+\.web\.app$`)
+
 func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	origin := request.Header["Origin"]
 	resp.Header().Set("Vary", "Origin")
@@ -207,6 +209,10 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 					allowed = true
 					break
 				}
+			}
+
+			if !allowed && prPreviewOriginRegex.MatchString(origin[0]) {
+				allowed = true
 			}
 
 			// Since we are becoming more and more of a platform
@@ -1073,10 +1079,14 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Seed default alert thresholds once if not yet applied.
-	if addDefaultAlertThresholds(org) {
+	alertThresholdsChanged := addDefaultAlertThresholds(org)
+	if fixDriftedAlertThresholds(org) {
+		alertThresholdsChanged = true
+	}
+
+	if alertThresholdsChanged {
 		if setErr := SetOrg(ctx, *org, org.Id); setErr != nil {
-			log.Printf("[WARNING] Failed persisting default alert thresholds for org %s (%s): %s", org.Name, org.Id, setErr)
+			log.Printf("[WARNING] Failed persisting alert threshold updates for org %s (%s): %s", org.Name, org.Id, setErr)
 		}
 	}
 
@@ -14611,6 +14621,9 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 		org.LeadInfo = newLeadinfo
 
+		oldAppExecutionsLimit := org.SyncFeatures.AppExecutions.Limit
+		oldOnpremAppExecutionsLimit := org.SyncFeatures.OnpremAppExecutions.Limit
+
 		if newLeadinfo.EnterpriseLicenseOnprem ||
 			newLeadinfo.BusinessLicenseOnprem {
 
@@ -14696,6 +14709,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Reset limits to defaults (2000 app runs / 1 env / 3 tenants) for org %s (no license)", org.Id)
 		}
 
+		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 
 		if newLeadinfo.EnterpriseLicenseCloud ||
 			newLeadinfo.EnterpriseLicenseOnprem ||
@@ -14897,8 +14911,13 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	if project.Environment == "cloud" && user.SupportAccess && tmpData.SyncFeatures.Editing {
 		log.Printf("[DEBUG] Updating features for org %s (%s)", org.Name, org.Id)
 
+		oldAppExecutionsLimit := org.SyncFeatures.AppExecutions.Limit
+		oldOnpremAppExecutionsLimit := org.SyncFeatures.OnpremAppExecutions.Limit
+
 		org.SyncFeatures = tmpData.SyncFeatures
 		org.SyncFeatures.Editing = false
+
+		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 	}
 
 	if tmpData.EditingBranding {
@@ -14960,8 +14979,14 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		log.Printf("[DEBUG] User %s (%s) is allowed to edit sync features of suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
+
+		oldAppExecutionsLimit := org.SyncFeatures.AppExecutions.Limit
+		oldOnpremAppExecutionsLimit := org.SyncFeatures.OnpremAppExecutions.Limit
+
 		org.SyncFeatures = tmpData.SyncFeatures
 		org.SyncFeatures.Editing = false
+
+		syncAlertThresholdsToLimits(org, oldAppExecutionsLimit, oldOnpremAppExecutionsLimit)
 	}
 
 	if (len(tmpData.Billing.Consultation.Hours) > 0 || len(tmpData.Billing.Consultation.Minutes) > 0) && user.SupportAccess {
@@ -20944,10 +20969,11 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 								"id": "%s_%s"
 							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
 
-						// 1. Get the value and set it instead if it exists
-						// 2. If it doesn't exist, add it
-						_, err := getExecutionFileValue(ctx, workflowExecution, item)
-						if err == nil {
+						// Write the file unless it already holds this exact value.
+						// Most results never change, but an AI Agent's result grows with every turn,
+						// and keeping the first file would bring back old history once the cache expires.
+						existing, err := getExecutionFileValue(ctx, workflowExecution, item)
+						if err == nil && (existing == item.Result || (isAgentAction(item.Action) && existing == cleanAgentResultString(item.Result))) {
 							//log.Printf("[DEBUG][%s] Found execution file locally for '%s'. Not saving another.", workflowExecution.ExecutionId, item.Action.Label)
 						} else {
 							fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
@@ -20969,6 +20995,12 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 								item.Result = baseResult
 								newResults = append(newResults, item)
 								continue
+							}
+
+							// Readers check this cache before the file. Set overwrites the old copy; only drop it if the set fails.
+							actionReplaceKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, item.Action.ID)
+							if err := SetCache(ctx, actionReplaceKey, []byte(item.Result), 600); err != nil {
+								DeleteCache(ctx, actionReplaceKey)
 							}
 						}
 
@@ -36381,7 +36413,7 @@ func SanitizeFuzzySubstring(haystack, secret string, maxDistance int) string {
 // Basic cleanup.
 func cleanupProtectedKeys(exec WorkflowExecution) WorkflowExecution {
 	// Basic checks to return
-	if os.Getenv("SHUFFLE_PROTECTED_CLEANUP_DISABLED") == "true" || project.Environment == "worker" {
+	if standalone || os.Getenv("STANDALONE") == "true" || os.Getenv("SHUFFLE_PROTECTED_CLEANUP_DISABLED") == "true" || project.Environment == "worker" {
 		return exec
 	}
 

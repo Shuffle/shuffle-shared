@@ -424,10 +424,18 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 
 				var err error
 				if len(memcached) > 0 {
+					expSeconds := expiration * 60
+					if useMilliseconds {
+						expSeconds = expiration / 1000
+						if expSeconds < 1 {
+							expSeconds = 1
+						}
+					}
+
 					newitem := &gomemcache.Item{
 						Key:        keyname,
 						Value:      parsedData,
-						Expiration: expiration * 60,
+						Expiration: expSeconds,
 					}
 
 					err = mc.Set(newitem)
@@ -469,10 +477,18 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32, u
 
 			var err error
 			if len(memcached) > 0 {
+				expSeconds := expiration * 60
+				if useMilliseconds {
+					expSeconds = expiration / 1000
+					if expSeconds < 1 {
+						expSeconds = 1
+					}
+				}
+
 				newitem := &gomemcache.Item{
 					Key:        name,
 					Value:      data,
-					Expiration: expiration * 60,
+					Expiration: expSeconds,
 				}
 
 				err = mc.Set(newitem)
@@ -3178,26 +3194,12 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				}
 
 				// Somehow this can happen. Reverting to LATEST revision
-				if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 {
+				if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 && !workflow.BackgroundProcessing {
 					revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 2)
 					if err != nil {
 						log.Printf("[WARNING] Failed getting revisions during trigger load for workflow %s: %s", workflow.ID, err)
-					} else {
-						if len(revisions) > 0 {
-							for _, revision := range revisions {
-								if revision.ID != workflow.ID {
-									continue
-								}
-
-								if len(revision.Triggers) > 0 {
-									workflow.Triggers = revision.Triggers
-									break
-								}
-							}
-
-							//log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
-							workflow.Triggers = revisions[0].Triggers
-						}
+					} else if len(revisions) > 0 && revisions[0].ID == workflow.ID && len(revisions[0].Triggers) > 0 {
+						workflow.Triggers = revisions[0].Triggers
 					}
 				}
 
@@ -3307,26 +3309,12 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 	}
 
 	// Somehow this can happen. Reverting to LATEST revision
-	if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 {
+	if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 && !workflow.BackgroundProcessing {
 		revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 2)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting revisions during trigger load for workflow %s: %s", workflow.ID, err)
-		} else {
-			if len(revisions) > 0 {
-				for _, revision := range revisions {
-					if revision.ID != workflow.ID {
-						continue
-					}
-
-					if len(revision.Triggers) > 0 {
-						workflow.Triggers = revision.Triggers
-						break
-					}
-				}
-
-				//log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
-				workflow.Triggers = revisions[0].Triggers
-			}
+		} else if len(revisions) > 0 && revisions[0].ID == workflow.ID && len(revisions[0].Triggers) > 0 {
+			workflow.Triggers = revisions[0].Triggers
 		}
 	}
 
@@ -4087,6 +4075,27 @@ func mergeDefaultAlertThresholds(thresholds []AlertThreshold, limit int64) []Ale
 	return thresholds
 }
 
+func recalculateAlertThresholds(thresholds []AlertThreshold, limit int64) []AlertThreshold {
+	for i := range thresholds {
+		thresholds[i].Count = int(float64(thresholds[i].Percentage) / 100 * float64(limit))
+		thresholds[i].Email_send = false
+	}
+
+	return mergeDefaultAlertThresholds(thresholds, limit)
+}
+
+func syncAlertThresholdsToLimits(org *Org, oldAppLimit int64, oldOnpremLimit int64) {
+	if org.SyncFeatures.AppExecutions.Limit > 0 && org.SyncFeatures.AppExecutions.Limit != oldAppLimit {
+		org.Billing.AlertThreshold = recalculateAlertThresholds(org.Billing.AlertThreshold, org.SyncFeatures.AppExecutions.Limit)
+		org.Billing.DefaultAlertsApplied = true
+	}
+
+	if org.SyncFeatures.OnpremAppExecutions.Limit > 0 && org.SyncFeatures.OnpremAppExecutions.Limit != oldOnpremLimit && isOnpremAlertEligible(org) {
+		org.Billing.OnpremAlertThreshold = recalculateAlertThresholds(org.Billing.OnpremAlertThreshold, org.SyncFeatures.OnpremAppExecutions.Limit)
+		org.Billing.DefaultOnpremAlertsApplied = true
+	}
+}
+
 func addDefaultAlertThresholds(org *Org) bool {
 	changed := false
 
@@ -4106,6 +4115,34 @@ func addDefaultAlertThresholds(org *Org) bool {
 			org.Billing.DefaultOnpremAlertsApplied = true
 			changed = true
 		}
+	}
+
+	return changed
+}
+
+func alertThresholdCountsDrifted(thresholds []AlertThreshold, limit int64) bool {
+	for _, threshold := range thresholds {
+		if threshold.Count != int(float64(threshold.Percentage)/100*float64(limit)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func fixDriftedAlertThresholds(org *Org) bool {
+	changed := false
+
+	limit := org.SyncFeatures.AppExecutions.Limit
+	if limit > 0 && alertThresholdCountsDrifted(org.Billing.AlertThreshold, limit) {
+		org.Billing.AlertThreshold = recalculateAlertThresholds(org.Billing.AlertThreshold, limit)
+		changed = true
+	}
+
+	onpremLimit := org.SyncFeatures.OnpremAppExecutions.Limit
+	if onpremLimit > 0 && isOnpremAlertEligible(org) && alertThresholdCountsDrifted(org.Billing.OnpremAlertThreshold, onpremLimit) {
+		org.Billing.OnpremAlertThreshold = recalculateAlertThresholds(org.Billing.OnpremAlertThreshold, onpremLimit)
+		changed = true
 	}
 
 	return changed
@@ -14160,6 +14197,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				}
 
 				cacheData.Value = config.Value
+				if getCacheError == nil && config.Created > 0 {
+					sameValue = true
+				}
 			}
 
 			// Works on merging enrichments
@@ -14293,6 +14333,16 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				if len(cacheData.Tags) == 0 {
 					cacheData.Tags = config.Tags
 				} else {
+					for _, existingTag := range config.Tags {
+						if strings.HasPrefix(existingTag, "agent-") && !ArrayContains(cacheData.Tags, existingTag) {
+							cacheData.Tags = append(cacheData.Tags, existingTag)
+						}
+					}
+				}
+
+				if config.Value == cacheData.Value {
+					sameValue = true
+				} else {
 					sameValue = false
 				}
 
@@ -14353,7 +14403,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				}
 			}
 
+			skipAutomationKey := fmt.Sprintf("datastore_unchanged_%s_%s_%s", cacheData.OrgId, cacheData.Category, cacheData.Key)
 			if sameValue {
+				SetCache(ctx, skipAutomationKey, []byte(fmt.Sprintf("%d", len(cacheData.Value))), 5000, true)
+
 				// cacheData.Changed = false
 
 				// FIXME: Should NOT be returning keys?
@@ -14364,6 +14417,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) ([]Datasto
 				//datastoreKeys <- *datastore.NameKey("", datastoreId, nil)
 				//cacheKeys <- CacheKeyData{}
 
+			} else {
+				DeleteCache(ctx, skipAutomationKey)
 			}
 
 			cacheData.Changed = keyUpdated
@@ -15306,6 +15361,8 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 		if err == nil {
 			parsedCache := []byte(cache.([]uint8))
 			err = json.Unmarshal(parsedCache, cacheData)
+			if err != nil {
+			}
 			if err == nil {
 				return cacheData, nil
 			}
@@ -15377,6 +15434,7 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 				//log.Printf("[WARNING] Error in datastore key loading for %s: %s", id, err)
 
 				if len(category) > 0 && category != "default" {
+
 				} else {
 					// Search for key by removing first uuid part
 					newId := id

@@ -3138,6 +3138,10 @@ type OAuthClient struct {
 	ClientID                string   `json:"client_id" datastore:"client_id"`
 	ClientSecret            string   `json:"client_secret,omitempty" datastore:"client_secret,noindex"`
 	ClientName              string   `json:"client_name" datastore:"client_name"`
+	ClientURI               string   `json:"client_uri,omitempty" datastore:"client_uri"`
+	LogoURI                 string   `json:"logo_uri,omitempty" datastore:"logo_uri"`
+	SoftwareID              string   `json:"software_id,omitempty" datastore:"software_id"`
+	SoftwareVersion         string   `json:"software_version,omitempty" datastore:"software_version"`
 	RedirectUris            []string `json:"redirect_uris" datastore:"redirect_uris"`
 	GrantTypes              []string `json:"grant_types" datastore:"grant_types"`
 	ResponseTypes           []string `json:"response_types" datastore:"response_types"`
@@ -3232,6 +3236,9 @@ type OAuthUserInfo struct {
 type OAuthConsentInfoResponse struct {
 	ClientID      string           `json:"client_id"`
 	ClientName    string           `json:"client_name"`
+	ClientURI     string           `json:"client_uri,omitempty"`
+	LogoURI       string           `json:"logo_uri,omitempty"`
+	Issuer        string           `json:"issuer,omitempty"`
 	Scopes        []OAuthScopeInfo `json:"scopes"`
 	User          OAuthUserInfo    `json:"user"`
 	AvailableOrgs []OrgMini        `json:"available_orgs"`
@@ -3244,6 +3251,8 @@ type OAuthConsentInfoResponse struct {
 type OAuthAuthorizeRequest struct {
 	ClientID            string   `json:"client_id"`
 	ClientName          string   `json:"client_name,omitempty"`
+	ClientURI           string   `json:"client_uri,omitempty"`
+	LogoURI             string   `json:"logo_uri,omitempty"`
 	RedirectURI         string   `json:"redirect_uri"`
 	ResponseType        string   `json:"response_type"`
 	Scope               string   `json:"scope"`
@@ -3296,6 +3305,8 @@ type OAuthTokenView struct {
 	ID          string    `json:"id"`
 	ClientID    string    `json:"client_id"`
 	ClientName  string    `json:"client_name,omitempty"`
+	ClientURI   string    `json:"client_uri,omitempty"`
+	LogoURI     string    `json:"logo_uri,omitempty"`
 	TokenType   string    `json:"token_type"`
 	Scope       string    `json:"scope"`
 	AllowedApps []string  `json:"allowed_apps,omitempty"`
