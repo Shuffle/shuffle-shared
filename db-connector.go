@@ -11391,7 +11391,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 
 		notifications = []Notification{}
 		for _, hit := range wrapped.Hits.Hits {
-			if hit.Source.Personal {
+			if hit.Source.Personal || len(hit.Source.UserId) > 0 {
 				continue
 			}
 
@@ -11439,6 +11439,15 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 				return notifications, err
 			}
 		}
+
+		filtered := []Notification{}
+		for _, notification := range notifications {
+			if notification.Personal || len(notification.UserId) > 0 {
+				continue
+			}
+			filtered = append(filtered, notification)
+		}
+		notifications = filtered
 	}
 
 	if project.CacheDb {
@@ -11464,25 +11473,32 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 	var notifications []Notification
 
 	nameKey := "notifications"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, userId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &notifications)
+			if err == nil {
+				return notifications, nil
+			}
+		}
+	}
+
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
 			"size": 1000,
+			"sort": map[string]interface{}{
+				"updated_at": map[string]interface{}{
+					"order":         "desc",
+					"unmapped_type": "long",
+				},
+			},
 			"query": map[string]interface{}{
-				"bool": map[string]interface{}{
-					"must": []map[string]interface{}{
-						map[string]interface{}{
-							"match": map[string]interface{}{
-								"user_id": userId,
-							},
-						},
-						map[string]interface{}{
-							"match": map[string]interface{}{
-								"read": false,
-							},
-						},
-					},
+				"match": map[string]interface{}{
+					"user_id": userId,
 				},
 			},
 		}
@@ -11529,14 +11545,17 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 			}
 		}
 
-		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return notifications, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
-
-		}
-
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return notifications, err
+		}
+
+		if res.StatusCode == 400 {
+			return notifications, nil
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return notifications, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
 		wrapped := NotificationSearchWrapper{}
@@ -11555,12 +11574,12 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(25)
+		q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(250)
 
 		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 		if err != nil && len(notifications) == 0 {
 			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
-				q = q.Limit(10)
+				q = q.Limit(50)
 				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 				if err != nil && len(notifications) == 0 {
 					return notifications, err
@@ -11569,6 +11588,16 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 				log.Printf("[INFO] Failed loading SOME notifications - skipping: %s", err)
 			} else {
 				return notifications, err
+			}
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(notifications)
+		if err == nil {
+			err = SetCache(ctx, cacheKey, data, 5)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating user notification cache: %s", err)
 			}
 		}
 	}
@@ -20040,6 +20069,45 @@ func SetOAuthToken(ctx context.Context, token OAuthToken) error {
 			refreshCacheKey := fmt.Sprintf("oauth_refresh_%s", token.RefreshToken)
 			_ = SetCache(ctx, refreshCacheKey, []byte(token.AccessToken), int32(token.ExpiresIn))
 		}
+
+		// Maintain cache-backed index lists for org and user lookups
+		if len(token.OrgId) > 0 {
+			orgIndexKey := fmt.Sprintf("oauth_tokens_org_%s", token.OrgId)
+			var orgTokenIds []string
+			if raw, cErr := GetCache(ctx, orgIndexKey); cErr == nil && raw != nil {
+				switch v := raw.(type) {
+				case []byte:
+					_ = json.Unmarshal(v, &orgTokenIds)
+				case string:
+					_ = json.Unmarshal([]byte(v), &orgTokenIds)
+				}
+			}
+			if !ArrayContains(orgTokenIds, token.AccessToken) {
+				orgTokenIds = append(orgTokenIds, token.AccessToken)
+				if idxBytes, mErr := json.Marshal(orgTokenIds); mErr == nil {
+					_ = SetCache(ctx, orgIndexKey, idxBytes, int32(token.ExpiresIn))
+				}
+			}
+		}
+
+		if len(token.UserId) > 0 {
+			userIndexKey := fmt.Sprintf("oauth_tokens_user_%s", token.UserId)
+			var userTokenIds []string
+			if raw, cErr := GetCache(ctx, userIndexKey); cErr == nil && raw != nil {
+				switch v := raw.(type) {
+				case []byte:
+					_ = json.Unmarshal(v, &userTokenIds)
+				case string:
+					_ = json.Unmarshal([]byte(v), &userTokenIds)
+				}
+			}
+			if !ArrayContains(userTokenIds, token.AccessToken) {
+				userTokenIds = append(userTokenIds, token.AccessToken)
+				if idxBytes, mErr := json.Marshal(userTokenIds); mErr == nil {
+					_ = SetCache(ctx, userIndexKey, idxBytes, int32(token.ExpiresIn))
+				}
+			}
+		}
 	}
 
 	return nil
@@ -20278,8 +20346,8 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 	if project.DbType == "opensearch" {
 		query := map[string]interface{}{
 			"query": map[string]interface{}{
-				"term": map[string]interface{}{
-					"org_id.keyword": orgId,
+				"match": map[string]interface{}{
+					"org_id": orgId,
 				},
 			},
 			"size": 100,
@@ -20290,10 +20358,16 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 			Body:    bytes.NewReader(queryBytes),
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return tokens, nil
+			}
 			return nil, err
 		}
 		res := resp.Inspect().Response
 		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return tokens, nil
+		}
 
 		var searchResp struct {
 			Hits struct {
@@ -20302,6 +20376,9 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 		}
 		if err := json.NewDecoder(res.Body).Decode(&searchResp); err == nil {
 			for _, hit := range searchResp.Hits.Hits {
+				if hit.Source.OrgId != orgId {
+					continue
+				}
 				if hit.Source.ExpiresAt.IsZero() || time.Now().Before(hit.Source.ExpiresAt) {
 					tokens = append(tokens, hit.Source)
 				}
@@ -20325,6 +20402,24 @@ func GetOAuthTokensByOrg(ctx context.Context, orgId string) ([]OAuthToken, error
 		}
 	}
 
+	if len(tokens) == 0 && project.CacheDb {
+		orgIndexKey := fmt.Sprintf("oauth_tokens_org_%s", orgId)
+		if raw, cErr := GetCache(ctx, orgIndexKey); cErr == nil && raw != nil {
+			var tokenIds []string
+			switch v := raw.(type) {
+			case []byte:
+				_ = json.Unmarshal(v, &tokenIds)
+			case string:
+				_ = json.Unmarshal([]byte(v), &tokenIds)
+			}
+			for _, tid := range tokenIds {
+				if tok, tErr := GetOAuthToken(ctx, tid); tErr == nil && tok != nil && len(tok.AccessToken) > 0 {
+					tokens = append(tokens, *tok)
+				}
+			}
+		}
+	}
+
 	return tokens, nil
 }
 
@@ -20340,8 +20435,8 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 	if project.DbType == "opensearch" {
 		query := map[string]interface{}{
 			"query": map[string]interface{}{
-				"term": map[string]interface{}{
-					"user_id.keyword": userId,
+				"match": map[string]interface{}{
+					"user_id": userId,
 				},
 			},
 			"size": 100,
@@ -20352,10 +20447,16 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 			Body:    bytes.NewReader(queryBytes),
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "index_not_found_exception") {
+				return tokens, nil
+			}
 			return nil, err
 		}
 		res := resp.Inspect().Response
 		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return tokens, nil
+		}
 
 		var searchResp struct {
 			Hits struct {
@@ -20364,6 +20465,9 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 		}
 		if err := json.NewDecoder(res.Body).Decode(&searchResp); err == nil {
 			for _, hit := range searchResp.Hits.Hits {
+				if hit.Source.UserId != userId {
+					continue
+				}
 				if hit.Source.ExpiresAt.IsZero() || time.Now().Before(hit.Source.ExpiresAt) {
 					tokens = append(tokens, hit.Source)
 				}
@@ -20384,6 +20488,24 @@ func GetOAuthTokensByUser(ctx context.Context, userId string) ([]OAuthToken, err
 		}()
 		if getErr != nil && !project.CacheDb {
 			return nil, getErr
+		}
+	}
+
+	if len(tokens) == 0 && project.CacheDb {
+		userIndexKey := fmt.Sprintf("oauth_tokens_user_%s", userId)
+		if raw, cErr := GetCache(ctx, userIndexKey); cErr == nil && raw != nil {
+			var tokenIds []string
+			switch v := raw.(type) {
+			case []byte:
+				_ = json.Unmarshal(v, &tokenIds)
+			case string:
+				_ = json.Unmarshal([]byte(v), &tokenIds)
+			}
+			for _, tid := range tokenIds {
+				if tok, tErr := GetOAuthToken(ctx, tid); tErr == nil && tok != nil && len(tok.AccessToken) > 0 {
+					tokens = append(tokens, *tok)
+				}
+			}
 		}
 	}
 
